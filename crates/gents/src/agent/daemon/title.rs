@@ -8,7 +8,7 @@ use gents_protocol::request_admission::RequestPurpose;
 use tokio::sync::watch;
 use tokio::task::JoinSet;
 
-use super::{BehaviorDaemon, ShutdownDrainFailure};
+use super::{AgentDaemon, ShutdownDrainFailure};
 use crate::admission::{self, AdmissionCallContext, CallKind};
 use crate::lifecycle::{ClaimOutcome, RequestLifecycle, RequestTerminalOutcome, TerminalizeResult};
 use crate::session;
@@ -48,7 +48,7 @@ async fn flush_received_title_partial(context: &str) -> Result<()> {
 
 struct TitleTask<M: crate::llm::rig_compat::ProviderModel> {
     node: Arc<EmbeddedNode>,
-    behavior: Arc<crate::config::ResolvedBehavior>,
+    agent_config: Arc<crate::config::ResolvedAgent>,
     provider_family: Option<String>,
     model: Arc<M>,
     verifier: crate::request_admission::AgentRequestAdmissionVerifier,
@@ -64,11 +64,11 @@ enum TitleResult {
     Interrupted,
 }
 
-impl<M: crate::llm::rig_compat::ProviderModel> BehaviorDaemon<M> {
+impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
     fn title_task(&self) -> TitleTask<M> {
         TitleTask {
             node: Arc::clone(&self.node),
-            behavior: Arc::clone(&self.behavior),
+            agent_config: Arc::clone(&self.agent_config),
             provider_family: self.provider_family.clone(),
             model: Arc::clone(&self.model),
             verifier: self.request_admission.clone(),
@@ -94,7 +94,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> BehaviorDaemon<M> {
             let result: Result<()> = async {
                 if !session::session_needs_generated_title(
                     node.as_ref(),
-                    &parent.agent_did,
+                    &parent.node_did,
                     parent.requester_did.as_deref(),
                     &parent.session_id,
                 )
@@ -135,7 +135,7 @@ fn title_generation_allowed(max_total_tokens: Option<i64>) -> bool {
     max_total_tokens.is_none()
 }
 
-/// Reasoning-capable titles keep the behavior's configured output budget
+/// Reasoning-capable titles keep the agent_config's configured output budget
 /// (bounded in time by `TITLE_GENERATION_TIMEOUT_SECS`), so a reasoning run
 /// is not truncated into a reasoning-only result by the visible-title cap.
 fn title_max_tokens(
@@ -166,7 +166,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> TitleTask<M> {
         let Some(request) = super::verify_request_at_claim_boundary(
             &self.verifier,
             Arc::clone(&self.node),
-            &self.behavior.behavior_id,
+            &self.agent_config.agent_id,
             request,
         )
         .await
@@ -178,15 +178,15 @@ impl<M: crate::llm::rig_compat::ProviderModel> TitleTask<M> {
                 .context("admitted title request is missing execution origin")?;
         let mut lifecycle = RequestLifecycle::new_with_execution_binding(
             Arc::clone(&self.node),
-            &self.behavior.behavior_id,
-            self.behavior.agent_did(),
+            &self.agent_config.agent_id,
+            self.agent_config.node_did(),
             request.clone(),
-            self.behavior.deadline_duration.as_secs(),
+            self.agent_config.deadline_duration.as_secs(),
             origin,
-            self.behavior.backend_id.clone().unwrap_or_default(),
+            self.agent_config.backend_id.clone().unwrap_or_default(),
         );
-        lifecycle.set_execution_lease_duration(self.behavior.stream_liveness_timeout);
-        lifecycle.set_configured_max_total_tokens(self.behavior.max_total_tokens);
+        lifecycle.set_execution_lease_duration(self.agent_config.stream_liveness_timeout);
+        lifecycle.set_configured_max_total_tokens(self.agent_config.max_total_tokens);
         match lifecycle.claim_with_identity().await {
             Ok(ClaimOutcome::Claimed) => {}
             Ok(ClaimOutcome::Queued | ClaimOutcome::Interrupted | ClaimOutcome::Expired) => {
@@ -200,8 +200,8 @@ impl<M: crate::llm::rig_compat::ProviderModel> TitleTask<M> {
         }
         let writer = DefraStreamWriter::new(
             Arc::clone(&self.node),
-            self.behavior.agent_did(),
-            Duration::from_millis(self.behavior.stream_batch_ms),
+            self.agent_config.node_did(),
+            Duration::from_millis(self.agent_config.stream_batch_ms),
         );
         let title_request = lifecycle.request().clone();
         let result = self
@@ -249,7 +249,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> TitleTask<M> {
             if let Some((title, parent_requester_did)) = title {
                 if let Err(error) = session::update_session_title_with_source(
                     self.node.as_ref(),
-                    &title_request.agent_did,
+                    &title_request.node_did,
                     parent_requester_did.as_deref(),
                     &title_request.session_id,
                     &title,
@@ -279,7 +279,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> TitleTask<M> {
         let capture_context = crate::rendered_request::context_for_claimed_request(
             &request,
             commit_cid,
-            self.behavior.model_name.clone(),
+            self.agent_config.model_name.clone(),
             self.provider_family.clone(),
         );
         let mut capture_scope = crate::rendered_request::scope_from_factory(
@@ -293,14 +293,14 @@ impl<M: crate::llm::rig_compat::ProviderModel> TitleTask<M> {
                 request.clone(),
                 generation,
                 crate::provider_input::ProviderInputProfile::resolve(
-                    self.behavior.backend_provider_kind,
-                    self.behavior.openai_wire_api,
+                    self.agent_config.backend_provider_kind,
+                    self.agent_config.openai_wire_api,
                 ),
             ));
         let admission_context = AdmissionCallContext::for_request(
             &request,
-            &self.behavior.behavior_id,
-            self.behavior.backend_id.clone().unwrap_or_default(),
+            &self.agent_config.agent_id,
+            self.agent_config.backend_id.clone().unwrap_or_default(),
         );
         admission::scope_request(
             admission_context,
@@ -308,7 +308,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> TitleTask<M> {
                 lifecycle.begin_owned_execution(writer).await?;
                 if !session::session_needs_generated_title(
                     self.node.as_ref(),
-                    &request.agent_did,
+                    &request.node_did,
                     parent.requester_did.as_deref(),
                     &request.session_id,
                 )
@@ -318,7 +318,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> TitleTask<M> {
                 }
                 let recent = session::load_recent_titles_for_agent(
                     self.node.as_ref(),
-                    &request.agent_did,
+                    &request.node_did,
                     &request.session_id,
                     RECENT_TITLE_LIMIT,
                 )
@@ -326,7 +326,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> TitleTask<M> {
                 .unwrap_or_default();
                 let prompt = title_generation_prompt(&request.content, &recent);
                 let mut config = crate::completion_factory::loop_config(
-                    &self.behavior,
+                    &self.agent_config,
                     title_generation_preamble(),
                     0,
                     crate::rendered_request::CaptureScopeKind::Title,
@@ -445,9 +445,9 @@ async fn load_title_parent(node: &EmbeddedNode, title: &AgentRequest) -> Result<
         parent.purpose == RequestPurpose::Normal
             && parent.doc_id == parent_doc_id
             && title.caused_by_parent_request_id.as_deref() == Some(parent.request_id.as_str())
-            && parent.agent_did == title.agent_did
+            && parent.node_did == title.node_did
             && parent.session_id == title.session_id
-            && parent.behavior_id == title.behavior_id,
+            && parent.agent_id == title.agent_id,
         "title parent receipt does not match signed provenance"
     );
     Ok(parent)

@@ -36,23 +36,23 @@ pub(super) fn rescan_tick() -> tokio::time::Interval {
 impl CallbackEngine {
     pub(super) fn new(
         node: Arc<EmbeddedNode>,
-        agent_did: String,
+        node_did: String,
         ceiling: Option<std::path::PathBuf>,
         cancel: tokio_util::sync::CancellationToken,
     ) -> Self {
-        Self::with_subscription_source(node.clone(), node, agent_did, ceiling, cancel)
+        Self::with_subscription_source(node.clone(), node, node_did, ceiling, cancel)
     }
 
     pub(super) fn with_subscription_source(
         subs: Arc<dyn UpdateSubscriptionSource>,
         node: Arc<EmbeddedNode>,
-        agent_did: String,
+        node_did: String,
         ceiling: Option<std::path::PathBuf>,
         cancel: tokio_util::sync::CancellationToken,
     ) -> Self {
         Self {
             node,
-            agent_did,
+            node_did,
             ceiling,
             plugins: Arc::default(),
             subscription_source: subs,
@@ -70,7 +70,7 @@ impl CallbackEngine {
     }
 
     pub(super) async fn reconcile_bindings(&mut self) {
-        let bindings = match list_enabled_bindings(self.node.as_ref(), &self.agent_did).await {
+        let bindings = match list_enabled_bindings(self.node.as_ref(), &self.node_did).await {
             Ok(bindings) => bindings,
             Err(error) => {
                 tracing::warn!(%error, "callback engine failed to load CallbackBinding rows");
@@ -86,7 +86,7 @@ impl CallbackEngine {
             match load_event_source(
                 self.node.as_ref(),
                 &binding.event_source_id,
-                &binding.agent_did,
+                &binding.node_did,
             )
             .await
             {
@@ -156,7 +156,7 @@ impl CallbackEngine {
             .collect();
         let live = crate::graph_pipeline::live_run_correlations(
             self.node.as_ref(),
-            &self.agent_did,
+            &self.node_did,
             consumers.iter().map(|(id, _)| id.as_str()),
         )
         .await?;
@@ -251,7 +251,7 @@ impl CallbackEngine {
                 Box::pin(async move {
                     event_source_cursor::load_or_seed_for_source(
                         txn,
-                        &binding.agent_did,
+                        &binding.node_did,
                         consumer,
                         &source.source_collection,
                     )
@@ -288,7 +288,7 @@ impl CallbackEngine {
             Box::pin(async move {
                 event_source_cursor::checkpoint_prefix(
                     txn,
-                    &binding.agent_did,
+                    &binding.node_did,
                     consumer,
                     collection,
                     position,
@@ -305,7 +305,7 @@ impl CallbackEngine {
     /// stays pending until admitted as an invocation or excluded, however late
     /// this engine first observes the source.
     pub(super) async fn deliver_arrivals(&mut self, collection: Option<&str>) {
-        let bindings = match list_enabled_bindings(self.node.as_ref(), &self.agent_did).await {
+        let bindings = match list_enabled_bindings(self.node.as_ref(), &self.node_did).await {
             Ok(bindings) => bindings,
             Err(error) => {
                 tracing::warn!(%error, "callback engine failed to load CallbackBinding rows");
@@ -325,7 +325,7 @@ impl CallbackEngine {
             let source = match load_event_source(
                 self.node.as_ref(),
                 &binding.event_source_id,
-                &binding.agent_did,
+                &binding.node_did,
             )
             .await
             {
@@ -411,7 +411,7 @@ impl CallbackEngine {
     /// Grouped bindings admit their sealed groups; per-document bindings
     /// deliver from their arrival cursor instead.
     pub(super) async fn handle_created_doc(&mut self, collection: &str, doc_id: &str) {
-        let bindings = match list_enabled_bindings(self.node.as_ref(), &self.agent_did).await {
+        let bindings = match list_enabled_bindings(self.node.as_ref(), &self.node_did).await {
             Ok(bindings) => bindings,
             Err(error) => {
                 tracing::warn!(%error, "callback engine reload bindings failed");
@@ -453,7 +453,7 @@ impl CallbackEngine {
         grouped: bool,
     ) -> Result<bool> {
         let Some(binding) =
-            load_binding(self.node.as_ref(), &binding.binding_id, &binding.agent_did).await?
+            load_binding(self.node.as_ref(), &binding.binding_id, &binding.node_did).await?
         else {
             return Ok(false);
         };
@@ -472,7 +472,7 @@ impl CallbackEngine {
         let event = load_event_source(
             self.node.as_ref(),
             &binding.event_source_id,
-            &binding.agent_did,
+            &binding.node_did,
         )
         .await?
         .ok_or_else(|| {
@@ -494,7 +494,7 @@ impl CallbackEngine {
             event.filter.as_deref(),
             None,
         )?;
-        let callback = load_callback(self.node.as_ref(), &binding.callback_id, &binding.agent_did)
+        let callback = load_callback(self.node.as_ref(), &binding.callback_id, &binding.node_did)
             .await?
             .ok_or_else(|| anyhow::anyhow!("Callback {} missing for owner", binding.callback_id))?;
         if !callback.enabled {
@@ -548,7 +548,7 @@ impl CallbackEngine {
         };
         let invocation = CallbackInvocationDoc {
             invocation_id: uuid::Uuid::new_v4().to_string(),
-            owner_agent_did: binding.agent_did.clone(),
+            owner_node_did: binding.node_did.clone(),
             callback_id: binding.callback_id.clone(),
             input,
             origin,
@@ -592,7 +592,7 @@ impl CallbackEngine {
         callback: &crate::document_config::Callback,
     ) -> Result<bool> {
         let stored = create_pending_invocation(self.node.as_ref(), &invocation).await?;
-        if invocation_is_claimable(&self.agent_did, &stored) {
+        if invocation_is_claimable(&self.node_did, &stored) {
             if let Err(error) = run_owned_invocation(
                 self.node.as_ref(),
                 &stored,
@@ -624,7 +624,7 @@ impl CallbackEngine {
             source.filter.as_deref(),
             None,
         )?;
-        let callback = load_callback(&self.node, &binding.callback_id, &binding.agent_did)
+        let callback = load_callback(&self.node, &binding.callback_id, &binding.node_did)
             .await?
             .ok_or_else(|| anyhow::anyhow!("callback missing for owner"))?;
         if !binding.enabled || !callback.enabled {
@@ -669,7 +669,7 @@ impl CallbackEngine {
         self.publish_invocation(
             CallbackInvocationDoc {
                 invocation_id: uuid::Uuid::new_v4().to_string(),
-                owner_agent_did: binding.agent_did.clone(),
+                owner_node_did: binding.node_did.clone(),
                 callback_id: binding.callback_id.clone(),
                 input,
                 origin: crate::document_config::CallbackInvocationOrigin::EventGroup {
@@ -694,13 +694,12 @@ impl CallbackEngine {
     }
 
     async fn recover_group_page(&mut self) {
-        let Ok(bindings) = list_enabled_bindings(&self.node, &self.agent_did).await else {
+        let Ok(bindings) = list_enabled_bindings(&self.node, &self.node_did).await else {
             return;
         };
         let mut grouped = Vec::new();
         for binding in bindings {
-            match load_event_source(&self.node, &binding.event_source_id, &binding.agent_did).await
-            {
+            match load_event_source(&self.node, &binding.event_source_id, &binding.node_did).await {
                 Ok(Some(source)) if source.group.is_some() => grouped.push((binding, source)),
                 Ok(_) => {}
                 Err(error) => {
@@ -924,14 +923,14 @@ mod grouped_tests {
         node.add_schema("type CallbackMember { batch:String value:String hidden:String }")
             .await
             .unwrap();
-        let response=node.execute(r#"mutation {create_Callback(input:{agent_did:"owner",callback_id:"callback",enabled:true,handler:{kind:"built_in",emitter:"create_workspace"}}){_docID}}"#).await;
+        let response=node.execute(r#"mutation {create_Callback(input:{node_did:"owner",callback_id:"callback",enabled:true,handler:{kind:"built_in",emitter:"create_workspace"}}){_docID}}"#).await;
         assert!(!response.has_errors(), "{:?}", response.errors);
         for value in ["one", "two"] {
             let response=node.execute(&format!("mutation{{create_CallbackMember(input:{{batch:\"batch\",value:\"{value}\",hidden:\"not-selected\"}}){{_docID}}}}" )).await;
             assert!(!response.has_errors(), "{:?}", response.errors);
         }
-        let binding:CallbackBindingDoc=serde_json::from_value(json!({"agent_did":"owner","binding_id":"binding","event_source_id":"source","callback_id":"callback","input_fields":["value"]})).unwrap();
-        let source:crate::document_config::EventSource=serde_json::from_value(json!({"agent_did":"owner","event_source_id":"source","source_collection":"CallbackMember","correlation_field":"batch","group":{"expected_count":2}})).unwrap();
+        let binding:CallbackBindingDoc=serde_json::from_value(json!({"node_did":"owner","binding_id":"binding","event_source_id":"source","callback_id":"callback","input_fields":["value"]})).unwrap();
+        let source:crate::document_config::EventSource=serde_json::from_value(json!({"node_did":"owner","event_source_id":"source","source_collection":"CallbackMember","correlation_field":"batch","group":{"expected_count":2}})).unwrap();
         let engine = CallbackEngine::new(
             node.clone(),
             "owner".into(),

@@ -37,7 +37,7 @@ pub(crate) use atomic_inputs::ToolNotificationPublication;
 pub use coalescing::reconcile_coalesced_pending_request;
 pub(crate) use coalescing::supersede_pending_mutation;
 use coalescing::{
-    parent_behavior_id, queue_row_to_enqueued_request, row_matches_coalesced_source_and_key,
+    parent_agent_id, queue_row_to_enqueued_request, row_matches_coalesced_source_and_key,
 };
 pub(crate) use draining::drain_automated_wakeups_in_txn;
 pub use enqueue::enqueue_local_steering_request;
@@ -52,7 +52,7 @@ pub use gents_protocol::request_input::{
     GoalContinuationInput, QueuePolicy, QueueSource, RequestInput, RequestQueue,
 };
 pub(crate) use goal_continuation::{
-    goal_continuation_behavior, goal_continuation_identity, prepare_goal_continuation,
+    goal_continuation_agent, goal_continuation_identity, prepare_goal_continuation,
 };
 pub(crate) use input::{
     background_wake_queue, is_automated_wakeup, row_is_automated_wakeup, row_queue,

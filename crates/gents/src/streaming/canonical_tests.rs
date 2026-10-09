@@ -19,7 +19,7 @@ async fn claimed(node: &Arc<EmbeddedNode>, request_id: &str, session_id: &str) -
     let request_id = crate::graphql::escape_graphql_string(request_id);
     let session_id = crate::graphql::escape_graphql_string(session_id);
     let now = crate::graphql::escape_graphql_string(&now);
-    let response = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", purpose: "normal", agent_did: "did:test:test", behavior_id: "general", session_id: "{session_id}", retry_parent_request: "", retry_root_request: "{request_id}", superseded_by_request: "", content: "hello", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "{now}", retry_count: 0, max_retries: 3, subagent_depth: 0 }}) {{ _docID }} }}"#)).await;
+    let response = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", purpose: "normal", node_did: "did:test:test", agent_id: "general", session_id: "{session_id}", retry_parent_request: "", retry_root_request: "{request_id}", superseded_by_request: "", content: "hello", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "{now}", retry_count: 0, max_retries: 3, request_hop: 0 }}) {{ _docID }} }}"#)).await;
     assert!(!response.has_errors(), "{:#?}", response.errors);
     let response = node
         .execute(&format!(
@@ -31,7 +31,7 @@ async fn claimed(node: &Arc<EmbeddedNode>, request_id: &str, session_id: &str) -
         crate::graphql::first_row(&response, "AgentRequest")
             .unwrap()
             .unwrap();
-    let mut lifecycle = RequestLifecycle::new_with_agent_did(
+    let mut lifecycle = RequestLifecycle::new_with_node_did(
         node.clone(),
         "general",
         "did:test:test",
@@ -113,7 +113,7 @@ async fn selected_history_missing_later_payload_never_returns_a_shortened_prefix
     let header = TranscriptMessage {
         message_key: "later-input".into(),
         session_id: "incomplete-session".into(),
-        agent_did: "did:test:test".into(),
+        node_did: "did:test:test".into(),
         requester_did: None,
         request_doc_id: Some(lifecycle.request().doc_id.clone()),
         publication: MessagePublication::RequestExecution {
@@ -161,7 +161,6 @@ async fn owned_input_handoff_publishes_context_and_prompt_once_before_provider_o
     let request_doc_id = lifecycle.request().doc_id.clone();
     let hook = crate::hook::DefraSessionHook::with_identity(
         node.clone(),
-        "general",
         "did:test:test",
         crate::hook::FailurePolicy::default(),
     );
@@ -292,7 +291,7 @@ fn provider_segment_for_message(
     let request = lifecycle.request();
     (
         OutputSegment {
-            agent_did: request.agent_did.clone(),
+            node_did: request.node_did.clone(),
             requester_did: request.requester_did.clone(),
             session_id: request.session_id.clone(),
             request_doc_id: request.doc_id.clone(),
@@ -443,8 +442,8 @@ async fn recovery_receipt_fixture(
                 crate::session::ensure_session_in_txn(
                     &txn,
                     &request.session_id,
-                    &request.agent_did,
-                    &request.behavior_id,
+                    &request.node_did,
+                    &request.agent_id,
                     request.requester_did.as_deref(),
                     None,
                     None,
@@ -453,7 +452,7 @@ async fn recovery_receipt_fixture(
                 .await?;
                 let session = crate::session::load_agent_session_row_in_txn(
                     &txn,
-                    &request.agent_did,
+                    &request.node_did,
                     &request.session_id,
                     request.requester_did.as_deref(),
                 )
@@ -1044,7 +1043,7 @@ async fn publication_timestamp_follows_a_flush_that_already_owns_the_tail() {
     let tail = tails.get_mut(&request.doc_id).unwrap();
     let delta = provider_flush_delta(&tail.streams, &encoded).unwrap();
     let segment = OutputSegment {
-        agent_did: request.agent_did.clone(),
+        node_did: request.node_did.clone(),
         requester_did: request.requester_did.clone(),
         session_id: request.session_id.clone(),
         request_doc_id: request.doc_id.clone(),
@@ -1075,7 +1074,7 @@ async fn publication_timestamp_follows_a_flush_that_already_owns_the_tail() {
     let (_, observed) = crate::session::load_canonical_message(
         &crate::config_client::ConfigAccess::Local(node.clone()),
         &published.message_doc_id,
-        &request.agent_did,
+        &request.node_did,
         request.requester_did.as_deref(),
     )
     .await
@@ -1441,7 +1440,7 @@ async fn post_commit_receipt_loss_replays_into_exact_committed_publication() {
     let deadline = lifecycle.claimed_deadline_at().unwrap();
     let mut first_dispatch = crate::tool_call_lifecycle::ToolCallLifecycle::from_accepted(
         node.clone(),
-        lifecycle.request().agent_did.clone(),
+        lifecycle.request().node_did.clone(),
         lifecycle.request().requester_did.clone(),
         a.clone(),
         deadline,
@@ -1450,7 +1449,7 @@ async fn post_commit_receipt_loss_replays_into_exact_committed_publication() {
     .unwrap();
     let mut replay_dispatch = crate::tool_call_lifecycle::ToolCallLifecycle::from_accepted(
         node.clone(),
-        lifecycle.request().agent_did.clone(),
+        lifecycle.request().node_did.clone(),
         lifecycle.request().requester_did.clone(),
         b.clone(),
         deadline,
@@ -1516,7 +1515,7 @@ async fn post_commit_receipt_loss_replays_into_exact_committed_publication() {
         &a.tool_call_doc_id,
         &lifecycle.request().doc_id,
         &lifecycle.request().session_id,
-        &lifecycle.request().agent_did,
+        &lifecycle.request().node_did,
         lifecycle.request().requester_did.as_deref(),
     )
     .await

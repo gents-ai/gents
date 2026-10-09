@@ -7,8 +7,8 @@ use super::{
     LIFECYCLE_SUCCEEDED,
 };
 
-pub fn invocation_is_claimable(agent_did: &str, invocation: &CallbackInvocationDoc) -> bool {
-    invocation.owner_agent_did == agent_did
+pub fn invocation_is_claimable(node_did: &str, invocation: &CallbackInvocationDoc) -> bool {
+    invocation.owner_node_did == node_did
         && matches!(
             invocation.lifecycle_state.as_str(),
             LIFECYCLE_PENDING | LIFECYCLE_CLAIMED | LIFECYCLE_RUNNING
@@ -22,14 +22,14 @@ pub fn invocation_is_terminal(state: &str) -> bool {
     )
 }
 
-/// Claim is unique per (owner_agent_did, invocation_id). Replicas see the
+/// Claim is unique per (owner_node_did, invocation_id). Replicas see the
 /// row under another principal must not claim. Single-instance enforcement is deferred.
 pub async fn claim_invocation(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     invocation: &CallbackInvocationDoc,
 ) -> Result<Option<CallbackInvocationDoc>> {
-    if invocation.owner_agent_did != agent_did {
+    if invocation.owner_node_did != node_did {
         return Ok(None);
     }
     if invocation_is_terminal(&invocation.lifecycle_state) {
@@ -56,8 +56,8 @@ pub async fn claim_invocation(
     let current = super::documents::load_invocation(
         node,
         &invocation.invocation_id,
-        &invocation.owner_agent_did,
+        &invocation.owner_node_did,
     )
     .await?;
-    Ok(current.filter(|row| invocation_is_claimable(agent_did, row)))
+    Ok(current.filter(|row| invocation_is_claimable(node_did, row)))
 }

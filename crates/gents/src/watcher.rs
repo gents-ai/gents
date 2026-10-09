@@ -25,9 +25,9 @@ pub struct AgentRequest {
     pub purpose: gents_protocol::request_admission::RequestPurpose,
     pub doc_id: String,
     pub request_id: String,
-    pub agent_did: String,
+    pub node_did: String,
     pub requester_did: Option<String>,
-    pub behavior_id: String,
+    pub agent_id: String,
     pub session_id: String,
     pub content: String,
     pub retry_parent_request_doc_id: Option<String>,
@@ -39,7 +39,7 @@ pub struct AgentRequest {
     pub execution_generation: Option<String>,
     pub execution_lease_secs: Option<i64>,
     pub execution_lease_expires_at: Option<String>,
-    pub subagent_depth: u32,
+    pub request_hop: u32,
     pub caused_by_parent_request_id: Option<String>,
     pub caused_by_parent_request_doc_id: Option<String>,
     pub caused_by_parent_tool_call_id: Option<String>,
@@ -50,7 +50,7 @@ pub struct AgentRequest {
     pub caused_by_correlation: Option<String>,
     pub caused_by_trigger_context: Option<String>,
     pub workspace_id: Option<String>,
-    pub workspace_owner_agent_did: Option<String>,
+    pub workspace_owner_node_did: Option<String>,
     pub workspace_authority: Option<String>,
     pub workspace_seal_hash: Option<String>,
 }
@@ -73,11 +73,11 @@ impl TryFrom<gents_protocol::row::AgentRequestRow> for AgentRequest {
     type Error = anyhow::Error;
 
     fn try_from(row: gents_protocol::row::AgentRequestRow) -> Result<Self> {
-        let subagent_depth = row
-            .subagent_depth
+        let request_hop = row
+            .request_hop
             .map(u32::try_from)
             .transpose()
-            .context("agent request subagent_depth must fit in u32")?
+            .context("agent request request_hop must fit in u32")?
             .unwrap_or(0);
         let execution_lease_secs = match row.execution_lease_secs {
             Some(secs) if secs < 0 => {
@@ -89,13 +89,9 @@ impl TryFrom<gents_protocol::row::AgentRequestRow> for AgentRequest {
             purpose: row.purpose.context("agent request is missing purpose")?,
             doc_id: row.doc_id.context("agent request is missing _docID")?,
             request_id: row.request_id,
-            agent_did: row
-                .agent_did
-                .context("agent request is missing agent_did")?,
+            node_did: row.node_did.context("agent request is missing node_did")?,
             requester_did: normalize_optional_string(row.requester_did),
-            behavior_id: row
-                .behavior_id
-                .context("agent request is missing behavior_id")?,
+            agent_id: row.agent_id.context("agent request is missing agent_id")?,
             session_id: row
                 .session_id
                 .context("agent request is missing session_id")?,
@@ -111,7 +107,7 @@ impl TryFrom<gents_protocol::row::AgentRequestRow> for AgentRequest {
             execution_generation: normalize_optional_string(row.execution_generation),
             execution_lease_secs,
             execution_lease_expires_at: normalize_optional_string(row.execution_lease_expires_at),
-            subagent_depth,
+            request_hop,
             caused_by_parent_request_id: row.caused_by_parent_request_id,
             caused_by_parent_request_doc_id: row.caused_by_parent_request_doc_id,
             caused_by_parent_tool_call_id: row.caused_by_parent_tool_call_id,
@@ -122,7 +118,7 @@ impl TryFrom<gents_protocol::row::AgentRequestRow> for AgentRequest {
             caused_by_correlation: normalize_optional_string(row.caused_by_correlation),
             caused_by_trigger_context: normalize_optional_string(row.caused_by_trigger_context),
             workspace_id: normalize_optional_string(row.workspace_id),
-            workspace_owner_agent_did: row.workspace_owner_agent_did,
+            workspace_owner_node_did: row.workspace_owner_node_did,
             workspace_authority: normalize_optional_string(row.workspace_authority),
             workspace_seal_hash: normalize_optional_string(row.workspace_seal_hash),
         };
@@ -140,8 +136,8 @@ fn normalize_optional_string(value: Option<String>) -> Option<String> {
 
 pub fn validate_agent_request(req: &AgentRequest) -> Result<()> {
     anyhow::ensure!(
-        !req.behavior_id.is_empty() && req.behavior_id.trim() == req.behavior_id,
-        "agent request behavior_id must be a canonical nonblank identifier"
+        !req.agent_id.is_empty() && req.agent_id.trim() == req.agent_id,
+        "agent request agent_id must be a canonical nonblank identifier"
     );
     if req.max_total_tokens.is_some_and(|limit| limit < 0) {
         anyhow::bail!("agent request max_total_tokens must be non-negative");
@@ -158,8 +154,8 @@ pub fn validate_agent_request(req: &AgentRequest) -> Result<()> {
                 && has_parent_req_doc
                 && !has_parent_tc
                 && !has_parent_tc_doc
-                && req.subagent_depth == 0,
-            "title audit requires parent-only provenance, not subagent authority"
+                && req.request_hop == 0,
+            "title audit requires parent-only provenance, not delegated authority"
         );
     }
     let request_only_control_link = has_parent_req
@@ -180,17 +176,17 @@ pub fn validate_agent_request(req: &AgentRequest) -> Result<()> {
     if has_parent_req != has_parent_tc && !request_only_control_link {
         return Err(IllegalToolCallTransition::ParentLinkageIncoherent.into());
     }
-    if req.subagent_depth > 0
+    if req.request_hop > 0
         && !request_only_control_link
         && !(has_parent_req && has_parent_tc && has_parent_req_doc && has_parent_tc_doc)
     {
         return Err(IllegalToolCallTransition::ParentLinkageIncoherent.into());
     }
     let is_top_level = !has_parent_req;
-    if is_top_level && req.subagent_depth != 0 {
+    if is_top_level && req.request_hop != 0 {
         return Err(IllegalToolCallTransition::ParentLinkageIncoherent.into());
     }
-    if !is_top_level && req.subagent_depth == 0 && !request_only_control_link {
+    if !is_top_level && req.request_hop == 0 && !request_only_control_link {
         return Err(IllegalToolCallTransition::ParentLinkageIncoherent.into());
     }
     Ok(())
@@ -204,21 +200,21 @@ pub trait Watcher: Send + Sync {
 
 pub struct DefraWatcher {
     node: Arc<EmbeddedNode>,
-    agent_did: String,
+    node_did: String,
     request_collection_id: Option<String>,
     subscription: events::DocumentChangeSubscription,
     processed_request_ids: cooldown::ProcessedRequests,
 }
 
 impl DefraWatcher {
-    pub fn new(node: Arc<EmbeddedNode>, agent_did: &str) -> Self {
-        Self::with_subscription_source(node.clone(), node, agent_did)
+    pub fn new(node: Arc<EmbeddedNode>, node_did: &str) -> Self {
+        Self::with_subscription_source(node.clone(), node, node_did)
     }
 
     pub fn with_subscription_source(
         subs: Arc<dyn UpdateSubscriptionSource>,
         node: Arc<EmbeddedNode>,
-        agent_did: &str,
+        node_did: &str,
     ) -> Self {
         let subscription = subs.subscribe_document_changes();
         let request_collection_id = node
@@ -228,7 +224,7 @@ impl DefraWatcher {
             .map(|collection| collection.collection_id);
         Self {
             node,
-            agent_did: agent_did.to_string(),
+            node_did: node_did.to_string(),
             request_collection_id,
             subscription,
             processed_request_ids: HashMap::new(),

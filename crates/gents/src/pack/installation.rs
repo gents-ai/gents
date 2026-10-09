@@ -181,7 +181,7 @@ fn collection_named(name: &str) -> Result<Collection> {
 async fn read_record(txn: &ConfigApplyTxn<'_>, owner: &str, coordinate: &str) -> Result<Record> {
     let response = txn
         .execute(&format!(
-            r#"{{ {RECORD}(filter: {{ agent_did: {{ _eq: "{}" }}, coordinate: {{ _eq: "{}" }} }}, limit: 2) {{ _docID version digest documents plugins history required_by explicit plugin_store }} }}"#,
+            r#"{{ {RECORD}(filter: {{ node_did: {{ _eq: "{}" }}, coordinate: {{ _eq: "{}" }} }}, limit: 2) {{ _docID version digest documents plugins history required_by explicit plugin_store }} }}"#,
             escape_graphql_string(owner),
             escape_graphql_string(coordinate)
         ))
@@ -310,7 +310,7 @@ async fn write_record_in_txn(
     }
     let required_by: Vec<&String> = prior.required_by.iter().collect();
     let input = json!({
-        "agent_did": owner,
+        "node_did": owner,
         "coordinate": pack.coordinate,
         "version": pack.version,
         "digest": pack.digest,
@@ -334,7 +334,7 @@ async fn write_record_in_txn(
         Some(doc_id) => {
             let mut update = input;
             if let Some(object) = update.as_object_mut() {
-                object.remove("agent_did");
+                object.remove("node_did");
                 object.remove("coordinate");
             }
             txn.execute_with_variables(
@@ -532,7 +532,7 @@ pub(crate) async fn install_in_txn(
 /// Records a change to `coordinate`'s plugins in the host plugin store under
 /// `home`: `installed` is what an install just stored, `None` a removal. The
 /// write is what wakes the control watcher (the `PackInstallation` match in
-/// `agent::document_view`), so a behavior that names a changed plugin is
+/// `agent::document_view`), so an Agent that names a changed plugin is
 /// re-resolved on the next reconcile; callers change the store first.
 ///
 /// Over a pack install of `coordinate` the record keeps the documents and
@@ -804,7 +804,7 @@ pub async fn list_installed_packs(
 ) -> Result<Vec<InstalledPack>> {
     let response = access
         .execute(&format!(
-            r#"{{ {RECORD}(filter: {{ agent_did: {{ _eq: "{}" }} }}, order: {{ coordinate: ASC }}) {{ _docID coordinate version digest plugin_store }} }}"#,
+            r#"{{ {RECORD}(filter: {{ node_did: {{ _eq: "{}" }} }}, order: {{ coordinate: ASC }}) {{ _docID coordinate version digest plugin_store }} }}"#,
             escape_graphql_string(owner)
         ))
         .await?;
@@ -833,7 +833,7 @@ pub async fn read_installed_pack(
 ) -> Result<Option<InstalledPack>> {
     let response = access
         .execute(&format!(
-            r#"{{ {RECORD}(filter: {{ agent_did: {{ _eq: "{}" }}, coordinate: {{ _eq: "{}" }} }}, limit: 2) {{ _docID coordinate version digest plugin_store }} }}"#,
+            r#"{{ {RECORD}(filter: {{ node_did: {{ _eq: "{}" }}, coordinate: {{ _eq: "{}" }} }}, limit: 2) {{ _docID coordinate version digest plugin_store }} }}"#,
             escape_graphql_string(owner),
             escape_graphql_string(coordinate)
         ))
@@ -932,7 +932,7 @@ pub(crate) fn installable_documents(config: &PackConfig) -> Result<Vec<DesiredSt
     Ok(DesiredStateApplyPlan::from_pack_config(config)?
         .documents()
         .iter()
-        .filter(|document| document.collection != Collection::AgentPrincipal)
+        .filter(|document| document.collection != Collection::Node)
         .cloned()
         .collect())
 }

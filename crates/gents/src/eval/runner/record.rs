@@ -178,7 +178,7 @@ mod tests {
                                 case_id: "case".into(),
                                 trial_index: i,
                                 attempt: 1,
-                                trial_agent_did: owner.into(),
+                                trial_node_did: owner.into(),
                                 session_id: format!("session-{i}"),
                                 seed: i.into(),
                                 home_hint: None,

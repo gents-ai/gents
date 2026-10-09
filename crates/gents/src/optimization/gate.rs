@@ -7,7 +7,7 @@
 //! only the allowed field" is a statement about files rather than about intent.
 //!
 //! The gate does not validate the candidate's reference closure. Pack
-//! behaviors name inference-slot markers that are bound only when the executor
+//! agents name inference-slot markers that are bound only when the executor
 //! runs, so a pack-level closure check would refuse every real candidate. It is
 //! also unnecessary: the byte comparison proves that only the target prompt
 //! differs from the baseline, so the candidate's references are exactly the
@@ -178,7 +178,7 @@ fn owner_validation(baseline: &MaterializedPack, text: &str) -> Result<(), Struc
     task.validate().map_err(invalid)?;
     let plan = DesiredStateApplyPlan::from_pack_config(&config).map_err(invalid)?;
     let references = ConfigReferences::from_documents(
-        &config.agent_principal.agent_did,
+        &config.node.node_did,
         plan.documents()
             .iter()
             .map(|document| (document.collection, document.add.clone())),

@@ -1,11 +1,11 @@
 use super::*;
 
-fn resolved_task_for_test(task_id: &str, behavior_id: &str, prompt_template: &str) -> ResolvedTask {
+fn resolved_task_for_test(task_id: &str, agent_id: &str, prompt_template: &str) -> ResolvedTask {
     ResolvedTask {
         emit_outcome: false,
         task_id: task_id.to_string(),
         name: None,
-        behavior_id: behavior_id.to_string(),
+        agent_id: agent_id.to_string(),
         prompt_template: prompt_template.to_string(),
         goal_objective_template: None,
         goal_token_budget: None,
@@ -22,7 +22,7 @@ fn snapshot_with_active_task(task: ResolvedTask) -> Arc<ActiveRuntimeSnapshot> {
     tasks.insert(task.task_id.clone(), task);
     let resolved = ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
         "general".to_string(),
-        vec![integration_test_behavior("general")],
+        vec![integration_test_agent("general")],
         HashMap::new(),
         HashMap::new(),
         HashMap::new(),
@@ -31,7 +31,7 @@ fn snapshot_with_active_task(task: ResolvedTask) -> Arc<ActiveRuntimeSnapshot> {
         tasks,
         ..Default::default()
     })
-    .with_principal(stub_principal());
+    .with_node(stub_principal());
     Arc::new(resolved.activate(1, HashMap::new()))
 }
 
@@ -107,15 +107,15 @@ async fn manual_source_next_fire_returns_none_after_cancel() {
 async fn production_materializer_persists_event_source_document_lineage() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let behavior = integration_test_behavior("general");
-    let identity = behavior.principal_identity().clone();
-    let owner = behavior.agent_did();
-    crate::test_support::install_test_behavior(node.as_ref(), owner, "general").await;
+    let behavior = integration_test_agent("general");
+    let identity = behavior.node_identity().clone();
+    let owner = behavior.node_did();
+    crate::test_support::install_test_agent(node.as_ref(), owner, "general").await;
     let config = serde_json::from_value(serde_json::json!({
-        "agent_principal":{"agent_did":owner},
-        "tasks":[{"agent_did":owner,"task_id":"task-event","behavior_id":"general","prompt_template":"event body"}],
-        "event_sources":[{"agent_did":owner,"event_source_id":"source","source_collection":"AgentRequest","event_kind":"created"}],
-        "triggers":[{"agent_did":owner,"trigger_id":"event-trigger","task_id":"task-event","source":{"kind":"event","event_source_id":"source"}}]
+        "node":{"node_did":owner},
+        "tasks":[{"node_did":owner,"task_id":"task-event","agent_id":"general","prompt_template":"event body"}],
+        "event_sources":[{"node_did":owner,"event_source_id":"source","source_collection":"AgentRequest","event_kind":"created"}],
+        "triggers":[{"node_did":owner,"trigger_id":"event-trigger","task_id":"task-event","source":{"kind":"event","event_source_id":"source"}}]
     })).unwrap();
     let plan = crate::config_client::DesiredStateApplyPlan::from_pack_config(&config).unwrap();
     let trigger_doc_id = crate::config_client::ConfigAccess::transact_local(
@@ -140,7 +140,7 @@ async fn production_materializer_persists_event_source_document_lineage() {
     )
     .await
     .unwrap();
-    let snapshot = snapshot_with_behavior_and_schedules(behavior, HashMap::new());
+    let snapshot = snapshot_with_agent_and_schedules(behavior, HashMap::new());
     let (_tx, rx) = watch::channel(snapshot);
     let materializer = ProductionMaterializer::new(node.clone(), rx);
     let task = resolved_task_for_test("task-event", "general", "event body");
@@ -220,18 +220,18 @@ async fn production_materializer_persists_event_source_document_lineage() {
 /// admission, claims into that same session and resumes it.
 #[tokio::test]
 async fn production_event_fire_into_a_paired_client_session_adopts_its_requester() {
-    use crate::identity::AgentIdentity;
+    use crate::identity::NodeIdentity;
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let behavior = integration_test_behavior("general");
-    let identity = behavior.principal_identity().clone();
-    let owner = behavior.agent_did().to_owned();
-    crate::test_support::install_test_behavior(node.as_ref(), &owner, "general").await;
+    let behavior = integration_test_agent("general");
+    let identity = behavior.node_identity().clone();
+    let owner = behavior.node_did().to_owned();
+    crate::test_support::install_test_agent(node.as_ref(), &owner, "general").await;
     let config = serde_json::from_value(serde_json::json!({
-        "agent_principal":{"agent_did":owner},
-        "tasks":[{"agent_did":owner,"task_id":"task-lead","behavior_id":"general","prompt_template":"continue the lead"}],
-        "event_sources":[{"agent_did":owner,"event_source_id":"outcomes","source_collection":"AgentRequest","event_kind":"created"}],
-        "triggers":[{"agent_did":owner,"trigger_id":"lead-outcomes","task_id":"task-lead","source":{"kind":"event","event_source_id":"outcomes"},"session_id_template":"{{ doc.session_id }}"}]
+        "node":{"node_did":owner},
+        "tasks":[{"node_did":owner,"task_id":"task-lead","agent_id":"general","prompt_template":"continue the lead"}],
+        "event_sources":[{"node_did":owner,"event_source_id":"outcomes","source_collection":"AgentRequest","event_kind":"created"}],
+        "triggers":[{"node_did":owner,"trigger_id":"lead-outcomes","task_id":"task-lead","source":{"kind":"event","event_source_id":"outcomes"},"session_id_template":"{{ doc.session_id }}"}]
     })).unwrap();
     let plan = crate::config_client::DesiredStateApplyPlan::from_pack_config(&config).unwrap();
     let trigger_doc_id = crate::config_client::ConfigAccess::transact_local(
@@ -263,10 +263,9 @@ async fn production_event_fire_into_a_paired_client_session_adopts_its_requester
     )
     .unwrap();
     let session_id = "paired-client-console";
-    crate::session::ensure_session_with_behavior_id_and_requester_did(
+    crate::session::ensure_session_with_agent_id_and_requester_did(
         node.as_ref(),
         session_id,
-        "general",
         &owner,
         "general",
         Some(desktop.did()),
@@ -301,7 +300,7 @@ async fn production_event_fire_into_a_paired_client_session_adopts_its_requester
         receipt: fire.clone(),
         target_existing: true,
     };
-    let snapshot = snapshot_with_behavior_and_schedules(behavior, HashMap::new());
+    let snapshot = snapshot_with_agent_and_schedules(behavior, HashMap::new());
     let (_tx, rx) = watch::channel(snapshot);
     let materializer = ProductionMaterializer::new(node.clone(), rx);
     let task = resolved_task_for_test("task-lead", "general", "continue the lead");
@@ -364,7 +363,6 @@ async fn production_event_fire_into_a_paired_client_session_adopts_its_requester
     crate::hook::DefraSessionHook::resume_with_identity_policy(
         node.clone(),
         session_id,
-        "general",
         &owner,
         verified.requester_did.as_deref(),
         crate::hook::FailurePolicy::FailClosed,
@@ -377,15 +375,15 @@ async fn production_event_fire_into_a_paired_client_session_adopts_its_requester
 async fn production_schedule_materialization_passes_final_exact_config_admission() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let behavior = integration_test_behavior("general");
-    let identity = behavior.principal_identity().clone();
-    let owner = behavior.agent_did();
-    crate::test_support::install_test_behavior(node.as_ref(), owner, "general").await;
+    let behavior = integration_test_agent("general");
+    let identity = behavior.node_identity().clone();
+    let owner = behavior.node_did();
+    crate::test_support::install_test_agent(node.as_ref(), owner, "general").await;
     let config = serde_json::from_value(serde_json::json!({
-        "agent_principal":{"agent_did":owner},
-        "tasks":[{"agent_did":owner,"task_id":"task-schedule","behavior_id":"general","prompt_template":"schedule body"}],
-        "schedules":[{"agent_did":owner,"schedule_id":"source","cadence":{"kind":"interval","interval_secs":60}}],
-        "triggers":[{"agent_did":owner,"trigger_id":"schedule-trigger","task_id":"task-schedule","source":{"kind":"schedule","schedule_id":"source"}}]
+        "node":{"node_did":owner},
+        "tasks":[{"node_did":owner,"task_id":"task-schedule","agent_id":"general","prompt_template":"schedule body"}],
+        "schedules":[{"node_did":owner,"schedule_id":"source","cadence":{"kind":"interval","interval_secs":60}}],
+        "triggers":[{"node_did":owner,"trigger_id":"schedule-trigger","task_id":"task-schedule","source":{"kind":"schedule","schedule_id":"source"}}]
     })).unwrap();
     let plan = crate::config_client::DesiredStateApplyPlan::from_pack_config(&config).unwrap();
     let trigger_doc_id = crate::config_client::ConfigAccess::transact_local(
@@ -410,7 +408,7 @@ async fn production_schedule_materialization_passes_final_exact_config_admission
     )
     .await
     .unwrap();
-    let snapshot = snapshot_with_behavior_and_schedules(behavior, HashMap::new());
+    let snapshot = snapshot_with_agent_and_schedules(behavior, HashMap::new());
     let (_tx, rx) = watch::channel(snapshot);
     let materializer = ProductionMaterializer::new(node.clone(), rx);
     let task = resolved_task_for_test("task-schedule", "general", "schedule body");
@@ -464,7 +462,7 @@ async fn production_schedule_materialization_passes_final_exact_config_admission
 async fn production_materializer_rejects_incoherent_source_document_lineage() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     let snapshot =
-        snapshot_with_behavior_and_schedules(integration_test_behavior("general"), HashMap::new());
+        snapshot_with_agent_and_schedules(integration_test_agent("general"), HashMap::new());
     let (_tx, rx) = watch::channel(snapshot);
     let materializer = ProductionMaterializer::new(node, rx);
     let task = resolved_task_for_test("task-lineage-input", "general", "body");

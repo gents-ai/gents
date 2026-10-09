@@ -4,22 +4,22 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
 use defra_node::EmbeddedNode;
-use gents_protocol::row::BehaviorReadinessUnavailableReason;
+use gents_protocol::node_readiness::AgentReadinessUnavailableReason;
 
 use crate::admission::BackendAvailability;
-use crate::config::ResolvedBehavior;
-use crate::document_config::AgentBehavior as AgentBehaviorDocument;
-use crate::runtime_snapshot::{ResolvedRuntimeSnapshot, UnavailableBehavior};
+use crate::config::ResolvedAgent;
+use crate::document_config::Agent as AgentDocument;
+use crate::runtime_snapshot::{ResolvedRuntimeSnapshot, UnavailableAgent};
 use crate::tool_surface::ResolvedToolSelection;
 
 use super::DocumentRuntimeView;
 
 use crate::agent::{
-    assemble_principal_and_behaviors, behavior_config_from_documents, tool_selection_from_document,
-    BehaviorBuildError, DocumentResolveContext,
+    agent_config_from_documents, assemble_node_and_agents, tool_selection_from_document,
+    AgentBuildError, DocumentResolveContext,
 };
-use crate::identity::RuntimePrincipal;
-use crate::tool_surface::SubagentToolConfig;
+use crate::identity::RuntimeNode;
+use crate::tool_surface::AgentToolConfig;
 
 // The view is already scoped; check again at reference resolution so a foreign
 // record cannot satisfy a reference even in an independently constructed view.
@@ -35,7 +35,7 @@ macro_rules! owned_doc {
                 .get(id)
                 .ok_or_else(|| anyhow!("missing {} reference {id:?}", stringify!($map)))?;
             anyhow::ensure!(
-                record.value.agent_did == $owner,
+                record.value.node_did == $owner,
                 "foreign configuration reference {id:?}"
             );
             Ok(&record.value)
@@ -43,7 +43,7 @@ macro_rules! owned_doc {
     }};
 }
 
-/// A behavior on a backend this build cannot run is unavailable, not pending:
+/// A agent_config on a backend this build cannot run is unavailable, not pending:
 /// no arriving document repairs it.
 #[derive(Debug, thiserror::Error)]
 #[error("backend {backend_id} has provider kind {kind} this build does not know")]
@@ -52,13 +52,13 @@ struct UnknownKindBackend {
     kind: String,
 }
 
-struct BehaviorResolutionError {
-    code: BehaviorReadinessUnavailableReason,
+struct AgentResolutionError {
+    code: AgentReadinessUnavailableReason,
     detail: anyhow::Error,
 }
 
-impl BehaviorResolutionError {
-    fn new(code: BehaviorReadinessUnavailableReason, detail: anyhow::Error) -> Self {
+impl AgentResolutionError {
+    fn new(code: AgentReadinessUnavailableReason, detail: anyhow::Error) -> Self {
         Self { code, detail }
     }
 }
@@ -68,28 +68,25 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
     context: &DocumentResolveContext,
     view: &DocumentRuntimeView,
 ) -> Result<ResolvedRuntimeSnapshot> {
-    if !view.principal.value.enabled {
-        anyhow::bail!(
-            "agent principal {} is disabled",
-            view.principal.value.agent_did
-        );
+    if !view.node.value.enabled {
+        anyhow::bail!("node {} is disabled", view.node.value.node_did);
     }
 
-    let default_behavior_id = view
-        .principal
+    let default_agent_id = view
+        .node
         .value
-        .default_behavior_id
+        .default_agent_id
         .as_deref()
         .filter(|value| !value.trim().is_empty())
         .map(ToOwned::to_owned)
         .unwrap_or_default();
 
-    let principal_data = RuntimePrincipal {
-        agent_did: view.principal.value.agent_did.clone(),
+    let node_data = RuntimeNode {
+        node_did: view.node.value.node_did.clone(),
         identity: context.identity.clone(),
-        default_behavior_id: default_behavior_id.clone(),
-        display_name: view.principal.value.display_name.clone(),
-        enabled: view.principal.value.enabled,
+        default_agent_id: default_agent_id.clone(),
+        display_name: view.node.value.display_name.clone(),
+        enabled: view.node.value.enabled,
     };
 
     let measured_vetoed = context.backend_health.vetoed_backend_ids().await;
@@ -105,44 +102,42 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
         }
     }
 
-    let mut unavailable_behaviors = HashMap::new();
-    let mut behavior_factories: Vec<
+    let mut unavailable_agents = HashMap::new();
+    let mut agent_factories: Vec<
         Box<
-            dyn FnOnce(
-                    Arc<RuntimePrincipal>,
-                ) -> std::result::Result<ResolvedBehavior, BehaviorBuildError>
+            dyn FnOnce(Arc<RuntimeNode>) -> std::result::Result<ResolvedAgent, AgentBuildError>
                 + Send,
         >,
     > = Vec::new();
 
     let all_skills = sorted_skills(view);
 
-    for behavior_record in view.behaviors.values() {
-        let behavior = &behavior_record.value;
-        if !behavior.enabled {
-            unavailable_behaviors.insert(
-                behavior.behavior_id.clone(),
-                UnavailableBehavior::new(
-                    BehaviorReadinessUnavailableReason::BehaviorDisabled,
-                    format!("behavior {} is disabled", behavior.behavior_id),
+    for behavior_record in view.agents.values() {
+        let agent_config = &behavior_record.value;
+        if !agent_config.enabled {
+            unavailable_agents.insert(
+                agent_config.agent_id.clone(),
+                UnavailableAgent::new(
+                    AgentReadinessUnavailableReason::AgentDisabled,
+                    format!("agent {} is disabled", agent_config.agent_id),
                 ),
             );
             continue;
         }
 
-        let resolved_result: std::result::Result<_, BehaviorResolutionError> = (|| {
-            let scope = view.principal.value.agent_did.as_str();
+        let resolved_result: std::result::Result<_, AgentResolutionError> = (|| {
+            let scope = view.node.value.node_did.as_str();
             let inference =
-                resolve_inference(view, &behavior.inference_profile_id).map_err(|error| {
-                    BehaviorResolutionError::new(
-                        BehaviorReadinessUnavailableReason::InferenceProfileInvalid,
+                resolve_inference(view, &agent_config.inference_profile_id).map_err(|error| {
+                    AgentResolutionError::new(
+                        AgentReadinessUnavailableReason::InferenceProfileInvalid,
                         error,
                     )
                 })?;
             ensure_inference_available(view, &inference, &backend_admission_configs)?;
             let context_result: Result<_> = (|| {
-                anyhow::ensure!(behavior.agent_did == scope, "behavior owner mismatch");
-                let context = behavior
+                anyhow::ensure!(agent_config.node_did == scope, "agent owner mismatch");
+                let context = agent_config
                     .context_id
                     .as_deref()
                     .map(|id| owned_doc!(&view.contexts, id, scope))
@@ -173,11 +168,8 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
                     .and_then(|context| context.tools_id.as_deref())
                     .map(|id| owned_doc!(&view.tools, id, scope))
                     .transpose()?;
-                let (tool_selection, subagents) = match tools {
-                    None => (
-                        ResolvedToolSelection::default(),
-                        SubagentToolConfig::default(),
-                    ),
+                let (tool_selection, agents) = match tools {
+                    None => (ResolvedToolSelection::default(), AgentToolConfig::default()),
                     Some(tools) => {
                         tools.validate()?;
                         if let Some(remote) = &tools.remote {
@@ -199,60 +191,53 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
                         let eth = super::expand_eth_tools(tools, view)?;
                         selected.eth_queries = eth.queries;
                         selected.eth_calls = eth.calls;
-                        let subagents =
-                            crate::tool_surface::SubagentToolConfig::from_document_with_targets(
+                        let agents =
+                            crate::tool_surface::AgentToolConfig::from_document_with_targets(
                                 tools,
-                                view.subagent_targets.values().map(|record| &record.value),
+                                view.agent_targets.values().map(|record| &record.value),
                             )?;
-                        for target in &subagents.targets {
-                            if target.target_agent_did == scope {
-                                owned_doc!(&view.behaviors, target.behavior_id.as_str(), scope)?;
+                        for target in &agents.targets {
+                            if target.target_node_did == scope {
+                                owned_doc!(&view.agents, target.agent_id.as_str(), scope)?;
                             }
                         }
-                        (selected, subagents)
+                        (selected, agents)
                     }
                 };
-                Ok((context, compaction, summary, tool_selection, subagents))
+                Ok((context, compaction, summary, tool_selection, agents))
             })();
-            let (context, compaction, summary, tools, subagents) =
+            let (context, compaction, summary, tools, agents) =
                 context_result.map_err(|error| {
-                    BehaviorResolutionError::new(
-                        BehaviorReadinessUnavailableReason::ToolConfigurationInvalid,
+                    AgentResolutionError::new(
+                        AgentReadinessUnavailableReason::ToolConfigurationInvalid,
                         error,
                     )
                 })?;
-            Ok((inference, context, compaction, summary, tools, subagents))
+            Ok((inference, context, compaction, summary, tools, agents))
         })();
 
         match resolved_result {
-            Ok((
-                inference,
-                resolved_context,
-                compaction,
-                summary,
-                tool_selection,
-                subagent_tools,
-            )) => {
-                let behavior_id = behavior.behavior_id.clone();
-                let behavior_value = behavior.clone();
+            Ok((inference, resolved_context, compaction, summary, tool_selection, agent_tools)) => {
+                let agent_id = agent_config.agent_id.clone();
+                let behavior_value = agent_config.clone();
                 let tool_ceiling = context.tool_ceiling.clone();
                 let skill_ids = resolved_context
                     .as_ref()
                     .map(|context| context.skill_ids.as_slice())
                     .unwrap_or(&[]);
                 let behavior_skills =
-                    crate::skills::effective_skills(&all_skills, &behavior.agent_did, skill_ids)
+                    crate::skills::effective_skills(&all_skills, &agent_config.node_did, skill_ids)
                         .into_iter()
                         .cloned()
                         .collect::<Vec<_>>();
                 let factory: Box<
                     dyn FnOnce(
-                            Arc<RuntimePrincipal>,
+                            Arc<RuntimeNode>,
                         )
-                            -> std::result::Result<ResolvedBehavior, BehaviorBuildError>
+                            -> std::result::Result<ResolvedAgent, AgentBuildError>
                         + Send,
                 > = Box::new(move |principal| {
-                    behavior_config_from_documents(
+                    agent_config_from_documents(
                         principal,
                         &behavior_value,
                         resolved_context.as_ref(),
@@ -260,38 +245,37 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
                         summary,
                         &inference,
                         tool_selection,
-                        subagent_tools,
+                        agent_tools,
                         &tool_ceiling,
                         behavior_skills,
                     )
-                    .map_err(|error| BehaviorBuildError {
-                        behavior_id: behavior_id.clone(),
+                    .map_err(|error| AgentBuildError {
+                        agent_id: agent_id.clone(),
                         error,
                     })
                 });
-                behavior_factories.push(factory);
+                agent_factories.push(factory);
             }
             Err(error) => {
-                unavailable_behaviors.insert(
-                    behavior.behavior_id.clone(),
-                    UnavailableBehavior::new(error.code, error.detail.to_string()),
+                unavailable_agents.insert(
+                    agent_config.agent_id.clone(),
+                    UnavailableAgent::new(error.code, error.detail.to_string()),
                 );
             }
         }
     }
 
-    let (principal, behavior_results) =
-        assemble_principal_and_behaviors(principal_data, behavior_factories);
+    let (principal, agent_results) = assemble_node_and_agents(node_data, agent_factories);
 
-    let mut behaviors = Vec::<Arc<ResolvedBehavior>>::new();
-    for result in behavior_results {
+    let mut agents = Vec::<Arc<ResolvedAgent>>::new();
+    for result in agent_results {
         match result {
-            Ok(behavior_arc) => behaviors.push(behavior_arc),
-            Err(BehaviorBuildError { behavior_id, error }) => {
-                unavailable_behaviors.insert(
-                    behavior_id,
-                    UnavailableBehavior::new(
-                        BehaviorReadinessUnavailableReason::RuntimeConfigurationInvalid,
+            Ok(agent_arc) => agents.push(agent_arc),
+            Err(AgentBuildError { agent_id, error }) => {
+                unavailable_agents.insert(
+                    agent_id,
+                    UnavailableAgent::new(
+                        AgentReadinessUnavailableReason::RuntimeConfigurationInvalid,
                         error.to_string(),
                     ),
                 );
@@ -299,29 +283,29 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
         }
     }
 
-    let own_agent_did = context.identity.did().to_string();
-    let candidate_behavior_ids = behaviors
+    let own_node_did = context.identity.did().to_string();
+    let candidate_agent_ids = agents
         .iter()
-        .map(|behavior| behavior.behavior_id.clone())
+        .map(|agent_config| agent_config.agent_id.clone())
         .collect::<HashSet<_>>();
-    let mut behavior_surfaces = Vec::with_capacity(behaviors.len());
-    for behavior in behaviors {
-        match behavior
+    let mut behavior_surfaces = Vec::with_capacity(agents.len());
+    for agent_config in agents {
+        match agent_config
             .tools
-            .resolve_with_available_subagent_targets(
+            .resolve_with_available_agent_targets(
                 node,
-                &own_agent_did,
-                &candidate_behavior_ids,
+                &own_node_did,
+                &candidate_agent_ids,
                 &context.plugins,
             )
             .await
         {
-            Ok(tool_surface) => behavior_surfaces.push((behavior, tool_surface)),
+            Ok(tool_surface) => behavior_surfaces.push((agent_config, tool_surface)),
             Err(error) => {
-                unavailable_behaviors.insert(
-                    behavior.behavior_id.clone(),
-                    UnavailableBehavior::new(
-                        BehaviorReadinessUnavailableReason::ToolSurfaceUnavailable,
+                unavailable_agents.insert(
+                    agent_config.agent_id.clone(),
+                    UnavailableAgent::new(
+                        AgentReadinessUnavailableReason::ToolSurfaceUnavailable,
                         error.to_string(),
                     ),
                 );
@@ -329,40 +313,40 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
         }
     }
 
-    let active_behavior_ids = behavior_surfaces
+    let active_agent_ids = behavior_surfaces
         .iter()
-        .map(|(behavior, _)| behavior.behavior_id.clone())
+        .map(|(agent_config, _)| agent_config.agent_id.clone())
         .collect::<HashSet<_>>();
-    let mut behaviors = Vec::with_capacity(behavior_surfaces.len());
+    let mut agents = Vec::with_capacity(behavior_surfaces.len());
     let mut tool_surfaces = HashMap::with_capacity(behavior_surfaces.len());
-    for (behavior, mut tool_surface) in behavior_surfaces {
-        for target in tool_surface.subagent_targets() {
-            if target.target_agent_did == own_agent_did
-                && !active_behavior_ids.contains(&target.behavior_id)
+    for (agent_config, mut tool_surface) in behavior_surfaces {
+        for target in tool_surface.agent_targets() {
+            if target.target_node_did == own_node_did
+                && !active_agent_ids.contains(&target.agent_id)
             {
                 tracing::warn!(
-                    behavior_id = %behavior.behavior_id,
+                    agent_id = %agent_config.agent_id,
                     target_name = %target.name,
-                    target_behavior_id = %target.behavior_id,
-                    "dropping LOCAL subagent target: target behavior is not active \
-                     (behavior may be disabled or its backend/MCP resolution failed)"
+                    target_agent_id = %target.agent_id,
+                    "dropping LOCAL agent target: target agent is not active \
+                     (agent may be disabled or its backend/MCP resolution failed)"
                 );
             }
         }
-        tool_surface.retain_subagent_targets(&own_agent_did, &active_behavior_ids);
-        tool_surfaces.insert(behavior.behavior_id.clone(), Arc::new(tool_surface));
-        behaviors.push(behavior);
+        tool_surface.retain_agent_targets(&own_node_did, &active_agent_ids);
+        tool_surfaces.insert(agent_config.agent_id.clone(), Arc::new(tool_surface));
+        agents.push(agent_config);
     }
 
-    let automation = resolve_automation(view, &unavailable_behaviors);
+    let automation = resolve_automation(view, &unavailable_agents);
     Ok(ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
-        default_behavior_id,
-        behaviors,
+        default_agent_id,
+        agents,
         tool_surfaces,
         backend_admission_configs,
-        unavailable_behaviors,
+        unavailable_agents,
     )
-    .with_principal(principal)
+    .with_node(principal)
     .with_local_did(context.identity.did().to_string())
     .with_automation(automation))
 }
@@ -371,24 +355,24 @@ fn ensure_inference_available(
     view: &DocumentRuntimeView,
     inference: &crate::config::ResolvedInference,
     admission_configs: &HashMap<String, crate::admission::BackendAdmissionConfig>,
-) -> std::result::Result<(), BehaviorResolutionError> {
-    let scope = view.principal.value.agent_did.as_str();
+) -> std::result::Result<(), AgentResolutionError> {
+    let scope = view.node.value.node_did.as_str();
     let backend = &inference.backend;
     let admission = admission_configs.get(&backend.backend_id).ok_or_else(|| {
-        BehaviorResolutionError::new(
-            BehaviorReadinessUnavailableReason::BackendNotConfigured,
+        AgentResolutionError::new(
+            AgentReadinessUnavailableReason::BackendNotConfigured,
             anyhow!("backend {} has no matching observation", backend.backend_id),
         )
     })?;
     let unavailable = match admission.availability() {
         BackendAvailability::Available => None,
-        BackendAvailability::Disabled => Some(BehaviorReadinessUnavailableReason::BackendDisabled),
+        BackendAvailability::Disabled => Some(AgentReadinessUnavailableReason::BackendDisabled),
         BackendAvailability::ProbeNotHealthy | BackendAvailability::MeasuredUnhealthy => {
-            Some(BehaviorReadinessUnavailableReason::BackendTemporarilyUnavailable)
+            Some(AgentReadinessUnavailableReason::BackendTemporarilyUnavailable)
         }
     };
     if let Some(code) = unavailable {
-        return Err(BehaviorResolutionError::new(
+        return Err(AgentResolutionError::new(
             code,
             anyhow!(
                 "backend {} is unavailable: {:?}",
@@ -399,7 +383,7 @@ fn ensure_inference_available(
     }
     if matches!(
         backend.auth,
-        crate::document_config::BackendAuth::PrincipalOAuth { .. }
+        crate::document_config::BackendAuth::NodeOAuth { .. }
     ) {
         let provider = match backend.provider_kind {
             crate::backend_provider::BackendProviderKind::ChatGptCodex => {
@@ -412,9 +396,9 @@ fn ensure_inference_available(
                 crate::claude_oauth::CLAUDE_OAUTH_PROVIDER
             }
             _ => {
-                return Err(BehaviorResolutionError::new(
-                    BehaviorReadinessUnavailableReason::CredentialsRequired,
-                    anyhow!("provider has no principal OAuth adapter"),
+                return Err(AgentResolutionError::new(
+                    AgentReadinessUnavailableReason::CredentialsRequired,
+                    anyhow!("provider has no node OAuth adapter"),
                 ));
             }
         };
@@ -422,8 +406,8 @@ fn ensure_inference_available(
             provider,
             crate::oauth_credential::AccountPick::Reference(backend.auth.oauth_account_ref()),
         ) {
-            return Err(BehaviorResolutionError::new(
-                BehaviorReadinessUnavailableReason::CredentialsRequired,
+            return Err(AgentResolutionError::new(
+                AgentReadinessUnavailableReason::CredentialsRequired,
                 anyhow!(
                     "backend {} requires enabled OAuthCredential for {scope}",
                     backend.backend_id
@@ -436,14 +420,14 @@ fn ensure_inference_available(
 
 pub(super) fn collect_unresolved_behavior_references(
     view: &DocumentRuntimeView,
-    behavior: &AgentBehaviorDocument,
+    agent_config: &AgentDocument,
     details: &mut Vec<String>,
 ) {
-    let scope = view.principal.value.agent_did.as_str();
+    let scope = view.node.value.node_did.as_str();
     let result: Result<()> = (|| {
-        anyhow::ensure!(behavior.agent_did == scope, "behavior owner mismatch");
-        select_inference_documents(view, &behavior.inference_profile_id)?;
-        if let Some(id) = &behavior.context_id {
+        anyhow::ensure!(agent_config.node_did == scope, "agent owner mismatch");
+        select_inference_documents(view, &agent_config.inference_profile_id)?;
+        if let Some(id) = &agent_config.context_id {
             let context = owned_doc!(&view.contexts, id.as_str(), scope)?;
             if let Some(id) = &context.compaction_id {
                 let compaction = owned_doc!(&view.compactions, id.as_str(), scope)?;
@@ -462,7 +446,7 @@ pub(super) fn collect_unresolved_behavior_references(
     })();
     if let Err(error) = result {
         if error.downcast_ref::<UnknownKindBackend>().is_none() {
-            details.push(format!("behavior {}: {error:#}", behavior.behavior_id));
+            details.push(format!("agent {}: {error:#}", agent_config.agent_id));
         }
     }
 }
@@ -479,13 +463,13 @@ struct SelectedInferenceDocuments<'a> {
 /// Only a failure here can be repaired by a document arriving, so this is what
 /// the control watcher's visibility gate may wait on; `resolve_inference`'s
 /// advertised-model, credential and structural validation can be permanently
-/// false for a behavior the router never selects, and the snapshot reports
-/// that per behavior as an `UnavailableBehavior` instead of blocking.
+/// false for an agent the router never selects, and the snapshot reports
+/// that per agent as an `UnavailableAgent` instead of blocking.
 fn select_inference_documents<'a>(
     view: &'a DocumentRuntimeView,
     id: &str,
 ) -> Result<SelectedInferenceDocuments<'a>> {
-    let scope = view.principal.value.agent_did.as_str();
+    let scope = view.node.value.node_did.as_str();
     let profile = owned_doc!(&view.inference_profiles, id, scope)?;
     if let Some(kind) = view.unknown_kind_backends.get(&profile.backend_id) {
         return Err(UnknownKindBackend {
@@ -588,7 +572,7 @@ mod advertised_context_override_tests {
 
     fn profile(context_window: i64) -> crate::document_config::InferenceProfile {
         serde_json::from_value(serde_json::json!({
-            "agent_did": "did:test:owner",
+            "node_did": "did:test:owner",
             "profile_id": "profile",
             "backend_id": "backend",
             "model_name": "gpt-5.6-sol",
@@ -632,7 +616,7 @@ mod advertised_context_override_tests {
 
 // The runtime configuration fingerprint is compared across independently
 // resolved views. Every collection map is keyed/sorted by the projector;
-// skills are the one value vector embedded in ResolvedBehavior's Debug value, so
+// skills are the one value vector embedded in ResolvedAgent's Debug value, so
 // canonicalize it before both prompt construction and fingerprinting.
 pub(super) fn sorted_skills(view: &DocumentRuntimeView) -> Vec<crate::skills::Skill> {
     let mut skills = view
@@ -647,7 +631,7 @@ pub(super) fn sorted_skills(view: &DocumentRuntimeView) -> Vec<crate::skills::Sk
 fn skill_from_document(doc: &crate::document_config::SkillDocument) -> crate::skills::Skill {
     crate::skills::Skill {
         skill_id: doc.skill_id.clone(),
-        agent_did: doc.agent_did.clone(),
+        node_did: doc.node_did.clone(),
         name: doc.name.clone().unwrap_or_default(),
         description: doc.description.clone().unwrap_or_default(),
         instructions: doc.instructions.clone().unwrap_or_default(),

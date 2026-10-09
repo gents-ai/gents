@@ -167,7 +167,7 @@ fn runtime_control_projection_keeps_authored_steering_visible() {
     ));
     assert!(crate::lifecycle::is_runtime_control_message(
         &RequestInput::default(),
-        "background-completion-notification:child-1:subagent",
+        "background-completion-notification:child-1:agent",
     ));
     assert!(!crate::lifecycle::is_runtime_control_message(
         &input(QueueSource::User),

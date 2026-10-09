@@ -38,7 +38,7 @@ pub struct HydrationRequest {
     pub request_key: String,
     pub peer_id: String,
     pub requester_did: String,
-    pub agent_did: String,
+    pub node_did: String,
     pub session_id: String,
 }
 
@@ -48,7 +48,7 @@ impl HydrationRequest {
     pub fn from_row(
         request_key: String,
         requester_did: String,
-        agent_did: String,
+        node_did: String,
         session_id: String,
     ) -> Result<Self, &'static str> {
         let Some((peer_id, key_session_id)) = request_key.split_once(':') else {
@@ -62,7 +62,7 @@ impl HydrationRequest {
             request_key,
             peer_id,
             requester_did,
-            agent_did,
+            node_did,
             session_id,
         })
     }
@@ -72,7 +72,7 @@ impl HydrationRequest {
 pub struct SessionOwner {
     pub session_id: String,
     pub requester_did: String,
-    pub agent_did: String,
+    pub node_did: String,
 }
 
 /// A locally desired client route whose exact requester/agent filter is applied.
@@ -80,7 +80,7 @@ pub struct SessionOwner {
 pub struct AppliedPairingRoute {
     pub peer_id: String,
     pub requester_did: String,
-    pub agent_did: String,
+    pub node_did: String,
 }
 
 /// An active membership whose network root and admin signature were verified.
@@ -95,7 +95,7 @@ pub struct HydrationDocument {
     pub collection: SessionHydrationCollection,
     pub doc_id: String,
     pub requester_did: String,
-    pub agent_did: String,
+    pub node_did: String,
     pub session_id: String,
 }
 
@@ -198,7 +198,7 @@ pub fn decide_hydration(
     let pairing = AppliedPairingRoute {
         peer_id: request.peer_id.clone(),
         requester_did: request.requester_did.clone(),
-        agent_did: request.agent_did.clone(),
+        node_did: request.node_did.clone(),
     };
     if !catalog.applied_pairing_routes.contains(&pairing) {
         return HydrationVerdict::Reject("peer pairing does not match requester and agent");
@@ -215,7 +215,7 @@ pub fn decide_hydration(
     let owner = SessionOwner {
         session_id: request.session_id.clone(),
         requester_did: request.requester_did.clone(),
-        agent_did: request.agent_did.clone(),
+        node_did: request.node_did.clone(),
     };
     if !catalog.sessions.contains(&owner) {
         return HydrationVerdict::Reject(SESSION_OWNERSHIP_MISMATCH);
@@ -228,7 +228,7 @@ pub fn decide_hydration(
             .filter(|doc| {
                 HYDRATION_COLLECTIONS.contains(&doc.collection)
                     && doc.requester_did == request.requester_did
-                    && doc.agent_did == request.agent_did
+                    && doc.node_did == request.node_did
                     && (doc.session_id == request.session_id
                         || catalog.authorized_reference_closure.contains(
                             &SessionHydrationDocumentKey {
@@ -276,7 +276,7 @@ impl ClientHydrationPhase {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientHydrationProgress {
     pub session_id: String,
-    pub agent_did: String,
+    pub node_did: String,
     pub phase: ClientHydrationPhase,
     pub merged_count: usize,
     /// Locally present identities that belong to the signed served manifest.
@@ -291,7 +291,7 @@ impl Default for ClientHydrationProgress {
     fn default() -> Self {
         Self {
             session_id: String::new(),
-            agent_did: String::new(),
+            node_did: String::new(),
             phase: ClientHydrationPhase::Idle,
             merged_count: 0,
             covered_count: 0,
@@ -302,7 +302,7 @@ impl Default for ClientHydrationProgress {
     }
 }
 
-/// Durable request state for one exact `(session_id, agent_did)` target.
+/// Durable request state for one exact `(session_id, node_did)` target.
 ///
 /// This is deliberately a query result rather than retained client state. A
 /// session snapshot derives progress from its own request row and locally
@@ -317,10 +317,10 @@ pub enum ClientHydrationRequestState {
 
 /// Begin a new receiver attempt, clearing any terminal state and denominator
 /// retained by the previous request for this target.
-pub fn begin_hydration_request(session_id: &str, agent_did: &str) -> ClientHydrationProgress {
+pub fn begin_hydration_request(session_id: &str, node_did: &str) -> ClientHydrationProgress {
     ClientHydrationProgress {
         session_id: session_id.to_string(),
-        agent_did: agent_did.to_string(),
+        node_did: node_did.to_string(),
         phase: ClientHydrationPhase::Requested,
         merged_count: 0,
         covered_count: 0,
@@ -347,10 +347,10 @@ pub fn can_start_hydration(
 pub fn can_retry_hydration(
     prev: &ClientHydrationProgress,
     session_id: &str,
-    agent_did: &str,
+    node_did: &str,
 ) -> bool {
     prev.session_id == session_id
-        && prev.agent_did == agent_did
+        && prev.node_did == node_did
         && prev.phase == ClientHydrationPhase::Failed
 }
 
@@ -374,17 +374,17 @@ fn can_complete(
 pub fn observe_hydration_progress(
     prev: &ClientHydrationProgress,
     session_id: &str,
-    agent_did: &str,
+    node_did: &str,
     merged_documents: BTreeSet<SessionHydrationDocumentKey>,
     served_documents: Option<BTreeSet<SessionHydrationDocumentKey>>,
     failed: bool,
 ) -> ClientHydrationProgress {
-    let base = if prev.session_id == session_id && prev.agent_did == agent_did {
+    let base = if prev.session_id == session_id && prev.node_did == node_did {
         prev.clone()
     } else {
         ClientHydrationProgress {
             session_id: session_id.to_string(),
-            agent_did: agent_did.to_string(),
+            node_did: node_did.to_string(),
             ..ClientHydrationProgress::default()
         }
     };
@@ -402,7 +402,7 @@ pub fn observe_hydration_progress(
     if failed || base.phase == ClientHydrationPhase::Failed {
         return ClientHydrationProgress {
             session_id: session_id.to_string(),
-            agent_did: agent_did.to_string(),
+            node_did: node_did.to_string(),
             phase: ClientHydrationPhase::Failed,
             merged_count,
             covered_count,
@@ -414,7 +414,7 @@ pub fn observe_hydration_progress(
     if can_complete(&merged, served.as_ref()) {
         return ClientHydrationProgress {
             session_id: session_id.to_string(),
-            agent_did: agent_did.to_string(),
+            node_did: node_did.to_string(),
             phase: ClientHydrationPhase::Complete,
             merged_count,
             covered_count,
@@ -429,7 +429,7 @@ pub fn observe_hydration_progress(
     {
         return ClientHydrationProgress {
             session_id: session_id.to_string(),
-            agent_did: agent_did.to_string(),
+            node_did: node_did.to_string(),
             phase: ClientHydrationPhase::Serving,
             merged_count,
             covered_count,
@@ -440,7 +440,7 @@ pub fn observe_hydration_progress(
     }
     ClientHydrationProgress {
         session_id: session_id.to_string(),
-        agent_did: agent_did.to_string(),
+        node_did: node_did.to_string(),
         phase: if base.phase == ClientHydrationPhase::Requested {
             ClientHydrationPhase::Requested
         } else {
@@ -461,7 +461,7 @@ pub fn observe_hydration_progress(
 /// pending. No process-local progress survives or crosses target queries.
 pub fn project_durable_hydration_progress(
     session_id: &str,
-    agent_did: &str,
+    node_did: &str,
     merged_documents: BTreeSet<SessionHydrationDocumentKey>,
     request: ClientHydrationRequestState,
 ) -> ClientHydrationProgress {
@@ -469,22 +469,22 @@ pub fn project_durable_hydration_progress(
         ClientHydrationRequestState::Missing => (
             ClientHydrationProgress {
                 session_id: session_id.to_string(),
-                agent_did: agent_did.to_string(),
+                node_did: node_did.to_string(),
                 ..ClientHydrationProgress::default()
             },
             None,
             false,
         ),
         ClientHydrationRequestState::Pending => {
-            (begin_hydration_request(session_id, agent_did), None, false)
+            (begin_hydration_request(session_id, node_did), None, false)
         }
         ClientHydrationRequestState::Served(documents) => (
-            begin_hydration_request(session_id, agent_did),
+            begin_hydration_request(session_id, node_did),
             Some(documents),
             false,
         ),
         ClientHydrationRequestState::Rejected(documents) => (
-            begin_hydration_request(session_id, agent_did),
+            begin_hydration_request(session_id, node_did),
             documents,
             true,
         ),
@@ -492,7 +492,7 @@ pub fn project_durable_hydration_progress(
     observe_hydration_progress(
         &base,
         session_id,
-        agent_did,
+        node_did,
         merged_documents,
         served_documents,
         failed,

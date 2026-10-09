@@ -1,15 +1,15 @@
 {
-  "agent_principal": {},
-  "agent_behaviors": [
+  "node": {},
+  "agents": [
     {
-      "behavior_id": "engineer",
+      "agent_id": "engineer",
       "display_name": "The Engineer",
       "description": "Walks you through configuring Gents for the work you want to do.",
       "context_id": "engineer-context",
       "inference_profile_id": "gents:inference-slot:engineer",
       "enabled": true,
       "tags": [
-        "gents:setup-steward"
+        "gents:engineer"
       ]
     }
   ],
@@ -34,7 +34,7 @@
           "mode": "Off"
         }
       },
-      "subagents": {
+      "agents": {
         "enabled": true
       },
       "built_ins": {
@@ -55,10 +55,10 @@
       "self_config": {
         "enable_self_config": true,
         "self_config_categories": [
-          "behavior",
+          "node",
+          "agent",
           "tools",
           "profile",
-          "persona",
           "backend",
           "mcp_service",
           "automation"

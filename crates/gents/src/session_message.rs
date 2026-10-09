@@ -15,7 +15,7 @@ use crate::config_client::ConfigAccess;
 use crate::graphql::escape_graphql_string;
 use crate::lifecycle::{SessionMessageCause, SessionMessageTarget};
 use crate::session_origin::SessionScope;
-use crate::tool_surface::SubagentToolConfig;
+use crate::tool_surface::AgentToolConfig;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -117,17 +117,17 @@ pub(crate) struct RenderedBody {
     pub goal: Option<(String, Option<i64>)>,
 }
 
-/// The caller's `Tools.subagents` group and its resolved targets, read through
+/// The caller's `Tools.agents` group and its resolved targets, read through
 /// the request admission configuration walk. Absent tools leave it disabled.
 pub(crate) async fn load_caller_session_tools(
     node: &EmbeddedNode,
-    agent_did: &str,
-    behavior_id: &str,
-) -> Result<SubagentToolConfig> {
+    node_did: &str,
+    agent_id: &str,
+) -> Result<AgentToolConfig> {
     let (_, tools, targets) =
-        crate::request_admission::load_request_context(node, agent_did, behavior_id).await?;
+        crate::request_admission::load_request_context(node, node_did, agent_id).await?;
     tools
-        .map(|tools| SubagentToolConfig::from_document_with_targets(&tools, &targets))
+        .map(|tools| AgentToolConfig::from_document_with_targets(&tools, &targets))
         .transpose()
         .map(Option::unwrap_or_default)
 }
@@ -137,8 +137,8 @@ pub(crate) async fn load_caller_session_tools(
 /// declaration, if any, is rendered for the target session.
 pub(crate) async fn render_body(
     node: &EmbeddedNode,
-    caller_agent_did: &str,
-    target_behavior_id: &str,
+    caller_node_did: &str,
+    target_agent_id: &str,
     target_session_id: &str,
     body: MessageBody<'_>,
 ) -> Result<Result<RenderedBody, String>> {
@@ -157,7 +157,7 @@ pub(crate) async fn render_body(
         None,
         "session_message.load_task",
         {
-            let owner = caller_agent_did.to_owned();
+            let owner = caller_node_did.to_owned();
             let task_id = task_id.to_owned();
             move |txn| {
                 let owner = owner.clone();
@@ -185,7 +185,7 @@ pub(crate) async fn render_body(
     }
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let (node_scope, ctx_scope) =
-        crate::template::task_node_ctx(caller_agent_did, target_behavior_id, &now);
+        crate::template::task_node_ctx(caller_node_did, target_agent_id, &now);
     let scope = crate::template::TemplateScope {
         session: Some(serde_json::json!({"session_id": target_session_id})),
         request: None,
@@ -215,39 +215,39 @@ pub(crate) async fn render_body(
 /// ACP decides whether the resulting write is accepted.
 pub(crate) async fn resolve_send_target(
     node: &Arc<EmbeddedNode>,
-    caller_agent_did: &str,
-    tools: &SubagentToolConfig,
+    caller_node_did: &str,
+    tools: &AgentToolConfig,
     session_id: &str,
 ) -> Result<Option<SessionMessageTarget>> {
     let Some(session) = crate::session_origin::load_session(
         &ConfigAccess::Local(node.clone()),
         session_id,
-        Some(caller_agent_did),
+        Some(caller_node_did),
     )
     .await?
     else {
         return Ok(None);
     };
-    let own = session.agent_did == caller_agent_did;
+    let own = session.node_did == caller_node_did;
     let started = session
         .provenance
         .as_ref()
         .is_some_and(|provenance| provenance.parent_request_doc_id.is_some())
-        && tools.allows(&session.agent_did, &session.behavior_id);
+        && tools.allows(&session.node_did, &session.agent_id);
     Ok((own || started).then(|| SessionMessageTarget {
-        agent_did: session.agent_did,
-        behavior_id: session.behavior_id,
+        node_did: session.node_did,
+        agent_id: session.agent_id,
         session_id: session.session_id,
     }))
 }
 
 /// The scope of a session [`resolve_send_target`] resolved: its requester is
 /// always the calling principal.
-pub(crate) fn target_scope(caller_agent_did: &str, target: &SessionMessageTarget) -> SessionScope {
+pub(crate) fn target_scope(caller_node_did: &str, target: &SessionMessageTarget) -> SessionScope {
     SessionScope {
-        agent_did: target.agent_did.clone(),
+        node_did: target.node_did.clone(),
         session_id: target.session_id.clone(),
-        requester_did: Some(caller_agent_did.to_owned()),
+        requester_did: Some(caller_node_did.to_owned()),
     }
 }
 
@@ -299,13 +299,13 @@ pub(crate) async fn plan(
     interrupt: bool,
 ) -> Result<Result<Plan, String>> {
     let request_id = uuid::Uuid::new_v4().to_string();
-    let local = target.agent_did == cause.caller_agent_did;
+    let local = target.node_did == cause.caller_node_did;
     let active = if local {
         match crate::interrupt::active_session_request(
             node,
             &target.session_id,
-            &target.agent_did,
-            Some(&cause.caller_agent_did),
+            &target.node_did,
+            Some(&cause.caller_node_did),
         )
         .await?
         {
@@ -328,12 +328,12 @@ pub(crate) async fn plan(
     // Lean `CausalHop.nextHop` of a cross-session cause: past the caller, and
     // never below the addressed session's current hop.
     let own_hop = match &active {
-        Some(active) => active.subagent_depth.max(
-            crate::session::load_session_current_hop(node, &target.agent_did, &target.session_id)
+        Some(active) => active.request_hop.max(
+            crate::session::load_session_current_hop(node, &target.node_did, &target.session_id)
                 .await?,
         ),
         None => {
-            crate::session::load_session_current_hop(node, &target.agent_did, &target.session_id)
+            crate::session::load_session_current_hop(node, &target.node_did, &target.session_id)
                 .await?
         }
     };
@@ -453,7 +453,7 @@ pub(crate) async fn commit(
     let durable = crate::tool_call_lifecycle::ToolCallLifecycle::load_by_doc_id(
         node.clone(),
         &doc_id,
-        lifecycle.agent_did(),
+        lifecycle.node_did(),
         lifecycle.session_id(),
         lifecycle.requester_did(),
     )
@@ -465,7 +465,7 @@ pub(crate) async fn commit(
     let receipt = load_receipt(
         node,
         &doc_id,
-        lifecycle.agent_did(),
+        lifecycle.node_did(),
         lifecycle.session_id(),
         lifecycle.requester_did(),
     )
@@ -537,7 +537,7 @@ async fn commit_once(
             objective,
             token_budget,
         } => {
-            let actor = ::identity::Did::new(cause.caller_agent_did.clone())
+            let actor = ::identity::Did::new(cause.caller_node_did.clone())
                 .context("caller DID is not ACP-addressable")?;
             let (create, objective, session_id, binding, receipt_for) =
                 (&create, &objective, &session_id, &binding, &receipt_for);
@@ -551,7 +551,7 @@ async fn commit_once(
                         let started_at = start_dispatch(txn, start).await?;
                         let enqueued = crate::goal::stage_goal_backed_request_in_txn(
                             txn,
-                            &create.agent_did,
+                            &create.node_did,
                             session_id,
                             objective,
                             token_budget,
@@ -584,10 +584,10 @@ async fn ensure_planned_hop_current(
     create: &gents_protocol::request_admission::AgentRequestCreate,
 ) -> Result<()> {
     let current =
-        crate::session::load_session_current_hop_in_txn(txn, &create.agent_did, &create.session_id)
+        crate::session::load_session_current_hop_in_txn(txn, &create.node_did, &create.session_id)
             .await?;
     anyhow::ensure!(
-        create.subagent_depth >= current,
+        create.request_hop >= current,
         "the target session moved to hop {current} while this message was planned"
     );
     Ok(())
@@ -607,14 +607,14 @@ async fn start_dispatch(
 pub(crate) async fn load_receipt(
     node: &std::sync::Arc<EmbeddedNode>,
     tool_call_doc_id: &str,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
 ) -> Result<Option<SessionMessageReceipt>> {
     let read = crate::tool_call_lifecycle::query::load_tool_call_read(
         &crate::config_client::ConfigAccess::Local(node.clone()),
         tool_call_doc_id,
-        agent_did,
+        node_did,
         session_id,
         requester_did,
     )
@@ -653,7 +653,7 @@ pub(crate) async fn observe_caused_request(
     let Some(receipt) = load_receipt(
         node,
         tool_call_doc_id,
-        lifecycle.agent_did(),
+        lifecycle.node_did(),
         lifecycle.session_id(),
         lifecycle.requester_did(),
     )
@@ -665,8 +665,8 @@ pub(crate) async fn observe_caused_request(
     };
     let query = format!(
         r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{
-            _docID request_id agent_did requester_did session_id lifecycle_state input
-            subagent_depth caused_by_parent_request_doc_id caused_by_parent_tool_call_id
+            _docID request_id node_did requester_did session_id lifecycle_state input
+            request_hop caused_by_parent_request_doc_id caused_by_parent_tool_call_id
             caused_by_parent_tool_call_doc_id
         }} }}"#,
         escape_graphql_string(&receipt.request_doc_id),
@@ -684,7 +684,7 @@ pub(crate) async fn observe_caused_request(
     else {
         return Ok(CausedObservation::NotVisible);
     };
-    let caller = lifecycle.agent_did();
+    let caller = lifecycle.node_did();
     let session_message = caused.requester_did.as_deref() == Some(caller)
         && caused.caused_by_parent_tool_call_doc_id.as_deref() == Some(tool_call_doc_id)
         && caused.caused_by_parent_tool_call_id.as_deref() == Some(lifecycle.tool_call_id())
@@ -742,7 +742,7 @@ pub async fn interrupt_session(
     let Some(active) = crate::interrupt::active_session_request(
         node,
         &target.session_id,
-        &target.agent_did,
+        &target.node_did,
         target.requester_did.as_deref(),
     )
     .await?
@@ -755,7 +755,7 @@ pub async fn interrupt_session(
             .doc_id
             .as_deref()
             .context("active request lacks physical identity")?,
-        &target.agent_did,
+        &target.node_did,
         active.requester_did.as_deref(),
     )
     .await?;
@@ -766,7 +766,7 @@ pub async fn interrupt_session(
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
 pub(crate) struct ReachableSession {
     pub session_id: String,
-    pub agent_did: String,
+    pub node_did: String,
     pub relationship: &'static str,
     pub status: String,
     pub can_message: bool,
@@ -778,7 +778,7 @@ pub(crate) struct ReachableSession {
 pub(crate) async fn agent_list(
     node: &Arc<EmbeddedNode>,
     caller: &crate::AgentRequest,
-    tools: &SubagentToolConfig,
+    tools: &AgentToolConfig,
 ) -> Result<serde_json::Value> {
     let own = SessionScope::of_request(caller);
     let lineage = crate::session_origin::lineage(&ConfigAccess::Local(node.clone()), &own).await?;
@@ -808,20 +808,20 @@ pub(crate) async fn agent_list(
         {
             continue;
         }
-        let can_message = scope.requester_did.as_deref() == Some(caller.agent_did.as_str())
-            && resolve_send_target(node, &caller.agent_did, tools, &scope.session_id)
+        let can_message = scope.requester_did.as_deref() == Some(caller.node_did.as_str())
+            && resolve_send_target(node, &caller.node_did, tools, &scope.session_id)
                 .await?
                 .is_some();
         let active = crate::interrupt::active_session_request(
             node,
             &scope.session_id,
-            &scope.agent_did,
+            &scope.node_did,
             scope.requester_did.as_deref(),
         )
         .await?;
         sessions.push(ReachableSession {
             session_id: scope.session_id,
-            agent_did: scope.agent_did,
+            node_did: scope.node_did,
             relationship,
             status: if active.is_some() { "busy" } else { "idle" }.to_owned(),
             can_message,
@@ -834,8 +834,8 @@ pub(crate) async fn agent_list(
         .map(|target| {
             serde_json::json!({
                 "agent": target.name,
-                "agent_did": target.target_agent_did,
-                "behavior_id": target.behavior_id,
+                "node_did": target.target_node_did,
+                "agent_id": target.agent_id,
                 "description": target.description,
             })
         })
@@ -878,16 +878,16 @@ pub(crate) async fn kill(
             .doc_id
             .as_deref()
             .context("caused request lacks physical identity")?;
-        let agent_did = caused
-            .agent_did
+        let node_did = caused
+            .node_did
             .as_deref()
-            .context("caused request lacks agent_did")?;
-        let local = agent_did == lifecycle.agent_did();
+            .context("caused request lacks node_did")?;
+        let local = node_did == lifecycle.node_did();
         if !terminal {
             let interrupted = crate::interrupt::interrupt_request_by_doc_id(
                 node,
                 doc_id,
-                agent_did,
+                node_did,
                 caused.requester_did.as_deref(),
             )
             .await;
@@ -966,7 +966,7 @@ mod hop_tests {
         caller_hop: u32,
     ) -> SessionMessageCause {
         SessionMessageCause {
-            caller_agent_did: message.admission.agent_did.clone(),
+            caller_node_did: message.admission.node_did.clone(),
             caller_request_id: "caller-request".to_owned(),
             caller_request_doc_id: message.admission.tool.request_doc_id().unwrap().to_owned(),
             caller_hop,
@@ -1000,8 +1000,8 @@ mod hop_tests {
         .unwrap()
         .unwrap();
         let target = SessionMessageTarget {
-            agent_did: caused.agent_did.clone(),
-            behavior_id: caused.behavior_id.clone(),
+            node_did: caused.node_did.clone(),
+            agent_id: caused.agent_id.clone(),
             session_id: caused.session_id.clone(),
         };
         let cases = &crate::lean_vocab_test::lean_contract_snapshot()
@@ -1010,7 +1010,7 @@ mod hop_tests {
         assert!(cases.iter().any(|case| case.delivery == "steering"));
         for case in cases {
             let name = case.name.as_str();
-            assert_eq!(case.own_hop, caused.subagent_depth, "{name}");
+            assert_eq!(case.own_hop, caused.request_hop, "{name}");
             let state = if case.delivery == "steering" {
                 "processing"
             } else {
@@ -1037,7 +1037,7 @@ mod hop_tests {
             let PlannedWrite::Request { create, .. } = &planned.write else {
                 panic!("{name}: a message without a Goal is a request");
             };
-            assert_eq!(create.subagent_depth, case.expected_hop, "{name}");
+            assert_eq!(create.request_hop, case.expected_hop, "{name}");
             assert_eq!(
                 create.caused_by_parent_request_doc_id.as_deref(),
                 Some(cause.caller_request_doc_id.as_str()),
@@ -1115,8 +1115,8 @@ mod agent_tools_tests {
                 crate::session::ensure_session_in_txn(
                     txn,
                     &caused.session_id,
-                    &caused.agent_did,
-                    &caused.behavior_id,
+                    &caused.node_did,
+                    &caused.agent_id,
                     caused.requester_did.as_deref(),
                     None,
                     caused
@@ -1182,18 +1182,18 @@ mod agent_tools_tests {
         let node = message.admission.node.clone();
         let scope = SessionScope::of_request(&caused);
         let target = SessionMessageTarget {
-            agent_did: caused.agent_did.clone(),
-            behavior_id: caused.behavior_id.clone(),
+            node_did: caused.node_did.clone(),
+            agent_id: caused.agent_id.clone(),
             session_id: caused.session_id.clone(),
         };
         assert_eq!(interrupt_session(&node, &scope).await.unwrap(), None);
         set_state(&node, &message.caused_request_doc_id, "processing").await;
 
         let cause = SessionMessageCause {
-            caller_agent_did: caller.agent_did.clone(),
+            caller_node_did: caller.node_did.clone(),
             caller_request_id: caller.request_id.clone(),
             caller_request_doc_id: caller.doc_id.clone(),
-            caller_hop: caller.subagent_depth,
+            caller_hop: caller.request_hop,
             tool_call_id: "steer-tool".to_owned(),
             tool_call_doc_id: "steer-tool-doc".to_owned(),
             correlation: None,
@@ -1235,13 +1235,13 @@ mod agent_tools_tests {
     async fn agent_list_reports_agents_and_reachable_sessions() {
         let (message, caller, caused) = started("agent-list").await;
         let node = message.admission.node.clone();
-        let tools = SubagentToolConfig {
+        let tools = AgentToolConfig {
             enabled: true,
-            targets: vec![crate::document_config::SubagentTargetDocument {
+            targets: vec![crate::document_config::AgentTargetDocument {
                 target_id: "worker".to_owned(),
-                agent_did: caller.agent_did.clone(),
-                target_agent_did: caused.agent_did.clone(),
-                behavior_id: caused.behavior_id.clone(),
+                node_did: caller.node_did.clone(),
+                target_node_did: caused.node_did.clone(),
+                agent_id: caused.agent_id.clone(),
                 name: "worker".to_owned(),
                 description: Some("does the work".to_owned()),
                 tags: Vec::new(),
@@ -1249,7 +1249,7 @@ mod agent_tools_tests {
         };
         let listed = agent_list(&node, &caller, &tools).await.unwrap();
         assert_eq!(listed["agents"][0]["agent"], "worker");
-        assert_eq!(listed["agents"][0]["behavior_id"], caused.behavior_id);
+        assert_eq!(listed["agents"][0]["agent_id"], caused.agent_id);
         let sessions = listed["sessions"].as_array().unwrap();
         assert_eq!(sessions.len(), 1, "{listed}");
         assert_eq!(sessions[0]["session_id"], caused.session_id);

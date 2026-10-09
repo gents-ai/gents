@@ -46,7 +46,7 @@ fn load(dir: &Path) -> (PackManifest, PackConfig) {
     let config = load_pack_config(
         &manifest,
         &PackInstallOptions {
-            agent_did: OWNER.into(),
+            node_did: OWNER.into(),
         },
         &|path| Ok(std::fs::read(dir.join(path))?),
         &|_| None,
@@ -60,19 +60,19 @@ fn every_subject_is_the_desktop_engineer_on_an_eval_node() {
     for dir in subjects() {
         let (manifest, config) = load(&dir);
         let name = dir.display();
-        let [behavior] = config.agent_behaviors.as_slice() else {
+        let [behavior] = config.agents.as_slice() else {
             panic!("{name}: one behavior, the Engineer");
         };
-        assert_eq!(behavior.behavior_id, "engineer", "{name}");
+        assert_eq!(behavior.agent_id, "engineer", "{name}");
         assert_eq!(
-            config.agent_principal.default_behavior_id, None,
+            config.node.default_agent_id, None,
             "{name}: the trial selects the cell's behavior as the default"
         );
         assert!(
             behavior
                 .tags
                 .iter()
-                .any(|tag| tag == gents::agent::persona_ops::SETUP_STEWARD_BEHAVIOR_TAG),
+                .any(|tag| tag == gents::self_config::ENGINEER_AGENT_TAG),
             "{name}: the Engineer carries the protected Setup tag"
         );
         assert_eq!(
@@ -86,7 +86,7 @@ fn every_subject_is_the_desktop_engineer_on_an_eval_node() {
         let prompt = context.system_prompt.as_deref().unwrap_or_default();
         if dir.to_string_lossy().ends_with("_preview") {
             assert!(
-                prompt.starts_with(gents_protocol::SETUP_STEWARD_PROMPT.trim_end())
+                prompt.starts_with(gents_protocol::ENGINEER_PROMPT.trim_end())
                     && prompt.trim_end().ends_with(
                         "Preview every configuration write and apply it only after the preview is clean."
                     ),
@@ -95,18 +95,18 @@ fn every_subject_is_the_desktop_engineer_on_an_eval_node() {
         } else {
             assert_eq!(
                 prompt,
-                gents_protocol::SETUP_STEWARD_PROMPT,
+                gents_protocol::ENGINEER_PROMPT,
                 "{name}: engineer/system_prompt.md must equal the shipped Setup prompt"
             );
         }
         let tools = &config.tools[0];
         assert_eq!(
             tools.self_config,
-            Some(gents::agent::persona_ops::setup_steward_self_config()),
+            Some(gents::self_config::engineer_self_config()),
             "{name}: the Setup self-config grant"
         );
         assert_eq!(
-            tools.subagents.as_ref().and_then(|agents| agents.enabled),
+            tools.agents.as_ref().and_then(|agents| agents.enabled),
             Some(true),
             "{name}"
         );
@@ -230,7 +230,7 @@ fn capstone_role_checks_follow_generated_ids_through_automation() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|agent| agent["behavior_id"] == "planner")
+        .find(|agent| agent["agent_id"] == "planner")
         .unwrap();
     let wiring = params["links"]
         .as_array()
@@ -240,11 +240,11 @@ fn capstone_role_checks_follow_generated_ids_through_automation() {
             link["id"] == "BriefRequest"
                 && link["via"]
                     .as_array()
-                    .is_some_and(|hops| hops.last().unwrap()["target_capture"] == "behaviors")
+                    .is_some_and(|hops| hops.last().unwrap()["target_capture"] == "agents")
         })
         .unwrap();
-    let permission = json!({"agents":{"behaviors":"behaviors","contexts":"contexts","tools":"tools","expect":[{
-        "behavior_id":"planner","source_match":planner["source_match"],"tools":[{"field":"host.bash.mode","equals":"Off"}]
+    let permission = json!({"agents":{"agents":"agents","contexts":"contexts","tools":"tools","expect":[{
+        "agent_id":"planner","source_match":planner["source_match"],"tools":[{"field":"host.bash.mode","equals":"Off"}]
     }]},"links":[wiring]});
     let mut evidence = ScriptedExecutor::passed_evidence(OWNER, "setup", "unused", vec![])
         .stages
@@ -252,10 +252,10 @@ fn capstone_role_checks_follow_generated_ids_through_automation() {
     evidence.captures.clear();
     for (name, rows) in [
         (
-            "behaviors",
+            "agents",
             vec![
-                json!({"behavior_id":"did:x:research-desk-planner","display_name":"Research desk Planner","context_id":"c"}),
-                json!({"behavior_id":"wrong","display_name":"Researcher"}),
+                json!({"agent_id":"did:x:research-desk-planner","display_name":"Research desk Planner","context_id":"c"}),
+                json!({"agent_id":"wrong","display_name":"Researcher"}),
             ],
         ),
         ("contexts", vec![json!({"context_id":"c","tools_id":"t"})]),
@@ -275,7 +275,7 @@ fn capstone_role_checks_follow_generated_ids_through_automation() {
         ),
         (
             "tasks",
-            vec![json!({"task_id":"generated-task","behavior_id":"did:x:research-desk-planner"})],
+            vec![json!({"task_id":"generated-task","agent_id":"did:x:research-desk-planner"})],
         ),
     ] {
         evidence
@@ -288,7 +288,7 @@ fn capstone_role_checks_follow_generated_ids_through_automation() {
     let CaptureResult::Documents { rows } = evidence.captures.get_mut("tasks").unwrap() else {
         unreachable!()
     };
-    rows[0]["behavior_id"] = json!("wrong");
+    rows[0]["agent_id"] = json!("wrong");
     assert!(check.evaluate(&permission, &evidence).score_bp.unwrap() < 10000);
 }
 
@@ -379,15 +379,12 @@ fn capstone_disabled_roles_fail_cleanup_without_shadowing_active_roles() {
     for stage in &definition.cases[0].stages {
         let captures = serde_json::to_value(&stage.capture).unwrap();
         let captures = captures.as_array().unwrap();
-        let active = captures.iter().find(|c| c["name"] == "behaviors").unwrap();
-        let all = captures
-            .iter()
-            .find(|c| c["name"] == "all_behaviors")
-            .unwrap();
+        let active = captures.iter().find(|c| c["name"] == "agents").unwrap();
+        let all = captures.iter().find(|c| c["name"] == "all_agents").unwrap();
         assert_eq!(active["filter"]["enabled"], json!({"_eq":true}));
         assert!(all["filter"].get("enabled").is_none());
         assert_eq!(all["collection"], active["collection"]);
-        assert_eq!(all["filter"]["agent_did"], active["filter"]["agent_did"]);
+        assert_eq!(all["filter"]["node_did"], active["filter"]["node_did"]);
 
         let params = &stage
             .checks
@@ -399,7 +396,7 @@ fn capstone_disabled_roles_fail_cleanup_without_shadowing_active_roles() {
             .as_array()
             .unwrap()
             .iter()
-            .find(|p| p["capture"] == "all_behaviors")
+            .find(|p| p["capture"] == "all_agents")
             .unwrap();
         let link = params["links"]
             .as_array()
@@ -410,18 +407,18 @@ fn capstone_disabled_roles_fail_cleanup_without_shadowing_active_roles() {
             })
             .unwrap();
         let subset = json!({"present":[count],"links":[link]});
-        let planner = json!({"behavior_id":"planner-new","display_name":"Planner","enabled":true,"inference_profile_id":"profile"});
+        let planner = json!({"agent_id":"planner-new","display_name":"Planner","enabled":true,"inference_profile_id":"profile"});
         let mut all_rows = vec![planner.clone()];
-        all_rows.extend((0..6).map(|i| json!({"behavior_id":format!("other-{i}"),"enabled":true})));
-        all_rows.push(json!({"behavior_id":"planner-old","display_name":"Planner","enabled":false,"inference_profile_id":"wrong-profile"}));
+        all_rows.extend((0..6).map(|i| json!({"agent_id":format!("other-{i}"),"enabled":true})));
+        all_rows.push(json!({"agent_id":"planner-old","display_name":"Planner","enabled":false,"inference_profile_id":"wrong-profile"}));
         let mut evidence =
             ScriptedExecutor::passed_evidence(OWNER, &stage.stage_id, "unused", vec![])
                 .stages
                 .remove(0);
         evidence.captures.clear();
         for (name, rows) in [
-            ("behaviors", vec![planner.clone()]),
-            ("all_behaviors", all_rows.clone()),
+            ("agents", vec![planner.clone()]),
+            ("all_agents", all_rows.clone()),
             (
                 "profiles",
                 vec![json!({"profile_id":"profile","reasoning_effort":"high"})],
@@ -440,21 +437,20 @@ fn capstone_disabled_roles_fail_cleanup_without_shadowing_active_roles() {
         assert!(verdict.raw["unmet"][0]
             .as_str()
             .unwrap()
-            .contains("all_behaviors"));
+            .contains("all_agents"));
 
         all_rows.pop();
         evidence.captures.insert(
-            "all_behaviors".into(),
+            "all_agents".into(),
             CaptureResult::Documents { rows: all_rows },
         );
         assert_eq!(check.evaluate(&subset, &evidence).score_bp, Some(10000));
 
-        evidence.captures.insert("behaviors".into(), CaptureResult::Documents { rows: vec![planner.clone(), json!({"behavior_id":"planner-duplicate","display_name":"Planner","enabled":true,"inference_profile_id":"profile"})] });
+        evidence.captures.insert("agents".into(), CaptureResult::Documents { rows: vec![planner.clone(), json!({"agent_id":"planner-duplicate","display_name":"Planner","enabled":true,"inference_profile_id":"profile"})] });
         assert!(check.evaluate(&subset, &evidence).score_bp.unwrap() < 10000);
-        evidence.captures.insert(
-            "behaviors".into(),
-            CaptureResult::Documents { rows: vec![] },
-        );
+        evidence
+            .captures
+            .insert("agents".into(), CaptureResult::Documents { rows: vec![] });
         assert!(check.evaluate(&subset, &evidence).score_bp.unwrap() < 10000);
     }
 }

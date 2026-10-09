@@ -8,7 +8,7 @@ use gents_protocol::request_input::RequestInput;
 
 use super::{AgentRequestAdmissionError, AgentRequestAdmissionVerifier};
 use crate::agent::p2p_reconcile::enrollment_authority_channel;
-use crate::identity::{AgentIdentity, KeyIdentity};
+use crate::identity::{KeyIdentity, NodeIdentity};
 use crate::lean_vocab_test::{
     lean_title_request_admission_cases, LeanRequestPurpose, LeanTitleRequestAdmissionCase,
 };
@@ -131,7 +131,7 @@ async fn verify_generated_case(case: &LeanTitleRequestAdmissionCase) {
         .title_parent
         .as_ref()
         .expect("modeled parent evidence");
-    assert_eq!(evidence.target_agent, case.request.target_agent);
+    assert_eq!(evidence.target_node, case.request.target_node);
     assert_eq!(evidence.source_request_id, parent.request_id);
     let parent_fields = model_text_fields(&case.request.model_parent_fields_hex);
     assert!(
@@ -141,7 +141,7 @@ async fn verify_generated_case(case: &LeanTitleRequestAdmissionCase) {
     assert_eq!(parent_fields[1], parent.request_id);
     assert_eq!(parent_fields[3], parent.document_id);
     let target = identity.did();
-    let requester = if case.request.requester_did == case.request.target_agent {
+    let requester = if case.request.requester_did == case.request.target_node {
         target
     } else {
         foreign.did()
@@ -158,7 +158,7 @@ async fn verify_generated_case(case: &LeanTitleRequestAdmissionCase) {
         parent_request_id,
         target,
         target,
-        &parent.behavior_id,
+        &parent.agent_id,
         &parent.session_id,
         &case.request.content,
         "interactive",
@@ -201,7 +201,7 @@ async fn verify_generated_case(case: &LeanTitleRequestAdmissionCase) {
         &case.request.request_id,
         target,
         requester,
-        &case.request.behavior_id,
+        &case.request.agent_id,
         &case.request.session_id,
         &case.request.content,
         "interactive",
@@ -210,7 +210,7 @@ async fn verify_generated_case(case: &LeanTitleRequestAdmissionCase) {
     );
     create.max_retries = 0;
     create.input = native_input(case);
-    create.subagent_depth = case.request.hop;
+    create.request_hop = case.request.hop;
     create.caused_by_parent_request_id = Some(parent_fields[1].clone());
     create.caused_by_parent_request_doc_id = Some(parent_doc_id);
     if parent_fields[4] == "some" {
@@ -256,7 +256,7 @@ async fn verify_generated_case(case: &LeanTitleRequestAdmissionCase) {
     }
     let (_owner, enrollment) = enrollment_authority_channel();
     let verifier = AgentRequestAdmissionVerifier::new(node.clone(), identity, enrollment);
-    let result = verifier.verify_fresh(&queued, &case.session_behavior).await;
+    let result = verifier.verify_fresh(&queued, &case.session_agent).await;
     let actual_disposition = match &result {
         Ok(_) => "admit",
         Err(AgentRequestAdmissionError::Denied(_)) => "deny",

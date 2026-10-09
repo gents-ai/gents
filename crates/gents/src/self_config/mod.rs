@@ -1,10 +1,14 @@
-//! Principal-scoped self-configuration through canonical context and inference documents.
+//! Node-scoped self-configuration through canonical context and inference documents.
 //! Patches name explicit writable fields and commit through the common desired-state
 //! transaction after validating the complete retained configuration. Nested tool
 //! permissions and auth references retain their existing typed owners. Raw API keys
 //! cannot be changed or returned. Optional no-lockout checks the candidate config
-//! chain. Persona requests reuse the existing signed admission and reconciliation path.
+//! chain. Agent management publishes canonical documents in the same transaction.
 
+pub mod agent;
+mod agent_management;
+pub use agent_management::configure_agent;
+use agent_management::{agent_mutate, agent_preview, load_agent_catalog};
 mod command;
 pub(crate) use command::{is_help_call, ConfigCommandParams};
 mod execution;
@@ -18,32 +22,35 @@ mod tests;
 mod text_tests;
 
 pub use ops::{
-    apply_tool_grant_selection, guard_backend_auth, guard_backend_choice,
-    guard_behavior_keeps_reach, guard_tools_keep_control, guard_tools_keep_grants,
-    reselection_keeps_grants, validate_tool_network_selection, OperatorGrants, PatchOutcome,
-    SelfConfigCore, EFFECT_TIMING_NOTE,
+    apply_tool_grant_selection, guard_agent_keeps_reach, guard_backend_auth, guard_backend_choice,
+    guard_tools_keep_control, guard_tools_keep_grants, reselection_keeps_grants,
+    validate_tool_network_selection, OperatorGrants, PatchOutcome, SelfConfigCore,
+    EFFECT_TIMING_NOTE,
 };
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Value};
 
-use crate::agent::p2p_reconcile::{GraphqlPersonaRequestStore, PersonaRequestStore};
-use crate::agent::persona_ops::{
-    decide_persona_request, derive_behavior_id, local_persona_request_mutation, PersonaOp,
-    PersonaRequestDoc, PersonaVerdict,
-};
 use crate::config_client::patch::{SelfConfigPatch, SelfConfigTarget};
 use crate::graphql::escape_graphql_string;
 use crate::llm::tool::{Tool, ToolDefinition, ToolDyn};
+use crate::tool_surface::presets::{builtin_preset_names, preset_fields};
 use crate::tool_surface::SelfConfigToolConfig;
-use crate::AgentIdentity;
+use crate::NodeIdentity;
+use agent::derive_agent_id;
 use defra_node::EmbeddedNode;
-use gents_protocol::persona::{LocalPersonaRequestRecord, PERSONA_AUTHORITY_LOCAL_SELF};
 use ops::{decode_merged, validate_merged_selection, ApplyRequest};
+
+// Engineer-granted configurator: identity and self-config.
+pub const ENGINEER_AGENT_TAG: &str = "gents:engineer";
+
+pub fn engineer_self_config() -> crate::document_config::SelfConfigTools {
+    serde_json::from_str(gents_protocol::ENGINEER_SELF_CONFIG_JSON)
+        .expect("bundled Engineer grant must match canonical SelfConfigTools")
+}
 
 pub const CONFIG_TOOL_NAME: &str = "config";
 pub const PREVIEW_GRAPH_TOOL_NAME: &str = "preview_graph";
@@ -77,12 +84,12 @@ pub const SELF_CONFIG_TOOL_NAMES: [&str; 7] = [
 
 pub(crate) use crate::tool_output::{ordered, Ordered};
 
-/// Reading order of an effective configuration: the behavior and its chain,
+/// Reading order of an effective configuration: the agent and its chain,
 /// then what it may do, then grants and timing.
 const EFFECTIVE_ORDER: &[&str] = &[
     "execution_settings",
-    "behavior_id",
-    "behavior",
+    "agent_id",
+    "agent",
     "context",
     "inference_profile",
     "documents",
@@ -138,16 +145,16 @@ fn anchored_request(
     });
     request
 }
-fn behavior_request(core: &SelfConfigCore, patch: SelfConfigPatch) -> ApplyRequest<'static> {
-    let id = core.behavior_id().to_owned();
-    let mut request = ApplyRequest::new(SelfConfigTarget::AgentBehavior, patch);
+fn agent_request(core: &SelfConfigCore, patch: SelfConfigPatch) -> ApplyRequest<'static> {
+    let id = core.agent_id().to_owned();
+    let mut request = ApplyRequest::new(SelfConfigTarget::Agent, patch);
     request.resolve_unique = Box::new(move |_| Ok(id.clone()));
-    request.guard = Box::new(|_, stored, merged| guard_behavior_keeps_reach(stored, merged));
+    request.guard = Box::new(|_, stored, merged| guard_agent_keeps_reach(stored, merged));
     fence_profile_pick(&mut request);
     request
 }
 /// An `inference_profile_id` pick may not switch accounts of one provider.
-/// Unset (compaction only) reuses the behavior's profile.
+/// Unset (compaction only) reuses the agent's profile.
 fn fence_profile_pick(request: &mut ApplyRequest<'static>) {
     request.validate = Box::new(|txn, anchor, stored, merged| {
         Box::pin(async move {
@@ -159,9 +166,9 @@ fn fence_profile_pick(request: &mut ApplyRequest<'static>) {
                 return Ok(());
             }
             let owner = merged
-                .get("agent_did")
+                .get("node_did")
                 .and_then(Value::as_str)
-                .context("document is missing agent_did")?;
+                .context("document is missing node_did")?;
             let current_backend = match current {
                 Some(id) => Some(ops::profile_backend_id(txn, owner, id).await?),
                 None => anchor
@@ -177,38 +184,33 @@ fn fence_profile_pick(request: &mut ApplyRequest<'static>) {
     });
 }
 
-/// Model-facing patches may target any owned behavior, including the invoking
+/// Model-facing patches may target any owned agent, including the invoking
 /// configurator itself; its lockout protection is the no-lockout guard (Lean
 /// `SelfConfig.keepsControl`), and operator grants are bounded in the validate
 /// slot (Lean `SelfConfig.keepsGrants`). Keep the shared-reference check inside the
 /// same transaction as validation/publication so a stale preflight cannot
 /// authorize a write.
-fn protect_working_behavior(mut request: ApplyRequest<'static>) -> ApplyRequest<'static> {
+fn protect_working_agent(mut request: ApplyRequest<'static>) -> ApplyRequest<'static> {
     let target = request.target;
     let validate = request.validate;
     request.validate = Box::new(move |txn, anchor, stored, merged| {
         let validation = validate(txn, anchor, stored, merged);
         Box::pin(async move {
             // Context and Tools are reusable documents. A targeted edit must
-            // not mutate another behavior (especially Setup) through a shared
+            // not mutate another agent (especially Engineer) through a shared
             // reference. Keep the observation and rejection in the same
             // transaction as the canonical patch publication, matching the
             // Lean siblingToolsAllowed contract.
             let owner = anchor
                 .doc
-                .get("agent_did")
+                .get("node_did")
                 .and_then(Value::as_str)
-                .context("selected behavior is missing agent_did")?;
-            let behavior_id = anchor
+                .context("selected agent is missing node_did")?;
+            let agent_id = anchor
                 .doc
-                .get("behavior_id")
+                .get("agent_id")
                 .and_then(Value::as_str)
-                .context("selected behavior is missing behavior_id")?;
-            let context_id = anchor
-                .context
-                .get("context_id")
-                .and_then(Value::as_str)
-                .context("selected behavior context is missing context_id")?;
+                .context("selected agent is missing agent_id")?;
             let require_only_referrer = |response: &Value,
                                          collection: &str,
                                          unique: &str,
@@ -221,33 +223,35 @@ fn protect_working_behavior(mut request: ApplyRequest<'static>) -> ApplyRequest<
                 anyhow::ensure!(
                     rows.len() == 1
                         && rows[0].get(unique).and_then(Value::as_str) == Some(expected),
-                    "targeted configuration requires an unshared Context and Tools; clone the working behavior before editing shared configuration"
+                    "targeted configuration requires an unshared Context and Tools; clone the working agent before editing shared configuration"
                 );
                 Ok::<_, anyhow::Error>(())
             };
             if target == SelfConfigTarget::AgentContext || target == SelfConfigTarget::Tools {
+                let context_id = anchor.context.get("context_id").and_then(Value::as_str)
+                    .context("selected agent has no context; create and select a Context before editing it or its Tools")?;
                 let escaped_owner = escape_graphql_string(owner);
                 let escaped_context = escape_graphql_string(context_id);
                 let response = txn
                     .execute(&format!(
-                        r#"{{ AgentBehavior(filter: {{agent_did: {{_eq: "{escaped_owner}"}}, context_id: {{_eq: "{escaped_context}"}}}}) {{behavior_id}} }}"#
+                        r#"{{ Agent(filter: {{node_did: {{_eq: "{escaped_owner}"}}, context_id: {{_eq: "{escaped_context}"}}}}) {{agent_id}} }}"#
                     ))
                     .await?;
-                require_only_referrer(&response, "AgentBehavior", "behavior_id", behavior_id)?;
-            }
-            if target == SelfConfigTarget::Tools {
-                let tools_id = stored
-                    .get("tools_id")
-                    .and_then(Value::as_str)
-                    .context("selected Tools is missing tools_id")?;
-                let escaped_owner = escape_graphql_string(owner);
-                let escaped_tools = escape_graphql_string(tools_id);
-                let response = txn
+                require_only_referrer(&response, "Agent", "agent_id", agent_id)?;
+                if target == SelfConfigTarget::Tools {
+                    let tools_id = stored
+                        .get("tools_id")
+                        .and_then(Value::as_str)
+                        .context("selected Tools is missing tools_id")?;
+                    let escaped_owner = escape_graphql_string(owner);
+                    let escaped_tools = escape_graphql_string(tools_id);
+                    let response = txn
                     .execute(&format!(
-                        r#"{{ AgentContext(filter: {{agent_did: {{_eq: "{escaped_owner}"}}, tools_id: {{_eq: "{escaped_tools}"}}}}) {{context_id}} }}"#
+                        r#"{{ AgentContext(filter: {{node_did: {{_eq: "{escaped_owner}"}}, tools_id: {{_eq: "{escaped_tools}"}}}}) {{context_id}} }}"#
                     ))
                     .await?;
-                require_only_referrer(&response, "AgentContext", "context_id", context_id)?;
+                    require_only_referrer(&response, "AgentContext", "context_id", context_id)?;
+                }
             }
             ops::guard_compaction_choice_in_txn(txn, target, anchor, stored, merged).await?;
             validation.await
@@ -387,9 +391,9 @@ fn fence_profile_backend(request: &mut ApplyRequest<'static>) {
                 return Ok(());
             }
             let owner = merged
-                .get("agent_did")
+                .get("node_did")
                 .and_then(Value::as_str)
-                .context("profile is missing agent_did")?;
+                .context("profile is missing node_did")?;
             ops::guard_backend_choice_in_txn(txn, owner, current, next).await
         })
     });
@@ -406,7 +410,7 @@ fn profile_create_request(
     request.resolve_unique = Box::new(move |_| Ok(profile_id.clone()));
     request.on_create = Box::new(move |id, merged| {
         merged.insert("profile_id".into(), json!(id));
-        merged.insert("agent_did".into(), json!(owner));
+        merged.insert("node_did".into(), json!(owner));
         Ok(())
     });
     fence_profile_backend(&mut request);
@@ -485,7 +489,7 @@ fn local_backend_create_request(
     request.resolve_unique = Box::new(move |_| Ok(backend_id.clone()));
     request.on_create = Box::new(move |id, merged| {
         merged.insert("backend_id".into(), json!(id));
-        merged.insert("agent_did".into(), json!(owner));
+        merged.insert("node_did".into(), json!(owner));
         Ok(())
     });
     request.validate = Box::new(move |_, _, _, merged| {
@@ -520,16 +524,16 @@ fn automation_request(
     id: String,
     patch: SelfConfigPatch,
 ) -> ApplyRequest<'static> {
-    let owner = core.agent_did().to_owned();
-    let behavior = core.behavior_id().to_owned();
+    let owner = core.node_did().to_owned();
+    let agent = core.agent_id().to_owned();
     let mut request = ApplyRequest::new(target, patch);
     request.allow_create = true;
     request.resolve_unique = Box::new(move |_| Ok(id.clone()));
     request.on_create = Box::new(move |id, merged| {
         merged.insert(target.unique_field().into(), json!(id));
-        merged.insert("agent_did".into(), json!(owner));
+        merged.insert("node_did".into(), json!(owner));
         if target == SelfConfigTarget::Task {
-            merged.insert("behavior_id".into(), json!(behavior));
+            merged.insert("agent_id".into(), json!(agent));
         }
         Ok(())
     });
@@ -541,10 +545,10 @@ fn automation_request(
         Box::pin(async move {
             if target == SelfConfigTarget::Task {
                 anyhow::ensure!(
-                    merged.get("behavior_id").and_then(Value::as_str) == Some(core.behavior_id()),
-                    "task belongs to behavior {:?}, not {:?}; retry with options.behavior set to its owner; to run a different behavior, create a separate task",
-                    merged.get("behavior_id").and_then(Value::as_str),
-                    core.behavior_id()
+                    merged.get("agent_id").and_then(Value::as_str) == Some(core.agent_id()),
+                    "task belongs to agent {:?}, not {:?}; retry with options.agent set to its owner; to run a different agent, create a separate task",
+                    merged.get("agent_id").and_then(Value::as_str),
+                    core.agent_id()
                 );
             }
             // Packs may publish an event source before installing its schema;
@@ -566,8 +570,8 @@ fn automation_request(
                         .ok_or_else(|| anyhow!("Trigger.task_id must name an existing Task; inspect tasks with {{\"argv\":[\"task\",\"list\"]}}"))?;
                     anyhow::ensure!(
                         core.task_owned(txn, anchor, task).await?,
-                        "Trigger.task_id {task:?} must reference a Task owned by selected behavior {:?}. Inspect it with {{\"argv\":[\"task\",\"get\"],\"target_id\":{task:?}}}. Create a missing Task first with options.behavior set to that owner. An existing Trigger cannot switch task owners; create a separate Trigger for a different owner and preserve the current workflow until its replacement is valid",
-                        core.behavior_id()
+                        "Trigger.task_id {task:?} must reference a Task owned by selected agent {:?}. Inspect it with {{\"argv\":[\"task\",\"get\"],\"target_id\":{task:?}}}. Create a missing Task first with options.agent set to that owner. An existing Trigger cannot switch task owners; create a separate Trigger for a different owner and preserve the current workflow until its replacement is valid",
+                        core.agent_id()
                     );
                 }
             }
@@ -589,10 +593,10 @@ fn automation_target(kind: &str) -> Result<SelfConfigTarget> {
 }
 
 // ---------------------------------------------------------------------------
-// Behavior request transport
+// Agent management arguments
 // ---------------------------------------------------------------------------
 
-/// Model-facing tri-state for behavior edits. Serde invokes `Default` only
+/// Model-facing tri-state for agent edits. Serde invokes `Default` only
 /// when the property is absent; a present JSON null reaches the deserializer
 /// and becomes `Clear`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -632,7 +636,7 @@ impl StringUpdate {
     }
 }
 
-fn persona_edit_fields(args: &ConfigurePersonaParams) -> Vec<String> {
+fn agent_edit_fields(args: &ConfigureAgentParams) -> Vec<String> {
     [
         ("display_name", &args.display_name),
         ("description", &args.description),
@@ -649,7 +653,7 @@ fn persona_edit_fields(args: &ConfigurePersonaParams) -> Vec<String> {
 
 #[derive(Debug, Clone, Default, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ConfigurePersonaParams {
+pub struct ConfigureAgentParams {
     /// `list` | `inspect` | `preview` | `create` | `edit` | `clone` | `disable`.
     pub action: String,
     /// Proposed mutation for `action: "preview"`.
@@ -657,18 +661,18 @@ pub struct ConfigurePersonaParams {
     pub operation: Option<String>,
     #[serde(default)]
     pub display_name: StringUpdate,
-    /// User-facing summary for the working behavior and its context.
+    /// User-facing summary for the working agent and its context.
     #[serde(default)]
     pub description: StringUpdate,
-    /// Complete operating instructions for the working behavior. Required
+    /// Complete operating instructions for the working agent. Required
     /// when creating from a permission preset; optional overrides a clone or
-    /// an existing behavior.
+    /// an existing agent.
     #[serde(default)]
     pub system_prompt: StringUpdate,
-    /// Exact behavior_id of the sibling behavior (required for edit/disable).
+    /// Exact agent_id of the sibling agent (required for edit/disable).
     #[serde(default)]
-    pub behavior_id: Option<String>,
-    /// Exact sibling behavior_id to clone; a supplied preset requests a new behavior.
+    pub agent_id: Option<String>,
+    /// Exact sibling agent_id to clone; a supplied preset requests a new agent.
     #[serde(default)]
     pub clone_from: Option<String>,
     #[serde(default)]
@@ -678,7 +682,7 @@ pub struct ConfigurePersonaParams {
     /// Exact owner-scoped inference profile ID.
     #[serde(default)]
     pub profile_id: StringUpdate,
-    /// Promote the applied behavior to this principal's default behavior.
+    /// Promote the applied agent to this node's default agent.
     #[serde(default)]
     pub make_default: bool,
     #[serde(default)]
@@ -690,183 +694,51 @@ pub struct ConfigurePersonaParams {
     pub network_mode: Option<crate::toolset::CommandNetworkMode>,
 }
 
-/// How long the `config behavior` command polls a freshly-authored
-/// `PersonaConfigRequest` row before returning it still-`pending`: the
-/// in-process reconciler sweeps on every `Update` event, so a healthy node
-/// converges well inside this window.
-const PERSONA_REQUEST_POLL_TIMEOUT: Duration = Duration::from_secs(5);
-const PERSONA_REQUEST_POLL_INTERVAL: Duration = Duration::from_millis(200);
-
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
-struct PersonaRequestRowOut {
-    #[serde(default)]
-    request_key: Option<String>,
-    #[serde(default)]
-    requester_did: Option<String>,
-    #[serde(default)]
-    agent_did: Option<String>,
-    #[serde(default)]
-    op: Option<String>,
-    #[serde(default)]
-    behavior_id: Option<String>,
-    #[serde(default)]
-    clone_from: Option<String>,
-    #[serde(default)]
-    description: Option<String>,
-    #[serde(default)]
-    system_prompt: Option<String>,
-    #[serde(default)]
-    root: Option<String>,
-    #[serde(default)]
-    preset: Option<String>,
-    #[serde(default)]
-    profile_id: Option<String>,
-    #[serde(default)]
-    edit_fields: Option<Vec<String>>,
-    #[serde(default)]
-    make_default: Option<bool>,
-    #[serde(default)]
-    created_at: Option<String>,
-    #[serde(default)]
-    status: Option<String>,
-    #[serde(default)]
-    status_detail: Option<String>,
-    #[serde(default)]
-    applied_behavior_id: Option<String>,
-    #[serde(default)]
-    processed_at: Option<String>,
-}
-
-async fn load_persona_request_row(
-    node: &Arc<EmbeddedNode>,
-    request_key: &str,
-    agent_did: &str,
-) -> Result<Option<PersonaRequestRowOut>> {
-    let escaped = escape_graphql_string(request_key);
-    let owner = escape_graphql_string(agent_did);
+async fn node_default_agent(node: &EmbeddedNode, node_did: &str) -> Result<Option<String>> {
     let query = format!(
-        r#"{{
-            PersonaConfigRequest(filter: {{ agent_did: {{ _eq: "{owner}" }}, request_key: {{ _eq: "{escaped}" }} }}, limit: 2) {{
-                request_key
-                requester_did
-                agent_did
-                op
-                behavior_id
-                clone_from
-                description
-                system_prompt
-                root
-                preset
-                profile_id
-                edit_fields
-                make_default
-                created_at
-                status
-                status_detail
-                applied_behavior_id
-                processed_at
-            }}
-        }}"#
+        r#"{{ Node(filter: {{node_did: {{_eq: "{}"}}}}, limit: 2) {{ default_agent_id }} }}"#,
+        escape_graphql_string(node_did)
     );
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        bail!("query PersonaConfigRequest failed: {:?}", response.errors);
-    }
-    let Some(value) = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("PersonaConfigRequest"))
-    else {
-        return Ok(None);
-    };
-    let rows: Vec<PersonaRequestRowOut> =
-        serde_json::from_value(value.clone()).map_err(|error| anyhow!("decode row: {error}"))?;
-    anyhow::ensure!(rows.len() <= 1, "ambiguous persona request identity");
-    Ok(rows.into_iter().next())
-}
-
-/// Poll a freshly-authored row until the reconciler (which sweeps on every
-/// `Update` event) drives it to a terminal status, or [`PERSONA_REQUEST_POLL_TIMEOUT`]
-/// elapses. A still-pending row is returned as-is rather than an error: the
-/// request is valid and will converge, the caller just needs to check again.
-async fn poll_persona_request(
-    node: &Arc<EmbeddedNode>,
-    request_key: &str,
-    agent_did: &str,
-) -> Result<PersonaRequestRowOut> {
-    let deadline = tokio::time::Instant::now() + PERSONA_REQUEST_POLL_TIMEOUT;
-    loop {
-        if let Some(row) = load_persona_request_row(node, request_key, agent_did).await? {
-            if row.status.as_deref() != Some("pending") {
-                return Ok(row);
-            }
-        }
-        if tokio::time::Instant::now() >= deadline {
-            return Ok(PersonaRequestRowOut {
-                request_key: Some(request_key.to_owned()),
-                status: Some("pending".to_owned()),
-                status_detail: Some(
-                    "still pending after 5s; the reconciler may need another moment — inspect the request again or list behaviors to determine whether materialization completed"
-                        .to_owned(),
-                ),
-                ..Default::default()
-            });
-        }
-        tokio::time::sleep(PERSONA_REQUEST_POLL_INTERVAL).await;
-    }
-}
-
-async fn principal_default_behavior(
-    node: &EmbeddedNode,
-    agent_did: &str,
-) -> Result<Option<String>> {
-    let owner = escape_graphql_string(agent_did);
-    let response = node
-        .execute(&format!(
-            r#"{{ AgentPrincipal(filter: {{agent_did: {{_eq: "{owner}"}}}}, limit: 2) {{ default_behavior_id }} }}"#
-        ))
-        .await;
-    if response.has_errors() {
-        bail!("query AgentPrincipal failed: {:?}", response.errors);
-    }
+    let response =
+        crate::graphql::graphql_with_transaction_retry(node, &query, "self_config.default_agent")
+            .await?;
     let rows = response
         .data
         .as_ref()
-        .and_then(|data| data.get("AgentPrincipal"))
+        .and_then(|data| data.get("Node"))
         .and_then(Value::as_array)
-        .context("AgentPrincipal query returned no rows array")?;
-    anyhow::ensure!(rows.len() <= 1, "ambiguous principal identity");
+        .context("Node query returned no rows")?;
+    anyhow::ensure!(rows.len() <= 1, "ambiguous node identity");
     Ok(rows
         .first()
-        .and_then(|row| row.get("default_behavior_id"))
+        .and_then(|row| row.get("default_agent_id"))
         .and_then(Value::as_str)
         .map(ToOwned::to_owned))
 }
 
-async fn behavior_snapshot(
+async fn agent_snapshot(
     node: &Arc<EmbeddedNode>,
-    agent_did: &str,
-    behavior_id: &str,
+    node_did: &str,
+    agent_id: &str,
     process_ceiling: &crate::tool_surface::SelfConfigProcessCeiling,
     protected: bool,
-    default_behavior_id: Option<&str>,
+    default_agent_id: Option<&str>,
 ) -> Result<Value> {
-    let effective =
-        SelfConfigCore::new(node.clone(), agent_did.to_owned(), behavior_id.to_owned())?
-            .with_process_ceiling(process_ceiling.clone())
-            .read_effective_config(&BTreeSet::new(), false, false)
-            .await?;
+    let effective = SelfConfigCore::new(node.clone(), node_did.to_owned(), agent_id.to_owned())?
+        .with_process_ceiling(process_ceiling.clone())
+        .read_effective_config(&BTreeSet::new(), false, false)
+        .await?;
     Ok(json!({
-        "behavior_id": behavior_id,
+        "agent_id": agent_id,
         "protected": protected,
-        "is_default": default_behavior_id == Some(behavior_id),
+        "is_default": default_agent_id == Some(agent_id),
         "effective_config": effective,
     }))
 }
 
-async fn persona_list(
+async fn agent_list(
     node: &Arc<EmbeddedNode>,
-    agent_did: &str,
+    node_did: &str,
     process_ceiling: &crate::tool_surface::SelfConfigProcessCeiling,
     limit: usize,
     cursor: Option<&str>,
@@ -875,61 +747,59 @@ async fn persona_list(
         (1..=50).contains(&limit),
         "--limit must be between 1 and 50"
     );
-    let store =
-        GraphqlPersonaRequestStore::with_ceiling(node.clone(), process_ceiling.root.clone());
-    let catalog = store.load_catalog_view(agent_did).await?;
-    let default_behavior_id = principal_default_behavior(node, agent_did).await?;
-    let total = catalog.behaviors.len();
+    let catalog = load_agent_catalog(node, node_did).await?;
+    let default_agent_id = node_default_agent(node, node_did).await?;
+    let total = catalog.agents.len();
     let selected = catalog
-        .behaviors
+        .agents
         .iter()
-        .filter(|(behavior_id, _)| cursor.is_none_or(|cursor| behavior_id.as_str() > cursor))
+        .filter(|(agent_id, _)| cursor.is_none_or(|cursor| agent_id.as_str() > cursor))
         .take(limit + 1)
         .collect::<Vec<_>>();
     let truncated = selected.len() > limit;
-    let mut behaviors = Vec::new();
-    for (behavior_id, reference) in selected.into_iter().take(limit) {
-        let snapshot = match behavior_snapshot(
+    let mut agents = Vec::new();
+    for (agent_id, reference) in selected.into_iter().take(limit) {
+        let snapshot = match agent_snapshot(
             node,
-            agent_did,
-            behavior_id,
+            node_did,
+            agent_id,
             process_ceiling,
-            reference.protected,
-            default_behavior_id.as_deref(),
+            catalog.protected_ids.contains(agent_id),
+            default_agent_id.as_deref(),
         )
         .await
         {
             Ok(snapshot) => {
                 let effective = &snapshot["effective_config"];
                 json!({
-                    "behavior_id": behavior_id,
-                    "display_name": effective.pointer("/behavior/display_name"),
-                    "description": effective.pointer("/behavior/description"),
-                    "enabled": reference.enabled,
-                    "protected": reference.protected,
-                    "is_default": default_behavior_id.as_deref() == Some(behavior_id.as_str()),
-                    "context_id": effective.pointer("/behavior/context_id"),
-                    "profile_id": effective.pointer("/behavior/inference_profile_id"),
+                    "agent_id": agent_id,
+                    "display_name": effective.pointer("/agent/display_name"),
+                    "description": effective.pointer("/agent/description"),
+                    "enabled": *reference,
+                    "protected": catalog.protected_ids.contains(agent_id),
+                    "is_default": default_agent_id.as_deref() == Some(agent_id.as_str()),
+                    "context_id": effective.pointer("/agent/context_id"),
+                    "profile_id": effective.pointer("/agent/inference_profile_id"),
                     "backend_id": effective.pointer("/inference_profile/backend_id"),
                     "model_name": effective.pointer("/inference_profile/model_name"),
                     "reasoning_effort": effective.pointer("/inference_profile/reasoning_effort"),
                 })
             }
             Err(error) => json!({
-                "behavior_id": behavior_id,
-                "enabled": reference.enabled,
-                "protected": reference.protected,
-                "is_default": default_behavior_id.as_deref() == Some(behavior_id.as_str()),
+                "agent_id": agent_id,
+                "enabled": *reference,
+                "protected": catalog.protected_ids.contains(agent_id),
+                "is_default": default_agent_id.as_deref() == Some(agent_id.as_str()),
                 "configuration_error": format!("{error:#}"),
             }),
         };
-        behaviors.push(snapshot);
+        agents.push(snapshot);
     }
     let next_cursor = truncated
         .then(|| {
-            behaviors
+            agents
                 .last()?
-                .get("behavior_id")?
+                .get("agent_id")?
                 .as_str()
                 .map(ToOwned::to_owned)
         })
@@ -938,57 +808,52 @@ async fn persona_list(
         "page": {
             "limit": limit,
             "total": total,
-            "returned": behaviors.len(),
+            "returned": agents.len(),
             "truncated": truncated,
             "next_cursor": next_cursor,
         },
         "process_ceiling": process_ceiling,
-        "allowed_roots": catalog.allowed_roots,
-        "permission_presets": crate::agent::persona_presets::builtin_preset_names(),
-        "available_profile_ids": catalog.available_profile_ids,
-        "default_behavior_id": default_behavior_id,
-        "behaviors": behaviors,
+        "permission_presets": builtin_preset_names(),
+        "available_profile_ids": catalog.published_profiles,
+        "default_agent_id": default_agent_id,
+        "agents": agents,
         "activation": {
             "durable_config": "after the admitted transaction commits",
             "running_generation": "after the runtime reconciler generation swap",
-            "session": "select the behavior in a new session; existing sessions remain bound to their original behavior",
-            "pairing_and_restart": "canonical documents and request outcomes replicate to authorized paired clients and are reloaded after restart",
+            "session": "select the agent in a new session; existing sessions remain bound to their original agent",
+            "pairing_and_restart": "canonical documents replicate to authorized paired clients and are reloaded after restart",
         },
     });
     serde_json::to_string_pretty(&snapshot).map_err(|error| anyhow!("serialize catalog: {error}"))
 }
 
-async fn persona_inspect(
+async fn agent_inspect(
     node: &Arc<EmbeddedNode>,
-    agent_did: &str,
-    behavior_id: &str,
+    node_did: &str,
+    agent_id: &str,
     process_ceiling: &crate::tool_surface::SelfConfigProcessCeiling,
 ) -> Result<String> {
-    let store =
-        GraphqlPersonaRequestStore::with_ceiling(node.clone(), process_ceiling.root.clone());
-    let catalog = store.load_catalog_view(agent_did).await?;
-    let reference = catalog.behaviors.get(behavior_id).with_context(|| {
-        format!(
-            "unknown behavior_id {behavior_id:?}; copy an exact ID from [\"behavior\",\"list\"]"
-        )
+    let catalog = load_agent_catalog(node, node_did).await?;
+    let _ = catalog.agents.get(agent_id).with_context(|| {
+        format!("unknown agent_id {agent_id:?}; copy an exact ID from [\"agent\",\"list\"]")
     })?;
-    let default_behavior_id = principal_default_behavior(node, agent_did).await?;
-    let snapshot = behavior_snapshot(
+    let default_agent_id = node_default_agent(node, node_did).await?;
+    let snapshot = agent_snapshot(
         node,
-        agent_did,
-        behavior_id,
+        node_did,
+        agent_id,
         process_ceiling,
-        reference.protected,
-        default_behavior_id.as_deref(),
+        catalog.protected_ids.contains(agent_id),
+        default_agent_id.as_deref(),
     )
     .await?;
     let Value::Object(mut snapshot) = snapshot else {
-        bail!("behavior snapshot must be an object");
+        bail!("agent snapshot must be an object");
     };
     let effective = snapshot.remove("effective_config").unwrap_or_default();
     let mut result = Ordered::reading_order(
         Value::Object(snapshot),
-        &["behavior_id", "is_default", "protected"],
+        &["agent_id", "is_default", "protected"],
     );
     result.push(Ordered::entry(
         "effective_config",
@@ -997,214 +862,35 @@ async fn persona_inspect(
     result.pretty()
 }
 
-async fn persona_preview(
-    node: &Arc<EmbeddedNode>,
-    agent_did: &str,
-    args: &ConfigurePersonaParams,
-    process_ceiling: &crate::tool_surface::SelfConfigProcessCeiling,
-    held: &OperatorGrants,
-) -> Result<String> {
-    let operation = args
-        .operation
-        .as_deref()
-        .context("preview requires operation: create|edit|clone|disable")?;
-    let (op_raw, op, clone_from) = match operation {
-        "create" => ("create", PersonaOp::Create { clone_from: None }, None),
-        "clone" => {
-            let source = args
-                .clone_from
-                .as_deref()
-                .filter(|value| !value.trim().is_empty())
-                .context("preview clone requires clone_from")?
-                .to_owned();
-            (
-                "create",
-                PersonaOp::Create {
-                    clone_from: Some(source.clone()),
-                },
-                Some(source),
-            )
-        }
-        "edit" => ("edit", PersonaOp::Edit, None),
-        "disable" => ("disable", PersonaOp::Disable, None),
-        other => bail!("unknown preview operation {other:?}; use create|edit|clone|disable"),
-    };
-    if let Some(source) = clone_from.as_deref() {
-        let actor = ::identity::Did::new(agent_did.to_owned())
-            .context("the agent DID is not ACP-addressable")?;
-        crate::config_client::ConfigAccess::transact_local_readonly(
-            node,
-            Some(actor),
-            "self_config.preview_clone_grants",
-            |txn| {
-                Box::pin(
-                    async move { clone_keeps_grants_in_txn(txn, agent_did, source, held).await },
-                )
-            },
-        )
-        .await?;
-    }
-    let store =
-        GraphqlPersonaRequestStore::with_ceiling(node.clone(), process_ceiling.root.clone());
-    let catalog = store.load_catalog_view(agent_did).await?;
-    let request_key = format!("preview-{}", uuid::Uuid::new_v4());
-    let doc = PersonaRequestDoc {
-        request_key: request_key.clone(),
-        requester_did: agent_did.to_owned(),
-        agent_did: agent_did.to_owned(),
-        authority_kind: PERSONA_AUTHORITY_LOCAL_SELF.to_owned(),
-        local_signer_did: agent_did.to_owned(),
-        local_signature_valid: true,
-        op_raw: op_raw.to_owned(),
-        op: Some(op.clone()),
-        behavior_id: args.behavior_id.clone(),
-        persona_name: args.display_name.owned_value(),
-        description: args.description.owned_value(),
-        system_prompt: args.system_prompt.owned_value(),
-        root: args.root.owned_value(),
-        preset: args.preset.owned_value(),
-        profile_id: args.profile_id.owned_value(),
-        edit_fields: (operation == "edit")
-            .then(|| persona_edit_fields(args))
-            .unwrap_or_default(),
-        make_default: args.make_default,
-        ..Default::default()
-    };
-    let mut verdict = decide_persona_request(&doc, &catalog);
-    if matches!(verdict, PersonaVerdict::Admit) {
-        let current_behavior = matches!(op, PersonaOp::Edit)
-            .then_some(args.behavior_id.as_deref())
-            .flatten();
-        let next_profile = args.profile_id.value();
-        let actor = ::identity::Did::new(agent_did.to_owned())
-            .context("self-config principal DID is not ACP-addressable")?;
-        if let Err(error) = crate::config_client::ConfigAccess::transact_local(
-            node,
-            Some(actor),
-            "self_config.preview_persona_profile_choice",
-            |txn| {
-                Box::pin(guard_persona_profile_choice(
-                    txn,
-                    agent_did,
-                    current_behavior,
-                    clone_from.as_deref(),
-                    next_profile,
-                ))
-            },
-        )
-        .await
-        {
-            verdict = PersonaVerdict::Reject(format!("{error:#}"));
-        }
-    }
-    let rejection = match &verdict {
-        PersonaVerdict::Admit => None,
-        PersonaVerdict::Reject(detail) => Some(detail.clone()),
-    };
-    let behavior_id = match &op {
-        PersonaOp::Create { .. } => args
-            .display_name
-            .value()
-            .map(|name| derive_behavior_id(agent_did, name, &catalog.behaviors)),
-        PersonaOp::Edit | PersonaOp::Disable => args.behavior_id.clone(),
-    };
-    let inherited = match operation {
-        "clone" => clone_from.as_deref(),
-        "edit" | "disable" => args.behavior_id.as_deref(),
-        _ => None,
-    };
-    let inherited_config = match inherited {
-        Some(behavior_id) if catalog.behaviors.contains_key(behavior_id) => {
-            let reference = &catalog.behaviors[behavior_id];
-            let default_behavior_id = principal_default_behavior(node, agent_did).await?;
-            Some(
-                behavior_snapshot(
-                    node,
-                    agent_did,
-                    behavior_id,
-                    process_ceiling,
-                    reference.protected,
-                    default_behavior_id.as_deref(),
-                )
-                .await?,
-            )
-        }
-        _ => None,
-    };
-    let preset_requested = args.preset.value().and_then(|preset| {
-        crate::agent::persona_presets::preset_fields(preset).map(|fields| {
-            json!({
-                "file_mode": fields.file_tools_mode,
-                "bash_mode": fields.bash_mode,
-                "self_configuration": fields.enable_self_config,
-            })
-        })
-    });
-    ordered! {
-        "admitted": matches!(verdict, PersonaVerdict::Admit),
-        "rejection": rejection,
-        "committed": false,
-        "operation": operation,
-        "proposed_ids": json!({
-            "behavior_id": behavior_id,
-            "context_id": matches!(&op, PersonaOp::Create { .. }).then(|| format!("context-{request_key}")),
-            "tools_id": matches!(&op, PersonaOp::Create { .. }).then(|| format!("tools-{request_key}")),
-            "profile_id": args.profile_id.value(),
-        }),
-        "proposed_values": json!({
-            "display_name": args.display_name.value(),
-            "description": args.description.value(),
-            "context_description": args.description.value(),
-            "system_prompt": args.system_prompt.value(),
-            "root": args.root.value(),
-            "preset": args.preset.value(),
-            "edit_fields": (operation == "edit").then(|| persona_edit_fields(args)),
-            "make_default": args.make_default,
-        }),
-        "note": "Preview checks request admission without writing; it does not verify materialization or runtime readiness. Preset values are requested authority, narrowed by the process ceiling at runtime. Inspect the applied behavior for effective authority. Applied create IDs use the admitted request key and will differ from these preview-only IDs.",
-        "preset_requested": preset_requested,
-        "inherited_config": inherited_config,
-        "process_ceiling": process_ceiling,
-    }
-    .pretty()
-}
-
-/// Create and clone have no current backend; edit's is the target behavior's.
-/// A clone also keeps its source's context, which moves its compaction from
-/// its own profile to whatever that context compacts on.
-async fn guard_persona_profile_choice(
+async fn guard_agent_profile_choice(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
-    agent_did: &str,
-    current_behavior: Option<&str>,
+    node_did: &str,
+    current_agent: Option<&str>,
     clone_from: Option<&str>,
     next_profile: Option<&str>,
 ) -> Result<()> {
     let Some(next_profile) = next_profile else {
         return Ok(());
     };
-    let current_profile = match current_behavior {
-        Some(behavior_id) => {
-            ops::read_owned_doc(txn, SelfConfigTarget::AgentBehavior, agent_did, behavior_id)
-                .await?
-                .and_then(|(_, doc)| {
-                    doc.get("inference_profile_id")?
-                        .as_str()
-                        .map(ToOwned::to_owned)
-                })
-        }
+    let current_profile = match current_agent {
+        Some(agent_id) => ops::read_owned_doc(txn, SelfConfigTarget::Agent, node_did, agent_id)
+            .await?
+            .and_then(|(_, doc)| {
+                doc.get("inference_profile_id")?
+                    .as_str()
+                    .map(ToOwned::to_owned)
+            }),
         None => None,
     };
     let current_backend = match current_profile {
-        Some(profile) => Some(ops::profile_backend_id(txn, agent_did, &profile).await?),
+        Some(profile) => Some(ops::profile_backend_id(txn, node_did, &profile).await?),
         None => None,
     };
-    let next_backend = ops::profile_backend_id(txn, agent_did, next_profile).await?;
-    ops::guard_backend_choice_in_txn(txn, agent_did, current_backend.as_deref(), &next_backend)
+    let next_backend = ops::profile_backend_id(txn, node_did, next_profile).await?;
+    ops::guard_backend_choice_in_txn(txn, node_did, current_backend.as_deref(), &next_backend)
         .await?;
     let source = match clone_from {
-        Some(id) => {
-            ops::read_owned_doc(txn, SelfConfigTarget::AgentBehavior, agent_did, id).await?
-        }
+        Some(id) => ops::read_owned_doc(txn, SelfConfigTarget::Agent, node_did, id).await?,
         None => None,
     };
     let Some((_, source)) = source else {
@@ -1216,348 +902,18 @@ async fn guard_persona_profile_choice(
     if let Some(context) = source.get("context_id") {
         cloned.insert("context_id".to_owned(), context.clone());
     }
-    let anchor = ops::BehaviorAnchor {
+    let anchor = ops::AgentAnchor {
         doc: source,
         context: serde_json::Map::new(),
         profile: serde_json::Map::new(),
         execution: serde_json::Map::new(),
     };
-    ops::guard_compaction_choice_in_txn(
-        txn,
-        SelfConfigTarget::AgentBehavior,
-        &anchor,
-        &own,
-        &cloned,
-    )
-    .await
-}
-
-async fn persona_mutate(
-    node: &Arc<EmbeddedNode>,
-    agent_did: &str,
-    identity: &dyn AgentIdentity,
-    args: &ConfigurePersonaParams,
-    process_ceiling: &crate::tool_surface::SelfConfigProcessCeiling,
-    held: &OperatorGrants,
-) -> Result<String> {
-    anyhow::ensure!(
-        identity.did() == agent_did,
-        "behavior writes require the exact local principal signer; signer {:?} cannot configure principal {agent_did:?}",
-        identity.did()
-    );
-    let resolved_behavior_id = args.behavior_id.as_deref().map(str::to_owned);
-    let resolved_profile_id = args.profile_id.owned_value();
-
-    let required_behavior_id = |action: &str| -> Result<()> {
-        if resolved_behavior_id
-            .as_deref()
-            .map(str::trim)
-            .unwrap_or("")
-            .is_empty()
-        {
-            bail!("{action} action requires behavior_id (the sibling behavior to target)");
-        }
-        Ok(())
-    };
-    let (op, clone_from): (&str, Option<String>) = match args.action.as_str() {
-        "create" => ("create", None),
-        "clone" => {
-            let preset_given = args
-                .preset
-                .value()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .is_some();
-            anyhow::ensure!(
-                !preset_given,
-                "clone action inherits its source permissions and must not include preset"
-            );
-            let clone_from = args
-                .clone_from
-                .as_deref()
-                .map(str::to_owned)
-                .filter(|value| !value.is_empty())
-                .ok_or_else(|| {
-                    anyhow!("clone action requires clone_from (the sibling behavior_id to clone)")
-                })?;
-            ("create", Some(clone_from))
-        }
-        "edit" => {
-            required_behavior_id("edit")?;
-            ("edit", None)
-        }
-        "disable" => {
-            required_behavior_id("disable")?;
-            ("disable", None)
-        }
-        other => bail!("unknown action {other:?}; use list|create|edit|clone|disable"),
-    };
-
-    let request_key = format!("pcr-{}", uuid::Uuid::new_v4());
-    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let mut record = LocalPersonaRequestRecord {
-        request_key: request_key.clone(),
-        requester_did: agent_did.to_string(),
-        agent_did: agent_did.to_string(),
-        authority_kind: PERSONA_AUTHORITY_LOCAL_SELF.to_string(),
-        local_signer_did: agent_did.to_string(),
-        op: op.to_string(),
-        behavior_id: resolved_behavior_id,
-        clone_from,
-        persona_name: args.display_name.owned_value(),
-        description: args.description.owned_value(),
-        system_prompt: args.system_prompt.owned_value(),
-        root: args.root.owned_value(),
-        preset: args.preset.owned_value(),
-        profile_id: resolved_profile_id,
-        edit_fields: (args.action == "edit")
-            .then(|| persona_edit_fields(args))
-            .unwrap_or_default(),
-        make_default: args.make_default,
-        created_at: now,
-        local_signature: Vec::new(),
-    };
-    record.local_signature = identity.sign(&record.signing_payload()).await?;
-    record.validate_shape()?;
-    let mutation = local_persona_request_mutation(&record);
-    let actor = ::identity::Did::new(identity.did().to_owned())
-        .context("self-config principal DID is not ACP-addressable")?;
-    let current_behavior = (op == "edit")
-        .then_some(record.behavior_id.as_deref())
-        .flatten();
-    crate::config_client::ConfigAccess::transact_local(
-        node,
-        Some(actor),
-        "self_config.create_persona_request",
-        |txn| {
-            let mutation = &mutation;
-            let next_profile = record.profile_id.as_deref();
-            let clone_from = record.clone_from.as_deref();
-            Box::pin(async move {
-                if let Some(source) = clone_from {
-                    clone_keeps_grants_in_txn(txn, agent_did, source, held).await?;
-                }
-                guard_persona_profile_choice(
-                    txn,
-                    agent_did,
-                    current_behavior,
-                    clone_from,
-                    next_profile,
-                )
-                .await?;
-                txn.execute_local_response(mutation).await.map(|_| ())
-            })
-        },
-    )
-    .await?;
-
-    let row = poll_persona_request(node, &request_key, agent_did).await?;
-    let status = json!(row.status);
-    if row.status.as_deref() == Some("applied") {
-        let applied_behavior_id = row
-            .applied_behavior_id
-            .as_deref()
-            .context("applied behavior request has no applied_behavior_id")?;
-        if args.action == "disable" {
-            let behavior = crate::list_agent_behaviors(node, agent_did)
-                .await?
-                .into_iter()
-                .find(|behavior| behavior.behavior_id == applied_behavior_id)
-                .context("applied disable outcome cannot re-read its behavior")?;
-            anyhow::ensure!(
-                !behavior.enabled,
-                "applied disable outcome still resolves the behavior as enabled"
-            );
-            let is_default = principal_default_behavior(node, agent_did)
-                .await?
-                .as_deref()
-                == Some(applied_behavior_id);
-            return ordered! {
-                "status": status,
-                "behavior_id": applied_behavior_id,
-                "activation": json!({
-                    "durable": "confirmed",
-                    "runtime": "new requests cannot select the disabled behavior after reconciliation",
-                    "current_turn": "unchanged",
-                }),
-                "effective": json!({"behavior": behavior, "is_default": is_default}),
-                "request": row,
-            }
-            .pretty();
-        }
-        let inspected =
-            persona_inspect(node, agent_did, applied_behavior_id, process_ceiling).await?;
-        let effective: Value = serde_json::from_str(&inspected)?;
-        let effective_config = &effective["effective_config"];
-        let required_materialized_id = |pointer: &str, name: &str| -> Result<String> {
-            effective_config
-                .pointer(pointer)
-                .and_then(Value::as_str)
-                .filter(|value| !value.trim().is_empty())
-                .map(ToOwned::to_owned)
-                .with_context(|| {
-                    format!(
-                        "applied behavior request reported success without a materialized {name}"
-                    )
-                })
-        };
-        let context_id = required_materialized_id("/context/context_id", "context_id")?;
-        let profile_id = required_materialized_id("/inference_profile/profile_id", "profile_id")?;
-        let requires_tools = args
-            .preset
-            .value()
-            .is_some_and(|preset| !preset.trim().is_empty())
-            || args
-                .root
-                .value()
-                .is_some_and(|root| !root.trim().is_empty());
-        let tools_id = if !requires_tools {
-            effective_config
-                .pointer("/documents/Tools/tools_id")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned)
-        } else {
-            Some(required_materialized_id(
-                "/documents/Tools/tools_id",
-                "tools_id",
-            )?)
-        };
-        if args.action == "create" {
-            anyhow::ensure!(
-                effective_config
-                    .pointer("/context/system_prompt")
-                    .and_then(Value::as_str)
-                    .is_some_and(|prompt| !prompt.trim().is_empty()),
-                "applied behavior request reported success without effective system instructions"
-            );
-        }
-        let verify_string = |pointer: &str, update: &StringUpdate, field: &str| -> Result<()> {
-            if update.is_present() {
-                anyhow::ensure!(
-                    effective_config.pointer(pointer).and_then(Value::as_str) == update.value(),
-                    "applied behavior request reported success but {field} does not match the requested value"
-                );
-            }
-            Ok(())
-        };
-        verify_string("/behavior/display_name", &args.display_name, "display_name")?;
-        verify_string(
-            "/behavior/description",
-            &args.description,
-            "behavior description",
-        )?;
-        verify_string(
-            "/context/description",
-            &args.description,
-            "context description",
-        )?;
-        verify_string(
-            "/context/system_prompt",
-            &args.system_prompt,
-            "system_prompt",
-        )?;
-        if args.root.is_present() {
-            let effective_root = effective_config
-                .pointer("/documents/Tools/host/root")
-                .and_then(Value::as_str);
-            match args.root.value() {
-                Some(requested_root) => {
-                    let canonical_requested = crate::tool_surface::resolve_configured_tool_root(
-                        std::path::Path::new(requested_root),
-                    )?;
-                    anyhow::ensure!(
-                        effective_root == Some(canonical_requested.to_string_lossy().as_ref()),
-                        "applied behavior request reported success but root does not match the canonical requested value"
-                    );
-                }
-                None => anyhow::ensure!(
-                    effective_root.is_none(),
-                    "applied behavior request reported success but did not clear root"
-                ),
-            }
-        }
-        verify_string(
-            "/behavior/inference_profile_id",
-            &args.profile_id,
-            "profile_id",
-        )?;
-        if let Some(preset) = args.preset.value() {
-            let fields = crate::agent::persona_presets::preset_fields(preset)
-                .context("applied behavior request used an unknown preset")?;
-            anyhow::ensure!(
-                effective_config
-                    .pointer("/documents/Tools/host/files/mode")
-                    .and_then(Value::as_str)
-                    == Some(fields.file_tools_mode.as_str())
-                    && effective_config
-                        .pointer("/documents/Tools/host/bash/mode")
-                        .and_then(Value::as_str)
-                        == Some(fields.bash_mode.as_str()),
-                "applied behavior request reported success but effective Tools do not match preset {preset:?}"
-            );
-        }
-        if args.make_default {
-            anyhow::ensure!(
-                effective["is_default"].as_bool() == Some(true),
-                "applied behavior request reported success but did not select the behavior as principal default"
-            );
-        }
-        return ordered! {
-            "status": status,
-            "behavior_id": applied_behavior_id,
-            "materialized_ids": json!({
-                "behavior_id": applied_behavior_id,
-                "context_id": context_id,
-                "tools_id": tools_id,
-                "profile_id": profile_id,
-            }),
-            "activation": json!({
-                "durable": "confirmed",
-                "runtime": "applies to requests dispatched after the reconciler publishes the new generation",
-                "current_turn": "unchanged",
-                "test": "start a new session explicitly selecting applied_behavior_id",
-                "restart_and_pairing": "durable canonical documents and the terminal request outcome survive restart and replicate to authorized paired clients",
-            }),
-            "effective": serde_json::value::RawValue::from_string(inspected)?,
-            "request": row,
-        }
-        .pretty();
-    }
-    let recovery = (row.status.as_deref() == Some("rejected")).then(|| {
-        json!({
-            "guidance": row.status_detail,
-            "next": "list or inspect behavior configuration and retry only with published profile/root/preset choices",
-        })
-    });
-    ordered! {"status": status, "recovery": recovery, "request": row}.pretty()
-}
-
-/// The clone bound (Lean `SelfConfig.reselectionKeepsGrants` with no previous
-/// selection): a clone copies its source's whole Tools document, operator
-/// grants included, so its grants are bounded like a Tools write over a
-/// document with no grant: pack installation only when the invoking agent
-/// holds it.
-/// Checked in the transaction that authors the request, and on preview. The
-/// reconciler publishes the clone later from the source as it is then, without
-/// the invoker's grants, so a grant an operator adds to the source in that
-/// window is copied; operator writes are unguarded by design.
-async fn clone_keeps_grants_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
-    agent_did: &str,
-    source_behavior_id: &str,
-    held: &OperatorGrants,
-) -> Result<()> {
-    let source_tools = ops::behavior_tools_in_txn(txn, agent_did, source_behavior_id).await?;
-    reselection_keeps_grants(held, None, source_tools.as_ref()).with_context(|| {
-        format!(
-            "clone source {source_behavior_id:?} carries an operator grant this agent does not hold; clone a source without it or ask the operator to grant it"
-        )
-    })
+    ops::guard_compaction_choice_in_txn(txn, SelfConfigTarget::Agent, &anchor, &own, &cloned).await
 }
 
 /// Install document and graph packs from the home's pack store or the registry through the
 /// canonical resolver, package publication, and activation owners. The running
-/// principal is always the install owner; callers cannot select another DID,
+/// node is always the install owner; callers cannot select another DID,
 /// filesystem distribution, registry endpoint, or control-plane endpoint.
 struct PackInstaller {
     core: SelfConfigCore,
@@ -1651,7 +1007,7 @@ impl PackInstaller {
         );
         for (name, value) in &args.variables {
             anyhow::ensure!(
-                name != "GENTS_PACK_AGENT_DID"
+                name != "GENTS_PACK_NODE_DID"
                     && !name.is_empty()
                     && name.len() <= 128
                     && name.bytes().all(|byte| {
@@ -1706,7 +1062,7 @@ impl PackInstaller {
         let access = crate::config_client::ConfigAccess::Local(self.node.clone());
         let installed = crate::pack::installed_packs(
             self.home.as_deref(),
-            Some((&access, self.core.agent_did())),
+            Some((&access, self.core.node_did())),
         )
         .await?;
         let resolved = crate::pack_resolve::resolve_named(
@@ -1743,7 +1099,7 @@ impl PackInstaller {
     ) -> anyhow::Result<Option<crate::graph_pipeline::GraphPlan>> {
         let access = crate::config_client::ConfigAccess::Local(self.node.clone());
         let coordinate = format!("{}/{}", manifest.metadata.namespace, manifest.name);
-        if crate::pack::read_installed_pack(&access, self.core.agent_did(), &coordinate)
+        if crate::pack::read_installed_pack(&access, self.core.node_did(), &coordinate)
             .await?
             .is_none()
         {
@@ -1752,7 +1108,7 @@ impl PackInstaller {
         crate::graph_package::load_installed_package_plan(
             &access,
             &manifest.name,
-            self.core.agent_did(),
+            self.core.node_did(),
         )
         .await
     }
@@ -1770,7 +1126,7 @@ impl PackInstaller {
         }
         let access = crate::config_client::ConfigAccess::Local(self.node.clone());
         let coordinate = format!("{}/{}", manifest.metadata.namespace, manifest.name);
-        crate::pack::read_installed_pack(&access, self.core.agent_did(), &coordinate)
+        crate::pack::read_installed_pack(&access, self.core.node_did(), &coordinate)
             .await?
             .map(serde_json::to_value)
             .transpose()
@@ -1785,7 +1141,7 @@ impl PackInstaller {
         commit: bool,
     ) -> anyhow::Result<String> {
         let access = crate::config_client::ConfigAccess::Local(self.node.clone());
-        let owner = self.core.agent_did();
+        let owner = self.core.node_did();
         let prior = self.installation_status(distribution.manifest()).await?;
         anyhow::ensure!(
             operation != "update" || prior.is_some(),
@@ -1860,7 +1216,7 @@ impl PackInstaller {
             }))?);
         }
         let scope = crate::pack::PackInstallOptions {
-            agent_did: owner.to_owned(),
+            node_did: owner.to_owned(),
         };
         let environment = |name: &str| args.variables.get(name).cloned();
         let authored = crate::pack::load_pack_config(
@@ -2069,7 +1425,7 @@ impl PackInstaller {
         let inference = crate::pack::inspect_pack_inference_bindings(
             &access,
             distribution.manifest(),
-            self.core.agent_did(),
+            self.core.node_did(),
             &BTreeMap::new(),
         )
         .await?;
@@ -2126,7 +1482,7 @@ impl PackInstaller {
         let access = crate::config_client::ConfigAccess::Local(self.node.clone());
         let report = crate::pack::remove_pack(
             &access,
-            self.core.agent_did(),
+            self.core.node_did(),
             &coordinate,
             crate::pack::DriftPolicy::Refuse,
         )
@@ -2207,7 +1563,7 @@ impl PackInstaller {
         &self,
         bindings: &crate::pack::PackInferenceBindings,
     ) -> anyhow::Result<()> {
-        let owner = self.core.agent_did();
+        let owner = self.core.node_did();
         crate::config_client::ConfigAccess::transact_local(
             &self.node,
             Some(self.core.identity()?),
@@ -2247,7 +1603,7 @@ impl PackInstaller {
         let inspected = crate::pack::inspect_pack_inference_bindings(
             &access,
             distribution.manifest(),
-            self.core.agent_did(),
+            self.core.node_did(),
             &args.inference_slots,
         )
         .await?;
@@ -2276,18 +1632,18 @@ impl PackInstaller {
         let inference = crate::pack::preview_pack_inference_bindings(
             &access,
             distribution.manifest(),
-            self.core.agent_did(),
+            self.core.node_did(),
             &args.inference_slots,
         )
         .await?;
         self.fence_bindings(&inference.bindings).await?;
         let scope = crate::pack::PackInstallOptions {
-            agent_did: self.core.agent_did().to_owned(),
+            node_did: self.core.node_did().to_owned(),
         };
         let environment = |name: &str| args.variables.get(name).cloned();
         let package = distribution.load_graph(&scope, &environment)?;
         let bindings = crate::graph_package::GraphPackageInstallBindings {
-            agent_did: self.core.agent_did().to_owned(),
+            node_did: self.core.node_did().to_owned(),
             inference_slots: inference.bindings.clone(),
         };
         let prepared = crate::graph_package::prepare_loaded_graph_package_install(
@@ -2374,13 +1730,13 @@ impl PackInstaller {
         let inference = crate::pack::preview_pack_inference_bindings(
             &access,
             distribution.manifest(),
-            self.core.agent_did(),
+            self.core.node_did(),
             &args.inference_slots,
         )
         .await?;
         self.fence_bindings(&inference.bindings).await?;
         let scope = crate::pack::PackInstallOptions {
-            agent_did: self.core.agent_did().to_owned(),
+            node_did: self.core.node_did().to_owned(),
         };
         let environment = |name: &str| args.variables.get(name).cloned();
         let package = distribution.load_graph(&scope, &environment)?;
@@ -2389,7 +1745,7 @@ impl PackInstaller {
             "resolved package content does not match the previewed artifact digest"
         );
         let bindings = crate::graph_package::GraphPackageInstallBindings {
-            agent_did: self.core.agent_did().to_owned(),
+            node_did: self.core.node_did().to_owned(),
             inference_slots: inference.bindings.clone(),
         };
         let external_dependencies = package.manifest.external_dependencies.clone();
@@ -2400,7 +1756,7 @@ impl PackInstaller {
             crate::plugin::install::bind_plugin_slots(
                 home,
                 distribution.manifest(),
-                self.core.agent_did(),
+                self.core.node_did(),
                 &bindings.inference_slots,
             )
             .inspect_err(|_| {
@@ -2422,7 +1778,7 @@ impl PackInstaller {
         // landed.
         let receipt = match crate::graph_package::install_loaded_graph_package(
             &access,
-            self.core.agent_did(),
+            self.core.node_did(),
             &package,
             &bindings,
             None,
@@ -2440,7 +1796,7 @@ impl PackInstaller {
         };
         let activation = crate::graph_pipeline::activate_graph_revision_with_access(
             &access,
-            self.core.agent_did(),
+            self.core.node_did(),
             &receipt.graph_id,
             &receipt.revision_digest,
             previous.as_ref().map(|plan| plan.digest.as_str()),
@@ -2492,7 +1848,7 @@ pub async fn list_graphs_value(
     let owner = escape_graphql_string(owner_did);
     let response = access
         .execute(&format!(
-            r#"{{ GraphDefinition(filter: {{agent_did: {{_eq: "{owner}"}}}}) {{ graph_id agent_did enabled active_revision_digest generation created_at updated_at tags }} }}"#
+            r#"{{ GraphDefinition(filter: {{node_did: {{_eq: "{owner}"}}}}) {{ graph_id node_did enabled active_revision_digest generation created_at updated_at tags }} }}"#
         ))
         .await?;
     let rows = response
@@ -2529,7 +1885,7 @@ pub async fn list_graphs_value(
             .cmp(&right["definition"]["graph_id"].as_str())
     });
     Ok(serde_json::to_string_pretty(&json!({
-        "agent_did": owner_did,
+        "node_did": owner_did,
         "node_bound": true,
         "graphs": graphs,
     }))?)
@@ -2557,7 +1913,7 @@ impl Tool for ListGraphsTool {
     async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
         Ok(list_graphs_value(
             &graph_access(&self.node),
-            self.core.agent_did(),
+            self.core.node_did(),
             Some(RUN_GRAPH_TOOL_NAME),
         )
         .await?)
@@ -2628,7 +1984,7 @@ impl Tool for RunGraphTool {
                 .into())
             }
         };
-        let plan = crate::graph_package::select_run_plan(&access, self.core.agent_did(), &selector)
+        let plan = crate::graph_package::select_run_plan(&access, self.core.node_did(), &selector)
             .await?
             .with_context(|| match selector {
                 crate::graph_package::GraphRunSelector::Package { name, .. } => format!(
@@ -2664,7 +2020,7 @@ impl Tool for RunGraphTool {
                 .unwrap_or_default();
             if effective_file_mode == crate::tool_surface::FileToolMode::Off {
                 return Err(anyhow!(
-                    "this graph's prepare step requires effective read authority on the current behavior"
+                    "this graph's prepare step requires effective read authority on the current agent"
                 )
                 .into());
             }
@@ -2678,7 +2034,7 @@ impl Tool for RunGraphTool {
         };
         let prepared = crate::graph_package::prepare_entry_run(
             &access,
-            self.core.agent_did(),
+            self.core.node_did(),
             crate::graph_package::EntryRunRequest {
                 plan: &plan,
                 entry: args.entry.as_deref(),
@@ -2690,7 +2046,7 @@ impl Tool for RunGraphTool {
         .await?;
         let receipt = crate::graph_pipeline::start_graph_run_with_access(
             &access,
-            self.core.agent_did(),
+            self.core.node_did(),
             &plan.graph_id,
             Some(&plan.digest),
             &prepared.entry_name,
@@ -2700,12 +2056,12 @@ impl Tool for RunGraphTool {
         .await?;
         let observed = crate::graph_pipeline::load_graph_run_view_with_access(
             &access,
-            self.core.agent_did(),
+            self.core.node_did(),
             &receipt.run_id,
         )
         .await?;
         crate::graph_pipeline::run_graph_tool_result(
-            self.core.agent_did(),
+            self.core.node_did(),
             &receipt,
             &observed,
             json!({"status_tool": GET_GRAPH_RUN_TOOL_NAME, "result_tool": GET_GRAPH_RESULT_TOOL_NAME}),
@@ -2738,7 +2094,7 @@ impl Tool for GetGraphRunTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let view = crate::graph_pipeline::load_graph_run_view_with_access(
             &graph_access(&self.node),
-            self.core.agent_did(),
+            self.core.node_did(),
             &args.run_id,
         )
         .await?;
@@ -2776,7 +2132,7 @@ impl Tool for GetGraphResultTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let view = crate::graph_pipeline::load_graph_run_result_view_with_access(
             &graph_access(&self.node),
-            self.core.agent_did(),
+            self.core.node_did(),
             &args.run_id,
         )
         .await?;
@@ -2822,7 +2178,7 @@ impl Tool for CancelGraphRunTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let view = crate::graph_pipeline::request_graph_run_cancellation_with_access(
             &graph_access(&self.node),
-            self.core.agent_did(),
+            self.core.node_did(),
             &args.run_id,
             args.reason.as_deref(),
         )
@@ -2859,7 +2215,7 @@ pub fn graph_tool_definitions() -> [ToolDefinition; 5] {
 fn list_graphs_definition() -> ToolDefinition {
     ToolDefinition {
         name: LIST_GRAPHS_TOOL_NAME.to_owned(),
-        description: "Discover installed graphs on this managed node for the current principal. Returns exact active revision digests, package attribution, entry schemas/input contracts, results, limits, and activation state; it never searches a home directory or another endpoint.".to_owned(),
+        description: "Discover installed graphs on this managed node for the current node. Returns exact active revision digests, package attribution, entry schemas/input contracts, results, limits, and activation state; it never searches a home directory or another endpoint.".to_owned(),
         parameters: json!({"type":"object","properties":{},"additionalProperties":false}),
     }
 }
@@ -2867,7 +2223,7 @@ fn list_graphs_definition() -> ToolDefinition {
 fn run_graph_definition() -> ToolDefinition {
     ToolDefinition {
         name: RUN_GRAPH_TOOL_NAME.to_owned(),
-        description: "Start an installed graph on this managed node as the current principal. Select it by package, or by the exact graph_id and revision_digest that list_graphs returns. Supply entry only when the graph has more than one, and input matching that entry's input_schema from list_graphs (default {}). Returns a durable run receipt and observed initial state.".to_owned(),
+        description: "Start an installed graph on this managed node as the current node. Select it by package, or by the exact graph_id and revision_digest that list_graphs returns. Supply entry only when the graph has more than one, and input matching that entry's input_schema from list_graphs (default {}). Returns a durable run receipt and observed initial state.".to_owned(),
         parameters: json!({
             "type":"object",
             "properties":{
@@ -2885,7 +2241,7 @@ fn run_graph_definition() -> ToolDefinition {
 fn get_graph_run_definition() -> ToolDefinition {
     ToolDefinition {
         name: GET_GRAPH_RUN_TOOL_NAME.to_owned(),
-        description: "Inspect durable status, stages, requests, cancellation, and result-contract progress for one exact run on this managed node and principal.".to_owned(),
+        description: "Inspect durable status, stages, requests, cancellation, and result-contract progress for one exact run on this managed node.".to_owned(),
         parameters: json!({"type":"object","properties":{"run_id":{"type":"string"}},"required":["run_id"],"additionalProperties":false}),
     }
 }
@@ -2893,7 +2249,7 @@ fn get_graph_run_definition() -> ToolDefinition {
 fn get_graph_result_definition() -> ToolDefinition {
     ToolDefinition {
         name: GET_GRAPH_RESULT_TOOL_NAME.to_owned(),
-        description: "Load terminal graph results and their durable documents for one exact run on this managed node and principal. A nonterminal run is reported honestly as not ready.".to_owned(),
+        description: "Load terminal graph results and their durable documents for one exact run on this managed node. A nonterminal run is reported honestly as not ready.".to_owned(),
         parameters: json!({"type":"object","properties":{"run_id":{"type":"string"}},"required":["run_id"],"additionalProperties":false}),
     }
 }
@@ -2901,40 +2257,39 @@ fn get_graph_result_definition() -> ToolDefinition {
 fn cancel_graph_run_definition() -> ToolDefinition {
     ToolDefinition {
         name: CANCEL_GRAPH_RUN_TOOL_NAME.to_owned(),
-        description: "Persist cancellation intent and interrupt active requests for one exact graph run on this managed node and principal. Returns the observed durable run state.".to_owned(),
+        description: "Persist cancellation intent and interrupt active requests for one exact graph run on this managed node. Returns the observed durable run state.".to_owned(),
         parameters: json!({"type":"object","properties":{"run_id":{"type":"string"},"reason":{"type":"string"}},"required":["run_id"],"additionalProperties":false}),
     }
 }
 
-/// Build the gated self-config tool family for one behavior. Fails closed:
+/// Build the gated self-config tool family for one agent. Fails closed:
 /// with an empty agent DID (bare oneshot contexts) no tools are registered.
 pub fn build_self_config_tools(
     node: Arc<EmbeddedNode>,
-    agent_did: String,
-    identity: Option<Arc<dyn AgentIdentity>>,
+    node_did: String,
+    identity: Option<Arc<dyn NodeIdentity>>,
     config: &SelfConfigToolConfig,
     plugins: Arc<crate::plugin::executor::PluginExecutor>,
 ) -> Vec<Box<dyn ToolDyn>> {
     if !config.enabled && !config.enable_graph_tools {
         return Vec::new();
     }
-    let core =
-        match SelfConfigCore::new(node.clone(), agent_did.clone(), config.behavior_id.clone()) {
-            Ok(core) => core
-                .with_no_lockout(config.no_lockout)
-                .with_process_ceiling(config.process_ceiling.clone())
-                .with_held_grants(OperatorGrants {
-                    pack_install: config.enable_pack_install,
-                }),
-            Err(error) => {
-                tracing::warn!(
-                    behavior_id = %config.behavior_id,
-                    %error,
-                    "self-config tools requested but not registrable; failing closed"
-                );
-                return Vec::new();
-            }
-        };
+    let core = match SelfConfigCore::new(node.clone(), node_did.clone(), config.agent_id.clone()) {
+        Ok(core) => core
+            .with_no_lockout(config.no_lockout)
+            .with_process_ceiling(config.process_ceiling.clone())
+            .with_held_grants(OperatorGrants {
+                pack_install: config.enable_pack_install,
+            }),
+        Err(error) => {
+            tracing::warn!(
+                agent_id = %config.agent_id,
+                %error,
+                "self-config tools requested but not registrable; failing closed"
+            );
+            return Vec::new();
+        }
+    };
 
     let mut tools: Vec<Box<dyn ToolDyn>> = Vec::new();
     if previews_graphs(config) {
@@ -2970,7 +2325,7 @@ pub fn build_self_config_tools(
     }
     tools.push(Box::new(command::ConfigCommandTool {
         node,
-        agent_did,
+        node_did,
         identity,
         core,
         categories: config.categories.clone(),

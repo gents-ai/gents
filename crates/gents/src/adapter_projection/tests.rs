@@ -26,7 +26,7 @@ fn message_row(
     let header = gents_protocol::output::TranscriptMessage {
         message_key: format!("{session_id}:{sequence}"),
         session_id: session_id.to_string(),
-        agent_did: "did:test:projection".to_string(),
+        node_did: "did:test:projection".to_string(),
         requester_did: None,
         request_doc_id: request_doc_id.map(ToOwned::to_owned),
         publication: gents_protocol::output::MessagePublication::RequestExecution {
@@ -45,7 +45,7 @@ fn message_row(
         request_doc_id: header.request_doc_id.clone(),
         sequence,
         timestamp: Some(timestamp.to_string()),
-        agent_did: Some(header.agent_did.clone()),
+        node_did: Some(header.node_did.clone()),
         header,
         message,
     }
@@ -102,8 +102,8 @@ fn timeline_with_captures() -> crate::run_timeline::RunTimeline {
         request: TimelineRequestRow {
             doc_id: Some("doc-req-1".to_string()),
             request_id: "req-1".to_string(),
-            agent_did: Some("did:test:amy".to_string()),
-            behavior_id: Some("amy".to_string()),
+            node_did: Some("did:test:amy".to_string()),
+            agent_id: Some("amy".to_string()),
             session_id: Some("session-1".to_string()),
             content: Some("hello".to_string()),
             lifecycle_state: Some(RequestLifecycleState::Completed),
@@ -292,8 +292,8 @@ fn assert_adapter_projection_matches_json_schema(envelope: &AdapterProjectionEnv
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct ProjectionParticipant {
-    agent_did: Option<String>,
-    behavior_id: Option<String>,
+    node_did: Option<String>,
+    agent_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -315,8 +315,8 @@ fn delegated_coherence_timeline() -> RunTimeline {
         request: TimelineRequestRow {
             doc_id: Some("doc-req-root".to_string()),
             request_id: "req-root".to_string(),
-            agent_did: Some("did:test:coordinator".to_string()),
-            behavior_id: Some("coordinator".to_string()),
+            node_did: Some("did:test:coordinator".to_string()),
+            agent_id: Some("coordinator".to_string()),
             session_id: Some("session-root".to_string()),
             content: Some("root private objective".to_string()),
             lifecycle_state: Some(RequestLifecycleState::Completed),
@@ -326,8 +326,8 @@ fn delegated_coherence_timeline() -> RunTimeline {
         requests: vec![TimelineRequestRow {
             doc_id: Some("doc-req-review".to_string()),
             request_id: "req-review".to_string(),
-            agent_did: Some("did:test:reviewer".to_string()),
-            behavior_id: Some("reviewer".to_string()),
+            node_did: Some("did:test:reviewer".to_string()),
+            agent_id: Some("reviewer".to_string()),
             session_id: Some("session-review".to_string()),
             lifecycle_state: Some(RequestLifecycleState::Completed),
             caused_by_parent_request_id: Some("req-root".to_string()),
@@ -448,14 +448,14 @@ fn projection_participants(
                 .agent
                 .extra
                 .as_ref()
-                .and_then(|extra| extra.get("agent_did"))
+                .and_then(|extra| extra.get("node_did"))
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned),
             projection
                 .agent
                 .extra
                 .as_ref()
-                .and_then(|extra| extra.get("behavior_id"))
+                .and_then(|extra| extra.get("agent_id"))
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned),
         )
@@ -466,10 +466,8 @@ fn projection_participants(
             .iter()
             .filter_map(|item| match item {
                 OpenAiCodexTraceItem::Request {
-                    agent_did,
-                    behavior_id,
-                    ..
-                } => participant(agent_did.clone(), behavior_id.clone()),
+                    node_did, agent_id, ..
+                } => participant(node_did.clone(), agent_id.clone()),
                 _ => None,
             })
             .collect(),
@@ -477,32 +475,26 @@ fn projection_participants(
             .nodes
             .iter()
             .filter(|node| node.kind == "request")
-            .filter_map(|node| participant(node.agent_did.clone(), node.behavior_id.clone()))
+            .filter_map(|node| participant(node.node_did.clone(), node.agent_id.clone()))
             .collect(),
         AdapterProjection::MultiAgentTask(projection) => projection
             .participants
             .iter()
             .filter_map(|participant| {
-                self::participant(
-                    participant.agent_did.clone(),
-                    participant.behavior_id.clone(),
-                )
+                self::participant(participant.node_did.clone(), participant.agent_id.clone())
             })
             .collect(),
     }
 }
 
 fn participant(
-    agent_did: Option<String>,
-    behavior_id: Option<String>,
+    node_did: Option<String>,
+    agent_id: Option<String>,
 ) -> Option<ProjectionParticipant> {
-    if agent_did.is_none() && behavior_id.is_none() {
+    if node_did.is_none() && agent_id.is_none() {
         return None;
     }
-    Some(ProjectionParticipant {
-        agent_did,
-        behavior_id,
-    })
+    Some(ProjectionParticipant { node_did, agent_id })
 }
 
 #[test]
@@ -879,12 +871,12 @@ fn adapter_projections_are_coherent_for_delegated_timeline() {
     let full = build_all_adapter_projections(&timeline, ProjectionRedactionMode::Full);
     let expected_participants = BTreeSet::from([
         ProjectionParticipant {
-            agent_did: Some("did:test:coordinator".to_string()),
-            behavior_id: Some("coordinator".to_string()),
+            node_did: Some("did:test:coordinator".to_string()),
+            agent_id: Some("coordinator".to_string()),
         },
         ProjectionParticipant {
-            agent_did: Some("did:test:reviewer".to_string()),
-            behavior_id: Some("reviewer".to_string()),
+            node_did: Some("did:test:reviewer".to_string()),
+            agent_id: Some("reviewer".to_string()),
         },
     ]);
     let expected_delegations = BTreeSet::from([ProjectionDelegation {
@@ -1038,8 +1030,8 @@ fn builds_three_adapter_shapes_from_one_timeline_with_redaction() {
         request: TimelineRequestRow {
             doc_id: Some("doc-req-1".to_string()),
             request_id: "req-1".to_string(),
-            agent_did: Some("did:test:root".to_string()),
-            behavior_id: Some("root".to_string()),
+            node_did: Some("did:test:root".to_string()),
+            agent_id: Some("root".to_string()),
             session_id: Some("session-1".to_string()),
             content: Some("sensitive prompt".to_string()),
             lifecycle_state: Some(RequestLifecycleState::Completed),
@@ -1049,8 +1041,8 @@ fn builds_three_adapter_shapes_from_one_timeline_with_redaction() {
         requests: vec![TimelineRequestRow {
             doc_id: Some("doc-child-1".to_string()),
             request_id: "child-1".to_string(),
-            agent_did: Some("did:test:child".to_string()),
-            behavior_id: Some("child".to_string()),
+            node_did: Some("did:test:child".to_string()),
+            agent_id: Some("child".to_string()),
             session_id: Some("session-1".to_string()),
             lifecycle_state: Some(RequestLifecycleState::Completed),
             caused_by_parent_request_id: Some("req-1".to_string()),

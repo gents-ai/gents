@@ -133,7 +133,7 @@ async fn claimed(node: &Arc<EmbeddedNode>, name: &str) -> RequestLifecycle {
     let session_id = format!("session-{request_id}");
     let now = chrono::Utc::now().to_rfc3339();
     let mutation = format!(
-        r#"mutation {{ create_AgentRequest(input: {{ request_id: "{}", purpose: "normal", agent_did: "did:test:test", behavior_id: "general", session_id: "{}", retry_parent_request: "", retry_root_request: "{}", superseded_by_request: "", content: "hello", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "{}", retry_count: 0, max_retries: 3, subagent_depth: 0 }}) {{ _docID }} }}"#,
+        r#"mutation {{ create_AgentRequest(input: {{ request_id: "{}", purpose: "normal", node_did: "did:test:test", agent_id: "general", session_id: "{}", retry_parent_request: "", retry_root_request: "{}", superseded_by_request: "", content: "hello", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "{}", retry_count: 0, max_retries: 3, request_hop: 0 }}) {{ _docID }} }}"#,
         crate::graphql::escape_graphql_string(&request_id),
         crate::graphql::escape_graphql_string(&session_id),
         crate::graphql::escape_graphql_string(&request_id),
@@ -152,7 +152,7 @@ async fn claimed(node: &Arc<EmbeddedNode>, name: &str) -> RequestLifecycle {
     let response = access.execute(&query).await.unwrap();
     let row: gents_protocol::row::AgentRequestRow =
         serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
-    let mut lifecycle = RequestLifecycle::new_with_agent_did(
+    let mut lifecycle = RequestLifecycle::new_with_node_did(
         node.clone(),
         "general",
         "did:test:test",
@@ -216,7 +216,7 @@ fn native_raw(
     let request = lifecycle.request();
     let (scope, turn, attempt) = modeled_scope(case);
     OutputSegment {
-        agent_did: request.agent_did.clone(),
+        node_did: request.node_did.clone(),
         requester_did: request.requester_did.clone(),
         session_id: request.session_id.clone(),
         request_doc_id: request.doc_id.clone(),
@@ -794,7 +794,7 @@ async fn generated_auxiliary_cases_drive_non_claude_sink_audit_without_publicati
                 message_id: None,
             },
             messages: &[],
-            agent_did: &request.agent_did,
+            node_did: &request.node_did,
             requester_did: request.requester_did.as_deref(),
             records: &observed,
             denied_headers: &[],

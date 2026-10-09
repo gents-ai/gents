@@ -1,5 +1,5 @@
 use super::*;
-use crate::identity::AgentIdentity;
+use crate::identity::NodeIdentity;
 use crate::TriggerSource;
 
 #[tokio::test]
@@ -33,7 +33,7 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
         branch: "existing-branch".into(),
         creation_policy: "git_worktree_diff".into(),
         adapter: "git_worktree".into(),
-        owner_agent_did: did.into(),
+        owner_node_did: did.into(),
         writer_principal: did.into(),
         integrator_principal: did.into(),
         instruction_manifest: "{}".into(),
@@ -44,7 +44,7 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
     };
     let placement = crate::workspace::WorkspacePlacementDoc {
         workspace_id: workspace.workspace_id.clone(),
-        owner_agent_did: did.into(),
+        owner_node_did: did.into(),
         host_path: workspace_path.to_string_lossy().into_owned(),
         repository_placement_id: "repository-placement".into(),
         adapter: "git_worktree".into(),
@@ -75,8 +75,8 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
     );
     create.workspace_id = Some(workspace.workspace_id.clone());
     create.workspace_authority = Some("readOnly".into());
-    create.workspace_owner_agent_did = Some(did.into());
-    create.subagent_depth = 2;
+    create.workspace_owner_node_did = Some(did.into());
+    create.request_hop = 2;
     create.caused_by_parent_request_id = Some("grandparent-request".into());
     create.caused_by_parent_request_doc_id = Some("grandparent-request-doc".into());
     create.caused_by_parent_tool_call_id = Some("grandparent-tool".into());
@@ -103,7 +103,7 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
             .collect()
     }
     let parent = requests(&node, did).await.remove(0);
-    let mut owner = RequestLifecycle::new_with_agent_did(node.clone(), "general", did, parent, 60);
+    let mut owner = RequestLifecycle::new_with_node_did(node.clone(), "general", did, parent, 60);
     owner.claim().await.unwrap();
     let writer = crate::streaming::DefraStreamWriter::new(node.clone(), did, Duration::ZERO);
     owner.begin_owned_execution(&writer).await.unwrap();
@@ -161,36 +161,36 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
         .contains("partial durable response"));
     let snapshot = Arc::new(crate::ActiveRuntimeSnapshot {
         generation: 1,
-        principal: None,
+        node: None,
         local_did: did.into(),
-        default_behavior_id: "general".into(),
-        behaviors: Default::default(),
+        default_agent_id: "general".into(),
+        agents: Default::default(),
         tool_surfaces: Default::default(),
         backend_admission_configs: Default::default(),
-        unavailable_behaviors: Default::default(),
+        unavailable_agents: Default::default(),
         active_schedules: Default::default(),
         unavailable_schedules: Default::default(),
         active_event_triggers: Default::default(),
         unavailable_event_triggers: Default::default(),
         active_tasks: Default::default(),
         dispatchers: Default::default(),
-        behavior_executor_capacities: Default::default(),
-        behavior_executor_queue_capacities: Default::default(),
+        agent_executor_capacities: Default::default(),
+        agent_executor_queue_capacities: Default::default(),
     });
-    let readiness = gents_protocol::row::project_behavior_readiness_source(
-        gents_protocol::row::BehaviorReadinessProcessState::Ready,
+    let readiness = gents_protocol::row::project_node_readiness_source(
+        gents_protocol::row::NodeReadinessProcessState::Ready,
         1,
         1,
         "general",
-        [gents_protocol::row::BehaviorReadinessSourceEntry {
-            behavior_id: "general".into(),
+        [gents_protocol::row::AgentReadinessSourceEntry {
+            agent_id: "general".into(),
             dispatcher_present: true,
             unavailable_reason: None,
             startup_demoted: false,
         }],
     )
     .unwrap();
-    crate::behavior_readiness_publisher::upsert_behavior_readiness(
+    crate::node_readiness_publisher::upsert_node_readiness(
         &node,
         did,
         &readiness,
@@ -221,10 +221,10 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
     assert_eq!(child.workspace_id, parent.workspace_id);
     assert_eq!(child.workspace_authority, parent.workspace_authority);
     assert_eq!(
-        child.workspace_owner_agent_did,
-        parent.workspace_owner_agent_did
+        child.workspace_owner_node_did,
+        parent.workspace_owner_node_did
     );
-    assert_eq!(child.subagent_depth, parent.subagent_depth);
+    assert_eq!(child.request_hop, parent.request_hop);
     assert_eq!(
         child.caused_by_parent_request_id.as_deref(),
         Some(parent.request_id.as_str())

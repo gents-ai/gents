@@ -20,9 +20,7 @@ use std::time::Duration;
 use gents::defra_node::EmbeddedNode;
 use gents::document_config::{AgentContext, CompactionConfig, InferenceSampling};
 use gents::graphql::escape_graphql_string;
-use gents::{
-    default_inference_profile_id_for_behavior, AgentIdentity, Collection, CompactionStrategy,
-};
+use gents::{default_inference_profile_id_for_agent, Collection, CompactionStrategy, NodeIdentity};
 use serde::Deserialize;
 
 use crate::support::fixtures::test_identity;
@@ -48,19 +46,19 @@ async fn live_seeds_reach_the_provider() {
     let target = live_target();
 
     let db = test_db("live-seed").await;
-    let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity("live-seed"));
-    let (agent_did, behavior_id) = bind_target(db.node.as_ref(), identity.as_ref(), &target).await;
+    let identity: Arc<dyn NodeIdentity> = Arc::new(test_identity("live-seed"));
+    let (node_did, agent_id) = bind_target(db.node.as_ref(), identity.as_ref(), &target).await;
 
-    let profile_id = default_inference_profile_id_for_behavior(&behavior_id);
-    configure_seed_and_compaction(db.node.as_ref(), &agent_did, &behavior_id, &profile_id).await;
+    let profile_id = default_inference_profile_id_for_agent(&agent_id);
+    configure_seed_and_compaction(db.node.as_ref(), &node_did, &agent_id, &profile_id).await;
 
     // Create requests before boot so every provider call resolves the same
     // profile-owned sampling document before the daemon can claim them.
     let profile_request_id = "req-live-profile-seed";
     create_runtime_request(
         db.node.as_ref(),
-        &agent_did,
-        &behavior_id,
+        &node_did,
+        &agent_id,
         profile_request_id,
         "session-live-profile-seed",
         "Reply with the single lowercase word: profile",
@@ -70,8 +68,8 @@ async fn live_seeds_reach_the_provider() {
     let second_request_id = "req-live-second-profile-seed";
     create_runtime_request(
         db.node.as_ref(),
-        &agent_did,
-        &behavior_id,
+        &node_did,
+        &agent_id,
         second_request_id,
         "session-live-second-profile-seed",
         "Reply with the single lowercase word: second",
@@ -82,14 +80,14 @@ async fn live_seeds_reach_the_provider() {
     let compaction_session_id = "session-live-compaction-seed";
     create_runtime_request(
         db.node.as_ref(),
-        &agent_did,
-        &behavior_id,
+        &node_did,
+        &agent_id,
         compaction_request_id,
         compaction_session_id,
         "Use the retained context and reply with the single lowercase word: compacted",
     )
     .await;
-    seed_compaction_history(db.node.as_ref(), &agent_did, compaction_session_id).await;
+    seed_compaction_history(db.node.as_ref(), &node_did, compaction_session_id).await;
 
     let agent = boot_live_agent(&db, identity)
         .await
@@ -156,8 +154,8 @@ async fn live_seeds_reach_the_provider() {
 
 async fn configure_seed_and_compaction(
     node: &EmbeddedNode,
-    agent_did: &str,
-    behavior_id: &str,
+    node_did: &str,
+    agent_id: &str,
     profile_id: &str,
 ) {
     use gents::config_client::{
@@ -167,26 +165,25 @@ async fn configure_seed_and_compaction(
 
     gents::ConfigAccess::transact_local(node, None, "test.configure_live_seed", |txn| {
         Box::pin(async move {
-            let (_, profile) = read(txn, Collection::InferenceProfile, agent_did, profile_id)
+            let (_, profile) = read(txn, Collection::InferenceProfile, node_did, profile_id)
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("default inference profile is missing"))?;
             let mut profile: gents::InferenceProfile = serde_json::from_value(profile)?;
-            let (_, behavior) = read(txn, Collection::AgentBehavior, agent_did, behavior_id)
+            let (_, behavior) = read(txn, Collection::Agent, node_did, agent_id)
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("default behavior is missing"))?;
-            let mut behavior: gents::document_config::AgentBehavior =
-                serde_json::from_value(behavior)?;
+            let mut behavior: gents::document_config::Agent = serde_json::from_value(behavior)?;
             let context_id = behavior
                 .context_id
                 .clone()
-                .unwrap_or_else(|| format!("{behavior_id}:context"));
-            let mut context = read(txn, Collection::AgentContext, agent_did, &context_id)
+                .unwrap_or_else(|| format!("{agent_id}:context"));
+            let mut context = read(txn, Collection::AgentContext, node_did, &context_id)
                 .await?
                 .map(|(_, value)| serde_json::from_value::<AgentContext>(value))
                 .transpose()?
                 .unwrap_or_else(|| AgentContext {
                     context_id: context_id.clone(),
-                    agent_did: agent_did.to_string(),
+                    node_did: node_did.to_string(),
                     display_name: None,
                     description: None,
                     system_prompt: None,
@@ -196,21 +193,21 @@ async fn configure_seed_and_compaction(
                     tags: Vec::new(),
                 });
             let sampling_id = format!("{profile_id}:sampling");
-            let compaction_id = format!("{behavior_id}:compaction");
+            let compaction_id = format!("{agent_id}:compaction");
             profile.sampling_id = Some(sampling_id.clone());
             profile.context_window = Some(64_000);
             profile.max_output_tokens = Some(512);
             behavior.context_id = Some(context_id);
             context.compaction_id = Some(compaction_id.clone());
             let sampling = InferenceSampling {
-                agent_did: agent_did.to_string(),
+                node_did: node_did.to_string(),
                 sampling_id,
                 seed: Some(PROFILE_SEED),
                 ..Default::default()
             };
             let compaction = CompactionConfig {
                 compaction_id,
-                agent_did: agent_did.to_string(),
+                node_did: node_did.to_string(),
                 display_name: None,
                 strategy: CompactionStrategy::StripThenSummarize,
                 threshold: Some(0.25),
@@ -229,7 +226,7 @@ async fn configure_seed_and_compaction(
                 (Collection::Compaction, serde_json::to_value(compaction)?),
                 (Collection::InferenceProfile, serde_json::to_value(profile)?),
                 (Collection::AgentContext, serde_json::to_value(context)?),
-                (Collection::AgentBehavior, serde_json::to_value(behavior)?),
+                (Collection::Agent, serde_json::to_value(behavior)?),
             ];
             let plan = DesiredStateApplyPlan::new(
                 documents
@@ -250,14 +247,14 @@ async fn configure_seed_and_compaction(
 
 /// History is scoped to the signed LocalSelf request's agent and requester;
 /// rows under any other scope are invisible to its transcript.
-async fn seed_compaction_history(node: &EmbeddedNode, agent_did: &str, session_id: &str) {
+async fn seed_compaction_history(node: &EmbeddedNode, node_did: &str, session_id: &str) {
     let timestamp = chrono::Utc::now().to_rfc3339();
     for turn in 0..10 {
         let sequence = turn * 2 + 1;
         create_agent_message_in_scope(
             node,
-            agent_did,
-            Some(agent_did),
+            node_did,
+            Some(node_did),
             session_id,
             sequence,
             "user",
@@ -267,8 +264,8 @@ async fn seed_compaction_history(node: &EmbeddedNode, agent_did: &str, session_i
         .await;
         create_agent_message_in_scope(
             node,
-            agent_did,
-            Some(agent_did),
+            node_did,
+            Some(node_did),
             session_id,
             sequence + 1,
             "assistant",

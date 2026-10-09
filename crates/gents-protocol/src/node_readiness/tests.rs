@@ -233,3 +233,27 @@ fn agent_unavailable_rejections_are_exactly_routing_messages() {
         assert!(!is_behavior_unavailable_rejection(other), "{other:?}");
     }
 }
+
+#[test]
+fn unsupported_version_is_classified_before_current_payload_shape() {
+    let row = readiness_row(
+        "did:test:node",
+        r#"{"format_version":1,"process_state":"ready","active_generation":4,"router_generation":4,"default_behavior_id":"a","behaviors":[{"behavior_id":"a","state":"ready","reason":null}]}"#.to_string(),
+    );
+    assert_eq!(
+        decode_node_readiness_snapshot(&row, "did:test:node"),
+        Err(AgentReadinessUnknownReason::ReadinessVersionUnsupported),
+    );
+    let current = readiness_row(
+        "did:test:node",
+        format!(r#"{{"format_version":{NODE_READINESS_FORMAT_VERSION}}}"#),
+    );
+    assert_eq!(
+        decode_node_readiness_snapshot(&current, "did:test:node"),
+        Err(AgentReadinessUnknownReason::ReadinessMalformed),
+    );
+    assert_eq!(
+        decode_node_readiness_snapshot(&row, "did:test:other"),
+        Err(AgentReadinessUnknownReason::ReadinessMalformed),
+    );
+}

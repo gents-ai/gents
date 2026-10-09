@@ -7,7 +7,7 @@ use tokio::task::{JoinError, JoinSet};
 use tracing::Instrument;
 
 use crate::admission::AdmissionRegistry;
-use crate::config::ResolvedBehavior;
+use crate::config::ResolvedAgent;
 use crate::retry::RetryPolicy;
 use crate::runtime_snapshot::ActiveRuntimeSnapshot;
 use crate::runtime_snapshot::ResolvedRuntimeSnapshot;
@@ -21,8 +21,7 @@ mod slot;
 use diff::diff_counts;
 pub(in crate::agent) use slot::SlotFailurePolicy;
 use slot::{
-    behavior_executor_capacity, spawn_slot_with_capacity, spawn_slots, BehaviorSlot,
-    BehaviorSlotState,
+    agent_executor_capacity, spawn_slot_with_capacity, spawn_slots, AgentSlot, AgentSlotState,
 };
 
 #[derive(Debug)]
@@ -40,7 +39,7 @@ use slot::{retire_slot, spawn_slot};
 
 pub(super) struct GenerationSupervisor<F> {
     current_snapshot: Arc<ActiveRuntimeSnapshot>,
-    active_slots: HashMap<String, BehaviorSlot>,
+    active_slots: HashMap<String, AgentSlot>,
     admission_registry: AdmissionRegistry,
     retry_policy: RetryPolicy,
     runner: F,
@@ -61,7 +60,7 @@ fn slot_join_result(
 }
 
 struct StagedSlots {
-    slots: HashMap<String, BehaviorSlot>,
+    slots: HashMap<String, AgentSlot>,
     registered: HashSet<(String, u64)>,
     failure_policy: Option<Arc<dyn SlotFailurePolicy>>,
 }
@@ -75,42 +74,42 @@ impl StagedSlots {
         }
     }
 
-    fn record_registration(&mut self, behavior_id: String, generation: u64) {
-        self.registered.insert((behavior_id, generation));
+    fn record_registration(&mut self, agent_id: String, generation: u64) {
+        self.registered.insert((agent_id, generation));
     }
 
-    fn insert(&mut self, behavior_id: String, slot: BehaviorSlot) {
-        self.slots.insert(behavior_id, slot);
+    fn insert(&mut self, agent_id: String, slot: AgentSlot) {
+        self.slots.insert(agent_id, slot);
     }
 
-    fn get(&self, behavior_id: &str) -> Option<&BehaviorSlot> {
-        self.slots.get(behavior_id)
+    fn get(&self, agent_id: &str) -> Option<&AgentSlot> {
+        self.slots.get(agent_id)
     }
 
-    fn into_slots(self) -> HashMap<String, BehaviorSlot> {
+    fn into_slots(self) -> HashMap<String, AgentSlot> {
         self.slots
     }
 
     async fn abort(self) {
         let mut registered = self.registered;
-        for (behavior_id, slot) in self.slots {
+        for (agent_id, slot) in self.slots {
             let generation = slot.generation;
-            let _ = slot.state_tx.send(BehaviorSlotState::Retiring);
+            let _ = slot.state_tx.send(AgentSlotState::Retiring);
             drop(slot.dispatcher);
             if let Err(error) = slot_join_result(
                 slot.handle.await,
-                "staged behavior slot failed during rollback",
+                "staged agent slot failed during rollback",
             ) {
-                tracing::error!(behavior_id, generation, error = %error, "staged behavior slot failed during rollback");
+                tracing::error!(agent_id, generation, error = %error, "staged agent slot failed during rollback");
             }
             if let Some(policy) = &self.failure_policy {
-                policy.on_slot_retired(&behavior_id, generation, true).await;
+                policy.on_slot_retired(&agent_id, generation, true).await;
             }
-            registered.remove(&(behavior_id, generation));
+            registered.remove(&(agent_id, generation));
         }
         if let Some(policy) = &self.failure_policy {
-            for (behavior_id, generation) in registered {
-                policy.on_slot_retired(&behavior_id, generation, true).await;
+            for (agent_id, generation) in registered {
+                policy.on_slot_retired(&agent_id, generation, true).await;
             }
         }
     }
@@ -119,7 +118,7 @@ impl StagedSlots {
 impl<F, Fut> GenerationSupervisor<F>
 where
     F: Fn(
-            Arc<ResolvedBehavior>,
+            Arc<ResolvedAgent>,
             Arc<ToolSurface>,
             Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
             u64,
@@ -140,19 +139,17 @@ where
         shutdown: watch::Receiver<bool>,
         slot_failure_policy: Option<Arc<dyn SlotFailurePolicy>>,
     ) -> Result<Self> {
-        resolved_snapshot.validate_behavior_readiness_source()?;
+        resolved_snapshot.validate_node_readiness_source()?;
         if let Some(policy) = &slot_failure_policy {
             let mut registered = Vec::new();
-            for behavior_id in resolved_snapshot.behaviors.keys() {
-                if let Err(error) = policy.on_slot_created(behavior_id, 1).await {
-                    for registered_behavior_id in registered {
-                        policy
-                            .on_slot_retired(registered_behavior_id, 1, true)
-                            .await;
+            for agent_id in resolved_snapshot.agents.keys() {
+                if let Err(error) = policy.on_slot_created(agent_id, 1).await {
+                    for registered_agent_id in registered {
+                        policy.on_slot_retired(registered_agent_id, 1, true).await;
                     }
                     return Err(error);
                 }
-                registered.push(behavior_id);
+                registered.push(agent_id);
             }
         }
         admission_registry.reconcile(1, &resolved_snapshot.backend_admission_configs);
@@ -166,15 +163,15 @@ where
         );
         let dispatchers = active_slots
             .iter()
-            .map(|(behavior_id, slot)| (behavior_id.clone(), slot.dispatcher.clone()))
+            .map(|(agent_id, slot)| (agent_id.clone(), slot.dispatcher.clone()))
             .collect();
         let executor_capacities = active_slots
             .iter()
-            .map(|(behavior_id, slot)| (behavior_id.clone(), slot.executor_capacity))
+            .map(|(agent_id, slot)| (agent_id.clone(), slot.executor_capacity))
             .collect();
         let executor_queue_capacities = active_slots
             .iter()
-            .map(|(behavior_id, slot)| (behavior_id.clone(), slot.queue_capacity))
+            .map(|(agent_id, slot)| (agent_id.clone(), slot.queue_capacity))
             .collect();
         let current_snapshot = Arc::new(resolved_snapshot.activate_with_executor_metadata(
             1,
@@ -216,18 +213,18 @@ where
                     };
                     let current_generation = self.current_snapshot.generation;
                     let next_generation = current_generation + 1;
-                    let proposed_behavior_count = proposal.behaviors.len();
-                    let proposed_unavailable_behavior_count = proposal.unavailable_behaviors.len();
-                    let proposed_default_behavior_id = proposal.default_behavior_id.clone();
+                    let proposed_agent_count = proposal.agents.len();
+                    let proposed_unavailable_agent_count = proposal.unavailable_agents.len();
+                    let proposed_default_agent_id = proposal.default_agent_id.clone();
 
                     if let Err(error) = self.handle_proposal(proposal, &active_snapshot_tx, shutdown.clone())
                         .instrument(tracing::info_span!(
                             "runtime.reconcile",
                             current_generation,
                             next_generation,
-                            proposed_behavior_count,
-                            proposed_unavailable_behavior_count,
-                            proposed_default_behavior_id = %proposed_default_behavior_id,
+                            proposed_agent_count,
+                            proposed_unavailable_agent_count,
+                            proposed_default_agent_id = %proposed_default_agent_id,
                         ))
                         .await
                     {
@@ -241,7 +238,7 @@ where
         let shutdown_result = self.shutdown_slots().await;
         match (fatal_error, shutdown_result) {
             (Some(error), Err(shutdown_error)) => Err(error.context(format!(
-                "behavior slot shutdown also failed: {shutdown_error:#}"
+                "agent slot shutdown also failed: {shutdown_error:#}"
             ))),
             (Some(error), Ok(())) => Err(error),
             (None, result) => result,
@@ -281,20 +278,20 @@ where
             Ok(()) => {
                 tracing::info!(
                     generation = next_generation,
-                    added_behaviors = diff.added,
-                    removed_behaviors = diff.removed,
-                    updated_behaviors = diff.updated,
+                    added_agents = diff.added,
+                    removed_agents = diff.removed,
+                    updated_agents = diff.updated,
                     default_changed = diff.default_changed,
                     unavailable_changed = diff.unavailable_changed,
                     "runtime reconcile applied"
                 );
                 if diff.unavailable_changed {
-                    for (behavior_id, reason) in &self.current_snapshot.unavailable_behaviors {
+                    for (agent_id, reason) in &self.current_snapshot.unavailable_agents {
                         tracing::warn!(
-                            behavior_id = %behavior_id,
+                            agent_id = %agent_id,
                             public_reason = ?reason.public_reason,
                             diagnostic = %reason.diagnostic,
-                            "behavior unavailable after runtime reconcile"
+                            "agent unavailable after runtime reconcile"
                         );
                     }
                 }
@@ -310,9 +307,9 @@ where
                 });
                 tracing::error!(
                     generation = next_generation,
-                    added_behaviors = diff.added,
-                    removed_behaviors = diff.removed,
-                    updated_behaviors = diff.updated,
+                    added_agents = diff.added,
+                    removed_agents = diff.removed,
+                    updated_agents = diff.updated,
                     default_changed = diff.default_changed,
                     unavailable_changed = diff.unavailable_changed,
                     error = %error,
@@ -338,59 +335,57 @@ where
         active_snapshot_tx: &watch::Sender<Arc<ActiveRuntimeSnapshot>>,
         shutdown: watch::Receiver<bool>,
     ) -> Result<()> {
-        resolved_snapshot.validate_behavior_readiness_source()?;
+        resolved_snapshot.validate_node_readiness_source()?;
 
         // Complete the entire recreation plan before registering generations
         // or spawning executors. Invalid snapshots have no observable side
         // effects on either readiness standing or slot ownership.
-        let mut recreated_behavior_ids = Vec::new();
-        for (behavior_id, behavior) in &resolved_snapshot.behaviors {
+        let mut recreated_agent_ids = Vec::new();
+        for (agent_id, agent) in &resolved_snapshot.agents {
             let tool_surface = resolved_snapshot
                 .tool_surfaces
-                .get(behavior_id)
+                .get(agent_id)
                 .expect("validated runnable/tool-surface keyset parity");
             let executor_capacity =
-                behavior_executor_capacity(behavior, &resolved_snapshot.backend_admission_configs);
+                agent_executor_capacity(agent, &resolved_snapshot.backend_admission_configs);
             if self
                 .active_slots
-                .get(behavior_id)
-                .is_none_or(|slot| !slot.matches(behavior, tool_surface, executor_capacity))
+                .get(agent_id)
+                .is_none_or(|slot| !slot.matches(agent, tool_surface, executor_capacity))
             {
-                recreated_behavior_ids.push(behavior_id.clone());
+                recreated_agent_ids.push(agent_id.clone());
             }
         }
 
         let mut staged = StagedSlots::new(self.slot_failure_policy.clone());
         if let Some(policy) = &self.slot_failure_policy {
-            for behavior_id in &recreated_behavior_ids {
-                if let Err(error) = policy.on_slot_created(behavior_id, generation).await {
+            for agent_id in &recreated_agent_ids {
+                if let Err(error) = policy.on_slot_created(agent_id, generation).await {
                     staged.abort().await;
                     return Err(error).with_context(|| {
-                        format!(
-                            "register staged behavior slot {behavior_id} generation {generation}"
-                        )
+                        format!("register staged agent slot {agent_id} generation {generation}")
                     });
                 }
-                staged.record_registration(behavior_id.clone(), generation);
+                staged.record_registration(agent_id.clone(), generation);
             }
         }
 
-        for behavior_id in &recreated_behavior_ids {
-            let behavior = resolved_snapshot
-                .behaviors
-                .get(behavior_id)
-                .expect("recreation plan references a runnable behavior");
+        for agent_id in &recreated_agent_ids {
+            let agent = resolved_snapshot
+                .agents
+                .get(agent_id)
+                .expect("recreation plan references a runnable agent");
             let tool_surface = resolved_snapshot
                 .tool_surfaces
-                .get(behavior_id)
+                .get(agent_id)
                 .cloned()
                 .expect("validated runnable/tool-surface keyset parity");
             let executor_capacity =
-                behavior_executor_capacity(behavior, &resolved_snapshot.backend_admission_configs);
+                agent_executor_capacity(agent, &resolved_snapshot.backend_admission_configs);
             staged.insert(
-                behavior_id.clone(),
+                agent_id.clone(),
                 spawn_slot_with_capacity(
-                    behavior.clone(),
+                    agent.clone(),
                     tool_surface,
                     executor_capacity,
                     generation,
@@ -402,22 +397,18 @@ where
             );
         }
 
-        let runnable_behavior_ids = resolved_snapshot
-            .behaviors
-            .keys()
-            .cloned()
-            .collect::<Vec<_>>();
+        let runnable_agent_ids = resolved_snapshot.agents.keys().cloned().collect::<Vec<_>>();
         let mut dispatchers = HashMap::new();
         let mut executor_capacities = HashMap::new();
         let mut executor_queue_capacities = HashMap::new();
-        for behavior_id in &runnable_behavior_ids {
+        for agent_id in &runnable_agent_ids {
             let slot = staged
-                .get(behavior_id)
-                .or_else(|| self.active_slots.get(behavior_id))
+                .get(agent_id)
+                .or_else(|| self.active_slots.get(agent_id))
                 .expect("validated recreation plan owns every runnable slot");
-            dispatchers.insert(behavior_id.clone(), slot.dispatcher.clone());
-            executor_capacities.insert(behavior_id.clone(), slot.executor_capacity);
-            executor_queue_capacities.insert(behavior_id.clone(), slot.queue_capacity);
+            dispatchers.insert(agent_id.clone(), slot.dispatcher.clone());
+            executor_capacities.insert(agent_id.clone(), slot.executor_capacity);
+            executor_queue_capacities.insert(agent_id.clone(), slot.queue_capacity);
         }
         let next_snapshot = Arc::new(resolved_snapshot.activate_with_executor_metadata(
             generation,
@@ -445,7 +436,7 @@ where
             // owners also closes their request channels.
             drop(next_snapshot);
             staged.abort().await;
-            return Err(error).context("publish behavior readiness before active generation");
+            return Err(error).context("publish node readiness before active generation");
         }
 
         // Source publication is deliberately ordered before the dispatcher
@@ -467,27 +458,27 @@ where
 
         let mut next_slots = HashMap::new();
         let mut retired_slots = Vec::new();
-        let mut retired_behaviors: Vec<(String, u64, bool)> = Vec::new();
+        let mut retired_agents: Vec<(String, u64, bool)> = Vec::new();
         let mut staged_slots = staged.into_slots();
-        for behavior_id in &runnable_behavior_ids {
-            if let Some(slot) = staged_slots.remove(behavior_id) {
-                if let Some(existing) = self.active_slots.remove(behavior_id) {
+        for agent_id in &runnable_agent_ids {
+            if let Some(slot) = staged_slots.remove(agent_id) {
+                if let Some(existing) = self.active_slots.remove(agent_id) {
                     let old_generation = existing.generation;
                     retired_slots.push(existing);
-                    retired_behaviors.push((behavior_id.clone(), old_generation, true));
+                    retired_agents.push((agent_id.clone(), old_generation, true));
                 }
-                next_slots.insert(behavior_id.clone(), slot);
+                next_slots.insert(agent_id.clone(), slot);
             } else {
                 let existing = self
                     .active_slots
-                    .remove(behavior_id)
+                    .remove(agent_id)
                     .expect("reused slot disappeared before transaction commit");
-                next_slots.insert(behavior_id.clone(), existing);
+                next_slots.insert(agent_id.clone(), existing);
             }
         }
         debug_assert!(staged_slots.is_empty());
-        for (behavior_id, slot) in self.active_slots.drain() {
-            retired_behaviors.push((behavior_id, slot.generation, false));
+        for (agent_id, slot) in self.active_slots.drain() {
+            retired_agents.push((agent_id, slot.generation, false));
             retired_slots.push(slot);
         }
 
@@ -497,25 +488,24 @@ where
         // and transfer every retiring handle into the supervisor-owned join
         // set before reporting success.
         for slot in retired_slots {
-            let _ = slot.state_tx.send(BehaviorSlotState::Retiring);
+            let _ = slot.state_tx.send(AgentSlotState::Retiring);
             drop(slot.dispatcher);
             self.retiring_slots.spawn(async move {
-                slot_join_result(slot.handle.await, "retired behavior slot failed")
+                slot_join_result(slot.handle.await, "retired agent slot failed")
             });
         }
         while let Some(joined) = self.retiring_slots.try_join_next() {
-            if let Err(error) = slot_join_result(joined, "retired behavior slot owner join failed")
-            {
-                tracing::error!(error = %error, "retired behavior slot owner failed");
+            if let Err(error) = slot_join_result(joined, "retired agent slot owner join failed") {
+                tracing::error!(error = %error, "retired agent slot owner failed");
                 if self.retired_slot_error.is_none() {
                     self.retired_slot_error = Some(error);
                 }
             }
         }
         if let Some(policy) = self.slot_failure_policy.clone() {
-            for (behavior_id, old_generation, recreated) in retired_behaviors {
+            for (agent_id, old_generation, recreated) in retired_agents {
                 policy
-                    .on_slot_retired(&behavior_id, old_generation, recreated)
+                    .on_slot_retired(&agent_id, old_generation, recreated)
                     .await;
             }
         }
@@ -526,29 +516,27 @@ where
     pub(super) async fn shutdown_slots(mut self) -> Result<()> {
         let failure_policy = self.slot_failure_policy.clone();
         let mut first_error = self.retired_slot_error.take();
-        for (behavior_id, slot) in self.active_slots {
+        for (agent_id, slot) in self.active_slots {
             let generation = slot.generation;
-            let _ = slot.state_tx.send(BehaviorSlotState::Retiring);
+            let _ = slot.state_tx.send(AgentSlotState::Retiring);
             drop(slot.dispatcher);
             if let Err(error) =
-                slot_join_result(slot.handle.await, "behavior slot failed during shutdown")
+                slot_join_result(slot.handle.await, "agent slot failed during shutdown")
             {
-                tracing::error!(behavior_id, generation, error = %error, "behavior slot failed during shutdown");
+                tracing::error!(agent_id, generation, error = %error, "agent slot failed during shutdown");
                 if first_error.is_none() {
                     first_error = Some(error);
                 }
             }
             if let Some(policy) = &failure_policy {
-                policy
-                    .on_slot_retired(&behavior_id, generation, false)
-                    .await;
+                policy.on_slot_retired(&agent_id, generation, false).await;
             }
         }
         while let Some(joined) = self.retiring_slots.join_next().await {
             if let Err(error) =
-                slot_join_result(joined, "retired behavior slot owner failed during shutdown")
+                slot_join_result(joined, "retired agent slot owner failed during shutdown")
             {
-                tracing::error!(error = %error, "retired behavior slot owner failed during shutdown");
+                tracing::error!(error = %error, "retired agent slot owner failed during shutdown");
                 if first_error.is_none() {
                     first_error = Some(error);
                 }

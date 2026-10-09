@@ -121,7 +121,7 @@ pub struct ClientRouteIdentity {
     pub directory_id: String,
     pub transport: TransportEndpoint,
     pub requester_did: String,
-    pub owner_agent_did: String,
+    pub owner_node_did: String,
 }
 
 impl ClientRouteIdentity {
@@ -129,14 +129,14 @@ impl ClientRouteIdentity {
         directory_id: impl Into<String>,
         address: impl Into<String>,
         requester_did: impl Into<String>,
-        owner_agent_did: impl Into<String>,
+        owner_node_did: impl Into<String>,
     ) -> Result<Self> {
         let directory_id = directory_id.into();
         let requester_did = requester_did.into();
-        let owner_agent_did = owner_agent_did.into();
+        let owner_node_did = owner_node_did.into();
         if directory_id.trim().is_empty()
             || requester_did.trim().is_empty()
-            || owner_agent_did.trim().is_empty()
+            || owner_node_did.trim().is_empty()
         {
             bail!("client route directory id, requester DID, and owner DID must not be blank");
         }
@@ -144,7 +144,7 @@ impl ClientRouteIdentity {
             directory_id,
             transport: TransportEndpoint::parse(address)?,
             requester_did,
-            owner_agent_did,
+            owner_node_did,
         })
     }
 
@@ -163,7 +163,7 @@ impl ClientRouteIdentity {
                 template,
                 direction,
                 &self.requester_did,
-                &self.owner_agent_did,
+                &self.owner_node_did,
             ),
             template_ids: [template.id.to_string()].into_iter().collect(),
         }
@@ -186,15 +186,15 @@ pub fn resolve_template_filters(
     template: &ScopeTemplate,
     direction: PairingDirection,
     requester_did: &str,
-    owner_agent_did: &str,
+    owner_node_did: &str,
 ) -> PairingFilters {
     match template.scope {
-        Scope::ClientRoute => client_route_filters(direction, requester_did, owner_agent_did),
+        Scope::ClientRoute => client_route_filters(direction, requester_did, owner_node_did),
         _ => scope_filter(
             &template.scope,
             template.collections,
             requester_did,
-            owner_agent_did,
+            owner_node_did,
         ),
     }
 }
@@ -209,7 +209,7 @@ pub fn desired_route_is_applied(desired: &PairingDesired, applied: &PairingAppli
 fn client_route_filters(
     direction: PairingDirection,
     requester_did: &str,
-    owner_agent_did: &str,
+    owner_node_did: &str,
 ) -> PairingFilters {
     let mut filters = PairingFilters::new();
     for collection in [
@@ -220,19 +220,18 @@ fn client_route_filters(
         "AgentSession",
         "CompactionEntry",
         "MailboxItem",
-        "PersonaConfigRequest",
     ] {
         filters.insert(
             collection.to_string(),
             combine_filters(
                 equality_filter("requester_did", requester_did),
-                equality_filter("agent_did", owner_agent_did),
+                equality_filter("node_did", owner_node_did),
             ),
         );
     }
     let endpoint_did = match direction {
         PairingDirection::ClientToRuntime => requester_did,
-        PairingDirection::RuntimeToClient => owner_agent_did,
+        PairingDirection::RuntimeToClient => owner_node_did,
     };
     filters.insert(
         "PeerEndpoint".to_string(),
@@ -242,13 +241,13 @@ fn client_route_filters(
         "SessionHydrationRequest".to_string(),
         combine_filters(
             equality_filter("requester_did", requester_did),
-            equality_filter("agent_did", owner_agent_did),
+            equality_filter("node_did", owner_node_did),
         ),
     );
     if direction == PairingDirection::RuntimeToClient {
         filters.insert(
-            "AgentBehaviorReadiness".to_string(),
-            equality_filter("agent_did", owner_agent_did),
+            "NodeReadiness".to_string(),
+            equality_filter("node_did", owner_node_did),
         );
     }
     // Runtime-owned configuration is unfiltered only on the return leg. Each
@@ -318,7 +317,7 @@ mod tests {
         let encoded = serde_json::to_string(&conditions).unwrap();
         assert!(encoded.contains("requester_did"));
         assert!(encoded.contains("did:key:phone"));
-        assert!(encoded.contains("agent_did"));
+        assert!(encoded.contains("node_did"));
         assert!(encoded.contains("did:key:mandrake"));
         assert!(!encoded.contains("did:key:amy"));
     }
@@ -327,11 +326,11 @@ mod tests {
     fn client_route_contains_exact_bounded_control_plane() {
         let template = resolve_template(CLIENT_TEMPLATE).unwrap();
         for collection in [
-            "AgentBehavior",
+            "Agent",
             "AgentContext",
             "CompactionConfig",
             "Tools",
-            "SubagentTarget",
+            "AgentTarget",
             "InferenceProfile",
             "InferenceSampling",
             "InferenceExecution",
@@ -353,12 +352,8 @@ mod tests {
         }
         assert!(!template.collections.contains(&"PeerPairingDesired"));
         assert!(!template.collections.contains(&"DataPlanePairingDesired"));
-        assert!(
-            !client_route_collections(PairingDirection::ClientToRuntime).contains(&"AgentBehavior")
-        );
-        assert!(
-            client_route_collections(PairingDirection::RuntimeToClient).contains(&"AgentBehavior")
-        );
+        assert!(!client_route_collections(PairingDirection::ClientToRuntime).contains(&"Agent"));
+        assert!(client_route_collections(PairingDirection::RuntimeToClient).contains(&"Agent"));
         assert!(
             !client_route_collections(PairingDirection::RuntimeToClient)
                 .contains(&"InferenceBackend"),
@@ -388,7 +383,7 @@ mod tests {
             .expect("encode hydration filter");
         assert!(encoded.contains("requester_did"));
         assert!(encoded.contains("did:key:phone"));
-        assert!(encoded.contains("agent_did"));
+        assert!(encoded.contains("node_did"));
         assert!(encoded.contains("did:key:mandrake"));
         assert_eq!(
             outbound.get("SessionHydrationRequest"),

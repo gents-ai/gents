@@ -14,17 +14,17 @@ mod readiness_gate;
 mod request_head;
 mod reset_resume;
 pub(crate) use claimed_publication::{
-    publish_claimed_continuation, stop_claimed_continuation_for_unavailable_behavior,
+    publish_claimed_continuation, stop_claimed_continuation_for_unavailable_agent,
 };
 pub use operator_resume::{
     resume_goal_on_account, resume_goal_request, GoalResumeOnReceipt, GoalResumeReceipt,
 };
 pub use readiness_gate::{
-    gate_claimed_goal_continuation, gate_goal_continuation, goal_behavior_observation,
+    gate_claimed_goal_continuation, gate_goal_continuation, goal_agent_observation,
     goal_failure_cause, goal_readiness_newer_than_terminal, next_goal_infrastructure_retries,
-    observe_goal_behavior, observe_goal_behavior_readiness, GoalBehaviorObservation,
-    GoalBehaviorReadiness, GoalClaimedDecision, GoalContinuationFacts, GoalFailureCause,
-    GoalGatedDecision, ObservedGoalBehavior, GOAL_READINESS_WAIT_PREFIX,
+    observe_goal_agent, observe_goal_agent_readiness, GoalAgentObservation, GoalAgentReadiness,
+    GoalClaimedDecision, GoalContinuationFacts, GoalFailureCause, GoalGatedDecision,
+    ObservedGoalAgent, GOAL_READINESS_WAIT_PREFIX,
 };
 #[cfg(test)]
 pub(crate) use request_head::assignment_allows;
@@ -196,7 +196,7 @@ pub const GOAL_FIELDS: &str = r#"
     goal_id
     creation_key
     session_id
-    agent_did
+    node_did
     objective
     status
     token_budget
@@ -540,7 +540,7 @@ pub struct GoalDocument {
     pub doc_id: String,
     pub goal_id: String,
     pub session_id: String,
-    pub agent_did: String,
+    pub node_did: String,
     #[serde(default)]
     pub objective: String,
     #[serde(default)]
@@ -622,7 +622,7 @@ impl GoalDocument {
 pub struct GoalSnapshot {
     pub goal_id: String,
     pub session_id: String,
-    pub agent_did: String,
+    pub node_did: String,
     pub objective: String,
     pub status: String,
     pub token_budget: Option<i64>,
@@ -644,7 +644,7 @@ impl GoalSnapshot {
         Self {
             goal_id: goal.goal_id.clone(),
             session_id: goal.session_id.clone(),
-            agent_did: goal.agent_did.clone(),
+            node_did: goal.node_did.clone(),
             objective: goal.objective.clone(),
             status: goal.status.clone(),
             token_budget: goal.token_budget,
@@ -663,12 +663,12 @@ impl GoalSnapshot {
     }
 }
 
-pub fn deterministic_goal_id(agent_did: &str, session_id: &str) -> String {
-    format!("{}:{agent_did}:{session_id}", agent_did.len())
+pub fn deterministic_goal_id(node_did: &str, session_id: &str) -> String {
+    format!("{}:{node_did}:{session_id}", node_did.len())
 }
 
-pub fn deterministic_goal_creation_key(agent_did: &str, session_id: &str) -> String {
-    format!("goal-create:{}:{agent_did}:{session_id}", agent_did.len())
+pub fn deterministic_goal_creation_key(node_did: &str, session_id: &str) -> String {
+    format!("goal-create:{}:{node_did}:{session_id}", node_did.len())
 }
 
 #[doc(hidden)]
@@ -683,9 +683,9 @@ pub struct TaskGoalFireIdentity {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct TaskGoalRequestBinding {
     #[serde(default)]
-    pub agent_did: String,
+    pub node_did: String,
     #[serde(default)]
-    pub behavior_id: String,
+    pub agent_id: String,
     #[serde(default)]
     pub session_id: String,
     #[serde(default)]
@@ -740,13 +740,13 @@ pub fn decide_task_goal_fire_recovery(
 /// delimiter aliases without introducing a second persisted identity scheme.
 #[doc(hidden)]
 pub fn task_goal_fire_identity(
-    agent_did: &str,
+    node_did: &str,
     task_id: &str,
     fire_key: &str,
 ) -> TaskGoalFireIdentity {
     let scope = format!(
-        "{}:{agent_did}:{}:{task_id}:{}:{fire_key}",
-        agent_did.chars().count(),
+        "{}:{node_did}:{}:{task_id}:{}:{fire_key}",
+        node_did.chars().count(),
         task_id.chars().count(),
         fire_key.chars().count()
     );
@@ -841,19 +841,19 @@ pub fn validate_task_goal_declaration(
 
 pub(crate) async fn load_goal_creation_claim_fingerprint(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
 ) -> Result<Option<GoalCreationFingerprint>> {
-    let key = escape_graphql_string(&deterministic_goal_creation_key(agent_did, session_id));
+    let key = escape_graphql_string(&deterministic_goal_creation_key(node_did, session_id));
     let query = format!(
         r#"{{ GoalCreationClaim(filter: {{ creation_key: {{ _eq: "{key}" }} }}, limit: 2) {{
-            agent_did session_id objective token_budget
+            node_did session_id objective token_budget
         }} }}"#
     );
     let response = graphql_with_transaction_retry(node, &query, "load goal creation claim").await?;
     #[derive(Deserialize)]
     struct ClaimRow {
-        agent_did: String,
+        node_did: String,
         session_id: String,
         objective: String,
         token_budget: Option<i64>,
@@ -867,7 +867,7 @@ pub(crate) async fn load_goal_creation_claim_fingerprint(
         .into_iter()
         .next()
         .map(|claim| GoalCreationFingerprint {
-            owner: claim.agent_did,
+            owner: claim.node_did,
             session: claim.session_id,
             objective: claim.objective,
             token_budget: claim.token_budget.map(i128::from),
@@ -945,13 +945,13 @@ async fn fence_opened_graph_goal_in_txn(
     {
         return Ok(());
     }
-    let did = escape_graphql_string(&goal.agent_did);
+    let did = escape_graphql_string(&goal.node_did);
     let session = escape_graphql_string(&goal.session_id);
     let fields = crate::request_admission::SIGNED_REQUEST_FIELDS;
     let response = txn
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{
-        agent_did: {{ _eq: "{did}" }}, session_id: {{ _eq: "{session}" }}
+        node_did: {{ _eq: "{did}" }}, session_id: {{ _eq: "{session}" }}
     }}, order: [{{ created_at: DESC }}, {{ request_id: DESC }}]) {{ {fields} }} }}"#
         ))
         .await?;
@@ -988,7 +988,7 @@ async fn fence_opened_graph_goal_in_txn(
 
 async fn stage_goal_and_claim(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     objective: &str,
     token_budget: Option<i64>,
@@ -996,9 +996,9 @@ async fn stage_goal_and_claim(
     now: &str,
 ) -> Result<StagedGoal> {
     let create_request = GoalCreateRequest {
-        caller: agent_did.to_string(),
+        caller: node_did.to_string(),
         current_session: session_id.to_string(),
-        requested_owner: agent_did.to_string(),
+        requested_owner: node_did.to_string(),
         requested_session: session_id.to_string(),
         objective: objective.to_string(),
         objective_nonempty: !objective.is_empty(),
@@ -1012,19 +1012,19 @@ async fn stage_goal_and_claim(
     );
     let fingerprint = goal_creation_fingerprint(&create_request);
     let objective = fingerprint.objective.as_str();
-    let goal_id = deterministic_goal_id(agent_did, session_id);
-    let creation_key = deterministic_goal_creation_key(agent_did, session_id);
-    let escaped_did = escape_graphql_string(agent_did);
+    let goal_id = deterministic_goal_id(node_did, session_id);
+    let creation_key = deterministic_goal_creation_key(node_did, session_id);
+    let escaped_did = escape_graphql_string(node_did);
     let escaped_session = escape_graphql_string(session_id);
     let response = txn
         .execute(&format!(
             r#"{{
                 Goal(filter: {{
-                    agent_did: {{ _eq: "{escaped_did}" }},
+                    node_did: {{ _eq: "{escaped_did}" }},
                     session_id: {{ _eq: "{escaped_session}" }}
                 }}) {{ {GOAL_FIELDS} }}
                 GoalCreationClaim(filter: {{ creation_key: {{ _eq: "{}" }} }}) {{
-                    goal_id agent_did session_id objective token_budget
+                    goal_id node_did session_id objective token_budget
                 }}
             }}"#,
             escape_graphql_string(&creation_key),
@@ -1050,7 +1050,7 @@ async fn stage_goal_and_claim(
     if let Some(claim) = claims.first() {
         let claim_fingerprint = GoalCreationFingerprint {
             owner: claim
-                .get("agent_did")
+                .get("node_did")
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or_default()
                 .to_string(),
@@ -1080,7 +1080,7 @@ async fn stage_goal_and_claim(
         txn.execute(&format!(
             r#"mutation {{ create_GoalCreationClaim(input: {{
                 creation_key: "{}", goal_id: "{}",
-                agent_did: "{escaped_did}", session_id: "{escaped_session}",
+                node_did: "{escaped_did}", session_id: "{escaped_session}",
                 objective: "{}", {budget_field} created_at: "{}"
             }}) {{ _docID }} }}"#,
             escape_graphql_string(&creation_key),
@@ -1111,7 +1111,7 @@ async fn stage_goal_and_claim(
     txn.execute(&format!(
         r#"mutation {{ create_Goal(input: {{
             goal_id: "{}", creation_key: "{}",
-            session_id: "{escaped_session}", agent_did: "{escaped_did}",
+            session_id: "{escaped_session}", node_did: "{escaped_did}",
             objective: "{}", status: "{}", {}
             tokens_used: 0, active_time_seconds: 0, {active_started_field}
             consecutive_blocked_audits: {}, continuation_sequence: 0,
@@ -1136,7 +1136,7 @@ async fn stage_goal_and_claim(
             doc_id: String::new(),
             goal_id,
             session_id: session_id.to_string(),
-            agent_did: agent_did.to_string(),
+            node_did: node_did.to_string(),
             objective: objective.to_string(),
             status: status.as_str().to_string(),
             token_budget,
@@ -1174,15 +1174,15 @@ async fn stage_goal_and_claim(
 /// for twins received through P2P replication.
 pub async fn create_goal_for_session(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     objective: &str,
     token_budget: Option<i64>,
 ) -> std::result::Result<CreateGoalForSessionOutcome, CreateGoalForSessionError> {
     let create_request = GoalCreateRequest {
-        caller: agent_did.to_string(),
+        caller: node_did.to_string(),
         current_session: session_id.to_string(),
-        requested_owner: agent_did.to_string(),
+        requested_owner: node_did.to_string(),
         requested_session: session_id.to_string(),
         objective: objective.to_string(),
         objective_nonempty: !objective.is_empty(),
@@ -1209,7 +1209,7 @@ pub async fn create_goal_for_session(
             Box::pin(async move {
                 stage_goal_and_claim(
                     txn,
-                    agent_did,
+                    node_did,
                     session_id,
                     objective,
                     token_budget,
@@ -1229,7 +1229,7 @@ pub async fn create_goal_for_session(
 
     match result {
         Ok(outcome) => {
-            let goal = load_canonical_goal(node, agent_did, session_id)
+            let goal = load_canonical_goal(node, node_did, session_id)
                 .await
                 .map_err(CreateGoalForSessionError::Storage)?
                 .context("committed Goal row not found")
@@ -1240,13 +1240,13 @@ pub async fn create_goal_for_session(
             })
         }
         Err(error) => {
-            if let Some(existing) = load_canonical_goal(node, agent_did, session_id)
+            if let Some(existing) = load_canonical_goal(node, node_did, session_id)
                 .await
                 .map_err(CreateGoalForSessionError::Storage)?
             {
                 if existing.objective.trim() == objective
                     && existing.token_budget == token_budget
-                    && load_goal_creation_claim_fingerprint(node, agent_did, session_id)
+                    && load_goal_creation_claim_fingerprint(node, node_did, session_id)
                         .await
                         .map_err(CreateGoalForSessionError::Storage)?
                         == Some(requested_fingerprint.clone())
@@ -1270,15 +1270,15 @@ pub enum GoalBackedRequestDisposition {
 }
 
 pub(crate) const GOAL_BACKED_REQUEST_FINGERPRINT_FIELDS: &str = r#"
-    request_id purpose agent_did requester_did behavior_id session_id
+    request_id purpose node_did requester_did agent_id session_id
     retry_parent_request retry_parent_request_doc_id retry_root_request retry_key
     content input
     execution_origin caused_by_trigger_id caused_by_trigger_doc_id
     caused_by_trigger_kind caused_by_correlation caused_by_trigger_context
-    caused_by_source_doc_id retry_count max_retries valid_until subagent_depth
+    caused_by_source_doc_id retry_count max_retries valid_until request_hop
     caused_by_parent_request_id caused_by_parent_request_doc_id
     caused_by_parent_tool_call_id caused_by_parent_tool_call_doc_id
-    workspace_id workspace_owner_agent_did workspace_authority workspace_seal_hash
+    workspace_id workspace_owner_node_did workspace_authority workspace_seal_hash
     admission_kind admission_signer_did enrollment_request_id
     enrollment_request_digest enrollment_admin_did
     enrollment_authorization_sequence enrollment_authorization_expires_at
@@ -1295,9 +1295,9 @@ pub(crate) const GOAL_BACKED_REQUEST_FINGERPRINT_FIELDS: &str = r#"
 pub(crate) struct GoalBackedRequestFingerprint {
     request_id: String,
     purpose: gents_protocol::request_admission::RequestPurpose,
-    agent_did: String,
+    node_did: String,
     requester_did: String,
-    behavior_id: String,
+    agent_id: String,
     session_id: String,
     retry_parent_request: Option<String>,
     retry_parent_request_doc_id: Option<String>,
@@ -1319,13 +1319,13 @@ pub(crate) struct GoalBackedRequestFingerprint {
     retry_count: i64,
     max_retries: i64,
     valid_until: Option<String>,
-    subagent_depth: i64,
+    request_hop: i64,
     caused_by_parent_request_id: Option<String>,
     caused_by_parent_request_doc_id: Option<String>,
     caused_by_parent_tool_call_id: Option<String>,
     caused_by_parent_tool_call_doc_id: Option<String>,
     workspace_id: Option<String>,
-    workspace_owner_agent_did: Option<String>,
+    workspace_owner_node_did: Option<String>,
     workspace_authority: Option<String>,
     workspace_seal_hash: Option<String>,
     admission_kind: String,
@@ -1349,9 +1349,9 @@ impl GoalBackedRequestFingerprint {
         let gents_protocol::request_admission::AgentRequestCreate {
             request_id: _,
             purpose: _,
-            agent_did: _,
+            node_did: _,
             requester_did: _,
-            behavior_id: _,
+            agent_id: _,
             session_id: _,
             retry_parent_request: _,
             retry_parent_request_doc_id: _,
@@ -1370,13 +1370,13 @@ impl GoalBackedRequestFingerprint {
             retry_count: _,
             max_retries: _,
             valid_until: _,
-            subagent_depth: _,
+            request_hop: _,
             caused_by_parent_request_id: _,
             caused_by_parent_request_doc_id: _,
             caused_by_parent_tool_call_id: _,
             caused_by_parent_tool_call_doc_id: _,
             workspace_id: _,
-            workspace_owner_agent_did: _,
+            workspace_owner_node_did: _,
             workspace_authority: _,
             workspace_seal_hash: _,
             initial_lifecycle_state: _,
@@ -1385,9 +1385,9 @@ impl GoalBackedRequestFingerprint {
         Ok(Self {
             request_id: request.request_id.clone(),
             purpose: request.purpose,
-            agent_did: request.agent_did.clone(),
+            node_did: request.node_did.clone(),
             requester_did: request.requester_did.clone(),
-            behavior_id: request.behavior_id.clone(),
+            agent_id: request.agent_id.clone(),
             session_id: request.session_id.clone(),
             retry_parent_request: request.retry_parent_request.clone(),
             retry_parent_request_doc_id: request.retry_parent_request_doc_id.clone(),
@@ -1405,13 +1405,13 @@ impl GoalBackedRequestFingerprint {
             retry_count: request.retry_count,
             max_retries: request.max_retries,
             valid_until: request.valid_until.clone(),
-            subagent_depth: i64::from(request.subagent_depth),
+            request_hop: i64::from(request.request_hop),
             caused_by_parent_request_id: request.caused_by_parent_request_id.clone(),
             caused_by_parent_request_doc_id: request.caused_by_parent_request_doc_id.clone(),
             caused_by_parent_tool_call_id: request.caused_by_parent_tool_call_id.clone(),
             caused_by_parent_tool_call_doc_id: request.caused_by_parent_tool_call_doc_id.clone(),
             workspace_id: request.workspace_id.clone(),
-            workspace_owner_agent_did: request.workspace_owner_agent_did.clone(),
+            workspace_owner_node_did: request.workspace_owner_node_did.clone(),
             workspace_authority: request.workspace_authority.clone(),
             workspace_seal_hash: request.workspace_seal_hash.clone(),
             admission_kind: request.admission.kind.as_str().to_string(),
@@ -1473,7 +1473,7 @@ fn resolve_ambiguous_goal_submission_commit(
 
 async fn stage_goal_backed_request(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     objective: &str,
     token_budget: Option<i64>,
@@ -1485,7 +1485,7 @@ async fn stage_goal_backed_request(
         token_budget.is_none_or(|budget| budget > 0),
         "goal token budget must be positive"
     );
-    anyhow::ensure!(request.agent_did == agent_did, "goal/request DID mismatch");
+    anyhow::ensure!(request.node_did == node_did, "goal/request DID mismatch");
     anyhow::ensure!(
         request.session_id == session_id,
         "goal/request session mismatch"
@@ -1497,7 +1497,7 @@ async fn stage_goal_backed_request(
 
     let staged_goal = stage_goal_and_claim(
         txn,
-        agent_did,
+        node_did,
         session_id,
         objective,
         token_budget,
@@ -1583,7 +1583,7 @@ async fn stage_goal_backed_request(
 /// goal, and request commit together.
 pub async fn submit_goal_backed_request(
     access: &crate::ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     objective: &str,
     token_budget: Option<i64>,
@@ -1594,7 +1594,7 @@ pub async fn submit_goal_backed_request(
             Box::pin(async move {
                 stage_goal_backed_request(
                     txn,
-                    agent_did,
+                    node_did,
                     session_id,
                     objective,
                     token_budget,
@@ -1610,7 +1610,7 @@ pub async fn submit_goal_backed_request(
         Err(error) => {
             let recovery = load_goal_backed_request_by_retry_key_from_access(
                 access,
-                agent_did,
+                node_did,
                 session_id,
                 objective,
                 token_budget,
@@ -1627,23 +1627,23 @@ pub async fn submit_goal_backed_request(
 /// selection in one round trip) and `goal_creation_claim_recovery_query`
 /// (issued alone, after a separate `AgentRequest` retry-key match) — same
 /// filters and fields, so this selection text exists exactly once.
-fn goal_creation_claim_selection(agent_did: &str, session_id: &str) -> String {
+fn goal_creation_claim_selection(node_did: &str, session_id: &str) -> String {
     format!(
         r#"Goal(
-            filter: {{ agent_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }} }},
+            filter: {{ node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }} }},
             order: [{{ created_at: ASC }}, {{ goal_id: ASC }}]
         ) {{ {GOAL_FIELDS} }}
         GoalCreationClaim(filter: {{ creation_key: {{ _eq: "{}" }} }}, limit: 2) {{
-            goal_id agent_did session_id objective token_budget
+            goal_id node_did session_id objective token_budget
         }}"#,
-        escape_graphql_string(agent_did),
+        escape_graphql_string(node_did),
         escape_graphql_string(session_id),
-        escape_graphql_string(&deterministic_goal_creation_key(agent_did, session_id)),
+        escape_graphql_string(&deterministic_goal_creation_key(node_did, session_id)),
     )
 }
 
 fn goal_backed_request_recovery_query(
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     request: &gents_protocol::request_admission::AgentRequestCreate,
 ) -> Result<String> {
@@ -1659,7 +1659,7 @@ fn goal_backed_request_recovery_query(
             {}
         }}"#,
         escape_graphql_string(retry_key),
-        goal_creation_claim_selection(agent_did, session_id),
+        goal_creation_claim_selection(node_did, session_id),
     ))
 }
 
@@ -1717,13 +1717,13 @@ pub(crate) async fn load_agent_request_by_retry_key(
 /// caller expects.
 fn verify_goal_creation_claim_cross_check(
     response: &serde_json::Value,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     objective: &str,
     token_budget: Option<i64>,
 ) -> Result<()> {
     let expected_claim = GoalCreationFingerprint {
-        owner: agent_did.to_string(),
+        owner: node_did.to_string(),
         session: session_id.to_string(),
         objective: objective.trim().to_string(),
         token_budget: token_budget.map(i128::from),
@@ -1757,7 +1757,7 @@ fn verify_goal_creation_claim_cross_check(
         .unwrap_or_default();
     let claim = GoalCreationFingerprint {
         owner: claim
-            .get("agent_did")
+            .get("node_did")
             .and_then(serde_json::Value::as_str)
             .unwrap_or_default()
             .to_string(),
@@ -1777,7 +1777,7 @@ fn verify_goal_creation_claim_cross_check(
             .map(i128::from),
     };
     anyhow::ensure!(
-        goal.agent_did == agent_did
+        goal.node_did == node_did
             && goal.session_id == session_id
             && goal.objective.trim() == expected_claim.objective
             && goal.token_budget == token_budget
@@ -1790,7 +1790,7 @@ fn verify_goal_creation_claim_cross_check(
 
 fn decode_goal_backed_request_recovery(
     response: &serde_json::Value,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     objective: &str,
     token_budget: Option<i64>,
@@ -1807,7 +1807,7 @@ fn decode_goal_backed_request_recovery(
     };
     verify_goal_creation_claim_cross_check(
         response,
-        agent_did,
+        node_did,
         session_id,
         objective,
         token_budget,
@@ -1821,17 +1821,17 @@ fn decode_goal_backed_request_recovery(
 
 async fn load_goal_backed_request_by_retry_key_from_access(
     access: &crate::ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     objective: &str,
     token_budget: Option<i64>,
     request: &gents_protocol::request_admission::AgentRequestCreate,
 ) -> Result<Option<crate::lifecycle::materialize::EnqueuedAgentRequest>> {
-    let query = goal_backed_request_recovery_query(agent_did, session_id, request)?;
+    let query = goal_backed_request_recovery_query(node_did, session_id, request)?;
     let response = access.execute(&query).await?;
     decode_goal_backed_request_recovery(
         &response,
-        agent_did,
+        node_did,
         session_id,
         objective,
         token_budget,
@@ -1839,10 +1839,10 @@ async fn load_goal_backed_request_by_retry_key_from_access(
     )
 }
 
-fn goal_creation_claim_recovery_query(agent_did: &str, session_id: &str) -> String {
+fn goal_creation_claim_recovery_query(node_did: &str, session_id: &str) -> String {
     format!(
         "{{ {} }}",
-        goal_creation_claim_selection(agent_did, session_id)
+        goal_creation_claim_selection(node_did, session_id)
     )
 }
 
@@ -1858,7 +1858,7 @@ fn goal_creation_claim_recovery_query(agent_did: &str, session_id: &str) -> Stri
 /// a match the second query then fails to find.
 async fn load_goal_backed_request_by_retry_key(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     objective: &str,
     token_budget: Option<i64>,
@@ -1872,7 +1872,7 @@ async fn load_goal_backed_request_by_retry_key(
     let Some(doc_id) = load_agent_request_by_retry_key(node, retry_key, &expected).await? else {
         return Ok(None);
     };
-    let query = goal_creation_claim_recovery_query(agent_did, session_id);
+    let query = goal_creation_claim_recovery_query(node_did, session_id);
     let response =
         graphql_with_transaction_retry(node, &query, "load goal-backed request creation claim")
             .await?;
@@ -1881,7 +1881,7 @@ async fn load_goal_backed_request_by_retry_key(
     });
     verify_goal_creation_claim_cross_check(
         &response,
-        agent_did,
+        node_did,
         session_id,
         objective,
         token_budget,
@@ -1898,13 +1898,13 @@ async fn load_goal_backed_request_by_retry_key(
 /// another fact to that request in the same commit.
 pub(crate) async fn stage_goal_backed_request_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     objective: &str,
     token_budget: Option<i64>,
     request: &gents_protocol::request_admission::AgentRequestCreate,
 ) -> Result<crate::lifecycle::EnqueuedAgentRequest> {
-    stage_goal_backed_request(txn, agent_did, session_id, objective, token_budget, request)
+    stage_goal_backed_request(txn, node_did, session_id, objective, token_budget, request)
         .await
         .and_then(authorize_goal_submission_commit)?;
     let retry_key = request
@@ -1944,7 +1944,7 @@ pub(crate) async fn stage_goal_backed_request_in_txn(
 pub async fn submit_goal_backed_request_local(
     node: &EmbeddedNode,
     actor: ::identity::Did,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     objective: &str,
     token_budget: Option<i64>,
@@ -1958,7 +1958,7 @@ pub async fn submit_goal_backed_request_local(
             Box::pin(async move {
                 stage_goal_backed_request(
                     txn,
-                    agent_did,
+                    node_did,
                     session_id,
                     objective,
                     token_budget,
@@ -1975,7 +1975,7 @@ pub async fn submit_goal_backed_request_local(
         Err(error) => {
             if let Some(recovered) = load_goal_backed_request_by_retry_key(
                 node,
-                agent_did,
+                node_did,
                 session_id,
                 objective,
                 token_budget,
@@ -1990,7 +1990,7 @@ pub async fn submit_goal_backed_request_local(
     }
     load_goal_backed_request_by_retry_key(
         node,
-        agent_did,
+        node_did,
         session_id,
         objective,
         token_budget,
@@ -2002,16 +2002,16 @@ pub async fn submit_goal_backed_request_local(
 
 pub async fn load_goals_for_session(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
 ) -> Result<Vec<GoalDocument>> {
-    let agent_did = escape_graphql_string(agent_did);
+    let node_did = escape_graphql_string(node_did);
     let session_id = escape_graphql_string(session_id);
     let query = format!(
         r#"{{
             Goal(
                 filter: {{
-                    agent_did: {{ _eq: "{agent_did}" }},
+                    node_did: {{ _eq: "{node_did}" }},
                     session_id: {{ _eq: "{session_id}" }}
                 }},
                 order: [{{ created_at: ASC }}, {{ goal_id: ASC }}]
@@ -2025,10 +2025,10 @@ pub async fn load_goals_for_session(
 
 pub async fn load_canonical_goal(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
 ) -> Result<Option<GoalDocument>> {
-    Ok(load_goals_for_session(node, agent_did, session_id)
+    Ok(load_goals_for_session(node, node_did, session_id)
         .await?
         .into_iter()
         .next())
@@ -2036,15 +2036,15 @@ pub async fn load_canonical_goal(
 
 pub async fn load_goal_by_id(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     goal_id: &str,
 ) -> Result<Option<GoalDocument>> {
-    let agent_did = escape_graphql_string(agent_did);
+    let node_did = escape_graphql_string(node_did);
     let goal_id = escape_graphql_string(goal_id);
     let query = format!(
         r#"{{
             Goal(
-                filter: {{ agent_did: {{ _eq: "{agent_did}" }}, goal_id: {{ _eq: "{goal_id}" }} }},
+                filter: {{ node_did: {{ _eq: "{node_did}" }}, goal_id: {{ _eq: "{goal_id}" }} }},
                 order: [{{ created_at: ASC }}, {{ goal_id: ASC }}]
             ) {{ {GOAL_FIELDS} }}
         }}"#
@@ -2070,7 +2070,7 @@ async fn decode_goal_rows(node: &EmbeddedNode, query: &str) -> Result<Vec<GoalDo
 
 pub async fn set_goal(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     objective: Option<&str>,
     status: Option<GoalStatus>,
@@ -2080,7 +2080,7 @@ pub async fn set_goal(
         Box::pin(async move {
             set_goal_in_txn(
                 txn,
-                agent_did,
+                node_did,
                 session_id,
                 objective,
                 status,
@@ -2098,7 +2098,7 @@ pub async fn set_goal(
 /// keeps the stored value. The model's goal tools never reach this argument.
 pub async fn set_goal_from_access(
     access: &crate::ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     objective: Option<&str>,
     status: Option<GoalStatus>,
@@ -2110,7 +2110,7 @@ pub async fn set_goal_from_access(
             Box::pin(async move {
                 set_goal_in_txn(
                     txn,
-                    agent_did,
+                    node_did,
                     session_id,
                     objective,
                     status,
@@ -2125,15 +2125,15 @@ pub async fn set_goal_from_access(
 
 pub(crate) async fn load_canonical_goal_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
 ) -> Result<Option<GoalDocument>> {
-    let agent_did = escape_graphql_string(agent_did);
+    let node_did = escape_graphql_string(node_did);
     let session_id = escape_graphql_string(session_id);
     let response = txn
         .execute(&format!(
             r#"{{ Goal(filter: {{
-        agent_did: {{ _eq: "{agent_did}" }}, session_id: {{ _eq: "{session_id}" }}
+        node_did: {{ _eq: "{node_did}" }}, session_id: {{ _eq: "{session_id}" }}
     }}) {{ {GOAL_FIELDS} }} }}"#
         ))
         .await?;
@@ -2155,7 +2155,7 @@ pub(crate) async fn apply_claimed_task_goal_in_txn(
     request: &crate::watcher::AgentRequest,
     now: &str,
 ) -> Result<()> {
-    let owner = escape_graphql_string(&request.agent_did);
+    let owner = escape_graphql_string(&request.node_did);
     let request_id = escape_graphql_string(&request.request_id);
     let response = txn.execute_local_response(&format!(
         r#"{{ TriggerFire(filter: {{owner_did: {{_eq: "{owner}"}}, request_id: {{_eq: "{request_id}"}}}}) {{
@@ -2190,7 +2190,7 @@ pub(crate) async fn apply_claimed_task_goal_in_txn(
     );
     anyhow::ensure!(
         assignment.goal_id.as_deref()
-            == Some(deterministic_goal_id(&request.agent_did, &request.session_id).as_str()),
+            == Some(deterministic_goal_id(&request.node_did, &request.session_id).as_str()),
         "Task receipt has a noncanonical Goal identity"
     );
     let objective = assignment
@@ -2203,7 +2203,7 @@ pub(crate) async fn apply_claimed_task_goal_in_txn(
         assignment.goal_token_budget.is_none_or(|budget| budget > 0),
         "Task Goal budget must be positive"
     );
-    let previous = load_canonical_goal_in_txn(txn, &request.agent_did, &request.session_id).await?;
+    let previous = load_canonical_goal_in_txn(txn, &request.node_did, &request.session_id).await?;
     if let Some(goal) = &previous {
         anyhow::ensure!(
             goal.parsed_status().is_some(),
@@ -2211,7 +2211,7 @@ pub(crate) async fn apply_claimed_task_goal_in_txn(
         );
         crate::trigger_engine::durable::publish_goal_outcomes(
             txn,
-            &goal.agent_did,
+            &goal.node_did,
             &goal.goal_id,
             goal.last_blocked_reason.as_deref().unwrap_or(&goal.status),
             now,
@@ -2233,7 +2233,7 @@ pub(crate) async fn apply_claimed_task_goal_in_txn(
     if previous.is_none() || was_active {
         set_goal_in_txn(
             txn,
-            &request.agent_did,
+            &request.node_did,
             &request.session_id,
             Some(objective),
             Some(GoalStatus::Active),
@@ -2242,7 +2242,7 @@ pub(crate) async fn apply_claimed_task_goal_in_txn(
         )
         .await?;
     }
-    let goal = load_canonical_goal_in_txn(txn, &request.agent_did, &request.session_id)
+    let goal = load_canonical_goal_in_txn(txn, &request.node_did, &request.session_id)
         .await?
         .context("Task Goal assignment has no canonical row")?;
     let goal_doc_id = escape_graphql_string(&goal.doc_id);
@@ -2255,7 +2255,7 @@ pub(crate) async fn apply_claimed_task_goal_in_txn(
         String::new()
     } else {
         let baseline =
-            session_token_usage_in_txn(txn, &request.agent_did, &request.session_id).await?;
+            session_token_usage_in_txn(txn, &request.node_did, &request.session_id).await?;
         format!(
             r#"tokens_used: 0, token_usage_baseline: {baseline},
             active_time_seconds: 0, active_started_at: "{timestamp}",
@@ -2268,7 +2268,7 @@ pub(crate) async fn apply_claimed_task_goal_in_txn(
     let response = txn
         .execute_local_response(&format!(
             r#"mutation {{
-        update_Goal(filter: {{_docID: {{_eq: "{goal_doc_id}"}}, agent_did: {{_eq: "{owner}"}},
+        update_Goal(filter: {{_docID: {{_eq: "{goal_doc_id}"}}, node_did: {{_eq: "{owner}"}},
             continuation_sequence: {{_eq: {expected_sequence}}}}}, input: {{
             objective: "{objective}", status: "active", {budget}
             assignment_root_request_doc_id: "{assignment_root}",
@@ -2285,7 +2285,7 @@ pub(crate) async fn apply_claimed_task_goal_in_txn(
             .is_some_and(mutation_returned_rows),
         "Task Goal assignment lost its continuation fence"
     );
-    let updated = load_canonical_goal_in_txn(txn, &request.agent_did, &request.session_id)
+    let updated = load_canonical_goal_in_txn(txn, &request.node_did, &request.session_id)
         .await?
         .context("assigned Task Goal disappeared")?;
     request_head::retire_stale_assignment_continuations_in_txn(txn, &updated, None, now).await?;
@@ -2303,7 +2303,7 @@ pub(crate) async fn apply_claimed_task_goal_in_txn(
     .await?;
     crate::trigger_engine::durable::publish_goal_outcomes(
         txn,
-        &updated.agent_did,
+        &updated.node_did,
         &updated.goal_id,
         "Task Goal assignment replaced",
         now,
@@ -2314,14 +2314,14 @@ pub(crate) async fn apply_claimed_task_goal_in_txn(
 
 async fn set_goal_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     objective: Option<&str>,
     status: Option<GoalStatus>,
     token_budget: Option<Option<i64>>,
     auto_resume: Option<bool>,
 ) -> Result<GoalDocument> {
-    let existing = load_canonical_goal_in_txn(txn, agent_did, session_id).await?;
+    let existing = load_canonical_goal_in_txn(txn, node_did, session_id).await?;
     let objective = objective
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -2363,14 +2363,14 @@ async fn set_goal_in_txn(
             (!active_started_at.is_empty()).then_some(active_started_at.as_str()),
         );
         let doc_id = escape_graphql_string(&existing.doc_id);
-        let escaped_agent_did = escape_graphql_string(agent_did);
+        let escaped_node_did = escape_graphql_string(node_did);
         let objective = escape_graphql_string(&objective);
         let status = post.status.as_str();
         let now = escape_graphql_string(&now_string);
         let mutation = format!(
             r#"mutation {{
                 update_Goal(
-                    filter: {{ _docID: {{ _eq: "{doc_id}" }}, agent_did: {{ _eq: "{escaped_agent_did}" }} }},
+                    filter: {{ _docID: {{ _eq: "{doc_id}" }}, node_did: {{ _eq: "{escaped_node_did}" }} }},
                     input: {{
                         objective: "{objective}",
                         status: "{status}",
@@ -2392,13 +2392,13 @@ async fn set_goal_in_txn(
             wrapup_completed = post.wrapup_completed,
         );
         txn.execute(&mutation).await?;
-        let updated = load_canonical_goal_in_txn(txn, agent_did, session_id)
+        let updated = load_canonical_goal_in_txn(txn, node_did, session_id)
             .await?
             .context("updated Goal row disappeared")?;
         fence_opened_graph_goal_in_txn(txn, Some(pre), &updated).await?;
         crate::trigger_engine::durable::publish_goal_outcomes(
             txn,
-            agent_did,
+            node_did,
             &updated.goal_id,
             updated
                 .last_blocked_reason
@@ -2425,9 +2425,9 @@ async fn set_goal_in_txn(
     // create-only call may adopt a matching operator goal transactionally;
     // attaching the claim here would become stale as soon as `goal set`
     // changes the objective or budget.
-    let goal_id = deterministic_goal_id(agent_did, session_id);
+    let goal_id = deterministic_goal_id(node_did, session_id);
     let escaped_goal_id = escape_graphql_string(&goal_id);
-    let escaped_agent_did = escape_graphql_string(agent_did);
+    let escaped_node_did = escape_graphql_string(node_did);
     let escaped_session_id = escape_graphql_string(session_id);
     let escaped_objective = escape_graphql_string(&objective);
     let escaped_now = escape_graphql_string(&now_string);
@@ -2441,7 +2441,7 @@ async fn set_goal_in_txn(
             create_Goal(input: {{
                 goal_id: "{escaped_goal_id}",
                 session_id: "{escaped_session_id}",
-                agent_did: "{escaped_agent_did}",
+                node_did: "{escaped_node_did}",
                 objective: "{escaped_objective}",
                 status: "{status}",
                 {budget_field}
@@ -2464,7 +2464,7 @@ async fn set_goal_in_txn(
         wrapup_completed = initial_state.wrapup_completed,
     );
     txn.execute(&mutation).await?;
-    let created = load_canonical_goal_in_txn(txn, agent_did, session_id)
+    let created = load_canonical_goal_in_txn(txn, node_did, session_id)
         .await?
         .context("created Goal row not found")?;
     fence_opened_graph_goal_in_txn(txn, None, &created).await?;
@@ -2473,10 +2473,10 @@ async fn set_goal_in_txn(
 
 pub async fn delete_goal(node: &EmbeddedNode, goal: &GoalDocument) -> Result<bool> {
     let doc_id = escape_graphql_string(&goal.doc_id);
-    let agent_did = escape_graphql_string(&goal.agent_did);
+    let node_did = escape_graphql_string(&goal.node_did);
     let mutation = format!(
         r#"mutation {{
-            delete_Goal(filter: {{ _docID: {{ _eq: "{doc_id}" }}, agent_did: {{ _eq: "{agent_did}" }} }}) {{ _docID }}
+            delete_Goal(filter: {{ _docID: {{ _eq: "{doc_id}" }}, node_did: {{ _eq: "{node_did}" }} }}) {{ _docID }}
         }}"#
     );
     let response = execute_goal_mutation_response(node, &mutation, "goal.delete").await?;
@@ -2493,12 +2493,12 @@ pub async fn delete_goal(node: &EmbeddedNode, goal: &GoalDocument) -> Result<boo
 /// sweep the complete ownership scope rather than delete only the canonical row.
 pub async fn delete_goals_for_session(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
 ) -> Result<usize> {
-    let agent_did = escape_graphql_string(agent_did);
+    let node_did = escape_graphql_string(node_did);
     let session_id = escape_graphql_string(session_id);
-    let agent_did = &agent_did;
+    let node_did = &node_did;
     let session_id = &session_id;
     crate::config_client::ConfigAccess::transact_local(
         node,
@@ -2510,7 +2510,7 @@ pub async fn delete_goals_for_session(
                     .execute(&format!(
                         r#"mutation {{
             delete_Goal(filter: {{
-                agent_did: {{ _eq: "{agent_did}" }},
+                node_did: {{ _eq: "{node_did}" }},
                 session_id: {{ _eq: "{session_id}" }}
             }}) {{ _docID }}
         }}"#
@@ -2519,7 +2519,7 @@ pub async fn delete_goals_for_session(
                 txn.execute(&format!(
                     r#"mutation {{
                 delete_GoalCreationClaim(filter: {{
-                    agent_did: {{ _eq: "{agent_did}" }},
+                    node_did: {{ _eq: "{node_did}" }},
                     session_id: {{ _eq: "{session_id}" }}
                 }}) {{ _docID }}
             }}"#
@@ -2547,7 +2547,7 @@ pub async fn update_goal_fields_if_status(
     fields: &str,
 ) -> Result<bool> {
     let doc_id = escape_graphql_string(&goal.doc_id);
-    let agent_did = escape_graphql_string(&goal.agent_did);
+    let node_did = escape_graphql_string(&goal.node_did);
     let expected_status = escape_graphql_string(expected_status.as_str());
     let expected_sequence = goal.continuation_sequence();
     let mutation = format!(
@@ -2555,7 +2555,7 @@ pub async fn update_goal_fields_if_status(
             update_Goal(
                 filter: {{
                     _docID: {{ _eq: "{doc_id}" }},
-                    agent_did: {{ _eq: "{agent_did}" }},
+                    node_did: {{ _eq: "{node_did}" }},
                     status: {{ _eq: "{expected_status}" }},
                     continuation_sequence: {{ _eq: {expected_sequence} }}
                 }},
@@ -2574,13 +2574,12 @@ pub async fn update_goal_fields_if_status(
                     .pointer("/data/update_Goal")
                     .is_some_and(mutation_returned_rows);
                 if won {
-                    let updated =
-                        load_canonical_goal_in_txn(txn, &goal.agent_did, &goal.session_id)
-                            .await?
-                            .context("updated Goal row disappeared")?;
+                    let updated = load_canonical_goal_in_txn(txn, &goal.node_did, &goal.session_id)
+                        .await?
+                        .context("updated Goal row disappeared")?;
                     crate::trigger_engine::durable::publish_goal_outcomes(
                         txn,
-                        &updated.agent_did,
+                        &updated.node_did,
                         &updated.goal_id,
                         updated
                             .last_blocked_reason
@@ -2603,7 +2602,7 @@ pub async fn claim_continuation(
     parent_request_id: &str,
 ) -> Result<bool> {
     let doc_id = escape_graphql_string(&goal.doc_id);
-    let agent_did = escape_graphql_string(&goal.agent_did);
+    let node_did = escape_graphql_string(&goal.node_did);
     let parent_request_id = escape_graphql_string(parent_request_id);
     let expected_sequence = goal.continuation_sequence();
     let next_sequence = expected_sequence
@@ -2616,7 +2615,7 @@ pub async fn claim_continuation(
             update_Goal(
                 filter: {{
                     _docID: {{ _eq: "{doc_id}" }},
-                    agent_did: {{ _eq: "{agent_did}" }},
+                    node_did: {{ _eq: "{node_did}" }},
                     status: {{ _eq: "{expected_status}" }},
                     continuation_sequence: {{ _eq: {expected_sequence} }}
                 }},
@@ -2648,7 +2647,7 @@ pub async fn claim_retry_continuation(
     failure: &str,
 ) -> Result<bool> {
     let doc_id = escape_graphql_string(&goal.doc_id);
-    let agent_did = escape_graphql_string(&goal.agent_did);
+    let node_did = escape_graphql_string(&goal.node_did);
     let parent_request_id = escape_graphql_string(parent_request_id);
     let failure = escape_graphql_string(failure);
     let expected_sequence = goal.continuation_sequence();
@@ -2662,7 +2661,7 @@ pub async fn claim_retry_continuation(
             update_Goal(
                 filter: {{
                     _docID: {{ _eq: "{doc_id}" }},
-                    agent_did: {{ _eq: "{agent_did}" }},
+                    node_did: {{ _eq: "{node_did}" }},
                     status: {{ _eq: "{expected_status}" }},
                     continuation_sequence: {{ _eq: {expected_sequence} }}
                 }},
@@ -2689,25 +2688,25 @@ pub async fn claim_retry_continuation(
 /// same as the request ledger (`crate::provider_usage::sum_charged_from_persisted_parts`).
 pub async fn session_token_usage(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
 ) -> Result<i64> {
     crate::config_client::ConfigAccess::transact_local(node, None, "goal.session_usage", |txn| {
-        Box::pin(async move { session_token_usage_in_txn(txn, agent_did, session_id).await })
+        Box::pin(async move { session_token_usage_in_txn(txn, node_did, session_id).await })
     })
     .await
 }
 
 async fn session_token_usage_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
 ) -> Result<i64> {
-    let agent_did = escape_graphql_string(agent_did);
+    let node_did = escape_graphql_string(node_did);
     let session_id = escape_graphql_string(session_id);
     let request_query = format!(
         r#"{{
-            AgentRequest(filter: {{ purpose: {{ _eq: "normal" }}, agent_did: {{ _eq: "{agent_did}" }}, session_id: {{ _eq: "{session_id}" }} }}) {{ request_id }}
+            AgentRequest(filter: {{ purpose: {{ _eq: "normal" }}, node_did: {{ _eq: "{node_did}" }}, session_id: {{ _eq: "{session_id}" }} }}) {{ request_id }}
         }}"#
     );
     let response = txn.execute_local_response(&request_query).await?;
@@ -2732,7 +2731,7 @@ async fn session_token_usage_in_txn(
     let query = format!(
         r#"{{
             InferenceCall(
-                filter: {{ agent_did: {{ _eq: "{agent_did}" }}, request_id: {{ _in: [{request_ids}] }} }}
+                filter: {{ node_did: {{ _eq: "{node_did}" }}, request_id: {{ _in: [{request_ids}] }} }}
             ) {{ prompt_tokens completion_tokens }}
         }}"#
     );
@@ -2756,7 +2755,7 @@ async fn session_token_usage_in_txn(
 }
 
 pub async fn refresh_goal_usage(node: &EmbeddedNode, goal: &GoalDocument) -> Result<i64> {
-    let tokens = session_token_usage(node, &goal.agent_did, &goal.session_id)
+    let tokens = session_token_usage(node, &goal.node_did, &goal.session_id)
         .await?
         .saturating_sub(goal.token_usage_baseline.unwrap_or_default().max(0))
         .max(0);
@@ -2876,11 +2875,11 @@ mod tests {
             AgentRequestAdmissionRecord::local_self("did:key:executor"),
         );
         request.workspace_id = Some("shared-label".into());
-        request.workspace_owner_agent_did = Some("did:key:source-owner".into());
+        request.workspace_owner_node_did = Some("did:key:source-owner".into());
         request.workspace_authority = Some("readOnly".into());
         request.workspace_seal_hash = Some("same-seal".into());
         let expected = GoalBackedRequestFingerprint::from_create(&request).unwrap();
-        request.workspace_owner_agent_did = Some("did:key:different-owner".into());
+        request.workspace_owner_node_did = Some("did:key:different-owner".into());
         assert_ne!(
             expected,
             GoalBackedRequestFingerprint::from_create(&request).unwrap()
@@ -3100,7 +3099,7 @@ pub(crate) async fn fence_goal_continuation_claim_in_txn(
         return Ok(true);
     }
     let Some(goal) =
-        load_canonical_goal_in_txn(txn, &request.agent_did, &request.session_id).await?
+        load_canonical_goal_in_txn(txn, &request.node_did, &request.session_id).await?
     else {
         return Ok(true);
     };

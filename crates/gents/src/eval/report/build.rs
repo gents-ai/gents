@@ -488,7 +488,7 @@ fn attempt_summary(record: &TrialRecord) -> AttemptSummary {
     AttemptSummary {
         trial_id: identity.trial_id.clone(),
         attempt: identity.attempt,
-        trial_agent_did: identity.trial_agent_did.clone(),
+        trial_node_did: identity.trial_node_did.clone(),
         session_id: identity.session_id.clone(),
         home_hint: identity.home_hint.clone(),
         evidence_digest: completion.and_then(|completion| completion.evidence_digest.clone()),

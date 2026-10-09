@@ -13,12 +13,7 @@ async fn dropped_wait_without_volatile_handle_settles_through_terminal_parent_ow
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         ensure_runtime_schemas(&node).await.unwrap();
         let agent = "did:test:wait-settlement";
-        let hook = DefraSessionHook::with_identity(
-            node.clone(),
-            "general",
-            agent,
-            FailurePolicy::FailClosed,
-        );
+        let hook = DefraSessionHook::with_identity(node.clone(), agent, FailurePolicy::FailClosed);
         assert!(matches!(
             hook.on_completion_call(&user_text_message("Observe a process"), &[])
                 .await,

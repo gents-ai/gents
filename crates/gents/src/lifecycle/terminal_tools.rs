@@ -20,7 +20,8 @@ struct ToolDocument {
     #[serde(rename = "_docID")]
     doc_id: String,
     request_doc_id: String,
-    agent_did: String,
+    #[serde(rename = "node_did")]
+    node_did: String,
     #[serde(flatten)]
     row: AgentToolCallRow,
 }
@@ -36,7 +37,7 @@ fn directly_bound<'a>(
         if message.request_doc_id.as_deref() != Some(tool.request_doc_id.as_str())
             || message.session_id.as_str() != tool.row.session_id.as_deref().unwrap_or_default()
             || Some(i64::from(message.sequence)) != tool.row.message_sequence
-            || message.agent_did != tool.agent_did
+            || message.node_did != tool.node_did
             || message.requester_did != tool.row.requester_did
             || message.role != MessageRole::Assistant
             || message.outcome != OutputOutcome::Complete
@@ -84,7 +85,7 @@ pub(super) async fn account_tools_in_txn(
         .as_deref()
         .context("request has no physical identity")?;
     let agent = request
-        .agent_did
+        .node_did
         .as_deref()
         .context("request missing agent")?;
     let session = request
@@ -98,7 +99,7 @@ pub(super) async fn account_tools_in_txn(
         .execute_local_response(&format!(
             r#"{{
         AgentToolCall(filter: {{ {scope}, request_doc_id: {{ _eq: "{escaped_request}" }} }}) {{
-            _docID tool_call_key request_doc_id agent_did requester_did session_id
+            _docID tool_call_key request_doc_id node_did requester_did session_id
             message_sequence tool_call_id tool_name lifecycle_state await_mode
             started_at spawned_by_tool_call_doc_id
         }}

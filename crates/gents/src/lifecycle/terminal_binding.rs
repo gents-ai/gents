@@ -45,7 +45,7 @@ mod tests {
         TranscriptMessage {
             message_key: "reply-key".into(),
             session_id: "session".into(),
-            agent_did: "did:test:agent".into(),
+            node_did: "did:test:agent".into(),
             requester_did: Some("did:test:requester".into()),
             request_doc_id: Some("request".into()),
             publication: MessagePublication::ToolDelivery {

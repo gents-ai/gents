@@ -1,8 +1,8 @@
 {
-  "agent_principal": {},
-  "agent_behaviors": [
+  "node": {},
+  "agents": [
     {
-      "behavior_id": "fixture-worker",
+      "agent_id": "fixture-worker",
       "display_name": "Fixture worker",
       "description": "Writes one report for the prepared job.",
       "context_id": "fixture-worker-context",
@@ -26,7 +26,7 @@
   "contexts": [
     {
       "context_id": "fixture-worker-context",
-      "system_prompt": "./agent_behaviors/fixture_worker/system_prompt.md",
+      "system_prompt": "./agents/fixture_worker/system_prompt.md",
       "tools_id": "fixture-worker-tools",
       "compaction_id": "fixture-compaction"
     }
@@ -69,7 +69,7 @@
     {
       "task_id": "fixture-worker-task",
       "display_name": "Write the fixture report",
-      "behavior_id": "fixture-worker",
+      "agent_id": "fixture-worker",
       "prompt_template": "./tasks/fixture_worker_task/prompt.md",
       "goal_objective_template": "Write the report for run {{ event.correlation }}, then complete this Goal."
     }
@@ -83,7 +83,7 @@
     {
       "capability_id": "fixture-worker",
       "allowed_callers": [
-        "${GENTS_PACK_AGENT_DID}"
+        "${GENTS_PACK_NODE_DID}"
       ],
       "revision": "v1",
       "target": {

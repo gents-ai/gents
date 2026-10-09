@@ -2,12 +2,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gents::{
-    AgentIdentity, DocumentRuntimeOptions, Gents, KeyIdentity, ProcessLifecycleObserver,
+    DocumentRuntimeOptions, Gents, KeyIdentity, NodeIdentity, ProcessLifecycleObserver,
     ProcessLifecycleState, RuntimeSnapshotObserver, ToolCeiling,
 };
 use tokio::sync::watch;
 
-use crate::support::fixtures::bind_default_behavior_backend;
+use crate::support::fixtures::bind_default_agent_backend;
 use crate::support::interrupt::TEST_RUNTIME_READY_TIMEOUT;
 use crate::support::snapshots::{fetch_runtime_snapshot, RuntimeSnapshot};
 use crate::support::test_db;
@@ -47,7 +47,7 @@ impl RuntimeSnapshotObserver for RuntimeEventObserver {
         &self,
         generation: u64,
         _configuration_fingerprint: &str,
-        _runnable_behavior_ids: &[String],
+        _runnable_agent_ids: &[String],
     ) {
         self.generation_tx.send_replace(generation);
     }
@@ -83,7 +83,7 @@ async fn wait_for_observed<T>(
 
 async fn wait_for_runtime_snapshot<F>(
     node: &gents::defra_node::EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     predicate: F,
 ) -> RuntimeSnapshot
 where
@@ -91,7 +91,7 @@ where
 {
     let deadline = tokio::time::Instant::now() + TEST_RUNTIME_READY_TIMEOUT;
     loop {
-        let last_snapshot = fetch_runtime_snapshot(node, agent_did).await;
+        let last_snapshot = fetch_runtime_snapshot(node, node_did).await;
         if let Some(snapshot) = last_snapshot.as_ref() {
             if predicate(&snapshot) {
                 return snapshot.clone();
@@ -100,7 +100,7 @@ where
         assert!(
             tokio::time::Instant::now() < deadline,
             "timed out after {TEST_RUNTIME_READY_TIMEOUT:?} waiting for runtime snapshot for \
-             {agent_did}; last observed snapshot: {last_snapshot:?}"
+             {node_did}; last observed snapshot: {last_snapshot:?}"
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
@@ -110,7 +110,7 @@ where
 async fn runtime_status_surfaces_startup_reconcile_and_shutdown() {
     let db = test_db("runtime-observability").await;
     let identity = Arc::new(test_identity("runtime-observability"));
-    bind_default_behavior_backend(
+    bind_default_agent_backend(
         db.node.as_ref(),
         identity.did(),
         "backend-runtime-observability",
@@ -126,7 +126,7 @@ async fn runtime_status_surfaces_startup_reconcile_and_shutdown() {
         generation_tx,
         event_sources_tx,
     });
-    let agent = Gents::from_default_behavior_documents(
+    let agent = Gents::from_default_agent_documents(
         db.node.clone(),
         identity,
         DocumentRuntimeOptions {
@@ -138,8 +138,8 @@ async fn runtime_status_surfaces_startup_reconcile_and_shutdown() {
     )
     .await
     .unwrap();
-    let agent_did = agent.agent_did().to_string();
-    let default_behavior_id = agent.default_behavior_id().to_string();
+    let node_did = agent.node_did().to_string();
+    let default_agent_id = agent.default_agent_id().to_string();
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(agent.clone().run(shutdown_rx));
@@ -150,7 +150,7 @@ async fn runtime_status_surfaces_startup_reconcile_and_shutdown() {
         |state| *state == ProcessLifecycleState::Ready,
     )
     .await;
-    let startup = wait_for_runtime_snapshot(db.node.as_ref(), &agent_did, |snapshot| {
+    let startup = wait_for_runtime_snapshot(db.node.as_ref(), &node_did, |snapshot| {
         snapshot.process_state == "ready"
             && snapshot.reconcile_phase == "idle"
             && snapshot.active_generation == 1
@@ -158,7 +158,7 @@ async fn runtime_status_surfaces_startup_reconcile_and_shutdown() {
             && snapshot.last_reconcile_error.is_empty()
     })
     .await;
-    assert_eq!(startup.default_behavior_id, default_behavior_id);
+    assert_eq!(startup.default_agent_id, default_agent_id);
     assert!(startup.last_reconcile_error.is_empty());
     let initial_fingerprint = agent
         .document_runtime_configuration_fingerprint()
@@ -180,33 +180,32 @@ async fn runtime_status_surfaces_startup_reconcile_and_shutdown() {
         None,
         "test.update_context",
         |txn| {
-            let agent_did = &agent_did;
-            let behavior_id = &default_behavior_id;
+            let node_did = &node_did;
+            let agent_id = &default_agent_id;
             Box::pin(async move {
                 use gents::config_client::{
                     read_desired_state_record_in_txn as read, DesiredStateApplyDocument,
                     DesiredStateApplyPlan,
                 };
                 use gents::Collection;
-                let (_, mut behavior) =
-                    read(txn, Collection::AgentBehavior, agent_did, behavior_id)
-                        .await?
-                        .expect("behavior");
+                let (_, mut behavior) = read(txn, Collection::Agent, node_did, agent_id)
+                    .await?
+                    .expect("behavior");
                 let context_id = behavior["context_id"]
                     .as_str()
                     .map(str::to_owned)
-                    .unwrap_or_else(|| format!("{behavior_id}:context"));
-                let mut context = read(txn, Collection::AgentContext, agent_did, &context_id)
+                    .unwrap_or_else(|| format!("{agent_id}:context"));
+                let mut context = read(txn, Collection::AgentContext, node_did, &context_id)
                     .await?
                     .map(|(_, value)| value)
                     .unwrap_or_else(
-                        || serde_json::json!({"agent_did":agent_did,"context_id":context_id}),
+                        || serde_json::json!({"node_did":node_did,"context_id":context_id}),
                     );
                 context["system_prompt"] = "runtime observability update".into();
                 behavior["context_id"] = context_id.into();
                 let plan = DesiredStateApplyPlan::new(
                     [
-                        (Collection::AgentBehavior, behavior),
+                        (Collection::Agent, behavior),
                         (Collection::AgentContext, context),
                     ]
                     .into_iter()
@@ -244,7 +243,7 @@ async fn runtime_status_surfaces_startup_reconcile_and_shutdown() {
         *generation >= 2
     })
     .await;
-    let reconciled = wait_for_runtime_snapshot(db.node.as_ref(), &agent_did, |snapshot| {
+    let reconciled = wait_for_runtime_snapshot(db.node.as_ref(), &node_did, |snapshot| {
         snapshot.process_state == "ready"
             && snapshot.reconcile_phase == "idle"
             && snapshot.active_generation == 2
@@ -252,13 +251,13 @@ async fn runtime_status_surfaces_startup_reconcile_and_shutdown() {
             && snapshot.last_reconcile_error.is_empty()
     })
     .await;
-    assert_eq!(reconciled.default_behavior_id, default_behavior_id);
+    assert_eq!(reconciled.default_agent_id, default_agent_id);
     assert!(reconciled.last_reconcile_error.is_empty());
 
     let _ = shutdown_tx.send(true);
     handle.await.unwrap().unwrap();
 
-    let shutdown = fetch_runtime_snapshot(db.node.as_ref(), &agent_did)
+    let shutdown = fetch_runtime_snapshot(db.node.as_ref(), &node_did)
         .await
         .expect("shutdown runtime snapshot");
     assert_eq!(shutdown.process_state, "shutdown");

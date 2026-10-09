@@ -307,7 +307,7 @@ impl WriteToolDecl {
             })?;
             if field.name == "requester_did" && field.fill.is_none() {
                 anyhow::bail!(
-                    "field[{index}] requester_did is principal identity and must be runtime-filled"
+                    "field[{index}] requester_did is node identity and must be runtime-filled"
                 );
             }
         }
@@ -409,7 +409,7 @@ pub(crate) fn validate_write_tool_declarations(
 }
 
 /// True when `name` is already claimed by the built-in tool surface: the native
-/// file/shell tools, the meta tools, the subagent/process control tools, or the
+/// file/shell tools, the meta tools, the agent/process control tools, or the
 /// built-in singletons (including the durable goal tools).
 ///
 /// A `write_tools` declaration whose `tool_name` collides with one of these
@@ -422,7 +422,7 @@ pub(crate) fn validate_write_tool_declarations(
 pub fn is_reserved_builtin_tool_name(name: &str) -> bool {
     let name = name.trim();
 
-    const SUBAGENT_TOOL_NAMES: &[&str] = &[
+    const AGENT_TOOL_NAMES: &[&str] = &[
         AGENT_NEW_TOOL_NAME,
         AGENT_MESSAGE_TOOL_NAME,
         AGENT_INTERRUPT_TOOL_NAME,
@@ -450,7 +450,7 @@ pub fn is_reserved_builtin_tool_name(name: &str) -> bool {
     crate::toolset::NativeTool::ALL_NAMES.contains(&name)
         || name == crate::toolset::lsp::LSP_TOOL_NAME
         || META_TOOL_NAMES.contains(&name)
-        || SUBAGENT_TOOL_NAMES.contains(&name)
+        || AGENT_TOOL_NAMES.contains(&name)
         || SINGLETON_TOOL_NAMES.contains(&name)
         || crate::self_config::SELF_CONFIG_TOOL_NAMES.contains(&name)
         || crate::graph_pipeline::GRAPH_PIPELINE_TOOL_NAMES.contains(&name)
@@ -458,7 +458,7 @@ pub fn is_reserved_builtin_tool_name(name: &str) -> bool {
 
 /// Collections no datastore tool may read or write. They hold protected eval
 /// material and promotion evidence; an agent in the launching home, including
-/// the live version of a behavior under optimization, must not reach them.
+/// the live version of an agent under optimization, must not reach them.
 pub const PROTECTED_DATASTORE_COLLECTIONS: &[&str] = &[
     gents_protocol::schemas::EVAL_DEFINITION_NAME,
     gents_protocol::schemas::EVAL_RUN_NAME,

@@ -105,9 +105,9 @@ pub(crate) fn definition(
     cases.extend(HELD_OUT_CASES.iter().map(|id| case(id, "held_out", check)));
     json!({
         "definition_id": definition_id,
-        "agent_did": OWNER,
+        "node_did": OWNER,
         "comparability_version": version,
-        "subject": {"kind": "behavior", "inference_slots": ["primary"]},
+        "subject": {"kind": "agent", "inference_slots": ["primary"]},
         "cases": cases,
     })
 }
@@ -115,10 +115,10 @@ pub(crate) fn definition(
 /// The live configuration the job freezes and, in PR 4, promotes into.
 fn behavior(display_name: &str) -> (Collection, Value) {
     (
-        Collection::AgentBehavior,
+        Collection::Agent,
         json!({
-            "behavior_id": "monitor",
-            "agent_did": OWNER,
+            "agent_id": "monitor",
+            "node_did": OWNER,
             "display_name": display_name,
             "context_id": "monitor-context",
             "inference_profile_id": "local",
@@ -131,7 +131,7 @@ fn context(prompt: &str) -> (Collection, Value) {
         Collection::AgentContext,
         json!({
             "context_id": "monitor-context",
-            "agent_did": OWNER,
+            "node_did": OWNER,
             "display_name": "Monitor",
             "system_prompt": prompt,
             "tools_id": "monitor-tools",
@@ -146,7 +146,7 @@ fn tools() -> (Collection, Value) {
         Collection::Tools,
         json!({
             "tools_id": "monitor-tools",
-            "agent_did": OWNER,
+            "node_did": OWNER,
             "display_name": "Monitor tools",
             "host": {"bash": {"mode": "Off"}},
         }),
@@ -492,7 +492,7 @@ impl Harness {
             job_id: job_id.into(),
             owner: OWNER.into(),
             evaluator_did: self.launching.evaluator_did(),
-            behavior_id: "monitor".into(),
+            agent_id: "monitor".into(),
             target: JobTarget::Context,
             definition_id: definition_id.into(),
             inference_profile_id: "local".into(),
@@ -711,8 +711,8 @@ async fn task_harness() -> (Harness, PathBuf) {
                 Collection::Task,
                 json!({
                     "task_id": "plan",
-                    "agent_did": OWNER,
-                    "behavior_id": "monitor",
+                    "node_did": OWNER,
+                    "agent_id": "monitor",
                     "prompt_template": FIXTURE_TEMPLATE,
                 }),
             ),
@@ -720,7 +720,7 @@ async fn task_harness() -> (Harness, PathBuf) {
                 Collection::EventSource,
                 json!({
                     "event_source_id": "plan-source",
-                    "agent_did": OWNER,
+                    "node_did": OWNER,
                     "source_collection": "PlanItem",
                 }),
             ),
@@ -728,7 +728,7 @@ async fn task_harness() -> (Harness, PathBuf) {
                 Collection::Trigger,
                 json!({
                     "trigger_id": "plan-trigger",
-                    "agent_did": OWNER,
+                    "node_did": OWNER,
                     "task_id": "plan",
                     "source": {"kind": "event", "event_source_id": "plan-source"},
                 }),
@@ -824,7 +824,7 @@ async fn an_unexercised_task_target_is_refused_before_any_job_or_trial_is_create
 }
 
 /// [`accepting_harness`] for a task prompt template target: the live task
-/// `plan` of the monitor behavior and a pack holding it as a sidecar.
+/// `plan` of the monitor agent and a pack holding it as a sidecar.
 pub(crate) async fn accepting_task_harness(job_id: &str) -> (Harness, JobRequest) {
     let (harness, pack) = task_harness().await;
     install_task_definition(&harness, &["train", "validation", "held_out"]).await;
@@ -974,7 +974,7 @@ async fn a_resume_with_another_capture_list_is_refused() {
 /// A job evaluates the live revision (#1455), not a transfer to it: a pack
 /// whose prompt matches but whose other configuration differs is refused at
 /// freeze with nothing written, and a pack that differs only where a trial
-/// remaps it (its behavior names an inference slot, the live one the profile
+/// remaps it (its agent names an inference slot, the live one the profile
 /// `local`) freezes.
 #[tokio::test]
 async fn a_pack_that_is_not_the_live_configuration_is_refused_at_freeze() {
@@ -1005,7 +1005,7 @@ async fn a_pack_that_is_not_the_live_configuration_is_refused_at_freeze() {
         .unwrap_err();
     let reason = refusal(error);
     assert!(
-        reason.contains("AgentBehavior \"monitor\"") && reason.contains("display_name"),
+        reason.contains("Agent \"monitor\"") && reason.contains("display_name"),
         "{reason}"
     );
     assert!(!baseline_dir(&request.jobs_dir, &request.job_id).exists());
@@ -1852,7 +1852,7 @@ async fn a_definition_that_no_longer_validates_fails_the_job_as_definition_chang
         .transact("matrix.invalidate_definition", |txn| {
             Box::pin(async move {
                 txn.execute(&format!(
-                    r#"mutation {{ update_EvalDefinition(filter: {{ definition_id: {{ _eq: "{}" }}, agent_did: {{ _eq: "{}" }} }}, input: {{ comparability_version: 0 }}) {{ _docID }} }}"#,
+                    r#"mutation {{ update_EvalDefinition(filter: {{ definition_id: {{ _eq: "{}" }}, node_did: {{ _eq: "{}" }} }}, input: {{ comparability_version: 0 }}) {{ _docID }} }}"#,
                     crate::graphql::escape_graphql_string(DEFINITION),
                     crate::graphql::escape_graphql_string(OWNER),
                 ))

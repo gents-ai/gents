@@ -6,12 +6,12 @@
 //! engine. Matching state lives on `EventSource`; the `Trigger` carries task
 //! selection, enabled state, concurrency and delivery identity only — no
 //! duplicate selector/run state and no graph model override
-//! (`Task.behavior_id` is the only model selection path).
+//! (`Task.agent_id` is the only model selection path).
 
 use super::DocumentRuntimeView;
 use crate::runtime_snapshot::{
     ConcurrencyMode, EventTriggerFireMode, ResolvedAutomation, ResolvedEventTrigger,
-    ResolvedSchedule, ResolvedTask, UnavailableBehavior,
+    ResolvedSchedule, ResolvedTask, UnavailableAgent,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -19,16 +19,16 @@ use std::collections::{HashMap, HashSet};
 /// projection installed via `ResolvedRuntimeSnapshot::with_automation`.
 pub(super) fn resolve_automation(
     view: &DocumentRuntimeView,
-    unavailable_behaviors: &HashMap<String, UnavailableBehavior>,
+    unavailable_agents: &HashMap<String, UnavailableAgent>,
 ) -> ResolvedAutomation {
-    let tasks = resolve_tasks(view, unavailable_behaviors);
+    let tasks = resolve_tasks(view, unavailable_agents);
     let mut schedules = HashMap::new();
     let mut unavailable_schedules = HashSet::new();
     let mut event_triggers = HashMap::new();
     let mut unavailable_event_triggers = HashSet::new();
     let mut unavailable_triggers = HashSet::new();
 
-    // Trigger -> Task -> behavior is the shared entrance. First resolve every
+    // Trigger -> Task -> agent_config is the shared entrance. First resolve every
     // enabled trigger's task reference, then resolve schedule/event sources
     // through it so the same admission gate applies to both consumers.
     let mut trigger_tasks: HashMap<String, ResolvedTask> = HashMap::new();
@@ -56,8 +56,8 @@ pub(super) fn resolve_automation(
             unavailable_triggers.insert(trigger_id.clone());
             continue;
         }
-        let behavior_id = task.behavior_id.as_str();
-        let Some(behavior_record) = view.behaviors.get(behavior_id) else {
+        let agent_id = task.agent_id.as_str();
+        let Some(behavior_record) = view.agents.get(agent_id) else {
             unavailable_triggers.insert(trigger_id.clone());
             continue;
         };
@@ -65,7 +65,7 @@ pub(super) fn resolve_automation(
             unavailable_triggers.insert(trigger_id.clone());
             continue;
         }
-        if unavailable_behaviors.contains_key(behavior_id) {
+        if unavailable_agents.contains_key(agent_id) {
             unavailable_triggers.insert(trigger_id.clone());
             continue;
         }
@@ -142,7 +142,7 @@ fn resolved_task_from(task: &crate::document_config::Task) -> ResolvedTask {
         emit_outcome: task.emit_outcome,
         task_id: task.task_id.clone(),
         name: task.display_name.clone(),
-        behavior_id: task.behavior_id.clone(),
+        agent_id: task.agent_id.clone(),
         prompt_template: task.prompt_template.clone(),
         goal_objective_template: task.goal_objective_template.clone(),
         goal_token_budget: task.goal_token_budget,
@@ -153,7 +153,7 @@ fn resolved_task_from(task: &crate::document_config::Task) -> ResolvedTask {
 
 fn resolve_tasks(
     view: &DocumentRuntimeView,
-    unavailable_behaviors: &HashMap<String, UnavailableBehavior>,
+    unavailable_agents: &HashMap<String, UnavailableAgent>,
 ) -> HashMap<String, ResolvedTask> {
     let mut active_tasks = HashMap::new();
 
@@ -164,18 +164,18 @@ fn resolve_tasks(
             continue;
         }
 
-        if task.behavior_id.trim().is_empty() {
+        if task.agent_id.trim().is_empty() {
             continue;
         }
 
-        let behavior_record = match view.behaviors.get(&task.behavior_id) {
+        let behavior_record = match view.agents.get(&task.agent_id) {
             Some(record) => record,
             None => continue,
         };
         if !behavior_record.value.enabled {
             continue;
         }
-        if unavailable_behaviors.contains_key(&task.behavior_id) {
+        if unavailable_agents.contains_key(&task.agent_id) {
             continue;
         }
 

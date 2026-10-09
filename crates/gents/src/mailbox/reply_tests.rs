@@ -223,7 +223,6 @@ async fn modeled_handoff_positive_sequence_maps_to_native_owners() {
     let node = tests::test_node().await;
     let temp = tempfile::tempdir().unwrap();
     let identity = KeyIdentity::load_or_create(temp.path().join("handoff.key"), None).unwrap();
-    crate::test_support::install_test_agent(&node, identity.did(), "operator").await;
     let producer = persisted_request(&node, &identity, None, "producer-request", false).await;
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         node.clone(),

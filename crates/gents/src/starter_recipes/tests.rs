@@ -84,7 +84,7 @@ fn catalog_snapshot_is_small_stable_and_complete() {
                 "id": "gents.custom",
                 "version": 1,
                 "display_name": "Custom",
-                "summary": "Create a bounded behavior from an explicit role, goal, and success criteria.",
+                "summary": "Create a bounded agent from an explicit role, goal, and success criteria.",
                 "inputs": [
                     {
                         "key": "custom_role",
@@ -96,7 +96,7 @@ fn catalog_snapshot_is_small_stable_and_complete() {
                         "key": "custom_goal",
                         "kind": "text",
                         "required": true,
-                        "description": "The outcome this behavior should pursue."
+                        "description": "The outcome this agent should pursue."
                     },
                     {
                         "key": "custom_success_criteria",
@@ -154,7 +154,7 @@ fn coding_tools_snapshot_is_workspace_write_without_network_or_background() {
         serde_json::to_value(&resolved.recommended_tools).unwrap(),
         json!({
             "tools_id": TOOLS_ID,
-            "agent_did": OWNER,
+            "node_did": OWNER,
             "display_name": "Coding starter tools",
             "host": {
                 "root": "/workspace/project",
@@ -185,7 +185,7 @@ fn code_review_tools_snapshot_is_read_only() {
         serde_json::to_value(&resolved.recommended_tools).unwrap(),
         json!({
             "tools_id": TOOLS_ID,
-            "agent_did": OWNER,
+            "node_did": OWNER,
             "display_name": "Code review starter tools",
             "host": {
                 "root": "/workspace/project",
@@ -218,7 +218,7 @@ fn research_has_no_implicit_network_shell_or_write_tools() {
         serde_json::to_value(&local.recommended_tools).unwrap(),
         json!({
             "tools_id": TOOLS_ID,
-            "agent_did": OWNER,
+            "node_did": OWNER,
             "display_name": "Research starter tools",
             "host": {
                 "root": "/workspace/sources",
@@ -252,7 +252,7 @@ fn general_and_custom_start_with_no_capabilities() {
         let tools = &resolved.recommended_tools;
         assert!(tools.host.is_none());
         assert!(tools.remote.is_none());
-        assert!(tools.subagents.is_none());
+        assert!(tools.agents.is_none());
         assert!(tools.built_ins.is_none());
         assert!(tools.datastore.is_none());
         assert!(tools.integrations.is_none());

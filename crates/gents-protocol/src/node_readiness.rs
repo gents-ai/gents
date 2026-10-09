@@ -309,11 +309,19 @@ pub fn decode_node_readiness_snapshot(
     {
         return Err(AgentReadinessUnknownReason::ReadinessMalformed);
     }
-    let snapshot = serde_json::from_str::<NodeReadinessSnapshot>(&row.snapshot_json)
+    #[derive(Deserialize)]
+    struct Version {
+        format_version: u32,
+    }
+    // An unsupported wire version can have a different payload shape, so
+    // classify its version before applying the current strict schema.
+    let version = serde_json::from_str::<Version>(&row.snapshot_json)
         .map_err(|_| AgentReadinessUnknownReason::ReadinessMalformed)?;
-    if snapshot.format_version != NODE_READINESS_FORMAT_VERSION {
+    if version.format_version != NODE_READINESS_FORMAT_VERSION {
         return Err(AgentReadinessUnknownReason::ReadinessVersionUnsupported);
     }
+    let snapshot = serde_json::from_str::<NodeReadinessSnapshot>(&row.snapshot_json)
+        .map_err(|_| AgentReadinessUnknownReason::ReadinessMalformed)?;
     let entries_are_canonical = snapshot.agents.iter().all(|entry| {
         is_canonical_id(&entry.agent_id)
             && match entry.state {

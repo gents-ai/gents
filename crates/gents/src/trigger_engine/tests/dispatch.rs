@@ -12,7 +12,7 @@ async fn dispatch_reports_pre_materialized_request_without_materializer_call() {
         trigger_kind: TriggerKind::Manual,
         task: resolved_task("ignored"),
         concurrency: ConcurrencyMode::Parallel,
-        event_vars: serde_json::json!({"trigger_kind": "subagent"}),
+        event_vars: serde_json::json!({"trigger_kind": "manual"}),
         doc_vars: None,
         correlation: None,
         group_vars: None,
@@ -284,8 +284,8 @@ async fn goal_fire_retry_recovers_after_goal_declaration_is_removed() {
 #[tokio::test]
 async fn dispatch_parallel_group_materializes_once_for_the_same_correlation() {
     let task = resolved_task("group {{ group.correlation_value }}");
-    let behavior = integration_test_behavior("general");
-    let agent_did = behavior.agent_did().to_string();
+    let agent = integration_test_agent("general");
+    let node_did = agent.node_did().to_string();
     let trigger = ResolvedEventTrigger {
         fire_mode: crate::runtime_snapshot::EventTriggerFireMode::PerGroup,
         correlation_field: Some("run_id".to_string()),
@@ -299,7 +299,7 @@ async fn dispatch_parallel_group_materializes_once_for_the_same_correlation() {
     let snapshot = Arc::new(
         ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
             "general".to_string(),
-            vec![behavior],
+            vec![agent],
             HashMap::new(),
             HashMap::new(),
             HashMap::new(),
@@ -308,12 +308,12 @@ async fn dispatch_parallel_group_materializes_once_for_the_same_correlation() {
             event_triggers: HashMap::from([("group-trigger".to_string(), trigger)]),
             ..Default::default()
         })
-        .with_principal(stub_principal())
+        .with_node(stub_principal())
         .activate(1, HashMap::new()),
     );
     let (_tx, rx) = watch::channel(snapshot);
     let materializer = SpyMaterializer::new();
-    materializer.persist_materialized_group_markers(&agent_did);
+    materializer.persist_materialized_group_markers(&node_did);
     let engine = Arc::new(TriggerEngine::new(rx, materializer.clone()));
 
     let make_intent = || FireIntent {
@@ -368,11 +368,11 @@ async fn dispatch_serial_per_document_is_trigger_wide_despite_correlation() {
         correlation_field: Some("run_id".to_string()),
         ..resolved_event_trigger_with_concurrency("event-1", task.clone(), ConcurrencyMode::Serial)
     };
-    let behavior = integration_test_behavior("general");
+    let agent = integration_test_agent("general");
     let snapshot = Arc::new(
         ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
             "general".to_string(),
-            vec![behavior],
+            vec![agent],
             HashMap::new(),
             HashMap::new(),
             HashMap::new(),
@@ -381,7 +381,7 @@ async fn dispatch_serial_per_document_is_trigger_wide_despite_correlation() {
             event_triggers: HashMap::from([("event-1".to_string(), trigger)]),
             ..Default::default()
         })
-        .with_principal(stub_principal())
+        .with_node(stub_principal())
         .activate(1, HashMap::new()),
     );
     let (_tx, rx) = watch::channel(snapshot);
@@ -425,12 +425,12 @@ async fn dispatch_serial_per_group_separates_correlation_and_membership_generati
         expected_count: Some(2),
         ..resolved_event_trigger_with_concurrency("event-1", task.clone(), ConcurrencyMode::Serial)
     };
-    let behavior = integration_test_behavior("general");
-    let agent_did = behavior.agent_did().to_owned();
+    let agent = integration_test_agent("general");
+    let node_did = agent.node_did().to_owned();
     let snapshot = Arc::new(
         ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
             "general".to_string(),
-            vec![behavior],
+            vec![agent],
             HashMap::new(),
             HashMap::new(),
             HashMap::new(),
@@ -439,15 +439,15 @@ async fn dispatch_serial_per_group_separates_correlation_and_membership_generati
             event_triggers: HashMap::from([("event-1".to_string(), trigger)]),
             ..Default::default()
         })
-        .with_principal(stub_principal())
+        .with_node(stub_principal())
         .activate(1, HashMap::new()),
     );
     let (_tx, rx) = watch::channel(snapshot);
     let materializer = SpyMaterializer::new();
     // Active work is itself a durable marker. Model that real storage invariant.
     let old_key = super::super::durable_fire_key("event-group", &["run-a"]);
-    materializer.mark_group_materialized(&agent_did, "event-1", &old_key);
-    materializer.persist_materialized_group_markers(&agent_did);
+    materializer.mark_group_materialized(&node_did, "event-1", &old_key);
+    materializer.persist_materialized_group_markers(&node_did);
     let engine = TriggerEngine::new(rx, materializer.clone());
 
     let make_intent = |correlation: &str| FireIntent {
@@ -659,18 +659,18 @@ async fn dispatch_errors_and_skips_materialize_on_template_render_failure() {
 }
 
 #[tokio::test]
-async fn dispatch_scopes_concurrency_by_the_behaviors_agent_did() {
+async fn dispatch_scopes_concurrency_by_the_agents_node_did() {
     // #605: the trigger tuple is only unique per agent. Both the serial gate
-    // and LatestOnly supersede must receive the DID of the fire's behavior so
+    // and LatestOnly supersede must receive the DID of the fire's agent so
     // replicated foreign requests for the same trigger id can never gate (or
     // be superseded by) this agent's fires.
     let task = resolved_task("tick");
     let schedule = resolved_schedule("sched-did", task.clone());
     let snapshot = snapshot_with_schedules(HashMap::from([("sched-did".to_string(), schedule)]));
     let expected_did = snapshot
-        .behavior("general")
-        .expect("test snapshot resolves the general behavior")
-        .agent_did()
+        .agent("general")
+        .expect("test snapshot resolves the general agent")
+        .node_did()
         .to_string();
     assert!(!expected_did.is_empty());
     let (_tx, rx) = watch::channel(snapshot);

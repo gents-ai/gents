@@ -623,7 +623,7 @@ fn require_runtime_principal(resolved: &ResolvedEthCall) -> Result<(), ToolError
                 "Ethereum signing has no runtime identity".to_string(),
             )
         })?;
-    if runtime.agent_did.as_deref() != Some(resolved.principal_did.as_str()) {
+    if runtime.node_did.as_deref() != Some(resolved.principal_did.as_str()) {
         return Err(reported(
             FailureClass::PolicyDenied,
             "Ethereum signing runtime principal does not own its key binding".to_string(),
@@ -681,7 +681,7 @@ async fn load_signing_key_with_store(
     if !tool.enabled {
         bail!("EthTool {:?} is disabled", resolved.eth_tool_id);
     }
-    if tool.agent_did != resolved.principal_did {
+    if tool.node_did != resolved.principal_did {
         bail!(
             "EthTool {:?} belongs to another principal",
             resolved.eth_tool_id
@@ -696,7 +696,7 @@ async fn load_signing_key_with_store(
             resolved.eth_tool_id
         );
     }
-    if binding.agent_did != resolved.principal_did {
+    if binding.node_did != resolved.principal_did {
         bail!("chain key binding {binding_id:?} belongs to another principal");
     }
     if binding
@@ -722,15 +722,15 @@ async fn load_signing_key_with_store(
     )?;
     let payload = attestation_payload(
         binding_id,
-        &binding.agent_did,
+        &binding.node_did,
         &binding.address,
         KEY_BACKEND_KEYRING,
         created_at,
     );
-    if !crate::identity::verify_did_signature(&binding.agent_did, &payload, &attestation)? {
+    if !crate::identity::verify_did_signature(&binding.node_did, &payload, &attestation)? {
         bail!("chain key binding {binding_id:?} has an invalid attestation");
     }
-    let secret = Zeroizing::new(store.load(&binding_storage_key(&binding.agent_did, binding_id))?);
+    let secret = Zeroizing::new(store.load(&binding_storage_key(&binding.node_did, binding_id))?);
     let address = address_from_secret(&secret)?;
     if !address.eq_ignore_ascii_case(&binding.address) {
         bail!("chain key material does not match binding {binding_id:?}");
@@ -1062,7 +1062,7 @@ mod tests {
         ResolvedEthCall,
         super::super::keys::MemoryChainKeyStore,
     ) {
-        use crate::identity::AgentIdentity;
+        use crate::identity::NodeIdentity;
         let dir = tempfile::tempdir().unwrap();
         let identity =
             crate::identity::KeyIdentity::load_or_create(dir.path().join("key"), None).unwrap();
@@ -1073,7 +1073,7 @@ mod tests {
         let created = "2026-09-09T00:00:00Z";
         let binding = ChainKeyBindingDocument {
             binding_id: "signing".into(),
-            agent_did: identity.did().into(),
+            node_did: identity.did().into(),
             address: address.clone(),
             key_backend: Some(KEY_BACKEND_KEYRING.into()),
             attestation: Some(super::super::keys::encode_attestation(
@@ -1095,12 +1095,12 @@ mod tests {
         // Foreign logical IDs are deliberately inserted first.
         for owner in ["did:test:foreign", identity.did()] {
             let mut record = binding.clone();
-            record.agent_did = owner.into();
+            record.node_did = owner.into();
             let response = node
                 .execute(&crate::create_chain_key_binding_mutation(&record).unwrap())
                 .await;
             assert!(!response.has_errors(), "{:?}", response.errors);
-            let value = json!({"tool_id":"payments","agent_did":owner,"chain_id":8453,"key_binding_id":"signing","enabled":true});
+            let value = json!({"tool_id":"payments","node_did":owner,"chain_id":8453,"key_binding_id":"signing","enabled":true});
             let input = gents_protocol::graphql::graphql_input_literal(&value).unwrap();
             let response = node
                 .execute(&format!(
@@ -1153,13 +1153,10 @@ mod tests {
             .await
             .unwrap();
         store
-            .delete(&binding_storage_key(&valid.agent_did, "signing"))
+            .delete(&binding_storage_key(&valid.node_did, "signing"))
             .unwrap();
         store
-            .store_new(
-                &binding_storage_key(&valid.agent_did, "signing"),
-                &[2u8; 32],
-            )
+            .store_new(&binding_storage_key(&valid.node_did, "signing"), &[2u8; 32])
             .unwrap();
         assert!(load_signing_key_with_store(&node, &resolved, &store)
             .await
@@ -1167,13 +1164,10 @@ mod tests {
             .to_string()
             .contains("does not match"));
         store
-            .delete(&binding_storage_key(&valid.agent_did, "signing"))
+            .delete(&binding_storage_key(&valid.node_did, "signing"))
             .unwrap();
         store
-            .store_new(
-                &binding_storage_key(&valid.agent_did, "signing"),
-                &[1u8; 32],
-            )
+            .store_new(&binding_storage_key(&valid.node_did, "signing"), &[1u8; 32])
             .unwrap();
         binding = valid.clone();
         binding.revoked_at = Some("revoked".into());
@@ -1189,7 +1183,7 @@ mod tests {
             .to_string()
             .contains("revoked"));
         let records =
-            crate::document_config::list_chain_key_binding_records(&node, &binding.agent_did)
+            crate::document_config::list_chain_key_binding_records(&node, &binding.node_did)
                 .await
                 .unwrap();
         assert_eq!(records.len(), 1);
@@ -1204,7 +1198,7 @@ mod tests {
             let mut value = if collection == "ChainKeyBinding" {
                 serde_json::to_value(&binding).unwrap()
             } else {
-                json!({"tool_id":"payments","agent_did":binding.agent_did,"chain_id":8453,"key_binding_id":"signing","enabled":true})
+                json!({"tool_id":"payments","node_did":binding.node_did,"chain_id":8453,"key_binding_id":"signing","enabled":true})
             };
             // Tags do not create a second logical identity. The schema owns this
             // invariant, so an impossible duplicate never reaches signing.

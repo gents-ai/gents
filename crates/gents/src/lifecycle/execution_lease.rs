@@ -404,7 +404,7 @@ async fn terminalize_execution_with_time(
             let doc_id = escape_graphql_string(request_doc_id);
             let result = txn.execute_local_response(&format!(r#"{{ AgentRequest(
                 filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{
-                _docID request_id purpose agent_did requester_did session_id lifecycle_state
+                _docID request_id purpose node_did requester_did session_id lifecycle_state
                 execution_generation execution_lease_expires_at interrupt_requested_at terminal_output
             }} }}"#)).await?;
             let row = crate::graphql::first_row::<AgentRequestRow>(&result, "AgentRequest")?
@@ -442,7 +442,7 @@ async fn terminalize_execution_with_time(
             if !authorized || row.terminal_output.is_some() {
                 return Ok(TerminalizeResult::Lost);
             }
-            let agent = row.agent_did.as_deref().context("missing request agent")?;
+            let agent = row.node_did.as_deref().context("missing request agent")?;
             let session_id = row.session_id.as_deref().context("missing request session")?;
             let headers = session::load_request_headers_in_txn(
                 txn, session_id, agent, row.requester_did.as_deref(), request_doc_id

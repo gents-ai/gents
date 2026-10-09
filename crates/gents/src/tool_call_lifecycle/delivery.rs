@@ -45,7 +45,7 @@ pub(crate) struct ToolOutputBinding {
     pub(crate) tool_call_doc_id: String,
     pub(crate) request_doc_id: String,
     pub(crate) session_id: String,
-    pub(crate) agent_did: String,
+    pub(crate) node_did: String,
     pub(crate) requester_did: Option<String>,
 }
 
@@ -67,7 +67,7 @@ impl std::fmt::Debug for ToolOutputBinding {
             .field("tool_call_doc_id", &self.tool_call_doc_id)
             .field("request_doc_id", &self.request_doc_id)
             .field("session_id", &self.session_id)
-            .field("agent_did", &self.agent_did)
+            .field("node_did", &self.node_did)
             .field("requester_did", &self.requester_did)
             .finish()
     }
@@ -259,7 +259,7 @@ impl ToolCallLifecycle {
             .clone()
             .context("spawned dispatch requires request binding")?;
         let session_id = self.session_id.clone();
-        let agent_did = self.agent_did.clone();
+        let node_did = self.node_did.clone();
         let requester_did = self.requester_did.clone();
         let tool_call_id = self.tool_call_id.clone();
         let tool_name = self.tool_name.clone();
@@ -270,7 +270,7 @@ impl ToolCallLifecycle {
             move |txn| {
                 let doc_id = doc_id.clone(); let parent_doc_id = parent_doc_id.clone();
                 let request_doc_id = request_doc_id.clone(); let session_id = session_id.clone();
-                let agent_did = agent_did.clone(); let requester_did = requester_did.clone();
+                let node_did = node_did.clone(); let requester_did = requester_did.clone();
                 let tool_call_id = tool_call_id.clone(); let tool_name = tool_name.clone();
                 Box::pin(async move {
                     let now = fixture_now.unwrap_or_else(Utc::now);
@@ -278,13 +278,13 @@ impl ToolCallLifecycle {
                     let parent = escape_graphql_string(&parent_doc_id);
                     let request = escape_graphql_string(&request_doc_id);
                     let session = escape_graphql_string(&session_id);
-                    let agent = escape_graphql_string(&agent_did);
+                    let agent = escape_graphql_string(&node_did);
                     let requester_filter = requester_did.as_deref().map(|value| format!(r#", requester_did: {{ _eq: "{}" }}"#, escape_graphql_string(value)))
                         .unwrap_or_else(|| ", requester_did: { _eq: null }".to_owned());
                     let mutation = txn.execute(&format!(r#"mutation {{ update_AgentToolCall(docID: "{doc}", filter: {{
                         _docID: {{ _eq: "{doc}" }}, spawned_by_tool_call_doc_id: {{ _eq: "{parent}" }},
                         request_doc_id: {{ _eq: "{request}" }}, session_id: {{ _eq: "{session}" }},
-                        agent_did: {{ _eq: "{agent}" }}, tool_call_id: {{ _eq: "{}" }},
+                        node_did: {{ _eq: "{agent}" }}, tool_call_id: {{ _eq: "{}" }},
                         tool_name: {{ _eq: "{}" }}, message_sequence: {{ _eq: {message_sequence} }},
                         await_mode: {{ _eq: "background" }},
                         lifecycle_state: {{ _eq: "pending" }}{requester_filter}
@@ -364,7 +364,7 @@ impl ToolCallLifecycle {
             .clone()
             .context("spawned admission requires parent execution generation")?;
         let session_id = self.session_id.clone();
-        let agent_did = self.agent_did.clone();
+        let node_did = self.node_did.clone();
         let requester_did = self.requester_did.clone();
         let message_sequence = self.message_sequence;
         let parent_tool_call_id = self.tool_call_id.clone();
@@ -378,7 +378,7 @@ impl ToolCallLifecycle {
         let persisted_accepted_header_doc_id = accepted_header_doc_id.clone();
         let persisted_generation = generation.clone();
         let persisted_session_id = session_id.clone();
-        let persisted_agent_did = agent_did.clone();
+        let persisted_node_did = node_did.clone();
         let persisted_requester_did = requester_did.clone();
         let persisted_parent_tool_call_id = parent_tool_call_id.clone();
         let persisted_tool_name = tool_name.clone();
@@ -394,7 +394,7 @@ impl ToolCallLifecycle {
                 let accepted_header_doc_id = persisted_accepted_header_doc_id.clone();
                 let generation = persisted_generation.clone();
                 let session_id = persisted_session_id.clone();
-                let agent_did = persisted_agent_did.clone();
+                let node_did = persisted_node_did.clone();
                 let requester_did = persisted_requester_did.clone();
                 let parent_tool_call_id = persisted_parent_tool_call_id.clone();
                 let tool_name = persisted_tool_name.clone();
@@ -406,13 +406,13 @@ impl ToolCallLifecycle {
                     let parent = escape_graphql_string(&parent_doc_id);
                     let request = escape_graphql_string(&request_doc_id);
                     let session = escape_graphql_string(&session_id);
-                    let agent = escape_graphql_string(&agent_did);
+                    let agent = escape_graphql_string(&node_did);
                     let requester_filter = requester_did.as_deref().map(|value| format!(
                         r#", requester_did: {{ _eq: "{}" }}"#, escape_graphql_string(value)
                     )).unwrap_or_else(|| ", requester_did: { _eq: null }".to_owned());
                     let existing = txn.execute(&format!(r#"{{ AgentToolCall(filter: {{
                         spawned_by_tool_call_doc_id: {{ _eq: "{parent}" }}, request_doc_id: {{ _eq: "{request}" }},
-                        session_id: {{ _eq: "{session}" }}, agent_did: {{ _eq: "{agent}" }}{requester_filter}
+                        session_id: {{ _eq: "{session}" }}, node_did: {{ _eq: "{agent}" }}{requester_filter}
                     }}, limit: 2) {{ _docID tool_call_key tool_call_id tool_name message_sequence
                         lifecycle_state await_mode spawned_by_tool_call_doc_id deadline_at
                         selected_service_id selected_tool_name }} }}"#)).await?;
@@ -444,7 +444,7 @@ impl ToolCallLifecycle {
                     let (accepted, _) = crate::session::load_canonical_message_in_txn(
                         txn,
                         &accepted_header_doc_id,
-                        &agent_did,
+                        &node_did,
                         requester_did.as_deref(),
                     )
                     .await?;
@@ -466,7 +466,7 @@ impl ToolCallLifecycle {
                     );
                     let parent_row = txn.execute(&format!(r#"{{ AgentToolCall(filter: {{
                         _docID: {{ _eq: "{parent}" }}, request_doc_id: {{ _eq: "{request}" }},
-                        session_id: {{ _eq: "{session}" }}, agent_did: {{ _eq: "{agent}" }},
+                        session_id: {{ _eq: "{session}" }}, node_did: {{ _eq: "{agent}" }},
                         tool_call_id: {{ _eq: "{}" }}, tool_name: {{ _eq: "spawn_process" }},
                         message_sequence: {{ _eq: {message_sequence} }}, lifecycle_state: {{ _eq: "running" }}{requester_filter}
                     }}, limit: 2) {{ _docID spawned_by_tool_call_doc_id }} }}"#, escape_graphql_string(&parent_tool_call_id))).await?;
@@ -474,7 +474,7 @@ impl ToolCallLifecycle {
                         rows.len() == 1 && rows[0]["spawned_by_tool_call_doc_id"].is_null()),
                         "spawned admission lost its exact running accepted parent");
                     let request_row = txn.execute(&format!(r#"{{ AgentRequest(filter: {{
-                        _docID: {{ _eq: "{request}" }}, agent_did: {{ _eq: "{agent}" }}, session_id: {{ _eq: "{session}" }}
+                        _docID: {{ _eq: "{request}" }}, node_did: {{ _eq: "{agent}" }}, session_id: {{ _eq: "{session}" }}
                     }}, limit: 2) {{ request_id requester_did lifecycle_state execution_generation execution_lease_expires_at interrupt_requested_at }} }}"#)).await?;
                     let requests = request_row["data"]["AgentRequest"].as_array()
                         .context("spawned admission request lookup omitted rows")?;
@@ -502,7 +502,7 @@ impl ToolCallLifecycle {
                     };
                     let created = txn.execute(&format!(r#"mutation {{ create_AgentToolCall(input: {{
                         tool_call_key: "{}", request_id: "{}", request_doc_id: "{request}",
-                        session_id: "{session}", agent_did: "{agent}", {}
+                        session_id: "{session}", node_did: "{agent}", {}
                         message_sequence: {message_sequence}, tool_name: "{}", tool_call_id: "{}",
                         lifecycle_state: "pending", status: "pending", deadline_at: "{deadline}",
                         await_mode: "background",
@@ -519,7 +519,7 @@ impl ToolCallLifecycle {
         ToolCallLifecycle::load_by_doc_id(
             self.node.clone(),
             &created,
-            &self.agent_did,
+            &self.node_did,
             &self.session_id,
             self.requester_did.as_deref(),
         )
@@ -542,7 +542,7 @@ impl ToolCallLifecycle {
                 .clone()
                 .context("raw tool output requires a request binding")?,
             session_id: self.session_id.clone(),
-            agent_did: self.agent_did.clone(),
+            node_did: self.node_did.clone(),
             requester_did: self.requester_did.clone(),
         })
     }
@@ -566,7 +566,7 @@ impl ToolCallLifecycle {
                 .arguments
                 .clone()
                 .context("dispatch requires an accepted argument reference")?,
-            agent: self.agent_did.clone(),
+            agent: self.node_did.clone(),
             requester: self.requester_did.clone(),
             session: self.session_id.clone(),
             doc_id: self
@@ -668,7 +668,7 @@ impl ToolCallLifecycle {
                 .execution_generation
                 .clone()
                 .context("background receipt requires execution generation")?,
-            agent_did: self.agent_did.clone(),
+            node_did: self.node_did.clone(),
             requester_did: self.requester_did.clone(),
             session_id: self.session_id.clone(),
             tool_call_id: self.tool_call_id.clone(),
@@ -860,7 +860,7 @@ impl ToolCallLifecycle {
             .clone()
             .context("canonical tool terminalization requires accepted header binding")?;
         let started_at = self.started_at;
-        let agent_did = self.agent_did.clone();
+        let node_did = self.node_did.clone();
         let requester_did = self.requester_did.clone();
         let session_id = self.session_id.clone();
         let tool_call_id = self.tool_call_id.clone();
@@ -892,7 +892,7 @@ impl ToolCallLifecycle {
                 let doc_id = doc_id.clone();
                 let request_doc_id = request_doc_id.clone();
                 let accepted_header = accepted_header.clone();
-                let agent_did = agent_did.clone();
+                let node_did = node_did.clone();
                 let requester_did = requester_did.clone();
                 let session_id = session_id.clone();
                 let tool_call_id = tool_call_id.clone();
@@ -909,7 +909,7 @@ impl ToolCallLifecycle {
                         &doc_id,
                         &request_doc_id,
                         &accepted_header,
-                        &agent_did,
+                        &node_did,
                         requester_did.as_deref(),
                         &session_id,
                         &tool_call_id,
@@ -951,7 +951,7 @@ async fn terminalize_transaction(
     tool_doc_id: &str,
     request_doc_id: &str,
     accepted_header_doc_id: &str,
-    agent_did: &str,
+    node_did: &str,
     requester_did: Option<&str>,
     session_id: &str,
     tool_call_id: &str,
@@ -975,7 +975,7 @@ async fn terminalize_transaction(
 ) -> Result<bool> {
     let tool = escape_graphql_string(tool_doc_id);
     let request = escape_graphql_string(request_doc_id);
-    let agent = escape_graphql_string(agent_did);
+    let agent = escape_graphql_string(node_did);
     let session = escape_graphql_string(session_id);
     let expected = expected.as_str();
     let tool_id = escape_graphql_string(tool_call_id);
@@ -1000,7 +1000,7 @@ async fn terminalize_transaction(
             .execute(&format!(
                 r#"{{ AgentToolCall(filter: {{
             _docID: {{ _eq: "{tool}" }}, request_doc_id: {{ _eq: "{request}" }},
-            session_id: {{ _eq: "{session}" }}, agent_did: {{ _eq: "{agent}" }},
+            session_id: {{ _eq: "{session}" }}, node_did: {{ _eq: "{agent}" }},
             tool_call_id: {{ _eq: "{tool_id}" }}, tool_name: {{ _eq: "{name}" }},
             message_sequence: {{ _eq: {message_sequence} }}{requester_filter}
         }}, limit: 2) {{ lifecycle_state status tool_failure_class cancel_cause }} }}"#
@@ -1051,7 +1051,7 @@ async fn terminalize_transaction(
     let (accepted, _) = crate::session::load_canonical_message_in_txn(
         txn,
         accepted_header_doc_id,
-        agent_did,
+        node_did,
         requester_did,
     )
     .await?;
@@ -1061,7 +1061,7 @@ async fn terminalize_transaction(
             .execute(&format!(
                 r#"{{ AgentToolCall(filter: {{
             _docID: {{ _eq: "{parent}" }}, request_doc_id: {{ _eq: "{request}" }},
-            session_id: {{ _eq: "{session}" }}, agent_did: {{ _eq: "{agent}" }}{requester_filter}
+            session_id: {{ _eq: "{session}" }}, node_did: {{ _eq: "{agent}" }}{requester_filter}
         }}, limit: 2) {{ _docID tool_call_id tool_name message_sequence lifecycle_state
             spawned_by_tool_call_doc_id }} }}"#
             ))
@@ -1123,7 +1123,7 @@ async fn terminalize_transaction(
     // canonical header rather than publishing a second ToolResult merely
     // because an in-memory bridge classification was incomplete.
     let receipt_rows = txn.execute(&format!(
-        r#"{{ AgentMessage(filter: {{ message_key: {{ _eq: "{receipt_key_escaped}" }}, session_id: {{ _eq: "{session}" }}, agent_did: {{ _eq: "{agent}" }}{requester_filter} }}, limit: 2) {{ _docID }} }}"#
+        r#"{{ AgentMessage(filter: {{ message_key: {{ _eq: "{receipt_key_escaped}" }}, session_id: {{ _eq: "{session}" }}, node_did: {{ _eq: "{agent}" }}{requester_filter} }}, limit: 2) {{ _docID }} }}"#
     )).await?;
     let receipt_rows = receipt_rows["data"]["AgentMessage"]
         .as_array()
@@ -1136,7 +1136,7 @@ async fn terminalize_transaction(
             txn,
             tool_doc_id,
             request_doc_id,
-            &agent_did,
+            &node_did,
             requester_did,
             session_id,
             tool_call_id,
@@ -1146,7 +1146,7 @@ async fn terminalize_transaction(
     }
 
     let existing = txn.execute(&format!(
-        r#"{{ AgentMessage(filter: {{ message_key: {{ _eq: "{delivery_key_escaped}" }}, session_id: {{ _eq: "{session}" }}, agent_did: {{ _eq: "{agent}" }} }}, limit: 2) {{ {AGENT_MESSAGE_FIELDS} }} }}"#
+        r#"{{ AgentMessage(filter: {{ message_key: {{ _eq: "{delivery_key_escaped}" }}, session_id: {{ _eq: "{session}" }}, node_did: {{ _eq: "{agent}" }} }}, limit: 2) {{ {AGENT_MESSAGE_FIELDS} }} }}"#
     )).await?;
     let existing_rows = existing["data"]["AgentMessage"]
         .as_array()
@@ -1161,7 +1161,7 @@ async fn terminalize_transaction(
             anyhow::ensure!(
                 existing.message.request_doc_id.as_deref() == Some(request_doc_id)
                     && existing.message.session_id == session_id
-                    && existing.message.agent_did == agent_did
+                    && existing.message.node_did == node_did
                     && existing.message.requester_did.as_deref() == requester_did
                     && existing.message.role == MessageRole::User
                     && existing.message.outcome == OutputOutcome::Complete
@@ -1178,7 +1178,7 @@ async fn terminalize_transaction(
                 .execute(&format!(
                     r#"{{ AgentToolCall(filter: {{
             _docID: {{ _eq: "{tool}" }}, request_doc_id: {{ _eq: "{request}" }},
-            session_id: {{ _eq: "{session}" }}, agent_did: {{ _eq: "{agent}" }},
+            session_id: {{ _eq: "{session}" }}, node_did: {{ _eq: "{agent}" }},
             tool_call_id: {{ _eq: "{tool_id}" }}, tool_name: {{ _eq: "{name}" }},
             message_sequence: {{ _eq: {message_sequence} }}{requester_filter}
         }}, limit: 2) {{ lifecycle_state status tool_failure_class cancel_cause }} }}"#
@@ -1232,7 +1232,7 @@ async fn terminalize_transaction(
                     r#"{{ AgentOutputSegment(filter: {{
             {}, request_doc_id: {{ _eq: "{request}" }}
         }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"#,
-                    crate::session::session_scope_filter(agent_did, session_id, requester_did)
+                    crate::session::session_scope_filter(node_did, session_id, requester_did)
                 ))
                 .await?;
             let replay_rows = replay_rows["data"]["AgentOutputSegment"]
@@ -1301,7 +1301,7 @@ async fn terminalize_transaction(
             r#"{{ AgentOutputSegment(filter: {{
         {}, request_doc_id: {{ _eq: "{request}" }}
     }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"#,
-            crate::session::session_scope_filter(agent_did, session_id, requester_did)
+            crate::session::session_scope_filter(node_did, session_id, requester_did)
         ))
         .await?;
     let source_rows = source_rows["data"]["AgentOutputSegment"]
@@ -1327,7 +1327,7 @@ async fn terminalize_transaction(
             .execute(&format!(
                 r#"{{ AgentToolCall(filter: {{
             _docID: {{ _eq: "{tool}" }}, request_doc_id: {{ _eq: "{request}" }},
-            session_id: {{ _eq: "{session}" }}, agent_did: {{ _eq: "{agent}" }},
+            session_id: {{ _eq: "{session}" }}, node_did: {{ _eq: "{agent}" }},
             tool_call_id: {{ _eq: "{tool_id}" }}, tool_name: {{ _eq: "{name}" }},
             message_sequence: {{ _eq: {message_sequence} }}{requester_filter}
         }}, limit: 2) {{ lifecycle_state status tool_failure_class cancel_cause }} }}"#
@@ -1465,7 +1465,7 @@ async fn terminalize_transaction(
         Vec::new()
     };
     let segment = OutputSegment {
-        agent_did: agent_did.to_owned(),
+        node_did: node_did.to_owned(),
         requester_did: requester_did.map(str::to_owned),
         session_id: session_id.to_owned(),
         request_doc_id: request_doc_id.to_owned(),
@@ -1514,7 +1514,7 @@ async fn terminalize_transaction(
         .unwrap_or_else(|| ", spawned_by_tool_call_doc_id: { _eq: null }".to_owned());
     let lifecycle = txn.execute(&format!(r#"mutation {{ update_AgentToolCall(docID: "{tool}", filter: {{
         _docID: {{ _eq: "{tool}" }}, request_doc_id: {{ _eq: "{request}" }},
-        session_id: {{ _eq: "{session}" }}, agent_did: {{ _eq: "{agent}" }},
+        session_id: {{ _eq: "{session}" }}, node_did: {{ _eq: "{agent}" }},
         tool_call_id: {{ _eq: "{tool_id}" }}, tool_name: {{ _eq: "{name}" }},
         message_sequence: {{ _eq: {message_sequence} }},
         lifecycle_state: {{ _eq: "{expected}" }}{requester_filter}{spawned_filter} }}, input: {{
@@ -1535,7 +1535,7 @@ async fn terminalize_transaction(
         .context("published tool terminal omitted logical request identity")?;
     crate::session::refresh_session_request_observation_in_txn(
         txn,
-        agent_did,
+        node_did,
         requester_did,
         session_id,
         request_doc_id,
@@ -1560,11 +1560,11 @@ async fn terminalize_transaction(
         return Ok(true);
     }
 
-    let sequence = next_append_sequence_in_transaction(txn, agent_did, session_id).await?;
+    let sequence = next_append_sequence_in_transaction(txn, node_did, session_id).await?;
     let message = TranscriptMessage {
         message_key: delivery_key,
         session_id: session_id.to_owned(),
-        agent_did: agent_did.to_owned(),
+        node_did: node_did.to_owned(),
         requester_did: requester_did.map(str::to_owned),
         request_doc_id: Some(request_doc_id.to_owned()),
         publication: MessagePublication::ToolDelivery {
@@ -1606,7 +1606,7 @@ async fn ensure_background_receipt_before_bridge_close(
     txn: &ConfigApplyTxn<'_>,
     tool_call_doc_id: &str,
     request_doc_id: &str,
-    agent_did: &str,
+    node_did: &str,
     requester_did: Option<&str>,
     session_id: &str,
     tool_call_id: &str,
@@ -1615,7 +1615,7 @@ async fn ensure_background_receipt_before_bridge_close(
     let key = escape_graphql_string(&format!(
         "{session_id}:background-receipt:{tool_call_doc_id}"
     ));
-    let scope = crate::session::session_scope_filter(agent_did, session_id, requester_did);
+    let scope = crate::session::session_scope_filter(node_did, session_id, requester_did);
     let response = txn
         .execute(&format!(
             r#"{{ AgentMessage(filter: {{ {scope}, message_key: {{ _eq: "{key}" }} }}, limit: 2) {{ {AGENT_MESSAGE_FIELDS} }} }}"#
@@ -1632,7 +1632,7 @@ async fn ensure_background_receipt_before_bridge_close(
     anyhow::ensure!(
         receipt.message.request_doc_id.as_deref() == Some(request_doc_id)
             && receipt.message.session_id == session_id
-            && receipt.message.agent_did == agent_did
+            && receipt.message.node_did == node_did
             && receipt.message.requester_did.as_deref() == requester_did
             && receipt.message.role == MessageRole::User
             && receipt.message.outcome == OutputOutcome::Complete
@@ -1725,7 +1725,7 @@ async fn append_tool_output_with_time(
                 let now = fixture_now.unwrap_or_else(Utc::now);
                 let tool = escape_graphql_string(&binding.tool_call_doc_id);
                 let request = escape_graphql_string(&binding.request_doc_id);
-                let agent = escape_graphql_string(&binding.agent_did);
+                let agent = escape_graphql_string(&binding.node_did);
                 let session = escape_graphql_string(&binding.session_id);
                 let requester_filter = binding
                     .requester_did
@@ -1738,7 +1738,7 @@ async fn append_tool_output_with_time(
                     })
                     .unwrap_or_else(|| "requester_did: { _eq: null }".to_owned());
                 let scope = crate::session::session_scope_filter(
-                    &binding.agent_did,
+                    &binding.node_did,
                     &binding.session_id,
                     binding.requester_did.as_deref(),
                 );
@@ -1746,7 +1746,7 @@ async fn append_tool_output_with_time(
                     .execute(&format!(
                         r#"{{ AgentToolCall(filter: {{
                 _docID: {{ _eq: "{tool}" }}, request_doc_id: {{ _eq: "{request}" }},
-                agent_did: {{ _eq: "{agent}" }}, session_id: {{ _eq: "{session}" }},
+                node_did: {{ _eq: "{agent}" }}, session_id: {{ _eq: "{session}" }},
                 {requester_filter}
             }}, limit: 2) {{ _docID lifecycle_state deadline_at }} }}"#
                     ))
@@ -1822,7 +1822,7 @@ async fn append_tool_output_with_time(
                 let ordinal = extent.segments;
                 let start = extent.stream_bytes.first().copied().unwrap_or(0);
                 let segment = OutputSegment {
-                    agent_did: binding.agent_did.clone(),
+                    node_did: binding.node_did.clone(),
                     requester_did: binding.requester_did.clone(),
                     session_id: binding.session_id.clone(),
                     request_doc_id: binding.request_doc_id.clone(),
@@ -2121,7 +2121,7 @@ mod spawned_background_tests {
         let observed = crate::tool_call_lifecycle::load_tool_call_presentation(
             &crate::config_client::ConfigAccess::Local(node.clone()),
             &tool_doc_id,
-            &tool.agent_did,
+            &tool.node_did,
             &tool.session_id,
             tool.requester_did.as_deref(),
         )
@@ -2192,7 +2192,7 @@ mod spawned_background_tests {
             let mut replay = ToolCallLifecycle::load_by_doc_id(
                 node.clone(),
                 &tool_doc_id,
-                &tool.agent_did,
+                &tool.node_did,
                 &tool.session_id,
                 tool.requester_did.as_deref(),
             )
@@ -2206,7 +2206,7 @@ mod spawned_background_tests {
                     ToolCallLifecycle::load_by_doc_id(
                         node.clone(),
                         &tool_doc_id,
-                        &tool.agent_did,
+                        &tool.node_did,
                         &tool.session_id,
                         tool.requester_did.as_deref(),
                     )
@@ -2278,7 +2278,7 @@ mod spawned_background_tests {
                 &tool_doc_id,
                 &request_doc_id,
                 &tool.session_id,
-                &tool.agent_did,
+                &tool.node_did,
                 tool.requester_did.as_deref(),
             )
             .await
@@ -2287,7 +2287,7 @@ mod spawned_background_tests {
             let presentation = crate::tool_call_lifecycle::load_tool_call_presentation(
                 &crate::config_client::ConfigAccess::Local(node.clone()),
                 &tool_doc_id,
-                &tool.agent_did,
+                &tool.node_did,
                 &tool.session_id,
                 tool.requester_did.as_deref(),
             )
@@ -2382,7 +2382,7 @@ mod spawned_background_tests {
             apply_desired_state_plan, ConfigAccess, DesiredStateApplyDocument,
             DesiredStateApplyPlan,
         };
-        let tools = serde_json::json!({"agent_did": owner, "tools_id": "general:tools",
+        let tools = serde_json::json!({"node_did": owner, "tools_id": "general:tools",
             "host": {"bash": {"mode": "ReadOnly", "max_output_chars": budget}}});
         let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
             collection: crate::Collection::Tools,
@@ -2405,7 +2405,7 @@ mod spawned_background_tests {
         crate::tool_call_lifecycle::load_tool_call_presentation(
             &crate::config_client::ConfigAccess::Local(node.clone()),
             tool.doc_id().unwrap(),
-            &tool.agent_did,
+            &tool.node_did,
             &tool.session_id,
             tool.requester_did.as_deref(),
         )
@@ -2415,10 +2415,10 @@ mod spawned_background_tests {
         .expect("terminal delivery presentation")
     }
 
-    /// An interrupted call's diagnostic tail follows the owning behavior's
+    /// An interrupted call's diagnostic tail follows the owning agent's
     /// configured budget for the tool, resolved from configuration so a
     /// reloaded owner (restart recovery) applies it too. Tools without a host
-    /// group, and behaviors that no longer resolve, keep the default.
+    /// group, and agents that no longer resolve, keep the default.
     #[tokio::test]
     async fn interrupted_tool_diagnostic_follows_the_configured_output_budget() {
         use crate::tool_call_lifecycle::admission_fixture::{
@@ -2448,14 +2448,14 @@ mod spawned_background_tests {
                 .unwrap();
             // Configuration is read when the diagnostic is presented.
             if configured {
-                crate::test_support::install_test_behavior(&node, &tool.agent_did, "general").await;
-                configure_bash_output_budget(&node, &tool.agent_did, 5).await;
+                crate::test_support::install_test_agent(&node, &tool.node_did, "general").await;
+                configure_bash_output_budget(&node, &tool.node_did, 5).await;
             }
             if reload {
                 tool = ToolCallLifecycle::load_by_doc_id(
                     node.clone(),
                     tool.doc_id().unwrap(),
-                    &tool.agent_did,
+                    &tool.node_did,
                     &tool.session_id,
                     tool.requester_did.as_deref(),
                 )
@@ -2466,7 +2466,7 @@ mod spawned_background_tests {
             let mut replay = ToolCallLifecycle::load_by_doc_id(
                 node.clone(),
                 tool.doc_id().unwrap(),
-                &tool.agent_did,
+                &tool.node_did,
                 &tool.session_id,
                 tool.requester_did.as_deref(),
             )
@@ -2494,7 +2494,7 @@ mod spawned_background_tests {
             if bounded && !reload {
                 // A configuration change after delivery does not make the
                 // delivered diagnostic a conflicting replay.
-                configure_bash_output_budget(&node, &tool.agent_did, 12).await;
+                configure_bash_output_budget(&node, &tool.node_did, 12).await;
                 assert!(!replay.timeout().await.unwrap(), "{name}: replay");
                 assert_eq!(interrupted_presentation(&node, &tool).await, presented);
             }
@@ -2665,7 +2665,7 @@ mod spawned_background_tests {
                 &child_doc_id,
                 child.request_doc_id.as_deref().unwrap(),
                 &child.session_id,
-                &child.agent_did,
+                &child.node_did,
                 child.requester_did.as_deref(),
             )
             .await
@@ -2741,7 +2741,7 @@ mod spawned_background_tests {
         bridge = ToolCallLifecycle::load_by_doc_id(
             node.clone(),
             &tool_doc_id,
-            &bridge.agent_did,
+            &bridge.node_did,
             &bridge.session_id,
             bridge.requester_did.as_deref(),
         )
@@ -2877,7 +2877,7 @@ mod spawned_background_tests {
             ToolCallLifecycle::load_by_doc_id(
                 node.clone(),
                 &tool_doc_id,
-                &bridge.agent_did,
+                &bridge.node_did,
                 &bridge.session_id,
                 bridge.requester_did.as_deref(),
             )
@@ -2944,7 +2944,7 @@ mod spawned_background_tests {
     }
 }
 
-/// Exact accepted-invocation binding of a background subagent bridge's
+/// Exact accepted-invocation binding of a background agent bridge's
 /// receipt.
 #[derive(Clone)]
 pub(crate) struct BackgroundReceiptBinding {
@@ -2953,7 +2953,7 @@ pub(crate) struct BackgroundReceiptBinding {
     pub(crate) accepted_header_doc_id: String,
     pub(crate) arguments: gents_protocol::output::PayloadRef,
     pub(crate) generation: String,
-    pub(crate) agent_did: String,
+    pub(crate) node_did: String,
     pub(crate) requester_did: Option<String>,
     pub(crate) session_id: String,
     pub(crate) tool_call_id: String,
@@ -2976,7 +2976,7 @@ pub(crate) async fn publish_background_receipt_in_txn(
         accepted_header_doc_id,
         arguments,
         generation,
-        agent_did,
+        node_did,
         requester_did,
         session_id,
         tool_call_id,
@@ -2988,7 +2988,7 @@ pub(crate) async fn publish_background_receipt_in_txn(
     let key = format!("{session_id}:background-receipt:{tool_doc_id}");
     let tool = escape_graphql_string(&tool_doc_id);
     let request = escape_graphql_string(&request_doc_id);
-    let agent = escape_graphql_string(&agent_did);
+    let agent = escape_graphql_string(&node_did);
     let session = escape_graphql_string(&session_id);
     let requester_filter = requester_did
         .as_deref()
@@ -2999,7 +2999,7 @@ pub(crate) async fn publish_background_receipt_in_txn(
             )
         })
         .unwrap_or_else(|| ", requester_did: { _eq: null }".to_owned());
-    let existing = txn.execute(&format!(r#"{{ AgentMessage(filter: {{ message_key: {{ _eq: "{}" }}, session_id: {{ _eq: "{session}" }}, agent_did: {{ _eq: "{agent}" }}{requester_filter} }}, limit: 2) {{ {AGENT_MESSAGE_FIELDS} }} }}"#, escape_graphql_string(&key))).await?;
+    let existing = txn.execute(&format!(r#"{{ AgentMessage(filter: {{ message_key: {{ _eq: "{}" }}, session_id: {{ _eq: "{session}" }}, node_did: {{ _eq: "{agent}" }}{requester_filter} }}, limit: 2) {{ {AGENT_MESSAGE_FIELDS} }} }}"#, escape_graphql_string(&key))).await?;
     let existing_rows = existing["data"]["AgentMessage"]
         .as_array()
         .context("background receipt lookup omitted messages")?;
@@ -3009,7 +3009,7 @@ pub(crate) async fn publish_background_receipt_in_txn(
         anyhow::ensure!(
             existing.message.request_doc_id.as_deref() == Some(request_doc_id.as_str())
                 && existing.message.session_id == session_id
-                && existing.message.agent_did == agent_did
+                && existing.message.node_did == node_did
                 && existing.message.requester_did.as_deref() == requester_did.as_deref()
                 && existing.message.role == MessageRole::User
                 && existing.message.outcome == OutputOutcome::Complete
@@ -3030,7 +3030,7 @@ pub(crate) async fn publish_background_receipt_in_txn(
             },
             _ => unreachable!("physical binding guard established one ToolResult"),
         };
-        let close = txn.execute(&format!(r#"{{ AgentOutputSegment(filter: {{ _docID: {{ _eq: "{}" }}, request_doc_id: {{ _eq: "{request}" }}, session_id: {{ _eq: "{session}" }}, agent_did: {{ _eq: "{agent}" }}{requester_filter} }}, limit: 2) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"#, escape_graphql_string(close_doc_id))).await?;
+        let close = txn.execute(&format!(r#"{{ AgentOutputSegment(filter: {{ _docID: {{ _eq: "{}" }}, request_doc_id: {{ _eq: "{request}" }}, session_id: {{ _eq: "{session}" }}, node_did: {{ _eq: "{agent}" }}{requester_filter} }}, limit: 2) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"#, escape_graphql_string(close_doc_id))).await?;
         let close_rows = close["data"]["AgentOutputSegment"]
             .as_array()
             .context("background receipt replay omitted authored close")?;
@@ -3056,7 +3056,7 @@ pub(crate) async fn publish_background_receipt_in_txn(
     let (accepted, _) = crate::session::load_canonical_message_in_txn(
         txn,
         &accepted_header_doc_id,
-        &agent_did,
+        &node_did,
         requester_did.as_deref(),
     )
     .await?;
@@ -3073,7 +3073,7 @@ pub(crate) async fn publish_background_receipt_in_txn(
                     && name == &tool_name && accepted_arguments == &arguments)),
         "background receipt lacks exact accepted invocation"
     );
-    let bridge = txn.execute(&format!(r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{tool}" }}, request_doc_id: {{ _eq: "{request}" }}, session_id: {{ _eq: "{session}" }}, agent_did: {{ _eq: "{agent}" }}, tool_call_id: {{ _eq: "{}" }}, tool_name: {{ _eq: "{}" }}, message_sequence: {{ _eq: {message_sequence} }}, lifecycle_state: {{ _eq: "running" }}, await_mode: {{ _eq: "background" }}{requester_filter} }}, limit: 2) {{ _docID }} }}"#, escape_graphql_string(&tool_call_id), escape_graphql_string(&tool_name))).await?;
+    let bridge = txn.execute(&format!(r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{tool}" }}, request_doc_id: {{ _eq: "{request}" }}, session_id: {{ _eq: "{session}" }}, node_did: {{ _eq: "{agent}" }}, tool_call_id: {{ _eq: "{}" }}, tool_name: {{ _eq: "{}" }}, message_sequence: {{ _eq: {message_sequence} }}, lifecycle_state: {{ _eq: "running" }}, await_mode: {{ _eq: "background" }}{requester_filter} }}, limit: 2) {{ _docID }} }}"#, escape_graphql_string(&tool_call_id), escape_graphql_string(&tool_name))).await?;
     anyhow::ensure!(
         bridge["data"]["AgentToolCall"]
             .as_array()
@@ -3086,7 +3086,7 @@ pub(crate) async fn publish_background_receipt_in_txn(
         tool_call_doc_id: tool_doc_id.clone(),
     };
     let segment = OutputSegment {
-        agent_did: agent_did.clone(),
+        node_did: node_did.clone(),
         requester_did: requester_did.clone(),
         session_id: session_id.clone(),
         request_doc_id: request_doc_id.clone(),
@@ -3118,18 +3118,18 @@ pub(crate) async fn publish_background_receipt_in_txn(
         )
         .await?;
     let close_doc_id = created_doc_id(&segment_response, "AgentOutputSegment")?;
-    let receipt_fence = txn.execute(&format!(r#"mutation {{ update_AgentToolCall(docID: "{tool}", filter: {{ _docID: {{ _eq: "{tool}" }}, request_doc_id: {{ _eq: "{request}" }}, session_id: {{ _eq: "{session}" }}, agent_did: {{ _eq: "{agent}" }}, lifecycle_state: {{ _eq: "running" }}, await_mode: {{ _eq: "background" }}{requester_filter} }}, input: {{ status: "running" }}) {{ _docID }} }}"#)).await?;
+    let receipt_fence = txn.execute(&format!(r#"mutation {{ update_AgentToolCall(docID: "{tool}", filter: {{ _docID: {{ _eq: "{tool}" }}, request_doc_id: {{ _eq: "{request}" }}, session_id: {{ _eq: "{session}" }}, node_did: {{ _eq: "{agent}" }}, lifecycle_state: {{ _eq: "running" }}, await_mode: {{ _eq: "background" }}{requester_filter} }}, input: {{ status: "running" }}) {{ _docID }} }}"#)).await?;
     anyhow::ensure!(
         receipt_fence["data"]["update_AgentToolCall"]
             .as_array()
             .is_some_and(|rows| rows.len() == 1),
         "background receipt lost running bridge fence"
     );
-    let sequence = next_append_sequence_in_transaction(txn, &agent_did, &session_id).await?;
+    let sequence = next_append_sequence_in_transaction(txn, &node_did, &session_id).await?;
     let message = TranscriptMessage {
         message_key: key,
         session_id: session_id.clone(),
-        agent_did: agent_did.clone(),
+        node_did: node_did.clone(),
         requester_did: requester_did.clone(),
         request_doc_id: Some(request_doc_id.clone()),
         publication: MessagePublication::ToolDelivery {
@@ -3225,7 +3225,7 @@ pub(crate) async fn start_running_in_txn(
     let request_row = txn
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{
-            _docID: {{ _eq: "{request_id}" }}, agent_did: {{ _eq: "{}" }},
+            _docID: {{ _eq: "{request_id}" }}, node_did: {{ _eq: "{}" }},
             session_id: {{ _eq: "{}" }}
         }}, limit: 2) {{
             _docID requester_did lifecycle_state execution_generation
@@ -3267,7 +3267,7 @@ pub(crate) async fn start_running_in_txn(
         .execute(&format!(
             r#"{{ AgentToolCall(filter: {{
             _docID: {{ _eq: "{}" }}, request_doc_id: {{ _eq: "{request_id}" }},
-            session_id: {{ _eq: "{}" }}, agent_did: {{ _eq: "{}" }}{requester_filter}
+            session_id: {{ _eq: "{}" }}, node_did: {{ _eq: "{}" }}{requester_filter}
         }}, limit: 2) {{ _docID }} }}"#,
             escape_graphql_string(&start.doc_id),
             escape_graphql_string(&start.session),
@@ -3285,7 +3285,7 @@ pub(crate) async fn start_running_in_txn(
         .execute(&format!(
             r#"mutation {{ update_AgentToolCall(docID: "{physical_doc_id}", filter: {{
             _docID: {{ _eq: "{}" }}, request_doc_id: {{ _eq: "{request_id}" }},
-            session_id: {{ _eq: "{}" }}, agent_did: {{ _eq: "{}" }},
+            session_id: {{ _eq: "{}" }}, node_did: {{ _eq: "{}" }},
             tool_call_id: {{ _eq: "{}" }}, tool_name: {{ _eq: "{}" }},
             message_sequence: {{ _eq: {} }},
             lifecycle_state: {{ _eq: "pending" }}{requester_filter}

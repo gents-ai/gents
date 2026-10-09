@@ -14,7 +14,7 @@ fn pack_cases_grade_installation_and_preservation_without_graph_execution() {
     let config = load_pack_config(
         &manifest,
         &PackInstallOptions {
-            agent_did: "did:key:eval-owner".into(),
+            node_did: "did:key:eval-owner".into(),
         },
         &|p| Ok(std::fs::read(root.join(p))?),
         &|_| None,

@@ -1,6 +1,6 @@
 use super::*;
 use crate::config_client::{ConfigAccess, ConfigApplyTxn};
-use crate::identity::{AgentIdentity, KeyIdentity};
+use crate::identity::{KeyIdentity, NodeIdentity};
 use crate::lean_vocab_test::{
     LeanInterruptQueueCase, LeanInterruptQueueEntry, LeanInterruptQueueInput,
 };
@@ -60,7 +60,7 @@ async fn rows(node: &EmbeddedNode, session: &str) -> Vec<Value> {
     let session = escape_graphql_string(session);
     let result = graphql_with_transaction_retry(
         node,
-        &format!("{{AgentRequest(filter:{{session_id:{{_eq:\"{session}\"}}}}){{_docID request_id agent_did requester_did lifecycle_state interrupt_requested_at input execution_origin}}}}"),
+        &format!("{{AgentRequest(filter:{{session_id:{{_eq:\"{session}\"}}}}){{_docID request_id node_did requester_did lifecycle_state interrupt_requested_at input execution_origin}}}}"),
         "interrupt queue test rows",
     )
     .await
@@ -81,10 +81,10 @@ async fn fixture_with_http(
     case: &LeanInterruptQueueCase,
     http_address: Option<std::net::SocketAddr>,
 ) -> (Arc<EmbeddedNode>, tempfile::TempDir, AgentRequest) {
-    assert_eq!(case.agent_id, 1, "fixture maps modeled agent 1 to its DID");
+    assert_eq!(case.node_id, 1, "fixture maps modeled node 1 to its DID");
     assert_eq!(
         case.requester_id,
-        Some(case.agent_id),
+        Some(case.node_id),
         "runtime wake requester must share the modeled scope"
     );
     let dir = tempfile::tempdir().unwrap();
@@ -99,14 +99,13 @@ async fn fixture_with_http(
     };
     let node = Arc::new(builder.build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    crate::test_support::install_test_behavior(&node, &did, BEHAVIOR).await;
+    crate::test_support::install_test_agent(&node, &did, BEHAVIOR).await;
     let session = case.session_id.to_string();
     // Runtime-signed background wakes use the signing DID as requester. The
     // generated agent/requester identity pair maps to that same native DID.
-    crate::session::ensure_session_with_behavior_id_and_requester_did(
+    crate::session::ensure_session_with_agent_id_and_requester_did(
         &node,
         &session,
-        BEHAVIOR,
         &did,
         BEHAVIOR,
         Some(&did),
@@ -116,8 +115,8 @@ async fn fixture_with_http(
     let active = case.active_request_id.unwrap().to_string();
     let doc = insert_request(
         &node,
-        json!({"request_id":active,"agent_did":did,"requester_did":did,
-            "session_id":session,"behavior_id":BEHAVIOR,"content":"active",
+        json!({"request_id":active,"node_did":did,"requester_did":did,
+            "session_id":session,"agent_id":BEHAVIOR,"content":"active",
             "lifecycle_state":"processing","execution_origin":"interactive",
             "created_at":"2026-09-01T00:00:00Z"}),
     )
@@ -125,9 +124,9 @@ async fn fixture_with_http(
     let parent = AgentRequest {
         doc_id: doc,
         request_id: active,
-        agent_did: did.clone(),
+        node_did: did.clone(),
         requester_did: Some(did),
-        behavior_id: BEHAVIOR.into(),
+        agent_id: BEHAVIOR.into(),
         session_id: session,
         content: "active".into(),
         max_total_tokens: None,
@@ -140,7 +139,7 @@ async fn fixture_with_http(
         execution_generation: None,
         execution_lease_secs: None,
         execution_lease_expires_at: None,
-        subagent_depth: 0,
+        request_hop: 0,
         caused_by_parent_request_id: None,
         caused_by_parent_request_doc_id: None,
         caused_by_parent_tool_call_id: None,
@@ -151,7 +150,7 @@ async fn fixture_with_http(
         caused_by_correlation: None,
         caused_by_trigger_context: None,
         workspace_id: None,
-        workspace_owner_agent_did: None,
+        workspace_owner_node_did: None,
         workspace_authority: None,
         workspace_seal_hash: None,
     };
@@ -225,9 +224,9 @@ async fn insert_generated_pending(
     };
     insert_request(
         node,
-        json!({"request_id":entry.request_id.to_string(),"agent_did":parent.agent_did,
+        json!({"request_id":entry.request_id.to_string(),"node_did":parent.node_did,
             "requester_did":parent.requester_did,"session_id":parent.session_id,
-            "behavior_id":BEHAVIOR,"content":"generated pending fixture",
+            "agent_id":BEHAVIOR,"content":"generated pending fixture",
             "lifecycle_state":"pending","execution_origin":origin.as_str(),
             "input":input,"created_at":created_at}),
     )
@@ -325,7 +324,7 @@ async fn generated_interrupt_queue_events_bind_to_native_rows() {
                         interrupt_request_by_doc_id_with_access(
                             &access,
                             &parent.doc_id,
-                            &parent.agent_did,
+                            &parent.node_did,
                             parent.requester_did.as_deref(),
                         )
                         .await
@@ -532,7 +531,7 @@ async fn generated_http_overlap_cases_preserve_cutoff() {
         let paused = Arc::new(AtomicBool::new(false));
         let filter = exact_request_filter(
             &parent.doc_id,
-            &parent.agent_did,
+            &parent.node_did,
             parent.requester_did.as_deref(),
         )
         .unwrap();
@@ -684,7 +683,7 @@ async fn generated_http_overlap_cases_preserve_cutoff() {
         interrupt_request_by_doc_id(
             &node,
             &parent.doc_id,
-            &parent.agent_did,
+            &parent.node_did,
             parent.requester_did.as_deref(),
         )
         .await
@@ -768,7 +767,7 @@ async fn interrupted_queue_drain_rolls_back_with_latch() {
         interrupt_request_by_doc_id(
             &node,
             &parent.doc_id,
-            &parent.agent_did,
+            &parent.node_did,
             parent.requester_did.as_deref(),
         ),
     )

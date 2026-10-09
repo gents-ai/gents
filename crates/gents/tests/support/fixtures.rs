@@ -3,8 +3,8 @@ use std::time::Duration;
 
 use gents::defra_node::EmbeddedNode;
 use gents::{
-    ensure_agent_principal, BackendProviderKind, BehaviorToolConfig, KeyIdentity, ResolvedBehavior,
-    RuntimePrincipal,
+    ensure_node, AgentToolSurfaceConfig, BackendProviderKind, KeyIdentity, ResolvedAgent,
+    RuntimeNode,
 };
 
 /// Every pack fixture directory under `tests/fixtures/packs`, sorted by
@@ -61,27 +61,27 @@ pub fn test_identity(name: &str) -> KeyIdentity {
     KeyIdentity::load_or_create(path, None).unwrap()
 }
 
-pub fn test_principal_for(
-    identity: Arc<dyn gents::AgentIdentity>,
-    default_behavior_id: impl Into<String>,
-) -> Arc<RuntimePrincipal> {
-    Arc::new(RuntimePrincipal {
-        agent_did: identity.did().to_string(),
+pub fn test_node_for(
+    identity: Arc<dyn gents::NodeIdentity>,
+    default_agent_id: impl Into<String>,
+) -> Arc<RuntimeNode> {
+    Arc::new(RuntimeNode {
+        node_did: identity.did().to_string(),
         identity,
-        default_behavior_id: default_behavior_id.into(),
+        default_agent_id: default_agent_id.into(),
         display_name: None,
         enabled: true,
     })
 }
 
-pub fn test_behavior(
+pub fn test_agent(
     name: &str,
     backend_id: &str,
     backend_api_key_env_var: Option<&str>,
-) -> ResolvedBehavior {
-    let identity: Arc<dyn gents::AgentIdentity> = Arc::new(test_identity(name));
-    let principal = test_principal_for(identity, name);
-    let mut behavior = test_behavior_for_principal(name, principal);
+) -> ResolvedAgent {
+    let identity: Arc<dyn gents::NodeIdentity> = Arc::new(test_identity(name));
+    let principal = test_node_for(identity, name);
+    let mut behavior = test_agent_for_node(name, principal);
     behavior.backend_id = Some(backend_id.to_owned());
     behavior.backend_auth = match backend_api_key_env_var {
         Some(variable) => gents::document_config::BackendAuth::Environment {
@@ -92,15 +92,15 @@ pub fn test_behavior(
     behavior
 }
 
-pub fn test_behavior_for_principal(
-    behavior_id: impl Into<String>,
-    principal: Arc<RuntimePrincipal>,
-) -> ResolvedBehavior {
-    let behavior_id = behavior_id.into();
-    ResolvedBehavior {
+pub fn test_agent_for_node(
+    agent_id: impl Into<String>,
+    principal: Arc<RuntimeNode>,
+) -> ResolvedAgent {
+    let agent_id = agent_id.into();
+    ResolvedAgent {
         skills: Vec::new(),
-        behavior_id,
-        principal,
+        agent_id,
+        node: principal,
         backend_id: None,
         backend_provider_kind: BackendProviderKind::OpenAiCompatible,
         openai_wire_api: gents::OpenAiWireApi::ChatCompletions,
@@ -113,7 +113,7 @@ pub fn test_behavior_for_principal(
         max_turns: gents::config::DEFAULT_MAX_TURNS,
         max_turns_provenance: gents::config::MaxTurnsProvenance::Default,
         system_prompt: String::new(),
-        tools: BehaviorToolConfig::default(),
+        tools: AgentToolSurfaceConfig::default(),
         compaction: None,
         compaction_inference: None,
         max_total_tokens: None,
@@ -136,35 +136,35 @@ pub fn test_behavior_for_principal(
 /// Publish the complete behavior-owned tool graph used by integration tests.
 /// Targets are standalone documents, `Tools` selects them, `AgentContext`
 /// selects the tools, and the behavior selects the context.
-pub async fn configure_subagent_behavior(
+pub async fn configure_child_agent(
     node: &EmbeddedNode,
-    agent_did: &str,
-    behavior_id: &str,
+    node_did: &str,
+    agent_id: &str,
     tools_id: &str,
-    targets: Vec<gents::SubagentTargetDocument>,
+    targets: Vec<gents::AgentTargetDocument>,
     enabled: bool,
 ) {
     use gents::config_client::{
         read_desired_state_record_in_txn as read, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
-    use gents::document_config::{AgentContext, SubagentTools, Tools};
+    use gents::document_config::{AgentContext, AgentTools, Tools};
     use gents::Collection;
 
-    gents::ConfigAccess::transact_local(node, None, "test.configure_subagent_behavior", |txn| {
+    gents::ConfigAccess::transact_local(node, None, "test.configure_child_agent", |txn| {
         let targets = targets.clone();
         Box::pin(async move {
             let mut documents = Vec::new();
-            let mut behavior = read(txn, Collection::AgentBehavior, agent_did, behavior_id)
+            let mut behavior = read(txn, Collection::Agent, node_did, agent_id)
                 .await?
-                .map(|(_, value)| serde_json::from_value::<gents::AgentBehaviorDocument>(value))
+                .map(|(_, value)| serde_json::from_value::<gents::AgentDocument>(value))
                 .transpose()?
-                .unwrap_or_else(|| gents::AgentBehaviorDocument {
-                    behavior_id: behavior_id.to_string(),
-                    agent_did: agent_did.to_string(),
-                    display_name: Some(behavior_id.to_string()),
+                .unwrap_or_else(|| gents::AgentDocument {
+                    agent_id: agent_id.to_string(),
+                    node_did: node_did.to_string(),
+                    display_name: Some(agent_id.to_string()),
                     description: None,
                     context_id: None,
-                    inference_profile_id: format!("{behavior_id}-inference"),
+                    inference_profile_id: format!("{agent_id}-inference"),
                     enabled: true,
                     tags: Vec::new(),
                     created_at: Some("2026-05-12T00:00:00Z".to_string()),
@@ -173,23 +173,23 @@ pub async fn configure_subagent_behavior(
             if read(
                 txn,
                 Collection::InferenceProfile,
-                agent_did,
+                node_did,
                 &behavior.inference_profile_id,
             )
             .await?
             .is_none()
             {
-                let backend_id = format!("{behavior_id}-test-backend");
-                if read(txn, Collection::InferenceBackend, agent_did, &backend_id)
+                let backend_id = format!("{agent_id}-test-backend");
+                if read(txn, Collection::InferenceBackend, node_did, &backend_id)
                     .await?
                     .is_none()
                 {
                     documents.push((
                         Collection::InferenceBackend,
                         serde_json::json!({
-                            "agent_did": agent_did,
+                            "node_did": node_did,
                             "backend_id": backend_id,
-                            "name": format!("{behavior_id} test backend"),
+                            "name": format!("{agent_id} test backend"),
                             "provider_kind": "OpenAiCompatible",
                             "openai_wire_api": "chat_completions",
                             "endpoint": "http://127.0.0.1:1/v1",
@@ -200,7 +200,7 @@ pub async fn configure_subagent_behavior(
                 documents.push((
                     Collection::InferenceProfile,
                     serde_json::json!({
-                        "agent_did": agent_did,
+                        "node_did": node_did,
                         "profile_id": behavior.inference_profile_id,
                         "backend_id": backend_id,
                         "model_name": "test-model"
@@ -211,14 +211,14 @@ pub async fn configure_subagent_behavior(
             let context_id = behavior
                 .context_id
                 .clone()
-                .unwrap_or_else(|| format!("{behavior_id}-test-context"));
-            let mut context = read(txn, Collection::AgentContext, agent_did, &context_id)
+                .unwrap_or_else(|| format!("{agent_id}-test-context"));
+            let mut context = read(txn, Collection::AgentContext, node_did, &context_id)
                 .await?
                 .map(|(_, value)| serde_json::from_value::<AgentContext>(value))
                 .transpose()?
                 .unwrap_or_else(|| AgentContext {
                     context_id: context_id.clone(),
-                    agent_did: agent_did.to_string(),
+                    node_did: node_did.to_string(),
                     display_name: None,
                     description: None,
                     system_prompt: None,
@@ -229,16 +229,16 @@ pub async fn configure_subagent_behavior(
                 });
             context.tools_id = Some(tools_id.to_string());
 
-            let mut tools = read(txn, Collection::Tools, agent_did, tools_id)
+            let mut tools = read(txn, Collection::Tools, node_did, tools_id)
                 .await?
                 .map(|(_, value)| serde_json::from_value::<Tools>(value))
                 .transpose()?
                 .unwrap_or_else(|| Tools {
                     tools_id: tools_id.to_string(),
-                    agent_did: agent_did.to_string(),
+                    node_did: node_did.to_string(),
                     ..Default::default()
                 });
-            tools.subagents = Some(SubagentTools {
+            tools.agents = Some(AgentTools {
                 target_ids: targets
                     .iter()
                     .map(|target| target.target_id.clone())
@@ -249,7 +249,7 @@ pub async fn configure_subagent_behavior(
 
             documents.extend(targets.into_iter().map(|target| {
                 (
-                    Collection::SubagentTarget,
+                    Collection::AgentTarget,
                     serde_json::to_value(target).expect("serialize target fixture"),
                 )
             }));
@@ -263,7 +263,7 @@ pub async fn configure_subagent_behavior(
                     serde_json::to_value(context).expect("serialize context fixture"),
                 ),
                 (
-                    Collection::AgentBehavior,
+                    Collection::Agent,
                     serde_json::to_value(behavior).expect("serialize behavior fixture"),
                 ),
             ]);
@@ -286,12 +286,12 @@ pub async fn configure_subagent_behavior(
     .unwrap();
 }
 
-/// Publish one canonical `Tools -> AgentContext -> AgentBehavior` chain and
+/// Publish one canonical `Tools -> AgentContext -> Agent` chain and
 /// any standalone documents referenced by the tools document.
-pub async fn configure_behavior_tools(
+pub async fn configure_agent_tools(
     node: &EmbeddedNode,
-    agent_did: &str,
-    behavior_id: &str,
+    node_did: &str,
+    agent_id: &str,
     system_prompt: Option<String>,
     tools: gents::document_config::Tools,
     referenced_documents: Vec<(gents::Collection, serde_json::Value)>,
@@ -302,27 +302,27 @@ pub async fn configure_behavior_tools(
     use gents::document_config::AgentContext;
     use gents::Collection;
 
-    assert_eq!(tools.agent_did, agent_did);
-    gents::ConfigAccess::transact_local(node, None, "test.configure_behavior_tools", |txn| {
+    assert_eq!(tools.node_did, node_did);
+    gents::ConfigAccess::transact_local(node, None, "test.configure_agent_tools", |txn| {
         let tools = tools.clone();
         let referenced_documents = referenced_documents.clone();
         let system_prompt = system_prompt.clone();
         Box::pin(async move {
-            let (_, behavior) = read(txn, Collection::AgentBehavior, agent_did, behavior_id)
+            let (_, behavior) = read(txn, Collection::Agent, node_did, agent_id)
                 .await?
-                .ok_or_else(|| anyhow::anyhow!("behavior {behavior_id} is missing"))?;
-            let mut behavior: gents::AgentBehaviorDocument = serde_json::from_value(behavior)?;
+                .ok_or_else(|| anyhow::anyhow!("behavior {agent_id} is missing"))?;
+            let mut behavior: gents::AgentDocument = serde_json::from_value(behavior)?;
             let context_id = behavior
                 .context_id
                 .clone()
-                .unwrap_or_else(|| format!("{behavior_id}:context"));
-            let mut context = read(txn, Collection::AgentContext, agent_did, &context_id)
+                .unwrap_or_else(|| format!("{agent_id}:context"));
+            let mut context = read(txn, Collection::AgentContext, node_did, &context_id)
                 .await?
                 .map(|(_, value)| serde_json::from_value::<AgentContext>(value))
                 .transpose()?
                 .unwrap_or_else(|| AgentContext {
                     context_id: context_id.clone(),
-                    agent_did: agent_did.to_string(),
+                    node_did: node_did.to_string(),
                     display_name: None,
                     description: None,
                     system_prompt: None,
@@ -341,7 +341,7 @@ pub async fn configure_behavior_tools(
             documents.extend([
                 (Collection::Tools, serde_json::to_value(tools)?),
                 (Collection::AgentContext, serde_json::to_value(context)?),
-                (Collection::AgentBehavior, serde_json::to_value(behavior)?),
+                (Collection::Agent, serde_json::to_value(behavior)?),
             ]);
             let plan = DesiredStateApplyPlan::new(
                 documents
@@ -362,47 +362,47 @@ pub async fn configure_behavior_tools(
     .unwrap();
 }
 
-pub fn subagent_target(
+pub fn agent_target(
     owner_did: &str,
     name: impl Into<String>,
-    target_agent_did: impl Into<String>,
-    behavior_id: impl Into<String>,
-) -> gents::SubagentTargetDocument {
+    target_node_did: impl Into<String>,
+    agent_id: impl Into<String>,
+) -> gents::AgentTargetDocument {
     let name = name.into();
-    gents::SubagentTargetDocument {
+    gents::AgentTargetDocument {
         target_id: name.clone(),
-        agent_did: owner_did.to_string(),
-        target_agent_did: target_agent_did.into(),
-        behavior_id: behavior_id.into(),
+        node_did: owner_did.to_string(),
+        target_node_did: target_node_did.into(),
+        agent_id: agent_id.into(),
         name,
         description: None,
         tags: Vec::new(),
     }
 }
 
-pub async fn bind_default_behavior_backend(
+pub async fn bind_default_agent_backend(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     backend_id: &str,
     endpoint: &str,
 ) {
-    bind_behavior_backend_chain(node, agent_did, None, backend_id, endpoint, "default").await;
+    bind_agent_backend_chain(node, node_did, None, backend_id, endpoint, "default").await;
 }
 
 /// Publish the canonical principal → behavior → inference profile → backend
 /// chain used by daemon integration fixtures with an explicit behavior id.
-pub async fn bind_behavior_backend(
+pub async fn bind_agent_backend(
     node: &EmbeddedNode,
-    agent_did: &str,
-    behavior_id: &str,
+    node_did: &str,
+    agent_id: &str,
     backend_id: &str,
     endpoint: &str,
     model_name: &str,
 ) {
-    bind_behavior_backend_chain(
+    bind_agent_backend_chain(
         node,
-        agent_did,
-        Some(behavior_id),
+        node_did,
+        Some(agent_id),
         backend_id,
         endpoint,
         model_name,
@@ -410,15 +410,15 @@ pub async fn bind_behavior_backend(
     .await;
 }
 
-async fn bind_behavior_backend_chain(
+async fn bind_agent_backend_chain(
     node: &EmbeddedNode,
-    agent_did: &str,
-    behavior_id: Option<&str>,
+    node_did: &str,
+    agent_id: Option<&str>,
     backend_id: &str,
     endpoint: &str,
     model_name: &str,
 ) {
-    ensure_agent_principal(node, agent_did).await.unwrap();
+    ensure_node(node, node_did).await.unwrap();
     gents::config_client::ConfigAccess::transact_local(
         node,
         None,
@@ -431,51 +431,50 @@ async fn bind_behavior_backend_chain(
                 };
                 use gents::Collection;
 
-                let (_, mut principal) =
-                    read(txn, Collection::AgentPrincipal, agent_did, agent_did)
-                        .await?
-                        .expect("principal");
-                let behavior_id = behavior_id
+                let (_, mut principal) = read(txn, Collection::Node, node_did, node_did)
+                    .await?
+                    .expect("principal");
+                let agent_id = agent_id
                     .map(str::to_owned)
-                    .or_else(|| principal["default_behavior_id"].as_str().map(str::to_owned))
-                    .unwrap_or_else(|| gents::default_behavior_id_for_agent(agent_did));
-                principal["default_behavior_id"] = behavior_id.clone().into();
+                    .or_else(|| principal["default_agent_id"].as_str().map(str::to_owned))
+                    .unwrap_or_else(|| gents::default_agent_id_for_node(node_did));
+                principal["default_agent_id"] = agent_id.clone().into();
 
-                let mut behavior = read(txn, Collection::AgentBehavior, agent_did, &behavior_id)
+                let mut behavior = read(txn, Collection::Agent, node_did, &agent_id)
                     .await?
                     .map(|(_, value)| value)
                     .unwrap_or_else(|| {
                         serde_json::json!({
-                            "agent_did": agent_did,
-                            "behavior_id": behavior_id,
+                            "node_did": node_did,
+                            "agent_id": agent_id,
                             "enabled": true
                         })
                     });
                 let profile_id = behavior["inference_profile_id"]
                     .as_str()
                     .map(str::to_owned)
-                    .unwrap_or_else(|| format!("{behavior_id}-inference"));
+                    .unwrap_or_else(|| format!("{agent_id}-inference"));
                 behavior["inference_profile_id"] = profile_id.clone().into();
                 behavior["enabled"] = true.into();
 
-                let mut profile = read(txn, Collection::InferenceProfile, agent_did, &profile_id)
+                let mut profile = read(txn, Collection::InferenceProfile, node_did, &profile_id)
                     .await?
                     .map(|(_, value)| value)
                     .unwrap_or_else(|| {
                         serde_json::json!({
-                            "agent_did": agent_did,
+                            "node_did": node_did,
                             "profile_id": profile_id
                         })
                     });
                 profile["backend_id"] = backend_id.into();
                 profile["model_name"] = model_name.into();
 
-                let mut backend = read(txn, Collection::InferenceBackend, agent_did, backend_id)
+                let mut backend = read(txn, Collection::InferenceBackend, node_did, backend_id)
                     .await?
                     .map(|(_, value)| value)
                     .unwrap_or_else(|| {
                         serde_json::json!({
-                            "agent_did": agent_did,
+                            "node_did": node_did,
                             "backend_id": backend_id,
                             "name": backend_id,
                             "provider_kind": "OpenAiCompatible",
@@ -490,10 +489,10 @@ async fn bind_behavior_backend_chain(
 
                 let plan = DesiredStateApplyPlan::new(
                     [
-                        (Collection::AgentPrincipal, principal),
+                        (Collection::Node, principal),
                         (Collection::InferenceBackend, backend),
                         (Collection::InferenceProfile, profile),
-                        (Collection::AgentBehavior, behavior),
+                        (Collection::Agent, behavior),
                     ]
                     .into_iter()
                     .map(|(collection, value)| DesiredStateApplyDocument {
@@ -509,7 +508,7 @@ async fn bind_behavior_backend_chain(
     )
     .await
     .unwrap();
-    gents::backend_registry::set_backend_probe_status(node, agent_did, backend_id, "healthy")
+    gents::backend_registry::set_backend_probe_status(node, node_did, backend_id, "healthy")
         .await
         .unwrap();
 }

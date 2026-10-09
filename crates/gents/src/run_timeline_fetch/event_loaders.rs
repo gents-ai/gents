@@ -9,14 +9,14 @@ use crate::session::load_canonical_message;
 /// synthesized: request ownership is the header's physical `request_doc_id`.
 pub(super) async fn resolve_timeline_messages_for_session(
     access: &ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
 ) -> Result<Vec<TimelineMessageRow>> {
     let header_doc_ids =
-        load_timeline_message_header_ids_for_session(access, agent_did, session_id, requester_did)
+        load_timeline_message_header_ids_for_session(access, node_did, session_id, requester_did)
             .await?;
-    resolve_timeline_messages(access, agent_did, session_id, requester_did, header_doc_ids).await
+    resolve_timeline_messages(access, node_did, session_id, requester_did, header_doc_ids).await
 }
 
 /// The canonical messages at one accepted sequence of an exact session scope.
@@ -24,25 +24,25 @@ pub(super) async fn resolve_timeline_messages_for_session(
 #[cfg(test)]
 pub(super) async fn resolve_timeline_messages_at_sequence(
     access: &ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
     sequence: i64,
 ) -> Result<Vec<TimelineMessageRow>> {
     let header_doc_ids = load_message_header_ids(
         access,
-        agent_did,
+        node_did,
         session_id,
         requester_did,
         &format!(", sequence: {{ _eq: {sequence} }}"),
     )
     .await?;
-    resolve_timeline_messages(access, agent_did, session_id, requester_did, header_doc_ids).await
+    resolve_timeline_messages(access, node_did, session_id, requester_did, header_doc_ids).await
 }
 
 async fn resolve_timeline_messages(
     access: &ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
     header_doc_ids: Vec<String>,
@@ -50,14 +50,14 @@ async fn resolve_timeline_messages(
     let mut rows = Vec::with_capacity(header_doc_ids.len());
     for header_doc_id in header_doc_ids {
         let (header, message) =
-            load_canonical_message(access, &header_doc_id, agent_did, requester_did)
+            load_canonical_message(access, &header_doc_id, node_did, requester_did)
                 .await
                 .with_context(|| {
                     format!("resolving canonical AgentMessage {header_doc_id} for timeline")
                 })?;
         anyhow::ensure!(
             header.session_id == session_id
-                && header.agent_did == agent_did
+                && header.node_did == node_did
                 && header.requester_did.as_deref() == requester_did,
             "canonical AgentMessage {header_doc_id} crossed the requested session scope"
         );
@@ -77,21 +77,21 @@ async fn resolve_timeline_messages(
 /// fallback, and unresolved or integrity-failing headers propagate as errors.
 pub(super) async fn load_timeline_message_header_ids_for_session(
     access: &ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
 ) -> Result<Vec<String>> {
-    load_message_header_ids(access, agent_did, session_id, requester_did, "").await
+    load_message_header_ids(access, node_did, session_id, requester_did, "").await
 }
 
 async fn load_message_header_ids(
     access: &ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
     extra_filter: &str,
 ) -> Result<Vec<String>> {
-    let scope = crate::session::session_scope_filter(agent_did, session_id, requester_did);
+    let scope = crate::session::session_scope_filter(node_did, session_id, requester_did);
     let query = format!(
         r#"{{
             AgentMessage(
@@ -117,11 +117,11 @@ async fn load_message_header_ids(
 
 pub(super) async fn load_timeline_tool_observations_for_session(
     access: &ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
 ) -> Result<Vec<ToolLifecycleObservation>> {
-    load_tool_observations(access, agent_did, session_id, requester_did, "").await
+    load_tool_observations(access, node_did, session_id, requester_did, "").await
 }
 
 /// Lifecycle observations for one exact physical tool document in a session
@@ -129,7 +129,7 @@ pub(super) async fn load_timeline_tool_observations_for_session(
 #[cfg(test)]
 pub(super) async fn load_timeline_tool_observation(
     access: &ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
     tool_doc_id: &str,
@@ -137,7 +137,7 @@ pub(super) async fn load_timeline_tool_observation(
     let tool_doc_id = escape_graphql_string(tool_doc_id);
     load_tool_observations(
         access,
-        agent_did,
+        node_did,
         session_id,
         requester_did,
         &format!(r#", _docID: {{ _eq: "{tool_doc_id}" }}"#),
@@ -147,12 +147,12 @@ pub(super) async fn load_timeline_tool_observation(
 
 async fn load_tool_observations(
     access: &ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
     extra_filter: &str,
 ) -> Result<Vec<ToolLifecycleObservation>> {
-    let scope = crate::session::session_scope_filter(agent_did, session_id, requester_did);
+    let scope = crate::session::session_scope_filter(node_did, session_id, requester_did);
     let query = format!(
         r#"{{
             AgentToolCall(
@@ -194,7 +194,7 @@ async fn load_tool_observations(
 
 pub(super) async fn resolve_timeline_tool_observations(
     access: &ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
     observations: Vec<ToolLifecycleObservation>,
@@ -221,7 +221,7 @@ pub(super) async fn resolve_timeline_tool_observations(
             row.result = Some(
                 load_spawned_tool_output(
                     access,
-                    agent_did,
+                    node_did,
                     session_id,
                     requester_did,
                     request_doc_id,
@@ -237,7 +237,7 @@ pub(super) async fn resolve_timeline_tool_observations(
 
 async fn load_spawned_tool_output(
     access: &ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
     request_doc_id: &str,
@@ -254,7 +254,7 @@ async fn load_spawned_tool_output(
     };
     let rows = crate::session::canonical_rows::decode_scoped_request_output_segments(
         &values,
-        agent_did,
+        node_did,
         Some(session_id),
         requester_did,
     )?
@@ -474,8 +474,8 @@ pub(super) async fn load_timeline_inference_calls_for_request(
                 started_at
                 ended_at
                 backend_id
-                behavior_id
-                agent_did
+                agent_id
+                node_did
                 call_kind
                 priority
                 queue_depth_at_enqueue
@@ -499,7 +499,7 @@ pub(super) async fn load_timeline_inference_calls_for_request(
 /// timeline.
 pub(super) async fn load_timeline_rendered_requests_for_session(
     access: &ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
 ) -> Result<Vec<TimelineRenderedRequestRow>> {
@@ -507,8 +507,8 @@ pub(super) async fn load_timeline_rendered_requests_for_session(
     // string, while canonical session-scoped documents represent it as null.
     let requester_did = requester_did.unwrap_or_default();
     let scope = format!(
-        r#"agent_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }}, requester_did: {{ _eq: "{}" }}"#,
-        escape_graphql_string(agent_did),
+        r#"node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }}, requester_did: {{ _eq: "{}" }}"#,
+        escape_graphql_string(node_did),
         escape_graphql_string(session_id),
         escape_graphql_string(requester_did),
     );
@@ -569,11 +569,11 @@ pub(super) async fn load_timeline_rendered_requests_for_request(
 
 pub(super) async fn load_timeline_compactions_for_session(
     access: &ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
 ) -> Result<Vec<TimelineCompactionRow>> {
-    let scope = crate::session::session_scope_filter(agent_did, session_id, requester_did);
+    let scope = crate::session::session_scope_filter(node_did, session_id, requester_did);
     let query = format!(
         r#"{{
             CompactionEntry(

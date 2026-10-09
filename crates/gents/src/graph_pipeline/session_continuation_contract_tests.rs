@@ -113,7 +113,7 @@ fn compiler_preserves_entry_and_group_selection_and_rejects_fanout() {
         "../../tests/fixtures/packs/review_graph/pack_config.json"
     ))
     .unwrap();
-    authored["graph_intents"][0]["agent_did"] = json!("did:test:session-compiler");
+    authored["graph_intents"][0]["node_did"] = json!("did:test:session-compiler");
     let mut intent: GraphIntent =
         serde_json::from_value(authored["graph_intents"][0].clone()).unwrap();
     let capabilities = authored["graph_capabilities"]
@@ -121,7 +121,7 @@ fn compiler_preserves_entry_and_group_selection_and_rejects_fanout() {
         .unwrap()
         .iter_mut()
         .map(|capability| {
-            capability["agent_did"] = json!("did:test:session-compiler");
+            capability["node_did"] = json!("did:test:session-compiler");
             capability["allowed_callers"] = json!(["did:test:session-compiler"]);
             serde_json::from_value::<StageCapability>(capability.clone()).unwrap()
         })
@@ -173,7 +173,7 @@ fn compiler_preserves_entry_and_group_selection_and_rejects_fanout() {
 
 #[tokio::test]
 async fn selector_authentication_uses_real_signed_graph_receipts() {
-    use crate::identity::AgentIdentity;
+    use crate::identity::NodeIdentity;
     let (node, run, _goal, identity, _temp) =
         super::super::logical_invocation_contract_tests::signed_invocation_fixture(5).await;
     let response = crate::graphql::graphql_with_transaction_retry(
@@ -202,7 +202,7 @@ async fn selector_authentication_uses_real_signed_graph_receipts() {
     let candidate = |row: &AgentRequestRow| SessionRootCandidate {
         root_doc_id: row.doc_id.clone().unwrap(),
         session_id: row.session_id.clone().unwrap(),
-        owner: row.agent_did.clone().unwrap(),
+        owner: row.node_did.clone().unwrap(),
         correlation: row.caused_by_correlation.clone().unwrap(),
         revision: context.revision.clone(),
         target_route: row.caused_by_trigger_id.clone().unwrap(),
@@ -240,7 +240,7 @@ async fn admit_session_graph_task(
     source_doc_id: &str,
     session: Option<&str>,
 ) -> crate::lifecycle::EnqueuedAgentRequest {
-    use crate::identity::AgentIdentity;
+    use crate::identity::NodeIdentity;
     use gents_protocol::request_admission::{
         AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
     };
@@ -328,7 +328,7 @@ async fn admit_session_graph_task(
 #[tokio::test]
 async fn native_same_behavior_graph_continues_session_with_distinct_stage_roots() {
     use crate::graph_pipeline::{compile_graph, CompilerPolicy, GraphIntent, StageCapability};
-    use crate::identity::AgentIdentity;
+    use crate::identity::NodeIdentity;
     let identity = super::super::runtime::graph_test_identity();
     let owner = identity.did();
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
@@ -351,7 +351,7 @@ async fn native_same_behavior_graph_continues_session_with_distinct_stage_roots(
     )
     .await;
     let intent: GraphIntent = serde_json::from_value(json!({
-        "agent_did": owner, "graph_id": "session-continuation-native",
+        "node_did": owner, "graph_id": "session-continuation-native",
         "nodes": [
             {"node_id":"recon","capability_id":"recon","capability_revision":"v1"},
             {"node_id":"verify","capability_id":"verify","capability_revision":"v1","session":{"continue":"recon"}},
@@ -367,7 +367,7 @@ async fn native_same_behavior_graph_continues_session_with_distinct_stage_roots(
     })).unwrap();
     let capabilities = [("recon","ContinueInput","ContinueStep"),("verify","ContinueStep","ContinueSummary"),("triage","ContinueSummary","ContinueResult")]
         .into_iter().map(|(name,input,output)| serde_json::from_value::<StageCapability>(json!({
-            "agent_did":owner,"capability_id":name,"revision":"v1","target":{"kind":"task","task_id":format!("{name}-task")},
+            "node_did":owner,"capability_id":name,"revision":"v1","target":{"kind":"task","task_id":format!("{name}-task")},
             "allowed_callers":[owner],
             "input_ports":[{"name":"in","collection":input,"schema":format!("{input}/v1"),"correlation_field":"run_id","cardinality":"one","required":true}],
             "output_ports":[{"name":"out","collection":output,"schema":format!("{output}/v1"),"correlation_field":"run_id","cardinality":"one"}]

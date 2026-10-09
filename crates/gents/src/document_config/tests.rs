@@ -4,10 +4,10 @@ use crate::config_client::write_tools_document;
 /// The wide-open preset is an authored nested `Tools` document. Pin its explicit
 /// permissive surface: meta dispatch and DefraDB query capabilities on, every
 /// privilege-bearing host capability absent (absence grants nothing).
-fn wide_open_tools_document(agent_did: &str) -> Tools {
+fn wide_open_tools_document(node_did: &str) -> Tools {
     serde_json::from_value(serde_json::json!({
         "tools_id": "wide-open",
-        "agent_did": agent_did,
+        "node_did": node_did,
         "built_ins": {"enable_context_budget": true},
         "datastore": {"enable_defra_query": true},
     }))
@@ -18,9 +18,9 @@ fn wide_open_tools_document(agent_did: &str) -> Tools {
 fn wide_open_preset_is_permissive_and_explicit() {
     let did = "did:test:amy";
     let preset = wide_open_tools_document(did);
-    // Owner-scoped logical id; `agent_did` passes the per-principal filter.
+    // Owner-scoped logical id; `node_did` passes the per-node filter.
     assert_eq!(preset.tools_id, "wide-open");
-    assert_eq!(preset.agent_did, did);
+    assert_eq!(preset.node_did, did);
     // Two capabilities are explicitly enabled by this preset.
     assert_eq!(
         preset.built_ins.as_ref().unwrap().enable_context_budget,
@@ -30,13 +30,13 @@ fn wide_open_preset_is_permissive_and_explicit() {
         preset.datastore.as_ref().unwrap().enable_defra_query,
         Some(true)
     );
-    // No host tools, remote services (hence no meta dispatch), subagents,
+    // No host tools, remote services (hence no meta dispatch), agents,
     // integrations, or self-config: the permissive surface is explicit, never
     // implied by a policy version — the canonical document has no historical
     // re-interpretation contract.
     assert!(preset.host.is_none());
     assert!(preset.remote.is_none());
-    assert!(preset.subagents.is_none());
+    assert!(preset.agents.is_none());
     assert!(preset.integrations.is_none());
     assert!(preset.self_config.is_none());
     assert!(preset.validate().is_ok());
@@ -46,7 +46,7 @@ fn wide_open_preset_is_permissive_and_explicit() {
 fn tools_document_accepts_empty_string_arrays_and_null_groups() {
     let document: Tools = serde_json::from_value(serde_json::json!({
         "tools_id": "default-tools",
-        "agent_did": "did:test:test",
+        "node_did": "did:test:test",
         "display_name": "Tools",
         "host": {
             "files": {"mode": "ReadOnly"},
@@ -74,7 +74,7 @@ fn tools_document_accepts_empty_string_arrays_and_null_groups() {
 fn tools_document_accepts_explicit_selections() {
     let document: Tools = serde_json::from_value(serde_json::json!({
         "tools_id": "default-tools",
-        "agent_did": "did:test:test",
+        "node_did": "did:test:test",
         "remote": {"services": [{"mcp_service_id": "x-data", "tool_names": ["search"]}]},
         "host": {"cli": [{"name": "rg"}]}
     }))
@@ -93,7 +93,7 @@ fn required_mcp_service_selection_is_explicit_and_unique() {
     // checks its local shape; runtime readiness remains the admission owner.
     let tools: Tools = serde_json::from_value(serde_json::json!({
         "tools_id": "required-mcp",
-        "agent_did": "did:key:test",
+        "node_did": "did:key:test",
         "remote": {"services": [{"mcp_service_id": "research", "tool_names": ["search"], "required": true}]},
     }))
     .unwrap();
@@ -101,7 +101,7 @@ fn required_mcp_service_selection_is_explicit_and_unique() {
     // A duplicate service id stays invalid regardless of required status.
     let tools: Tools = serde_json::from_value(serde_json::json!({
         "tools_id": "required-mcp",
-        "agent_did": "did:key:test",
+        "node_did": "did:key:test",
         "remote": {"services": [
             {"mcp_service_id": "research", "required": true},
             {"mcp_service_id": "research"}
@@ -116,11 +116,11 @@ fn required_mcp_service_selection_is_explicit_and_unique() {
 }
 
 #[test]
-fn validate_rejects_blank_subagent_target_ids() {
+fn validate_rejects_blank_agent_target_ids() {
     let doc = Tools {
         tools_id: "test-tools".to_string(),
-        agent_did: "did:test:test".to_string(),
-        subagents: Some(SubagentTools {
+        node_did: "did:test:test".to_string(),
+        agents: Some(AgentTools {
             target_ids: vec!["".to_string()],
             enabled: Some(true),
         }),
@@ -129,8 +129,8 @@ fn validate_rejects_blank_subagent_target_ids() {
     let result = doc.validate();
     assert!(result.is_err());
     assert!(
-        format!("{}", result.unwrap_err()).contains("subagents.target_ids"),
-        "error message must mention subagents.target_ids"
+        format!("{}", result.unwrap_err()).contains("agents.target_ids"),
+        "error message must mention agents.target_ids"
     );
 }
 
@@ -542,7 +542,7 @@ async fn tools_document_round_trips_defra_query_fields() {
 
     let doc = Tools {
         tools_id: "amy-general-tools".to_string(),
-        agent_did: "did:key:z-test".to_string(),
+        node_did: "did:key:z-test".to_string(),
         built_ins: Some(BuiltInTools {
             enable_session_history_tool: Some(true),
             ..Default::default()
@@ -569,7 +569,7 @@ async fn tools_document_round_trips_defra_query_fields() {
                 crate::config_client::read_desired_state_record_in_txn(
                     txn,
                     crate::Collection::Tools,
-                    &doc.agent_did,
+                    &doc.node_did,
                     &doc.tools_id,
                 )
                 .await?
@@ -611,7 +611,7 @@ async fn tools_update_can_clear_lsp_config() {
     let access = crate::config_client::ConfigAccess::Local(std::sync::Arc::new(node));
     let lsp = |config: Option<String>| Tools {
         tools_id: "lsp-config-clear".to_string(),
-        agent_did: "did:key:z-lsp-config-clear".to_string(),
+        node_did: "did:key:z-lsp-config-clear".to_string(),
         integrations: Some(IntegrationTools {
             lsp: config.map(|config| LspTools {
                 config: Some(config),
@@ -679,7 +679,7 @@ async fn tools_document_round_trips_read_only_commands() {
 
     let doc = Tools {
         tools_id: "steward-readonly-allowlist".to_string(),
-        agent_did: "did:key:z-test-allowlist".to_string(),
+        node_did: "did:key:z-test-allowlist".to_string(),
         host: Some(HostTools {
             bash: Some(BashTools {
                 read_only_commands: Some(vec!["jq".to_string(), "echo".to_string()]),
@@ -701,7 +701,7 @@ async fn tools_document_round_trips_read_only_commands() {
                 crate::config_client::read_desired_state_record_in_txn(
                     txn,
                     crate::Collection::Tools,
-                    &doc.agent_did,
+                    &doc.node_did,
                     &doc.tools_id,
                 )
                 .await?
@@ -734,7 +734,7 @@ fn read_only_commands_absent_decodes_to_none() {
     // runtime falls back to the hardcoded default_read_only_commands() list.
     let json = serde_json::json!({
         "tools_id": "sel-1",
-        "agent_did": "did:test:test",
+        "node_did": "did:test:test",
         "host": {"bash": {}},
     });
     let loaded: Tools = serde_json::from_value(json).unwrap();
@@ -824,7 +824,7 @@ async fn tools_document_round_trips_write_tools() {
     // declarations are expanded from the referenced DatastoreToolSurface.
     let tools = Tools {
         tools_id: "steward-write-tools".to_string(),
-        agent_did: "did:key:z-test-write".to_string(),
+        node_did: "did:key:z-test-write".to_string(),
         datastore: Some(DatastoreTools {
             datastore_tool_surface_ids: Some(vec!["surface".to_string()]),
             ..Default::default()
@@ -833,7 +833,7 @@ async fn tools_document_round_trips_write_tools() {
     };
     let surface: DatastoreToolSurfaceDocument = serde_json::from_value(serde_json::json!({
         "surface_id": "surface",
-        "agent_did": "did:key:z-test-write",
+        "node_did": "did:key:z-test-write",
         "entries": decls,
     }))
     .unwrap();
@@ -878,8 +878,8 @@ async fn tools_document_round_trips_session_message_enablement() {
 
     let doc = Tools {
         tools_id: "amy-background-tools".to_string(),
-        agent_did: "did:key:z-test-background".to_string(),
-        subagents: Some(SubagentTools {
+        node_did: "did:key:z-test-background".to_string(),
+        agents: Some(AgentTools {
             enabled: Some(true),
             ..Default::default()
         }),
@@ -897,7 +897,7 @@ async fn tools_document_round_trips_session_message_enablement() {
                 crate::config_client::read_desired_state_record_in_txn(
                     txn,
                     crate::Collection::Tools,
-                    &doc.agent_did,
+                    &doc.node_did,
                     &doc.tools_id,
                 )
                 .await?
@@ -910,37 +910,37 @@ async fn tools_document_round_trips_session_message_enablement() {
         .await
         .expect("read should succeed")
         .expect("tools should exist");
-    assert_eq!(loaded.subagents.as_ref().unwrap().enabled, Some(true));
+    assert_eq!(loaded.agents.as_ref().unwrap().enabled, Some(true));
 }
 
 #[tokio::test]
-async fn agent_behavior_description_round_trip_with_explicit_owner_fixture() {
+async fn agent_description_round_trip_with_explicit_owner_fixture() {
     let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
     crate::ensure_runtime_schemas(&node).await.unwrap();
 
-    // Canonical AgentBehavior(context_id, inference_profile_id, tags) carries
+    // Canonical Agent(context_id, inference_profile_id, tags) carries
     // UI text and references only. Literal instructions, skill selection, tools,
     // and compaction live on AgentContext; model selection lives on
-    // InferenceProfile — the retired parallel behavior fields (summary,
+    // InferenceProfile — the retired parallel fields (summary,
     // system_prompt, backend/model, compaction, skill lists) must not return.
-    // install_test_behavior provides the explicit context/tools/profile/backend
-    // chain; the principal bootstrap itself creates no executable configuration.
-    let agent_did = "did:key:z-test-desc";
-    crate::test_support::install_test_behavior(&node, agent_did, "amy-general").await;
+    // install_test_agent provides the explicit context/tools/profile/backend
+    // chain; the node bootstrap itself creates no executable configuration.
+    let node_did = "did:key:z-test-desc";
+    crate::test_support::install_test_agent(&node, node_did, "amy-general").await;
 
     // Compact authored document. `tags: null` is the DefraDB empty-list form and
     // must decode to the empty default; an omitted context_id decodes to None
     // (no instructions, skills, or tools; runtime-default compaction).
     let authored = serde_json::json!({
-        "behavior_id": "amy-general",
-        "agent_did": agent_did,
+        "agent_id": "amy-general",
+        "node_did": node_did,
         "display_name": "Amy General",
         "description": "A general-purpose assistant for research and writing.",
         "context_id": null,
         "inference_profile_id": "amy-general:inference",
         "tags": null,
     });
-    let sparse: AgentBehavior = serde_json::from_value(authored.clone()).unwrap();
+    let sparse: Agent = serde_json::from_value(authored.clone()).unwrap();
     assert_eq!(
         sparse.context_id, None,
         "null context_id must decode to None"
@@ -954,17 +954,17 @@ async fn agent_behavior_description_round_trip_with_explicit_owner_fixture() {
     assert_eq!(
         serde_json::to_value(&sparse).unwrap(),
         serde_json::json!({
-            "behavior_id": "amy-general",
-            "agent_did": agent_did,
+            "agent_id": "amy-general",
+            "node_did": node_did,
             "display_name": "Amy General",
             "description": "A general-purpose assistant for research and writing.",
             "inference_profile_id": "amy-general:inference",
         })
     );
 
-    let doc = AgentBehavior {
-        behavior_id: "amy-general".to_string(),
-        agent_did: agent_did.to_string(),
+    let doc = Agent {
+        agent_id: "amy-general".to_string(),
+        node_did: node_did.to_string(),
         display_name: Some("Amy General".to_string()),
         description: Some("A general-purpose assistant for research and writing.".to_string()),
         context_id: Some("amy-general:context".to_string()),
@@ -973,14 +973,14 @@ async fn agent_behavior_description_round_trip_with_explicit_owner_fixture() {
         tags: Vec::new(),
         created_at: None,
     };
-    upsert_agent_behavior(&node, &doc)
+    upsert_agent(&node, &doc)
         .await
         .expect("upsert should persist description fields");
 
-    let loaded = load_agent_behavior(&node, "amy-general")
+    let loaded = load_agent(&node, "amy-general")
         .await
         .expect("load should succeed")
-        .expect("behavior should exist after upsert");
+        .expect("agent should exist after upsert");
     assert_eq!(
         loaded.description,
         Some("A general-purpose assistant for research and writing.".to_string()),
@@ -1011,7 +1011,7 @@ async fn inference_retry_policy_fields_round_trip() {
     // profile; typed effort lives on the profile. The backend must exist for
     // the references closure to accept the profile.
     let retry = InferenceRetryPolicy {
-        agent_did: "did:key:z-test-retry".to_string(),
+        node_did: "did:key:z-test-retry".to_string(),
         retry_policy_id: "retry-policy".to_string(),
         display_name: Some("Retry Policy".to_string()),
         max_transport_retries: Some(4),
@@ -1023,7 +1023,7 @@ async fn inference_retry_policy_fields_round_trip() {
     };
     let backend: crate::document_config::InferenceBackend =
         serde_json::from_value(serde_json::json!({
-            "agent_did": "did:key:z-test-retry",
+            "node_did": "did:key:z-test-retry",
             "backend_id": "backend",
             "name": "Local",
             "provider_kind": "OpenAiCompatible",
@@ -1032,7 +1032,7 @@ async fn inference_retry_policy_fields_round_trip() {
         }))
         .unwrap();
     let profile = InferenceProfile {
-        agent_did: "did:key:z-test-retry".to_string(),
+        node_did: "did:key:z-test-retry".to_string(),
         profile_id: "retry-profile".to_string(),
         display_name: Some("Retry Profile".to_string()),
         backend_id: "backend".to_string(),
@@ -1042,7 +1042,7 @@ async fn inference_retry_policy_fields_round_trip() {
         ..Default::default()
     };
     let execution = InferenceExecution {
-        agent_did: "did:key:z-test-retry".to_string(),
+        node_did: "did:key:z-test-retry".to_string(),
         execution_id: "retry-execution".to_string(),
         retry_policy_id: Some("retry-policy".to_string()),
         ..Default::default()
@@ -1101,7 +1101,7 @@ fn inference_sampling_rejects_negative_seed() {
     // rejects it before any write is staged, so the DB-level negative-seed
     // rejection now lives with this owner.
     let sampling = InferenceSampling {
-        agent_did: "did:key:z-test-seed".to_string(),
+        node_did: "did:key:z-test-seed".to_string(),
         sampling_id: "negative-seed-sampling".to_string(),
         seed: Some(-1),
         ..Default::default()
@@ -1131,7 +1131,7 @@ fn inference_retry_policy_null_backoff_decodes_to_defaults() {
     // `backoff_ms: null` (DefraDB's unset form — never `[]`) decodes to the
     // unset default and resolves the scheduled ladder.
     let retry: InferenceRetryPolicy = serde_json::from_value(serde_json::json!({
-        "agent_did": "did:key:z-test-backoff",
+        "node_did": "did:key:z-test-backoff",
         "retry_policy_id": "empty-backoff",
         "backoff_ms": null,
     }))
@@ -1199,25 +1199,25 @@ fn completion_retry_policy_resolution_uses_origin_and_profile_fields() {
 }
 
 #[test]
-fn validate_accepts_well_formed_subagent_target_documents() {
-    // Delegation targets are SubagentTarget documents: same-owner behavior
+fn validate_accepts_well_formed_agent_target_documents() {
+    // Delegation targets are AgentTarget documents: same-owner agent
     // references close through the references closure, foreign destinations are
-    // explicit. The calling owner owns each target document; target_agent_did
-    // owns the destination behavior.
-    let code_entry = SubagentTargetDocument {
+    // explicit. The calling owner owns each target document; target_node_did
+    // owns the destination agent.
+    let code_entry = AgentTargetDocument {
         target_id: "amy-code".to_string(),
-        agent_did: "did:key:zParent".to_string(),
-        target_agent_did: "did:key:zParent".to_string(),
-        behavior_id: "amy-code".to_string(),
+        node_did: "did:key:zParent".to_string(),
+        target_node_did: "did:key:zParent".to_string(),
+        agent_id: "amy-code".to_string(),
         name: "Code assistant".to_string(),
         description: None,
         tags: Vec::new(),
     };
-    let research_entry = SubagentTargetDocument {
+    let research_entry = AgentTargetDocument {
         target_id: "amy-research".to_string(),
-        agent_did: "did:key:zParent".to_string(),
-        target_agent_did: "did:key:zDestination".to_string(),
-        behavior_id: "amy-research".to_string(),
+        node_did: "did:key:zParent".to_string(),
+        target_node_did: "did:key:zDestination".to_string(),
+        agent_id: "amy-research".to_string(),
         name: "amy-research".to_string(),
         description: None,
         tags: Vec::new(),
@@ -1226,15 +1226,15 @@ fn validate_accepts_well_formed_subagent_target_documents() {
     for entry in [&code_entry, &research_entry] {
         let value = serde_json::to_value(entry).unwrap();
         assert_eq!(
-            serde_json::from_value::<SubagentTargetDocument>(value).unwrap(),
+            serde_json::from_value::<AgentTargetDocument>(value).unwrap(),
             *entry
         );
     }
-    // The Tools subagent group references these by target_id only.
+    // The Tools agents group references these by target_id only.
     let doc = Tools {
         tools_id: "test-tools".to_string(),
-        agent_did: "did:test:test".to_string(),
-        subagents: Some(SubagentTools {
+        node_did: "did:test:test".to_string(),
+        agents: Some(AgentTools {
             target_ids: vec!["amy-code".to_string(), "amy-research".to_string()],
             enabled: Some(true),
         }),
@@ -1242,7 +1242,7 @@ fn validate_accepts_well_formed_subagent_target_documents() {
     };
     assert!(
         doc.validate().is_ok(),
-        "well-formed subagent target references must be accepted"
+        "well-formed agent target references must be accepted"
     );
 }
 
@@ -1250,9 +1250,9 @@ fn validate_accepts_well_formed_subagent_target_documents() {
 fn tools_validation_reports_every_violation() {
     let doc: Tools = serde_json::from_value(serde_json::json!({
         "tools_id": "invalid-tools",
-        "agent_did": "did:test:test",
+        "node_did": "did:test:test",
         "host": {"bash": {"mode": "ReadOnly", "max_output_chars": 0}},
-        "subagents": {"target_ids": [""]}
+        "agents": {"target_ids": [""]}
     }))
     .unwrap();
 
@@ -1260,15 +1260,15 @@ fn tools_validation_reports_every_violation() {
     assert_eq!(violations.len(), 2, "{violations:?}");
     assert!(violations
         .iter()
-        .any(|error| error.contains("subagents.target_ids")));
+        .any(|error| error.contains("agents.target_ids")));
     assert!(violations
         .iter()
         .any(|error| error.contains("host.bash.max_output_chars")));
 }
 
 #[test]
-fn validate_rejects_undeclared_subagent_target_reference() {
-    // SubagentTools.target_ids are references to SubagentTarget documents; the
+fn validate_rejects_undeclared_agent_target_reference() {
+    // AgentTools.target_ids are references to AgentTarget documents; the
     // references closure rejects undeclared ids early with a clear error.
     let refs = ConfigReferences::from_documents(
         "did:test:test",
@@ -1276,8 +1276,8 @@ fn validate_rejects_undeclared_subagent_target_reference() {
             crate::Collection::Tools,
             serde_json::json!({
                 "tools_id": "test-tools",
-                "agent_did": "did:test:test",
-                "subagents": {"target_ids": ["amy-code"], "enabled": true}
+                "node_did": "did:test:test",
+                "agents": {"target_ids": ["amy-code"], "enabled": true}
             }),
         )],
     )
@@ -1285,16 +1285,16 @@ fn validate_rejects_undeclared_subagent_target_reference() {
     let result = refs.validate();
     assert!(
         result.is_err(),
-        "undeclared subagent target reference must be rejected"
+        "undeclared agent target reference must be rejected"
     );
     let err_msg = format!("{}", result.unwrap_err());
     assert!(
-        err_msg.contains("subagents.target_ids"),
-        "error must mention subagents.target_ids; got: {err_msg}"
+        err_msg.contains("agents.target_ids"),
+        "error must mention agents.target_ids; got: {err_msg}"
     );
     assert!(
-        err_msg.contains("SubagentTarget"),
-        "error must mention the SubagentTarget collection; got: {err_msg}"
+        err_msg.contains("AgentTarget"),
+        "error must mention the AgentTarget collection; got: {err_msg}"
     );
 }
 
@@ -1348,7 +1348,7 @@ fn write_tool_fill_grammar_is_exact_and_runtime_fields_cannot_be_required() {
 
 fn base_sampling(sampling_id: &str) -> InferenceSampling {
     InferenceSampling {
-        agent_did: "owner".to_string(),
+        node_did: "owner".to_string(),
         sampling_id: sampling_id.to_string(),
         ..Default::default()
     }
@@ -1356,7 +1356,7 @@ fn base_sampling(sampling_id: &str) -> InferenceSampling {
 
 fn base_execution(execution_id: &str) -> InferenceExecution {
     InferenceExecution {
-        agent_did: "owner".to_string(),
+        node_did: "owner".to_string(),
         execution_id: execution_id.to_string(),
         ..Default::default()
     }
@@ -1435,7 +1435,7 @@ fn inference_profile_accepts_unset_and_every_vocabulary_reasoning_effort() {
     let unset_forms: [Option<ReasoningEffort>; 1] = [None];
     for unset in unset_forms {
         let profile = InferenceProfile {
-            agent_did: "owner".into(),
+            node_did: "owner".into(),
             profile_id: "unset-effort".into(),
             backend_id: "backend".into(),
             model_name: "model".into(),
@@ -1455,7 +1455,7 @@ fn inference_profile_accepts_unset_and_every_vocabulary_reasoning_effort() {
         ReasoningEffort::Ultra,
     ] {
         let profile = InferenceProfile {
-            agent_did: "owner".into(),
+            node_did: "owner".into(),
             profile_id: "vocab".into(),
             backend_id: "backend".into(),
             model_name: "model".into(),
@@ -1476,7 +1476,7 @@ fn inference_profile_accepts_unset_and_every_vocabulary_reasoning_effort() {
     assert!(error.contains("reasoning_effort must be one of"), "{error}");
     // And an unknown serialized string must not decode onto the profile.
     let decoded: Result<InferenceProfile, _> = serde_json::from_value(serde_json::json!({
-        "agent_did": "owner", "profile_id": "bad-effort",
+        "node_did": "owner", "profile_id": "bad-effort",
         "backend_id": "backend", "model_name": "model",
         "reasoning_effort": "extreme"
     }));
@@ -1589,7 +1589,7 @@ fn inference_sampling_validate_reports_every_violation_at_once() {
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// AgentBehavior::validate_references (#1331)
+// Agent::validate_references (#1331)
 // ---------------------------------------------------------------------------
 
 fn reference_documents() -> Vec<(crate::Collection, serde_json::Value)> {
@@ -1597,41 +1597,41 @@ fn reference_documents() -> Vec<(crate::Collection, serde_json::Value)> {
     vec![
         (
             Collection::InferenceBackend,
-            serde_json::json!({"agent_did":"owner","backend_id":"backend","name":"Local","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}),
+            serde_json::json!({"node_did":"owner","backend_id":"backend","name":"Local","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}),
         ),
         (
             Collection::InferenceProfile,
-            serde_json::json!({"agent_did":"owner","profile_id":"profile","backend_id":"backend","model_name":"model"}),
+            serde_json::json!({"node_did":"owner","profile_id":"profile","backend_id":"backend","model_name":"model"}),
         ),
         (
             Collection::AgentContext,
-            serde_json::json!({"agent_did":"owner","context_id":"context","tools_id":"tools","skill_ids":["skill"]}),
+            serde_json::json!({"node_did":"owner","context_id":"context","tools_id":"tools","skill_ids":["skill"]}),
         ),
         (
             Collection::Tools,
-            serde_json::json!({"agent_did":"owner","tools_id":"tools"}),
+            serde_json::json!({"node_did":"owner","tools_id":"tools"}),
         ),
         (
             Collection::Skill,
-            serde_json::json!({"agent_did":"owner","skill_id":"skill","name":"Skill","description":"Skill","instructions":"literal"}),
+            serde_json::json!({"node_did":"owner","skill_id":"skill","name":"Skill","description":"Skill","instructions":"literal"}),
         ),
     ]
 }
 
-fn reference_behavior() -> AgentBehavior {
-    serde_json::from_value(serde_json::json!({"agent_did":"owner","behavior_id":"behavior","context_id":"context","inference_profile_id":"profile"})).unwrap()
+fn reference_agent() -> Agent {
+    serde_json::from_value(serde_json::json!({"node_did":"owner","agent_id":"agent","context_id":"context","inference_profile_id":"profile"})).unwrap()
 }
 
 #[test]
-fn behavior_and_context_share_canonical_reference_closure() {
+fn agent_and_context_share_canonical_reference_closure() {
     let refs = ConfigReferences::from_documents("owner", reference_documents()).unwrap();
-    reference_behavior().validate_references(&refs).unwrap();
+    reference_agent().validate_references(&refs).unwrap();
     // Absence invokes context defaults, not an implicit tool or skill set.
-    let mut behavior = reference_behavior();
-    behavior.context_id = None;
-    behavior.validate_references(&refs).unwrap();
-    behavior.inference_profile_id = "missing".into();
-    assert!(behavior
+    let mut agent = reference_agent();
+    agent.context_id = None;
+    agent.validate_references(&refs).unwrap();
+    agent.inference_profile_id = "missing".into();
+    assert!(agent
         .validate_references(&refs)
         .unwrap_err()
         .to_string()
@@ -1702,7 +1702,7 @@ async fn oauth_account_scope_matches_lean() {
         let credential = crate::oauth_credential::OAuthCredential {
             doc_id: None,
             credential_id: format!("{provider}:{owner}:{}", account.unwrap_or("original")),
-            agent_did: owner.to_string(),
+            node_did: owner.to_string(),
             provider: provider.to_string(),
             access_token: "access-TEST".to_string(),
             refresh_token: "refresh-TEST".to_string(),
@@ -1738,7 +1738,7 @@ async fn oauth_account_scope_matches_lean() {
             Some(owner) => {
                 assert!(matches!(auth, BackendAuth::NodeOAuth { .. }), "{case}");
                 let provider = kind_of(&case["provider_kind"]).oauth_provider().unwrap();
-                // The runtime resolves under the executing principal, never the stored owner.
+                // The runtime resolves under the executing node, never the stored owner.
                 let row = resolve_oauth_credential(
                     &access,
                     scope,
@@ -1748,10 +1748,10 @@ async fn oauth_account_scope_matches_lean() {
                 .await
                 .unwrap();
                 if let Some(row) = &row {
-                    assert_eq!(row.agent_did, owner, "{case}");
+                    assert_eq!(row.node_did, owner, "{case}");
                 }
                 row.map(
-                    |row| serde_json::json!({"owner": row.agent_did, "account": row.account_ref}),
+                    |row| serde_json::json!({"owner": row.node_did, "account": row.account_ref}),
                 )
             }
             None => {
@@ -1767,7 +1767,7 @@ async fn oauth_account_scope_matches_lean() {
 }
 
 #[test]
-fn unchanged_nested_links_are_validated_without_a_behavior_write() {
+fn unchanged_nested_links_are_validated_without_an_agent_write() {
     for missing in [
         crate::Collection::Tools,
         crate::Collection::Skill,
@@ -1788,7 +1788,7 @@ fn unchanged_nested_links_are_validated_without_a_behavior_write() {
 #[test]
 fn reference_snapshot_rejects_foreign_roots_duplicates_and_malformed_rows() {
     let mut documents = reference_documents();
-    documents[0].1["agent_did"] = "foreign".into();
+    documents[0].1["node_did"] = "foreign".into();
     assert!(ConfigReferences::from_documents("owner", documents).is_err());
     let mut documents = reference_documents();
     documents.push(documents[0].clone());
@@ -1807,21 +1807,21 @@ fn reference_snapshot_rejects_foreign_roots_duplicates_and_malformed_rows() {
 fn references_preserve_exact_ids_and_reject_present_blank_selections() {
     let refs = ConfigReferences::from_documents("owner", reference_documents()).unwrap();
     for selected in ["", " ", " context ", "missing"] {
-        let mut behavior = reference_behavior();
-        behavior.context_id = Some(selected.into());
-        assert!(behavior.validate_references(&refs).is_err(), "{selected:?}");
+        let mut agent = reference_agent();
+        agent.context_id = Some(selected.into());
+        assert!(agent.validate_references(&refs).is_err(), "{selected:?}");
     }
 }
 
 #[test]
-fn same_owner_delegation_requires_a_behavior_but_foreign_admission_is_separate() {
+fn same_owner_delegation_requires_an_agent_but_foreign_admission_is_separate() {
     let target = |destination| {
         (
-            crate::Collection::SubagentTarget,
-            serde_json::json!({"agent_did":"owner","target_id":"worker","name":"worker","target_agent_did":destination,"behavior_id":"remote"}),
+            crate::Collection::AgentTarget,
+            serde_json::json!({"node_did":"owner","target_id":"worker","name":"worker","target_node_did":destination,"agent_id":"remote"}),
         )
     };
-    // Same-owner targets must resolve the referenced behavior inside the same
+    // Same-owner targets must resolve the referenced agent inside the same
     // closure; foreign destinations are checked by delegation admission under
     // ACP, never satisfied by a config lookup, so the foreign case validates.
     let refs = ConfigReferences::from_documents("owner", vec![target("owner")]).unwrap();
@@ -1843,7 +1843,7 @@ async fn reference_loader_isolates_foreign_malformed_backends_and_rejects_owned_
         let owner = crate::graphql::escape_graphql_string(owner);
         let id = crate::graphql::escape_graphql_string(id);
         let auth = crate::graphql::escape_graphql_string(auth);
-        let result = node.execute(&format!(r#"mutation {{ create_InferenceBackend(input: {{agent_did: "{owner}", backend_id: "{id}", name: "fixture", provider_kind: "OpenAiCompatible", endpoint: "http://localhost:8000/v1", auth: {{kind: "{auth}"}}, enabled: true}}) {{_docID}} }}"#)).await;
+        let result = node.execute(&format!(r#"mutation {{ create_InferenceBackend(input: {{node_did: "{owner}", backend_id: "{id}", name: "fixture", provider_kind: "OpenAiCompatible", endpoint: "http://localhost:8000/v1", auth: {{kind: "{auth}"}}, enabled: true}}) {{_docID}} }}"#)).await;
         assert!(!result.has_errors(), "{:?}", result.errors);
     }
     crate::config_client::ConfigAccess::transact_local(
@@ -1864,7 +1864,7 @@ async fn reference_loader_isolates_foreign_malformed_backends_and_rejects_owned_
     )
     .await
     .unwrap();
-    let result = node.execute(r#"mutation { update_InferenceBackend(filter: {agent_did: {_eq: "owner"}, backend_id: {_eq: "good"}}, input: {auth: {kind: "invalid-auth"}}) {_docID} }"#).await;
+    let result = node.execute(r#"mutation { update_InferenceBackend(filter: {node_did: {_eq: "owner"}, backend_id: {_eq: "good"}}, input: {auth: {kind: "invalid-auth"}}) {_docID} }"#).await;
     assert!(!result.has_errors(), "{:?}", result.errors);
     let result = crate::config_client::ConfigAccess::transact_local(
         &node,

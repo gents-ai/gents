@@ -64,11 +64,11 @@ pub fn normalize_provider(provider: &str) -> String {
 }
 
 pub fn classify_xai_auth_error(
-    agent_did: &str,
+    node_did: &str,
     provider: &str,
     problem: &OAuthAuthProblem,
 ) -> String {
-    classify_oauth_auth_error(&XAI_OAUTH_PRODUCT, agent_did, provider, problem)
+    classify_oauth_auth_error(&XAI_OAUTH_PRODUCT, node_did, provider, problem)
 }
 
 pub fn grok_client_version() -> String {
@@ -306,13 +306,13 @@ fn promote_xai_context_usage(value: &mut Value) -> bool {
 /// this client injects in `prepare`.
 async fn build_authenticated_http(
     node: Arc<EmbeddedNode>,
-    agent_did: &str,
+    node_did: &str,
     account_ref: Option<&str>,
 ) -> Result<CapturingXaiGrokOAuthHttpClient> {
     let provider = XAI_OAUTH_PROVIDER;
     let (bearer, _credential) = crate::oauth_http::bootstrap_oauth_client(
         node,
-        agent_did,
+        node_did,
         provider,
         OAuthRefreshKind::Xai,
         XAI_OAUTH_PRODUCT,
@@ -337,13 +337,13 @@ pub type CapturingXaiGrokOAuthHttpClient = XaiGrokOAuthHttpClient<
 
 pub async fn build_responses_client(
     node: Arc<EmbeddedNode>,
-    agent_did: &str,
+    node_did: &str,
     account_ref: Option<&str>,
     endpoint: &str,
 ) -> Result<rig::providers::openai::Client<CapturingXaiGrokOAuthHttpClient>> {
     let headers = build_xai_grok_oauth_headers()?;
     let endpoint = normalize_endpoint(endpoint);
-    let http = build_authenticated_http(node, agent_did, account_ref).await?;
+    let http = build_authenticated_http(node, node_did, account_ref).await?;
     crate::inference_http::build_openai_responses_client(
         "xai-oauth-managed",
         &endpoint,
@@ -355,13 +355,13 @@ pub async fn build_responses_client(
 
 pub async fn build_chat_completions_client(
     node: Arc<EmbeddedNode>,
-    agent_did: &str,
+    node_did: &str,
     account_ref: Option<&str>,
     endpoint: &str,
 ) -> Result<rig::providers::openai::CompletionsClient<CapturingXaiGrokOAuthHttpClient>> {
     let endpoint = normalize_endpoint(endpoint);
     // Identity headers ride along via `prepare` on every request.
-    let http = build_authenticated_http(node, agent_did, account_ref).await?;
+    let http = build_authenticated_http(node, node_did, account_ref).await?;
     crate::inference_http::build_openai_chat_completions_client(
         "xai-oauth-managed",
         &endpoint,
@@ -753,9 +753,9 @@ mod tests {
                 request_doc_id: "doc-1".to_string(),
                 request_commit_cid: "bafy-request-commit".to_string(),
                 request_id: "req-1".to_string(),
-                agent_did: "did:key:agent".to_string(),
+                node_did: "did:key:agent".to_string(),
                 requester_did: String::new(),
-                behavior_id: "behavior".to_string(),
+                agent_id: "behavior".to_string(),
                 session_id: "session".to_string(),
                 model_name: "configured-model".to_string(),
                 provider_family: None,

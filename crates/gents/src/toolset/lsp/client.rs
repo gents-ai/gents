@@ -554,13 +554,22 @@ fn configuration_result(params: Option<&Value>, settings: &Option<Value>) -> Val
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    if items.is_empty() {
-        return json!([settings.clone().unwrap_or(Value::Null)]);
-    }
     Value::Array(
         items
             .iter()
-            .map(|_| settings.clone().unwrap_or(Value::Null))
+            .map(|item| {
+                let Some(settings) = settings.as_ref() else {
+                    return Value::Null;
+                };
+                match item.get("section").and_then(Value::as_str) {
+                    None | Some("") => settings.clone(),
+                    Some(section) => section
+                        .split('.')
+                        .try_fold(settings, |value, key| value.get(key))
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                }
+            })
             .collect(),
     )
 }
@@ -750,5 +759,53 @@ fn progress_token(value: Option<&Value>) -> String {
         Some(Value::String(token)) => token.clone(),
         Some(Value::Number(n)) => n.to_string(),
         _ => "progress".into(),
+    }
+}
+
+#[cfg(test)]
+mod configuration_tests {
+    use super::*;
+
+    #[test]
+    fn configuration_returns_requested_sections_in_item_order() {
+        let settings = Some(json!({
+            "rust-analyzer": {
+                "checkOnSave": false,
+                "cargo": { "buildScripts": { "enable": false } }
+            },
+            "editor": { "tabSize": 4 }
+        }));
+        let params = json!({ "items": [
+            { "section": "editor.tabSize" },
+            { "section": "rust-analyzer", "scopeUri": "file:///workspace/src/lib.rs" },
+            { "section": "rust-analyzer.cargo.buildScripts.enable" },
+            { "section": "missing" },
+            { "section": "editor.tabSize.missing" },
+            {}
+        ] });
+        assert_eq!(
+            configuration_result(Some(&params), &settings),
+            json!([
+                4,
+                { "checkOnSave": false, "cargo": { "buildScripts": { "enable": false } } },
+                false,
+                null,
+                null,
+                settings.as_ref().unwrap()
+            ])
+        );
+    }
+
+    #[test]
+    fn configuration_preserves_empty_and_unconfigured_cardinality() {
+        assert_eq!(
+            configuration_result(Some(&json!({ "items": [] })), &Some(json!({"x": 1}))),
+            json!([])
+        );
+        assert_eq!(configuration_result(None, &None), json!([]));
+        assert_eq!(
+            configuration_result(Some(&json!({ "items": [{"section": "x"}, {}] })), &None),
+            json!([null, null])
+        );
     }
 }

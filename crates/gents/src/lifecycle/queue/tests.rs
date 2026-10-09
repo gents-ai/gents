@@ -1,5 +1,5 @@
 use super::*;
-use crate::identity::AgentIdentity;
+use crate::identity::NodeIdentity;
 use crate::lifecycle::{
     extract_single_doc_id, ClaimOutcome, RequestLifecycle, DEFAULT_REQUEST_MAX_RETRIES,
 };
@@ -18,8 +18,8 @@ mod background_goal_repair;
 mod folding;
 mod steering;
 
-const TEST_AGENT_DID: &str = "did:test:queue-test";
-const TEST_BEHAVIOR_ID: &str = "general";
+const TEST_NODE_DID: &str = "did:test:queue-test";
+const TEST_AGENT_ID: &str = "general";
 
 struct TestDb {
     node: Arc<EmbeddedNode>,
@@ -28,7 +28,7 @@ struct TestDb {
 }
 
 impl TestDb {
-    fn agent_did(&self) -> &str {
+    fn node_did(&self) -> &str {
         self.identity.did()
     }
 }
@@ -39,7 +39,7 @@ struct QueueRow {
     doc_id: String,
     request_id: String,
     session_id: String,
-    behavior_id: String,
+    agent_id: String,
     content: String,
     #[serde(default)]
     input: Option<RequestInput>,
@@ -48,7 +48,7 @@ struct QueueRow {
     execution_origin: String,
     superseded_by_request: Option<String>,
     superseded_by_request_doc_id: Option<String>,
-    subagent_depth: Option<u32>,
+    request_hop: Option<u32>,
     caused_by_parent_request_id: Option<String>,
     caused_by_parent_request_doc_id: Option<String>,
     caused_by_parent_tool_call_id: Option<String>,
@@ -73,15 +73,15 @@ fn wake_queue_input(queue: RequestQueue) -> RequestInput {
     }
 }
 
-fn parent_request(agent_did: &str, session_id: &str) -> AgentRequest {
+fn parent_request(node_did: &str, session_id: &str) -> AgentRequest {
     AgentRequest {
         retry_parent_request_doc_id: None,
         purpose: gents_protocol::request_admission::RequestPurpose::Normal,
         doc_id: "parent-doc".to_string(),
         request_id: "parent-request".to_string(),
-        agent_did: agent_did.to_string(),
+        node_did: node_did.to_string(),
         requester_did: None,
-        behavior_id: TEST_BEHAVIOR_ID.to_string(),
+        agent_id: TEST_AGENT_ID.to_string(),
         session_id: session_id.to_string(),
         content: "parent".to_string(),
         max_total_tokens: None,
@@ -92,7 +92,7 @@ fn parent_request(agent_did: &str, session_id: &str) -> AgentRequest {
         execution_generation: None,
         execution_lease_expires_at: None,
         execution_lease_secs: None,
-        subagent_depth: 2,
+        request_hop: 2,
         caused_by_parent_request_id: Some("root-parent-request".to_string()),
         caused_by_parent_request_doc_id: Some("root-parent-request-doc".to_string()),
         caused_by_parent_tool_call_id: Some("root-parent-tool-call".to_string()),
@@ -103,7 +103,7 @@ fn parent_request(agent_did: &str, session_id: &str) -> AgentRequest {
         caused_by_correlation: None,
         caused_by_trigger_context: None,
         workspace_id: None,
-        workspace_owner_agent_did: None,
+        workspace_owner_node_did: None,
         workspace_authority: None,
         workspace_seal_hash: None,
     }
@@ -144,7 +144,7 @@ async fn test_db(name: &str) -> TestDb {
     crate::schema::ensure_runtime_schemas(&node)
         .await
         .expect("runtime schemas");
-    crate::test_support::install_test_behavior(&node, identity.did(), TEST_BEHAVIOR_ID).await;
+    crate::test_support::install_test_agent(&node, identity.did(), TEST_AGENT_ID).await;
     TestDb {
         node,
         identity,
@@ -163,14 +163,14 @@ async fn queue_rows(node: &EmbeddedNode, session_id: &str) -> Vec<QueueRow> {
                 _docID
                 request_id
                 session_id
-                behavior_id
+                agent_id
                 content
                 input
                 lifecycle_state
                 execution_origin
                 superseded_by_request
                 superseded_by_request_doc_id
-                subagent_depth
+                request_hop
                 caused_by_parent_request_id
                 caused_by_parent_request_doc_id
                 caused_by_parent_tool_call_id
@@ -194,14 +194,14 @@ async fn queue_rows(node: &EmbeddedNode, session_id: &str) -> Vec<QueueRow> {
 
 async fn insert_raw_queue_request(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     request_id: &str,
     session_id: &str,
     input: &RequestInput,
 ) -> String {
     let escaped_request_id = escape_graphql_string(request_id);
     let escaped_session_id = escape_graphql_string(session_id);
-    let escaped_agent_did = escape_graphql_string(agent_did);
+    let escaped_node_did = escape_graphql_string(node_did);
     let input_literal = gents_protocol::graphql::graphql_input_literal(
         &serde_json::to_value(input).expect("canonical input serializes"),
     )
@@ -212,8 +212,8 @@ async fn insert_raw_queue_request(
             create_AgentRequest(input: {{
                 request_id: "{escaped_request_id}",
                 purpose: "normal",
-                agent_did: "{escaped_agent_did}",
-                behavior_id: "{TEST_BEHAVIOR_ID}",
+                node_did: "{escaped_node_did}",
+                agent_id: "{TEST_AGENT_ID}",
                 session_id: "{escaped_session_id}",
                 retry_parent_request: "",
                 retry_root_request: "{escaped_request_id}",
@@ -227,7 +227,7 @@ async fn insert_raw_queue_request(
                 created_at: "{created_at}",
                 retry_count: 0,
                 max_retries: {max_retries},
-                subagent_depth: 0
+                request_hop: 0
             }}) {{ _docID }}
         }}"#,
         max_retries = DEFAULT_REQUEST_MAX_RETRIES,
@@ -259,7 +259,7 @@ async fn canonical_background_fixture(db: &TestDb, session_id: &str) -> Canonica
     let request_id = format!("background-parent-{}", uuid::Uuid::new_v4());
     insert_raw_queue_request(
         &db.node,
-        db.agent_did(),
+        db.node_did(),
         &request_id,
         session_id,
         &RequestInput::default(),
@@ -269,10 +269,10 @@ async fn canonical_background_fixture(db: &TestDb, session_id: &str) -> Canonica
         .await
         .expect("load canonical fixture parent")
         .expect("canonical fixture parent exists");
-    let mut lifecycle = RequestLifecycle::new_with_agent_did(
+    let mut lifecycle = RequestLifecycle::new_with_node_did(
         db.node.clone(),
-        TEST_BEHAVIOR_ID,
-        db.agent_did(),
+        TEST_AGENT_ID,
+        db.node_did(),
         request,
         60,
     );
@@ -283,7 +283,7 @@ async fn canonical_background_fixture(db: &TestDb, session_id: &str) -> Canonica
             .expect("claim canonical fixture parent"),
         ClaimOutcome::Claimed
     );
-    let writer = DefraStreamWriter::new(db.node.clone(), db.agent_did(), Duration::ZERO);
+    let writer = DefraStreamWriter::new(db.node.clone(), db.node_did(), Duration::ZERO);
     lifecycle
         .begin_owned_execution(&writer)
         .await
@@ -351,7 +351,7 @@ impl CanonicalBackgroundFixture {
             .context("fixture parent claim has no deadline")?;
         let mut tool = ToolCallLifecycle::from_accepted(
             self.node.clone(),
-            self.parent.agent_did.clone(),
+            self.parent.node_did.clone(),
             self.parent.requester_did.clone(),
             accepted.pop().expect("one accepted tool"),
             deadline,
@@ -408,7 +408,7 @@ async fn request_doc_lookup_rejects_duplicate_logical_request_ids() {
     let input = wake_queue_input(hints(QueueSource::User, QueuePolicy::Append));
     insert_raw_queue_request(
         &db.node,
-        db.agent_did(),
+        db.node_did(),
         "duplicate-logical-id",
         "session-a",
         &input,
@@ -416,7 +416,7 @@ async fn request_doc_lookup_rejects_duplicate_logical_request_ids() {
     .await;
     insert_raw_queue_request(
         &db.node,
-        db.agent_did(),
+        db.node_did(),
         "duplicate-logical-id",
         "session-b",
         &input,
@@ -460,7 +460,7 @@ mod pin_tests {
         let mut parent = parent_request(PIN_FIXED_DID, "sess-pin-parent");
         parent.request_id = "pin-parent-request".to_string();
         parent.doc_id = "pin-parent-doc".to_string();
-        parent.subagent_depth = 2;
+        parent.request_hop = 2;
         parent.caused_by_correlation = Some("corr-parent".to_string());
         parent.caused_by_trigger_context = Some(r#"{"a":"b"}"#.to_string());
         parent
@@ -505,7 +505,7 @@ mod pin_tests {
         let normalized = normalize_pin_fields(&fields);
         assert_eq!(
             normalized,
-            "request_id: \"req-session-mutation-1\", purpose: \"normal\", agent_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", requester_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", behavior_id: \"behavior-1\", session_id: \"sess-pin-parent\", retry_root_request: \"req-session-mutation-1\", retry_key: \"retry-key-session-1\", content: \"steering content\", input: { queue: { policy: \"append\", source: \"steering\" } }, execution_origin: \"interactive\", caused_by_correlation: \"corr-parent\", caused_by_trigger_context: \"{\\\"a\\\":\\\"b\\\"}\", created_at: \"2030-01-01T00:00:00Z\", retry_count: 0, max_retries: 3, subagent_depth: 2, caused_by_parent_request_id: \"pin-parent-request\", caused_by_parent_request_doc_id: \"pin-parent-doc\", admission_kind: \"runtime-internal\", admission_signer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", admission_signature: \"<SIGNATURE>\", runtime_issuer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", runtime_source_request_id: \"pin-parent-request\", runtime_source_kind: \"local-control\", lifecycle_state: \"pending\", failure_reason: \"\""
+            "request_id: \"req-session-mutation-1\", purpose: \"normal\", node_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", requester_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", agent_id: \"behavior-1\", session_id: \"sess-pin-parent\", retry_root_request: \"req-session-mutation-1\", retry_key: \"retry-key-session-1\", content: \"steering content\", input: { queue: { policy: \"append\", source: \"steering\" } }, execution_origin: \"interactive\", caused_by_correlation: \"corr-parent\", caused_by_trigger_context: \"{\\\"a\\\":\\\"b\\\"}\", created_at: \"2030-01-01T00:00:00Z\", retry_count: 0, max_retries: 3, request_hop: 2, caused_by_parent_request_id: \"pin-parent-request\", caused_by_parent_request_doc_id: \"pin-parent-doc\", admission_kind: \"runtime-internal\", admission_signer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", admission_signature: \"<SIGNATURE>\", runtime_issuer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", runtime_source_request_id: \"pin-parent-request\", runtime_source_kind: \"local-control\", lifecycle_state: \"pending\", failure_reason: \"\""
         );
     }
 
@@ -517,24 +517,24 @@ mod pin_tests {
 
         let mut parent = pin_parent_request();
         parent.workspace_id = Some("ws-goal-1".to_string());
-        parent.workspace_owner_agent_did = Some("did:key:workspace-owner".to_string());
+        parent.workspace_owner_node_did = Some("did:key:workspace-owner".to_string());
         parent.workspace_authority = Some("readWrite".to_string());
         parent.workspace_seal_hash = Some("seal-goal-1".to_string());
 
         let goal_id = "goal-1";
         let continuation_sequence: i64 = 3;
         let content = "continue the goal";
-        let behavior_id = parent.behavior_id.clone();
+        let agent_id = parent.agent_id.clone();
 
         let mut create = prepare_goal_continuation(
             &parent,
-            behavior_id,
+            agent_id,
             goal_id,
             content,
             continuation_sequence,
             false,
             "2030-01-01T00:00:00Z",
-            parent.subagent_depth,
+            parent.request_hop,
         )
         .expect("prepare goal continuation");
         crate::lifecycle::materialize::sign_request(
@@ -547,7 +547,7 @@ mod pin_tests {
         let fields = create.graphql_input_fields().expect("graphql_input_fields");
         assert_eq!(
             normalize_pin_fields(&fields),
-            "request_id: \"goal-cont-00000000000000000003-355ac0cefea9f3d0afab06ffb90fd1ec\", purpose: \"normal\", agent_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", requester_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", behavior_id: \"general\", session_id: \"sess-pin-parent\", retry_root_request: \"goal-cont-00000000000000000003-355ac0cefea9f3d0afab06ffb90fd1ec\", retry_key: \"goal-continuation:355ac0cefea9f3d0afab06ffb90fd1ec\", content: \"continue the goal\", input: { goal_continuation: { sequence: 3, wrapup: false }, queue: { key: \"goal:355ac0cefea9f3d0afab06ffb90fd1ec\", policy: \"coalesce\", queued_after_request_id: \"pin-parent-request\", source: \"goal\" } }, execution_origin: \"scheduled\", caused_by_trigger_id: \"goal-1\", caused_by_trigger_kind: \"goal\", caused_by_correlation: \"corr-parent\", caused_by_trigger_context: \"{\\\"a\\\":\\\"b\\\"}\", created_at: \"2030-01-01T00:00:00Z\", retry_count: 0, max_retries: 3, subagent_depth: 2, caused_by_parent_request_id: \"pin-parent-request\", caused_by_parent_request_doc_id: \"pin-parent-doc\", workspace_id: \"ws-goal-1\", workspace_owner_agent_did: \"did:key:workspace-owner\", workspace_authority: \"readWrite\", workspace_seal_hash: \"seal-goal-1\", admission_kind: \"runtime-internal\", admission_signer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", admission_signature: \"<SIGNATURE>\", runtime_issuer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", runtime_source_request_id: \"pin-parent-request\", runtime_source_kind: \"local-control\", lifecycle_state: \"pending\", failure_reason: \"\""
+            "request_id: \"goal-cont-00000000000000000003-355ac0cefea9f3d0afab06ffb90fd1ec\", purpose: \"normal\", node_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", requester_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", agent_id: \"general\", session_id: \"sess-pin-parent\", retry_root_request: \"goal-cont-00000000000000000003-355ac0cefea9f3d0afab06ffb90fd1ec\", retry_key: \"goal-continuation:355ac0cefea9f3d0afab06ffb90fd1ec\", content: \"continue the goal\", input: { goal_continuation: { sequence: 3, wrapup: false }, queue: { key: \"goal:355ac0cefea9f3d0afab06ffb90fd1ec\", policy: \"coalesce\", queued_after_request_id: \"pin-parent-request\", source: \"goal\" } }, execution_origin: \"scheduled\", caused_by_trigger_id: \"goal-1\", caused_by_trigger_kind: \"goal\", caused_by_correlation: \"corr-parent\", caused_by_trigger_context: \"{\\\"a\\\":\\\"b\\\"}\", created_at: \"2030-01-01T00:00:00Z\", retry_count: 0, max_retries: 3, request_hop: 2, caused_by_parent_request_id: \"pin-parent-request\", caused_by_parent_request_doc_id: \"pin-parent-doc\", workspace_id: \"ws-goal-1\", workspace_owner_node_did: \"did:key:workspace-owner\", workspace_authority: \"readWrite\", workspace_seal_hash: \"seal-goal-1\", admission_kind: \"runtime-internal\", admission_signer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", admission_signature: \"<SIGNATURE>\", runtime_issuer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", runtime_source_request_id: \"pin-parent-request\", runtime_source_kind: \"local-control\", lifecycle_state: \"pending\", failure_reason: \"\""
         );
     }
 }

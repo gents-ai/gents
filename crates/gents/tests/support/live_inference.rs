@@ -9,15 +9,13 @@ use anyhow::{Context, Result};
 use gents::config_client::DesiredStateApplyPlan;
 use gents::defra_node::EmbeddedNode;
 use gents::document_config::{
-    AgentBehavior, AgentPrincipal, BackendAuth, ConfigReferences, InferenceBackend,
-    InferenceProfile,
+    Agent, BackendAuth, ConfigReferences, InferenceBackend, InferenceProfile, Node,
 };
 use gents::graphql::escape_graphql_string;
 use gents::pack::{decode_pack_config, PackInstallOptions};
 use gents::{
-    default_behavior_id_for_agent, default_inference_profile_id_for_behavior,
-    ensure_agent_principal, AgentIdentity, BackendProviderKind, Collection, DocumentRuntimeOptions,
-    Gents, ToolCeiling,
+    default_agent_id_for_node, default_inference_profile_id_for_agent, ensure_node,
+    BackendProviderKind, Collection, DocumentRuntimeOptions, Gents, NodeIdentity, ToolCeiling,
 };
 use gents_protocol::output::reconstruction::{reconstruct_message, ObservedSegment};
 use gents_protocol::output::{OutputSegment, TranscriptMessage};
@@ -33,7 +31,7 @@ use crate::support::{first_optional_row, TestDb};
 pub const EVAL_TARGET_VARIABLE: &str = "GENTS_EVAL_TARGET";
 
 /// Owner bound while validating a target; binding replaces it with the
-/// principal under test. Target files must not author `agent_did`.
+/// node under test. Target files must not author `node_did`.
 const TARGET_VALIDATION_OWNER: &str = "did:key:inference-target-validation";
 
 fn workspace_root() -> PathBuf {
@@ -77,7 +75,7 @@ impl InferenceTarget {
         let config = decode_pack_config(
             value,
             Some(&PackInstallOptions {
-                agent_did: TARGET_VALIDATION_OWNER.to_owned(),
+                node_did: TARGET_VALIDATION_OWNER.to_owned(),
             }),
             // Targets are literal documents: interpolating the process
             // environment could copy secrets into endpoints, reports or the DB.
@@ -90,16 +88,16 @@ impl InferenceTarget {
             anyhow::ensure!(
                 matches!(
                     key.as_str(),
-                    "agent_principal" | "inference_backends" | "inference_profiles"
+                    "node" | "inference_backends" | "inference_profiles"
                 ),
                 "an inference target authors only one backend and one profile, not {key}"
             );
         }
         anyhow::ensure!(
-            authored["agent_principal"]
+            authored["node"]
                 .as_object()
-                .is_some_and(|principal| principal.len() == 1),
-            "an inference target's agent_principal must be empty; the test binds its principal"
+                .is_some_and(|node| node.len() == 1),
+            "an inference target's node must be empty; the test binds its node"
         );
         let plan = DesiredStateApplyPlan::from_pack_config(&config)?;
         ConfigReferences::from_documents(
@@ -116,9 +114,9 @@ impl InferenceTarget {
         backend.validate()?;
         profile.validate()?;
         anyhow::ensure!(
-            !matches!(backend.auth, BackendAuth::PrincipalOAuth { .. }),
-            "PrincipalOAuth targets are not supported for fresh-principal evals: \
-             each trial's new principal has no OAuthCredential"
+            !matches!(backend.auth, BackendAuth::NodeOAuth { .. }),
+            "NodeOAuth targets are not supported for fresh-node evals: \
+             each trial's new node has no OAuthCredential"
         );
         anyhow::ensure!(
             !matches!(backend.auth, BackendAuth::ApiKey { .. }),
@@ -193,19 +191,19 @@ impl InferenceTarget {
         &self.backend.auth
     }
 
-    /// The target backend owned by `agent_did`.
-    pub fn backend(&self, agent_did: &str) -> InferenceBackend {
+    /// The target backend owned by `node_did`.
+    pub fn backend(&self, node_did: &str) -> InferenceBackend {
         InferenceBackend {
-            agent_did: agent_did.to_owned(),
+            node_did: node_did.to_owned(),
             ..self.backend.clone()
         }
     }
 
-    /// The target's model selection owned by `agent_did`. Callers that install
+    /// The target's model selection owned by `node_did`. Callers that install
     /// several profiles replace `profile_id` and their own eval settings.
-    pub fn profile(&self, agent_did: &str) -> InferenceProfile {
+    pub fn profile(&self, node_did: &str) -> InferenceProfile {
         InferenceProfile {
-            agent_did: agent_did.to_owned(),
+            node_did: node_did.to_owned(),
             ..self.profile.clone()
         }
     }
@@ -293,29 +291,27 @@ pub fn live_target() -> InferenceTarget {
     InferenceTarget::selected().unwrap_or_else(|error| panic!("{error:#}"))
 }
 
-/// Bind one isolated live-test principal to a target: its backend, its model
-/// selection as the default behavior's profile, and that behavior.
+/// Bind one isolated live-test node to a target: its backend, its model
+/// selection as the default agent's profile, and that agent.
 pub async fn bind_target(
     node: &EmbeddedNode,
-    identity: &dyn AgentIdentity,
+    identity: &dyn NodeIdentity,
     target: &InferenceTarget,
 ) -> (String, String) {
-    let agent_did = identity.did().to_string();
-    let mut principal = ensure_agent_principal(node, &agent_did)
-        .await
-        .expect("ensure principal");
-    let behavior_id = default_behavior_id_for_agent(&agent_did);
-    let profile_id = default_inference_profile_id_for_behavior(&behavior_id);
-    principal.default_behavior_id = Some(behavior_id.clone());
-    let backend = target.backend(&agent_did);
+    let node_did = identity.did().to_string();
+    let mut node_doc = ensure_node(node, &node_did).await.expect("ensure node");
+    let agent_id = default_agent_id_for_node(&node_did);
+    let profile_id = default_inference_profile_id_for_agent(&agent_id);
+    node_doc.default_agent_id = Some(agent_id.clone());
+    let backend = target.backend(&node_did);
     let profile = InferenceProfile {
         profile_id: profile_id.clone(),
-        ..target.profile(&agent_did)
+        ..target.profile(&node_did)
     };
-    let behavior = AgentBehavior {
-        behavior_id: behavior_id.clone(),
-        agent_did: agent_did.clone(),
-        display_name: Some("Live default behavior".to_string()),
+    let agent = Agent {
+        agent_id: agent_id.clone(),
+        node_did: node_did.clone(),
+        display_name: Some("Live default agent".to_string()),
         description: None,
         context_id: None,
         inference_profile_id: profile_id,
@@ -324,24 +320,24 @@ pub async fn bind_target(
         created_at: Some(chrono::Utc::now().to_rfc3339()),
     };
 
-    apply_live_backend_documents(node, principal, backend, profile, behavior).await;
-    (agent_did, behavior_id)
+    apply_live_backend_documents(node, node_doc, backend, profile, agent).await;
+    (node_did, agent_id)
 }
 
 async fn apply_live_backend_documents(
     node: &EmbeddedNode,
-    principal: AgentPrincipal,
+    node_doc: Node,
     backend: InferenceBackend,
     profile: InferenceProfile,
-    behavior: AgentBehavior,
+    agent: Agent,
 ) {
     use gents::config_client::{apply_desired_state_plan, DesiredStateApplyDocument};
     let plan = DesiredStateApplyPlan::new(
         [
-            (Collection::AgentPrincipal, serde_json::to_value(principal)),
+            (Collection::Node, serde_json::to_value(node_doc)),
             (Collection::InferenceBackend, serde_json::to_value(backend)),
             (Collection::InferenceProfile, serde_json::to_value(profile)),
-            (Collection::AgentBehavior, serde_json::to_value(behavior)),
+            (Collection::Agent, serde_json::to_value(agent)),
         ]
         .into_iter()
         .map(|(collection, value)| {
@@ -363,13 +359,13 @@ async fn apply_live_backend_documents(
     .expect("upsert live backend");
 }
 
-pub async fn boot_live_agent(db: &TestDb, identity: Arc<dyn AgentIdentity>) -> Result<BootedAgent> {
+pub async fn boot_live_agent(db: &TestDb, identity: Arc<dyn NodeIdentity>) -> Result<BootedAgent> {
     boot_live_agent_with_ceiling(db, identity, ToolCeiling::meta_only()).await
 }
 
 pub async fn boot_live_agent_with_ceiling(
     db: &TestDb,
-    identity: Arc<dyn AgentIdentity>,
+    identity: Arc<dyn NodeIdentity>,
     tool_ceiling: ToolCeiling,
 ) -> Result<BootedAgent> {
     Ok(boot_live_agent_with_options(
@@ -386,13 +382,13 @@ pub async fn boot_live_agent_with_ceiling(
 
 pub async fn boot_live_agent_with_options(
     db: &TestDb,
-    identity: Arc<dyn AgentIdentity>,
+    identity: Arc<dyn NodeIdentity>,
     options: DocumentRuntimeOptions,
 ) -> Result<(BootedAgent, Gents)> {
     let (running, agent) =
         gents::eval::runner::embedded::boot_runtime(&db.home, identity, options).await?;
     Ok((
-        BootedAgent::new(running.shutdown, running.handle, running.agent_did),
+        BootedAgent::new(running.shutdown, running.handle, running.node_did),
         agent,
     ))
 }
@@ -479,7 +475,7 @@ pub async fn terminal_assistant_answer(node: &EmbeddedNode, request_id: &str) ->
     let query = format!(
         r#"{{
             AgentRequest(filter: {{ request_id: {{ _eq: "{escaped}" }} }}, limit: 2) {{
-                _docID agent_did requester_did session_id terminal_output
+                _docID node_did requester_did session_id terminal_output
             }}
         }}"#
     );
@@ -487,7 +483,7 @@ pub async fn terminal_assistant_answer(node: &EmbeddedNode, request_id: &str) ->
     struct RequestRow {
         #[serde(rename = "_docID")]
         doc_id: String,
-        agent_did: String,
+        node_did: String,
         requester_did: Option<String>,
         session_id: Option<String>,
         terminal_output: Option<gents_protocol::output::TerminalOutput>,
@@ -523,15 +519,15 @@ pub async fn terminal_assistant_answer(node: &EmbeddedNode, request_id: &str) ->
     let query = format!(
         r#"{{
             AgentMessage(
-                filter: {{ _docID: {{ _eq: "{}" }}, request_doc_id: {{ _eq: "{}" }}, session_id: {{ _eq: "{escaped_session}" }}, agent_did: {{ _eq: "{}" }}, role: {{ _eq: "assistant" }}{requester_filter} }}, limit: 2
-            ) {{ message_key session_id agent_did requester_did request_doc_id publication outcome sequence role native_id blocks created_at }}
-            AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }}, agent_did: {{ _eq: "{}" }}{requester_filter} }}) {{ _docID agent_did requester_did session_id request_doc_id source ordinal writer runs payload close created_at }}
+                filter: {{ _docID: {{ _eq: "{}" }}, request_doc_id: {{ _eq: "{}" }}, session_id: {{ _eq: "{escaped_session}" }}, node_did: {{ _eq: "{}" }}, role: {{ _eq: "assistant" }}{requester_filter} }}, limit: 2
+            ) {{ message_key session_id node_did requester_did request_doc_id publication outcome sequence role native_id blocks created_at }}
+            AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }}, node_did: {{ _eq: "{}" }}{requester_filter} }}) {{ _docID node_did requester_did session_id request_doc_id source ordinal writer runs payload close created_at }}
         }}"#,
         escape_graphql_string(&message_doc_id),
         escape_graphql_string(&row.doc_id),
-        escape_graphql_string(&row.agent_did),
+        escape_graphql_string(&row.node_did),
         escape_graphql_string(&row.doc_id),
-        escape_graphql_string(&row.agent_did)
+        escape_graphql_string(&row.node_did)
     );
     let resp = node.execute(&query).await;
     assert!(

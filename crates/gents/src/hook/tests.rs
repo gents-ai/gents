@@ -74,18 +74,13 @@ async fn client_output_snapshot_reads_full_retained_window_without_widening_mode
     );
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let registry = BackgroundExecutionRegistry::default();
-    let hook = DefraSessionHook::with_identity(
-        node.clone(),
-        "general",
-        "did:test:owner",
-        FailurePolicy::default(),
-    )
-    .with_background_execution_registry(registry.clone());
+    let hook =
+        DefraSessionHook::with_identity(node.clone(), "did:test:owner", FailurePolicy::default())
+            .with_background_execution_registry(registry.clone());
     let session_id = hook.session_id().await.unwrap();
-    crate::session::create_session_with_behavior_id(
+    crate::session::create_session_with_agent_id(
         node.as_ref(),
         &session_id,
-        "general",
         "did:test:owner",
         "general",
     )
@@ -153,7 +148,7 @@ async fn client_output_snapshot_reads_full_retained_window_without_widening_mode
     let scope = crate::background_tools::ProcessControlScope {
         request_id: "next".into(),
         session_id: session_id.clone(),
-        agent_did: "did:test:owner".into(),
+        node_did: "did:test:owner".into(),
         requester_did: None,
     };
     let page = crate::background_tools::handle_read_tool_output(
@@ -195,12 +190,8 @@ async fn client_output_snapshot_reads_full_retained_window_without_widening_mode
 #[tokio::test]
 async fn goal_tool_interception_defaults_deny_and_create_depends_on_base_capability() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
-    let denied = DefraSessionHook::with_identity(
-        node.clone(),
-        "general",
-        "did:test:general",
-        FailurePolicy::default(),
-    );
+    let denied =
+        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
     let denied_update = denied
         .on_tool_call(
             crate::goal::UPDATE_GOAL_TOOL_NAME,
@@ -214,13 +205,9 @@ async fn goal_tool_interception_defaults_deny_and_create_depends_on_base_capabil
         "an unauthorized update must not enter the hook-managed mutation path"
     );
 
-    let create_without_base = DefraSessionHook::with_identity(
-        node,
-        "general",
-        "did:test:general",
-        FailurePolicy::default(),
-    )
-    .with_goal_tool_authority(false, true);
+    let create_without_base =
+        DefraSessionHook::with_identity(node, "did:test:general", FailurePolicy::default())
+            .with_goal_tool_authority(false, true);
     let denied_create = create_without_base
         .on_tool_call(
             crate::goal::CREATE_GOAL_TOOL_NAME,
@@ -247,13 +234,9 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
             .unwrap(),
     );
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    let hook = DefraSessionHook::with_identity(
-        node.clone(),
-        "general",
-        "did:test:owner",
-        FailurePolicy::default(),
-    )
-    .with_goal_tool_authority(true, true);
+    let hook =
+        DefraSessionHook::with_identity(node.clone(), "did:test:owner", FailurePolicy::default())
+            .with_goal_tool_authority(true, true);
     assert!(matches!(
         hook.on_completion_call(&user_text_message("start"), &[])
             .await,
@@ -273,7 +256,7 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
         &hook,
         "goal-create-forged",
         crate::goal::CREATE_GOAL_TOOL_NAME,
-        r#"{"objective":"ship","agent_did":"did:test:other","session_id":"other"}"#,
+        r#"{"objective":"ship","node_did":"did:test:other","session_id":"other"}"#,
         None,
     )
     .await;
@@ -282,7 +265,7 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
             crate::goal::CREATE_GOAL_TOOL_NAME,
             None,
             "goal-create-forged",
-            r#"{"objective":"ship","agent_did":"did:test:other","session_id":"other"}"#,
+            r#"{"objective":"ship","node_did":"did:test:other","session_id":"other"}"#,
         )
         .await;
     assert!(
@@ -317,7 +300,7 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(goal.agent_did, "did:test:owner");
+    assert_eq!(goal.node_did, "did:test:owner");
     assert_eq!(goal.session_id, session_id);
     assert_eq!(goal.objective, "ship");
     assert_eq!(goal.token_budget, Some(1000));
@@ -440,12 +423,8 @@ async fn request_lineage_preserves_previous_binding_when_request_is_missing() {
             .expect("embedded node"),
     );
     ensure_runtime_schemas(&node).await.unwrap();
-    let hook = DefraSessionHook::with_identity(
-        node.clone(),
-        "general",
-        "did:test:host",
-        FailurePolicy::default(),
-    );
+    let hook =
+        DefraSessionHook::with_identity(node.clone(), "did:test:host", FailurePolicy::default());
 
     hook.set_active_request_binding(
         Some("request-a".to_string()),
@@ -481,12 +460,8 @@ async fn active_request_binding_rejects_a_half_bound_pair() {
             .await
             .expect("embedded node"),
     );
-    let hook = DefraSessionHook::with_identity(
-        node.clone(),
-        "general",
-        "did:test:host",
-        FailurePolicy::default(),
-    );
+    let hook =
+        DefraSessionHook::with_identity(node.clone(), "did:test:host", FailurePolicy::default());
 
     hook.set_active_request_binding(
         Some("request-a".to_string()),
@@ -512,12 +487,8 @@ async fn request_lineage_keeps_exact_doc_id_through_prompt_and_tool_paths() {
             .expect("embedded node"),
     );
     ensure_runtime_schemas(&node).await.unwrap();
-    let hook = DefraSessionHook::with_identity(
-        node.clone(),
-        "general",
-        "did:test:general",
-        FailurePolicy::default(),
-    );
+    let hook =
+        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
     assert!(matches!(
         hook.on_completion_call(&user_text_message("Run"), &[])
             .await,
@@ -575,12 +546,8 @@ async fn dispatch_receipt_scripts_bind_call_hook_under_both_persistence_policies
         for policy in [FailurePolicy::FailOpen, FailurePolicy::FailClosed] {
             let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
             ensure_runtime_schemas(&node).await.unwrap();
-            let hook = DefraSessionHook::with_identity(
-                node.clone(),
-                "general",
-                "did:test:dispatch-receipt",
-                policy,
-            );
+            let hook =
+                DefraSessionHook::with_identity(node.clone(), "did:test:dispatch-receipt", policy);
             assert!(matches!(
                 hook.on_completion_call(&user_text_message("Run a tool"), &[])
                     .await,
@@ -801,13 +768,9 @@ async fn control_tool_completion_failure_never_reauthorizes_dispatch() {
         for inject in [false, true] {
             let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
             ensure_runtime_schemas(&node).await.unwrap();
-            let hook = DefraSessionHook::with_identity(
-                node.clone(),
-                "general",
-                "did:test:control-receipt",
-                policy,
-            )
-            .with_goal_tool_authority(goal_case.goal_tools, goal_case.goal_create);
+            let hook =
+                DefraSessionHook::with_identity(node.clone(), "did:test:control-receipt", policy)
+                    .with_goal_tool_authority(goal_case.goal_tools, goal_case.goal_create);
             assert!(matches!(
                 hook.on_completion_call(&user_text_message("Create a goal"), &[])
                     .await,
@@ -1001,7 +964,6 @@ async fn generated_storage_observation_cases_match_hook_runtime_classification()
         } else {
             let hook = DefraSessionHook::with_identity(
                 node.clone(),
-                "agent",
                 "did:test:test",
                 failure_policy_from_contract(&case.policy),
             );
@@ -1047,20 +1009,20 @@ async fn create_interruptible_request_with_fields(
     node: &defra_node::EmbeddedNode,
     request_id: &str,
     session_id: &str,
-    agent_did: &str,
+    node_did: &str,
     extra_fields: &str,
 ) -> String {
     let request_id = crate::graphql::escape_graphql_string(request_id);
     let session_id = crate::graphql::escape_graphql_string(session_id);
-    let agent_did = crate::graphql::escape_graphql_string(agent_did);
+    let node_did = crate::graphql::escape_graphql_string(node_did);
     let created_at = chrono::Utc::now().to_rfc3339();
     let mutation = format!(
         r#"mutation {{
             create_AgentRequest(input: {{
                 request_id: "{request_id}",
                 purpose: "normal",
-                agent_did: "{agent_did}",
-                behavior_id: "general",
+                node_did: "{node_did}",
+                agent_id: "general",
                 session_id: "{session_id}",
                 retry_parent_request: "",
                 retry_root_request: "{request_id}",
@@ -1068,8 +1030,8 @@ async fn create_interruptible_request_with_fields(
                 content: "child request",
                 lifecycle_state: "processing",
                 backend_id: "",
-                execution_origin: "subagent",
-                subagent_depth: 0,
+                execution_origin: "interactive",
+                request_hop: 0,
                 {extra_fields}
                 created_at: "{created_at}",
                 retry_count: 0,
@@ -1167,7 +1129,7 @@ async fn bind_interruptible_request_with_requester(
         node,
         request_id,
         session_id,
-        &hook.agent_did,
+        &hook.node_did,
         &requester_field,
     )
     .await;
@@ -1193,10 +1155,10 @@ async fn bind_interruptible_request_with_requester(
         crate::graphql::first_row(&loaded, "AgentRequest")
             .unwrap()
             .unwrap();
-    let mut lifecycle = crate::lifecycle::RequestLifecycle::new_with_agent_did(
+    let mut lifecycle = crate::lifecycle::RequestLifecycle::new_with_node_did(
         hook.node.clone(),
         "general",
-        &hook.agent_did,
+        &hook.node_did,
         row.try_into().unwrap(),
         60,
     );
@@ -1206,7 +1168,7 @@ async fn bind_interruptible_request_with_requester(
     );
     let writer = crate::streaming::DefraStreamWriter::new(
         hook.node.clone(),
-        &hook.agent_did,
+        &hook.node_did,
         std::time::Duration::ZERO,
     );
     lifecycle.begin_owned_execution(&writer).await.unwrap();
@@ -1442,7 +1404,7 @@ async fn fetch_tool_call_row(
                     _docID
                     request_id
                     request_doc_id
-                    agent_did
+                    node_did
                     requester_did
                     session_id
                     message_sequence
@@ -1477,7 +1439,7 @@ async fn fetch_tool_call_row(
         row["_docID"].as_str().unwrap(),
         row["request_doc_id"].as_str().unwrap(),
         row["session_id"].as_str().unwrap(),
-        row["agent_did"].as_str().unwrap(),
+        row["node_did"].as_str().unwrap(),
         row["requester_did"].as_str(),
     )
     .await
@@ -1499,7 +1461,6 @@ async fn list_processes_skip_publishes_canonical_tool_result() {
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let hook = DefraSessionHook::with_identity(
         node.clone(),
-        "control-result",
         "did:test:control-result",
         FailurePolicy::default(),
     );
@@ -1557,7 +1518,6 @@ async fn wait_and_cancel_process_skip_publish_canonical_tool_results() {
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let hook = DefraSessionHook::with_identity(
         node.clone(),
-        "control-results",
         "did:test:control-results",
         FailurePolicy::default(),
     );
@@ -1676,7 +1636,6 @@ async fn control_tool_lost_terminal_compare_replays_the_durable_winner() {
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let hook = DefraSessionHook::with_identity(
         node.clone(),
-        "control-race",
         "did:test:control-race",
         FailurePolicy::default(),
     );
@@ -1796,20 +1755,16 @@ async fn call_tool_persists_concrete_dispatch_identity_without_rewriting_alias()
 
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
-    let hook = DefraSessionHook::with_identity(
-        node.clone(),
-        "general",
-        "did:test:general",
-        FailurePolicy::default(),
-    )
-    .with_remote_tools(Some(RemoteTools {
-        services: vec![RemoteServiceTools {
-            mcp_service_id: "metrics-prod".into(),
-            tool_names: vec!["query_metrics".into()],
-            style: RemoteToolStyle::Discovery,
-            ..Default::default()
-        }],
-    }));
+    let hook =
+        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default())
+            .with_remote_tools(Some(RemoteTools {
+                services: vec![RemoteServiceTools {
+                    mcp_service_id: "metrics-prod".into(),
+                    tool_names: vec!["query_metrics".into()],
+                    style: RemoteToolStyle::Discovery,
+                    ..Default::default()
+                }],
+            }));
     assert!(matches!(
         hook.on_completion_call(&user_text_message("Query metrics"), &[])
             .await,
@@ -1877,12 +1832,8 @@ async fn hook_attaches_active_request_deadline_to_tool_call_lifecycle() {
     );
     ensure_runtime_schemas(&node).await.unwrap();
 
-    let hook = DefraSessionHook::with_identity(
-        node.clone(),
-        "general",
-        "did:test:general",
-        FailurePolicy::default(),
-    );
+    let hook =
+        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
     let user_prompt = user_text_message("Run a tool");
     assert!(matches!(
         hook.on_completion_call(&user_prompt, &[]).await,
@@ -1934,13 +1885,9 @@ async fn update_goal_blocked_cannot_resurrect_budget_limited_goal() {
     );
     ensure_runtime_schemas(&node).await.unwrap();
 
-    let hook = DefraSessionHook::with_identity(
-        node.clone(),
-        "general",
-        "did:test:general",
-        FailurePolicy::default(),
-    )
-    .with_goal_tool_authority(true, false);
+    let hook =
+        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default())
+            .with_goal_tool_authority(true, false);
     assert!(matches!(
         hook.on_completion_call(&user_text_message("start goal"), &[])
             .await,
@@ -2022,17 +1969,12 @@ async fn claimed_authored_input_persists_context_once_before_prompt() {
     );
     ensure_runtime_schemas(&node).await.unwrap();
 
-    let hook = DefraSessionHook::with_identity(
-        node.clone(),
-        "general",
-        "did:test:general",
-        FailurePolicy::default(),
-    );
+    let hook =
+        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
     let session_id = hook.session_id().await.expect("session id");
-    crate::session::create_session_with_behavior_id(
+    crate::session::create_session_with_agent_id(
         node.as_ref(),
         &session_id,
-        "general",
         "did:test:general",
         "general",
     )
@@ -2041,7 +1983,7 @@ async fn claimed_authored_input_persists_context_once_before_prompt() {
     let context = user_text_message("<context>\nnow=2026-06-15T00:00:00Z\n</context>");
     let first_prompt = user_text_message("First request");
     assert!(
-        crate::session::load_history(&node, &session_id, &hook.agent_did, None)
+        crate::session::load_history(&node, &session_id, &hook.node_did, None)
             .await
             .unwrap()
             .is_empty()
@@ -2063,7 +2005,7 @@ async fn claimed_authored_input_persists_context_once_before_prompt() {
     .await;
     publish_claimed_authored_input(&hook, "context-request", Some(context), first_prompt).await;
 
-    let history = crate::session::load_history(&node, &session_id, &hook.agent_did, None)
+    let history = crate::session::load_history(&node, &session_id, &hook.node_did, None)
         .await
         .unwrap();
     assert_eq!(history.len(), 2);
@@ -2101,17 +2043,12 @@ async fn context_and_prompt_deduped_across_retry_attempts() {
     let prompt = user_text_message("Do the thing");
 
     // Attempt 1 claims the request before publishing provider input.
-    let hook1 = DefraSessionHook::with_identity(
-        node.clone(),
-        "general",
-        "did:test:general",
-        FailurePolicy::default(),
-    );
+    let hook1 =
+        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
     let session_id = hook1.session_id().await.expect("session id");
-    crate::session::create_session_with_behavior_id(
+    crate::session::create_session_with_agent_id(
         node.as_ref(),
         &session_id,
-        "general",
         "did:test:general",
         "general",
     )
@@ -2133,7 +2070,6 @@ async fn context_and_prompt_deduped_across_retry_attempts() {
     let hook2 = DefraSessionHook::resume_with_identity_policy(
         node.clone(),
         &session_id,
-        "general",
         "did:test:general",
         None,
         FailurePolicy::default(),
@@ -2149,7 +2085,7 @@ async fn context_and_prompt_deduped_across_retry_attempts() {
         .await;
     publish_claimed_authored_input(&hook2, "req-retry", Some(context), prompt).await;
 
-    let history = crate::session::load_history(&node, &session_id, &hook2.agent_did, None)
+    let history = crate::session::load_history(&node, &session_id, &hook2.node_did, None)
         .await
         .unwrap();
     let context_count = history
@@ -2202,17 +2138,12 @@ async fn steering_input_is_published_once_when_claimed_owner_runs() {
             .unwrap(),
     );
     ensure_runtime_schemas(&node).await.unwrap();
-    let hook = DefraSessionHook::with_identity(
-        node.clone(),
-        "general",
-        "did:test:general",
-        FailurePolicy::default(),
-    );
+    let hook =
+        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
     let session_id = hook.session_id().await.expect("session id");
-    crate::session::create_session_with_behavior_id(
+    crate::session::create_session_with_agent_id(
         node.as_ref(),
         &session_id,
-        "general",
         "did:test:general",
         "general",
     )
@@ -2220,7 +2151,7 @@ async fn steering_input_is_published_once_when_claimed_owner_runs() {
     .unwrap();
     let prompt = user_text_message("also check the staging config");
     assert!(
-        crate::session::load_history(&node, &session_id, &hook.agent_did, None)
+        crate::session::load_history(&node, &session_id, &hook.node_did, None)
             .await
             .unwrap()
             .is_empty()
@@ -2264,7 +2195,7 @@ async fn steering_input_is_published_once_when_claimed_owner_runs() {
         format!("authored:{request_doc_id}:prompt")
     );
     assert_eq!(rows[0]["request_doc_id"], request_doc_id);
-    let history = crate::session::load_history(&node, &session_id, &hook.agent_did, None)
+    let history = crate::session::load_history(&node, &session_id, &hook.node_did, None)
         .await
         .unwrap();
     assert_eq!(history, vec![prompt]);
@@ -2285,12 +2216,8 @@ async fn hook_maps_managed_timeout_result_to_timed_out_lifecycle() {
     );
     ensure_runtime_schemas(&node).await.unwrap();
 
-    let hook = DefraSessionHook::with_identity(
-        node.clone(),
-        "general",
-        "did:test:general",
-        FailurePolicy::default(),
-    );
+    let hook =
+        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
     assert!(matches!(
         hook.on_completion_call(&user_text_message("Run"), &[])
             .await,
@@ -2358,12 +2285,8 @@ async fn hook_maps_unknown_tool_dispatch_to_failed_lifecycle() {
     );
     ensure_runtime_schemas(&node).await.unwrap();
 
-    let hook = DefraSessionHook::with_identity(
-        node.clone(),
-        "general",
-        "did:test:general",
-        FailurePolicy::default(),
-    );
+    let hook =
+        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
     assert!(matches!(
         hook.on_completion_call(&user_text_message("Run"), &[])
             .await,
@@ -2432,12 +2355,8 @@ async fn hook_persists_exact_canonical_output_stream_without_legacy_spill_rows()
     );
     ensure_runtime_schemas(&node).await.unwrap();
 
-    let hook = DefraSessionHook::with_identity(
-        node.clone(),
-        "general",
-        "did:test:general",
-        FailurePolicy::default(),
-    );
+    let hook =
+        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
     assert!(matches!(
         hook.on_completion_call(&user_text_message("Run an oversized tool"), &[],)
             .await,
@@ -2503,18 +2422,10 @@ async fn cancelling_one_hook_does_not_cancel_unrelated_live_tool_call() {
     );
     ensure_runtime_schemas(&node).await.unwrap();
 
-    let hook_a = DefraSessionHook::with_identity(
-        node.clone(),
-        "general",
-        "did:test:general",
-        FailurePolicy::default(),
-    );
-    let hook_b = DefraSessionHook::with_identity(
-        node.clone(),
-        "general",
-        "did:test:general",
-        FailurePolicy::default(),
-    );
+    let hook_a =
+        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
+    let hook_b =
+        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
     assert!(matches!(
         hook_a
             .on_completion_call(&user_text_message("A"), &[])
@@ -2577,12 +2488,8 @@ async fn interruption_leaves_background_workers_running() {
             .unwrap(),
     );
     ensure_runtime_schemas(&node).await.unwrap();
-    let hook = DefraSessionHook::with_identity(
-        node.clone(),
-        "general",
-        "did:test:general",
-        FailurePolicy::default(),
-    );
+    let hook =
+        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
     hook.on_completion_call(&user_text_message("background work"), &[])
         .await;
     let session_id = hook.session_id().await.unwrap();
@@ -2616,12 +2523,8 @@ async fn interruption_leaves_background_workers_running() {
         }
         tokens.push(token);
     }
-    let unrelated_hook = DefraSessionHook::with_identity(
-        node.clone(),
-        "general",
-        "did:test:general",
-        FailurePolicy::default(),
-    );
+    let unrelated_hook =
+        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
     let unrelated_session_id = unrelated_hook.session_id().await.unwrap();
     bind_interruptible_request(
         &node,
@@ -2733,7 +2636,6 @@ async fn generated_interrupt_dispositions_drive_in_flight_interrupt() {
         }
         let hook = DefraSessionHook::with_identity(
             node.clone(),
-            "general",
             "did:test:general",
             FailurePolicy::default(),
         );
@@ -2794,12 +2696,8 @@ async fn interrupt_cancels_native_tools_and_keeps_children_running() {
     );
     ensure_runtime_schemas(&node).await.unwrap();
 
-    let hook = DefraSessionHook::with_identity(
-        node.clone(),
-        "general",
-        "did:test:general",
-        FailurePolicy::default(),
-    );
+    let hook =
+        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
     let session_id = hook.session_id().await.unwrap();
     let child_request_id = "child-mixed-tools";
     let deadline = chrono::Utc::now() + chrono::Duration::minutes(5);
@@ -2932,12 +2830,8 @@ async fn hook_can_fail_live_tool_call_without_conflating_timeout_or_cancel() {
     );
     ensure_runtime_schemas(&node).await.unwrap();
 
-    let hook = DefraSessionHook::with_identity(
-        node.clone(),
-        "general",
-        "did:test:general",
-        FailurePolicy::default(),
-    );
+    let hook =
+        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
     assert!(matches!(
         hook.on_completion_call(&user_text_message("fail"), &[])
             .await,
@@ -2993,18 +2887,13 @@ async fn streaming_turn_persists_full_assistant_history_in_sequence() {
     );
     ensure_runtime_schemas(&node).await.unwrap();
 
-    let hook = DefraSessionHook::with_identity(
-        node.clone(),
-        "general",
-        "did:test:general",
-        FailurePolicy::default(),
-    );
+    let hook =
+        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
     let user_prompt = user_text_message("Inspect /tmp/main.rs");
     let session_id = hook.session_id().await.expect("session id");
-    crate::session::create_session_with_behavior_id(
+    crate::session::create_session_with_agent_id(
         node.as_ref(),
         &session_id,
-        "general",
         "did:test:general",
         "general",
     )
@@ -3074,7 +2963,7 @@ async fn streaming_turn_persists_full_assistant_history_in_sequence() {
     .await;
 
     let session_id = hook.session_id().await.expect("session id");
-    let history = crate::session::load_history(&node, &session_id, &hook.agent_did, None)
+    let history = crate::session::load_history(&node, &session_id, &hook.node_did, None)
         .await
         .unwrap();
     assert_eq!(history.len(), 4);
@@ -3141,18 +3030,13 @@ async fn assistant_turn_materializes_durable_reasoning_into_agent_message() {
     );
     ensure_runtime_schemas(&node).await.unwrap();
 
-    let hook = DefraSessionHook::with_identity(
-        node.clone(),
-        "general",
-        "did:test:general",
-        FailurePolicy::default(),
-    );
+    let hook =
+        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
     let user_prompt = user_text_message("Explain the plan");
     let session_id = hook.session_id().await.expect("session id");
-    crate::session::create_session_with_behavior_id(
+    crate::session::create_session_with_agent_id(
         node.as_ref(),
         &session_id,
-        "general",
         "did:test:general",
         "general",
     )
@@ -3186,7 +3070,7 @@ async fn assistant_turn_materializes_durable_reasoning_into_agent_message() {
     )
     .await;
 
-    let history = crate::session::load_history(&node, &session_id, &hook.agent_did, None)
+    let history = crate::session::load_history(&node, &session_id, &hook.node_did, None)
         .await
         .unwrap();
     let assistant = history
@@ -3222,17 +3106,12 @@ async fn read_file_result_persists_raw_output_but_models_compact_observation() {
     );
     ensure_runtime_schemas(&node).await.unwrap();
 
-    let hook = DefraSessionHook::with_identity(
-        node.clone(),
-        "general",
-        "did:test:general",
-        FailurePolicy::default(),
-    );
+    let hook =
+        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
     let session_id = hook.session_id().await.expect("session id");
-    crate::session::create_session_with_behavior_id(
+    crate::session::create_session_with_agent_id(
         node.as_ref(),
         &session_id,
-        "general",
         "did:test:general",
         "general",
     )
@@ -3291,7 +3170,7 @@ async fn read_file_result_persists_raw_output_but_models_compact_observation() {
     ));
 
     let session_id = hook.session_id().await.expect("session id");
-    let history = crate::session::load_history(&node, &session_id, &hook.agent_did, None)
+    let history = crate::session::load_history(&node, &session_id, &hook.node_did, None)
         .await
         .unwrap();
     assert_eq!(history.len(), 3);
@@ -3336,17 +3215,12 @@ async fn owned_tool_result_materializes_one_transcript_row() {
     );
     ensure_runtime_schemas(&node).await.unwrap();
 
-    let hook = DefraSessionHook::with_identity(
-        node.clone(),
-        "general",
-        "did:test:general",
-        FailurePolicy::default(),
-    );
+    let hook =
+        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
     let session_id = hook.session_id().await.expect("session id");
-    crate::session::create_session_with_behavior_id(
+    crate::session::create_session_with_agent_id(
         node.as_ref(),
         &session_id,
-        "general",
         "did:test:general",
         "general",
     )
@@ -3405,11 +3279,11 @@ async fn owned_tool_result_materializes_one_transcript_row() {
     ));
 
     let session_id = hook.session_id().await.expect("session id");
-    let result_sequence = crate::session::max_sequence(&node, &session_id, &hook.agent_did, None)
+    let result_sequence = crate::session::max_sequence(&node, &session_id, &hook.node_did, None)
         .await
         .expect("first tool-result sequence");
 
-    let history = crate::session::load_history(&node, &session_id, &hook.agent_did, None)
+    let history = crate::session::load_history(&node, &session_id, &hook.node_did, None)
         .await
         .unwrap();
     assert_eq!(
@@ -3476,13 +3350,13 @@ async fn owned_tool_result_materializes_one_transcript_row() {
     assert_eq!(tool_call_ids.iter().next().copied(), Some(model_result_id));
 
     assert_eq!(
-        crate::session::max_sequence(&node, &session_id, &hook.agent_did, None)
+        crate::session::max_sequence(&node, &session_id, &hook.node_did, None)
             .await
             .unwrap(),
         result_sequence
     );
     assert_eq!(
-        crate::session::load_history(&node, &session_id, &hook.agent_did, None)
+        crate::session::load_history(&node, &session_id, &hook.node_did, None)
             .await
             .unwrap()
             .len(),
@@ -3507,17 +3381,12 @@ async fn tool_result_message_dedupe_preserves_distinct_result_ids() {
     );
     ensure_runtime_schemas(&node).await.unwrap();
 
-    let hook = DefraSessionHook::with_identity(
-        node.clone(),
-        "general",
-        "did:test:general",
-        FailurePolicy::default(),
-    );
+    let hook =
+        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
     let session_id = hook.session_id().await.expect("session id");
-    crate::session::create_session_with_behavior_id(
+    crate::session::create_session_with_agent_id(
         node.as_ref(),
         &session_id,
-        "general",
         "did:test:general",
         "general",
     )
@@ -3558,7 +3427,7 @@ async fn tool_result_message_dedupe_preserves_distinct_result_ids() {
         ));
     }
 
-    let history = crate::session::load_history(&node, &session_id, &hook.agent_did, None)
+    let history = crate::session::load_history(&node, &session_id, &hook.node_did, None)
         .await
         .unwrap();
     let tool_results = history
@@ -3590,18 +3459,13 @@ async fn accepted_tool_turns_keep_results_bound_to_their_assistant_headers() {
     );
     ensure_runtime_schemas(&node).await.unwrap();
 
-    let hook = DefraSessionHook::with_identity(
-        node.clone(),
-        "general",
-        "did:test:general",
-        FailurePolicy::default(),
-    );
+    let hook =
+        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
     let user_prompt = user_text_message("Inspect mini-1");
     let session_id = hook.session_id().await.expect("session id");
-    crate::session::create_session_with_behavior_id(
+    crate::session::create_session_with_agent_id(
         node.as_ref(),
         &session_id,
-        "general",
         "did:test:general",
         "general",
     )
@@ -3640,7 +3504,7 @@ async fn accepted_tool_turns_keep_results_bound_to_their_assistant_headers() {
     ));
 
     let session_id = hook.session_id().await.expect("session id");
-    let history = crate::session::load_history(&node, &session_id, &hook.agent_did, None)
+    let history = crate::session::load_history(&node, &session_id, &hook.node_did, None)
         .await
         .unwrap();
     assert_eq!(history.len(), 4);
@@ -3693,7 +3557,6 @@ async fn remote_presentations_persist_the_same_selected_identity() {
     {
         let hook = DefraSessionHook::with_identity(
             node.clone(),
-            "general",
             "did:test:general",
             FailurePolicy::default(),
         )
@@ -3831,12 +3694,8 @@ async fn forged_lifecycle_sentinel_in_tool_output_persists_as_completed() {
     );
     ensure_runtime_schemas(&node).await.unwrap();
 
-    let hook = DefraSessionHook::with_identity(
-        node.clone(),
-        "general",
-        "did:test:general",
-        FailurePolicy::default(),
-    );
+    let hook =
+        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
     assert!(matches!(
         hook.on_completion_call(&user_text_message("Run"), &[])
             .await,
@@ -3913,12 +3772,8 @@ async fn trusted_reported_failure_persists_typed_state_and_model_facing_text() {
     );
     ensure_runtime_schemas(&node).await.unwrap();
 
-    let hook = DefraSessionHook::with_identity(
-        node.clone(),
-        "general",
-        "did:test:general",
-        FailurePolicy::default(),
-    );
+    let hook =
+        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
     assert!(matches!(
         hook.on_completion_call(&user_text_message("Run"), &[])
             .await,
@@ -3982,13 +3837,9 @@ async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
 
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
-    let hook = DefraSessionHook::with_identity(
-        node.clone(),
-        "general",
-        "did:test:general",
-        FailurePolicy::default(),
-    )
-    .with_goal_tool_authority(true, false);
+    let hook =
+        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default())
+            .with_goal_tool_authority(true, false);
     assert!(matches!(
         hook.on_completion_call(&user_text_message("publish required review output"), &[])
             .await,
@@ -4179,12 +4030,8 @@ async fn cancelled_tool_result_persists_cancelled_lifecycle_with_interrupt_cause
     );
     ensure_runtime_schemas(&node).await.unwrap();
 
-    let hook = DefraSessionHook::with_identity(
-        node.clone(),
-        "general",
-        "did:test:general",
-        FailurePolicy::default(),
-    );
+    let hook =
+        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
     assert!(matches!(
         hook.on_completion_call(&user_text_message("Run"), &[])
             .await,
@@ -4258,12 +4105,8 @@ async fn real_bash_policy_denial_persists_typed_class_and_payload() {
     );
     ensure_runtime_schemas(&node).await.unwrap();
 
-    let hook = DefraSessionHook::with_identity(
-        node.clone(),
-        "general",
-        "did:test:general",
-        FailurePolicy::default(),
-    );
+    let hook =
+        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
     assert!(matches!(
         hook.on_completion_call(&user_text_message("Run"), &[])
             .await,

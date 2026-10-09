@@ -456,7 +456,7 @@ async fn close_session_preserves_creation_time() {
                     filter: { session_id: { _eq: "session-1" } },
                     limit: 1
                 ) {
-                    behavior_id
+                    agent_id
                     created_at
                     closed_at
                 }
@@ -479,7 +479,7 @@ async fn close_session_preserves_creation_time() {
         .expect("session row");
 
     assert_eq!(
-        row.get("behavior_id").and_then(|value| value.as_str()),
+        row.get("agent_id").and_then(|value| value.as_str()),
         Some("deploy-test")
     );
     assert!(row
@@ -538,8 +538,8 @@ async fn create_session_with_id_is_idempotent() {
                     created_at
                     tags
                     title
-                    agent_did
-                    behavior_id
+                    node_did
+                    agent_id
                 }
             }"#,
         )
@@ -566,11 +566,11 @@ async fn create_session_with_id_is_idempotent() {
         serde_json::json!({"text": "User title", "source": "user"})
     );
     assert_eq!(
-        rows[0].get("agent_did").and_then(|value| value.as_str()),
+        rows[0].get("node_did").and_then(|value| value.as_str()),
         Some("did:test:test")
     );
     assert_eq!(
-        rows[0].get("behavior_id").and_then(|value| value.as_str()),
+        rows[0].get("agent_id").and_then(|value| value.as_str()),
         Some("general")
     );
 
@@ -578,7 +578,7 @@ async fn create_session_with_id_is_idempotent() {
 }
 
 #[tokio::test]
-async fn create_session_with_behavior_id_rejects_mismatched_existing_binding() {
+async fn create_session_with_agent_id_rejects_mismatched_existing_binding() {
     let data_path =
         std::env::temp_dir().join(format!("gents-session-binding-{}", uuid::Uuid::new_v4()));
     let node = defra_node::EmbeddedNode::builder()
@@ -588,15 +588,14 @@ async fn create_session_with_behavior_id_rejects_mismatched_existing_binding() {
         .unwrap();
     ensure_runtime_schemas(&node).await.unwrap();
 
-    create_session_with_behavior_id(&node, "session-1", "general", "did:test:test", "general")
+    create_session_with_agent_id(&node, "session-1", "did:test:test", "general")
         .await
         .unwrap();
 
-    let error =
-        create_session_with_behavior_id(&node, "session-1", "general", "did:test:test", "code")
-            .await
-            .unwrap_err();
-    assert!(error.to_string().contains("behavior mismatch"));
+    let error = create_session_with_agent_id(&node, "session-1", "did:test:test", "code")
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("agent mismatch"));
 
     let _ = std::fs::remove_dir_all(&data_path);
 }
@@ -604,7 +603,7 @@ async fn create_session_with_behavior_id_rejects_mismatched_existing_binding() {
 async fn session_rewrite_rows(node: &defra_node::EmbeddedNode) -> Vec<Vec<String>> {
     let response = node
         .execute(
-            "{ AgentSession { _docID session_id behavior_id } \
+            "{ AgentSession { _docID session_id agent_id } \
                AgentMessage { _docID session_id sequence message_key } \
                CompactionEntry { _docID session_id sequence compaction_key summary } }",
         )
@@ -632,8 +631,8 @@ async fn fork_rolls_back_at_every_mutation_position() {
     const SOURCE: &str = "fork-rollback-source";
     let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
-    crate::test_support::install_test_behavior(&node, AGENT, "fork-rollback").await;
-    create_session_with_behavior_id(&node, SOURCE, "fork-rollback", AGENT, "fork-rollback")
+    crate::test_support::install_test_agent(&node, AGENT, "fork-rollback").await;
+    create_session_with_agent_id(&node, SOURCE, AGENT, "fork-rollback")
         .await
         .unwrap();
     for sequence in 1..=3u32 {
@@ -669,9 +668,9 @@ async fn fork_rolls_back_at_every_mutation_position() {
     let params = ForkParams {
         source_session_id: SOURCE,
         fork_at_user_turn: 3,
-        caller_agent_did: AGENT,
+        caller_node_did: AGENT,
         caller_requester_did: None,
-        target_behavior_id: None,
+        target_agent_id: None,
     };
 
     let (outcome, writes) = crate::config_client::ConfigApplyTxn::assert_every_mutation_rolls_back(
@@ -763,7 +762,7 @@ pub(crate) async fn import_history_observation(
     node: &std::sync::Arc<defra_node::EmbeddedNode>,
     request_id: &str,
     session_id: &str,
-    agent_did: &str,
+    node_did: &str,
     requester_did: Option<&str>,
     text: &str,
     message_key_suffix: &str,
@@ -774,7 +773,7 @@ pub(crate) async fn import_history_observation(
     use gents_protocol::output::*;
     let now = chrono::Utc::now().to_rfc3339();
     let segment = OutputSegment {
-        agent_did: agent_did.into(),
+        node_did: node_did.into(),
         requester_did: requester_did.map(str::to_owned),
         session_id: session_id.into(),
         request_doc_id: request_id.into(),
@@ -830,7 +829,7 @@ pub(crate) async fn import_history_observation(
     let header = TranscriptMessage {
         message_key: message_key_suffix.into(),
         session_id: session_id.into(),
-        agent_did: agent_did.into(),
+        node_did: node_did.into(),
         requester_did: requester_did.map(str::to_owned),
         request_doc_id: Some(request_id.into()),
         publication: match tool_call {
@@ -879,7 +878,7 @@ pub(crate) async fn import_history_observation(
     let (_, reconstructed) = load_canonical_message_from_node(
         node,
         row["_docID"].as_str().unwrap(),
-        agent_did,
+        node_did,
         requester_did,
     )
     .await
@@ -898,7 +897,7 @@ pub(crate) async fn import_history_observation(
 }
 
 #[tokio::test]
-async fn history_reads_exact_principal_and_requester_scope() {
+async fn history_reads_exact_node_and_requester_scope() {
     let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
     let rows = [
@@ -950,7 +949,7 @@ async fn history_reads_exact_principal_and_requester_scope() {
 }
 
 #[tokio::test]
-async fn authored_keys_are_immutable_and_sequences_are_principal_scoped() {
+async fn authored_keys_are_immutable_and_sequences_are_node_scoped() {
     let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
     for (owner, text) in [("did:key:owner", "local"), ("did:key:other", "foreign")] {
@@ -1056,21 +1055,21 @@ async fn compaction_chains_with_equal_session_labels_remain_owner_scoped() {
 async fn claimed_authored_request(
     node: &std::sync::Arc<defra_node::EmbeddedNode>,
     request_id: &str,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
 ) -> crate::lifecycle::RequestLifecycle {
     use crate::lifecycle::{ClaimOutcome, RequestLifecycle};
     let request_id = crate::graphql::escape_graphql_string(request_id);
-    let escaped_agent = crate::graphql::escape_graphql_string(agent_did);
+    let escaped_agent = crate::graphql::escape_graphql_string(node_did);
     let session_id = crate::graphql::escape_graphql_string(session_id);
     let now = crate::graphql::escape_graphql_string(&chrono::Utc::now().to_rfc3339());
     let created = node
         .execute(&format!(
             r#"mutation {{ create_AgentRequest(input: {{
-        request_id: "{request_id}", purpose: "normal", agent_did: "{escaped_agent}",
-        behavior_id: "general", session_id: "{session_id}", content: "race",
+        request_id: "{request_id}", purpose: "normal", node_did: "{escaped_agent}",
+        agent_id: "general", session_id: "{session_id}", content: "race",
         lifecycle_state: "pending", execution_origin: "interactive", created_at: "{now}",
-        retry_count: 0, max_retries: 3, subagent_depth: 0
+        retry_count: 0, max_retries: 3, request_hop: 0
     }}) {{ _docID }} }}"#
         ))
         .await;
@@ -1085,10 +1084,10 @@ async fn claimed_authored_request(
         crate::graphql::first_row(&response, "AgentRequest")
             .unwrap()
             .unwrap();
-    let mut lifecycle = RequestLifecycle::new_with_agent_did(
+    let mut lifecycle = RequestLifecycle::new_with_node_did(
         node.clone(),
         "general",
-        agent_did,
+        node_did,
         request.try_into().unwrap(),
         60,
     );
@@ -1206,7 +1205,7 @@ async fn single_header_transaction_matches_bulk_coordinate_validation() {
                     "key" => other.sequence = 2,
                     "sequence" => other.message_key = "sequence-twin".into(),
                     "both" => other.native_id = Some("distinct-physical-twin".into()),
-                    "foreign" => other.agent_did = "did:test:foreign".into(),
+                    "foreign" => other.node_did = "did:test:foreign".into(),
                     "requester" => other.requester_did = Some("did:test:requester".into()),
                     "fork" => {
                         other.session_id = "child-session".into();
@@ -1290,14 +1289,14 @@ async fn retry_frontier_matches_lean_admission() {
             "processing"
         };
         let parent = write_doc(&node, &format!(r#"mutation {{ create_AgentRequest(input: {{
-            request_id: "retry-frontier-parent-{index}", purpose: "normal", agent_did: "did:test:test",
-            behavior_id: "general", session_id: "{session}", content: "Do the work",
+            request_id: "retry-frontier-parent-{index}", purpose: "normal", node_did: "did:test:test",
+            agent_id: "general", session_id: "{session}", content: "Do the work",
             lifecycle_state: "{state}", failure_reason:"Stale", execution_origin: "interactive", created_at: "2026-10-07T00:00:00Z"
         }}) {{ _docID }} }}"#), "create_AgentRequest").await;
         let mut request = crate::watcher::AgentRequest::try_from(
             serde_json::from_value::<gents_protocol::row::AgentRequestRow>(serde_json::json!({
                 "_docID":"successor", "request_id":"successor", "purpose":"normal",
-                "agent_did":"did:test:test", "session_id":session_id, "behavior_id":"general",
+                "node_did":"did:test:test", "session_id":session_id, "agent_id":"general",
                 "content":"Do the work", "created_at":"2026-10-07T00:00:01Z",
                 "retry_parent_request_doc_id":parent
             }))
@@ -1352,7 +1351,7 @@ async fn retry_frontier_matches_lean_admission() {
                     &format!(
                         r#"mutation {{
                 create_AgentRequest(input: {{ request_id:"retry-frontier-second", purpose:"normal",
-                    agent_did:"did:test:test", behavior_id:"general", session_id:"{session}",
+                    node_did:"did:test:test", agent_id:"general", session_id:"{session}",
                     content:"Do the work", lifecycle_state:"failed", execution_origin:"interactive",
                     created_at:"2026-10-07T00:00:02Z", retry_parent_request_doc_id:"{parent_gql}"
                 }}) {{_docID}} }}"#

@@ -2,7 +2,7 @@
 //! admissions. Faults alter only recovery observations; assistant headers and
 //! tool rows come from the production stream owner.
 
-use crate::identity::AgentIdentity;
+use crate::identity::NodeIdentity;
 use crate::tool_call_lifecycle::admission_fixture::{
     complete_child, published_admission, published_session_message,
     published_session_message_with_owner, PublishedAdmission, PublishedAdmissionOptions,
@@ -61,7 +61,7 @@ async fn remove_parent(node: &crate::defra_node::EmbeddedNode, doc_id: &str) {
 async fn completion_obligations(
     node: &crate::defra_node::EmbeddedNode,
     session_id: &str,
-    agent_did: &str,
+    node_did: &str,
 ) -> (Vec<String>, Vec<serde_json::Value>) {
     let session_id = crate::graphql::escape_graphql_string(session_id);
     let response = node
@@ -76,8 +76,8 @@ async fn completion_obligations(
         let (_, message) = crate::session::load_canonical_message_from_node(
             node,
             row["_docID"].as_str().unwrap(),
-            agent_did,
-            Some(agent_did),
+            node_did,
+            Some(node_did),
         )
         .await
         .expect("reconstruct canonical recovery notification");
@@ -135,7 +135,7 @@ async fn generated_native_missing_parent_restart_cases_defer() {
             )
             .await;
         }
-        let report = ToolCallLifecycle::recover_all(&admission.node, &admission.agent_did)
+        let report = ToolCallLifecycle::recover_all(&admission.node, &admission.node_did)
             .await
             .unwrap();
         assert_eq!(report.tool_calls_recovered, 0, "{name}");
@@ -155,7 +155,7 @@ async fn generated_native_missing_parent_restart_cases_defer() {
 async fn settle(admission: &PublishedAdmission) -> usize {
     crate::background_completion::settle_running_session_message_rows(
         &admission.node,
-        &admission.agent_did,
+        &admission.node_did,
     )
     .await
     .unwrap()
@@ -229,7 +229,7 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
             );
             assert_eq!(row["tool_failure_class"], "external", "{name}");
             let (notifications, _) =
-                completion_obligations(&admission.node, &session_id, &admission.agent_did).await;
+                completion_obligations(&admission.node, &session_id, &admission.node_did).await;
             assert_eq!(
                 notifications.len(),
                 1,
@@ -256,7 +256,7 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
                 complete_child(
                     &admission.node,
                     &message.caused_request_id,
-                    &admission.agent_did,
+                    &admission.node_did,
                     "done",
                 )
                 .await;
@@ -298,7 +298,7 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
         }
         let session_id = admission.tool.session_id().to_owned();
         let (notifications, _) =
-            completion_obligations(&admission.node, &session_id, &admission.agent_did).await;
+            completion_obligations(&admission.node, &session_id, &admission.node_did).await;
         assert_eq!(notifications.len(), 1, "{name}");
         assert_notification_reason(&notifications[0], case);
         assert_eq!(settle(admission).await, 0, "{name}");
@@ -322,7 +322,7 @@ async fn caused_result_is_delivered_after_the_row_outlives_its_stored_deadline()
     .expect("publish accepted session message and materialize its request");
     let admission = &message.admission;
     let node = &admission.node;
-    let did = admission.agent_did.clone();
+    let did = admission.node_did.clone();
     let tool_doc_id = admission.tool.doc_id().unwrap().to_owned();
     let session_id = admission.tool.session_id().to_owned();
     update(node, &tool_doc_id, r#"deadline_at: "2020-01-01T00:00:00Z""#).await;
@@ -423,7 +423,7 @@ async fn kill_fixture(observation: &str) -> (PublishedAdmission, Option<String>)
                 complete_child(
                     &message.admission.node,
                     &message.caused_request_id,
-                    &message.admission.agent_did,
+                    &message.admission.node_did,
                     "finished before the kill",
                 )
                 .await;
@@ -446,7 +446,7 @@ async fn generated_kill_cases_drive_the_session_message_kill() {
     for case in cases {
         let (admission, caused_request_id) = kill_fixture(&case.observation).await;
         let node = admission.node.clone();
-        let did = admission.agent_did.clone();
+        let did = admission.node_did.clone();
         let session_id = admission.tool.session_id().to_owned();
         let mut tool = admission.tool;
         let outcome = crate::session_message::kill(&node, &mut tool)
@@ -490,7 +490,7 @@ async fn generated_kill_cases_drive_the_session_message_kill() {
 /// completion of the same turn rides that wake.
 #[tokio::test]
 async fn a_completion_at_the_bound_returns_at_the_callers_hop() {
-    use crate::identity::AgentIdentity;
+    use crate::identity::NodeIdentity;
     let message = published_session_message(PublishedAdmissionOptions {
         name: "session-message-wake-at-bound".to_owned(),
         real_identity: true,
@@ -500,21 +500,21 @@ async fn a_completion_at_the_bound_returns_at_the_callers_hop() {
     .await
     .expect("publish accepted session message and materialize its request");
     let node = message.admission.node.clone();
-    let did = message.admission.agent_did.clone();
+    let did = message.admission.node_did.clone();
     let session_id = message.admission.tool.session_id().to_owned();
     let caller_doc_id = message.admission.tool.request_doc_id().unwrap().to_owned();
     // The caused request runs at hop 1, the bound; its result returns at hop 0.
-    crate::document_config::ensure_agent_principal(&node, &did)
+    crate::document_config::ensure_node(&node, &did)
         .await
         .unwrap();
     let response = node
         .execute(&format!(
-            r#"mutation {{ update_AgentPrincipal(filter: {{ agent_did: {{ _eq: "{}" }} }}, input: {{ max_request_hop: 1 }}) {{ _docID }} }}"#,
+            r#"mutation {{ update_Node(filter: {{ node_did: {{ _eq: "{}" }} }}, input: {{ max_request_hop: 1 }}) {{ _docID }} }}"#,
             crate::graphql::escape_graphql_string(&did)
         ))
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
-    let identity: Arc<dyn AgentIdentity> = Arc::new(
+    let identity: Arc<dyn NodeIdentity> = Arc::new(
         crate::KeyIdentity::load_or_create(message.admission.path.join("test-agent.key"), None)
             .unwrap(),
     );
@@ -546,7 +546,7 @@ async fn a_completion_at_the_bound_returns_at_the_callers_hop() {
                 .await
                 .unwrap()
                 .unwrap();
-            let behavior = request.behavior_id.clone();
+            let behavior = request.agent_id.clone();
             let admitted = crate::agent::daemon::verify_request_at_claim_boundary(
                 verifier,
                 node.clone(),
@@ -556,7 +556,7 @@ async fn a_completion_at_the_bound_returns_at_the_callers_hop() {
             .await;
             let row = node
                 .execute(&format!(
-                    r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ subagent_depth lifecycle_state failure_reason }} }}"#,
+                    r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ request_hop lifecycle_state failure_reason }} }}"#,
                     crate::graphql::escape_graphql_string(&doc_id)
                 ))
                 .await
@@ -612,10 +612,10 @@ async fn a_completion_at_the_bound_returns_at_the_callers_hop() {
     .unwrap();
     assert!(!native.created_request);
     assert_eq!(pending_wakes(node.clone(), session_id.clone()).await, wakes);
-    crate::test_support::install_test_behavior(node.as_ref(), &did, &caller.behavior_id).await;
+    crate::test_support::install_test_agent(node.as_ref(), &did, &caller.agent_id).await;
     let (admitted, row) = admit(wakes[0].clone()).await;
     assert!(admitted, "{row}");
-    assert_eq!(row["subagent_depth"], caller.subagent_depth);
+    assert_eq!(row["request_hop"], caller.request_hop);
     assert_eq!(row["lifecycle_state"], "pending");
     node.shutdown().await;
     std::fs::remove_dir_all(&message.admission.path).unwrap();
@@ -637,7 +637,7 @@ async fn a_paired_client_session_receives_its_agent_new_result() {
     .await
     .expect("publish a paired client's agent_new and materialize its request");
     let node = message.admission.node.clone();
-    let did = message.admission.agent_did.clone();
+    let did = message.admission.node_did.clone();
     let session_id = message.admission.tool.session_id().to_owned();
     let caller_doc_id = message.admission.tool.request_doc_id().unwrap().to_owned();
     let caller = crate::request_binding::load_agent_request_by_doc_id(&node, &caller_doc_id)
@@ -680,7 +680,7 @@ async fn a_paired_client_session_receives_its_agent_new_result() {
     .unwrap()
     .unwrap();
     assert_eq!(wake.requester_did.as_deref(), Some(client.as_str()));
-    assert_eq!(wake.subagent_depth, caller.subagent_depth);
+    assert_eq!(wake.request_hop, caller.request_hop);
     // The calling turn ends; its session's queued result is next.
     calling
         .terminalize_owned(
@@ -698,8 +698,8 @@ async fn a_paired_client_session_receives_its_agent_new_result() {
         .await
         .unwrap();
 
-    crate::test_support::install_test_behavior(node.as_ref(), &did, &caller.behavior_id).await;
-    let identity: Arc<dyn AgentIdentity> = Arc::new(
+    crate::test_support::install_test_agent(node.as_ref(), &did, &caller.agent_id).await;
+    let identity: Arc<dyn NodeIdentity> = Arc::new(
         crate::KeyIdentity::load_or_create(message.admission.path.join("test-agent.key"), None)
             .unwrap(),
     );
@@ -711,14 +711,14 @@ async fn a_paired_client_session_receives_its_agent_new_result() {
     let verified = crate::agent::daemon::verify_request_at_claim_boundary(
         &verifier,
         node.clone(),
-        &wake.behavior_id,
+        &wake.agent_id,
         wake.clone(),
     )
     .await
     .expect("the returned result is admitted into the client's session");
-    let mut lifecycle = crate::RequestLifecycle::new_with_agent_did(
+    let mut lifecycle = crate::RequestLifecycle::new_with_node_did(
         node.clone(),
-        &wake.behavior_id,
+        &wake.agent_id,
         &did,
         verified.clone(),
         60,
@@ -730,7 +730,6 @@ async fn a_paired_client_session_receives_its_agent_new_result() {
     crate::hook::DefraSessionHook::resume_with_identity_policy(
         node.clone(),
         &session_id,
-        &wake.behavior_id,
         &did,
         verified.requester_did.as_deref(),
         crate::hook::FailurePolicy::FailClosed,
@@ -805,7 +804,7 @@ async fn generated_orphan_background_recovery_cases_use_accepted_native_call() {
         .await;
         let report = ToolCallLifecycle::reconcile_orphaned_background_tools(
             &admission.node,
-            &admission.agent_did,
+            &admission.node_did,
             &registry,
         )
         .await
@@ -847,7 +846,7 @@ async fn generated_orphan_background_recovery_cases_use_accepted_native_call() {
         }
         let session_id = format!("session-{fixture_name}");
         let (notifications, wakes) =
-            completion_obligations(&admission.node, &session_id, &admission.agent_did).await;
+            completion_obligations(&admission.node, &session_id, &admission.node_did).await;
         if let Some(reason) = case.notification_reason.as_deref() {
             assert_eq!(notifications.len(), 1, "{name}");
             assert!(
@@ -861,7 +860,7 @@ async fn generated_orphan_background_recovery_cases_use_accepted_native_call() {
         }
         let second = ToolCallLifecycle::reconcile_orphaned_background_tools(
             &admission.node,
-            &admission.agent_did,
+            &admission.node_did,
             &registry,
         )
         .await
@@ -896,17 +895,17 @@ async fn generated_registered_background_task_deletion_cases_use_live_worker() {
         std::env::temp_dir().join(format!("recovery-closeout-{name}-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&path).unwrap();
     let identity = crate::KeyIdentity::load_or_create(path.join("agent.key"), None).unwrap();
-    let agent_did = identity.did().to_owned();
+    let node_did = identity.did().to_owned();
     let node = Arc::new(
         crate::defra_node::EmbeddedNode::builder()
             .data_path(&path)
-            .with_node_identity_did(&agent_did)
+            .with_node_identity_did(&node_did)
             .build()
             .await
             .unwrap(),
     );
     crate::schema::ensure_runtime_schemas(&node).await.unwrap();
-    crate::test_support::install_test_behavior(&node, &agent_did, "general").await;
+    crate::test_support::install_test_agent(&node, &node_did, "general").await;
     let session_id = format!("session-{name}");
     let mut parent =
         crate::tool_call_lifecycle::admission_fixture::claimed_signed_request_with_trigger(
@@ -921,7 +920,7 @@ async fn generated_registered_background_task_deletion_cases_use_live_worker() {
     let tool = crate::tool_call_lifecycle::admission_fixture::publish_accepted_on_claimed_request(
         node.clone(),
         &mut parent,
-        &agent_did,
+        &node_did,
         0,
         crate::toolset::SPAWN_PROCESS_TOOL_NAME,
         "task-native-tool",
@@ -961,20 +960,20 @@ async fn generated_registered_background_task_deletion_cases_use_live_worker() {
     };
     let process = identity_rx.await.unwrap();
 
-    let escaped_agent = crate::graphql::escape_graphql_string(&agent_did);
+    let escaped_agent = crate::graphql::escape_graphql_string(&node_did);
     for mutation in [
         format!(
-            r#"mutation {{ create_Task(input: {{ task_id: "task-1858", agent_did: "{escaped_agent}", behavior_id: "general", prompt_template: "tick" }}) {{ _docID }} }}"#
+            r#"mutation {{ create_Task(input: {{ task_id: "task-1858", node_did: "{escaped_agent}", agent_id: "general", prompt_template: "tick" }}) {{ _docID }} }}"#
         ),
         format!(
-            r#"mutation {{ create_Trigger(input: {{ trigger_id: "trigger-1858", agent_did: "{escaped_agent}", task_id: "task-1858" }}) {{ _docID }} }}"#
+            r#"mutation {{ create_Trigger(input: {{ trigger_id: "trigger-1858", node_did: "{escaped_agent}", task_id: "task-1858" }}) {{ _docID }} }}"#
         ),
     ] {
         let response = node.execute(&mutation).await;
         assert!(!response.has_errors(), "{:?}", response.errors);
     }
     let report =
-        ToolCallLifecycle::reconcile_orphaned_background_tools(&node, &agent_did, &registry)
+        ToolCallLifecycle::reconcile_orphaned_background_tools(&node, &node_did, &registry)
             .await
             .unwrap();
     assert_eq!(report.tool_calls_terminalized, 0, "{}", left.name);
@@ -987,12 +986,12 @@ async fn generated_registered_background_task_deletion_cases_use_live_worker() {
 
     let response = node
         .execute(&format!(
-            r#"mutation {{ delete_Task(filter: {{ task_id: {{ _eq: "task-1858" }}, agent_did: {{ _eq: "{escaped_agent}" }} }}) {{ _docID }} }}"#
+            r#"mutation {{ delete_Task(filter: {{ task_id: {{ _eq: "task-1858" }}, node_did: {{ _eq: "{escaped_agent}" }} }}) {{ _docID }} }}"#
         ))
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
     let report =
-        ToolCallLifecycle::reconcile_orphaned_background_tools(&node, &agent_did, &registry)
+        ToolCallLifecycle::reconcile_orphaned_background_tools(&node, &node_did, &registry)
             .await
             .unwrap();
     assert_eq!(report.tool_calls_terminalized, 1, "{}", deleted.name);
@@ -1013,7 +1012,7 @@ async fn generated_registered_background_task_deletion_cases_use_live_worker() {
     let row = &response.data.unwrap()["AgentToolCall"][0];
     assert_eq!(row["lifecycle_state"], deleted.terminal_state.as_str());
     assert_eq!(row["cancel_cause"], "interrupted");
-    let (notifications, _) = completion_obligations(&node, &session_id, &agent_did).await;
+    let (notifications, _) = completion_obligations(&node, &session_id, &node_did).await;
     let reason = deleted.notification_reason.as_deref().unwrap();
     assert_eq!(notifications.len(), 1);
     assert!(notifications[0].contains(&format!("<reason>{reason}</reason>")));
@@ -1048,7 +1047,7 @@ async fn generated_missing_parent_deferred_cases_keep_accepted_row_running() {
         let error = match ToolCallLifecycle::load_by_doc_id(
             admission.node.clone(),
             &tool_doc_id,
-            &admission.agent_did,
+            &admission.node_did,
             admission.tool.session_id(),
             admission.tool.requester_did(),
         )
@@ -1066,7 +1065,7 @@ async fn generated_missing_parent_deferred_cases_keep_accepted_row_running() {
         let registry = crate::BackgroundExecutionRegistry::default();
         let report = ToolCallLifecycle::reconcile_orphaned_background_tools(
             &admission.node,
-            &admission.agent_did,
+            &admission.node_did,
             &registry,
         )
         .await
@@ -1115,21 +1114,21 @@ async fn generated_background_completion_recovery_uses_accepted_native_call() {
         .unwrap();
     let report = ToolCallLifecycle::reconcile_background_completion_side_effects(
         &admission.node,
-        &admission.agent_did,
+        &admission.node_did,
     )
     .await
     .unwrap();
     assert_eq!(report.side_effects_converged, 1, "{}", case.name);
     let second = ToolCallLifecycle::reconcile_background_completion_side_effects(
         &admission.node,
-        &admission.agent_did,
+        &admission.node_did,
     )
     .await
     .unwrap();
     assert!(second.is_noop(), "{}", case.name);
     let session_id = format!("session-{fixture_name}");
     let (notifications, wakes) =
-        completion_obligations(&admission.node, &session_id, &admission.agent_did).await;
+        completion_obligations(&admission.node, &session_id, &admission.node_did).await;
     assert_eq!(notifications.len(), 1, "{}", case.name);
     assert_eq!(wakes.len(), 1, "{}", case.name);
     admission.node.shutdown().await;

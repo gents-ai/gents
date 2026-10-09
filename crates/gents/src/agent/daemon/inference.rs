@@ -8,11 +8,11 @@ use futures::StreamExt;
 use gents_loop::output_obligation::OutputObligationCheck;
 use tracing::Instrument;
 
-use super::{BehaviorDaemon, HandleRequestOutcome, ShutdownDrainFailure};
+use super::{AgentDaemon, HandleRequestOutcome, ShutdownDrainFailure};
 use crate::admission::{self, CallKind};
 use crate::agent::loop_stream::{LoopReplayInput, TaggedMessage};
 use crate::compaction::ReductionOptions;
-use crate::config::{MaxTurnsProvenance, ResolvedBehavior};
+use crate::config::{MaxTurnsProvenance, ResolvedAgent};
 use crate::error::LoopFailureCause;
 use crate::hook::DefraSessionHook;
 use crate::llm::message::Message;
@@ -101,14 +101,14 @@ fn ensure_request_deadline_open(deadline: RequestDeadline, context: &str) -> Res
 
 pub(super) fn render_request_context_message(
     _node: &defra_node::EmbeddedNode,
-    behavior: &ResolvedBehavior,
+    agent_config: &ResolvedAgent,
     request: &AgentRequest,
     frozen_instruction_manifest: Option<&str>,
 ) -> Result<Option<Message>> {
     Ok(assemble_request_context_message(
         frozen_instruction_manifest,
         crate::workspace::request_workspace_cwd(request).as_deref(),
-        behavior.tools.host_tools().read_root(),
+        agent_config.tools.host_tools().read_root(),
     ))
 }
 
@@ -145,7 +145,7 @@ where
     }
 }
 
-impl<M: crate::llm::rig_compat::ProviderModel> BehaviorDaemon<M> {
+impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn run_inference(
         &mut self,
@@ -193,9 +193,9 @@ impl<M: crate::llm::rig_compat::ProviderModel> BehaviorDaemon<M> {
         let attempt_index = 1_i64;
         let request_id = request.request_id.clone();
         let session_id = request.session_id.clone();
-        let behavior_id = self.behavior.behavior_id.clone();
+        let agent_id = self.agent_config.agent_id.clone();
         let backend_id = lifecycle.backend_id().to_string();
-        let model_name = self.behavior.model_name.clone();
+        let model_name = self.agent_config.model_name.clone();
         // The rendered-request capture scope is installed by `handle_request`,
         // outside every completion loop the request contains — including the
         // pre-request compaction summarizer, which runs before this function is
@@ -209,8 +209,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> BehaviorDaemon<M> {
                 let hook = DefraSessionHook::resume_with_identity_policy(
                     self.node.clone(),
                     &request.session_id,
-                    &self.behavior.behavior_id,
-                    self.behavior.agent_did(),
+                    self.agent_config.node_did(),
                     request.requester_did.as_deref(),
                     self.hook_failure_policy,
                 )
@@ -220,8 +219,8 @@ impl<M: crate::llm::rig_compat::ProviderModel> BehaviorDaemon<M> {
                 .with_operator_tool_root(self.operator_tool_root.clone())
                 .with_remote_tools(self.remote_tools.clone())
                 .with_goal_tool_authority(
-                    self.behavior.tools.goal_tools_requested(),
-                    self.behavior.tools.goal_creation_requested(),
+                    self.agent_config.tools.goal_tools_requested(),
+                    self.agent_config.tools.goal_creation_requested(),
                 )
                 .with_output_obligation_gate(output_obligation_gate.clone());
                 hook.set_active_request_binding(
@@ -235,7 +234,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> BehaviorDaemon<M> {
 
                 let model = (*self.model).clone();
                 let mut loop_config = crate::completion_factory::loop_config_for_request(
-                    &self.behavior,
+                    &self.agent_config,
                     self.preamble.clone(),
                     request,
                     aggregate_token_budget.clone(),
@@ -246,8 +245,8 @@ impl<M: crate::llm::rig_compat::ProviderModel> BehaviorDaemon<M> {
                     .map(|gate| Arc::new(gate) as Arc<dyn OutputObligationCheck>);
                 let turn_compactor = self.compactor.clone();
                 let provider_profile = loop_config.provider_input_counter.profile();
-                let turn_context_window = self.behavior.context_window;
-                let max_turns_provenance = self.behavior.max_turns_provenance;
+                let turn_context_window = self.agent_config.context_window;
+                let max_turns_provenance = self.agent_config.max_turns_provenance;
                 let turn_compaction_options = self.compaction_options_for_request(
                     request_deadline,
                     aggregate_token_budget,
@@ -304,7 +303,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> BehaviorDaemon<M> {
                             crate::provider_context_reduction::capture_source_boundary(
                                 node.as_ref(),
                                 &request.session_id,
-                                &request.agent_did,
+                                &request.node_did,
                                 request.requester_did.as_deref(),
                                 &request.doc_id,
                                 &request_commit_cid,
@@ -374,7 +373,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> BehaviorDaemon<M> {
                             crate::provider_context_reduction::persist_exact(
                             node.as_ref(),
                             crate::provider_context_reduction::NewExactProviderContextReduction {
-                                agent_did: &request.agent_did,
+                                node_did: &request.node_did,
                                 requester_did: request.requester_did.as_deref(),
                                 session_id: &request.session_id,
                                 request_id: &request.request_id,
@@ -425,7 +424,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> BehaviorDaemon<M> {
                         "durable provider-context checkpoint has no current prompt",
                     )?;
                     anyhow::ensure!(
-                        row.agent_did == request.agent_did
+                        row.node_did == request.node_did
                             && row.requester_did == request.requester_did
                             && row.session_id == request.session_id
                             && row.request_id == request.request_id
@@ -435,7 +434,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> BehaviorDaemon<M> {
                     let boundary = row.source_boundary()?;
                     let replay_scope = crate::session::CanonicalReplayScope {
                         expected_scope_kind: gents_protocol::rendered_request::CaptureScopeKind::Inference,
-                        agent_did: &request.agent_did,
+                        node_did: &request.node_did,
                         requester_did: request.requester_did.as_deref(),
                         session_id: &request.session_id,
                         request_id: &request.request_id,
@@ -809,13 +808,13 @@ impl<M: crate::llm::rig_compat::ProviderModel> BehaviorDaemon<M> {
                 "inference.attempt",
                 request_id = %request_id,
                 session_id = %session_id,
-                agent_did = %request.agent_did,
-                behavior_id = %behavior_id,
+                node_did = %request.node_did,
+                agent_id = %agent_id,
                 backend_id = %backend_id,
                 model_name = %model_name,
                 deadline_at = %deadline_at,
                 has_deadline,
-                request_hop = request.subagent_depth,
+                request_hop = request.request_hop,
                 workspace_cwd_set,
                 attempt = attempt_index,
                 retry_attempt = false,
@@ -827,8 +826,8 @@ impl<M: crate::llm::rig_compat::ProviderModel> BehaviorDaemon<M> {
         // intercepts usually happens during polling.
         let outcome = crate::tool_call_lifecycle::runtime::scope_tool_request_identity(
             request.requester_did.clone(),
-            Some(request.agent_did.clone()),
-            Some(behavior_id.to_string()),
+            Some(request.node_did.clone()),
+            Some(agent_id.to_string()),
             Some(request.request_id.clone()),
             crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_workspace_overlay(
                 request_deadline,
@@ -856,18 +855,18 @@ pub(super) mod tests {
     use super::{
         assemble_request_context_message, await_with_request_deadline,
         ensure_request_deadline_open, request_deadline_remaining, stream_failure_reason,
-        terminal_response_has_visible_output, BehaviorDaemon, MaxTurnsProvenance,
+        terminal_response_has_visible_output, AgentDaemon, MaxTurnsProvenance,
     };
     use crate::agent::completion_retry::CompletionRetryProfileFields;
     use crate::agent::runtime::StartupBarrier;
     use crate::backend_provider::BackendProviderKind;
-    use crate::config::{ResolvedBehavior, SamplingConfig};
+    use crate::config::{ResolvedAgent, SamplingConfig};
     use crate::error::{CompletionFailure, LoopFailureCause};
     use crate::hook::{BackgroundExecutionRegistry, BackgroundToolRegistry, FailurePolicy};
-    use crate::identity::{AgentIdentity, KeyIdentity, RuntimePrincipal};
+    use crate::identity::{KeyIdentity, NodeIdentity, RuntimeNode};
     use crate::llm::tool::ToolDyn;
     use crate::prompt::LayeredPromptBuilder;
-    use crate::tool_surface::BehaviorToolConfig;
+    use crate::tool_surface::AgentToolSurfaceConfig;
     use crate::watcher::AgentRequest;
     use futures::stream;
     use rig::completion::{
@@ -883,7 +882,7 @@ pub(super) mod tests {
     /// rig's own turn-exhaustion `Display`. Its `PromptError: MaxTurnError: `
     /// prefix is pinned by `agent/loop_stream/tests/streaming.rs`; the
     /// parenthesised limit is pinned by
-    /// `tests/e2e_subagent/child_turn_limit.rs`.
+    /// `tests/e2e_background/session_message_turn_limit.rs`.
     const MAX_TURNS_DISPLAY: &str = "PromptError: MaxTurnError: (reached max turn limit: 1000)";
     const PINNED_PREFIX: &str = "agent stream failed: PromptError: MaxTurnError: ";
 
@@ -927,7 +926,7 @@ pub(super) mod tests {
         );
         assert!(reason.starts_with(PINNED_PREFIX));
         assert!(
-            reason.contains("BehaviorBuilder::max_turns"),
+            reason.contains("AgentBuilder::max_turns"),
             "must name the programmatic knob: {reason}"
         );
         assert!(
@@ -1134,37 +1133,37 @@ pub(super) mod tests {
         }
     }
 
-    pub(in crate::agent::daemon) fn test_behavior_with_deadline(
+    pub(in crate::agent::daemon) fn test_agent_with_deadline(
         deadline: Duration,
-    ) -> Arc<ResolvedBehavior> {
-        let mut behavior = ResolvedBehavior::clone(&test_behavior());
-        behavior.deadline_duration = deadline;
-        Arc::new(behavior)
+    ) -> Arc<ResolvedAgent> {
+        let mut agent_config = ResolvedAgent::clone(&test_agent());
+        agent_config.deadline_duration = deadline;
+        Arc::new(agent_config)
     }
 
-    fn test_behavior() -> Arc<ResolvedBehavior> {
-        let identity: Arc<dyn AgentIdentity> = Arc::new(
+    fn test_agent() -> Arc<ResolvedAgent> {
+        let identity: Arc<dyn NodeIdentity> = Arc::new(
             KeyIdentity::load_or_create(
                 std::env::temp_dir().join(format!("daemon-lineage-{}.key", uuid::Uuid::new_v4())),
                 None,
             )
             .expect("test identity"),
         );
-        test_behavior_with_identity(identity)
+        test_agent_with_identity(identity)
     }
 
-    fn test_behavior_with_identity(identity: Arc<dyn AgentIdentity>) -> Arc<ResolvedBehavior> {
-        let principal = Arc::new(RuntimePrincipal {
-            agent_did: identity.did().to_string(),
+    fn test_agent_with_identity(identity: Arc<dyn NodeIdentity>) -> Arc<ResolvedAgent> {
+        let principal = Arc::new(RuntimeNode {
+            node_did: identity.did().to_string(),
             identity,
-            default_behavior_id: "general".to_string(),
+            default_agent_id: "general".to_string(),
             display_name: None,
             enabled: true,
         });
 
-        Arc::new(ResolvedBehavior {
-            behavior_id: "general".to_string(),
-            principal,
+        Arc::new(ResolvedAgent {
+            agent_id: "general".to_string(),
+            node: principal,
             backend_id: Some("backend-general".to_string()),
             backend_provider_kind: BackendProviderKind::OpenAiCompatible,
             openai_wire_api: crate::OpenAiWireApi::ChatCompletions,
@@ -1177,7 +1176,7 @@ pub(super) mod tests {
             max_turns: 2,
             max_turns_provenance: crate::config::MaxTurnsProvenance::Default,
             system_prompt: "system".to_string(),
-            tools: BehaviorToolConfig::meta_only(),
+            tools: AgentToolSurfaceConfig::meta_only(),
             compaction: None,
             compaction_inference: None,
             max_total_tokens: None,
@@ -1195,13 +1194,13 @@ pub(super) mod tests {
 
     async fn create_routed_request(
         node: &defra_node::EmbeddedNode,
-        behavior: &ResolvedBehavior,
+        agent_config: &ResolvedAgent,
         requester_did: &str,
     ) -> AgentRequest {
-        crate::test_support::install_test_behavior(
+        crate::test_support::install_test_agent(
             node,
-            behavior.agent_did(),
-            &behavior.behavior_id,
+            agent_config.node_did(),
+            &agent_config.agent_id,
         )
         .await;
         let request_id = uuid::Uuid::new_v4().to_string();
@@ -1210,23 +1209,23 @@ pub(super) mod tests {
         let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
             request_id,
-            behavior.agent_did(),
+            agent_config.node_did(),
             requester_did,
-            &behavior.behavior_id,
+            &agent_config.agent_id,
             session_id,
             "route this reply",
             "interactive",
             created_at,
             gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
-                behavior.agent_did(),
+                agent_config.node_did(),
             ),
         );
-        create.subagent_depth = 1;
+        create.request_hop = 1;
         create.caused_by_parent_request_id = Some("parent-request".into());
         create.caused_by_parent_request_doc_id = Some("parent-request-doc".into());
         create.caused_by_parent_tool_call_id = Some("parent-tool-call".into());
         create.caused_by_parent_tool_call_doc_id = Some("parent-tool-call-doc".into());
-        crate::sign_agent_request_create(behavior.principal_identity().as_ref(), &mut create)
+        crate::sign_agent_request_create(agent_config.node_identity().as_ref(), &mut create)
             .await
             .unwrap();
         let response = node.execute(&create.graphql_mutation().unwrap()).await;
@@ -1249,23 +1248,23 @@ pub(super) mod tests {
 
     async fn create_enrollment_daemon_request(
         node: &defra_node::EmbeddedNode,
-        behavior: &ResolvedBehavior,
-        member: &dyn AgentIdentity,
+        agent_config: &ResolvedAgent,
+        member: &dyn NodeIdentity,
         fence: &crate::agent::p2p_reconcile::enrollment_reconcile::EnrollmentAuthorizationFence,
         suffix: &str,
     ) -> AgentRequest {
-        crate::test_support::install_test_behavior(
+        crate::test_support::install_test_agent(
             node,
-            behavior.agent_did(),
-            &behavior.behavior_id,
+            agent_config.node_did(),
+            &agent_config.agent_id,
         )
         .await;
         let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
             format!("request-{suffix}"),
-            behavior.agent_did(),
+            agent_config.node_did(),
             member.did(),
-            &behavior.behavior_id,
+            &agent_config.agent_id,
             format!("session-{suffix}"),
             "run enrolled request",
             "interactive",
@@ -1470,12 +1469,12 @@ pub(super) mod tests {
             .await
             .expect("runtime schemas");
 
-        let behavior = test_behavior();
-        let requester_did = behavior.agent_did().to_string();
-        let request = create_routed_request(node.as_ref(), &behavior, &requester_did).await;
-        let prompt_builder = LayeredPromptBuilder::for_behavior(
-            &behavior.system_prompt,
-            &behavior.behavior_id,
+        let agent_config = test_agent();
+        let requester_did = agent_config.node_did().to_string();
+        let request = create_routed_request(node.as_ref(), &agent_config, &requester_did).await;
+        let prompt_builder = LayeredPromptBuilder::for_agent(
+            &agent_config.system_prompt,
+            &agent_config.agent_id,
             &[],
             false,
             &[],
@@ -1484,12 +1483,12 @@ pub(super) mod tests {
         let loop_tools: Arc<Vec<Box<dyn ToolDyn>>> = Arc::new(Vec::new());
         let runtime_status = crate::runtime_status::RuntimeStatusHandle::new(
             node.clone(),
-            behavior.agent_did().to_string(),
+            agent_config.node_did().to_string(),
         );
-        let request_identity = behavior.principal_identity().clone();
-        let mut daemon = BehaviorDaemon::new(
+        let request_identity = agent_config.node_identity().clone();
+        let mut daemon = AgentDaemon::new(
             node.clone(),
-            behavior,
+            agent_config,
             None,
             Arc::new(RoutedReplyModel),
             preamble,
@@ -1578,7 +1577,7 @@ pub(super) mod tests {
         let _ = std::fs::remove_dir_all(data_path);
     }
 
-    /// The R6 completion fixture uses a background subagent child, not a
+    /// The R6 completion fixture uses a background agent-target session, not a
     /// spawned shell process. Its selected wake remains pending until the
     /// daemon's ordinary admission and claim path runs here.
     #[tokio::test]
@@ -1597,13 +1596,13 @@ pub(super) mod tests {
             RequestLifecycleState::Pending,
             "watcher selection must not preclaim the wake"
         );
-        let identity: Arc<dyn AgentIdentity> = Arc::new(
+        let identity: Arc<dyn NodeIdentity> = Arc::new(
             KeyIdentity::load_or_create(admission.path.join("test-agent.key"), None)
                 .expect("load the signed fixture's original identity"),
         );
-        let behavior = test_behavior_with_identity(identity);
-        assert_eq!(behavior.agent_did(), admission.agent_did);
-        assert_eq!(wake.agent_did, admission.agent_did);
+        let agent_config = test_agent_with_identity(identity);
+        assert_eq!(agent_config.node_did(), admission.node_did);
+        assert_eq!(wake.node_did, admission.node_did);
         assert_eq!(
             wake.max_total_tokens, None,
             "fixture allows the daemon to create an auxiliary title request"
@@ -1611,7 +1610,7 @@ pub(super) mod tests {
         assert!(
             crate::session::session_needs_generated_title(
                 &node,
-                &admission.agent_did,
+                &admission.node_did,
                 wake.requester_did.as_deref(),
                 &wake.session_id,
             )
@@ -1620,9 +1619,9 @@ pub(super) mod tests {
             "fixture starts with a placeholder title so title work is created"
         );
 
-        let prompt_builder = LayeredPromptBuilder::for_behavior(
-            &behavior.system_prompt,
-            &behavior.behavior_id,
+        let prompt_builder = LayeredPromptBuilder::for_agent(
+            &agent_config.system_prompt,
+            &agent_config.agent_id,
             &[],
             false,
             &[],
@@ -1631,10 +1630,10 @@ pub(super) mod tests {
         let provider_inputs = Arc::new(std::sync::Mutex::new(Vec::new()));
         let title_calls = Arc::new(AtomicUsize::new(0));
         let title_shape_mismatches = Arc::new(AtomicUsize::new(0));
-        let request_identity = behavior.principal_identity().clone();
-        let mut daemon = BehaviorDaemon::new(
+        let request_identity = agent_config.node_identity().clone();
+        let mut daemon = AgentDaemon::new(
             node.clone(),
-            behavior,
+            agent_config,
             None,
             Arc::new(WakeInputModel {
                 provider_inputs: provider_inputs.clone(),
@@ -1651,7 +1650,7 @@ pub(super) mod tests {
             Arc::new(StartupBarrier::ready_for_test()),
             crate::runtime_status::RuntimeStatusHandle::new(
                 node.clone(),
-                admission.agent_did.clone(),
+                admission.node_did.clone(),
             ),
             1,
             crate::request_admission::AgentRequestAdmissionVerifier::new(
@@ -1670,7 +1669,7 @@ pub(super) mod tests {
         // This direct daemon fixture has no watcher/router. The creator must
         // publish title work, but cannot dispatch its provider call here.
         let session_id = crate::graphql::escape_graphql_string(&wake.session_id);
-        let agent_did = crate::graphql::escape_graphql_string(&admission.agent_did);
+        let node_did = crate::graphql::escape_graphql_string(&admission.node_did);
         let title_purpose = crate::graphql::escape_graphql_string(
             gents_protocol::request_admission::RequestPurpose::TitleAudit.as_str(),
         );
@@ -1678,7 +1677,7 @@ pub(super) mod tests {
             loop {
                 let response = crate::config_client::ConfigAccess::Local(node.clone())
                     .execute(&format!(
-                        r#"{{ AgentRequest(filter: {{ agent_did: {{ _eq: "{agent_did}" }}, session_id: {{ _eq: "{session_id}" }}, purpose: {{ _eq: "{title_purpose}" }} }}) {{ lifecycle_state caused_by_parent_request_id caused_by_parent_request_doc_id }} }}"#
+                        r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{node_did}" }}, session_id: {{ _eq: "{session_id}" }}, purpose: {{ _eq: "{title_purpose}" }} }}) {{ lifecycle_state caused_by_parent_request_id caused_by_parent_request_doc_id }} }}"#
                     ))
                     .await
                     .expect("observe pending title request");
@@ -1700,7 +1699,7 @@ pub(super) mod tests {
         assert!(
             crate::session::session_needs_generated_title(
                 &node,
-                &admission.agent_did,
+                &admission.node_did,
                 wake.requester_did.as_deref(),
                 &wake.session_id,
             )
@@ -1777,12 +1776,12 @@ pub(super) mod tests {
                 .expect("WorkspaceRoot document id")
                 .to_owned();
 
-        let behavior = test_behavior();
-        let requester_did = behavior.agent_did().to_string();
-        let first = create_routed_request(node.as_ref(), &behavior, &requester_did).await;
-        let prompt_builder = LayeredPromptBuilder::for_behavior(
-            &behavior.system_prompt,
-            &behavior.behavior_id,
+        let agent_config = test_agent();
+        let requester_did = agent_config.node_did().to_string();
+        let first = create_routed_request(node.as_ref(), &agent_config, &requester_did).await;
+        let prompt_builder = LayeredPromptBuilder::for_agent(
+            &agent_config.system_prompt,
+            &agent_config.agent_id,
             &[],
             false,
             &[],
@@ -1790,12 +1789,12 @@ pub(super) mod tests {
         let calls = Arc::new(AtomicUsize::new(0));
         let runtime_status = crate::runtime_status::RuntimeStatusHandle::new(
             node.clone(),
-            behavior.agent_did().to_string(),
+            agent_config.node_did().to_string(),
         );
-        let request_identity = behavior.principal_identity().clone();
-        let mut daemon = BehaviorDaemon::new(
+        let request_identity = agent_config.node_identity().clone();
+        let mut daemon = AgentDaemon::new(
             node.clone(),
-            behavior.clone(),
+            agent_config.clone(),
             None,
             Arc::new(CountingReplyModel(calls.clone())),
             prompt_builder.preamble().to_string(),
@@ -1816,7 +1815,7 @@ pub(super) mod tests {
         )
         .unwrap()
         .with_root_execution_guard(Some(crate::tool_surface::RootExecutionGuard {
-            behavior_id: behavior.behavior_id.clone(),
+            agent_id: agent_config.agent_id.clone(),
             selected_root: Some(selected.clone()),
             ceiling_root: Some(selected.clone()),
         }));
@@ -1864,7 +1863,7 @@ pub(super) mod tests {
             ))
             .await;
         assert!(!revoked.has_errors(), "{:?}", revoked.errors);
-        let second = create_routed_request(node.as_ref(), &behavior, &requester_did).await;
+        let second = create_routed_request(node.as_ref(), &agent_config, &requester_did).await;
         let second_doc_id = second.doc_id.clone();
         daemon.process_request(second, shutdown_rx).await.unwrap();
         assert_eq!(
@@ -1916,9 +1915,9 @@ pub(super) mod tests {
                 .expect("embedded node"),
         );
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-        let behavior = test_behavior();
+        let agent_config = test_agent();
         let member_dir = tempfile::tempdir().unwrap();
-        let member: Arc<dyn AgentIdentity> = Arc::new(
+        let member: Arc<dyn NodeIdentity> = Arc::new(
             KeyIdentity::load_or_create(member_dir.path().join("member.key"), None).unwrap(),
         );
         let fence = |sequence: u64, request_id: &str| {
@@ -1929,7 +1928,7 @@ pub(super) mod tests {
                 member_did: member.did().to_string(),
                 member_peer: "peer-member".into(),
                 member_ticket: "ticket-member".into(),
-                owner_agent: behavior.agent_did().to_string(),
+                owner_node: agent_config.node_did().to_string(),
                 request_digest: format!("digest-{sequence}"),
                 authorization_sequence: sequence,
                 authorization_expires_at: "2099-01-01T00:00:00Z".into(),
@@ -1938,7 +1937,7 @@ pub(super) mod tests {
         let generation_one = fence(1, "enrollment-1");
         let revoked = create_enrollment_daemon_request(
             node.as_ref(),
-            &behavior,
+            &agent_config,
             member.as_ref(),
             &generation_one,
             "revoked",
@@ -1949,9 +1948,9 @@ pub(super) mod tests {
                 generation_one,
             ));
 
-        let prompt_builder = LayeredPromptBuilder::for_behavior(
-            &behavior.system_prompt,
-            &behavior.behavior_id,
+        let prompt_builder = LayeredPromptBuilder::for_agent(
+            &agent_config.system_prompt,
+            &agent_config.agent_id,
             &[],
             false,
             &[],
@@ -1959,12 +1958,12 @@ pub(super) mod tests {
         let calls = Arc::new(AtomicUsize::new(0));
         let runtime_status = crate::runtime_status::RuntimeStatusHandle::new(
             node.clone(),
-            behavior.agent_did().to_string(),
+            agent_config.node_did().to_string(),
         );
-        let request_identity = behavior.principal_identity().clone();
-        let mut daemon = BehaviorDaemon::new(
+        let request_identity = agent_config.node_identity().clone();
+        let mut daemon = AgentDaemon::new(
             node.clone(),
-            behavior.clone(),
+            agent_config.clone(),
             None,
             Arc::new(CountingReplyModel(calls.clone())),
             prompt_builder.preamble().to_string(),
@@ -2012,7 +2011,7 @@ pub(super) mod tests {
         authority.replace(Some(generation_two.clone())).await;
         let replacement = create_enrollment_daemon_request(
             node.as_ref(),
-            &behavior,
+            &agent_config,
             member.as_ref(),
             &generation_two,
             "replacement",

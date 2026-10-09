@@ -39,18 +39,18 @@ pub async fn interrupt_request(node: &EmbeddedNode, request_id: &str) -> Result<
         .map(|_| ())
 }
 
-/// Interrupt the exact request already selected within a principal/requester scope.
+/// Interrupt the exact request already selected within a node/requester scope.
 /// DefraDB ACP and the existing interruption owner retain all authorization and lifecycle work.
 pub async fn interrupt_request_by_doc_id(
     node: &EmbeddedNode,
     request_doc_id: &str,
-    agent_did: &str,
+    node_did: &str,
     requester_did: Option<&str>,
 ) -> Result<()> {
     interrupt_request_by_doc_id_returning_drained_wake_ids(
         node,
         request_doc_id,
-        agent_did,
+        node_did,
         requester_did,
     )
     .await
@@ -60,51 +60,51 @@ pub async fn interrupt_request_by_doc_id(
 pub(crate) async fn interrupt_request_by_doc_id_returning_drained_wake_ids(
     node: &EmbeddedNode,
     request_doc_id: &str,
-    agent_did: &str,
+    node_did: &str,
     requester_did: Option<&str>,
 ) -> Result<Vec<String>> {
     interrupt_request_matching(
         node,
-        exact_request_filter(request_doc_id, agent_did, requester_did)?,
+        exact_request_filter(request_doc_id, node_did, requester_did)?,
     )
     .await
 }
 
 fn exact_request_filter(
     request_doc_id: &str,
-    agent_did: &str,
+    node_did: &str,
     requester_did: Option<&str>,
 ) -> Result<String> {
     anyhow::ensure!(
-        !request_doc_id.trim().is_empty() && !agent_did.trim().is_empty(),
-        "interrupt requires physical request and principal identity"
+        !request_doc_id.trim().is_empty() && !node_did.trim().is_empty(),
+        "interrupt requires physical request and node identity"
     );
     let physical = escape_graphql_string(request_doc_id);
-    let owner = escape_graphql_string(agent_did);
+    let owner = escape_graphql_string(node_did);
     let requester = requester_did
         .map(|did| format!("\"{}\"", escape_graphql_string(did)))
         .unwrap_or_else(|| "null".into());
     Ok(format!(
-        "_docID:{{_eq:\"{physical}\"}},agent_did:{{_eq:\"{owner}\"}},requester_did:{{_eq:{requester}}}"
+        "_docID:{{_eq:\"{physical}\"}},node_did:{{_eq:\"{owner}\"}},requester_did:{{_eq:{requester}}}"
     ))
 }
 
 fn scoped_request_filter(
     request_id: &str,
-    agent_did: &str,
+    node_did: &str,
     requester_did: Option<&str>,
 ) -> Result<String> {
     anyhow::ensure!(
-        !request_id.trim().is_empty() && !agent_did.trim().is_empty(),
-        "interrupt fetch requires logical request and principal identity"
+        !request_id.trim().is_empty() && !node_did.trim().is_empty(),
+        "interrupt fetch requires logical request and node identity"
     );
     let logical = escape_graphql_string(request_id);
-    let owner = escape_graphql_string(agent_did);
+    let owner = escape_graphql_string(node_did);
     let requester = requester_did
         .map(|did| format!("\"{}\"", escape_graphql_string(did)))
         .unwrap_or_else(|| "null".into());
     Ok(format!(
-        "request_id:{{_eq:\"{logical}\"}},agent_did:{{_eq:\"{owner}\"}},requester_did:{{_eq:{requester}}}"
+        "request_id:{{_eq:\"{logical}\"}},node_did:{{_eq:\"{owner}\"}},requester_did:{{_eq:{requester}}}"
     ))
 }
 
@@ -113,10 +113,10 @@ fn scoped_request_filter(
 pub async fn interrupt_request_by_doc_id_with_access(
     access: &crate::config_client::ConfigAccess,
     request_doc_id: &str,
-    agent_did: &str,
+    node_did: &str,
     requester_did: Option<&str>,
 ) -> Result<()> {
-    let filter = exact_request_filter(request_doc_id, agent_did, requester_did)?;
+    let filter = exact_request_filter(request_doc_id, node_did, requester_did)?;
     access
         .transact("interrupt.latch_request", |txn| {
             let filter = &filter;
@@ -143,7 +143,7 @@ async fn interrupt_request_matching_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     filter: &str,
 ) -> Result<Vec<String>> {
-    let lookup = txn.execute(&format!(r#"{{AgentRequest(filter: {{{filter}}}, limit: 2) {{_docID request_id session_id agent_did requester_did interrupt_requested_at}}}}"#)).await?;
+    let lookup = txn.execute(&format!(r#"{{AgentRequest(filter: {{{filter}}}, limit: 2) {{_docID request_id session_id node_did requester_did interrupt_requested_at}}}}"#)).await?;
     let rows = lookup["data"]["AgentRequest"]
         .as_array()
         .ok_or_else(|| anyhow::anyhow!("interrupt request query omitted rows"))?;
@@ -163,10 +163,10 @@ async fn interrupt_request_matching_in_txn(
         .as_str()
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| anyhow::anyhow!("interrupt request missing session identity"))?;
-    let agent_did = row["agent_did"]
+    let node_did = row["node_did"]
         .as_str()
         .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| anyhow::anyhow!("interrupt request missing principal identity"))?;
+        .ok_or_else(|| anyhow::anyhow!("interrupt request missing node identity"))?;
     if row["interrupt_requested_at"]
         .as_str()
         .is_some_and(|value| !value.is_empty())
@@ -186,7 +186,7 @@ async fn interrupt_request_matching_in_txn(
     drain_automated_wakeups_in_txn(
         txn,
         session_id,
-        agent_did,
+        node_did,
         row["requester_did"].as_str(),
         "automated wake-up drained because active request was interrupted",
     )
@@ -196,13 +196,13 @@ async fn interrupt_request_matching_in_txn(
 pub(crate) async fn active_session_request(
     node: &EmbeddedNode,
     session_id: &str,
-    agent_did: &str,
+    node_did: &str,
     requester_did: Option<&str>,
 ) -> Result<Option<gents_protocol::row::AgentRequestRow>> {
-    let scope = crate::session::session_scope_filter(agent_did, session_id, requester_did);
+    let scope = crate::session::session_scope_filter(node_did, session_id, requester_did);
     let response = graphql_with_transaction_retry(
         node,
-        &format!(r#"{{AgentRequest(filter:{{{scope},purpose:{{_eq:"normal"}},lifecycle_state:{{_in:["claimed","processing"]}}}},limit:2){{_docID request_id agent_did requester_did session_id}}}}"#),
+        &format!(r#"{{AgentRequest(filter:{{{scope},purpose:{{_eq:"normal"}},lifecycle_state:{{_in:["claimed","processing"]}}}},limit:2){{_docID request_id node_did requester_did session_id}}}}"#),
         "active request lookup",
     )
     .await?;
@@ -227,7 +227,7 @@ pub(crate) async fn active_session_request(
 /// document identified by `_docID`.
 ///
 /// `_docID` is the globally unique physical key, so this lookup cannot
-/// cross principals or collide on a shared logical `request_id`.
+/// cross nodes or collide on a shared logical `request_id`.
 pub async fn fetch_interrupt_requested_at_by_doc_id(
     node: &EmbeddedNode,
     request_doc_id: &str,
@@ -283,18 +283,18 @@ pub async fn fetch_interrupt_requested_at(
 }
 
 /// Fetch the durable interrupt intent by logical request id within one
-/// principal scope (`agent_did` + optional `requester_did`).
+/// node scope (`node_did` + optional `requester_did`).
 ///
-/// Cross-principal collisions on the same logical id are excluded by the
+/// Cross-node collisions on the same logical id are excluded by the
 /// scope; any residual same-scope collision fails closed via the existing
 /// ambiguity rejection (`limit: 2` + row-count check), never `limit: 1`.
 pub async fn fetch_interrupt_requested_at_scoped(
     node: &EmbeddedNode,
     request_id: &str,
-    agent_did: &str,
+    node_did: &str,
     requester_did: Option<&str>,
 ) -> Result<Option<String>> {
-    let filter = scoped_request_filter(request_id, agent_did, requester_did)?;
+    let filter = scoped_request_filter(request_id, node_did, requester_did)?;
     let query = format!(
         r#"query {{
             AgentRequest(
@@ -316,7 +316,7 @@ pub async fn fetch_interrupt_requested_at_scoped(
         .ok_or_else(|| anyhow::anyhow!("interrupt request fetch omitted rows"))?;
     anyhow::ensure!(
         rows.len() <= 1,
-        "interrupt request fetch is ambiguous within principal scope"
+        "interrupt request fetch is ambiguous within node scope"
     );
     Ok(rows
         .first()

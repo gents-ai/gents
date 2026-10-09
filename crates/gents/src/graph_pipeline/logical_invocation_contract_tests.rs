@@ -2,7 +2,7 @@
 use super::*;
 use crate::goal::{set_goal, GoalStatus};
 use crate::graph_pipeline::runtime::graph_test_owner;
-use crate::identity::{AgentIdentity, KeyIdentity};
+use crate::identity::{KeyIdentity, NodeIdentity};
 use crate::request_admission::SIGNED_REQUEST_FIELDS;
 use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
 
@@ -134,7 +134,7 @@ pub(super) async fn prepare_signed_child(
     let foreign =
         KeyIdentity::load_or_create(foreign_temp.path().join("foreign.key"), None).unwrap();
     let signer = if variant == "wrong_child_owner" {
-        parent.agent_did = foreign.did().to_owned();
+        parent.node_did = foreign.did().to_owned();
         &foreign
     } else {
         identity
@@ -147,7 +147,7 @@ pub(super) async fn prepare_signed_child(
         1,
         false,
         "2026-08-25T00:00:00Z",
-        parent.subagent_depth,
+        parent.request_hop,
     )
     .unwrap();
     if variant == "wrong_physical_parent_edge" {
@@ -1057,12 +1057,12 @@ async fn graph_fixture_root_binding_survives_task_metadata_changes() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let identity = runtime::graph_test_identity();
-    crate::document_config::ensure_agent_principal(&node, identity.did())
+    crate::document_config::ensure_node(&node, identity.did())
         .await
         .unwrap();
-    crate::test_support::install_test_behavior(&node, identity.did(), "package").await;
+    crate::test_support::install_test_agent(&node, identity.did(), "package").await;
     let bindings = GraphPackageInstallBindings {
-        agent_did: identity.did().into(),
+        node_did: identity.did().into(),
         inference_slots: std::collections::BTreeMap::from([
             ("coordinator".into(), "package:inference".into()),
             ("worker".into(), "package:inference".into()),
@@ -1091,7 +1091,7 @@ async fn graph_fixture_root_binding_survives_task_metadata_changes() {
     let route = execute(
         &node,
         &format!(
-            r#"{{ Trigger(filter: {{ agent_did: {{ _eq: "{}" }}, trigger_id: {{ _eq: "{}" }} }}) {{ _docID task_id }} }}"#,
+            r#"{{ Trigger(filter: {{ node_did: {{ _eq: "{}" }}, trigger_id: {{ _eq: "{}" }} }}) {{ _docID task_id }} }}"#,
             crate::graphql::escape_graphql_string(identity.did()),
             crate::graphql::escape_graphql_string(&trigger)
         ),
@@ -1101,13 +1101,13 @@ async fn graph_fixture_root_binding_survives_task_metadata_changes() {
     let task = execute(
         &node,
         &format!(
-            r#"{{ Task(filter: {{ agent_did: {{ _eq: "{}" }}, task_id: {{ _eq: "{}" }} }}) {{ behavior_id }} }}"#,
+            r#"{{ Task(filter: {{ node_did: {{ _eq: "{}" }}, task_id: {{ _eq: "{}" }} }}) {{ agent_id }} }}"#,
             crate::graphql::escape_graphql_string(identity.did()),
             crate::graphql::escape_graphql_string(task_id)
         ),
     )
     .await;
-    let behavior = task["Task"][0]["behavior_id"].as_str().unwrap();
+    let behavior = task["Task"][0]["agent_id"].as_str().unwrap();
     let mut request = AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         "bundled-root",
@@ -1142,7 +1142,7 @@ async fn graph_fixture_root_binding_survives_task_metadata_changes() {
     assert_eq!(admitted.requests.len(), 1);
     assert_eq!(admitted.requests[0].node_id.as_deref(), Some("recon"));
     assert!(admitted.failure_evidence.is_none());
-    execute(&node, &format!(r#"mutation {{ update_Task(filter: {{ agent_did: {{ _eq: "{owner}" }}, task_id: {{ _eq: "{}" }} }}, input: {{ enabled: false }}) {{ _docID }} }}"#, crate::graphql::escape_graphql_string(task_id), owner=crate::graphql::escape_graphql_string(identity.did()))).await;
+    execute(&node, &format!(r#"mutation {{ update_Task(filter: {{ node_did: {{ _eq: "{owner}" }}, task_id: {{ _eq: "{}" }} }}, input: {{ enabled: false }}) {{ _docID }} }}"#, crate::graphql::escape_graphql_string(task_id), owner=crate::graphql::escape_graphql_string(identity.did()))).await;
     let disabled = load_graph_run_view(&node, identity.did(), &run.run_id)
         .await
         .unwrap();
@@ -1151,7 +1151,7 @@ async fn graph_fixture_root_binding_survives_task_metadata_changes() {
         disabled.failure_evidence.is_none(),
         "disable cannot erase a historical root's identity"
     );
-    execute(&node, &format!(r#"mutation {{ update_Task(filter: {{ agent_did: {{ _eq: "{owner}" }}, task_id: {{ _eq: "{}" }} }}, input: {{ behavior_id: "unapproved-task-target" }}) {{ _docID }} }}"#, crate::graphql::escape_graphql_string(task_id), owner=crate::graphql::escape_graphql_string(identity.did()))).await;
+    execute(&node, &format!(r#"mutation {{ update_Task(filter: {{ node_did: {{ _eq: "{owner}" }}, task_id: {{ _eq: "{}" }} }}, input: {{ agent_id: "unapproved-task-target" }}) {{ _docID }} }}"#, crate::graphql::escape_graphql_string(task_id), owner=crate::graphql::escape_graphql_string(identity.did()))).await;
     let changed = load_graph_run_view(&node, identity.did(), &run.run_id)
         .await
         .unwrap();
@@ -1211,7 +1211,7 @@ async fn replacement_goal_on_other_authenticated_chain_does_not_attach_to_old_ro
         1,
         false,
         "2026-08-28T00:00:00Z",
-        parent.subagent_depth,
+        parent.request_hop,
     )
     .unwrap();
     crate::sign_agent_request_create(&identity, &mut child)
@@ -1253,7 +1253,7 @@ async fn generic_graph_foreign_roots_remain_ignored_after_reassignment_or_missin
             let task = routes["Trigger"][0]["task_id"].as_str().unwrap();
             execute(&node, &format!(r#"mutation {{ delete_Task(filter: {{ task_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#, crate::graphql::escape_graphql_string(task))).await;
         } else {
-            execute(&node, &format!(r#"mutation {{ update_AgentBehavior(filter: {{ behavior_id: {{ _eq: "test-behavior" }} }}, input: {{ agent_did: "{}" }}) {{ _docID }} }}"#, crate::graphql::escape_graphql_string(foreign.did()))).await;
+            execute(&node, &format!(r#"mutation {{ update_Agent(filter: {{ agent_id: {{ _eq: "test-behavior" }} }}, input: {{ node_did: "{}" }}) {{ _docID }} }}"#, crate::graphql::escape_graphql_string(foreign.did()))).await;
         }
         let mut request = AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
@@ -1317,8 +1317,8 @@ async fn generic_task_behavior_changes_cannot_erase_active_owner_signed_root() {
         .await
         .unwrap();
     assert_eq!(before.active_request_count, 1);
-    execute(&node, &format!(r#"mutation {{ create_AgentBehavior(input: {{ behavior_id: "other-owner-behavior", agent_did: "{}", enabled: true }}) {{ _docID }} }}"#, crate::graphql::escape_graphql_string(graph_test_owner()))).await;
-    execute(&node, r#"mutation { update_Task(filter: { behavior_id: { _eq: "test-behavior" } }, input: { behavior_id: "other-owner-behavior", enabled: false, name: "renamed task" }) { _docID } }"#).await;
+    execute(&node, &format!(r#"mutation {{ create_Agent(input: {{ agent_id: "other-owner-behavior", node_did: "{}", enabled: true }}) {{ _docID }} }}"#, crate::graphql::escape_graphql_string(graph_test_owner()))).await;
+    execute(&node, r#"mutation { update_Task(filter: { agent_id: { _eq: "test-behavior" } }, input: { agent_id: "other-owner-behavior", enabled: false, name: "renamed task" }) { _docID } }"#).await;
     let changed = reconcile_graph_run(&node, None, graph_test_owner(), &run.run_id)
         .await
         .unwrap();

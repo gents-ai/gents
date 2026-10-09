@@ -61,8 +61,8 @@ fn native_outcome(report: &Value, trace: &[Value]) -> bool {
         .collect();
     let identity_observed = replies.iter().any(|reply| {
         [
-            (&reply["outcome"]["peers"], "agent_did"),
-            (&reply["outcome"]["registered_peers"], "agent_did"),
+            (&reply["outcome"]["peers"], "node_did"),
+            (&reply["outcome"]["registered_peers"], "node_did"),
             (&reply["observations"]["enrolled_peers"], "peer_did"),
         ]
         .into_iter()
@@ -74,7 +74,7 @@ fn native_outcome(report: &Value, trace: &[Value]) -> bool {
         }) || (reply["collection"] == "PeerRegistry"
             && reply["results"].as_array().is_some_and(|rows| {
                 rows.iter()
-                    .any(|row| row["peer_id"] == *peer && row["agent_did"] == *did)
+                    .any(|row| row["peer_id"] == *peer && row["node_did"] == *did)
             }))
     });
     let connection_observed = replies.iter().any(|reply| {
@@ -277,7 +277,7 @@ async fn engineer_p2p_live_comparison() -> Result<()> {
             .as_str()
             .unwrap()
             .to_owned();
-        ConfigAccess::Local(local.node.clone()).write("eval.p2p.registry", &format!("mutation {{create_PeerRegistry(input: {{peer_id: \"{}\", agent_did: \"{}\", display_name: \"Cedar\", network_id: \"engineer-eval\", addresses: [\"{}\"], status: \"discovered\"}}) {{_docID}}}}", escape_graphql_string(&peer), escape_graphql_string(&remote_did), escape_graphql_string(&address))).await?;
+        ConfigAccess::Local(local.node.clone()).write("eval.p2p.registry", &format!("mutation {{create_PeerRegistry(input: {{peer_id: \"{}\", node_did: \"{}\", display_name: \"Cedar\", network_id: \"engineer-eval\", addresses: [\"{}\"], status: \"discovered\"}}) {{_docID}}}}", escape_graphql_string(&peer), escape_graphql_string(&remote_did), escape_graphql_string(&address))).await?;
         let target_ids = bind_target(&local.node, local.node_identity.as_ref(), &target).await;
         let subject = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/configurator_evals/ladder/engineer_subject");
@@ -286,22 +286,21 @@ async fn engineer_p2p_live_comparison() -> Result<()> {
         let mut config = load_pack_config(
             &manifest,
             &PackInstallOptions {
-                agent_did: did.clone(),
+                node_did: did.clone(),
             },
             &|p| Ok(std::fs::read(subject.join(p))?),
             &|_| None,
         )?;
-        config.agent_principal.default_behavior_id =
-            Some(config.agent_behaviors[0].behavior_id.clone());
-        config.agent_behaviors[0].inference_profile_id =
-            gents::default_inference_profile_id_for_behavior(&target_ids.1);
+        config.node.default_agent_id = Some(config.agents[0].agent_id.clone());
+        config.agents[0].inference_profile_id =
+            gents::default_inference_profile_id_for_agent(&target_ids.1);
         let mut profile = target.profile(&did);
-        profile.profile_id = config.agent_behaviors[0].inference_profile_id.clone();
+        profile.profile_id = config.agents[0].inference_profile_id.clone();
         profile.reasoning_effort = Some(gents::config::ReasoningEffort::High);
         profile.sampling_id = Some("p2p-eval-sampling".into());
         config.inference_profiles = vec![profile];
         config.inference_sampling = vec![InferenceSampling {
-            agent_did: did.clone(),
+            node_did: did.clone(),
             sampling_id: "p2p-eval-sampling".into(),
             temperature: Some(1.0),
             top_p: Some(0.95),
@@ -359,7 +358,7 @@ async fn engineer_p2p_live_comparison() -> Result<()> {
             let endpoint = EnrollmentEndpointEntry {
                 desired_id: peer.clone(),
                 peer_id: peer.clone(),
-                agent_did: remote_did.clone(),
+                node_did: remote_did.clone(),
                 address: address.clone(),
                 request_digest: active.request.request_digest.clone(),
                 authorization_sequence: active.revision.sequence,
@@ -393,7 +392,7 @@ async fn engineer_p2p_live_comparison() -> Result<()> {
         let before = rows(
             &local,
             "DataPlanePairingDesired",
-            "_docID peer_id agent_did collections source",
+            "_docID peer_id node_did collections source",
         )
         .await?;
         let mut policy =
@@ -412,7 +411,7 @@ async fn engineer_p2p_live_comparison() -> Result<()> {
             },
         )
         .await?;
-        let ready_agent = gents::Gents::from_default_behavior_documents(
+        let ready_agent = gents::Gents::from_default_agent_documents(
             local.node.clone(),
             local.node_identity.clone(),
             DocumentRuntimeOptions {
@@ -423,9 +422,9 @@ async fn engineer_p2p_live_comparison() -> Result<()> {
         )
         .await?;
         let behavior = ready_agent
-            .behaviors()
+            .agents()
             .iter()
-            .find(|b| b.behavior_id == "engineer")
+            .find(|b| b.agent_id == "engineer")
             .ok_or_else(|| {
                 anyhow::anyhow!("ready runtime did not resolve the Engineer behavior")
             })?;
@@ -433,7 +432,7 @@ async fn engineer_p2p_live_comparison() -> Result<()> {
             .tools
             .resolve(&local.node, &did, &Default::default())
             .await?;
-        let tool_context = ToolRuntimeContext::new_with_agent_did(
+        let tool_context = ToolRuntimeContext::new_with_node_did(
             local.node.clone(),
             Default::default(),
             Default::default(),
@@ -475,7 +474,7 @@ async fn engineer_p2p_live_comparison() -> Result<()> {
         let after = rows(
             &local,
             "DataPlanePairingDesired",
-            "_docID peer_id agent_did collections source",
+            "_docID peer_id node_did collections source",
         )
         .await?;
         let notes = rows(&local, "DeploymentNote", "_docID text").await?;
@@ -610,7 +609,7 @@ async fn engineer_p2p_live_comparison() -> Result<()> {
             "Distinguish registry, signed enrollment, desired pairing, applied pairing and observed connectivity; do not certify the document supplier.",
             "Preserve supplied user inputs and identify only genuinely missing inputs."
         ]});
-        let mut report = json!({"case_id":case.case_id,"grading_version":NATIVE_GRADING_VERSION,"prompt_fixture_version":case.grading_version,"original_v2_passed":passed,"split":case.split,"expectation":case.expectation,"baseline_grant_disabled":baseline,"enrollment_preserved":enrollment_active,"observed_connection":observed_connection,"passed":passed,"deterministic_grade":"native effects and successful read receipts; not semantic answer correctness","capability_evidence":capability_evidence,"answer_audit":answer_audit,"terminal":terminal,"answer":answer,"setup_ms":setup_ms,"inference_ms":inference.elapsed().as_millis(),"agent_did":did,"peer_id":peer,"peer_did":remote_did,"document_id":doc_id,"desired_before":before,"desired_after":after,"applied":applied,"local_documents":notes,"remote_documents":remote_documents,"metrics":metrics,"tool_calls":calls,"usage":usage.ok(),"home":local.data_path()});
+        let mut report = json!({"case_id":case.case_id,"grading_version":NATIVE_GRADING_VERSION,"prompt_fixture_version":case.grading_version,"original_v2_passed":passed,"split":case.split,"expectation":case.expectation,"baseline_grant_disabled":baseline,"enrollment_preserved":enrollment_active,"observed_connection":observed_connection,"passed":passed,"deterministic_grade":"native effects and successful read receipts; not semantic answer correctness","capability_evidence":capability_evidence,"answer_audit":answer_audit,"terminal":terminal,"answer":answer,"setup_ms":setup_ms,"inference_ms":inference.elapsed().as_millis(),"node_did":did,"peer_id":peer,"peer_did":remote_did,"document_id":doc_id,"desired_before":before,"desired_after":after,"applied":applied,"local_documents":notes,"remote_documents":remote_documents,"metrics":metrics,"tool_calls":calls,"usage":usage.ok(),"home":local.data_path()});
         report["passed"] = json!(native_outcome(&report, &trace));
         std::fs::write(
             directory.join("evidence.json"),

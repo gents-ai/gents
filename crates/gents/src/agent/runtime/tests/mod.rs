@@ -1,4 +1,4 @@
-mod behavior_resolution;
+mod agent_resolution;
 mod control_watcher;
 mod plugin_readmission;
 mod router;

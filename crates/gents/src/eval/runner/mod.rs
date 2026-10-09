@@ -605,7 +605,7 @@ async fn execute_trial(
         case = %planned.case_id,
         trial_index = planned.trial_index,
         attempt = planned.attempt,
-        agent_did = %locator.trial_agent_did,
+        node_did = %locator.trial_node_did,
         session_id = %locator.session_id,
         "trial started"
     );
@@ -616,7 +616,7 @@ async fn execute_trial(
         case_id: planned.case_id.clone(),
         trial_index: planned.trial_index,
         attempt: planned.attempt,
-        trial_agent_did: locator.trial_agent_did.clone(),
+        trial_node_did: locator.trial_node_did.clone(),
         session_id: locator.session_id.clone(),
         seed: planned.seed,
         home_hint: locator.home_hint.clone(),
@@ -788,7 +788,7 @@ fn trial_spec(
         trial_id: planned.trial_id.clone(),
         pack_dir: cell.pack_dir.clone(),
         pack_digest: cell.spec.subject.pack_digest.clone(),
-        behavior_id: cell.spec.subject.behavior_id.clone(),
+        agent_id: cell.spec.subject.agent_id.clone(),
         inference,
         fixtures: fixtures(
             &cell.pack_dir,
@@ -1037,9 +1037,9 @@ mod tests {
     fn definition(check: &str) -> Value {
         json!({
             "definition_id": "loop-def",
-            "agent_did": OWNER,
+            "node_did": OWNER,
             "comparability_version": 1,
-            "subject": {"kind": "behavior", "inference_slots": ["primary"]},
+            "subject": {"kind": "agent", "inference_slots": ["primary"]},
             "cases": [
                 case("case-a", "validation", check),
                 case("case-b", "validation", check),
@@ -1111,7 +1111,7 @@ mod tests {
             cell_id: cell_id.into(),
             label: cell_id.into(),
             source: CellSource::Directory(pack.to_path_buf()),
-            behavior_id: "monitor".into(),
+            agent_id: "monitor".into(),
             inference_profile_id: "local".into(),
         }
     }
@@ -1184,7 +1184,7 @@ mod tests {
 
         async fn provision(&self, _spec: &TrialSpec) -> TrialLocator {
             TrialLocator {
-                trial_agent_did: "did:key:trial".into(),
+                trial_node_did: "did:key:trial".into(),
                 session_id: "session".into(),
                 home_hint: None,
             }
@@ -1225,7 +1225,7 @@ mod tests {
 
         async fn provision(&self, _spec: &TrialSpec) -> TrialLocator {
             TrialLocator {
-                trial_agent_did: "did:key:trial".into(),
+                trial_node_did: "did:key:trial".into(),
                 session_id: "session".into(),
                 home_hint: None,
             }
@@ -1309,7 +1309,7 @@ mod tests {
 
         async fn provision(&self, _spec: &TrialSpec) -> TrialLocator {
             TrialLocator {
-                trial_agent_did: "did:key:trial".into(),
+                trial_node_did: "did:key:trial".into(),
                 session_id: "session".into(),
                 home_hint: None,
             }
@@ -2748,7 +2748,7 @@ mod tests {
 
         async fn provision(&self, _spec: &TrialSpec) -> TrialLocator {
             TrialLocator {
-                trial_agent_did: "did:key:trial".into(),
+                trial_node_did: "did:key:trial".into(),
                 session_id: "session".into(),
                 home_hint: None,
             }
@@ -2835,7 +2835,7 @@ mod tests {
 
         async fn provision(&self, _spec: &TrialSpec) -> TrialLocator {
             TrialLocator {
-                trial_agent_did: "did:key:trial".into(),
+                trial_node_did: "did:key:trial".into(),
                 session_id: "session".into(),
                 home_hint: None,
             }
@@ -2875,7 +2875,7 @@ mod tests {
 
         async fn provision(&self, _spec: &TrialSpec) -> TrialLocator {
             TrialLocator {
-                trial_agent_did: "did:key:trial".into(),
+                trial_node_did: "did:key:trial".into(),
                 session_id: "session".into(),
                 home_hint: None,
             }
@@ -2986,7 +2986,7 @@ mod tests {
 
         async fn provision(&self, _spec: &TrialSpec) -> TrialLocator {
             TrialLocator {
-                trial_agent_did: "did:key:trial".into(),
+                trial_node_did: "did:key:trial".into(),
                 session_id: "session".into(),
                 home_hint: None,
             }
@@ -3058,7 +3058,7 @@ mod tests {
 
         async fn provision(&self, _spec: &TrialSpec) -> TrialLocator {
             TrialLocator {
-                trial_agent_did: "did:key:trial".into(),
+                trial_node_did: "did:key:trial".into(),
                 session_id: "session".into(),
                 home_hint: None,
             }

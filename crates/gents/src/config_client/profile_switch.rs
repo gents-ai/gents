@@ -42,11 +42,11 @@ pub struct SwitchPlan {
     pub profile: String,
     /// The account the profile runs on.
     pub account: ServingAccount,
-    pub behaviors: Vec<String>,
+    pub agents: Vec<String>,
     /// Plugins whose model slot is bound to the profile.
     pub plugin_slots: Vec<String>,
     pub candidates: Vec<SwitchCandidate>,
-    /// The other profiles of `behaviors` on the same account.
+    /// The other profiles of `agents` on the same account.
     pub companions: Vec<String>,
     pub cost: &'static str,
 }
@@ -59,7 +59,7 @@ pub struct SwitchReceipt {
     /// The account the profile now runs on.
     pub account: ServingAccount,
     pub backend_id: String,
-    pub behaviors: Vec<String>,
+    pub agents: Vec<String>,
     pub plugin_slots: Vec<String>,
     pub cost: &'static str,
     /// Companions the target offers that stayed on the old account.
@@ -72,15 +72,15 @@ pub struct SwitchReceipt {
 /// candidate, the error says how to add an account.
 pub async fn switch_candidates(
     access: &ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
     profile_id: &str,
     plugin_slots: &[String],
     now: DateTime<Utc>,
 ) -> Result<SwitchPlan> {
-    let accounts = list_accounts(access, agent_did).await?;
+    let accounts = list_accounts(access, node_did).await?;
     let snapshot = access
         .transact_readonly("config.profile_switch.candidates", |txn| {
-            Box::pin(async move { Snapshot::load_in_txn(txn, agent_did, profile_id).await })
+            Box::pin(async move { Snapshot::load_in_txn(txn, node_did, profile_id).await })
         })
         .await?;
     let own_provider = provider(&snapshot.backend, &accounts);
@@ -101,7 +101,7 @@ pub async fn switch_candidates(
                 Ok(None) => "not read yet",
                 Err(_) => continue,
             };
-        let stored = usage_for_backend(access, agent_did, backend).await?;
+        let stored = usage_for_backend(access, node_did, backend).await?;
         candidates.push(SwitchCandidate {
             label: serving.label,
             backend_id: backend.backend_id.clone(),
@@ -118,7 +118,7 @@ pub async fn switch_candidates(
     Ok(SwitchPlan {
         profile: profile_id.to_owned(),
         account: serving_account(&snapshot.backend, &accounts),
-        behaviors: snapshot.references.behaviors_on_profile(profile_id),
+        agents: snapshot.references.agents_on_profile(profile_id),
         plugin_slots: plugin_slots.to_vec(),
         candidates,
         companions: snapshot
@@ -137,18 +137,18 @@ pub async fn switch_candidates(
 /// read just before the transaction.
 pub async fn switch_profile_account(
     access: &ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
     profile_id: &str,
     target_backend_id: &str,
     move_companions: bool,
     plugin_slots: &[String],
 ) -> Result<SwitchReceipt> {
-    let accounts = list_accounts(access, agent_did).await?;
+    let accounts = list_accounts(access, node_did).await?;
     let accounts = &accounts;
     access
         .transact("config.profile_switch.move", |txn| {
             Box::pin(async move {
-                let snapshot = Snapshot::load_in_txn(txn, agent_did, profile_id).await?;
+                let snapshot = Snapshot::load_in_txn(txn, node_did, profile_id).await?;
                 let (target, observation) = snapshot
                     .backends
                     .iter()
@@ -218,18 +218,18 @@ pub async fn switch_profile_account(
                     })
                     .collect::<Result<Vec<_>>>()?;
                 apply_desired_state_plan(txn, &DesiredStateApplyPlan::new(documents)?).await?;
-                let behaviors = snapshot.references.behaviors_on_profile(profile_id);
+                let agents = snapshot.references.agents_on_profile(profile_id);
                 Ok(SwitchReceipt {
                     headline: headline(
                         profile_id,
                         &serving.label,
-                        behaviors.len(),
+                        agents.len(),
                         plugin_slots.len(),
                     ),
                     profile: profile_id.to_owned(),
                     account: serving,
                     backend_id: target.backend_id.clone(),
-                    behaviors,
+                    agents,
                     plugin_slots: plugin_slots.to_vec(),
                     cost: SWITCH_COST,
                     companions_offered: offered.into_iter().map(|p| p.profile_id).collect(),
@@ -240,12 +240,12 @@ pub async fn switch_profile_account(
         .await
 }
 
-/// `Move profile <P> to <label> (used by N behaviors and M plugin slots)`.
-fn headline(profile: &str, label: &str, behaviors: usize, slots: usize) -> String {
+/// `Move profile <P> to <label> (used by N agents and M plugin slots)`.
+fn headline(profile: &str, label: &str, agents: usize, slots: usize) -> String {
     let count = |n: usize, noun: &str| format!("{n} {noun}{}", if n == 1 { "" } else { "s" });
     let mut users = Vec::new();
-    if behaviors > 0 || slots == 0 {
-        users.push(count(behaviors, "behavior"));
+    if agents > 0 || slots == 0 {
+        users.push(count(agents, "agent"));
     }
     if slots > 0 {
         users.push(count(slots, "plugin slot"));
@@ -285,10 +285,10 @@ struct Snapshot {
 impl Snapshot {
     async fn load_in_txn(
         txn: &ConfigApplyTxn<'_>,
-        agent_did: &str,
+        node_did: &str,
         profile_id: &str,
     ) -> Result<Self> {
-        let references = ConfigReferences::load_in_txn(txn, agent_did).await?;
+        let references = ConfigReferences::load_in_txn(txn, node_did).await?;
         let (profile, backend) =
             references
                 .profile_with_backend(profile_id)?
@@ -296,10 +296,10 @@ impl Snapshot {
                     format!("no profile {profile_id:?}; `gents config profile list` shows them")
                 })?;
         let mut backends = Vec::new();
-        for backend in super::list_inference_backends_in_txn(txn, agent_did).await? {
+        for backend in super::list_inference_backends_in_txn(txn, node_did).await? {
             let observation = crate::backend_registry::lookup_backend_observation_in_txn(
                 txn,
-                agent_did,
+                node_did,
                 &backend.backend_id,
             )
             .await?;
@@ -313,15 +313,15 @@ impl Snapshot {
         })
     }
 
-    /// The other profiles (own or compaction) of the behaviors on the
+    /// The other profiles (own or compaction) of the agents on the
     /// profile that run on the same account.
     fn companions(&self, accounts: &[AccountSummary]) -> Vec<InferenceProfile> {
         let own = account_key(&self.backend, accounts);
         let ids: BTreeSet<String> = self
             .references
-            .behaviors_on_profile(&self.profile.profile_id)
+            .agents_on_profile(&self.profile.profile_id)
             .iter()
-            .flat_map(|behavior| self.references.behavior_profiles(behavior))
+            .flat_map(|behavior| self.references.agent_profiles(behavior))
             .filter(|id| *id != self.profile.profile_id)
             .collect();
         ids.iter()

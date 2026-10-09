@@ -5,7 +5,7 @@
 //! package has ever produced for that graph (including retired ones, so a
 //! reinstall after an untracked install picks up every one of them), each
 //! revision's derived `EventSource`/`Trigger`/`Callback`/`CallbackBinding`,
-//! and the package's own authored documents (behaviors, tasks, and so on).
+//! and the package's own authored documents (agents, tasks, and so on).
 //!
 //! The runtime-derived documents are never drift-checked: a `GraphDefinition`'s
 //! active pointer and generation change on activation, and a `GraphRevision`

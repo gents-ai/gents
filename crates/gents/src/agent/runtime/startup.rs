@@ -33,7 +33,6 @@ enum BackgroundTaskResult {
     RegistryHeartbeat(Result<()>),
     EndpointHeartbeat(Result<()>),
     SessionHydrationReconcile(Result<()>),
-    PersonaRequestReconcile(Result<()>),
     DirectoryProjection(Result<()>),
 }
 
@@ -52,9 +51,6 @@ impl BackgroundTaskResult {
             Self::EndpointHeartbeat(result) => result.context("endpoint heartbeat task"),
             Self::SessionHydrationReconcile(result) => {
                 result.context("session hydration reconcile task")
-            }
-            Self::PersonaRequestReconcile(result) => {
-                result.context("persona request reconcile task")
             }
             Self::DirectoryProjection(result) => result.context("directory projection task"),
         }
@@ -87,33 +83,26 @@ impl crate::agent::reconcile::SlotFailurePolicy for StartupSlotFailurePolicy {
         self.budget.max(1)
     }
 
-    fn on_build_failure(&self, behavior_id: &str, failure_number: u32, error: &str) {
+    fn on_build_failure(&self, agent_id: &str, failure_number: u32, error: &str) {
         if let Some(observer) = &self.observer {
-            observer.on_build_failure(
-                behavior_id,
-                failure_number,
-                self.build_failure_budget(),
-                error,
-            );
+            observer.on_build_failure(agent_id, failure_number, self.build_failure_budget(), error);
         }
     }
 
-    async fn on_slot_created(&self, behavior_id: &str, generation: u64) -> Result<()> {
+    async fn on_slot_created(&self, agent_id: &str, generation: u64) -> Result<()> {
         self.runtime_status
             .readiness()
-            .register_slot(behavior_id, generation)
+            .register_slot(agent_id, generation)
             .await
             .with_context(|| {
-                format!("register behavior readiness slot {behavior_id} generation {generation}")
+                format!("register agent readiness slot {agent_id} generation {generation}")
             })?;
-        self.barrier
-            .register_behavior(behavior_id, generation)
-            .await;
+        self.barrier.register_agent(agent_id, generation).await;
         Ok(())
     }
 
-    async fn try_demote(&self, behavior_id: &str, generation: u64, error: &str) -> Result<bool> {
-        if !self.barrier.is_pending(behavior_id, generation).await {
+    async fn try_demote(&self, agent_id: &str, generation: u64, error: &str) -> Result<bool> {
+        if !self.barrier.is_pending(agent_id, generation).await {
             return Ok(false);
         }
         let reason = format!(
@@ -123,7 +112,7 @@ impl crate::agent::reconcile::SlotFailurePolicy for StartupSlotFailurePolicy {
         let applied = match self
             .runtime_status
             .readiness()
-            .demote_slot(behavior_id, generation, reason)
+            .demote_slot(agent_id, generation, reason)
             .await
         {
             Ok(applied) => applied,
@@ -148,32 +137,30 @@ impl crate::agent::reconcile::SlotFailurePolicy for StartupSlotFailurePolicy {
         if !applied {
             return Ok(false);
         }
-        self.barrier
-            .mark_behavior_demoted(behavior_id, generation)
-            .await;
+        self.barrier.mark_agent_demoted(agent_id, generation).await;
         tracing::error!(
-            behavior_id = %behavior_id,
+            agent_id = %agent_id,
             budget = self.build_failure_budget(),
             error = %error,
-            "behavior demoted: its completion client failed to build repeatedly; \
-             the process will report Ready without it. Fix the behavior/backend \
+            "agent demoted: its completion client failed to build repeatedly; \
+             the process will report Ready without it. Fix the agent/backend \
              config, or install a plugin it names that is missing — the runtime \
              re-admits it on its next reconcile with a fresh budget."
         );
         Ok(true)
     }
 
-    async fn on_slot_retired(&self, behavior_id: &str, generation: u64, recreated: bool) {
+    async fn on_slot_retired(&self, agent_id: &str, generation: u64, recreated: bool) {
         if let Err(error) = self
             .runtime_status
             .readiness()
-            .retire_slot(behavior_id, generation)
+            .retire_slot(agent_id, generation)
             .await
         {
-            tracing::error!(behavior_id, generation, error = %error, "failed to retire behavior readiness slot");
+            tracing::error!(agent_id, generation, error = %error, "failed to retire agent_config readiness slot");
         }
         self.barrier
-            .mark_behavior_superseded(behavior_id, generation)
+            .mark_agent_superseded(agent_id, generation)
             .await;
         let _ = recreated;
     }
@@ -256,7 +243,7 @@ pub(in crate::agent) async fn run_agent(
         .await
         .context("ensure runtime schema migrations")?;
     let (runtime_status_owner, runtime_status) =
-        RuntimeStatusHandle::start(agent.node.clone(), agent.agent_did().to_string());
+        RuntimeStatusHandle::start(agent.node.clone(), agent.node_did().to_string());
     run_agent_with_runtime_status(
         agent,
         external_shutdown,
@@ -272,7 +259,7 @@ pub(in crate::agent) async fn run_agent(
 pub(super) async fn run_agent_with_readiness_writer(
     agent: Gents,
     external_shutdown: watch::Receiver<bool>,
-    writer: Arc<dyn crate::behavior_readiness_publisher::BehaviorReadinessWriter>,
+    writer: Arc<dyn crate::node_readiness_publisher::NodeReadinessWriter>,
     retry_delay: std::time::Duration,
 ) -> Result<()> {
     run_agent_with_readiness_writer_and_slot_runner(
@@ -289,7 +276,7 @@ pub(super) async fn run_agent_with_readiness_writer(
 pub(super) async fn run_agent_with_readiness_writer_and_slot_runner(
     agent: Gents,
     external_shutdown: watch::Receiver<bool>,
-    writer: Arc<dyn crate::behavior_readiness_publisher::BehaviorReadinessWriter>,
+    writer: Arc<dyn crate::node_readiness_publisher::NodeReadinessWriter>,
     retry_delay: std::time::Duration,
     slot_runner: Option<TestSlotRunner>,
 ) -> Result<()> {
@@ -298,7 +285,7 @@ pub(super) async fn run_agent_with_readiness_writer_and_slot_runner(
         .context("ensure runtime schema migrations")?;
     let (runtime_status_owner, runtime_status) = RuntimeStatusHandle::start_with_readiness_writer(
         agent.node.clone(),
-        agent.agent_did().to_string(),
+        agent.node_did().to_string(),
         writer,
         retry_delay,
     );
@@ -321,7 +308,7 @@ async fn run_agent_with_runtime_status(
 ) -> Result<()> {
     let terminal_observer = agent.process_state_observer.clone();
     let initialized = runtime_status
-        .initialize_startup(agent.default_behavior_id())
+        .initialize_startup(agent.default_agent_id())
         .await;
     let body_result = match initialized {
         Ok(()) => {
@@ -334,7 +321,7 @@ async fn run_agent_with_runtime_status(
             )
             .await
         }
-        Err(error) => Err(error.context("initialize runtime behavior readiness")),
+        Err(error) => Err(error.context("initialize runtime agent_config readiness")),
     };
 
     finish_run_agent(
@@ -354,8 +341,9 @@ async fn finish_run_agent(
 ) -> Result<()> {
     let mut teardown_error = None;
     let process_state = runtime_status.readiness().observation().process_state();
-    if process_state != gents_protocol::row::BehaviorReadinessProcessState::Shutdown {
-        if process_state != gents_protocol::row::BehaviorReadinessProcessState::ShuttingDown {
+    if process_state != gents_protocol::node_readiness::NodeReadinessProcessState::Shutdown {
+        if process_state != gents_protocol::node_readiness::NodeReadinessProcessState::ShuttingDown
+        {
             if let Err(error) = runtime_status
                 .set_process_state_durable(ProcessLifecycleState::ShuttingDown)
                 .await
@@ -379,7 +367,7 @@ async fn finish_run_agent(
         }
     }
     if let Err(error) = runtime_status_owner.close().await {
-        tracing::error!(error = %error, "failed to close runtime behavior readiness owner");
+        tracing::error!(error = %error, "failed to close runtime agent_config readiness owner");
         if teardown_error.is_none() {
             teardown_error = Some(error);
         }
@@ -418,14 +406,14 @@ async fn run_agent_owned(
         observer.on_process_state_change(ProcessLifecycleState::Recovering);
     }
     let health_map = ServiceHealthMap::new();
-    let tool_runtime = ToolRuntimeContext::new_with_agent_did(
+    let tool_runtime = ToolRuntimeContext::new_with_node_did(
         agent.node.clone(),
         agent.mcp_pool.clone(),
         health_map.clone(),
         agent.local_hostname.clone(),
         agent.local_subnet.clone(),
-        agent.agent_did().to_string(),
-        Some(agent.principal_arc().identity.clone()),
+        agent.node_did().to_string(),
+        Some(agent.runtime_node_arc().identity.clone()),
     )
     .with_plugins(agent.plugins().clone());
     backend_registry::probe_and_promote_enabled_backends(agent.node.as_ref()).await;
@@ -443,30 +431,30 @@ async fn run_agent_owned(
     }
     // DefraDB's event bus is live-only. Subscribe before the MCP health
     // checker's first cycle can persist a transition that makes a required
-    // service (and therefore its dependent behavior) runnable.
+    // service (and therefore its dependent agent) runnable.
     let control_subscription = agent
         .document_runtime_context()
         .is_some()
         .then(|| agent.node.subscribe_document_changes());
     log_recovery(
         &agent.node,
-        agent.agent_did(),
-        agent.default_behavior_id(),
+        agent.node_did(),
+        agent.default_agent_id(),
         &agent.background_execution_registry,
     )
     .await;
-    for (behavior_id, reason) in &agent.unavailable_behaviors {
+    for (agent_id, reason) in &agent.unavailable_agents {
         tracing::warn!(
-            behavior_id = %behavior_id,
+            agent_id = %agent_id,
             public_reason = ?reason.public_reason,
             diagnostic = %reason.diagnostic,
-            "behavior unavailable at startup"
+            "agent_config unavailable at startup"
         );
     }
 
     let startup_barrier = Arc::new(StartupBarrier::new(
         &resolved_snapshot
-            .behaviors
+            .agents
             .values()
             .cloned()
             .collect::<Vec<_>>(),
@@ -517,7 +505,7 @@ async fn run_agent_owned(
         resolved_snapshot,
         admission_registry.clone(),
         agent.retry_policy.clone(),
-        move |behavior, tool_surface, request_rx, generation, shutdown| {
+        move |agent, tool_surface, request_rx, generation, shutdown| {
             let runtime = runtime_for_runner.clone();
             #[cfg(test)]
             let test_slot_runner = test_slot_runner.clone();
@@ -527,7 +515,7 @@ async fn run_agent_owned(
                     return test_slot_runner(generation, shutdown.clone()).await;
                 }
                 runtime
-                    .run_behavior(behavior, tool_surface, request_rx, generation, shutdown)
+                    .run_agent(agent, tool_surface, request_rx, generation, shutdown)
                     .await
             }
         },
@@ -549,9 +537,9 @@ async fn run_agent_owned(
         cancel.cancel();
         let shutdown_result = generation_supervisor.shutdown_slots().await;
         return match shutdown_result {
-            Ok(()) => Err(error).context("durably publish startup behavior readiness source"),
+            Ok(()) => Err(error).context("durably publish startup agent_config readiness source"),
             Err(shutdown_error) => Err(error).context(format!(
-                "durably publish startup behavior readiness source; behavior slot shutdown also failed: {shutdown_error:#}"
+                "durably publish startup agent_config readiness source; agent_config slot shutdown also failed: {shutdown_error:#}"
             )),
         };
     }
@@ -566,7 +554,7 @@ async fn run_agent_owned(
         agent.local_subnet.clone(),
         cancel.child_token(),
         agent.health_checker_options.clone(),
-        agent.agent_did().to_string(),
+        agent.node_did().to_string(),
     ));
     let (backend_health_events_tx, backend_health_events_rx) = mpsc::channel::<()>(1);
     let backend_prober = AbortOnDropHandle::new(crate::backend_health::spawn_backend_prober(
@@ -575,7 +563,7 @@ async fn run_agent_owned(
         agent.backend_prober_options.clone(),
         backend_health_events_tx,
         cancel.child_token(),
-        agent.agent_did().to_string(),
+        agent.node_did().to_string(),
     ));
 
     let runtime_snapshot_observer_handle =
@@ -586,7 +574,7 @@ async fn run_agent_owned(
                 loop {
                     let (generation, fingerprint, runnable) = {
                         let snapshot = snapshot_rx.borrow_and_update();
-                        let mut ids: Vec<String> = snapshot.behaviors.keys().cloned().collect();
+                        let mut ids: Vec<String> = snapshot.agents.keys().cloned().collect();
                         ids.sort();
                         (
                             snapshot.generation,
@@ -626,7 +614,7 @@ async fn run_agent_owned(
     let (manual_source, manual_trigger_handle) =
         crate::trigger_engine::manual_source::ManualSource::new(trigger_engine_cancel.clone());
     let _ = agent.manual_trigger_handle.set(manual_trigger_handle);
-    let trigger_engine_agent_did = agent.agent_did().to_string();
+    let trigger_engine_node_did = agent.node_did().to_string();
     let trigger_engine_runtime_observer = agent.runtime_snapshot_observer.clone();
     let trigger_engine_handle = AbortOnDropHandle::new(tokio::spawn(async move {
         tokio::select! {
@@ -635,7 +623,7 @@ async fn run_agent_owned(
         }
         match crate::trigger_engine::production_materializer::recover_workspace_binding_pending_requests(
             trigger_engine_node.as_ref(),
-            &trigger_engine_agent_did,
+            &trigger_engine_node_did,
         )
         .await
         {
@@ -688,7 +676,7 @@ async fn run_agent_owned(
     }));
 
     let callback_node = agent.node.clone();
-    let callback_agent_did = agent.agent_did().to_string();
+    let callback_node_did = agent.node_did().to_string();
     let callback_ceiling = agent
         .document_runtime_context()
         .and_then(|context| context.tool_ceiling.root())
@@ -704,7 +692,7 @@ async fn run_agent_owned(
         }
         if let Err(error) = crate::callback::run_callback_engine(
             callback_node,
-            callback_agent_did,
+            callback_node_did,
             callback_ceiling,
             callback_plugins,
             callback_cancel,
@@ -718,8 +706,8 @@ async fn run_agent_owned(
     let ready_cancel = cancel.child_token();
     let ready_startup_barrier = startup_barrier.clone();
     let ready_lifecycle = lifecycle.clone();
-    let ready_behavior_count = initial_active_snapshot.behaviors.len();
-    let ready_unavailable_count = initial_active_snapshot.unavailable_behaviors.len();
+    let ready_agent_count = initial_active_snapshot.agents.len();
+    let ready_unavailable_count = initial_active_snapshot.unavailable_agents.len();
     let ready_runtime_status = runtime_status.clone();
     let readiness_handle = AbortOnDropHandle::new(tokio::spawn(async move {
         let mut watchdog = tokio::time::interval(std::time::Duration::from_secs(60));
@@ -730,9 +718,9 @@ async fn run_agent_owned(
                 _ = ready_cancel.cancelled() => return,
                 _ = ready_startup_barrier.wait_ready() => break,
                 _ = watchdog.tick() => {
-                    let pending = ready_startup_barrier.pending_behaviors().await;
+                    let pending = ready_startup_barrier.pending_agents().await;
                     tracing::warn!(
-                        pending_behaviors = ?pending,
+                        pending_agents = ?pending,
                         "startup readiness barrier is still waiting; a build may be wedged"
                     );
                 }
@@ -754,18 +742,18 @@ async fn run_agent_owned(
         let demoted = demoted.demotions();
         if demoted.is_empty() {
             tracing::info!(
-                runnable_behaviors = ready_behavior_count,
-                unavailable_behaviors = ready_unavailable_count,
+                runnable_agents = ready_agent_count,
+                unavailable_agents = ready_unavailable_count,
                 "gents ready"
             );
         } else {
             let mut demoted_ids: Vec<&String> = demoted.keys().collect();
             demoted_ids.sort();
             tracing::warn!(
-                runnable_behaviors = ready_behavior_count.saturating_sub(demoted.len()),
-                unavailable_behaviors = ready_unavailable_count + demoted.len(),
-                demoted_behaviors = ?demoted_ids,
-                "gents ready (degraded: startup build failures demoted behaviors)"
+                runnable_agents = ready_agent_count.saturating_sub(demoted.len()),
+                unavailable_agents = ready_unavailable_count + demoted.len(),
+                demoted_agents = ?demoted_ids,
+                "gents ready (degraded: startup build failures demoted agents)"
             );
         }
     }));
@@ -773,14 +761,14 @@ async fn run_agent_owned(
     let mut background_tasks = JoinSet::new();
 
     let completion_node = agent.node.clone();
-    let completion_agent_did = agent.agent_did().to_string();
+    let completion_node_did = agent.node_did().to_string();
     let completion_background_executions = agent.background_execution_registry.clone();
     let completion_cancel = cancel.child_token();
     background_tasks.spawn(async move {
         BackgroundTaskResult::BackgroundCompletion(
             crate::background_completion::run_background_completion_observer(
                 completion_node,
-                completion_agent_did,
+                completion_node_did,
                 completion_background_executions,
                 completion_cancel,
             )
@@ -789,7 +777,7 @@ async fn run_agent_owned(
     });
 
     let graph_run_node = agent.node.clone();
-    let graph_run_owner_did = agent.agent_did().to_string();
+    let graph_run_owner_did = agent.node_did().to_string();
     let graph_run_cancel = cancel.child_token();
     background_tasks.spawn(async move {
         BackgroundTaskResult::GraphRunReconcile(
@@ -803,7 +791,7 @@ async fn run_agent_owned(
     });
 
     let enrollment_node = agent.node.clone();
-    let enrollment_identity = agent.principal_arc().identity.clone();
+    let enrollment_identity = agent.runtime_node_arc().identity.clone();
     let enrollment_cancel = cancel.child_token();
     background_tasks.spawn(async move {
         BackgroundTaskResult::EnrollmentReconcile(
@@ -818,7 +806,7 @@ async fn run_agent_owned(
     });
 
     let pairing_node = agent.node.clone();
-    let pairing_identity = agent.principal_arc().identity.clone();
+    let pairing_identity = agent.runtime_node_arc().identity.clone();
     let pairing_enrollment = enrollment_handle.clone();
     let pairing_cancel = cancel.child_token();
     background_tasks.spawn(async move {
@@ -834,13 +822,13 @@ async fn run_agent_owned(
     });
 
     let registry_node = agent.node.clone();
-    let registry_agent_did = agent.agent_did().to_string();
+    let registry_node_did = agent.node_did().to_string();
     let registry_cancel = cancel.child_token();
     background_tasks.spawn(async move {
         BackgroundTaskResult::RegistryHeartbeat(
             crate::agent::p2p_reconcile::run_registry_heartbeat(
                 registry_node,
-                registry_agent_did,
+                registry_node_did,
                 crate::agent::p2p_reconcile::resolve_network_id(),
                 registry_cancel,
             )
@@ -849,7 +837,7 @@ async fn run_agent_owned(
     });
 
     let endpoint_node = agent.node.clone();
-    let endpoint_identity = agent.principal_arc().identity.clone();
+    let endpoint_identity = agent.runtime_node_arc().identity.clone();
     let endpoint_cancel = cancel.child_token();
     background_tasks.spawn(async move {
         BackgroundTaskResult::EndpointHeartbeat(
@@ -864,7 +852,7 @@ async fn run_agent_owned(
 
     let hydration_node = agent.node.clone();
     let hydration_enrollment = enrollment_handle.clone();
-    let hydration_identity = agent.principal_arc().identity.clone();
+    let hydration_identity = agent.runtime_node_arc().identity.clone();
     let hydration_cancel = cancel.child_token();
     background_tasks.spawn(async move {
         BackgroundTaskResult::SessionHydrationReconcile(
@@ -878,40 +866,14 @@ async fn run_agent_owned(
         )
     });
 
-    let persona_request_node = agent.node.clone();
-    let persona_request_ceiling = agent
-        .document_runtime_context()
-        .and_then(|context| context.tool_ceiling.root())
-        .map(std::path::Path::to_path_buf);
-    let persona_request_authority = enrollment_handle;
-    let persona_request_identity = agent.principal_arc().identity.clone();
-    let persona_request_cancel = cancel.child_token();
-    background_tasks.spawn(async move {
-        BackgroundTaskResult::PersonaRequestReconcile(
-            crate::agent::p2p_reconcile::run_persona_request_reconciler(
-                persona_request_node,
-                persona_request_ceiling,
-                persona_request_authority,
-                persona_request_identity,
-                persona_request_cancel,
-            )
-            .await,
-        )
-    });
-
     let directory_node = agent.node.clone();
-    let directory_source_did = agent.agent_did().to_string();
-    let directory_ceiling = agent
-        .document_runtime_context()
-        .and_then(|context| context.tool_ceiling.root())
-        .map(std::path::Path::to_path_buf);
+    let directory_source_did = agent.node_did().to_string();
     let directory_cancel = cancel.child_token();
     background_tasks.spawn(async move {
         BackgroundTaskResult::DirectoryProjection(
             crate::agent::directory_projection::run_directory_projection(
                 directory_node,
                 directory_source_did,
-                directory_ceiling,
                 directory_cancel,
             )
             .await,
@@ -919,7 +881,7 @@ async fn run_agent_owned(
     });
 
     let router_node = agent.node.clone();
-    let router_agent_did = agent.agent_did().to_string();
+    let router_node_did = agent.node_did().to_string();
     let router_active_snapshot_rx = active_snapshot_rx.clone();
     let router_shutdown = shutdown.clone();
     let router_admission_gate = admission_gate.clone();
@@ -929,7 +891,7 @@ async fn run_agent_owned(
         BackgroundTaskResult::Router(
             super::router::run_router(
                 router_node,
-                router_agent_did,
+                router_node_did,
                 router_active_snapshot_rx,
                 router_shutdown,
                 router_admission_gate,
@@ -972,7 +934,7 @@ async fn run_agent_owned(
         let control_node = agent.node.clone();
         let control_subscription =
             control_subscription.expect("document runtime context has control subscription");
-        let control_agent_did = agent.agent_did().to_string();
+        let control_node_did = agent.node_did().to_string();
         let control_context = agent
             .document_runtime_context()
             .cloned()
@@ -985,7 +947,7 @@ async fn run_agent_owned(
                 super::control_watcher::run_control_watcher(
                     control_node,
                     control_subscription,
-                    control_agent_did,
+                    control_node_did,
                     control_context,
                     control_tx,
                     control_runtime_status,
@@ -1082,14 +1044,14 @@ async fn run_agent_owned(
 
 async fn log_recovery(
     node: &std::sync::Arc<defra_node::EmbeddedNode>,
-    agent_did: &str,
-    default_behavior_id: &str,
+    node_did: &str,
+    default_agent_id: &str,
     executions: &crate::hook::BackgroundExecutionRegistry,
 ) {
     // Sweep order lives in `startup_recovery`, not here: the inference-call
     // sweep is parent-gated and must run after request repair (#1001).
     let outcome =
-        crate::startup_recovery::run_startup_recovery_with_executions(node, agent_did, executions)
+        crate::startup_recovery::run_startup_recovery_with_executions(node, node_did, executions)
             .await;
     let mut recovered_any = false;
 
@@ -1098,7 +1060,7 @@ async fn log_recovery(
             if report.tool_calls_recovered > 0 {
                 recovered_any = true;
                 tracing::info!(
-                    agent_did = %agent_did,
+                    node_did = %node_did,
                     count = report.tool_calls_recovered,
                     "recovered stuck tool calls"
                 );
@@ -1106,7 +1068,7 @@ async fn log_recovery(
         }
         Err(error) => {
             tracing::warn!(
-                agent_did = %agent_did,
+                node_did = %node_did,
                 error = %error,
                 "startup tool-call recovery failed"
             );
@@ -1118,7 +1080,7 @@ async fn log_recovery(
             if report.calls_recovered > 0 {
                 recovered_any = true;
                 tracing::info!(
-                    agent_did = %agent_did,
+                    node_did = %node_did,
                     count = report.calls_recovered,
                     "recovered stale inference calls"
                 );
@@ -1126,7 +1088,7 @@ async fn log_recovery(
         }
         Err(error) => {
             tracing::warn!(
-                agent_did = %agent_did,
+                node_did = %node_did,
                 error = %error,
                 "startup inference-call recovery failed"
             );
@@ -1138,14 +1100,14 @@ async fn log_recovery(
             if report > 0 {
                 recovered_any = true;
                 tracing::info!(
-                    agent_did = %agent_did,
+                    node_did = %node_did,
                     records = report,
                     "recovering interrupted task hook cleanup"
                 );
             }
         }
         Err(error) => {
-            tracing::warn!(agent_did = %agent_did, error = %error, "startup task hook recovery failed");
+            tracing::warn!(node_did = %node_did, error = %error, "startup task hook recovery failed");
         }
     }
 
@@ -1154,7 +1116,7 @@ async fn log_recovery(
             if report.requests_recovered > 0 {
                 recovered_any = true;
                 tracing::info!(
-                    agent_did = %agent_did,
+                    node_did = %node_did,
                     count = report.requests_recovered,
                     "recovered stuck requests"
                 );
@@ -1162,7 +1124,7 @@ async fn log_recovery(
             if report.background_wakes_redriven > 0 {
                 recovered_any = true;
                 tracing::info!(
-                    agent_did = %agent_did,
+                    node_did = %node_did,
                     count = report.background_wakes_redriven,
                     "redrove failed background-completion wakes"
                 );
@@ -1170,34 +1132,34 @@ async fn log_recovery(
             if report.responses_recovered > 0 {
                 recovered_any = true;
                 tracing::info!(
-                    agent_did = %agent_did,
+                    node_did = %node_did,
                     count = report.responses_recovered,
                     "recovered stuck responses"
                 );
             }
         }
         Err(error) => {
-            tracing::warn!(agent_did = %agent_did, error = %error, "startup recovery failed");
+            tracing::warn!(node_did = %node_did, error = %error, "startup recovery failed");
         }
     }
 
     if !recovered_any {
         tracing::debug!(
-            agent_did = %agent_did,
-            default_behavior_id = %default_behavior_id,
+            node_did = %node_did,
+            default_agent_id = %default_agent_id,
             "startup recovery found no stuck documents"
         );
     }
 }
 
 fn is_degraded_startup_unavailable_reason(
-    reason: gents_protocol::row::BehaviorReadinessUnavailableReason,
+    reason: gents_protocol::node_readiness::AgentReadinessUnavailableReason,
 ) -> bool {
-    use gents_protocol::row::BehaviorReadinessUnavailableReason as Reason;
+    use gents_protocol::node_readiness::AgentReadinessUnavailableReason as Reason;
 
     matches!(
         reason,
-        Reason::BehaviorDisabled
+        Reason::AgentDisabled
             | Reason::BackendNotConfigured
             | Reason::BackendDisabled
             | Reason::BackendTemporarilyUnavailable
@@ -1210,27 +1172,25 @@ async fn validate_startup_snapshot(
     tool_runtime: &ToolRuntimeContext,
     snapshot: &ResolvedRuntimeSnapshot,
 ) -> Result<()> {
-    snapshot
-        .validate_behavior_readiness_source()
-        .with_context(|| {
-            format!(
-                "validate behavior readiness source for {}",
-                agent.agent_did()
-            )
-        })?;
+    snapshot.validate_node_readiness_source().with_context(|| {
+        format!(
+            "validate agent_config readiness source for {}",
+            agent.node_did()
+        )
+    })?;
 
-    if snapshot.behaviors.is_empty() {
+    if snapshot.agents.is_empty() {
         let mut unavailable = snapshot
-            .unavailable_behaviors
+            .unavailable_agents
             .iter()
-            .map(|(behavior_id, reason)| (behavior_id.clone(), reason.clone()))
+            .map(|(agent_id, reason)| (agent_id.clone(), reason.clone()))
             .collect::<Vec<_>>();
         unavailable.sort_by(|left, right| left.0.cmp(&right.0));
 
         if unavailable.is_empty() {
             anyhow::bail!(
-                "agent {} has no runnable behaviors at startup",
-                agent.agent_did()
+                "agent {} has no runnable agents at startup",
+                agent.node_did()
             );
         }
 
@@ -1242,38 +1202,40 @@ async fn validate_startup_snapshot(
             // The bail and the persisted runtime status carry only the
             // presentation-safe reason; the diagnostic is operator-local and
             // must not leak into either, so it is only logged here.
-            for (behavior_id, reason) in &blocking {
+            for (agent_id, reason) in &blocking {
                 tracing::error!(
-                    behavior_id = %behavior_id,
+                    agent_id = %agent_id,
                     public_reason = ?reason.public_reason,
                     diagnostic = %reason.diagnostic,
-                    "behavior unavailable at startup blocks the agent from starting"
+                    "agent_config unavailable at startup blocks the agent from starting"
                 );
             }
             let blocking = blocking
                 .iter()
-                .map(|(behavior_id, reason)| format!("{behavior_id}: {}", reason.public_message()))
+                .map(|(agent_id, reason)| format!("{agent_id}: {}", reason.public_message()))
                 .collect::<Vec<_>>();
             anyhow::bail!(
-                "agent {} has no runnable behaviors at startup due to invalid configuration ({})",
-                agent.agent_did(),
+                "agent {} has no runnable agents at startup due to invalid configuration ({})",
+                agent.node_did(),
                 blocking.join("; ")
             );
         }
     }
 
-    let mut behavior_ids = snapshot.behaviors.keys().cloned().collect::<Vec<_>>();
-    behavior_ids.sort();
+    let mut agent_ids = snapshot.agents.keys().cloned().collect::<Vec<_>>();
+    agent_ids.sort();
 
-    for behavior_id in behavior_ids {
+    for agent_id in agent_ids {
         let tool_surface = snapshot
             .tool_surfaces
-            .get(&behavior_id)
-            .ok_or_else(|| anyhow!("missing tool surface for behavior {behavior_id}"))?;
+            .get(&agent_id)
+            .ok_or_else(|| anyhow!("missing tool surface for agent_config {agent_id}"))?;
         tool_surface
             .build_tools(tool_runtime)
             .await
-            .with_context(|| format!("building startup tool surface for behavior {behavior_id}"))?;
+            .with_context(|| {
+                format!("building startup tool surface for agent_config {agent_id}")
+            })?;
     }
 
     Ok(())
@@ -1281,16 +1243,13 @@ async fn validate_startup_snapshot(
 
 async fn resolve_tool_surfaces(
     node: &defra_node::EmbeddedNode,
-    behaviors: &[Arc<crate::config::ResolvedBehavior>],
+    agents: &[Arc<crate::config::ResolvedAgent>],
     plugins: &crate::plugin::executor::PluginExecutor,
 ) -> Result<HashMap<String, Arc<ToolSurface>>> {
-    let mut tool_surfaces = HashMap::with_capacity(behaviors.len());
-    for behavior in behaviors {
-        let tool_surface = behavior
-            .tools
-            .resolve(node, behavior.agent_did(), plugins)
-            .await?;
-        tool_surfaces.insert(behavior.behavior_id.clone(), Arc::new(tool_surface));
+    let mut tool_surfaces = HashMap::with_capacity(agents.len());
+    for agent in agents {
+        let tool_surface = agent.tools.resolve(node, agent.node_did(), plugins).await?;
+        tool_surfaces.insert(agent.agent_id.clone(), Arc::new(tool_surface));
     }
     Ok(tool_surfaces)
 }
@@ -1302,21 +1261,20 @@ async fn resolve_startup_snapshot(agent: &Gents) -> Result<ResolvedRuntimeSnapsh
         }
         None => {
             let tool_surfaces =
-                resolve_tool_surfaces(agent.node.as_ref(), &agent.behaviors, agent.plugins())
-                    .await?;
+                resolve_tool_surfaces(agent.node.as_ref(), &agent.agents, agent.plugins()).await?;
             let backend_admission_configs =
-                resolve_backend_admission_configs(agent.node.as_ref(), &agent.behaviors).await?;
+                resolve_backend_admission_configs(agent.node.as_ref(), &agent.agents).await?;
             Ok(ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
-                agent.default_behavior_id().to_string(),
-                agent.behaviors.clone(),
+                agent.default_agent_id().to_string(),
+                agent.agents.clone(),
                 tool_surfaces,
                 backend_admission_configs,
-                agent.unavailable_behaviors.clone(),
+                agent.unavailable_agents.clone(),
             ))
             .map(|snapshot| {
                 snapshot
-                    .with_principal(agent.principal_arc())
-                    .with_local_did(agent.agent_did().to_string())
+                    .with_node(agent.runtime_node_arc())
+                    .with_local_did(agent.node_did().to_string())
             })
         }
     }
@@ -1324,11 +1282,11 @@ async fn resolve_startup_snapshot(agent: &Gents) -> Result<ResolvedRuntimeSnapsh
 
 async fn resolve_backend_admission_configs(
     node: &defra_node::EmbeddedNode,
-    behaviors: &[Arc<crate::config::ResolvedBehavior>],
+    agents: &[Arc<crate::config::ResolvedAgent>],
 ) -> Result<HashMap<String, BackendAdmissionConfig>> {
     let mut configs = HashMap::new();
-    for behavior in behaviors {
-        let Some(backend_id) = behavior
+    for agent in agents {
+        let Some(backend_id) = agent
             .backend_id
             .as_deref()
             .map(str::trim)
@@ -1340,22 +1298,19 @@ async fn resolve_backend_admission_configs(
             continue;
         }
         let (resolved_backend_id, config) = async {
-            let backend = backend_registry::lookup_backend(node, behavior.agent_did(), backend_id)
+            let backend = backend_registry::lookup_backend(node, agent.node_did(), backend_id)
                 .await?
                 .ok_or_else(|| {
                     anyhow!(
-                        "behavior {} references missing backend {}",
-                        behavior.behavior_id,
+                        "agent_config {} references missing backend {}",
+                        agent.agent_id,
                         backend_id
                     )
                 })?;
-            let observation = backend_registry::lookup_backend_observation(
-                node,
-                behavior.agent_did(),
-                backend_id,
-            )
-            .await?
-            .context("backend observation disappeared during admission resolution")?;
+            let observation =
+                backend_registry::lookup_backend_observation(node, agent.node_did(), backend_id)
+                    .await?
+                    .context("backend observation disappeared during admission resolution")?;
             tracing::Span::current().record("backend_enabled", backend.enabled);
             tracing::Span::current().record(
                 "probe_status",
@@ -1370,7 +1325,7 @@ async fn resolve_backend_admission_configs(
         }
         .instrument(tracing::info_span!(
             "backend.admission_resolve",
-            behavior_id = %behavior.behavior_id,
+            agent_id = %agent.agent_id,
             backend_id = %backend_id,
             backend_enabled = tracing::field::Empty,
             probe_status = tracing::field::Empty,
@@ -1393,12 +1348,12 @@ async fn resolve_document_snapshot_with_tools(
 #[cfg(test)]
 mod degraded_reason_tests {
     use super::is_degraded_startup_unavailable_reason;
-    use gents_protocol::row::BehaviorReadinessUnavailableReason as Reason;
+    use gents_protocol::node_readiness::AgentReadinessUnavailableReason as Reason;
 
     #[test]
     fn startup_unavailability_classification_is_complete() {
         for reason in [
-            Reason::BehaviorDisabled,
+            Reason::AgentDisabled,
             Reason::BackendNotConfigured,
             Reason::BackendDisabled,
             Reason::BackendTemporarilyUnavailable,
@@ -1421,9 +1376,7 @@ mod startup_slot_failure_policy_tests {
     use std::sync::Arc;
 
     use crate::agent::reconcile::SlotFailurePolicy as _;
-    use crate::behavior_readiness_publisher::{
-        BehaviorReadinessWriter, FatalBehaviorReadinessWrite,
-    };
+    use crate::node_readiness_publisher::{FatalNodeReadinessWrite, NodeReadinessWriter};
     use crate::runtime_snapshot::ActiveRuntimeSnapshot;
 
     use super::*;
@@ -1431,18 +1384,18 @@ mod startup_slot_failure_policy_tests {
     struct FailDemotionWriter;
 
     #[async_trait::async_trait]
-    impl BehaviorReadinessWriter for FailDemotionWriter {
+    impl NodeReadinessWriter for FailDemotionWriter {
         async fn upsert(
             &self,
-            _agent_did: &str,
-            snapshot: &gents_protocol::row::BehaviorReadinessSnapshot,
+            _node_did: &str,
+            snapshot: &gents_protocol::node_readiness::NodeReadinessSnapshot,
             _updated_at: &str,
         ) -> Result<()> {
-            if snapshot.behaviors.iter().any(|entry| {
+            if snapshot.agents.iter().any(|entry| {
                 entry.reason
-                    == Some(gents_protocol::row::BehaviorReadinessUnavailableReason::ExecutorStartFailed)
+                    == Some(gents_protocol::node_readiness::AgentReadinessUnavailableReason::ExecutorStartFailed)
             }) {
-                return Err(FatalBehaviorReadinessWrite.into());
+                return Err(FatalNodeReadinessWrite.into());
             }
             Ok(())
         }
@@ -1511,21 +1464,21 @@ mod startup_slot_failure_policy_tests {
             .readiness()
             .publish_snapshot(&ActiveRuntimeSnapshot {
                 generation: 1,
-                principal: None,
+                node: None,
                 local_did: String::new(),
-                default_behavior_id: "general".to_string(),
-                behaviors: HashMap::new(),
+                default_agent_id: "general".to_string(),
+                agents: HashMap::new(),
                 tool_surfaces: HashMap::new(),
                 backend_admission_configs: HashMap::new(),
-                unavailable_behaviors: HashMap::new(),
+                unavailable_agents: HashMap::new(),
                 active_schedules: HashMap::new(),
                 unavailable_schedules: HashSet::new(),
                 active_event_triggers: HashMap::new(),
                 unavailable_event_triggers: HashSet::new(),
                 active_tasks: HashMap::new(),
                 dispatchers: HashMap::from([("general".to_string(), dispatcher)]),
-                behavior_executor_capacities: HashMap::new(),
-                behavior_executor_queue_capacities: HashMap::new(),
+                agent_executor_capacities: HashMap::new(),
+                agent_executor_queue_capacities: HashMap::new(),
             })
             .await
             .unwrap();
@@ -1540,7 +1493,7 @@ mod startup_slot_failure_policy_tests {
             .unwrap();
 
         let barrier = Arc::new(StartupBarrier::ready_for_test());
-        barrier.register_behavior("general", 1).await;
+        barrier.register_agent("general", 1).await;
         let gate = super::super::router::RuntimeAdmissionGate::closed();
         gate.open().await;
         let runtime_cancel = CancellationToken::new();
@@ -1568,7 +1521,7 @@ mod startup_slot_failure_policy_tests {
             .recv()
             .await
             .expect("runtime coordinator must receive demotion persistence failure");
-        assert_eq!(fatal.to_string(), "injected fatal behavior readiness write");
+        assert_eq!(fatal.to_string(), "injected fatal agent readiness write");
         assert_eq!(
             runtime_status
                 .readiness()
@@ -1610,11 +1563,11 @@ mod lifecycle_coordinator_tests {
     }
 
     #[async_trait::async_trait]
-    impl crate::behavior_readiness_publisher::BehaviorReadinessWriter for FailFirstReadyWriter {
+    impl crate::node_readiness_publisher::NodeReadinessWriter for FailFirstReadyWriter {
         async fn upsert(
             &self,
-            _agent_did: &str,
-            _snapshot: &gents_protocol::row::BehaviorReadinessSnapshot,
+            _node_did: &str,
+            _snapshot: &gents_protocol::node_readiness::NodeReadinessSnapshot,
             _updated_at: &str,
         ) -> Result<()> {
             if self.calls.fetch_add(1, Ordering::SeqCst) == 1 {

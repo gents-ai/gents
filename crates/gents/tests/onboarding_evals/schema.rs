@@ -14,7 +14,7 @@ fn schema_cases_use_valid_native_sdl_and_grade_saved_state() {
     let config = load_pack_config(
         &manifest,
         &PackInstallOptions {
-            agent_did: "did:key:eval-owner".into(),
+            node_did: "did:key:eval-owner".into(),
         },
         &|p| Ok(std::fs::read(root.join(p))?),
         &|_| None,

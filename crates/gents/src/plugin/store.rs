@@ -356,14 +356,14 @@ pub fn list_records(home: &Path) -> Result<Vec<InstalledPlugin>> {
     Ok(records)
 }
 
-/// `namespace/name` of each plugin under `home` whose model slot `agent_did`
+/// `namespace/name` of each plugin under `home` whose model slot `node_did`
 /// bound to `profile_id`.
-pub fn bound_to_profile(home: &Path, agent_did: &str, profile_id: &str) -> Result<Vec<String>> {
+pub fn bound_to_profile(home: &Path, node_did: &str, profile_id: &str) -> Result<Vec<String>> {
     Ok(list_records(home)?
         .into_iter()
         .filter(|record| {
             record.model_binding.as_ref().is_some_and(|binding| {
-                binding.agent_did == agent_did && binding.profile_id == profile_id
+                binding.node_did == node_did && binding.profile_id == profile_id
             })
         })
         .map(|record| format!("{}/{}", record.namespace, record.name))

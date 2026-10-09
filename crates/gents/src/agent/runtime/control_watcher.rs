@@ -41,7 +41,7 @@ const CONTROL_WATCHER_TIMING: ControlWatcherTiming = ControlWatcherTiming {
 pub(super) async fn run_control_watcher(
     node: Arc<defra_node::EmbeddedNode>,
     subscription: events::DocumentChangeSubscription,
-    agent_did: String,
+    node_did: String,
     resolve_context: DocumentResolveContext,
     proposals_tx: mpsc::Sender<ResolvedRuntimeSnapshot>,
     runtime_status: RuntimeStatusHandle,
@@ -51,7 +51,7 @@ pub(super) async fn run_control_watcher(
     run_control_watcher_with_timing(
         node,
         subscription,
-        agent_did,
+        node_did,
         resolve_context,
         proposals_tx,
         runtime_status,
@@ -66,7 +66,7 @@ pub(super) async fn run_control_watcher(
 pub(super) async fn run_control_watcher_with_timing(
     node: Arc<defra_node::EmbeddedNode>,
     mut subscription: events::DocumentChangeSubscription,
-    agent_did: String,
+    node_did: String,
     resolve_context: DocumentResolveContext,
     proposals_tx: mpsc::Sender<ResolvedRuntimeSnapshot>,
     runtime_status: RuntimeStatusHandle,
@@ -75,7 +75,7 @@ pub(super) async fn run_control_watcher_with_timing(
     timing: ControlWatcherTiming,
 ) -> Result<()> {
     let mut document_view =
-        document_view::load_document_runtime_view(node.as_ref(), &agent_did).await?;
+        document_view::load_document_runtime_view(node.as_ref(), &node_did).await?;
     let sleep = tokio::time::sleep(timing.idle_sleep);
     tokio::pin!(sleep);
     let mut dirty = false;
@@ -87,7 +87,7 @@ pub(super) async fn run_control_watcher_with_timing(
     let mut replicated_pending = false;
     let mut collection_id_to_name = HashMap::<String, String>::new();
     let mut measured_mcp_availability =
-        crate::tool_surface::measured_available_mcp_service_ids(node.as_ref(), &agent_did)
+        crate::tool_surface::measured_available_mcp_service_ids(node.as_ref(), &node_did)
             .await?
             .into_iter()
             .collect::<BTreeSet<_>>();
@@ -98,15 +98,15 @@ pub(super) async fn run_control_watcher_with_timing(
             _ = &mut sleep, if dirty => {
                 replicated_pending = false;
                 if resync_required || pending_visibility || settle_deadline.is_some() {
-                    match document_view::load_document_runtime_view(node.as_ref(), &agent_did).await {
+                    match document_view::load_document_runtime_view(node.as_ref(), &node_did).await {
                         Ok(reloaded) => {
                             document_view = reloaded;
-                            pending_visibility = document_view.has_unresolved_behavior_references();
+                            pending_visibility = document_view.has_unresolved_agent_references();
                             resync_required = false;
                         }
                         Err(error) => {
                             tracing::error!(
-                                agent_did = %agent_did,
+                                node_did = %node_did,
                                 error = %error,
                                 "runtime control watcher failed to refresh document view during settle window"
                             );
@@ -131,7 +131,7 @@ pub(super) async fn run_control_watcher_with_timing(
                     let pending_details = document_view.pending_visibility_details();
                     let pending_summary = super::router::format_pending_visibility_error(&pending_details);
                     tracing::warn!(
-                        agent_did = %agent_did,
+                        node_did = %node_did,
                         pending_references = %pending_details.join("; "),
                         "runtime control watcher is still waiting for referenced control documents"
                     );
@@ -183,7 +183,7 @@ pub(super) async fn run_control_watcher_with_timing(
                     Err(error) => {
                         resolve_failed = true;
                         tracing::error!(
-                            agent_did = %agent_did,
+                            node_did = %node_did,
                             error = %error,
                             "runtime reconcile resolve failed; keeping previous active generation"
                         );
@@ -222,7 +222,7 @@ pub(super) async fn run_control_watcher_with_timing(
             }
             Some(()) = health_events_rx.recv() => {
                 tracing::info!(
-                    agent_did = %agent_did,
+                    node_did = %node_did,
                     "backend measured-health transition detected; scheduling reconcile"
                 );
                 dirty = true;
@@ -239,7 +239,7 @@ pub(super) async fn run_control_watcher_with_timing(
 
                 if batch.resync_required {
                     tracing::warn!(
-                        agent_did = %agent_did,
+                        node_did = %node_did,
                         updates = batch.updates,
                         "runtime control watcher document-change capacity exceeded; scheduling full reconcile"
                     );
@@ -264,14 +264,14 @@ pub(super) async fn run_control_watcher_with_timing(
                     if collection_name.as_deref() == Some("ToolServiceHealthState") {
                         let current = match crate::tool_surface::measured_available_mcp_service_ids(
                             node.as_ref(),
-                            &agent_did,
+                            &node_did,
                         )
                         .await
                         {
                             Ok(service_ids) => service_ids.into_iter().collect::<BTreeSet<_>>(),
                             Err(error) => {
                                 tracing::warn!(
-                                    agent_did,
+                                    node_did,
                                     %error,
                                     "could not measure MCP availability after health-state update"
                                 );
@@ -285,7 +285,7 @@ pub(super) async fn run_control_watcher_with_timing(
                     }
                     match document_view::apply_control_update(
                         node.as_ref(),
-                        &agent_did,
+                        &node_did,
                         collection_name.as_deref().unwrap_or(update.collection_id.as_str()),
                         &update.doc_id,
                         &mut document_view,
@@ -294,14 +294,14 @@ pub(super) async fn run_control_watcher_with_timing(
                     {
                         Ok(document_view::ControlUpdateOutcome::Irrelevant) => continue,
                         Ok(document_view::ControlUpdateOutcome::FullReload) => {
-                            match document_view::load_document_runtime_view(node.as_ref(), &agent_did).await {
+                            match document_view::load_document_runtime_view(node.as_ref(), &node_did).await {
                                 Ok(reloaded) => {
                                     document_view = reloaded;
-                                    pending_visibility = document_view.has_unresolved_behavior_references();
+                                    pending_visibility = document_view.has_unresolved_agent_references();
                                 }
                                 Err(error) => {
                                     tracing::error!(
-                                        agent_did = %agent_did,
+                                        node_did = %node_did,
                                         error = %error,
                                         "runtime control watcher failed to reload document view; keeping previous active generation"
                                     );
@@ -317,20 +317,20 @@ pub(super) async fn run_control_watcher_with_timing(
                         }
                         Err(error) => {
                             tracing::error!(
-                                agent_did = %agent_did,
+                                node_did = %node_did,
                                 collection_id = %update.collection_id,
                                 doc_id = %update.doc_id,
                                 error = %error,
                                 "runtime control update apply failed; forcing full resync"
                             );
-                            match document_view::load_document_runtime_view(node.as_ref(), &agent_did).await {
+                            match document_view::load_document_runtime_view(node.as_ref(), &node_did).await {
                                 Ok(reloaded) => {
                                     document_view = reloaded;
-                                    pending_visibility = document_view.has_unresolved_behavior_references();
+                                    pending_visibility = document_view.has_unresolved_agent_references();
                                 }
                                 Err(resync_error) => {
                                     tracing::error!(
-                                        agent_did = %agent_did,
+                                        node_did = %node_did,
                                         error = %resync_error,
                                         "runtime control watcher failed to resync document view after update error"
                                     );
@@ -349,7 +349,7 @@ pub(super) async fn run_control_watcher_with_timing(
                     }
 
                     tracing::info!(
-                        agent_did = %agent_did,
+                        node_did = %node_did,
                         doc_id = %update.doc_id,
                         collection_id = %update.collection_id,
                         has_local_write = update.has_local_write,

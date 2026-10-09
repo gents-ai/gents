@@ -265,7 +265,7 @@ pub fn journal_conflict(error: &anyhow::Error) -> Option<&JournalConflict> {
 
 fn filter(owner: &str, job_id: &str) -> String {
     format!(
-        r#"owner_agent_did: {{ _eq: "{}" }}, job_id: {{ _eq: "{}" }}"#,
+        r#"owner_node_did: {{ _eq: "{}" }}, job_id: {{ _eq: "{}" }}"#,
         escape_graphql_string(owner),
         escape_graphql_string(job_id)
     )
@@ -283,7 +283,7 @@ pub async fn create_job(
 ) -> Result<JobRecord> {
     let variables = json!({ "input": {
         "job_id": job_id,
-        "owner_agent_did": owner,
+        "owner_node_did": owner,
         "origin": serde_json::to_string(origin)?,
         "journal": "[]",
         "journal_len": 0,
@@ -313,14 +313,14 @@ pub async fn create_job(
     })
 }
 
-const JOB_FIELDS: &str = "job_id owner_agent_did origin journal";
+const JOB_FIELDS: &str = "job_id owner_node_did origin journal";
 
 fn decode(row: &Value) -> Result<JobRecord> {
     Ok(JobRecord {
         job_id: row["job_id"].as_str().context("job_id")?.to_owned(),
-        owner: row["owner_agent_did"]
+        owner: row["owner_node_did"]
             .as_str()
-            .context("owner_agent_did")?
+            .context("owner_node_did")?
             .to_owned(),
         origin: serde_json::from_str(row["origin"].as_str().context("origin")?)
             .context("decoding job origin")?,
@@ -439,7 +439,7 @@ mod tests {
             closure: Vec::new(),
             subject: crate::eval::SubjectRef {
                 pack_digest: "sha256:baseline".into(),
-                behavior_id: "monitor".into(),
+                agent_id: "monitor".into(),
             },
             definition: crate::eval::DefinitionRef {
                 definition_id: "monitor-findings".into(),

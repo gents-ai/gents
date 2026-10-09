@@ -6,9 +6,9 @@ use anyhow::Result;
 use crate::agent::completion_retry::CompletionRetryProfileFields;
 use crate::backend_provider::BackendProviderKind;
 use crate::compaction::CompactionStrategy;
-use crate::identity::{AgentIdentity, RuntimePrincipal};
+use crate::identity::{NodeIdentity, RuntimeNode};
 use crate::openai_wire::OpenAiWireApi;
-use crate::tool_surface::BehaviorToolConfig;
+use crate::tool_surface::AgentToolSurfaceConfig;
 
 pub const DEFAULT_CONTEXT_WINDOW: usize = 131_072;
 pub const DEFAULT_MAX_OUTPUT_TOKENS: usize = 32_768;
@@ -36,15 +36,15 @@ pub const DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS: u64 = 300;
 pub const DEFAULT_DEADLINE_DURATION_SECS: u64 = 86_400;
 pub const DEFAULT_MODEL_NAME: &str = "default";
 
-/// Fully resolved runtime configuration for one behavior executor. Holds an
-/// `Arc<RuntimePrincipal>` back-reference; the principal owns the
+/// Fully resolved runtime configuration for one agent executor. Holds an
+/// `Arc<RuntimeNode>` back-reference; the node owns the
 /// signing identity used for all DefraDB ops issued for this
-/// behavior. The resolved behavior therefore carries the validated owner and
-/// signing handle selected by its principal-and-behavior key.
+/// agent. The resolved agent therefore carries the validated owner and
+/// signing handle selected by its node-and-agent key.
 #[derive(Clone)]
-pub struct ResolvedBehavior {
-    pub behavior_id: String,
-    pub principal: Arc<RuntimePrincipal>,
+pub struct ResolvedAgent {
+    pub agent_id: String,
+    pub node: Arc<RuntimeNode>,
     pub backend_id: Option<String>,
     pub backend_provider_kind: BackendProviderKind,
     pub openai_wire_api: OpenAiWireApi,
@@ -59,7 +59,7 @@ pub struct ResolvedBehavior {
     pub max_turns: usize,
     pub max_turns_provenance: MaxTurnsProvenance,
     pub system_prompt: String,
-    pub tools: BehaviorToolConfig,
+    pub tools: AgentToolSurfaceConfig,
     /// Canonical compaction selection; absence uses runtime defaults.
     pub compaction: Option<crate::document_config::CompactionConfig>,
     /// Optional summary inference resolved through the same profile chain.
@@ -72,7 +72,7 @@ pub struct ResolvedBehavior {
     pub deadline_duration: Duration,
     pub completion_retry: CompletionRetryProfileFields,
     pub sampling: SamplingConfig,
-    /// Effective skill set for this behavior (decision D5), resolved at
+    /// Effective skill set for this agent (decision D5), resolved at
     /// snapshot-build time. Their instructions compose into the prompt
     /// preamble; their tool deps are intersected with the tool ceiling and
     /// never widen it (decision D3). See `crate::skills`.
@@ -168,8 +168,8 @@ fn positive_inference_limit(value: Option<i64>, default: usize, field: &str) -> 
     }
 }
 
-/// Which owner set the effective `max_turns`. A behavior resolved from
-/// documents may have no `InferenceExecution` document at all, and a behavior
+/// Which owner set the effective `max_turns`. An agent resolved from
+/// documents may have no `InferenceExecution` document at all, and an agent
 /// built programmatically has none by construction, so the three cases name
 /// different knobs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -183,13 +183,13 @@ impl MaxTurnsProvenance {
     pub fn describe(self) -> &'static str {
         match self {
             MaxTurnsProvenance::Default => {
-                "no max_turns is configured for this behavior; this is the built-in default, raised by setting max_turns on an InferenceExecution document bound to the behavior's inference profile, or through BehaviorBuilder::max_turns for a behavior built programmatically"
+                "no max_turns is configured for this agent; this is the built-in default, raised by setting max_turns on an InferenceExecution document bound to the agent's inference profile, or through AgentBuilder::max_turns for an agent built programmatically"
             }
             MaxTurnsProvenance::ExecutionProfile => {
-                "max_turns is set explicitly by the InferenceExecution document bound to this behavior's inference profile"
+                "max_turns is set explicitly by the InferenceExecution document bound to this agent's inference profile"
             }
             MaxTurnsProvenance::BuilderOverride => {
-                "max_turns was set programmatically through BehaviorBuilder::max_turns; no InferenceExecution document controls it"
+                "max_turns was set programmatically through AgentBuilder::max_turns; no InferenceExecution document controls it"
             }
         }
     }
@@ -332,7 +332,7 @@ impl SamplingConfig {
     /// `completion_factory`; everything else is emitted here and deep-merged
     /// into `additional_params` at the request boundary. A `None` knob emits
     /// nothing at all — the served model's own default stands, which is the
-    /// pre-#649 behavior for every profile that does not pin a value.
+    /// pre-#649 default for every profile that does not pin a value.
     pub fn additional_params(self) -> Option<serde_json::Value> {
         let mut params = serde_json::Map::new();
         if let Some(top_p) = self.top_p {
@@ -370,11 +370,11 @@ impl SamplingConfig {
     }
 }
 
-impl std::fmt::Debug for ResolvedBehavior {
+impl std::fmt::Debug for ResolvedAgent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ResolvedBehavior")
-            .field("behavior_id", &self.behavior_id)
-            .field("principal_did", &self.principal.agent_did)
+        f.debug_struct("ResolvedAgent")
+            .field("agent_id", &self.agent_id)
+            .field("node_did", &self.node.node_did)
             .field("backend_id", &self.backend_id)
             .field("backend_provider_kind", &self.backend_provider_kind)
             .field("openai_wire_api", &self.openai_wire_api)
@@ -389,7 +389,7 @@ impl std::fmt::Debug for ResolvedBehavior {
             .field("max_output_tokens", &self.max_output_tokens)
             .field("max_turns", &self.max_turns)
             // Included for the same reason as `skills`: reconcile and slot
-            // selection compare `{behavior:?}`, so a provenance-only edit
+            // selection compare `{agent:?}`, so a provenance-only edit
             // (unset <-> an explicit value equal to the default) would
             // otherwise fingerprint identically and leave the running slot
             // reporting the previous provenance.
@@ -406,14 +406,14 @@ impl std::fmt::Debug for ResolvedBehavior {
             .field("completion_retry", &self.completion_retry)
             .field("sampling", &self.sampling)
             // Included so the runtime configuration fingerprint (which hashes
-            // `{behavior:?}`) changes when a behavior's effective skills change,
+            // `{agent:?}`) changes when an agent's effective skills change,
             // letting the control watcher reconcile live skill updates (#340).
             .field("skills", &self.skills)
             .finish()
     }
 }
 
-impl ResolvedBehavior {
+impl ResolvedAgent {
     pub fn compaction_threshold(&self) -> f64 {
         self.compaction
             .as_ref()
@@ -428,30 +428,30 @@ impl ResolvedBehavior {
             .unwrap_or(CompactionStrategy::StripThenSummarize)
     }
 
-    /// Returns the principal's agent_did.
-    pub fn agent_did(&self) -> &str {
-        &self.principal.agent_did
+    /// Returns the node's DID.
+    pub fn node_did(&self) -> &str {
+        &self.node.node_did
     }
 
-    /// Returns the principal's signing identity.
+    /// Returns the node's signing identity.
     ///
-    /// This is the only way to obtain an `Arc<dyn AgentIdentity>` for
-    /// a behavior; the behavior itself does not hold one. Two
-    /// behaviors sharing an `Arc<RuntimePrincipal>` return identical
+    /// This is the only way to obtain an `Arc<dyn NodeIdentity>` for
+    /// an agent; the agent itself does not hold one. Two
+    /// agents sharing an `Arc<RuntimeNode>` return identical
     /// clones, so DefraDB ACP receives the same actor for both —
-    /// satisfying Lean's `RespectsPrincipal` predicate.
-    pub fn principal_identity(&self) -> &Arc<dyn AgentIdentity> {
-        &self.principal.identity
+    /// satisfying Lean's `RespectsNode` predicate.
+    pub fn node_identity(&self) -> &Arc<dyn NodeIdentity> {
+        &self.node.identity
     }
 
-    /// Resolve the explicitly selected shared credential. Principal OAuth is
+    /// Resolve the explicitly selected shared credential. Node OAuth is
     /// handled by its existing credential owner, never an unauthenticated fallback.
     pub fn resolve_backend_api_key(&self) -> Result<Option<String>> {
         self.backend_auth.resolve_api_key().map_err(|error| {
             anyhow::anyhow!(
-                "backend {} for behavior {}: {error:#}",
+                "backend {} for agent {}: {error:#}",
                 self.backend_id.as_deref().unwrap_or("<unbound>"),
-                self.behavior_id
+                self.agent_id
             )
         })
     }
@@ -464,7 +464,7 @@ impl ResolvedBehavior {
 }
 
 /// Resolve a backend's explicitly selected shared credential, retaining backend
-/// identity in configuration errors. OAuth uses the principal credential owner.
+/// identity in configuration errors. OAuth uses the node credential owner.
 pub fn resolve_backend_api_key(
     backend: &crate::backend_registry::InferenceBackend,
 ) -> Result<Option<String>> {
@@ -490,20 +490,20 @@ mod tests {
         crate::document_config::InferenceBackendObservation,
     ) {
         let backend = serde_json::from_value(serde_json::json!({
-            "agent_did":"did:key:test", "backend_id":"xai", "name":"xAI",
+            "node_did":"did:key:test", "backend_id":"xai", "name":"xAI",
             "provider_kind":"OpenAiCompatible", "openai_wire_api":"responses",
             "endpoint":endpoint,
             "auth":{"kind":"environment","variable":"XAI_API_KEY"}
         }))
         .unwrap();
         let profile = serde_json::from_value(serde_json::json!({
-            "agent_did":"did:key:test", "profile_id":"grok", "backend_id":"xai",
+            "node_did":"did:key:test", "profile_id":"grok", "backend_id":"xai",
             "model_name":model, "reasoning_effort":effort
         }))
         .unwrap();
         let observation = serde_json::from_value(serde_json::json!({
             "backend_id":"xai", "probe_status":"healthy",
-            "catalogs":[{"agent_did":null,"observed_at":"2026-01-01T00:00:00Z",
+            "catalogs":[{"node_did":null,"observed_at":"2026-01-01T00:00:00Z",
                 "models":[{"model_name":model,"reasoning_efforts":catalogued_efforts}]}]
         }))
         .unwrap();
@@ -578,18 +578,18 @@ mod tests {
         );
     }
 
-    fn stub_principal() -> Arc<RuntimePrincipal> {
+    fn stub_node() -> Arc<RuntimeNode> {
         let identity = Arc::new(
             KeyIdentity::load_or_create(
-                std::env::temp_dir().join(format!("config-behavior-{}.key", uuid::Uuid::new_v4())),
+                std::env::temp_dir().join(format!("config-agent-{}.key", uuid::Uuid::new_v4())),
                 None,
             )
             .unwrap(),
         );
-        Arc::new(RuntimePrincipal {
-            agent_did: identity.did().to_string(),
+        Arc::new(RuntimeNode {
+            node_did: identity.did().to_string(),
             identity,
-            default_behavior_id: String::new(),
+            default_agent_id: String::new(),
             display_name: None,
             enabled: true,
         })
@@ -599,7 +599,7 @@ mod tests {
     fn anthropic_key_resolves_claude_reasoning_efforts() {
         let inference = ResolvedInference {
             backend: serde_json::from_value(serde_json::json!({
-                "agent_did": "did:key:backend-owner",
+                "node_did": "did:key:backend-owner",
                 "backend_id": "anthropic-key",
                 "name": "Anthropic API",
                 "provider_kind": "AnthropicApiKey",
@@ -608,7 +608,7 @@ mod tests {
             }))
             .unwrap(),
             profile: serde_json::from_value(serde_json::json!({
-                "agent_did": "did:key:backend-owner",
+                "node_did": "did:key:backend-owner",
                 "profile_id": "opus",
                 "backend_id": "anthropic-key",
                 "model_name": "claude-opus-5-5"
@@ -622,10 +622,10 @@ mod tests {
         assert!(inference.resolved_reasoning_efforts().is_some());
     }
 
-    fn behavior_with_wire(openai_wire_api: OpenAiWireApi) -> ResolvedBehavior {
-        ResolvedBehavior {
-            behavior_id: "general".to_string(),
-            principal: stub_principal(),
+    fn agent_with_wire(openai_wire_api: OpenAiWireApi) -> ResolvedAgent {
+        ResolvedAgent {
+            agent_id: "general".to_string(),
+            node: stub_node(),
             backend_id: Some("backend-general".to_string()),
             backend_provider_kind: BackendProviderKind::OpenAiCompatible,
             openai_wire_api,
@@ -638,7 +638,7 @@ mod tests {
             max_turns: DEFAULT_MAX_TURNS,
             max_turns_provenance: MaxTurnsProvenance::Default,
             system_prompt: "system".to_string(),
-            tools: BehaviorToolConfig::meta_only(),
+            tools: AgentToolSurfaceConfig::meta_only(),
             compaction: None,
             compaction_inference: None,
             max_total_tokens: None,
@@ -652,22 +652,22 @@ mod tests {
         }
     }
 
-    /// A behavior bound to a backend whose environment authentication names an
+    /// An agent bound to a backend whose environment authentication names an
     /// environment variable that isn't actually set in the process must fail
-    /// loudly, naming both the backend and the behavior — never silently
+    /// loudly, naming both the backend and the agent — never silently
     /// build/run with no key (#1338).
     #[test]
     fn resolve_backend_api_key_errors_when_env_var_named_but_unset() {
-        let mut behavior = behavior_with_wire(OpenAiWireApi::ChatCompletions);
+        let mut agent = agent_with_wire(OpenAiWireApi::ChatCompletions);
         // Deliberately not a substring of `backend-general` (the fixture's
         // backend id) so the two assertions below can't pass vacuously off
         // one shared match.
-        behavior.behavior_id = "behavior-alpha".to_string();
-        behavior.backend_auth = crate::document_config::BackendAuth::Environment {
+        agent.agent_id = "agent-alpha".to_string();
+        agent.backend_auth = crate::document_config::BackendAuth::Environment {
             variable: "GENTS_CONFIG_TEST_KEY_MISSING_1338_NEVER_SET".into(),
         };
 
-        let error = behavior
+        let error = agent
             .resolve_backend_api_key()
             .expect_err("a named-but-unset env var must hard error");
         let message = error.to_string();
@@ -676,8 +676,8 @@ mod tests {
             "error must name the backend: {message}"
         );
         assert!(
-            message.contains("behavior-alpha"),
-            "error must name the behavior: {message}"
+            message.contains("agent-alpha"),
+            "error must name the agent: {message}"
         );
         assert!(
             message.contains("GENTS_CONFIG_TEST_KEY_MISSING_1338_NEVER_SET"),
@@ -687,9 +687,9 @@ mod tests {
 
     #[test]
     fn resolve_backend_api_key_none_when_no_env_var_configured() {
-        let behavior = behavior_with_wire(OpenAiWireApi::ChatCompletions);
+        let agent = agent_with_wire(OpenAiWireApi::ChatCompletions);
         assert_eq!(
-            behavior
+            agent
                 .resolve_backend_api_key()
                 .expect("no key configured is not an error"),
             None
@@ -741,18 +741,18 @@ mod tests {
     fn max_turns_provenance_descriptions_name_a_reachable_knob() {
         let default = MaxTurnsProvenance::Default.describe();
         assert!(default.contains("built-in default"));
-        // A default-limit behavior may have been built either way, so the
+        // A default-limit agent may have been built either way, so the
         // advice has to cover both routes to a higher limit.
         assert!(default.contains("InferenceExecution document"));
         assert!(
-            default.contains("BehaviorBuilder::max_turns"),
-            "a programmatically built behavior has no document to edit: {default}"
+            default.contains("AgentBuilder::max_turns"),
+            "a programmatically built agent has no document to edit: {default}"
         );
         assert!(MaxTurnsProvenance::ExecutionProfile
             .describe()
             .contains("InferenceExecution document"));
         let builder = MaxTurnsProvenance::BuilderOverride.describe();
-        assert!(builder.contains("BehaviorBuilder::max_turns"));
+        assert!(builder.contains("AgentBuilder::max_turns"));
         assert!(
             builder.contains("no InferenceExecution document"),
             "a builder-supplied limit must not point the operator at a document: {builder}"
@@ -768,7 +768,7 @@ mod tests {
     fn default_execution_lease_is_two_minutes() {
         assert_eq!(DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS, 120);
         assert_eq!(
-            behavior_with_wire(OpenAiWireApi::ChatCompletions).stream_liveness_timeout,
+            agent_with_wire(OpenAiWireApi::ChatCompletions).stream_liveness_timeout,
             Duration::from_secs(120),
         );
     }
@@ -786,17 +786,17 @@ mod tests {
 
     /// TA-1 (#566 review): `openai_wire_api` must appear in the manual `Debug`
     /// impl, because the runtime configuration fingerprint hashes
-    /// `format!("{behavior:?}")` (see `runtime_snapshot::configuration_fingerprint`).
+    /// `format!("{agent:?}")` (see `runtime_snapshot::configuration_fingerprint`).
     /// Without the Debug field, switching a backend's wire API would not change the
     /// fingerprint, so the control watcher would never reconcile the change into a new
     /// generation. Deleting the `.field("openai_wire_api", …)` line makes these equal.
     #[test]
     fn debug_distinguishes_openai_wire_api_for_reconcile_fingerprint() {
-        let chat = format!("{:?}", behavior_with_wire(OpenAiWireApi::ChatCompletions));
-        let responses = format!("{:?}", behavior_with_wire(OpenAiWireApi::Responses));
+        let chat = format!("{:?}", agent_with_wire(OpenAiWireApi::ChatCompletions));
+        let responses = format!("{:?}", agent_with_wire(OpenAiWireApi::Responses));
         assert_ne!(
             chat, responses,
-            "openai_wire_api must be in ResolvedBehavior Debug so the runtime fingerprint \
+            "openai_wire_api must be in ResolvedAgent Debug so the runtime fingerprint \
              changes when the wire API changes"
         );
         assert!(chat.contains("ChatCompletions"));
@@ -835,7 +835,7 @@ pub fn validate_advertised_context_override(
 }
 
 /// The model catalog a backend's observation advertises in the backend's
-/// credential scope: the principal's own catalog for principal OAuth, the
+/// credential scope: the node's own catalog for node OAuth, the
 /// shared catalog otherwise. `None` when nothing has been observed; an error
 /// when the observation holds more than one catalog for that scope.
 pub fn backend_catalog<'a>(
@@ -844,9 +844,9 @@ pub fn backend_catalog<'a>(
 ) -> anyhow::Result<Option<&'a crate::document_config::BackendModelCatalog>> {
     let credential_scope = matches!(
         backend.auth,
-        crate::document_config::BackendAuth::PrincipalOAuth { .. }
+        crate::document_config::BackendAuth::NodeOAuth { .. }
     )
-    .then_some(backend.agent_did.as_str());
+    .then_some(backend.node_did.as_str());
     Ok(observation
         .filter(|observation| observation.backend_id == backend.backend_id)
         .map(|observation| observation.catalog_for(credential_scope))

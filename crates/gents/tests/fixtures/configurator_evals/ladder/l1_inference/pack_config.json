@@ -1,12 +1,12 @@
 {
-  "agent_principal": {},
+  "node": {},
   "eval_definitions": [
     {
       "definition_id": "configurator-l1-inference",
       "comparability_version": 7,
       "title": "Configurator L1 Inference: profile, execution and binding",
       "subject": {
-        "kind": "behavior",
+        "kind": "agent",
         "inference_slots": [
           "engineer"
         ]
@@ -18,7 +18,7 @@
         "./cases/val_reasoning_effort_high.json",
         "./cases/val_trap_preserve_default_profile.json",
         "./cases/val_minimal_limits.json",
-        "./cases/val_new_behavior_reviewer.json",
+        "./cases/val_new_agent_reviewer.json",
         "./cases/held_nightly_automation_reviewer.json"
       ]
     }

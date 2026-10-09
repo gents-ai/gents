@@ -41,7 +41,7 @@
         "desired_after": [
           {
             "_docID": "bae-37b10157-24d3-559b-8646-b82dedbdfb35",
-            "agent_did": "did:key:z6MksF9ok9qdaCfrwXMLuG2DWBvBSG8S5hy7FMzUAu6oYpGy",
+            "node_did": "did:key:z6MksF9ok9qdaCfrwXMLuG2DWBvBSG8S5hy7FMzUAu6oYpGy",
             "collections": [
               "DeploymentNote"
             ],
@@ -97,7 +97,7 @@
         "desired_after": [
           {
             "_docID": "bae-7ae82f02-e54f-5f76-bbd5-f03cf03d0951",
-            "agent_did": "did:key:z6MkkwwUscxZAegKQibi6ypE399RAjhtvRCfrkzY3j7zm2Yx",
+            "node_did": "did:key:z6MkkwwUscxZAegKQibi6ypE399RAjhtvRCfrkzY3j7zm2Yx",
             "collections": [
               "DeploymentNote"
             ],
@@ -130,7 +130,7 @@
         "desired_after": [
           {
             "_docID": "bae-9f2a0caf-50fc-5bdc-9ddc-da9f28044a66",
-            "agent_did": "did:key:z6MktzzHdH7EdNpc3WzVb3eLoNK5ZnAk53Pgb98rTd3MzG7V",
+            "node_did": "did:key:z6MktzzHdH7EdNpc3WzVb3eLoNK5ZnAk53Pgb98rTd3MzG7V",
             "collections": [
               "DeploymentNote"
             ],
@@ -163,7 +163,7 @@
         "desired_after": [
           {
             "_docID": "bae-43d7fe0e-8865-5d7f-a1e5-a365d5e6645d",
-            "agent_did": "did:key:z6MksQ8qUXkQUHkMHk66D4RcXNwL1k54WiVLnbJs2WCaT3Rv",
+            "node_did": "did:key:z6MksQ8qUXkQUHkMHk66D4RcXNwL1k54WiVLnbJs2WCaT3Rv",
             "collections": [
               "DeploymentNote"
             ],
@@ -219,7 +219,7 @@
         "desired_after": [
           {
             "_docID": "bae-96016a68-bfca-5cd3-b95b-17f3bbb92ea0",
-            "agent_did": "did:key:z6MkupnS5EnSA2MAUHTR3yH9rtUP2iNYDpyRsbi7pY3XLG1r",
+            "node_did": "did:key:z6MkupnS5EnSA2MAUHTR3yH9rtUP2iNYDpyRsbi7pY3XLG1r",
             "collections": [
               "DeploymentNote"
             ],
@@ -298,7 +298,7 @@
         "desired_after": [
           {
             "_docID": "bae-ce6c40ab-a870-516e-a3ad-a504f8b76409",
-            "agent_did": "did:key:z6MkfMrd3jjWNuhnZNTEByAHSBH8XE5emCcZr7EUcd8JyznX",
+            "node_did": "did:key:z6MkfMrd3jjWNuhnZNTEByAHSBH8XE5emCcZr7EUcd8JyznX",
             "collections": [
               "DeploymentNote"
             ],
@@ -331,7 +331,7 @@
         "desired_after": [
           {
             "_docID": "bae-236411da-7b8c-54c5-a1fd-001e147038d5",
-            "agent_did": "did:key:z6MkidKqxPKwNw4CzAdYjYoQYT1wsMPNcTX25QqxD3FhogHp",
+            "node_did": "did:key:z6MkidKqxPKwNw4CzAdYjYoQYT1wsMPNcTX25QqxD3FhogHp",
             "collections": [
               "DeploymentNote"
             ],
@@ -364,7 +364,7 @@
         "desired_after": [
           {
             "_docID": "bae-879a9be6-e7dd-5504-978c-ad29e9b976fc",
-            "agent_did": "did:key:z6MkecH4kxsms6GtmtghQJDPoHV9n7MzppbWYePY3LpmuiMA",
+            "node_did": "did:key:z6MkecH4kxsms6GtmtghQJDPoHV9n7MzppbWYePY3LpmuiMA",
             "collections": [
               "DeploymentNote"
             ],
@@ -444,7 +444,7 @@
         "desired_after": [
           {
             "_docID": "bae-67db1b74-7dd1-5608-b5aa-e4659bf579be",
-            "agent_did": "did:key:z6MkqDStP8VTpdMmnVjeHaFQdUx4WpXgsPe1KnxLKmbbtn6g",
+            "node_did": "did:key:z6MkqDStP8VTpdMmnVjeHaFQdUx4WpXgsPe1KnxLKmbbtn6g",
             "collections": [
               "DeploymentNote"
             ],

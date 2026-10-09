@@ -27,7 +27,7 @@ pub struct BackendFields {
     pub backend_auth: BackendAuth,
 }
 
-pub(crate) const BACKEND_CONFIG_FIELDS: &str = "agent_did backend_id name provider_kind openai_wire_api endpoint auth connect_timeout_secs discovery_timeout_secs max_concurrent max_queue_depth enabled tags";
+pub(crate) const BACKEND_CONFIG_FIELDS: &str = "node_did backend_id name provider_kind openai_wire_api endpoint auth connect_timeout_secs discovery_timeout_secs max_concurrent max_queue_depth enabled tags";
 
 impl InferenceBackend {
     pub fn from_value(value: &serde_json::Value) -> Result<Self> {
@@ -76,7 +76,7 @@ impl InferenceBackend {
     pub fn validation_violations(&self) -> Vec<String> {
         let mut violations = Vec::new();
         for (name, value) in [
-            ("agent_did", self.agent_did.as_str()),
+            ("node_did", self.node_did.as_str()),
             ("backend_id", self.backend_id.as_str()),
             ("endpoint", self.endpoint.as_str()),
         ] {
@@ -107,8 +107,8 @@ impl InferenceBackend {
             }
             _ => {}
         }
-        if matches!(self.auth, BackendAuth::PrincipalOAuth { .. })
-            != self.provider_kind.is_agent_scoped_oauth()
+        if matches!(self.auth, BackendAuth::NodeOAuth { .. })
+            != self.provider_kind.is_node_scoped_oauth()
         {
             violations
                 .push("backend auth selection is incompatible with the provider adapter".into());
@@ -133,7 +133,7 @@ impl InferenceBackend {
     /// Catalog authentication scope of this connection: `None` for shared
     /// credentials, the owning principal for principal OAuth.
     pub fn catalog_scope(&self) -> Option<&str> {
-        matches!(self.auth, BackendAuth::PrincipalOAuth { .. }).then_some(self.agent_did.as_str())
+        matches!(self.auth, BackendAuth::NodeOAuth { .. }).then_some(self.node_did.as_str())
     }
 }
 
@@ -161,7 +161,7 @@ impl BackendAuth {
                 );
                 Ok(Some(key))
             }
-            Self::PrincipalOAuth { .. } => {
+            Self::NodeOAuth { .. } => {
                 anyhow::bail!("principal OAuth requires the invoking principal's OAuthCredential")
             }
         }
@@ -182,7 +182,7 @@ impl InferenceBackendObservation {
         let mut catalogs = self
             .catalogs
             .iter()
-            .filter(|catalog| catalog.agent_did.as_deref() == principal);
+            .filter(|catalog| catalog.node_did.as_deref() == principal);
         let catalog = catalogs.next();
         anyhow::ensure!(
             catalogs.next().is_none(),
@@ -211,9 +211,9 @@ pub fn derive_display_state(enabled: bool, probe_status: &str) -> &'static str {
     }
 }
 
-fn scope_filter(agent_did: &str, backend_id: &str) -> Result<String> {
+fn scope_filter(node_did: &str, backend_id: &str) -> Result<String> {
     anyhow::ensure!(
-        !agent_did.trim().is_empty(),
+        !node_did.trim().is_empty(),
         "backend owner DID must not be blank"
     );
     anyhow::ensure!(
@@ -221,32 +221,32 @@ fn scope_filter(agent_did: &str, backend_id: &str) -> Result<String> {
         "backend ID must not be blank"
     );
     Ok(format!(
-        r#"{{ agent_did: {{ _eq: "{}" }}, backend_id: {{ _eq: "{}" }} }}"#,
-        escape_graphql_string(agent_did),
+        r#"{{ node_did: {{ _eq: "{}" }}, backend_id: {{ _eq: "{}" }} }}"#,
+        escape_graphql_string(node_did),
         escape_graphql_string(backend_id)
     ))
 }
 
 pub async fn lookup_backend(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     backend_id: &str,
 ) -> Result<Option<InferenceBackend>> {
-    Ok(lookup_backend_record(node, agent_did, backend_id)
+    Ok(lookup_backend_record(node, node_did, backend_id)
         .await?
         .map(|(_, backend)| backend))
 }
 
 pub(crate) async fn lookup_backend_record(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     backend_id: &str,
 ) -> Result<Option<(String, InferenceBackend)>> {
-    let filter = scope_filter(agent_did, backend_id)?;
+    let filter = scope_filter(node_did, backend_id)?;
     let mut records = query_backend_records(node, &format!("filter: {filter}"), false).await?;
     anyhow::ensure!(
         records.len() <= 1,
-        "ambiguous backend reference {backend_id:?} for {agent_did:?}"
+        "ambiguous backend reference {backend_id:?} for {node_did:?}"
     );
     Ok(records.pop())
 }
@@ -332,15 +332,15 @@ pub async fn list_enabled_backends(node: &EmbeddedNode) -> Result<Vec<InferenceB
 /// Enumerate enabled configuration only within the selected principal.
 pub async fn list_enabled_backends_for_agent(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
 ) -> Result<Vec<InferenceBackend>> {
     anyhow::ensure!(
-        !agent_did.trim().is_empty(),
+        !node_did.trim().is_empty(),
         "backend owner must be nonempty"
     );
     let filter = format!(
-        r#"filter: {{ agent_did: {{ _eq: "{}" }}, enabled: {{ _eq: true }} }}"#,
-        escape_graphql_string(agent_did)
+        r#"filter: {{ node_did: {{ _eq: "{}" }}, enabled: {{ _eq: true }} }}"#,
+        escape_graphql_string(node_did)
     );
     let records = query_backend_records(node, &filter, true).await?;
     let mut ids = std::collections::BTreeSet::new();
@@ -358,7 +358,7 @@ pub async fn list_enabled_backends_for_agent(
 
 pub async fn lookup_backend_observation(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     backend_id: &str,
 ) -> Result<Option<InferenceBackendObservation>> {
     crate::config_client::ConfigAccess::transact_local(
@@ -367,7 +367,7 @@ pub async fn lookup_backend_observation(
         "backend_registry.observation",
         |txn| {
             Box::pin(
-                async move { lookup_backend_observation_in_txn(txn, agent_did, backend_id).await },
+                async move { lookup_backend_observation_in_txn(txn, node_did, backend_id).await },
             )
         },
     )
@@ -377,10 +377,10 @@ pub async fn lookup_backend_observation(
 /// Read the existing observation inside a caller's configuration transaction.
 pub async fn lookup_backend_observation_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
-    agent_did: &str,
+    node_did: &str,
     backend_id: &str,
 ) -> Result<Option<InferenceBackendObservation>> {
-    let filter = scope_filter(agent_did, backend_id)?;
+    let filter = scope_filter(node_did, backend_id)?;
     let response = txn.execute(&format!(
         "query {{ InferenceBackend(filter: {filter}) {{ backend_id catalogs probe_status last_probe }} }}"
     )).await?;
@@ -397,13 +397,13 @@ pub async fn lookup_backend_observation_in_txn(
 
 pub async fn set_backend_probe_status(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     backend_id: &str,
     probe_status: &str,
 ) -> Result<()> {
     write_probe_observation(
         node,
-        agent_did,
+        node_did,
         backend_id,
         serde_json::json!({"probe_status": probe_status}),
     )
@@ -412,14 +412,14 @@ pub async fn set_backend_probe_status(
 
 pub async fn set_backend_probe_status_with_last_probe(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     backend_id: &str,
     probe_status: &str,
     last_probe: chrono::DateTime<chrono::Utc>,
 ) -> Result<()> {
     write_probe_observation(
         node,
-        agent_did,
+        node_did,
         backend_id,
         serde_json::json!({"probe_status": probe_status, "last_probe": last_probe.to_rfc3339()}),
     )
@@ -428,13 +428,13 @@ pub async fn set_backend_probe_status_with_last_probe(
 
 async fn write_probe_observation(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     backend_id: &str,
     input: serde_json::Value,
 ) -> Result<()> {
     // Resolve a unique scoped document before writing; a duplicate logical key
     // must never cause a multi-document update.
-    let (doc_id, _) = lookup_backend_record(node, agent_did, backend_id)
+    let (doc_id, _) = lookup_backend_record(node, node_did, backend_id)
         .await?
         .context("backend observation target does not exist")?;
     let input = gents_protocol::graphql::graphql_input_literal(&input)?;
@@ -479,7 +479,7 @@ pub async fn record_model_catalog_in_txn(
     catalog: BackendModelCatalog,
 ) -> Result<()> {
     anyhow::ensure!(
-        catalog.agent_did.as_deref() == backend.catalog_scope(),
+        catalog.node_did.as_deref() == backend.catalog_scope(),
         "catalog credential scope does not match backend authentication"
     );
     let observed_at = chrono::DateTime::parse_from_rfc3339(&catalog.observed_at)
@@ -500,7 +500,7 @@ pub async fn record_model_catalog_in_txn(
             "advertised token limits must be positive when known"
         );
     }
-    let filter = scope_filter(&backend.agent_did, &backend.backend_id)?;
+    let filter = scope_filter(&backend.node_did, &backend.backend_id)?;
     let response = txn.execute(&format!(
                     "{{ InferenceBackend(filter: {filter}, limit: 2) {{ _docID {BACKEND_CONFIG_FIELDS} catalogs }} }}"
                 )).await?;
@@ -527,7 +527,7 @@ pub async fn record_model_catalog_in_txn(
     let matching: Vec<_> = catalogs
         .iter()
         .enumerate()
-        .filter(|(_, old)| old.agent_did == catalog.agent_did)
+        .filter(|(_, old)| old.node_did == catalog.node_did)
         .collect();
     anyhow::ensure!(
         matching.len() <= 1,
@@ -571,7 +571,7 @@ pub async fn record_discovered_catalog_on(
     models: Vec<AdvertisedModel>,
 ) -> Result<BackendModelCatalog> {
     let catalog = BackendModelCatalog {
-        agent_did: backend.catalog_scope().map(str::to_owned),
+        node_did: backend.catalog_scope().map(str::to_owned),
         observed_at: chrono::Utc::now().to_rfc3339(),
         models,
     };
@@ -598,7 +598,7 @@ pub async fn record_connection_catalog_on(
 ) -> Result<usize> {
     anyhow::ensure!(!owner.trim().is_empty(), "backend owner must be nonempty");
     let query = format!(
-        r#"{{ InferenceBackend(filter: {{ agent_did: {{ _eq: "{}" }}, provider_kind: {{ _eq: "{}" }} }}) {{ {BACKEND_CONFIG_FIELDS} }} }}"#,
+        r#"{{ InferenceBackend(filter: {{ node_did: {{ _eq: "{}" }}, provider_kind: {{ _eq: "{}" }} }}) {{ {BACKEND_CONFIG_FIELDS} }} }}"#,
         escape_graphql_string(owner),
         escape_graphql_string(provider_kind.as_str()),
     );
@@ -620,7 +620,7 @@ pub async fn record_connection_catalog_on(
                         continue;
                     }
                     let catalog = BackendModelCatalog {
-                        agent_did: backend.catalog_scope().map(str::to_owned),
+                        node_did: backend.catalog_scope().map(str::to_owned),
                         observed_at: observed_at.clone(),
                         models: models.clone(),
                     };
@@ -641,7 +641,7 @@ pub fn scoped_observation_view(
     owner: &str,
     provider_kind: BackendProviderKind,
 ) -> Result<serde_json::Value> {
-    let scope = provider_kind.is_agent_scoped_oauth().then_some(owner);
+    let scope = provider_kind.is_node_scoped_oauth().then_some(owner);
     let catalog = observation
         .map(|observation| observation.catalog_for(scope))
         .transpose()?
@@ -667,11 +667,11 @@ pub async fn probe_and_promote_enabled_backends(node: &EmbeddedNode) {
     for backend in backends {
         // Agent-scoped credential refresh and discovery remain with the existing
         // invoking-agent owner. A fleet scan cannot choose an OAuth principal.
-        if matches!(backend.auth, BackendAuth::PrincipalOAuth { .. }) {
+        if matches!(backend.auth, BackendAuth::NodeOAuth { .. }) {
             continue;
         }
         if let Err(error) = discover_shared_backend(node, &backend).await {
-            tracing::warn!(agent_did = %backend.agent_did, backend_id = %backend.backend_id, %error, "startup backend probe failed; preserving previous observations");
+            tracing::warn!(node_did = %backend.node_did, backend_id = %backend.backend_id, %error, "startup backend probe failed; preserving previous observations");
         }
     }
 }
@@ -707,7 +707,7 @@ pub(crate) async fn discover_shared_backend(
         node,
         backend,
         BackendModelCatalog {
-            agent_did: None,
+            node_did: None,
             observed_at: now.to_rfc3339(),
             models,
         },
@@ -715,13 +715,13 @@ pub(crate) async fn discover_shared_backend(
     .await?;
     set_backend_probe_status_with_last_probe(
         node,
-        &backend.agent_did,
+        &backend.node_did,
         &backend.backend_id,
         HEALTHY_PROBE_STATUS,
         chrono::Utc::now(),
     )
     .await?;
-    lookup_backend_observation(node, &backend.agent_did, &backend.backend_id)
+    lookup_backend_observation(node, &backend.node_did, &backend.backend_id)
         .await?
         .context("discovered backend observation is missing")
 }

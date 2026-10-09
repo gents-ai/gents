@@ -8,13 +8,13 @@ use crate::graphql::escape_graphql_string;
 use crate::session::TxnCanonicalReader;
 
 const FIELDS: &str = crate::session::AGENT_SESSION_FIELDS;
-const HELP: &str = "Read canonical sessions visible to your authenticated DID through DefraDB ACP. Actions: list, count, search, get, transcript, output. Use {\"action\":\"help\",\"topic\":\"search\"} for an action's syntax. Copied IDs grant no access; ACP determines visibility across agents and requesters.";
+const HELP: &str = "Read canonical sessions visible to your authenticated DID through DefraDB ACP. Actions: list, count, search, get, transcript, output. Use {\"action\":\"help\",\"topic\":\"search\"} for an action's syntax. Copied IDs grant no access; ACP determines visibility across nodes and requesters.";
 
 fn action_help(topic: Option<&str>) -> Result<&'static str> {
     Ok(match topic {
         None => HELP,
         Some("list") => {
-            r#"{"action":"list","filter":{"status":"closed","tag":"release"},"limit":10}. Filters: behavior_id, status (open/closed), tag, created_after (inclusive), created_before (exclusive), text (title or ID substring). Order: created_at descending, then ID descending. Pass next_cursor as cursor with the same filter. Limit: 1–100."#
+            r#"{"action":"list","filter":{"status":"closed","tag":"release"},"limit":10}. Filters: agent_id, status (open/closed), tag, created_after (inclusive), created_before (exclusive), text (title or ID substring). Order: created_at descending, then ID descending. Pass next_cursor as cursor with the same filter. Limit: 1–100."#
         }
         Some("count") => {
             r#"{"action":"count","filter":{"status":"closed"}}. Exact count of authorized sessions, independent of request volume or list limits. Filters are the same as list; no cursor. Use help topic=list for filters."#
@@ -61,7 +61,7 @@ fn missing_search_query(args: &SessionHistoryParams) -> anyhow::Error {
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SessionFilter {
-    pub behavior_id: Option<String>,
+    pub agent_id: Option<String>,
     pub status: Option<String>,
     pub tag: Option<String>,
     pub created_after: Option<String>,
@@ -84,7 +84,7 @@ fn quoted(value: &str) -> String {
 
 fn scope(agent: &str, requester: Option<&str>) -> String {
     format!(
-        "agent_did: {{_eq: {}}}, requester_did: {{_eq: {}}}",
+        "node_did: {{_eq: {}}}, requester_did: {{_eq: {}}}",
         quoted(agent),
         requester.map(quoted).unwrap_or_else(|| "null".into())
     )
@@ -92,8 +92,8 @@ fn scope(agent: &str, requester: Option<&str>) -> String {
 
 fn filter_query(filter: &SessionFilter, cursor: Option<&Cursor>) -> Result<String> {
     let mut parts = Vec::new();
-    if let Some(behavior) = &filter.behavior_id {
-        parts.push(format!("{{ behavior_id: {{_eq: {}}} }}", quoted(behavior)));
+    if let Some(behavior) = &filter.agent_id {
+        parts.push(format!("{{ agent_id: {{_eq: {}}} }}", quoted(behavior)));
     }
     if let Some(tag) = &filter.tag {
         parts.push(format!("{{ tags: {{_any: {{_eq: {}}}}} }}", quoted(tag)));
@@ -163,7 +163,7 @@ fn rows(response: Value, collection: &str) -> Result<Vec<Value>> {
 }
 
 fn compact(row: &Value, current_session: Option<&str>, agent: &str) -> Value {
-    json!({"session_id":row["session_id"],"title":row["title"]["text"],"created_at":row["created_at"],"closed_at":row["closed_at"],"behavior_id":row["behavior_id"],"tags":row["tags"],"agent_did":row["agent_did"],"requester_did":row["requester_did"],"is_current":current_session.is_some_and(|id|super::is_current_session(agent,id,row["agent_did"].as_str().unwrap_or_default(),row["session_id"].as_str().unwrap_or_default())),"session_doc_id":row["_docID"]})
+    json!({"session_id":row["session_id"],"title":row["title"]["text"],"created_at":row["created_at"],"closed_at":row["closed_at"],"agent_id":row["agent_id"],"tags":row["tags"],"node_did":row["node_did"],"requester_did":row["requester_did"],"is_current":current_session.is_some_and(|id|super::is_current_session(agent,id,row["node_did"].as_str().unwrap_or_default(),row["session_id"].as_str().unwrap_or_default())),"session_doc_id":row["_docID"]})
 }
 
 /// Bytes per `output` page. With JSON escaping the result stays below the
@@ -207,7 +207,7 @@ impl Serialize for AnswerFirst<'_> {
                     "excerpt",
                     "closed_at",
                     "created_at",
-                    "behavior_id",
+                    "agent_id",
                     "tags",
                     "message_doc_id",
                     "session_doc_id",
@@ -252,15 +252,15 @@ pub(super) async fn run(
     let current = crate::tool_call_lifecycle::runtime::current_tool_runtime_context();
     if let Some(context) = &current {
         anyhow::ensure!(
-            context.agent_did.as_deref() == Some(tool.agent_did.as_str()),
-            "sessions requires the running principal; next call: sessions {{\"action\":\"help\"}}"
+            context.node_did.as_deref() == Some(tool.node_did.as_str()),
+            "sessions requires the running node; next call: sessions {{\"action\":\"help\"}}"
         );
     }
     let requester = current
         .as_ref()
         .and_then(|context| context.requester_did.clone());
     let current_session = current.and_then(|context| context.session_id);
-    let agent = tool.agent_did.clone();
+    let agent = tool.node_did.clone();
     let identity = agent
         .parse()
         .context("sessions requires a valid running DID")?;
@@ -316,9 +316,9 @@ async fn execute(
             .filter(|id| !id.trim().is_empty())
             .context("session_id required; next call: sessions {\"action\":\"list\"}")?;
         let session = authorized_session(txn, id).await?;
-        let agent = session["agent_did"]
+        let agent = session["node_did"]
             .as_str()
-            .context("session agent DID missing")?;
+            .context("session node DID missing")?;
         let requester = session["requester_did"].as_str();
         if action == "get" {
             let details = if args.details {
@@ -381,7 +381,7 @@ async fn execute(
             .as_u64()
             .context("sessions exact aggregate count missing")?;
         return Ok(
-            json!({"count":count,"scope":{"agent_did":agent,"requester_did":requester,"visibility":"acp"}}),
+            json!({"count":count,"scope":{"node_did":agent,"requester_did":requester,"visibility":"acp"}}),
         );
     }
     let needle = if action == "search" {
@@ -455,7 +455,7 @@ async fn execute(
                 if action != "count" {
                     if selected.len() == limit {
                         return Ok(
-                            json!({"sessions":selected,"next_cursor":serde_json::to_string(&last_selected)? ,"scope":{"agent_did":agent,"requester_did":requester}}),
+                            json!({"sessions":selected,"next_cursor":serde_json::to_string(&last_selected)? ,"scope":{"node_did":agent,"requester_did":requester}}),
                         );
                     }
                     selected.push(compact(&row, current_session, agent));
@@ -468,11 +468,11 @@ async fn execute(
         }
     }
     Ok(if action == "count" {
-        json!({"count":count,"scope":{"agent_did":agent,"requester_did":requester,"visibility":"acp"}})
+        json!({"count":count,"scope":{"node_did":agent,"requester_did":requester,"visibility":"acp"}})
     } else if action == "search" {
         json!({"hits":hits,"next_cursor":null,"search_kind":"literal_scan"})
     } else {
-        json!({"sessions":selected,"next_cursor":null,"scope":{"agent_did":agent,"requester_did":requester}})
+        json!({"sessions":selected,"next_cursor":null,"scope":{"node_did":agent,"requester_did":requester}})
     })
 }
 
@@ -516,9 +516,9 @@ async fn tool_output(
     let call_id = nonblank(&args.call_id);
     let named_doc = nonblank(&args.tool_call_doc_id);
     let session = authorized_session(txn, &session_id).await?;
-    let agent = session["agent_did"]
+    let agent = session["node_did"]
         .as_str()
-        .context("session agent DID missing")?;
+        .context("session node DID missing")?;
     let requester = session["requester_did"].as_str();
     let transcript_call = json!({"action":"transcript","session_id":session_id});
     let tool_call_doc_id = match (named_doc, &call_id) {
@@ -732,9 +732,9 @@ async fn search_session(
     let id = session["session_id"]
         .as_str()
         .context("session ID missing")?;
-    let agent = session["agent_did"]
+    let agent = session["node_did"]
         .as_str()
-        .context("session agent DID missing")?;
+        .context("session node DID missing")?;
     let requester = session["requester_did"].as_str();
     let mut hits = Vec::new();
     if resume_sequence.is_none() && matches_text(session, Some(needle)) {
@@ -781,7 +781,7 @@ async fn search_session(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::identity::{AgentIdentity, KeyIdentity};
+    use crate::identity::{KeyIdentity, NodeIdentity};
     use crate::lifecycle::test_support::{pin_fixed_signing_identity, PIN_FIXED_DID};
     use crate::llm::tool::Tool;
     use std::sync::Arc;
@@ -794,7 +794,7 @@ mod tests {
         title: &str,
         closed: bool,
     ) {
-        ConfigAccess::write_local(node, "test.sessions.discovery", &format!(r#"mutation {{create_AgentSession(input: {{agent_did: {},requester_did: {},session_id: {},behavior_id: "engineer",created_at: "2025-01-01T00:00:00Z",closed_at: {},title: {{text: {},source: "user"}},tags: ["release"]}}) {{_docID}}}}"#,quoted(agent),requester.map(quoted).unwrap_or_else(||"null".into()),quoted(id),if closed {quoted("2025-01-02T00:00:00Z")}else{"null".into()},quoted(title))).await.unwrap();
+        ConfigAccess::write_local(node, "test.sessions.discovery", &format!(r#"mutation {{create_AgentSession(input: {{node_did: {},requester_did: {},session_id: {},agent_id: "engineer",created_at: "2025-01-01T00:00:00Z",closed_at: {},title: {{text: {},source: "user"}},tags: ["release"]}}) {{_docID}}}}"#,quoted(agent),requester.map(quoted).unwrap_or_else(||"null".into()),quoted(id),if closed {quoted("2025-01-02T00:00:00Z")}else{"null".into()},quoted(title))).await.unwrap();
     }
 
     async fn call(tool: &SessionHistoryTool, params: Value) -> Value {
@@ -844,7 +844,7 @@ resources:
         let doc = ConfigAccess::transact_local(&node, Some(owner_did.parse().unwrap()), "test.sessions.acp.create", |txn| {
             let did = owner_did.clone();
             Box::pin(async move {
-                let value = txn.execute(&format!("mutation {{add_AgentSession(input: {{agent_did: {}, requester_did: \"different-requester\", session_id: \"shared\", behavior_id: \"engineer\", created_at: \"2026-01-01T00:00:00Z\"}}) {{_docID}}}}", quoted(&did))).await?;
+                let value = txn.execute(&format!("mutation {{add_AgentSession(input: {{node_did: {}, requester_did: \"different-requester\", session_id: \"shared\", agent_id: \"engineer\", created_at: \"2026-01-01T00:00:00Z\"}}) {{_docID}}}}", quoted(&did))).await?;
                 Ok(value["data"]["add_AgentSession"][0]["_docID"].as_str().with_context(|| format!("ACP session fixture creation failed: {value}"))?.to_owned())
             })
         }).await.unwrap();
@@ -857,7 +857,7 @@ resources:
             1
         );
         let found = call(&allowed_tool, json!({"action":"get","session_id":"shared"})).await;
-        assert_eq!(found["session"]["agent_did"], owner.did());
+        assert_eq!(found["session"]["node_did"], owner.did());
         assert_eq!(found["session"]["requester_did"], "different-requester");
         let denied_tool = SessionHistoryTool::new(node.clone(), denied.did());
         assert_eq!(
@@ -936,7 +936,7 @@ resources:
             .await
             .unwrap();
         let session = lifecycle.session_id().to_owned();
-        let tool = SessionHistoryTool::new(fixture.node.clone(), fixture.agent_did.clone());
+        let tool = SessionHistoryTool::new(fixture.node.clone(), fixture.node_did.clone());
 
         for key in ["spawn-provider-call", "spawn-native-tool"] {
             let mut params = json!({"action":"output","session_id":session,"call_id":key});
@@ -1055,7 +1055,7 @@ resources:
         )
         .await;
         for start in (0..5001).step_by(500) {
-            let rows = (start..(start+500).min(5001)).map(|index|format!("{{agent_did: {},request_id: {},session_id: \"support\",purpose: \"normal\",created_at: \"2026-01-01T00:00:00Z\"}}",quoted(owner.did()),quoted(&format!("noise-{index}")))).collect::<Vec<_>>().join(",");
+            let rows = (start..(start+500).min(5001)).map(|index|format!("{{node_did: {},request_id: {},session_id: \"support\",purpose: \"normal\",created_at: \"2026-01-01T00:00:00Z\"}}",quoted(owner.did()),quoted(&format!("noise-{index}")))).collect::<Vec<_>>().join(",");
             ConfigAccess::write_local(
                 &node,
                 "test.sessions.scan_bound",
@@ -1098,7 +1098,7 @@ resources:
             json!({"action":"get","session_id":"foreign-session"}),
         )
         .await;
-        assert_eq!(cross_agent["session"]["agent_did"], foreign.did());
+        assert_eq!(cross_agent["session"]["node_did"], foreign.did());
         node.shutdown().await;
     }
 

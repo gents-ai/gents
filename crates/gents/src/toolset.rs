@@ -34,7 +34,7 @@ use session_message::{
     ListProcessesTool, ReadProcessTool, SpawnProcessTool, WaitProcessTool,
 };
 
-use crate::tool_surface::{BackgroundToolConfig, SubagentToolConfig};
+use crate::tool_surface::{AgentToolConfig, BackgroundToolConfig};
 
 #[cfg(test)]
 pub(crate) fn read_only_bash_for_test(
@@ -134,7 +134,7 @@ pub const AGENT_NEW_TOOL_NAME: &str = "agent_new";
 pub const AGENT_MESSAGE_TOOL_NAME: &str = "agent_message";
 pub const AGENT_INTERRUPT_TOOL_NAME: &str = "agent_interrupt";
 pub const AGENT_LIST_TOOL_NAME: &str = "agent_list";
-/// The agents tool group (`SubagentTools.enabled`), in the order they are
+/// The agents tool group (`AgentTools.enabled`), in the order they are
 /// offered.
 pub const AGENT_TOOL_NAMES: [&str; 4] = [
     AGENT_NEW_TOOL_NAME,
@@ -691,7 +691,7 @@ pub(crate) fn is_agent_control_tool(tool_name: &str) -> bool {
     tool_name == AGENT_INTERRUPT_TOOL_NAME || tool_name == AGENT_LIST_TOOL_NAME
 }
 
-pub(crate) fn subagent_tool_names(config: &SubagentToolConfig) -> Vec<String> {
+pub(crate) fn agent_tool_names(config: &AgentToolConfig) -> Vec<String> {
     if !config.tools_enabled() {
         return Vec::new();
     }
@@ -702,7 +702,7 @@ pub(crate) fn subagent_tool_names(config: &SubagentToolConfig) -> Vec<String> {
         .collect()
 }
 
-pub(crate) fn build_subagent_tools(config: SubagentToolConfig) -> Vec<Box<dyn ToolDyn>> {
+pub(crate) fn build_agent_tools(config: AgentToolConfig) -> Vec<Box<dyn ToolDyn>> {
     if !config.tools_enabled() {
         return Vec::new();
     }

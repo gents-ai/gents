@@ -2,7 +2,7 @@ use gents::defra_node::{EmbeddedNode, EventName};
 use gents::graphql::escape_graphql_string;
 use gents::llm::message::{AssistantContent, Message, Text, ToolResultContent, UserContent};
 use gents::tool_call_lifecycle::{CancelCause, ToolCallLifecycle, ToolCallState};
-use gents::{interrupt_request, AgentIdentity, BackgroundExecutionRegistry};
+use gents::{interrupt_request, BackgroundExecutionRegistry, NodeIdentity};
 use serde::Deserialize;
 use serde_json::Value;
 use std::fmt::Debug;
@@ -12,11 +12,11 @@ use std::time::Duration;
 use crate::support::accepted_turn::{
     boot_prepared_accepted_turn, prepare_accepted_turn, AcceptedTurnRuntime, AcceptedTurnSpec,
 };
-use crate::support::fixtures::configure_behavior_tools;
+use crate::support::fixtures::configure_agent_tools;
 use crate::support::streaming_backend::StreamChunk;
 use crate::support::test_db;
 
-const R6_BEHAVIOR_ID: &str = "r6-background";
+const R6_AGENT_ID: &str = "r6-background";
 const R6_BACKEND_ID: &str = "r6-background-backend";
 const R6_MODEL: &str = "test-model";
 
@@ -67,15 +67,15 @@ async fn boot_background_turn_with_bounds(
         AcceptedTurnSpec {
             backend_id: R6_BACKEND_ID,
             model: R6_MODEL,
-            parent_behavior_id: R6_BEHAVIOR_ID,
-            configured_behavior_ids: &[R6_BEHAVIOR_ID],
+            parent_agent_id: R6_AGENT_ID,
+            configured_agent_ids: &[R6_AGENT_ID],
             request_id: &request_id,
             session_id: &session_id,
             prompt: &prompt,
             accepted_chunks,
             child_plans: Vec::new(),
             valid_until,
-            subagent_depth: None,
+            request_hop: None,
             request_setup: None,
         },
     )
@@ -85,27 +85,27 @@ async fn boot_background_turn_with_bounds(
             read_desired_state_record_in_txn as read, DesiredStateApplyDocument,
             DesiredStateApplyPlan,
         };
-        let agent_did = db.node_identity.did();
+        let node_did = db.node_identity.did();
         gents::ConfigAccess::transact_local(
             db.node.as_ref(),
             None,
             "test.configure_r6_execution_deadline",
             |txn| {
                 Box::pin(async move {
-                    let profile_id = format!("{R6_BEHAVIOR_ID}-inference");
+                    let profile_id = format!("{R6_AGENT_ID}-inference");
                     let (_, mut profile) = read(
                         txn,
                         gents::Collection::InferenceProfile,
-                        agent_did,
+                        node_did,
                         &profile_id,
                     )
                     .await?
                     .expect("R6 inference profile");
-                    let execution_id = format!("{R6_BEHAVIOR_ID}-deadline");
+                    let execution_id = format!("{R6_AGENT_ID}-deadline");
                     profile["execution_id"] = execution_id.clone().into();
                     let execution =
                         serde_json::to_value(gents::document_config::InferenceExecution {
-                            agent_did: agent_did.to_string(),
+                            node_did: node_did.to_string(),
                             execution_id,
                             stream_liveness_timeout_secs: Some(1),
                             deadline_duration_secs: Some(deadline_duration_secs),
@@ -133,14 +133,14 @@ async fn boot_background_turn_with_bounds(
         .expect("configure R6 execution deadline");
     }
     prepared.backend.enable_dynamic_followups(&prompt);
-    configure_behavior_tools(
+    configure_agent_tools(
         db.node.as_ref(),
         db.node_identity.did(),
-        R6_BEHAVIOR_ID,
+        R6_AGENT_ID,
         None,
         gents::document_config::Tools {
-            tools_id: format!("{R6_BEHAVIOR_ID}:tools"),
-            agent_did: db.node_identity.did().to_string(),
+            tools_id: format!("{R6_AGENT_ID}:tools"),
+            node_did: db.node_identity.did().to_string(),
             host: Some(gents::document_config::HostTools {
                 bash: Some(gents::document_config::BashTools {
                     mode: gents::BashMode::ReadOnly,
@@ -159,8 +159,8 @@ async fn boot_background_turn_with_bounds(
         Vec::new(),
     )
     .await;
-    let identity: Arc<dyn gents::AgentIdentity> = db.node_identity.clone();
-    let agent = gents::Gents::from_default_behavior_documents(
+    let identity: Arc<dyn gents::NodeIdentity> = db.node_identity.clone();
+    let agent = gents::Gents::from_default_agent_documents(
         db.node.clone(),
         identity,
         gents::DocumentRuntimeOptions {
@@ -189,7 +189,7 @@ async fn fetch_messages(node: &EmbeddedNode, session_id: &str) -> Vec<MessageRow
             AgentMessage(
                 filter: {{ session_id: {{ _eq: "{session_id}" }} }},
                 order: {{ sequence: ASC }}
-            ) {{ _docID agent_did requester_did request_doc_id }}
+            ) {{ _docID node_did requester_did request_doc_id }}
             AgentRequest(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{
                 _docID request_id
             }}
@@ -225,13 +225,13 @@ async fn fetch_messages(node: &EmbeddedNode, session_id: &str) -> Vec<MessageRow
     let mut messages = Vec::new();
     for header in headers {
         let header_doc_id = header["_docID"].as_str().expect("message header _docID");
-        let agent_did = header["agent_did"].as_str().expect("message header agent");
+        let node_did = header["node_did"].as_str().expect("message header agent");
         let requester_did = header["requester_did"].as_str();
         let request_doc_id = header["request_doc_id"].as_str().map(str::to_owned);
         let (_, message) = gents::session::load_canonical_message_from_node(
             node,
             header_doc_id,
-            agent_did,
+            node_did,
             requester_did,
         )
         .await
@@ -800,7 +800,7 @@ async fn background_tool_execution_survives_parent_request_deadline() {
         .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     crate::support::accepted_turn::enqueue_local_accepted_request_until(
         &turn.db,
-        R6_BEHAVIOR_ID,
+        R6_AGENT_ID,
         "r6-background-outlives-deadline-request-2",
         &turn.session_id,
         prompt,
@@ -1030,7 +1030,7 @@ async fn malformed_running_row_does_not_hide_valid_orphan_recovery() {
         r#"mutation {{
             create_AgentToolCall(input: {{
                 tool_call_key: "malformed-recovery-row",
-                agent_did: "{}",
+                node_did: "{}",
                 lifecycle_state: "running",
                 await_mode: "background"
             }}) {{ _docID }}
@@ -1280,7 +1280,7 @@ async fn wait_tool_caller_deadline_returns_without_cancelling_background_row() {
         .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     crate::support::accepted_turn::enqueue_local_accepted_request_until(
         &turn.db,
-        R6_BEHAVIOR_ID,
+        R6_AGENT_ID,
         "r6-background-wait-deadline-request-2",
         &turn.session_id,
         prompt,
@@ -1410,7 +1410,7 @@ async fn wait_tool_caller_interrupt_returns_without_cancelling_background_row() 
     );
     crate::support::accepted_turn::enqueue_local_accepted_request(
         &turn.db,
-        R6_BEHAVIOR_ID,
+        R6_AGENT_ID,
         request_id,
         &turn.session_id,
         prompt,
@@ -1537,7 +1537,7 @@ async fn process_controls_manage_same_principal_job_across_request_turns() {
     );
     crate::support::accepted_turn::enqueue_local_accepted_request(
         &turn.db,
-        R6_BEHAVIOR_ID,
+        R6_AGENT_ID,
         "r6-background-cross-turn-controls-request-2",
         &turn.session_id,
         prompt,
@@ -1615,8 +1615,8 @@ async fn second_signed_principal_runtime_is_denied_foreign_process_handle() {
         AcceptedTurnSpec {
             backend_id: "r6-background-foreign-backend",
             model: R6_MODEL,
-            parent_behavior_id: foreign_behavior,
-            configured_behavior_ids: &[foreign_behavior],
+            parent_agent_id: foreign_behavior,
+            configured_agent_ids: &[foreign_behavior],
             request_id: "r6-background-foreign-request",
             session_id: foreign_session,
             prompt: foreign_prompt,
@@ -1627,19 +1627,19 @@ async fn second_signed_principal_runtime_is_denied_foreign_process_handle() {
             )],
             child_plans: Vec::new(),
             valid_until: None,
-            subagent_depth: None,
+            request_hop: None,
             request_setup: None,
         },
     )
     .await;
-    configure_behavior_tools(
+    configure_agent_tools(
         turn.db.node.as_ref(),
         foreign.did(),
         foreign_behavior,
         None,
         gents::document_config::Tools {
             tools_id: format!("{foreign_behavior}:tools"),
-            agent_did: foreign.did().to_string(),
+            node_did: foreign.did().to_string(),
             host: Some(gents::document_config::HostTools {
                 bash: Some(gents::document_config::BashTools {
                     mode: gents::BashMode::ReadOnly,
@@ -1654,8 +1654,8 @@ async fn second_signed_principal_runtime_is_denied_foreign_process_handle() {
         Vec::new(),
     )
     .await;
-    let foreign_identity: Arc<dyn gents::AgentIdentity> = foreign.clone();
-    let foreign_agent = gents::Gents::from_default_behavior_documents(
+    let foreign_identity: Arc<dyn gents::NodeIdentity> = foreign.clone();
+    let foreign_agent = gents::Gents::from_default_agent_documents(
         turn.db.node.clone(),
         foreign_identity,
         gents::DocumentRuntimeOptions {
@@ -1705,7 +1705,7 @@ async fn list_processes_skips_malformed_legacy_rows_without_hiding_valid_jobs() 
 
     let escaped_session_id = escape_graphql_string(&turn.session_id);
     let escaped_request_id = escape_graphql_string(&turn.request_id);
-    let escaped_agent_did = escape_graphql_string(turn.db.node_identity.did());
+    let escaped_node_did = escape_graphql_string(turn.db.node_identity.did());
     let malformed_rows = format!(
         r#"mutation {{
             null_identity: create_AgentToolCall(input: {{
@@ -1721,7 +1721,7 @@ async fn list_processes_skips_malformed_legacy_rows_without_hiding_valid_jobs() 
                 tool_name: "slow_tool",
                 request_id: "{escaped_request_id}",
                 session_id: "{escaped_session_id}",
-                agent_did: "{escaped_agent_did}",
+                node_did: "{escaped_node_did}",
                 await_mode: "background",
                 lifecycle_state: "running"
             }}) {{ _docID }}
@@ -1753,7 +1753,7 @@ async fn list_processes_skips_malformed_legacy_rows_without_hiding_valid_jobs() 
     );
     crate::support::accepted_turn::enqueue_local_accepted_request(
         &turn.db,
-        R6_BEHAVIOR_ID,
+        R6_AGENT_ID,
         "r6-background-list-malformed-rows-request-2",
         &turn.session_id,
         prompt,
@@ -1869,7 +1869,7 @@ async fn same_tool_background_calls_execute_concurrently_without_registry_mutex(
     );
     crate::support::accepted_turn::enqueue_local_accepted_request(
         &turn.db,
-        R6_BEHAVIOR_ID,
+        R6_AGENT_ID,
         "r6-background-concurrent-tool-request-2",
         &turn.session_id,
         prompt,

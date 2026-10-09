@@ -10,7 +10,7 @@ use gents_loop::output_obligation::OutputObligationCheck;
 
 use crate::agent::stream_processor::{StreamAction, StreamProcessor};
 use crate::completion_factory::loop_config;
-use crate::config::ResolvedBehavior;
+use crate::config::ResolvedAgent;
 use crate::hook::{BackgroundToolRegistry, DefraSessionHook, FailurePolicy};
 use crate::lifecycle::TerminalizeResult;
 use crate::lifecycle::{ExecutionOrigin, RequestLifecycle, RequestTerminalOutcome, TriggerLineage};
@@ -27,35 +27,34 @@ pub struct OneshotRunResult {
 
 pub async fn run_openai_oneshot(
     node: Arc<EmbeddedNode>,
-    behavior: &ResolvedBehavior,
+    agent: &ResolvedAgent,
     prompt: &str,
 ) -> Result<OneshotRunResult> {
-    run_openai_oneshot_with_tools(node, behavior, Vec::new(), prompt).await
+    run_openai_oneshot_with_tools(node, agent, Vec::new(), prompt).await
 }
 
 pub async fn run_openai_oneshot_with_tools(
     node: Arc<EmbeddedNode>,
-    behavior: &ResolvedBehavior,
+    agent: &ResolvedAgent,
     extra_tools: Vec<Box<dyn ToolDyn>>,
     prompt: &str,
 ) -> Result<OneshotRunResult> {
     crate::migration::ensure_all_runtime_migrations(node.clone()).await?;
 
-    let api_key = behavior.completion_client_api_key()?;
-    let tool_runtime =
-        ToolRuntimeContext::oneshot_with_agent_did(node.clone(), behavior.agent_did());
-    let tool_surface = behavior
+    let api_key = agent.completion_client_api_key()?;
+    let tool_runtime = ToolRuntimeContext::oneshot_with_node_did(node.clone(), agent.node_did());
+    let tool_surface = agent
         .tools
         .resolve(
             node.as_ref(),
-            behavior.agent_did(),
+            agent.node_did(),
             // The oneshot path has no host plugin store; a plugin tool it
             // names resolves no identity and fails closed at build time.
             &Default::default(),
         )
         .await?;
-    let allowed_targets = tool_surface::resolve_subagent_target_descriptions(&tool_surface);
-    let prompt_builder = LayeredPromptBuilder::new(behavior, &tool_surface, &allowed_targets);
+    let allowed_targets = tool_surface::resolve_agent_target_descriptions(&tool_surface);
+    let prompt_builder = LayeredPromptBuilder::new(agent, &tool_surface, &allowed_targets);
     let output_obligations = tool_surface.output_obligations();
 
     let lsp_pool = tool_runtime.lsp_pool.clone();
@@ -71,7 +70,7 @@ pub async fn run_openai_oneshot_with_tools(
 
     let client = crate::llm::backend_client::build_backend_client(
         node.clone(),
-        behavior,
+        agent,
         &api_key,
         crate::startup_readiness::StartupReadinessOptions::default().build_timeout,
     )
@@ -82,7 +81,7 @@ pub async fn run_openai_oneshot_with_tools(
     crate::llm::backend_client::with_backend_client!(client, |client| {
         run_oneshot_with_completion_client(
             node,
-            behavior,
+            agent,
             provider_family,
             replay_issuer,
             prompt,
@@ -99,7 +98,7 @@ pub async fn run_openai_oneshot_with_tools(
 
 async fn run_oneshot_with_completion_client<C>(
     node: Arc<EmbeddedNode>,
-    behavior: &ResolvedBehavior,
+    agent: &ResolvedAgent,
     provider_family: Option<String>,
     replay_issuer: Option<gents_loop::claude_messages_body::ReplayIssuer>,
     prompt: &str,
@@ -119,16 +118,16 @@ where
     // `max_concurrent`/`max_queue_depth`/`probe_status`) so multiple daemon
     // slots sharing one backend stay bounded; it requires a registry that has
     // been `reconcile()`-d with that config, which only the daemon's runtime
-    // reconciler drives. `ResolvedBehavior` here carries no such fields (by
+    // reconciler drives. `ResolvedAgent` here carries no such fields (by
     // design — one-shot is a single ad hoc call, not a slot pool with
     // contention to bound), so plugging in a fresh, never-reconciled registry
     // would make every completion fail immediately with "BackendGone: backend
     // admission controller is not active" rather than skip the ceiling.
     // Pinned by `oneshot_completes_without_backend_admission_reconciliation`
     // in `tests/misc/oneshot_admission_exemption.rs`.
-    let model = client.completion_model(&behavior.model_name);
+    let model = client.completion_model(&agent.model_name);
     let mut config = loop_config(
-        behavior,
+        agent,
         prompt_builder.preamble().to_owned(),
         tools.len(),
         crate::rendered_request::CaptureScopeKind::OneShot,
@@ -136,7 +135,7 @@ where
     config.replay.issuer = replay_issuer;
     run_oneshot_owned(
         node,
-        behavior,
+        agent,
         provider_family,
         &prompt_builder,
         model,
@@ -180,7 +179,7 @@ async fn persist_oneshot_failure(lifecycle: &mut RequestLifecycle, reason: &str)
 #[allow(clippy::too_many_arguments)]
 async fn run_oneshot_owned<M: ProviderModel>(
     node: Arc<EmbeddedNode>,
-    behavior: &ResolvedBehavior,
+    agent: &ResolvedAgent,
     provider_family: Option<String>,
     prompt_builder: &LayeredPromptBuilder,
     model: M,
@@ -193,16 +192,16 @@ async fn run_oneshot_owned<M: ProviderModel>(
 ) -> Result<OneshotRunResult> {
     let mut lifecycle = RequestLifecycle::materialize_pending_with_execution_binding(
         node.clone(),
-        &behavior.behavior_id,
-        behavior.principal_identity().clone(),
+        &agent.agent_id,
+        agent.node_identity().clone(),
         prompt,
-        behavior.deadline_duration.as_secs(),
+        agent.deadline_duration.as_secs(),
         ExecutionOrigin::Interactive,
-        behavior.backend_id.as_deref().unwrap_or_default(),
+        agent.backend_id.as_deref().unwrap_or_default(),
         TriggerLineage::default(),
     )
     .await?;
-    lifecycle.set_execution_lease_duration(behavior.stream_liveness_timeout);
+    lifecycle.set_execution_lease_duration(agent.stream_liveness_timeout);
     anyhow::ensure!(
         matches!(
             lifecycle.claim_with_identity().await?,
@@ -211,11 +210,8 @@ async fn run_oneshot_owned<M: ProviderModel>(
         "new one-shot request was not claimed"
     );
     let request = lifecycle.request().clone();
-    let stream_writer = DefraStreamWriter::new(
-        node.clone(),
-        behavior.agent_did(),
-        std::time::Duration::ZERO,
-    );
+    let stream_writer =
+        DefraStreamWriter::new(node.clone(), agent.node_did(), std::time::Duration::ZERO);
     match lifecycle.begin_owned_execution(&stream_writer).await {
         Ok(()) => {}
         Err(error) => {
@@ -269,11 +265,11 @@ async fn run_oneshot_owned<M: ProviderModel>(
             request_doc_id: request.doc_id.clone(),
             request_commit_cid,
             request_id: request.request_id.clone(),
-            agent_did: behavior.agent_did().to_string(),
+            node_did: agent.node_did().to_string(),
             requester_did: String::new(),
-            behavior_id: behavior.behavior_id.clone(),
+            agent_id: agent.agent_id.clone(),
             session_id: request.session_id.clone(),
-            model_name: behavior.model_name.clone(),
+            model_name: agent.model_name.clone(),
             provider_family,
         },
         Some(&crate::rendered_request::defra_rendered_request_capture_factory(node.clone())),
@@ -289,8 +285,7 @@ async fn run_oneshot_owned<M: ProviderModel>(
     let hook = match DefraSessionHook::resume_with_identity_policy(
         node.clone(),
         &request.session_id,
-        &behavior.behavior_id,
-        behavior.agent_did(),
+        agent.node_did(),
         request.requester_did.as_deref(),
         FailurePolicy::default(),
     )
@@ -300,8 +295,8 @@ async fn run_oneshot_owned<M: ProviderModel>(
             .with_output_obligation_gate(output_obligation_gate.clone())
             .with_background_tool_registry(background_tool_registry)
             .with_goal_tool_authority(
-                behavior.tools.goal_tools_requested(),
-                behavior.tools.goal_creation_requested(),
+                agent.tools.goal_tools_requested(),
+                agent.tools.goal_creation_requested(),
             ),
         Err(error) => {
             return Err(terminalize_oneshot_setup_failure(&mut lifecycle, &lsp_pool, error).await);
@@ -418,7 +413,7 @@ async fn run_oneshot_owned<M: ProviderModel>(
             ) {
                 // A one-shot process has no periodic daemon sweep. Reuse the
                 // recovery owner before returning an expired execution to its caller.
-                RequestLifecycle::recover_all(&node, behavior.agent_did()).await?;
+                RequestLifecycle::recover_all(&node, agent.node_did()).await?;
             }
             let close_result = if matches!(lifecycle_result, Ok(TerminalizeResult::Won)) {
                 hook.close().await

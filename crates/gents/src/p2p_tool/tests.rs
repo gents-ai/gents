@@ -103,7 +103,7 @@ async fn native_pairing_sync_and_revoke_preserve_enrollment_and_scope() {
     let entry = EnrollmentEndpointEntry {
         desired_id: peer_id.clone(),
         peer_id: peer_id.clone(),
-        agent_did: remote.node_identity.did().into(),
+        node_did: remote.node_identity.did().into(),
         address: address.clone(),
         request_digest: active.request.request_digest.clone(),
         authorization_sequence: active.revision.sequence,
@@ -237,7 +237,7 @@ async fn native_pairing_sync_and_revoke_preserve_enrollment_and_scope() {
 async fn p2p_rejects_foreign_actor_and_preserves_another_overlays_owner() {
     let db = crate::support::test_p2p_db("engineer-p2p-owned").await;
     let access = ConfigAccess::Local(db.node.clone());
-    access.write("test.p2p.overlay", "mutation {create_DataPlanePairingDesired(input: {peer_id: \"foreign-route\", agent_did: \"did:key:another\", source: \"another-owner\", collections: [\"DeploymentNote\"], replicator_addresses: null, template: \"app-collections\"}) {_docID}}").await.unwrap();
+    access.write("test.p2p.overlay", "mutation {create_DataPlanePairingDesired(input: {peer_id: \"foreign-route\", node_did: \"did:key:another\", source: \"another-owner\", collections: [\"DeploymentNote\"], replicator_addresses: null, template: \"app-collections\"}) {_docID}}").await.unwrap();
     let tool = P2pTool::new(
         db.node.clone(),
         Some(db.node_identity.clone()),
@@ -255,7 +255,7 @@ async fn p2p_rejects_foreign_actor_and_preserves_another_overlays_owner() {
     .unwrap_err();
     assert!(result.to_string().contains("another owner"));
     assert!(tool.overlay("foreign-route").await.unwrap().is_some());
-    access.write("test.p2p.mixed", &format!("mutation {{create_DataPlanePairingDesired(input: {{peer_id: \"mixed-route\", agent_did: {}, source: \"engineer\", collections: [\"DeploymentNote\", \"PrivateNote\"], replicator_addresses: null, template: \"app-collections\"}}) {{_docID}}}}", quoted(db.node_identity.did()))).await.unwrap();
+    access.write("test.p2p.mixed", &format!("mutation {{create_DataPlanePairingDesired(input: {{peer_id: \"mixed-route\", node_did: {}, source: \"engineer\", collections: [\"DeploymentNote\", \"PrivateNote\"], replicator_addresses: null, template: \"app-collections\"}}) {{_docID}}}}", quoted(db.node_identity.did()))).await.unwrap();
     let scoped = P2pTool::new(
         db.node.clone(),
         Some(db.node_identity.clone()),

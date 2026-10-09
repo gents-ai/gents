@@ -67,34 +67,31 @@ impl Agent {
     }
 
     pub fn validate_references(&self, refs: &ConfigReferences) -> Result<()> {
-        refs.validate_document(
-            crate::Collection::AgentBehavior,
-            &serde_json::to_value(self)?,
-        )?;
+        refs.validate_document(crate::Collection::Agent, &serde_json::to_value(self)?)?;
         refs.validate()
     }
 }
 
-pub async fn load_agent_behavior(node: &EmbeddedNode, behavior_id: &str) -> Result<Option<Agent>> {
-    Ok(load_agent_behavior_record(node, behavior_id)
+pub async fn load_agent(node: &EmbeddedNode, agent_id: &str) -> Result<Option<Agent>> {
+    Ok(load_agent_record(node, agent_id)
         .await?
         .map(|(_, behavior)| behavior))
 }
 
-pub(crate) async fn load_agent_behavior_record(
+pub(crate) async fn load_agent_record(
     node: &EmbeddedNode,
-    behavior_id: &str,
+    agent_id: &str,
 ) -> Result<Option<(String, Agent)>> {
-    let escaped_behavior_id = escape_graphql_string(behavior_id);
+    let escaped_agent_id = escape_graphql_string(agent_id);
     let query = format!(
         r#"{{
-            AgentBehavior(
-                filter: {{ behavior_id: {{ _eq: "{escaped_behavior_id}" }} }},
+            Agent(
+                filter: {{ agent_id: {{ _eq: "{escaped_agent_id}" }} }},
                 limit: 1
             ) {{
                 _docID
-                behavior_id
-                agent_did
+                agent_id
+                node_did
                 display_name
                 description
                 context_id
@@ -106,33 +103,33 @@ pub(crate) async fn load_agent_behavior_record(
         }}"#
     );
 
-    let resp = graphql_with_transaction_retry(node, &query, "query AgentBehavior").await?;
+    let resp = graphql_with_transaction_retry(node, &query, "query Agent").await?;
 
-    Ok(first_row_with_doc_id(resp.data.as_ref(), "AgentBehavior"))
+    Ok(first_row_with_doc_id(resp.data.as_ref(), "Agent"))
 }
 
-pub async fn list_agent_behaviors(node: &EmbeddedNode, agent_did: &str) -> Result<Vec<Agent>> {
-    Ok(list_agent_behavior_records(node, agent_did)
+pub async fn list_agents(node: &EmbeddedNode, node_did: &str) -> Result<Vec<Agent>> {
+    Ok(list_agent_records(node, node_did)
         .await?
         .into_iter()
         .map(|(_, behavior)| behavior)
         .collect())
 }
 
-pub(crate) async fn list_agent_behavior_records(
+pub(crate) async fn list_agent_records(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
 ) -> Result<Vec<(String, Agent)>> {
-    let escaped_agent_did = escape_graphql_string(agent_did);
+    let escaped_node_did = escape_graphql_string(node_did);
     let query = format!(
         r#"{{
-            AgentBehavior(
-                filter: {{ agent_did: {{ _eq: "{escaped_agent_did}" }} }},
+            Agent(
+                filter: {{ node_did: {{ _eq: "{escaped_node_did}" }} }},
                 order: {{ created_at: ASC }}
             ) {{
                 _docID
-                behavior_id
-                agent_did
+                agent_id
+                node_did
                 display_name
                 description
                 context_id
@@ -144,22 +141,22 @@ pub(crate) async fn list_agent_behavior_records(
         }}"#
     );
 
-    let resp = graphql_with_transaction_retry(node, &query, "list AgentBehavior").await?;
+    let resp = graphql_with_transaction_retry(node, &query, "list Agent").await?;
 
-    Ok(rows_with_doc_id(resp.data.as_ref(), "AgentBehavior"))
+    Ok(rows_with_doc_id(resp.data.as_ref(), "Agent"))
 }
 
-pub async fn upsert_agent_behavior(node: &EmbeddedNode, behavior: &Agent) -> Result<()> {
+pub async fn upsert_agent(node: &EmbeddedNode, behavior: &Agent) -> Result<()> {
     crate::config_client::ConfigAccess::transact_local(
         node,
         None,
-        "document_config.agent_behavior.upsert",
+        "document_config.agent.upsert",
         |txn| {
             Box::pin(async move {
                 let value = serde_json::to_value(behavior)?;
                 let plan = crate::config_client::DesiredStateApplyPlan::new(vec![
                     crate::config_client::DesiredStateApplyDocument {
-                        collection: crate::Collection::AgentBehavior,
+                        collection: crate::Collection::Agent,
                         add: value.clone(),
                         update: value,
                     },

@@ -290,14 +290,14 @@ impl BackgroundExecutionRegistry {
         &self,
         node: &EmbeddedNode,
         session_id: &str,
-        agent_did: &str,
+        node_did: &str,
         requester_did: Option<&str>,
         tool_call_id: &str,
     ) -> anyhow::Result<Option<serde_json::Value>> {
         let caller = crate::background_tools::ProcessControlScope {
             request_id: String::new(),
             session_id: session_id.to_owned(),
-            agent_did: agent_did.to_owned(),
+            node_did: node_did.to_owned(),
             requester_did: requester_did.map(str::to_owned),
         };
         let result = crate::background_tools::read_tool_output_slice(
@@ -618,7 +618,7 @@ fn non_empty(value: Option<&str>) -> Option<&str> {
 #[derive(Clone)]
 pub struct DefraSessionHook {
     node: Arc<EmbeddedNode>,
-    agent_did: String,
+    node_did: String,
     truncation_limits: TruncationLimits,
     failure_policy: FailurePolicy,
     counters: Arc<HookCounters>,
@@ -727,7 +727,7 @@ impl DefraSessionHook {
             .and_then(|remote| selected_remote_identity(tool_name, args, remote));
         Ok(ToolCallLifecycle::from_accepted(
             self.node.clone(),
-            self.agent_did.clone(),
+            self.node_did.clone(),
             self.active_requester_did().await,
             accepted,
             deadline_at,
@@ -739,15 +739,14 @@ impl DefraSessionHook {
     #[cfg(test)]
     pub fn with_identity(
         node: Arc<EmbeddedNode>,
-        _agent_name: &str,
-        agent_did: &str,
+        node_did: &str,
         failure_policy: FailurePolicy,
     ) -> Self {
         let background_executions = BackgroundExecutionRegistry::default();
         let background_live_outputs = background_executions.live_outputs.clone();
         Self {
             node,
-            agent_did: agent_did.to_string(),
+            node_did: node_did.to_string(),
             truncation_limits: TruncationLimits::default(),
             failure_policy,
             counters: Arc::new(HookCounters {
@@ -781,19 +780,18 @@ impl DefraSessionHook {
     pub async fn resume_with_identity_policy(
         node: Arc<EmbeddedNode>,
         session_id: &str,
-        _agent_name: &str,
-        agent_did: &str,
+        node_did: &str,
         requester_did: Option<&str>,
         failure_policy: FailurePolicy,
     ) -> anyhow::Result<Self> {
-        session::require_session(&node, agent_did, session_id, requester_did).await?;
-        let max_seq = session::max_sequence(&node, session_id, agent_did, requester_did).await?;
+        session::require_session(&node, node_did, session_id, requester_did).await?;
+        let max_seq = session::max_sequence(&node, session_id, node_did, requester_did).await?;
         let background_executions = BackgroundExecutionRegistry::default();
         let background_live_outputs = background_executions.live_outputs.clone();
 
         Ok(Self {
             node,
-            agent_did: agent_did.to_string(),
+            node_did: node_did.to_string(),
             truncation_limits: TruncationLimits::default(),
             failure_policy,
             counters: Arc::new(HookCounters {
@@ -1114,7 +1112,7 @@ impl DefraSessionHook {
         if let Some(id) = session_id {
             session::close_session(
                 &self.node,
-                &self.agent_did,
+                &self.node_did,
                 &id,
                 self.active_requester_did().await.as_deref(),
             )

@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 fn segment(payload: &str) -> OutputSegment {
     OutputSegment {
-        agent_did: "did:test:genesis".into(),
+        node_did: "did:test:genesis".into(),
         requester_did: None,
         session_id: "genesis-session".into(),
         request_doc_id: "genesis-request".into(),

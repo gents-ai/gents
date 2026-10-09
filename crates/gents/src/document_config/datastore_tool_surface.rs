@@ -52,14 +52,14 @@ pub struct DatastoreToolSurfaceDocument {
 /// List canonical surface configurations owned by the selected principal.
 pub async fn list_datastore_tool_surfaces(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
 ) -> Result<Vec<DatastoreToolSurfaceDocument>> {
-    anyhow::ensure!(!agent_did.trim().is_empty(), "surface owner is required");
+    anyhow::ensure!(!node_did.trim().is_empty(), "surface owner is required");
     let (fields, _) =
         crate::config_client::config_projection(crate::Collection::DatastoreToolSurface, None)?;
-    let owner = escape_graphql_string(agent_did);
+    let owner = escape_graphql_string(node_did);
     let query = format!(
-        "{{ DatastoreToolSurface(filter: {{ agent_did: {{ _eq: \"{owner}\" }} }}) {{ {} }} }}",
+        "{{ DatastoreToolSurface(filter: {{ node_did: {{ _eq: \"{owner}\" }} }}) {{ {} }} }}",
         fields.join(" "),
     );
     let response =
@@ -74,7 +74,7 @@ pub async fn list_datastore_tool_surfaces(
     rows.iter()
         .map(|row| {
             let surface: DatastoreToolSurfaceDocument = serde_json::from_value(row.clone())?;
-            anyhow::ensure!(surface.agent_did == agent_did, "surface owner mismatch");
+            anyhow::ensure!(surface.node_did == node_did, "surface owner mismatch");
             anyhow::ensure!(
                 ids.insert(surface.surface_id.clone()),
                 "duplicate surface identity within owner"

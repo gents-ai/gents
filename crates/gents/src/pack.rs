@@ -77,7 +77,7 @@ pub struct PackMetadata {
     pub dependencies: Vec<String>,
     /// Pack-local inference roles bound to existing principal profiles before
     /// any document is written. Slot names are authoring/install vocabulary;
-    /// installed behaviors retain only their canonical profile reference.
+    /// installed agents retain only their canonical profile reference.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inference_slots: Vec<PackInferenceSlot>,
     /// The capabilities this pack builds and ships.
@@ -99,12 +99,12 @@ pub struct PackMetadata {
 pub struct PackInferenceSlot {
     pub name: String,
     pub description: String,
-    /// Canonical behavior IDs whose authored profile reference names this slot.
+    /// Canonical agent IDs whose authored profile reference names this slot.
     /// Empty for a slot only plugins use ([`PackPlugin::model_slot`]).
     #[serde(default)]
-    pub behaviors: Vec<String>,
+    pub agents: Vec<String>,
     /// A slot an install may leave unbound, and bind later. Only a slot that
-    /// names no behavior can be optional: an unbound behavior has no profile.
+    /// names no agent can be optional: an unbound agent has no profile.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub optional: bool,
 }
@@ -636,13 +636,13 @@ pub struct PackageExternalDependency {
 
 /// Installation scope shared by document and graph packs. Logical references
 /// resolve through the same canonical configuration loader. Graph installation
-/// adds topology/revision validation, not behavior/model selection overrides.
+/// adds topology/revision validation, not agent/model selection overrides.
 /// Before strict decoding, fill omitted root owners from this explicit scope;
 /// reject mismatched explicit owners. Never rewrite target/caller/signer DIDs.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PackInstallOptions {
-    pub agent_did: String,
+    pub node_did: String,
 }
 
 /// Return whether `name` is admissible at the pack catalog and source-pack
@@ -762,7 +762,7 @@ pub fn validate_pack_manifest(manifest: &PackManifest) -> Result<()> {
     );
 
     let mut slot_names = BTreeSet::new();
-    let mut slot_behaviors = BTreeSet::new();
+    let mut slot_agents = BTreeSet::new();
     for slot in &manifest.metadata.inference_slots {
         anyhow::ensure!(
             is_valid_pack_name(&slot.name),
@@ -780,21 +780,21 @@ pub fn validate_pack_manifest(manifest: &PackManifest) -> Result<()> {
             slot.name
         );
         anyhow::ensure!(
-            slot.optional == slot.behaviors.is_empty(),
-            "inference slot {:?} must name at least one behavior, unless it is optional, and \
+            slot.optional == slot.agents.is_empty(),
+            "inference slot {:?} must name at least one agent, unless it is optional, and \
              an optional slot names none",
             slot.name
         );
         let mut local = BTreeSet::new();
-        for behavior in &slot.behaviors {
+        for agent in &slot.agents {
             anyhow::ensure!(
-                !behavior.trim().is_empty() && local.insert(behavior.as_str()),
-                "inference slot {:?} repeats or has a blank behavior",
+                !agent.trim().is_empty() && local.insert(agent.as_str()),
+                "inference slot {:?} repeats or has a blank agent",
                 slot.name
             );
             anyhow::ensure!(
-                slot_behaviors.insert(behavior.as_str()),
-                "behavior {behavior:?} belongs to more than one inference slot"
+                slot_agents.insert(agent.as_str()),
+                "agent {agent:?} belongs to more than one inference slot"
             );
         }
     }
@@ -818,9 +818,9 @@ pub fn validate_pack_manifest(manifest: &PackManifest) -> Result<()> {
             );
             anyhow::ensure!(
                 manifest.metadata.inference_slots.iter().any(|declared| {
-                    declared.name == *slot && declared.optional && declared.behaviors.is_empty()
+                    declared.name == *slot && declared.optional && declared.agents.is_empty()
                 }),
-                "plugin {:?} model slot {slot:?} must be optional and have no behaviors",
+                "plugin {:?} model slot {slot:?} must be optional and have no agents",
                 plugin.name
             );
             plugin_slots.insert(slot.as_str());
@@ -1080,7 +1080,7 @@ mod tests {
                 serde_json::json!([{
                     "name": "remote_ocr", "description": "d",
                     "optional": case["optional"],
-                    "behaviors": if case["agent_free"].as_bool().unwrap() { vec![] } else { vec!["scan"] },
+                    "agents": if case["agent_free"].as_bool().unwrap() { vec![] } else { vec!["scan"] },
                 }])
             } else {
                 serde_json::json!([])
@@ -1098,13 +1098,13 @@ mod tests {
     }
 
     #[test]
-    fn only_a_slot_without_behaviors_can_be_optional() {
+    fn only_a_slot_without_agents_can_be_optional() {
         let required = serde_json::json!([{"name": "remote_ocr", "description": "d"}]);
         assert!(validate_pack_manifest(&plugins_pack(required, Some("remote_ocr"))).is_err());
-        let with_behavior = serde_json::json!([{
-            "name": "remote_ocr", "description": "d", "optional": true, "behaviors": ["scan"]
+        let with_agent = serde_json::json!([{
+            "name": "remote_ocr", "description": "d", "optional": true, "agents": ["scan"]
         }]);
-        assert!(validate_pack_manifest(&plugins_pack(with_behavior, Some("remote_ocr"))).is_err());
+        assert!(validate_pack_manifest(&plugins_pack(with_agent, Some("remote_ocr"))).is_err());
     }
 
     fn bindable_plugin() -> PackPlugin {

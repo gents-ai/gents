@@ -2,7 +2,7 @@
 //! Native admissions come from canonical assistant publication.
 
 use crate::graphql::escape_graphql_string;
-use crate::identity::AgentIdentity;
+use crate::identity::NodeIdentity;
 use crate::tool_call_lifecycle::ToolCallLifecycle;
 use std::sync::Arc;
 
@@ -131,7 +131,7 @@ async fn generated_absent_requester_process_control_uses_accepted_hook_calls() {
             .unwrap(),
     );
     crate::schema::ensure_runtime_schemas(&node).await.unwrap();
-    crate::test_support::install_test_behavior(&node, &did, "general").await;
+    crate::test_support::install_test_agent(&node, &did, "general").await;
     let session_id = "background-hook-scope-session";
     let request_id = "background-hook-scope-origin";
     let mut origin = crate::tool_call_lifecycle::admission_fixture::claimed_request(
@@ -148,7 +148,6 @@ async fn generated_absent_requester_process_control_uses_accepted_hook_calls() {
     let hook = crate::hook::DefraSessionHook::resume_with_identity_policy(
         node.clone(),
         session_id,
-        "general",
         &did,
         None,
         crate::hook::FailurePolicy::default(),
@@ -199,13 +198,13 @@ async fn generated_absent_requester_process_control_uses_accepted_hook_calls() {
     let originating_scope = crate::background_tools::ProcessControlScope {
         request_id: request_id.into(),
         session_id: session_id.into(),
-        agent_did: did.clone(),
+        node_did: did.clone(),
         requester_did: Some("did:requester".into()),
     };
     assert!(
         !originating_scope.authorizes(
             background.session_id(),
-            background.agent_did(),
+            background.node_did(),
             background.requester_did(),
         ),
         "{originating_name}: persisted owner must reject mismatched requester"
@@ -280,13 +279,13 @@ async fn generated_absent_requester_process_control_uses_accepted_hook_calls() {
     let empty_scope = crate::background_tools::ProcessControlScope {
         request_id: next_id.into(),
         session_id: session_id.into(),
-        agent_did: did.clone(),
+        node_did: did.clone(),
         requester_did: Some(String::new()),
     };
     assert!(
         !empty_scope.authorizes(
             background.session_id(),
-            background.agent_did(),
+            background.node_did(),
             background.requester_did(),
         ),
         "{empty_name}: empty requester must not alias absence"

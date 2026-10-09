@@ -101,11 +101,11 @@ fn timed_out_running_handle(result: &str, accepted_handle: &str) -> Result<bool>
 pub(super) async fn observe_intentional_wait(
     txn: &ConfigApplyTxn<'_>,
     parent_doc_id: &str,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
 ) -> WaitEvidence {
-    match observe_waits(txn, parent_doc_id, agent_did, session_id, requester_did).await {
+    match observe_waits(txn, parent_doc_id, node_did, session_id, requester_did).await {
         Ok(true) => WaitEvidence::Running,
         Ok(false) => WaitEvidence::Absent,
         Err(error) if crate::config_client::is_transaction_step_unavailable(&error) => {
@@ -118,15 +118,15 @@ pub(super) async fn observe_intentional_wait(
 async fn observe_waits(
     txn: &ConfigApplyTxn<'_>,
     parent_doc_id: &str,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
 ) -> Result<bool> {
-    let scope = crate::session::session_scope_filter(agent_did, session_id, requester_did);
+    let scope = crate::session::session_scope_filter(node_did, session_id, requester_did);
     let headers = crate::session::load_request_headers_in_txn(
         txn,
         session_id,
-        agent_did,
+        node_did,
         requester_did,
         parent_doc_id,
     )
@@ -162,7 +162,7 @@ async fn observe_waits(
         let accepted = query::load_tool_call_read_in_txn(
             txn,
             &control_doc_id,
-            agent_did,
+            node_did,
             session_id,
             requester_did,
         )
@@ -243,7 +243,7 @@ async fn observe_waits(
         let spawn_parent = query::load_tool_call_read_in_txn(
             txn,
             spawn_parent_doc_id,
-            agent_did,
+            node_did,
             session_id,
             requester_did,
         )

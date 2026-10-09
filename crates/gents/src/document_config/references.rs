@@ -31,11 +31,11 @@ pub struct MissingReference {
     pub node_did: String,
 }
 
-/// Canonical configuration visible for one principal. Retained documents and
+/// Canonical configuration visible for one node. Retained documents and
 /// staged replacements share this snapshot; observations are never selected.
 #[derive(Debug, Clone, Default)]
 pub struct ConfigReferences {
-    agent_did: String,
+    node_did: String,
     documents: BTreeMap<(Collection, String), Value>,
 }
 
@@ -47,15 +47,15 @@ impl ConfigReferences {
     /// Build the same closure check from canonical pack documents. Duplicates
     /// and foreign roots are errors, including collections without references.
     pub fn from_documents(
-        agent_did: &str,
+        node_did: &str,
         documents: impl IntoIterator<Item = (Collection, Value)>,
     ) -> Result<Self> {
         ensure!(
-            !agent_did.trim().is_empty(),
-            "configuration requires agent_did"
+            !node_did.trim().is_empty(),
+            "configuration requires node_did"
         );
         let mut snapshot = Self {
-            agent_did: agent_did.to_owned(),
+            node_did: node_did.to_owned(),
             documents: BTreeMap::new(),
         };
         for (collection, value) in documents {
@@ -63,8 +63,8 @@ impl ConfigReferences {
                 .1
                 .context("missing canonical projection")?;
             ensure!(
-                value["agent_did"].as_str() == Some(agent_did),
-                "{} configuration owner does not match {agent_did:?}",
+                value["node_did"].as_str() == Some(node_did),
+                "{} configuration owner does not match {node_did:?}",
                 collection.graphql_type()
             );
             let id = value[collection.unique_field()]
@@ -77,7 +77,7 @@ impl ConfigReferences {
                     .documents
                     .insert((collection, id.clone()), value)
                     .is_none(),
-                "multiple live {} documents share owner {agent_did:?} and ID {id:?}",
+                "multiple live {} documents share owner {node_did:?} and ID {id:?}",
                 collection.graphql_type()
             );
         }
@@ -86,10 +86,10 @@ impl ConfigReferences {
 
     /// Read every retained config row after the transaction's staged writes and
     /// removals. The transaction owns commit/discard and the complete read set.
-    pub async fn load_in_txn(txn: &ConfigApplyTxn<'_>, agent_did: &str) -> Result<Self> {
+    pub async fn load_in_txn(txn: &ConfigApplyTxn<'_>, node_did: &str) -> Result<Self> {
         ensure!(
-            !agent_did.trim().is_empty(),
-            "configuration requires agent_did"
+            !node_did.trim().is_empty(),
+            "configuration requires node_did"
         );
         let mut documents = Vec::new();
         for collection in Collection::ALL {
@@ -97,8 +97,8 @@ impl ConfigReferences {
             let fields = config_projection(collection, None)?.0.join(" ");
             let response = txn
                 .execute(&format!(
-                    r#"{{ {name}(filter: {{ agent_did: {{ _eq: "{}" }} }}) {{ {fields} }} }}"#,
-                    escape_graphql_string(agent_did)
+                    r#"{{ {name}(filter: {{ node_did: {{ _eq: "{}" }} }}) {{ {fields} }} }}"#,
+                    escape_graphql_string(node_did)
                 ))
                 .await?;
             let rows = response
@@ -108,7 +108,7 @@ impl ConfigReferences {
                 .with_context(|| format!("{name} configuration query did not return rows"))?;
             documents.extend(rows.iter().cloned().map(|row| (collection, row)));
         }
-        Self::from_documents(agent_did, documents)
+        Self::from_documents(node_did, documents)
     }
 
     /// A profile and the backend it selects, decoded from this snapshot, for
@@ -144,19 +144,19 @@ impl ConfigReferences {
             .collect()
     }
 
-    /// The profiles a behavior's turns use: its own, then its context's
+    /// The profiles an agent's turns use: its own, then its context's
     /// compaction profile.
-    pub(crate) fn behavior_profiles(&self, behavior_id: &str) -> Vec<String> {
+    pub(crate) fn agent_profiles(&self, agent_id: &str) -> Vec<String> {
         let get = |collection: Collection, id: Option<&str>| {
             self.documents.get(&(collection, id?.to_owned()))
         };
-        let Some(behavior) = get(Collection::AgentBehavior, Some(behavior_id)) else {
+        let Some(agent) = get(Collection::Agent, Some(agent_id)) else {
             return Vec::new();
         };
-        let compaction = get(Collection::AgentContext, behavior["context_id"].as_str())
+        let compaction = get(Collection::AgentContext, agent["context_id"].as_str())
             .and_then(|context| get(Collection::Compaction, context["compaction_id"].as_str()))
             .and_then(|compaction| compaction["inference_profile_id"].as_str());
-        let mut profiles: Vec<String> = behavior["inference_profile_id"]
+        let mut profiles: Vec<String> = agent["inference_profile_id"]
             .as_str()
             .into_iter()
             .map(str::to_owned)
@@ -167,16 +167,13 @@ impl ConfigReferences {
         profiles
     }
 
-    /// Behaviors that use `profile_id`, directly or as their compaction profile.
-    pub(crate) fn behaviors_on_profile(&self, profile_id: &str) -> Vec<String> {
+    /// Agents that use `profile_id`, directly or as their compaction profile.
+    pub(crate) fn agents_on_profile(&self, profile_id: &str) -> Vec<String> {
         self.documents
             .keys()
             .filter(|(collection, id)| {
-                *collection == Collection::AgentBehavior
-                    && self
-                        .behavior_profiles(id)
-                        .iter()
-                        .any(|own| own == profile_id)
+                *collection == Collection::Agent
+                    && self.agent_profiles(id).iter().any(|own| own == profile_id)
             })
             .map(|(_, id)| id.clone())
             .collect()
@@ -248,7 +245,7 @@ impl ConfigReferences {
 
     pub(crate) fn validate_document(&self, collection: Collection, value: &Value) -> Result<()> {
         ensure!(
-            value["agent_did"].as_str() == Some(&self.agent_did),
+            value["node_did"].as_str() == Some(&self.node_did),
             "{} configuration owner does not match reference scope",
             collection.graphql_type()
         );
@@ -269,7 +266,7 @@ impl ConfigReferences {
                     field: field.to_owned(),
                     target,
                     target_id: target_id.to_owned(),
-                    agent_did: self.agent_did.clone(),
+                    node_did: self.node_did.clone(),
                 }
                 .into());
             }
@@ -285,26 +282,26 @@ impl ConfigReferences {
         // rule table. Defra ACP and explicit foreign delegation retain their
         // existing owners and are not converted into ordinary references.
         match collection {
-            Collection::AgentPrincipal => {
-                let doc: AgentPrincipal = decode(value)?;
+            Collection::Node => {
+                let doc: Node = decode(value)?;
                 optional(
-                    Collection::AgentBehavior,
-                    doc.default_behavior_id.as_deref(),
-                    "default_behavior_id",
+                    Collection::Agent,
+                    doc.default_agent_id.as_deref(),
+                    "default_agent_id",
                 )?;
-                if let Some(default) = doc.default_behavior_id.as_deref() {
-                    let behavior: AgentBehavior =
-                        decode(&self.documents[&(Collection::AgentBehavior, default.to_owned())])?;
+                if let Some(default) = doc.default_agent_id.as_deref() {
+                    let agent: Agent =
+                        decode(&self.documents[&(Collection::Agent, default.to_owned())])?;
                     ensure!(
-                        behavior.enabled,
-                        "AgentBehavior {default:?} is the default behavior of {} and must be \
+                        agent.enabled,
+                        "Agent {default:?} is the default agent of {} and must be \
                          enabled; enable it or choose another default first",
-                        self.agent_did
+                        self.node_did
                     );
                 }
             }
-            Collection::AgentBehavior => {
-                let doc: AgentBehavior = decode(value)?;
+            Collection::Agent => {
+                let doc: Agent = decode(value)?;
                 optional(
                     Collection::AgentContext,
                     doc.context_id.as_deref(),
@@ -400,22 +397,18 @@ impl ConfigReferences {
                         )?;
                     }
                 }
-                if let Some(subagents) = &doc.subagents {
-                    for target in &subagents.target_ids {
-                        require(Collection::SubagentTarget, target, "subagents.target_ids")?;
+                if let Some(agents) = &doc.agents {
+                    for target in &agents.target_ids {
+                        require(Collection::AgentTarget, target, "agents.target_ids")?;
                     }
-                    // Reject a selection the runtime snapshot cannot resolve
-                    // (blank or duplicate agent names) before it is published.
-                    let targets = self
-                        .documents
-                        .iter()
-                        .filter(|((collection, _), _)| *collection == Collection::SubagentTarget)
-                        .map(|(_, value)| decode::<SubagentTargetDocument>(value))
-                        .collect::<Result<Vec<_>>>()?;
-                    crate::tool_surface::SubagentToolConfig::from_document_with_targets(
-                        &doc, &targets,
-                    )?;
                 }
+                let targets = self
+                    .documents
+                    .iter()
+                    .filter(|((collection, _), _)| *collection == Collection::AgentTarget)
+                    .map(|(_, value)| decode::<AgentTargetDocument>(value))
+                    .collect::<Result<Vec<_>>>()?;
+                crate::tool_surface::AgentToolConfig::from_document_with_targets(&doc, &targets)?;
                 if let Some(datastore) = doc.datastore {
                     for surface in datastore.datastore_tool_surface_ids.unwrap_or_default() {
                         require(
@@ -426,17 +419,17 @@ impl ConfigReferences {
                     }
                 }
             }
-            Collection::SubagentTarget => {
-                let doc: SubagentTargetDocument = decode(value)?;
+            Collection::AgentTarget => {
+                let doc: AgentTargetDocument = decode(value)?;
                 ensure!(
-                    !doc.target_agent_did.trim().is_empty() && !doc.behavior_id.trim().is_empty(),
-                    "SubagentTarget {id} requires target_agent_did and behavior_id"
+                    !doc.target_node_did.trim().is_empty() && !doc.agent_id.trim().is_empty(),
+                    "AgentTarget {id} requires target_node_did and agent_id"
                 );
-                // Same-owner targets close legal behavior/context/tools cycles.
+                // Same-owner targets close legal agent/context/tools cycles.
                 // Explicit foreign targets are checked by delegation admission
                 // under ACP, never satisfied by a global config lookup.
-                if doc.target_agent_did == self.agent_did {
-                    require(Collection::AgentBehavior, &doc.behavior_id, "behavior_id")?;
+                if doc.target_node_did == self.node_did {
+                    require(Collection::Agent, &doc.agent_id, "agent_id")?;
                 }
             }
             Collection::InferenceProfile => {
@@ -479,16 +472,12 @@ impl ConfigReferences {
             Collection::ProjectionAcpBinding => {
                 let doc: ProjectionAcpBinding = decode(value)?;
                 doc.validate()?;
-                optional(
-                    Collection::AgentBehavior,
-                    doc.behavior_id.as_deref(),
-                    "behavior_id",
-                )?;
+                optional(Collection::Agent, doc.agent_id.as_deref(), "agent_id")?;
             }
             Collection::Task => {
                 let task: Task = decode(value)?;
                 task.validate()?;
-                require(Collection::AgentBehavior, &task.behavior_id, "behavior_id")?;
+                require(Collection::Agent, &task.agent_id, "agent_id")?;
             }
             Collection::Trigger => {
                 let doc: Trigger = decode(value)?;

@@ -114,9 +114,7 @@ impl DefraSessionHook {
                     SPAWN_PROCESS_TOOL_NAME,
                     "/tool_name",
                     target_name,
-                    format!(
-                        "tool '{target_name}' is not allowed for backgrounding by this behavior"
-                    ),
+                    format!("tool '{target_name}' is not allowed for backgrounding by this agent"),
                     self.background_tool_registry.allowlist(),
                 ),
                 None,
@@ -160,7 +158,7 @@ impl DefraSessionHook {
             crate::meta_tools::selected_remote_identity(target_name, &target_args, remote)
         });
         // Backgrounded executions are decoupled from the parent request
-        // deadline (like background subagent bridges): they get their
+        // deadline (like background agent bridges): they get their
         // configured background lifetime, with cancel_process and the
         // completion notification as the lifecycle controls (#985).
         let lifetime = self
@@ -222,7 +220,7 @@ impl DefraSessionHook {
             .request_doc_id()
             .ok_or_else(|| anyhow::anyhow!("spawned background lifecycle lacks request binding"))?
             .to_owned();
-        let execution_agent_did = lifecycle.agent_did().to_owned();
+        let execution_node_did = lifecycle.node_did().to_owned();
         let execution_requester_did = lifecycle.requester_did().map(str::to_owned);
         let execution_tool_name = target_tool_name.clone();
         let live_output_writer = live_outputs
@@ -249,12 +247,12 @@ impl DefraSessionHook {
         let requester_did = runtime_context
             .as_ref()
             .and_then(|runtime| runtime.requester_did.clone());
-        let request_agent_did = runtime_context
+        let request_node_did = runtime_context
             .as_ref()
-            .and_then(|runtime| runtime.agent_did.clone());
-        let request_behavior_id = runtime_context
+            .and_then(|runtime| runtime.node_did.clone());
+        let request_agent_id = runtime_context
             .as_ref()
-            .and_then(|runtime| runtime.behavior_id.clone());
+            .and_then(|runtime| runtime.agent_id.clone());
         let source_fields = runtime_context
             .map(|runtime| runtime.source_fields)
             .unwrap_or_default();
@@ -268,8 +266,8 @@ impl DefraSessionHook {
                 process_recorder,
                 crate::tool_call_lifecycle::runtime::scope_tool_request_identity(
                     requester_did,
-                    request_agent_did,
-                    request_behavior_id,
+                    request_node_did,
+                    request_agent_id,
                     Some(execution_request_id.clone()),
                     async {
                         crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_workspace_overlay(
@@ -396,7 +394,7 @@ impl DefraSessionHook {
                                 &execution_tool_doc_id,
                                 &execution_request_doc_id,
                                 &execution_session_id,
-                                &execution_agent_did,
+                                &execution_node_did,
                                 execution_requester_did.as_deref(),
                             )
                             .await
@@ -473,7 +471,7 @@ impl DefraSessionHook {
                                 &execution_tool_doc_id,
                                 &execution_request_doc_id,
                                 &execution_session_id,
-                                &execution_agent_did,
+                                &execution_node_did,
                                 execution_requester_did.as_deref(),
                             )
                             .await
@@ -596,7 +594,7 @@ impl DefraSessionHook {
             lifecycle
                 .doc_id()
                 .context("lost terminal compare requires physical tool identity")?,
-            lifecycle.agent_did(),
+            lifecycle.node_did(),
             lifecycle.session_id(),
             lifecycle.requester_did(),
         )
@@ -657,7 +655,7 @@ impl DefraSessionHook {
         let caller = ProcessControlScope {
             request_id,
             session_id,
-            agent_did: self.agent_did.clone(),
+            node_did: self.node_did.clone(),
             requester_did,
         };
         // The handle's own durable record selects its configured wait policy;
@@ -770,13 +768,13 @@ impl DefraSessionHook {
         let caller = ProcessControlScope {
             request_id,
             session_id,
-            agent_did: self.agent_did.clone(),
+            node_did: self.node_did.clone(),
             requester_did: self.active_requester_did().await,
         };
         let response = handle_list_background_tools(
             &self.node,
             &caller,
-            &self.agent_did,
+            &self.node_did,
             &self.background_live_outputs.registry,
             parsed,
         )
@@ -839,7 +837,7 @@ impl DefraSessionHook {
         let caller = ProcessControlScope {
             request_id,
             session_id,
-            agent_did: self.agent_did.clone(),
+            node_did: self.node_did.clone(),
             requester_did: self.active_requester_did().await,
         };
         let result = match handle_read_tool_output(
@@ -865,7 +863,7 @@ impl DefraSessionHook {
                 READ_PROCESS_TOOL_NAME,
                 "/tool_call_id",
                 &background_tool_call_id,
-                "background tool call is not manageable by this session principal",
+                "background tool call is not manageable by this session",
                 Vec::new(),
             ),
         };
@@ -949,7 +947,7 @@ impl DefraSessionHook {
         let caller = ProcessControlScope {
             request_id: request_id.clone(),
             session_id: session_id.clone(),
-            agent_did: self.agent_did.clone(),
+            node_did: self.node_did.clone(),
             requester_did: self.active_requester_did().await,
         };
         let lifecycle = match self

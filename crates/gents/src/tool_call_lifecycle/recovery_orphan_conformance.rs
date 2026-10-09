@@ -68,7 +68,7 @@ async fn recovery_leaves_session_message_row_and_its_request_running_after_calle
     let admitted = message.admission;
     terminalize_accepted_parent(&admitted, &mut owner, RequestTerminalOutcome::Interrupted).await;
     drop(owner);
-    let report = ToolCallLifecycle::recover_all(&admitted.node, &admitted.agent_did)
+    let report = ToolCallLifecycle::recover_all(&admitted.node, &admitted.node_did)
         .await
         .expect("recover after the caller's interrupt");
     assert_eq!(report.tool_calls_recovered, 0);

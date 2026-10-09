@@ -5,10 +5,10 @@ use gents_loop::claude_messages_body::ReplayTag;
 use gents_protocol::output::OutputSource;
 use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
 
-fn test_builder(system_prompt: &str, behavior_name: &str) -> LayeredPromptBuilder {
-    LayeredPromptBuilder::for_behavior(
+fn test_builder(system_prompt: &str, agent_id: &str) -> LayeredPromptBuilder {
+    LayeredPromptBuilder::for_agent(
         system_prompt,
-        behavior_name,
+        agent_id,
         &["list_files", "read_file", "bash"],
         true,
         &[],
@@ -33,7 +33,7 @@ fn assistant_msg(text: &str) -> Message {
 }
 
 #[test]
-fn preamble_combines_prompt_and_behavior_name() {
+fn preamble_combines_prompt_and_agent_id() {
     let preamble = build_preamble(
         "You are a helpful assistant.",
         "research",
@@ -59,7 +59,7 @@ fn preamble_handles_empty_system_prompt() {
 }
 
 #[test]
-fn preamble_handles_empty_behavior_name() {
+fn preamble_handles_empty_agent_id() {
     let preamble = build_preamble("Be helpful.", "", &[], true);
     assert!(preamble.contains("Be helpful."));
     assert!(preamble.contains("## Tool Discovery"));
@@ -202,7 +202,7 @@ fn system_reminder_format() {
 }
 
 #[test]
-fn preamble_lists_allowed_subagent_targets() {
+fn preamble_lists_allowed_agent_targets() {
     let targets = vec![
         (
             "code-reviewer".to_string(),
@@ -251,10 +251,10 @@ fn preamble_no_targets_block_when_empty() {
         false,
         &[],
     );
-    // Should not contain any subagent section heading
+    // Should not contain any agent-target section heading
     assert!(
         !preamble.contains("## Agents"),
-        "preamble should have no subagent section when targets is empty"
+        "preamble should have no agent-target section when targets is empty"
     );
     assert!(
         !preamble.contains("agent_new"),

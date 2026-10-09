@@ -123,7 +123,7 @@ impl DefraStreamWriter {
             key: key.to_owned(),
         };
         let segment = OutputSegment {
-            agent_did: request.agent_did.clone(),
+            node_did: request.node_did.clone(),
             requester_did: request.requester_did.clone(),
             session_id: request.session_id.clone(),
             request_doc_id: request.doc_id.clone(),
@@ -217,7 +217,7 @@ impl DefraStreamWriter {
             return Ok(false);
         }
         let segment = OutputSegment {
-            agent_did: request.agent_did.clone(),
+            node_did: request.node_did.clone(),
             requester_did: request.requester_did.clone(),
             session_id: request.session_id.clone(),
             request_doc_id: request.doc_id.clone(),
@@ -284,7 +284,7 @@ impl DefraStreamWriter {
             .and_then(|tail| tail.capture_scope)
             .context("provider close has no exact active attempt")?;
         let segment = OutputSegment {
-            agent_did: request.agent_did.clone(),
+            node_did: request.node_did.clone(),
             requester_did: request.requester_did.clone(),
             session_id: request.session_id.clone(),
             request_doc_id: request.doc_id.clone(),
@@ -352,7 +352,7 @@ impl DefraStreamWriter {
         let delta = provider_flush_delta(&tail.streams, &encoded)?;
         let segment = if delta.grew {
             OutputSegment {
-                agent_did: request.agent_did.clone(),
+                node_did: request.node_did.clone(),
                 requester_did: request.requester_did.clone(),
                 session_id: request.session_id.clone(),
                 request_doc_id: request.doc_id.clone(),
@@ -368,7 +368,7 @@ impl DefraStreamWriter {
             }
         } else {
             OutputSegment {
-                agent_did: request.agent_did.clone(),
+                node_did: request.node_did.clone(),
                 requester_did: request.requester_did.clone(),
                 session_id: request.session_id.clone(),
                 request_doc_id: request.doc_id.clone(),
@@ -445,7 +445,7 @@ impl DefraStreamWriter {
             .map(tokio::time::Instant::from_std)
     }
 
-    pub fn new(node: Arc<EmbeddedNode>, _agent_did: &str, batch_interval: Duration) -> Self {
+    pub fn new(node: Arc<EmbeddedNode>, _node_did: &str, batch_interval: Duration) -> Self {
         Self {
             node,
             batch_interval,

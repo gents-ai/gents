@@ -24,21 +24,21 @@ pub(crate) fn budget_for_tool(limits: &CommandOutputLimits, tool_name: &str) -> 
     configured.unwrap_or(crate::toolset::DEFAULT_MAX_COMMAND_CHARS)
 }
 
-/// Budget for `tool_name` as configured now for `behavior_id` under its owner
-/// `agent_did`. A behavior, context or Tools document that no longer resolves
+/// Budget for `tool_name` as configured now for `agent_id` under its owner
+/// `node_did`. A behavior, context or Tools document that no longer resolves
 /// falls back to the default: presentation must never fail on configuration.
 pub(crate) async fn configured_output_budget(
     node: &EmbeddedNode,
-    agent_did: &str,
-    behavior_id: &str,
+    node_did: &str,
+    agent_id: &str,
     tool_name: &str,
 ) -> usize {
-    match load_command_output_limits(node, agent_did, behavior_id).await {
+    match load_command_output_limits(node, node_did, agent_id).await {
         Ok(limits) => budget_for_tool(&limits, tool_name),
         Err(error) => {
             tracing::debug!(
-                agent_did,
-                behavior_id,
+                node_did,
+                agent_id,
                 tool_name,
                 error = %format!("{error:#}"),
                 "output budget uses the default: behavior tools did not resolve"
@@ -50,20 +50,20 @@ pub(crate) async fn configured_output_budget(
 
 async fn load_command_output_limits(
     node: &EmbeddedNode,
-    agent_did: &str,
-    behavior_id: &str,
+    node_did: &str,
+    agent_id: &str,
 ) -> anyhow::Result<CommandOutputLimits> {
-    let owner = agent_did.to_owned();
-    let behavior_id = behavior_id.to_owned();
+    let owner = node_did.to_owned();
+    let agent_id = agent_id.to_owned();
     crate::config_client::ConfigAccess::transact_local(
         node,
         None,
         "tool_surface.output_budget",
         move |txn| {
             let owner = owner.clone();
-            let behavior_id = behavior_id.clone();
+            let agent_id = agent_id.clone();
             Box::pin(async move {
-                match crate::document_config::load_behavior_tools_in_txn(txn, &owner, &behavior_id)
+                match crate::document_config::load_agent_tools_in_txn(txn, &owner, &agent_id)
                     .await?
                 {
                     Some(tools) => {

@@ -48,7 +48,7 @@ async fn plugin_invocations(
     }
     let response = executor
         .execute_graph_query(&format!(
-            r#"{{ CallbackInvocation(filter: {{ owner_agent_did: {{ _eq: "{}" }},
+            r#"{{ CallbackInvocation(filter: {{ owner_node_did: {{ _eq: "{}" }},
         caused_by_correlation: {{ _eq: "{}" }}, callback_id: {{ _in: {} }} }}) {{
             invocation_id callback_id lifecycle_state error attempts action_journal }} }}"#,
             escape_graphql_string(owner_did),
@@ -86,7 +86,7 @@ async fn plugin_invocations(
                 request_id: field("invocation_id").to_owned(),
                 session_id: None,
                 node_id,
-                behavior_id: String::new(),
+                agent_id: String::new(),
                 lifecycle_state: Some(state.to_owned()),
                 failure_reason: Some(field("error").to_owned()).filter(|error| !error.is_empty()),
                 terminal,
@@ -101,7 +101,7 @@ fn request_view(row: &AgentRequestRow, node_id: Option<String>) -> GraphRunReque
         request_id: row.request_id.clone(),
         session_id: row.session_id.clone(),
         node_id,
-        behavior_id: row.behavior_id.clone().unwrap_or_default(),
+        agent_id: row.agent_id.clone().unwrap_or_default(),
         lifecycle_state: row.lifecycle_state.map(|state| state.as_str().to_owned()),
         failure_reason: row.failure_reason.clone(),
         terminal: row
@@ -112,7 +112,7 @@ fn request_view(row: &AgentRequestRow, node_id: Option<String>) -> GraphRunReque
 }
 
 pub(super) fn authentic_root(row: &AgentRequestRow, owner_did: &str) -> bool {
-    let Some(target) = row.agent_did.as_deref().filter(|s| !s.is_empty()) else {
+    let Some(target) = row.node_did.as_deref().filter(|s| !s.is_empty()) else {
         return false;
     };
     target == owner_did
@@ -181,18 +181,18 @@ pub(super) async fn load(
             .clone();
         if !authentic_root(root, owner_did) {
             // Owner DID comes from the verified GraphRun/revision, never the
-            // candidate row or mutable Task/AgentBehavior configuration.
+            // candidate row or mutable Task/Agent configuration.
             continue;
         }
-        let owner = root.agent_did.as_deref().unwrap();
+        let owner = root.node_did.as_deref().unwrap();
         let session = root.session_id.as_deref().unwrap();
         let key = (owner.to_owned(), session.to_owned());
         if !sessions.contains_key(&key) {
             let response = executor.execute_graph_query(&format!(
-                r#"{{ AgentRequest(filter: {{ agent_did: {{ _eq: "{}" }},
+                r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{}" }},
                 session_id: {{ _eq: "{}" }} }},
                 order: [{{ created_at: DESC }}, {{ request_id: DESC }}]) {{ {SIGNED_REQUEST_FIELDS} failure_reason }}
-                Goal(filter: {{ agent_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }} }}) {{ {GOAL_FIELDS} }} }}"#,
+                Goal(filter: {{ node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }} }}) {{ {GOAL_FIELDS} }} }}"#,
                 escape_graphql_string(owner), escape_graphql_string(session),
                 escape_graphql_string(owner), escape_graphql_string(session),
             )).await?;

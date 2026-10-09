@@ -1,12 +1,12 @@
 {
-  "agent_principal": {},
+  "node": {},
   "eval_definitions": [
     {
       "definition_id": "configurator-l4-automation",
       "comparability_version": 10,
       "title": "The Engineer \u2014 Level 4 document automation (EventSource / Trigger / Task)",
       "subject": {
-        "kind": "behavior",
+        "kind": "agent",
         "inference_slots": [
           "engineer"
         ]

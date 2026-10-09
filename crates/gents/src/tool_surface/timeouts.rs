@@ -274,7 +274,7 @@ mod tests {
     fn document(groups: Value) -> crate::document_config::Tools {
         let mut value = groups;
         value["tools_id"] = "tools".into();
-        value["agent_did"] = "owner".into();
+        value["node_did"] = "owner".into();
         serde_json::from_value(value).unwrap()
     }
 

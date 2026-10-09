@@ -23,7 +23,7 @@ pub(crate) async fn append_background_tool_completion(
     wake: crate::lifecycle::RequestHopCause,
 ) -> Result<()> {
     // Load the parent request up front so the completion notification is stamped
-    // with the parent session's owning agent_did.
+    // with the parent session's owning node_did.
     let parent_request = crate::request_binding::load_agent_request(node, parent_request_id)
         .await?
         .ok_or_else(|| anyhow!("parent AgentRequest {parent_request_id} not found"))?;
@@ -52,8 +52,8 @@ pub(crate) async fn append_background_tool_completion(
         Some(budget) => budget,
         None => crate::tool_surface::configured_output_budget(
             node,
-            &parent_request.agent_did,
-            &parent_request.behavior_id,
+            &parent_request.node_did,
+            &parent_request.agent_id,
             tool_name,
         )
         .await
@@ -76,7 +76,7 @@ pub(crate) async fn append_background_tool_completion(
     .await?;
     mark_background_tool_notification_delivered(
         node,
-        &parent_request.agent_did,
+        &parent_request.node_did,
         parent_request_id,
         tool_call_doc_id,
     )
@@ -102,7 +102,7 @@ async fn stored_notification_text(
     let (_, message) = crate::session::load_canonical_message_from_node(
         node,
         notification_doc_id,
-        &parent.agent_did,
+        &parent.node_did,
         parent.requester_did.as_deref(),
     )
     .await
@@ -205,11 +205,11 @@ pub(super) async fn ensure_notification_delivery(
 
 async fn mark_background_tool_notification_delivered(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     parent_request_id: &str,
     tool_call_doc_id: &str,
 ) -> Result<()> {
-    let agent_did = escape_graphql_string(agent_did);
+    let node_did = escape_graphql_string(node_did);
     let parent_request_id = escape_graphql_string(parent_request_id);
     let tool_call_doc_id = escape_graphql_string(tool_call_doc_id);
     let delivered_at = escape_graphql_string(&Utc::now().to_rfc3339());
@@ -217,7 +217,7 @@ async fn mark_background_tool_notification_delivered(
         r#"mutation {{
             update_AgentToolCall(
                 filter: {{
-                    agent_did: {{ _eq: "{agent_did}" }},
+                    node_did: {{ _eq: "{node_did}" }},
                     request_id: {{ _eq: "{parent_request_id}" }},
                     _docID: {{ _eq: "{tool_call_doc_id}" }},
                     completion_notification_delivered_at: {{ _eq: null }}

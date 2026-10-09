@@ -292,7 +292,7 @@ const USAGE_DID: &str = "did:key:z6MkUsageA";
 
 fn usage_account(backend_id: &str) -> crate::usage_observation::UsageAccount {
     crate::usage_observation::UsageAccount::Backend {
-        agent_did: USAGE_DID.to_string(),
+        node_did: USAGE_DID.to_string(),
         provider: "ChatGptCodex".to_string(),
         backend_id: backend_id.to_string(),
     }

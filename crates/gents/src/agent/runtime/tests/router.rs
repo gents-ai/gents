@@ -1,8 +1,8 @@
 use super::support::*;
 use super::*;
 use crate::agent::runtime::router::RuntimeAdmissionGate;
-use crate::behavior_readiness_publisher::{BehaviorReadinessWriter, FatalBehaviorReadinessWrite};
 use crate::lean_vocab_test::lean_runtime_reconcile_case;
+use crate::node_readiness_publisher::{FatalNodeReadinessWrite, NodeReadinessWriter};
 
 struct CountingWatcher {
     rx: mpsc::Receiver<anyhow::Result<AgentRequest>>,
@@ -19,15 +19,15 @@ impl crate::watcher::Watcher for CountingWatcher {
 struct RejectRouterGenerationWriter;
 
 #[async_trait::async_trait]
-impl BehaviorReadinessWriter for RejectRouterGenerationWriter {
+impl NodeReadinessWriter for RejectRouterGenerationWriter {
     async fn upsert(
         &self,
-        _agent_did: &str,
-        snapshot: &BehaviorReadinessSnapshot,
+        _node_did: &str,
+        snapshot: &NodeReadinessSnapshot,
         _updated_at: &str,
     ) -> anyhow::Result<()> {
         if snapshot.router_generation > 0 {
-            return Err(FatalBehaviorReadinessWrite.into());
+            return Err(FatalNodeReadinessWrite.into());
         }
         Ok(())
     }
@@ -39,21 +39,21 @@ fn routed_snapshot(
 ) -> Arc<crate::runtime_snapshot::ActiveRuntimeSnapshot> {
     Arc::new(crate::runtime_snapshot::ActiveRuntimeSnapshot {
         generation,
-        principal: None,
+        node: None,
         local_did: String::new(),
-        default_behavior_id: "general".to_string(),
-        behaviors: HashMap::new(),
+        default_agent_id: "general".to_string(),
+        agents: HashMap::new(),
         tool_surfaces: HashMap::new(),
         backend_admission_configs: HashMap::new(),
-        unavailable_behaviors: HashMap::new(),
+        unavailable_agents: HashMap::new(),
         active_schedules: HashMap::new(),
         unavailable_schedules: std::collections::HashSet::new(),
         active_event_triggers: HashMap::new(),
         unavailable_event_triggers: std::collections::HashSet::new(),
         active_tasks: HashMap::new(),
         dispatchers: HashMap::from([("general".to_string(), dispatcher)]),
-        behavior_executor_capacities: HashMap::new(),
-        behavior_executor_queue_capacities: HashMap::new(),
+        agent_executor_capacities: HashMap::new(),
+        agent_executor_queue_capacities: HashMap::new(),
     })
 }
 
@@ -61,15 +61,15 @@ fn routed_snapshot(
 async fn invalid_execution_origin_route_rejection_terminalizes_without_stopping_router() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let agent_did = "did:test:invalid-origin-route";
+    let node_did = "did:test:invalid-origin-route";
     let response = node
         .execute(
             r#"mutation {
                 create_AgentRequest(input: {
                     request_id: "invalid-origin-route-request"
                     purpose: "normal"
-                    agent_did: "did:test:invalid-origin-route"
-                    behavior_id: "general"
+                    node_did: "did:test:invalid-origin-route"
+                    agent_id: "general"
                     session_id: "invalid-origin-route-session"
                     content: "hostile"
                     lifecycle_state: "pending"
@@ -111,14 +111,14 @@ async fn invalid_execution_origin_route_rejection_terminalizes_without_stopping_
     let mut malformed = request(Some("general"), "invalid-origin-route-session");
     malformed.doc_id = doc_id;
     malformed.request_id = "invalid-origin-route-request".to_string();
-    malformed.agent_did = agent_did.to_string();
+    malformed.node_did = node_did.to_string();
 
     super::super::router::fail_routed_request(
         node.clone(),
-        agent_did,
+        node_did,
         malformed,
         "general",
-        "behavior unavailable",
+        "agent unavailable",
     )
     .await
     .expect("invalid origin must be terminalized, not escape the router");
@@ -160,7 +160,7 @@ async fn invalid_execution_origin_route_rejection_terminalizes_without_stopping_
 async fn closing_admission_cancels_a_send_to_a_full_executor_queue() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let agent_did = "did:test:full-executor-queue";
+    let node_did = "did:test:full-executor-queue";
     let (dispatcher, mut executor_rx) = mpsc::channel(1);
     dispatcher
         .send(request(Some("general"), "already-queued"))
@@ -171,7 +171,7 @@ async fn closing_admission_cancels_a_send_to_a_full_executor_queue() {
     let (_shutdown_tx, shutdown_rx) = watch::channel(false);
     let (request_tx, request_rx) = mpsc::channel(1);
     let (status_owner, status) =
-        RuntimeStatusHandle::start_with_unbounded_test_clock(node.clone(), agent_did);
+        RuntimeStatusHandle::start_with_unbounded_test_clock(node.clone(), node_did);
     status.initialize_startup("general").await.unwrap();
     status
         .readiness()
@@ -191,14 +191,14 @@ async fn closing_admission_cancels_a_send_to_a_full_executor_queue() {
     gate.open().await;
 
     let mut routed = request(Some("general"), "blocked-dispatch");
-    routed.agent_did = agent_did.to_string();
+    routed.node_did = node_did.to_string();
     request_tx.send(Ok(routed)).await.unwrap();
     let gate_for_router = gate.clone();
     let router_node = node.clone();
     let router = tokio::spawn(async move {
         super::super::router::run_router_with_watcher(
             router_node,
-            agent_did.to_string(),
+            node_did.to_string(),
             ScriptedWatcher { rx: request_rx },
             active_rx,
             shutdown_rx,
@@ -236,7 +236,7 @@ async fn closing_admission_cancels_a_send_to_a_full_executor_queue() {
 async fn router_generation_write_failure_closes_admission_before_dequeue_or_dispatch() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let agent_did = "did:test:router-generation-write-failure";
+    let node_did = "did:test:router-generation-write-failure";
     let (dispatcher, mut executor_rx) = mpsc::channel(1);
     let snapshot = routed_snapshot(1, dispatcher);
     let (_active_tx, active_rx) = watch::channel(snapshot.clone());
@@ -244,7 +244,7 @@ async fn router_generation_write_failure_closes_admission_before_dequeue_or_disp
     let (request_tx, request_rx) = mpsc::channel(1);
     let (status_owner, status) = RuntimeStatusHandle::start_with_readiness_writer(
         node.clone(),
-        agent_did,
+        node_did,
         Arc::new(RejectRouterGenerationWriter),
         Duration::from_millis(1),
     );
@@ -266,13 +266,13 @@ async fn router_generation_write_failure_closes_admission_before_dequeue_or_disp
     let gate = RuntimeAdmissionGate::closed();
     gate.open().await;
     let mut routed = request(Some("general"), "must-remain-pending");
-    routed.agent_did = agent_did.to_string();
+    routed.node_did = node_did.to_string();
     request_tx.send(Ok(routed)).await.unwrap();
     let watcher_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
     let error = super::super::router::run_router_with_watcher(
         node.clone(),
-        agent_did.to_string(),
+        node_did.to_string(),
         CountingWatcher {
             rx: request_rx,
             calls: watcher_calls.clone(),
@@ -286,7 +286,7 @@ async fn router_generation_write_failure_closes_admission_before_dequeue_or_disp
     .await
     .expect_err("router generation persistence failure must stop the router");
     assert!(
-        format!("{error:#}").contains("injected fatal behavior readiness write"),
+        format!("{error:#}").contains("injected fatal agent readiness write"),
         "unexpected router error: {error:#}"
     );
     assert!(!gate.is_open().await);
@@ -305,42 +305,42 @@ async fn router_holds_request_during_generation_handoff_and_dispatches_after_ali
     let accept = lean_runtime_reconcile_case("accept_request_after_router_observe");
     assert!(accept.legal);
 
-    let agent_did = "did:test:router-latest-snapshot";
+    let node_did = "did:test:router-latest-snapshot";
     let initial_snapshot = Arc::new(crate::runtime_snapshot::ActiveRuntimeSnapshot {
         generation: 1,
-        principal: None,
+        node: None,
         local_did: String::new(),
-        default_behavior_id: "general".to_string(),
-        behaviors: HashMap::new(),
+        default_agent_id: "general".to_string(),
+        agents: HashMap::new(),
         tool_surfaces: HashMap::new(),
         backend_admission_configs: HashMap::new(),
-        unavailable_behaviors: HashMap::new(),
+        unavailable_agents: HashMap::new(),
         active_schedules: HashMap::new(),
         unavailable_schedules: std::collections::HashSet::new(),
         active_event_triggers: HashMap::new(),
         unavailable_event_triggers: std::collections::HashSet::new(),
         active_tasks: HashMap::new(),
         dispatchers: HashMap::new(),
-        behavior_executor_capacities: HashMap::new(),
-        behavior_executor_queue_capacities: HashMap::new(),
+        agent_executor_capacities: HashMap::new(),
+        agent_executor_queue_capacities: HashMap::new(),
     });
     let updated_snapshot = Arc::new(crate::runtime_snapshot::ActiveRuntimeSnapshot {
         generation: 2,
-        principal: None,
+        node: None,
         local_did: String::new(),
-        default_behavior_id: "code".to_string(),
-        behaviors: HashMap::new(),
+        default_agent_id: "code".to_string(),
+        agents: HashMap::new(),
         tool_surfaces: HashMap::new(),
         backend_admission_configs: HashMap::new(),
-        unavailable_behaviors: HashMap::new(),
+        unavailable_agents: HashMap::new(),
         active_schedules: HashMap::new(),
         unavailable_schedules: std::collections::HashSet::new(),
         active_event_triggers: HashMap::new(),
         unavailable_event_triggers: std::collections::HashSet::new(),
         active_tasks: HashMap::new(),
         dispatchers: HashMap::new(),
-        behavior_executor_capacities: HashMap::new(),
-        behavior_executor_queue_capacities: HashMap::new(),
+        agent_executor_capacities: HashMap::new(),
+        agent_executor_queue_capacities: HashMap::new(),
     });
     let (active_tx, mut active_rx) = watch::channel(initial_snapshot);
     let (_shutdown_tx, mut shutdown_rx) = watch::channel(false);
@@ -351,17 +351,16 @@ async fn router_holds_request_during_generation_handoff_and_dispatches_after_ali
     let mut routed_request = request(Some("code"), "session-router");
     routed_request.doc_id = "doc-router".to_string();
     routed_request.request_id = "req-router".to_string();
-    routed_request.agent_did = agent_did.to_string();
+    routed_request.node_did = node_did.to_string();
     watcher_tx.send(Ok(routed_request)).await.unwrap();
     let admission_gate = RuntimeAdmissionGate::closed();
     admission_gate.open().await;
     let mut admission_rx = admission_gate.subscribe();
-    let (_readiness_tx, mut readiness_rx) = watch::channel(
-        crate::behavior_readiness_publisher::BehaviorAdmissionObservation::for_test(2, []),
-    );
+    let (_readiness_tx, mut readiness_rx) =
+        watch::channel(crate::node_readiness_publisher::AgentAdmissionObservation::for_test(2, []));
     let (request, routed_snapshot, routed_observation) = {
         let wait = wait_for_next_request_with_latest_snapshot(
-            agent_did,
+            node_did,
             &mut watcher,
             &mut active_snapshot,
             &mut active_rx,
@@ -388,12 +387,12 @@ async fn router_holds_request_during_generation_handoff_and_dispatches_after_ali
     assert_eq!(request.request_id, "req-router");
     assert_eq!(routed_observation.source_generation(), 2);
     assert_eq!(routed_snapshot.generation, 2);
-    assert_eq!(routed_snapshot.default_behavior_id, "code");
+    assert_eq!(routed_snapshot.default_agent_id, "code");
     assert_eq!(
         active_snapshot.generation,
         accept.post_router_generation as u64
     );
-    assert_eq!(active_snapshot.default_behavior_id, "code");
+    assert_eq!(active_snapshot.default_agent_id, "code");
 }
 
 #[tokio::test]
@@ -403,19 +402,19 @@ async fn router_publishes_observed_generation_without_waiting_for_request() {
 
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let agent_did = "did:test:router-observed-generation";
+    let node_did = "did:test:router-observed-generation";
     let initial_snapshot = Arc::new(crate::runtime_snapshot::ActiveRuntimeSnapshot {
         generation: 1,
-        principal: None,
+        node: None,
         local_did: String::new(),
-        default_behavior_id: "general".to_string(),
-        behaviors: HashMap::new(),
+        default_agent_id: "general".to_string(),
+        agents: HashMap::new(),
         tool_surfaces: HashMap::new(),
         backend_admission_configs: HashMap::new(),
-        unavailable_behaviors: HashMap::from([(
+        unavailable_agents: HashMap::from([(
             "general".to_string(),
-            crate::runtime_snapshot::UnavailableBehavior::new(
-                gents_protocol::row::BehaviorReadinessUnavailableReason::RuntimeConfigurationInvalid,
+            crate::runtime_snapshot::UnavailableAgent::new(
+                gents_protocol::row::AgentReadinessUnavailableReason::RuntimeConfigurationInvalid,
                 "test fixture has no executor",
             ),
         )]),
@@ -425,21 +424,21 @@ async fn router_publishes_observed_generation_without_waiting_for_request() {
         unavailable_event_triggers: std::collections::HashSet::new(),
         active_tasks: HashMap::new(),
         dispatchers: HashMap::new(),
-        behavior_executor_capacities: HashMap::new(),
-        behavior_executor_queue_capacities: HashMap::new(),
+        agent_executor_capacities: HashMap::new(),
+        agent_executor_queue_capacities: HashMap::new(),
     });
     let updated_snapshot = Arc::new(crate::runtime_snapshot::ActiveRuntimeSnapshot {
         generation: 2,
-        principal: None,
+        node: None,
         local_did: String::new(),
-        default_behavior_id: "general".to_string(),
-        behaviors: HashMap::new(),
+        default_agent_id: "general".to_string(),
+        agents: HashMap::new(),
         tool_surfaces: HashMap::new(),
         backend_admission_configs: HashMap::new(),
-        unavailable_behaviors: HashMap::from([(
+        unavailable_agents: HashMap::from([(
             "general".to_string(),
-            crate::runtime_snapshot::UnavailableBehavior::new(
-                gents_protocol::row::BehaviorReadinessUnavailableReason::RuntimeConfigurationInvalid,
+            crate::runtime_snapshot::UnavailableAgent::new(
+                gents_protocol::row::AgentReadinessUnavailableReason::RuntimeConfigurationInvalid,
                 "test fixture has no executor",
             ),
         )]),
@@ -449,13 +448,13 @@ async fn router_publishes_observed_generation_without_waiting_for_request() {
         unavailable_event_triggers: std::collections::HashSet::new(),
         active_tasks: HashMap::new(),
         dispatchers: HashMap::new(),
-        behavior_executor_capacities: HashMap::new(),
-        behavior_executor_queue_capacities: HashMap::new(),
+        agent_executor_capacities: HashMap::new(),
+        agent_executor_queue_capacities: HashMap::new(),
     });
     let (active_tx, mut active_rx) = watch::channel(initial_snapshot.clone());
     let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
     let (runtime_status_owner, runtime_status) =
-        RuntimeStatusHandle::start_with_unbounded_test_clock(node.clone(), agent_did.to_string());
+        RuntimeStatusHandle::start_with_unbounded_test_clock(node.clone(), node_did.to_string());
     runtime_status.initialize_startup("general").await.unwrap();
     runtime_status
         .publish_startup_snapshot(initial_snapshot.as_ref())
@@ -472,7 +471,7 @@ async fn router_publishes_observed_generation_without_waiting_for_request() {
     let mut admission_rx = admission_gate.subscribe();
     let router_task = tokio::spawn(async move {
         wait_for_next_request_with_latest_snapshot(
-            agent_did,
+            node_did,
             &mut watcher,
             &mut active_snapshot,
             &mut active_rx,
@@ -495,34 +494,34 @@ async fn router_publishes_observed_generation_without_waiting_for_request() {
     active_tx.send(updated_snapshot).unwrap();
     tokio::task::yield_now().await;
 
-    let row = fetch_runtime_status(node.as_ref(), agent_did).await;
+    let row = fetch_runtime_status(node.as_ref(), node_did).await;
     assert_eq!(row.last_reconcile_result, "startup");
 
     let query = format!(
         r#"{{
-            AgentBehaviorReadiness(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}, limit: 1) {{
+            NodeReadiness(filter: {{ node_did: {{ _eq: "{node_did}" }} }}, limit: 1) {{
                 snapshot_json
             }}
         }}"#,
-        agent_did = escape_graphql_string(agent_did),
+        node_did = escape_graphql_string(node_did),
     );
     let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
     loop {
         let response = node.execute(&query).await;
         assert!(
             !response.has_errors(),
-            "AgentBehaviorReadiness router query failed: {:?}",
+            "NodeReadiness router query failed: {:?}",
             response.errors
         );
         let router_generation = response
             .data
             .as_ref()
-            .and_then(|data| data.get("AgentBehaviorReadiness"))
+            .and_then(|data| data.get("NodeReadiness"))
             .and_then(|rows| rows.as_array())
             .and_then(|rows| rows.first())
             .and_then(|row| row.get("snapshot_json"))
             .and_then(Value::as_str)
-            .and_then(|snapshot| serde_json::from_str::<BehaviorReadinessSnapshot>(snapshot).ok())
+            .and_then(|snapshot| serde_json::from_str::<NodeReadinessSnapshot>(snapshot).ok())
             .map(|snapshot| snapshot.router_generation)
             .unwrap_or_default();
         if router_generation == router.post_router_generation as u64 {

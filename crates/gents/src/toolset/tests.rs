@@ -158,18 +158,18 @@ async fn bash_schema_advertises_decoupled_default_and_max() {
 
 #[test]
 fn session_message_tools_follow_enabled_and_agent_new_needs_a_target() {
-    let disabled = SubagentToolConfig {
-        targets: subagent_targets("worker"),
+    let disabled = AgentToolConfig {
+        targets: agent_targets("worker"),
         enabled: false,
     };
-    assert!(subagent_tool_names(&disabled).is_empty());
+    assert!(agent_tool_names(&disabled).is_empty());
 
-    let no_targets = SubagentToolConfig {
+    let no_targets = AgentToolConfig {
         targets: Vec::new(),
         enabled: true,
     };
     assert_eq!(
-        subagent_tool_names(&no_targets),
+        agent_tool_names(&no_targets),
         AGENT_TOOL_NAMES
             .iter()
             .filter(|name| **name != AGENT_NEW_TOOL_NAME)
@@ -177,19 +177,19 @@ fn session_message_tools_follow_enabled_and_agent_new_needs_a_target() {
             .collect::<Vec<_>>()
     );
     assert_eq!(
-        build_subagent_tools(no_targets)
+        build_agent_tools(no_targets)
             .iter()
             .map(|tool| tool.name())
             .collect::<Vec<_>>(),
         ["agent_message", "agent_interrupt", "agent_list"]
     );
 
-    let enabled = SubagentToolConfig {
-        targets: subagent_targets("worker"),
+    let enabled = AgentToolConfig {
+        targets: agent_targets("worker"),
         enabled: true,
     };
     assert_eq!(
-        subagent_tool_names(&enabled),
+        agent_tool_names(&enabled),
         AGENT_TOOL_NAMES
             .iter()
             .map(|name| name.to_string())
@@ -278,11 +278,11 @@ async fn spawn_process_decodes_only_its_advertised_schema() {
 
 #[tokio::test]
 async fn session_message_tool_definitions_register_expected_surface() {
-    let config = SubagentToolConfig {
-        targets: subagent_targets("research"),
+    let config = AgentToolConfig {
+        targets: agent_targets("research"),
         enabled: true,
     };
-    let tools = build_subagent_tools(config);
+    let tools = build_agent_tools(config);
     let names = tools.iter().map(|tool| tool.name()).collect::<Vec<_>>();
     assert_eq!(
         names,
@@ -331,13 +331,13 @@ async fn session_message_tool_definitions_register_expected_surface() {
 }
 
 /// Build a single-target list for session-message tool tests. `name` doubles as the
-/// behavior id and the destination principal is the same fixed local owner.
-fn subagent_targets(name: &str) -> Vec<crate::document_config::SubagentTargetDocument> {
-    vec![crate::document_config::SubagentTargetDocument {
+/// agent id and the destination principal is the same fixed local owner.
+fn agent_targets(name: &str) -> Vec<crate::document_config::AgentTargetDocument> {
+    vec![crate::document_config::AgentTargetDocument {
         target_id: format!("{name}-target"),
-        agent_did: "did:key:zTest".to_string(),
-        target_agent_did: "did:key:zTest".to_string(),
-        behavior_id: name.to_string(),
+        node_did: "did:key:zTest".to_string(),
+        target_node_did: "did:key:zTest".to_string(),
+        agent_id: name.to_string(),
         name: name.to_string(),
         description: None,
         tags: Vec::new(),

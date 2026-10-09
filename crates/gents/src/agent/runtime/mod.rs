@@ -12,7 +12,7 @@ use crate::watcher::Watcher;
 #[cfg(test)]
 use control_watcher::{run_control_watcher_with_timing, ControlWatcherTiming};
 #[cfg(test)]
-use router::{resolve_behavior_for_request, wait_for_next_request_with_latest_snapshot};
+use router::{resolve_agent_for_request, wait_for_next_request_with_latest_snapshot};
 #[cfg(test)]
 pub(in crate::agent) use router::{run_router_with_watcher, RuntimeAdmissionGate};
 #[cfg(test)]

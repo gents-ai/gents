@@ -1,4 +1,4 @@
-//! Single ordered owner of durable runtime behavior readiness.
+//! Single ordered owner of durable runtime agent readiness.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -7,8 +7,8 @@ use std::time::Duration;
 use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
 use gents_protocol::row::{
-    project_behavior_readiness_source, BehaviorReadinessProcessState, BehaviorReadinessSnapshot,
-    BehaviorReadinessSourceEntry, BehaviorReadinessUnavailableReason,
+    project_node_readiness_source, AgentReadinessSourceEntry, AgentReadinessUnavailableReason,
+    NodeReadinessProcessState, NodeReadinessSnapshot,
 };
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio_util::sync::CancellationToken;
@@ -18,19 +18,19 @@ use crate::graphql::escape_graphql_string;
 use crate::runtime_snapshot::ActiveRuntimeSnapshot;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct BehaviorAdmissionObservation {
-    process_state: BehaviorReadinessProcessState,
+pub(crate) struct AgentAdmissionObservation {
+    process_state: NodeReadinessProcessState,
     source_generation: u64,
     demotions: BTreeMap<String, String>,
 }
 
-impl BehaviorAdmissionObservation {
-    pub(crate) fn process_state(&self) -> BehaviorReadinessProcessState {
+impl AgentAdmissionObservation {
+    pub(crate) fn process_state(&self) -> NodeReadinessProcessState {
         self.process_state
     }
 
-    pub(crate) fn demotion_reason(&self, behavior_id: &str) -> Option<&str> {
-        self.demotions.get(behavior_id).map(String::as_str)
+    pub(crate) fn demotion_reason(&self, agent_id: &str) -> Option<&str> {
+        self.demotions.get(agent_id).map(String::as_str)
     }
 
     pub(crate) fn source_generation(&self) -> u64 {
@@ -47,17 +47,17 @@ impl BehaviorAdmissionObservation {
         demotions: impl IntoIterator<Item = (String, String)>,
     ) -> Self {
         Self {
-            process_state: BehaviorReadinessProcessState::Ready,
+            process_state: NodeReadinessProcessState::Ready,
             source_generation,
             demotions: demotions.into_iter().collect(),
         }
     }
 }
 
-impl Default for BehaviorAdmissionObservation {
+impl Default for AgentAdmissionObservation {
     fn default() -> Self {
         Self {
-            process_state: BehaviorReadinessProcessState::Uninitialized,
+            process_state: NodeReadinessProcessState::Uninitialized,
             source_generation: 0,
             demotions: BTreeMap::new(),
         }
@@ -65,14 +65,14 @@ impl Default for BehaviorAdmissionObservation {
 }
 
 #[derive(Clone)]
-pub(crate) struct BehaviorReadinessPublisherHandle {
+pub(crate) struct NodeReadinessPublisherHandle {
     commands: mpsc::Sender<Command>,
-    observation: watch::Receiver<BehaviorAdmissionObservation>,
+    observation: watch::Receiver<AgentAdmissionObservation>,
     cancel: CancellationToken,
     command_timeout: Option<Duration>,
 }
 
-pub(crate) struct BehaviorReadinessPublisherOwner {
+pub(crate) struct NodeReadinessPublisherOwner {
     commands: mpsc::Sender<Command>,
     cancel: CancellationToken,
     close_timeout: Option<Duration>,
@@ -84,69 +84,69 @@ const MIN_PERSIST_ATTEMPT_TIMEOUT: Duration = Duration::from_millis(250);
 const PRODUCTION_PERSIST_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[async_trait::async_trait]
-pub(crate) trait BehaviorReadinessWriter: Send + Sync {
+pub(crate) trait NodeReadinessWriter: Send + Sync {
     async fn upsert(
         &self,
-        agent_did: &str,
-        snapshot: &BehaviorReadinessSnapshot,
+        node_did: &str,
+        snapshot: &NodeReadinessSnapshot,
         updated_at: &str,
     ) -> Result<()>;
 }
 
-struct DefraBehaviorReadinessWriter {
+struct DefraNodeReadinessWriter {
     node: Arc<defra_node::EmbeddedNode>,
 }
 
 #[async_trait::async_trait]
-impl BehaviorReadinessWriter for DefraBehaviorReadinessWriter {
+impl NodeReadinessWriter for DefraNodeReadinessWriter {
     async fn upsert(
         &self,
-        agent_did: &str,
-        snapshot: &BehaviorReadinessSnapshot,
+        node_did: &str,
+        snapshot: &NodeReadinessSnapshot,
         updated_at: &str,
     ) -> Result<()> {
-        upsert_behavior_readiness(self.node.as_ref(), agent_did, snapshot, updated_at).await
+        upsert_node_readiness(self.node.as_ref(), node_did, snapshot, updated_at).await
     }
 }
 
 #[derive(Clone)]
 struct ReadinessSource {
     active_generation: u64,
-    default_behavior_id: String,
-    entries: BTreeMap<String, BehaviorReadinessSourceEntry>,
+    default_agent_id: String,
+    entries: BTreeMap<String, AgentReadinessSourceEntry>,
     slot_generations: BTreeMap<String, u64>,
 }
 
 #[derive(Clone)]
 struct PublisherState {
-    agent_did: String,
-    process_state: BehaviorReadinessProcessState,
+    node_did: String,
+    process_state: NodeReadinessProcessState,
     router_generation: u64,
     source: Option<ReadinessSource>,
     registered_slots: BTreeSet<(String, u64)>,
     demotions: BTreeMap<(String, u64), String>,
-    persisted: Option<BehaviorReadinessSnapshot>,
+    persisted: Option<NodeReadinessSnapshot>,
     updated_at: String,
     persist_attempt_timeout: Option<Duration>,
 }
 
 #[cfg(test)]
 #[derive(Debug)]
-pub(crate) struct FatalBehaviorReadinessWrite;
+pub(crate) struct FatalNodeReadinessWrite;
 
 #[cfg(test)]
-impl std::fmt::Display for FatalBehaviorReadinessWrite {
+impl std::fmt::Display for FatalNodeReadinessWrite {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("injected fatal behavior readiness write")
+        formatter.write_str("injected fatal agent readiness write")
     }
 }
 
 #[cfg(test)]
-impl std::error::Error for FatalBehaviorReadinessWrite {}
+impl std::error::Error for FatalNodeReadinessWrite {}
 
 enum Command {
     Initialize {
-        default_behavior_id: String,
+        default_agent_id: String,
         ack: oneshot::Sender<Result<()>>,
     },
     PublishSource {
@@ -154,7 +154,7 @@ enum Command {
         ack: oneshot::Sender<Result<()>>,
     },
     SetProcess {
-        state: BehaviorReadinessProcessState,
+        state: NodeReadinessProcessState,
         ack: oneshot::Sender<Result<()>>,
     },
     SetRouterGeneration {
@@ -162,23 +162,23 @@ enum Command {
         ack: oneshot::Sender<Result<()>>,
     },
     RegisterSlot {
-        behavior_id: String,
+        agent_id: String,
         generation: u64,
         ack: oneshot::Sender<Result<()>>,
     },
     MarkSlotReady {
-        behavior_id: String,
+        agent_id: String,
         generation: u64,
         ack: oneshot::Sender<Result<bool>>,
     },
     DemoteSlot {
-        behavior_id: String,
+        agent_id: String,
         generation: u64,
         diagnostic: String,
         ack: oneshot::Sender<Result<bool>>,
     },
     RetireSlot {
-        behavior_id: String,
+        agent_id: String,
         generation: u64,
         ack: oneshot::Sender<Result<bool>>,
     },
@@ -187,14 +187,14 @@ enum Command {
     },
 }
 
-impl BehaviorReadinessPublisherHandle {
+impl NodeReadinessPublisherHandle {
     pub(crate) fn start(
         node: Arc<defra_node::EmbeddedNode>,
-        agent_did: impl Into<String>,
-    ) -> (BehaviorReadinessPublisherOwner, Self) {
+        node_did: impl Into<String>,
+    ) -> (NodeReadinessPublisherOwner, Self) {
         Self::start_with_writer_and_timeout(
-            Arc::new(DefraBehaviorReadinessWriter { node }),
-            agent_did,
+            Arc::new(DefraNodeReadinessWriter { node }),
+            node_did,
             Duration::from_secs(1),
             Some(PRODUCTION_PERSIST_ATTEMPT_TIMEOUT),
         )
@@ -202,16 +202,16 @@ impl BehaviorReadinessPublisherHandle {
 
     #[cfg(test)]
     pub(crate) fn start_with_writer(
-        writer: Arc<dyn BehaviorReadinessWriter>,
-        agent_did: impl Into<String>,
+        writer: Arc<dyn NodeReadinessWriter>,
+        node_did: impl Into<String>,
         retry_delay: Duration,
-    ) -> (BehaviorReadinessPublisherOwner, Self) {
+    ) -> (NodeReadinessPublisherOwner, Self) {
         let persist_attempt_timeout = retry_delay
             .saturating_mul(MAX_PERSIST_ATTEMPTS as u32)
             .max(MIN_PERSIST_ATTEMPT_TIMEOUT);
         Self::start_with_writer_and_timeout(
             writer,
-            agent_did,
+            node_did,
             retry_delay,
             Some(persist_attempt_timeout),
         )
@@ -220,24 +220,24 @@ impl BehaviorReadinessPublisherHandle {
     #[cfg(test)]
     pub(crate) fn start_with_unbounded_test_clock(
         node: Arc<defra_node::EmbeddedNode>,
-        agent_did: impl Into<String>,
-    ) -> (BehaviorReadinessPublisherOwner, Self) {
+        node_did: impl Into<String>,
+    ) -> (NodeReadinessPublisherOwner, Self) {
         Self::start_with_writer_and_timeout(
-            Arc::new(DefraBehaviorReadinessWriter { node }),
-            agent_did,
+            Arc::new(DefraNodeReadinessWriter { node }),
+            node_did,
             Duration::from_secs(1),
             None,
         )
     }
 
     fn start_with_writer_and_timeout(
-        writer: Arc<dyn BehaviorReadinessWriter>,
-        agent_did: impl Into<String>,
+        writer: Arc<dyn NodeReadinessWriter>,
+        node_did: impl Into<String>,
         retry_delay: Duration,
         persist_attempt_timeout: Option<Duration>,
-    ) -> (BehaviorReadinessPublisherOwner, Self) {
+    ) -> (NodeReadinessPublisherOwner, Self) {
         let (commands, receiver) = mpsc::channel(64);
-        let (observation_tx, observation) = watch::channel(BehaviorAdmissionObservation::default());
+        let (observation_tx, observation) = watch::channel(AgentAdmissionObservation::default());
         let cancel = CancellationToken::new();
         let command_timeout = persist_attempt_timeout.map(|attempt_timeout| {
             attempt_timeout
@@ -248,8 +248,8 @@ impl BehaviorReadinessPublisherHandle {
         let task = tokio::spawn(run_publisher(
             writer,
             PublisherState {
-                agent_did: agent_did.into(),
-                process_state: BehaviorReadinessProcessState::Uninitialized,
+                node_did: node_did.into(),
+                process_state: NodeReadinessProcessState::Uninitialized,
                 router_generation: 0,
                 source: None,
                 registered_slots: BTreeSet::new(),
@@ -264,7 +264,7 @@ impl BehaviorReadinessPublisherHandle {
             cancel.clone(),
         ));
         (
-            BehaviorReadinessPublisherOwner {
+            NodeReadinessPublisherOwner {
                 commands: commands.clone(),
                 cancel: cancel.clone(),
                 close_timeout: command_timeout,
@@ -279,48 +279,48 @@ impl BehaviorReadinessPublisherHandle {
         )
     }
 
-    pub(crate) fn observation(&self) -> BehaviorAdmissionObservation {
+    pub(crate) fn observation(&self) -> AgentAdmissionObservation {
         self.observation.borrow().clone()
     }
 
-    pub(crate) fn subscribe_observation(&self) -> watch::Receiver<BehaviorAdmissionObservation> {
+    pub(crate) fn subscribe_observation(&self) -> watch::Receiver<AgentAdmissionObservation> {
         self.observation.clone()
     }
 
-    pub(crate) async fn initialize(&self, default_behavior_id: &str) -> Result<()> {
+    pub(crate) async fn initialize(&self, default_agent_id: &str) -> Result<()> {
         self.send(|ack| Command::Initialize {
-            default_behavior_id: default_behavior_id.to_string(),
+            default_agent_id: default_agent_id.to_string(),
             ack,
         })
         .await
     }
 
     pub(crate) async fn publish_snapshot(&self, snapshot: &ActiveRuntimeSnapshot) -> Result<()> {
-        let behavior_ids = snapshot
+        let agent_ids = snapshot
             .dispatchers
             .keys()
-            .chain(snapshot.unavailable_behaviors.keys())
+            .chain(snapshot.unavailable_agents.keys())
             .cloned()
             .collect::<std::collections::BTreeSet<_>>();
-        let entries = behavior_ids
+        let entries = agent_ids
             .into_iter()
-            .map(|behavior_id| {
-                let entry = BehaviorReadinessSourceEntry {
-                    behavior_id: behavior_id.clone(),
-                    dispatcher_present: snapshot.dispatchers.contains_key(&behavior_id),
+            .map(|agent_id| {
+                let entry = AgentReadinessSourceEntry {
+                    agent_id: agent_id.clone(),
+                    dispatcher_present: snapshot.dispatchers.contains_key(&agent_id),
                     unavailable_reason: snapshot
-                        .unavailable_behaviors
-                        .get(&behavior_id)
+                        .unavailable_agents
+                        .get(&agent_id)
                         .map(|unavailable| unavailable.public_reason),
                     startup_demoted: false,
                 };
-                (behavior_id, entry)
+                (agent_id, entry)
             })
             .collect();
         self.send(|ack| Command::PublishSource {
             source: ReadinessSource {
                 active_generation: snapshot.generation,
-                default_behavior_id: snapshot.default_behavior_id.clone(),
+                default_agent_id: snapshot.default_agent_id.clone(),
                 entries,
                 slot_generations: BTreeMap::new(),
             },
@@ -342,18 +342,18 @@ impl BehaviorReadinessPublisherHandle {
             .await
     }
 
-    pub(crate) async fn register_slot(&self, behavior_id: &str, generation: u64) -> Result<()> {
+    pub(crate) async fn register_slot(&self, agent_id: &str, generation: u64) -> Result<()> {
         self.send(|ack| Command::RegisterSlot {
-            behavior_id: behavior_id.to_string(),
+            agent_id: agent_id.to_string(),
             generation,
             ack,
         })
         .await
     }
 
-    pub(crate) async fn mark_slot_ready(&self, behavior_id: &str, generation: u64) -> Result<bool> {
+    pub(crate) async fn mark_slot_ready(&self, agent_id: &str, generation: u64) -> Result<bool> {
         self.send(|ack| Command::MarkSlotReady {
-            behavior_id: behavior_id.to_string(),
+            agent_id: agent_id.to_string(),
             generation,
             ack,
         })
@@ -362,12 +362,12 @@ impl BehaviorReadinessPublisherHandle {
 
     pub(crate) async fn demote_slot(
         &self,
-        behavior_id: &str,
+        agent_id: &str,
         generation: u64,
         diagnostic: String,
     ) -> Result<bool> {
         self.send(|ack| Command::DemoteSlot {
-            behavior_id: behavior_id.to_string(),
+            agent_id: agent_id.to_string(),
             generation,
             diagnostic,
             ack,
@@ -375,9 +375,9 @@ impl BehaviorReadinessPublisherHandle {
         .await
     }
 
-    pub(crate) async fn retire_slot(&self, behavior_id: &str, generation: u64) -> Result<bool> {
+    pub(crate) async fn retire_slot(&self, agent_id: &str, generation: u64) -> Result<bool> {
         self.send(|ack| Command::RetireSlot {
-            behavior_id: behavior_id.to_string(),
+            agent_id: agent_id.to_string(),
             generation,
             ack,
         })
@@ -390,7 +390,7 @@ impl BehaviorReadinessPublisherHandle {
     ) -> Result<T> {
         let (ack, result) = oneshot::channel();
         if self.cancel.is_cancelled() {
-            return Err(anyhow!("behavior readiness publisher stopped"));
+            return Err(anyhow!("agent readiness publisher stopped"));
         }
         let enqueue = async { self.commands.send(command(ack)).await };
         let enqueue_result = match self.command_timeout {
@@ -399,7 +399,7 @@ impl BehaviorReadinessPublisherHandle {
                 Err(_) => {
                     self.cancel.cancel();
                     return Err(anyhow!(
-                        "behavior readiness publisher command enqueue timed out"
+                        "agent readiness publisher command enqueue timed out"
                     ));
                 }
             },
@@ -407,7 +407,7 @@ impl BehaviorReadinessPublisherHandle {
         };
         match enqueue_result {
             Ok(()) => {}
-            Err(_) => return Err(anyhow!("behavior readiness publisher stopped")),
+            Err(_) => return Err(anyhow!("agent readiness publisher stopped")),
         }
         let acknowledgement = async { result.await };
         let acknowledgement_result = match self.command_timeout {
@@ -416,7 +416,7 @@ impl BehaviorReadinessPublisherHandle {
                 Err(_) => {
                     self.cancel.cancel();
                     return Err(anyhow!(
-                        "behavior readiness publisher command acknowledgement timed out"
+                        "agent readiness publisher command acknowledgement timed out"
                     ));
                 }
             },
@@ -424,29 +424,27 @@ impl BehaviorReadinessPublisherHandle {
         };
         match acknowledgement_result {
             Ok(result) => result,
-            Err(_) => Err(anyhow!(
-                "behavior readiness publisher dropped acknowledgement"
-            )),
+            Err(_) => Err(anyhow!("agent readiness publisher dropped acknowledgement")),
         }
     }
 }
 
-impl BehaviorReadinessPublisherOwner {
+impl NodeReadinessPublisherOwner {
     pub(crate) async fn close(self) -> Result<()> {
         let (ack, result) = oneshot::channel();
         let close = async {
             self.commands
                 .send(Command::Close { ack })
                 .await
-                .map_err(|_| anyhow!("behavior readiness publisher stopped before close"))?;
-            result.await.map_err(|_| {
-                anyhow!("behavior readiness publisher dropped close acknowledgement")
-            })?
+                .map_err(|_| anyhow!("agent readiness publisher stopped before close"))?;
+            result
+                .await
+                .map_err(|_| anyhow!("agent readiness publisher dropped close acknowledgement"))?
         };
         let close_result = match self.close_timeout {
             Some(timeout) => match tokio::time::timeout(timeout, close).await {
                 Ok(result) => result,
-                Err(_) => Err(anyhow!("behavior readiness publisher close timed out")),
+                Err(_) => Err(anyhow!("agent readiness publisher close timed out")),
             },
             None => close.await,
         };
@@ -456,16 +454,16 @@ impl BehaviorReadinessPublisherOwner {
         let mut task = self.task;
         let joined = match self.close_timeout {
             Some(timeout) => match tokio::time::timeout(timeout, &mut task).await {
-                Ok(joined) => joined.context("join behavior readiness publisher")?,
+                Ok(joined) => joined.context("join agent readiness publisher")?,
                 Err(_) => {
                     task.abort();
                     let _ = task.await;
                     return Err(close_result.err().unwrap_or_else(|| {
-                        anyhow!("behavior readiness publisher task shutdown timed out")
+                        anyhow!("agent readiness publisher task shutdown timed out")
                     }));
                 }
             },
-            None => task.await.context("join behavior readiness publisher")?,
+            None => task.await.context("join agent readiness publisher")?,
         };
         close_result?;
         joined
@@ -473,10 +471,10 @@ impl BehaviorReadinessPublisherOwner {
 }
 
 async fn run_publisher(
-    writer: Arc<dyn BehaviorReadinessWriter>,
+    writer: Arc<dyn NodeReadinessWriter>,
     mut state: PublisherState,
     mut commands: mpsc::Receiver<Command>,
-    observation: watch::Sender<BehaviorAdmissionObservation>,
+    observation: watch::Sender<AgentAdmissionObservation>,
     retry_delay: Duration,
     cancel: CancellationToken,
 ) -> Result<()> {
@@ -487,29 +485,29 @@ async fn run_publisher(
             command = commands.recv() => match command {
                 Some(command) => command,
                 None => return Err(anyhow!(
-                    "behavior readiness publisher command channel closed"
+                    "agent readiness publisher command channel closed"
                 )),
             },
         };
         let close = matches!(&command, Command::Close { .. });
         match command {
             Command::Initialize {
-                default_behavior_id,
+                default_agent_id,
                 ack,
             } => {
                 let mut candidate = state.clone();
-                candidate.process_state = BehaviorReadinessProcessState::Recovering;
+                candidate.process_state = NodeReadinessProcessState::Recovering;
                 candidate.router_generation = 0;
                 candidate.source = Some(ReadinessSource {
                     active_generation: 0,
-                    default_behavior_id: default_behavior_id.clone(),
+                    default_agent_id: default_agent_id.clone(),
                     entries: BTreeMap::from([(
-                        default_behavior_id.clone(),
-                        BehaviorReadinessSourceEntry {
-                            behavior_id: default_behavior_id,
+                        default_agent_id.clone(),
+                        AgentReadinessSourceEntry {
+                            agent_id: default_agent_id,
                             dispatcher_present: false,
                             unavailable_reason: Some(
-                                BehaviorReadinessUnavailableReason::RuntimeConfigurationInvalid,
+                                AgentReadinessUnavailableReason::RuntimeConfigurationInvalid,
                             ),
                             startup_demoted: false,
                         },
@@ -534,14 +532,14 @@ async fn run_publisher(
                     .entries
                     .iter()
                     .filter(|(_, entry)| entry.dispatcher_present)
-                    .filter_map(|(behavior_id, _)| {
+                    .filter_map(|(agent_id, _)| {
                         candidate
                             .registered_slots
                             .iter()
-                            .filter(|(registered_id, _)| registered_id == behavior_id)
+                            .filter(|(registered_id, _)| registered_id == agent_id)
                             .map(|(_, generation)| *generation)
                             .max()
-                            .map(|generation| (behavior_id.clone(), generation))
+                            .map(|generation| (agent_id.clone(), generation))
                     })
                     .collect();
                 candidate.source = Some(source);
@@ -597,12 +595,12 @@ async fn run_publisher(
                 );
             }
             Command::RegisterSlot {
-                behavior_id,
+                agent_id,
                 generation,
                 ack,
             } => {
                 let mut candidate = state.clone();
-                candidate.registered_slots.insert((behavior_id, generation));
+                candidate.registered_slots.insert((agent_id, generation));
                 let _ = ack.send(
                     commit_candidate(
                         &writer,
@@ -616,18 +614,16 @@ async fn run_publisher(
                 );
             }
             Command::MarkSlotReady {
-                behavior_id,
+                agent_id,
                 generation,
                 ack,
             } => {
                 let applied = state
                     .registered_slots
-                    .contains(&(behavior_id.clone(), generation));
+                    .contains(&(agent_id.clone(), generation));
                 let mut candidate = state.clone();
                 if applied {
-                    candidate
-                        .demotions
-                        .remove(&(behavior_id.clone(), generation));
+                    candidate.demotions.remove(&(agent_id.clone(), generation));
                 }
                 let result = if applied {
                     commit_candidate(
@@ -646,19 +642,19 @@ async fn run_publisher(
                 let _ = ack.send(result);
             }
             Command::DemoteSlot {
-                behavior_id,
+                agent_id,
                 generation,
                 diagnostic,
                 ack,
             } => {
                 let applied = state
                     .registered_slots
-                    .contains(&(behavior_id.clone(), generation));
+                    .contains(&(agent_id.clone(), generation));
                 let mut candidate = state.clone();
                 if applied {
                     candidate
                         .demotions
-                        .insert((behavior_id, generation), diagnostic);
+                        .insert((agent_id, generation), diagnostic);
                 }
                 let result = if applied {
                     commit_candidate(
@@ -677,34 +673,34 @@ async fn run_publisher(
                 let _ = ack.send(result);
             }
             Command::RetireSlot {
-                behavior_id,
+                agent_id,
                 generation,
                 ack,
             } => {
                 let applied = state
                     .registered_slots
-                    .contains(&(behavior_id.clone(), generation));
+                    .contains(&(agent_id.clone(), generation));
                 let mut candidate = state.clone();
                 if applied {
                     candidate
                         .registered_slots
-                        .remove(&(behavior_id.clone(), generation));
+                        .remove(&(agent_id.clone(), generation));
                     let source_uses_slot = candidate.source.as_ref().is_some_and(|source| {
-                        source.slot_generations.get(&behavior_id) == Some(&generation)
+                        source.slot_generations.get(&agent_id) == Some(&generation)
                     });
                     if source_uses_slot {
                         let source = candidate
                             .source
                             .as_mut()
                             .expect("source slot mapping implies initialized source");
-                        source.slot_generations.remove(&behavior_id);
-                        if let Some(entry) = source.entries.get_mut(&behavior_id) {
+                        source.slot_generations.remove(&agent_id);
+                        if let Some(entry) = source.entries.get_mut(&agent_id) {
                             entry.dispatcher_present = false;
                             entry.unavailable_reason =
-                                Some(BehaviorReadinessUnavailableReason::ExecutorStartFailed);
+                                Some(AgentReadinessUnavailableReason::ExecutorStartFailed);
                         }
                     }
-                    candidate.demotions.remove(&(behavior_id, generation));
+                    candidate.demotions.remove(&(agent_id, generation));
                 }
                 let result = if applied {
                     commit_candidate(
@@ -733,10 +729,10 @@ async fn run_publisher(
 }
 
 async fn commit_candidate(
-    writer: &Arc<dyn BehaviorReadinessWriter>,
+    writer: &Arc<dyn NodeReadinessWriter>,
     state: &mut PublisherState,
     mut candidate: PublisherState,
-    observation: &watch::Sender<BehaviorAdmissionObservation>,
+    observation: &watch::Sender<AgentAdmissionObservation>,
     retry_delay: Duration,
     cancel: &CancellationToken,
 ) -> Result<()> {
@@ -749,32 +745,32 @@ async fn commit_candidate(
 }
 
 async fn persist_candidate(
-    writer: &Arc<dyn BehaviorReadinessWriter>,
+    writer: &Arc<dyn NodeReadinessWriter>,
     state: &mut PublisherState,
     retry_delay: Duration,
     cancel: &CancellationToken,
-) -> Result<BehaviorAdmissionObservation> {
+) -> Result<AgentAdmissionObservation> {
     let source = state
         .source
         .as_ref()
-        .ok_or_else(|| anyhow!("behavior readiness source is not initialized"))?;
+        .ok_or_else(|| anyhow!("agent readiness source is not initialized"))?;
     let sources = source.entries.values().cloned().map(|mut entry| {
         entry.startup_demoted =
             source
                 .slot_generations
-                .get(&entry.behavior_id)
+                .get(&entry.agent_id)
                 .is_some_and(|slot_generation| {
                     state
                         .demotions
-                        .contains_key(&(entry.behavior_id.clone(), *slot_generation))
+                        .contains_key(&(entry.agent_id.clone(), *slot_generation))
                 });
         entry
     });
-    let snapshot = project_behavior_readiness_source(
+    let snapshot = project_node_readiness_source(
         state.process_state,
         source.active_generation,
         state.router_generation,
-        source.default_behavior_id.clone(),
+        source.default_agent_id.clone(),
         sources,
     )
     .map_err(anyhow::Error::msg)?;
@@ -783,35 +779,34 @@ async fn persist_candidate(
         for attempt in 1..=MAX_PERSIST_ATTEMPTS {
             let write = tokio::select! {
                 _ = cancel.cancelled() => {
-                    return Err(anyhow!("behavior readiness persistence cancelled"));
+                    return Err(anyhow!("agent readiness persistence cancelled"));
                 }
                 result = async {
                     match state.persist_attempt_timeout {
                         Some(timeout) => tokio::time::timeout(
                             timeout,
-                            writer.upsert(&state.agent_did, &snapshot, &state.updated_at),
+                            writer.upsert(&state.node_did, &snapshot, &state.updated_at),
                         )
                         .await
-                        .map_err(|_| anyhow!("behavior readiness persistence attempt timed out"))?,
-                        None => writer.upsert(&state.agent_did, &snapshot, &state.updated_at).await,
+                        .map_err(|_| anyhow!("agent readiness persistence attempt timed out"))?,
+                        None => writer.upsert(&state.node_did, &snapshot, &state.updated_at).await,
                     }
                 } => result,
             };
             match write {
                 Ok(()) => break,
                 Err(error) => {
-                    if is_fatal_behavior_readiness_write(&error) || attempt == MAX_PERSIST_ATTEMPTS
-                    {
+                    if is_fatal_node_readiness_write(&error) || attempt == MAX_PERSIST_ATTEMPTS {
                         return Err(error);
                     }
                     tracing::warn!(
-                        agent_did = %state.agent_did,
+                        node_did = %state.node_did,
                         error = %error,
-                        "behavior readiness persistence failed; ordered owner will retry"
+                        "agent readiness persistence failed; ordered owner will retry"
                     );
                     tokio::select! {
                         _ = cancel.cancelled() => {
-                            return Err(anyhow!("behavior readiness persistence cancelled"));
+                            return Err(anyhow!("agent readiness persistence cancelled"));
                         }
                         _ = tokio::time::sleep(retry_delay) => {}
                     }
@@ -820,28 +815,26 @@ async fn persist_candidate(
         }
         state.persisted = Some(snapshot);
     }
-    Ok(BehaviorAdmissionObservation {
+    Ok(AgentAdmissionObservation {
         process_state: state.process_state,
         source_generation: source.active_generation,
         demotions: source
             .slot_generations
             .iter()
-            .filter_map(|(behavior_id, generation)| {
+            .filter_map(|(agent_id, generation)| {
                 state
                     .demotions
-                    .get(&(behavior_id.clone(), *generation))
-                    .map(|diagnostic| (behavior_id.clone(), diagnostic.clone()))
+                    .get(&(agent_id.clone(), *generation))
+                    .map(|diagnostic| (agent_id.clone(), diagnostic.clone()))
             })
             .collect(),
     })
 }
 
-fn is_fatal_behavior_readiness_write(error: &anyhow::Error) -> bool {
+fn is_fatal_node_readiness_write(error: &anyhow::Error) -> bool {
     #[cfg(test)]
     {
-        error
-            .downcast_ref::<FatalBehaviorReadinessWrite>()
-            .is_some()
+        error.downcast_ref::<FatalNodeReadinessWrite>().is_some()
     }
     #[cfg(not(test))]
     {
@@ -850,19 +843,19 @@ fn is_fatal_behavior_readiness_write(error: &anyhow::Error) -> bool {
     }
 }
 
-pub(crate) async fn upsert_behavior_readiness(
+pub(crate) async fn upsert_node_readiness(
     node: &defra_node::EmbeddedNode,
-    agent_did: &str,
-    snapshot: &BehaviorReadinessSnapshot,
+    node_did: &str,
+    snapshot: &NodeReadinessSnapshot,
     updated_at: &str,
 ) -> Result<()> {
     let snapshot_json = serde_json::to_string(snapshot)?;
     let mutation = format!(
         r#"mutation {{
-            upsert_AgentBehaviorReadiness(
-                filter: {{ agent_did: {{ _eq: "{agent_did}" }} }},
+            upsert_NodeReadiness(
+                filter: {{ node_did: {{ _eq: "{node_did}" }} }},
                 add: {{
-                    agent_did: "{agent_did}",
+                    node_did: "{node_did}",
                     snapshot_json: "{snapshot_json}",
                     updated_at: "{updated_at}"
                 }},
@@ -872,26 +865,23 @@ pub(crate) async fn upsert_behavior_readiness(
                 }}
             ) {{ _docID }}
         }}"#,
-        agent_did = escape_graphql_string(agent_did),
+        node_did = escape_graphql_string(node_did),
         snapshot_json = escape_graphql_string(&snapshot_json),
         updated_at = escape_graphql_string(updated_at),
     );
     let response = crate::config_client::ConfigAccess::write_local_response(
         node,
-        "upsert_behavior_readiness",
+        "upsert_node_readiness",
         &mutation,
     )
     .await?;
     if response.has_errors() {
-        anyhow::bail!(
-            "upsert AgentBehaviorReadiness failed: {:?}",
-            response.errors
-        );
+        anyhow::bail!("upsert NodeReadiness failed: {:?}", response.errors);
     }
     Ok(())
 }
 
-impl From<ProcessLifecycleState> for BehaviorReadinessProcessState {
+impl From<ProcessLifecycleState> for NodeReadinessProcessState {
     fn from(value: ProcessLifecycleState) -> Self {
         match value {
             ProcessLifecycleState::Uninitialized => Self::Uninitialized,
@@ -904,5 +894,5 @@ impl From<ProcessLifecycleState> for BehaviorReadinessProcessState {
 }
 
 #[cfg(test)]
-#[path = "behavior_readiness_publisher/tests.rs"]
+#[path = "node_readiness_publisher/tests.rs"]
 mod tests;

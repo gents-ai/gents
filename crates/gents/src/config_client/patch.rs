@@ -2,12 +2,12 @@
 //!
 //! Mirrors the Lean `SelfConfig` model (`proofs/Proofs/SelfConfig/`): each
 //! config collection has a declared writable field set; everything else —
-//! identity/unique keys, the owner `agent_did`, runtime-owned status fields,
+//! identity/unique keys, the owner `node_did`, runtime-owned status fields,
 //! secrets, apply-managed fields — is protected. A patch is an in-memory
 //! partial merge over exactly the writable fields ([`apply_patch`]), rejected
 //! wholesale if it names anything outside them ([`ensure_admissible`]),
 //! validated as a whole document, and committed through a
-//! [`super::ConfigApplyTxn`] under the agent DID.
+//! [`super::ConfigApplyTxn`] under the node DID.
 //!
 //! Desired-field selection and merge semantics are fenced against the Lean contract
 //! snapshot by `tests/conformance/self_config.rs`:
@@ -22,11 +22,11 @@ use serde_json::{Map, Value};
 /// Canonical self-configuration targets; collection metadata belongs to the shared catalog.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SelfConfigTarget {
-    AgentBehavior,
+    Agent,
     AgentContext,
     Compaction,
     Tools,
-    SubagentTarget,
+    AgentTarget,
     InferenceProfile,
     InferenceSampling,
     InferenceExecution,
@@ -41,21 +41,21 @@ pub enum SelfConfigTarget {
     Skill,
 }
 pub const SELF_CONFIG_CATEGORIES: [&str; 7] = [
-    "behavior",
+    "agent",
     "tools",
     "profile",
     "backend",
     "mcp_service",
     "automation",
-    "persona",
+    "node",
 ];
-pub const DEFAULT_SELF_CONFIG_CATEGORIES: [&str; 3] = ["behavior", "tools", "profile"];
+pub const DEFAULT_SELF_CONFIG_CATEGORIES: [&str; 3] = ["agent", "tools", "profile"];
 pub const ALL_SELF_CONFIG_TARGETS: [SelfConfigTarget; 17] = [
-    SelfConfigTarget::AgentBehavior,
+    SelfConfigTarget::Agent,
     SelfConfigTarget::AgentContext,
     SelfConfigTarget::Compaction,
     SelfConfigTarget::Tools,
-    SelfConfigTarget::SubagentTarget,
+    SelfConfigTarget::AgentTarget,
     SelfConfigTarget::InferenceProfile,
     SelfConfigTarget::InferenceSampling,
     SelfConfigTarget::InferenceExecution,
@@ -72,11 +72,11 @@ pub const ALL_SELF_CONFIG_TARGETS: [SelfConfigTarget; 17] = [
 impl SelfConfigTarget {
     pub fn collection(self) -> crate::Collection {
         match self {
-            Self::AgentBehavior => crate::Collection::AgentBehavior,
+            Self::Agent => crate::Collection::Agent,
             Self::AgentContext => crate::Collection::AgentContext,
             Self::Compaction => crate::Collection::Compaction,
             Self::Tools => crate::Collection::Tools,
-            Self::SubagentTarget => crate::Collection::SubagentTarget,
+            Self::AgentTarget => crate::Collection::AgentTarget,
             Self::InferenceProfile => crate::Collection::InferenceProfile,
             Self::InferenceSampling => crate::Collection::InferenceSampling,
             Self::InferenceExecution => crate::Collection::InferenceExecution,
@@ -104,10 +104,8 @@ impl SelfConfigTarget {
     }
     pub fn category(self) -> &'static str {
         match self {
-            Self::AgentBehavior | Self::AgentContext => "behavior",
-            Self::Tools | Self::SubagentTarget | Self::DatastoreToolSurface | Self::Skill => {
-                "tools"
-            }
+            Self::Agent | Self::AgentContext => "agent",
+            Self::Tools | Self::AgentTarget | Self::DatastoreToolSurface | Self::Skill => "tools",
             Self::Compaction
             | Self::InferenceProfile
             | Self::InferenceSampling
@@ -129,9 +127,9 @@ impl SelfConfigTarget {
             .copied()
             .filter(|field| {
                 *field != self.unique_field()
-                    && !(self == Self::Task && *field == "behavior_id")
+                    && !(self == Self::Task && *field == "agent_id")
                     && ![
-                        "agent_did",
+                        "node_did",
                         "created_at",
                         "updated_at",
                         "created_by",
@@ -166,8 +164,8 @@ pub fn ensure_admissible(target: SelfConfigTarget, patch: &SelfConfigPatch) -> R
     for (field, _) in patch {
         if !target.is_writable(field) {
             if target.all_fields().contains(&field.as_str()) {
-                let recovery = if target == SelfConfigTarget::Task && field == "behavior_id" {
-                    "; choose the task owner with options.behavior when creating it, not set.behavior_id. To run a different behavior, create a separate Task and Trigger; keep the current workflow until the replacement is valid"
+                let recovery = if target == SelfConfigTarget::Task && field == "agent_id" {
+                    "; choose the task owner with options.agent when creating it, not set.agent_id. To run a different agent, create a separate Task and Trigger; keep the current workflow until the replacement is valid"
                 } else if field == target.unique_field() {
                     "; put the document ID in target_id, not set. IDs cannot be changed by update"
                 } else {
@@ -179,10 +177,10 @@ pub fn ensure_admissible(target: SelfConfigTarget, patch: &SelfConfigPatch) -> R
                     collection = target.collection_name(),
                 );
             }
-            let recovery = if target == SelfConfigTarget::AgentBehavior
+            let recovery = if target == SelfConfigTarget::Agent
                 && matches!(field.as_str(), "system_prompt" | "instructions")
             {
-                "; prompts belong to Context.system_prompt: behavior get shows context_id, then context update that ID with set.system_prompt"
+                "; prompts belong to Context.system_prompt: agent get shows context_id, then context update that ID with set.system_prompt"
             } else if target == SelfConfigTarget::EventSource && field == "concurrency" {
                 "; concurrency belongs to Trigger: trigger list then trigger get shows source bindings; update the matching Trigger with set.concurrency"
             } else if target == SelfConfigTarget::Trigger && field == "emit_outcome" {
@@ -195,7 +193,7 @@ pub fn ensure_admissible(target: SelfConfigTarget, patch: &SelfConfigPatch) -> R
                 && matches!(field.as_str(), "root" | "files" | "bash")
             {
                 "; host tool fields belong inside set.host. Read tools get first and preserve the other fields in that group"
-            } else if target == SelfConfigTarget::SubagentTarget && field == "display_name" {
+            } else if target == SelfConfigTarget::AgentTarget && field == "display_name" {
                 "; use set.name for the name passed to agent_new"
             } else if target == SelfConfigTarget::DatastoreToolSurface && field == "name" {
                 "; use set.display_name for the surface label; each entry has its own tool_name"
@@ -300,8 +298,8 @@ mod tests {
                 target.collection_name()
             );
             assert!(
-                !writable.contains(&"agent_did"),
-                "{}: agent_did must never be writable",
+                !writable.contains(&"node_did"),
+                "{}: node_did must never be writable",
                 target.collection_name()
             );
         }
@@ -310,8 +308,8 @@ mod tests {
     #[test]
     fn merge_sets_clears_and_contains() {
         let doc = json!({
-            "behavior_id": "beh-1",
-            "agent_did": "did:key:z6M",
+            "agent_id": "beh-1",
+            "node_did": "did:key:z6M",
             "display_name": "old",
             "description": "m-small",
         });
@@ -321,19 +319,19 @@ mod tests {
         let patch: SelfConfigPatch = vec![
             ("display_name".to_string(), Some(json!("new"))),
             ("description".to_string(), None),
-            ("agent_did".to_string(), Some(json!("did:key:attacker"))),
+            ("node_did".to_string(), Some(json!("did:key:attacker"))),
         ];
-        let merged = apply_patch(SelfConfigTarget::AgentBehavior, &doc, &patch);
+        let merged = apply_patch(SelfConfigTarget::Agent, &doc, &patch);
         assert_eq!(merged.get("display_name"), Some(&json!("new")));
         assert!(!merged.contains_key("description"));
         assert_eq!(
-            merged.get("agent_did"),
+            merged.get("node_did"),
             Some(&json!("did:key:z6M")),
             "protected field must survive even an inadmissible entry"
         );
-        assert!(ensure_admissible(SelfConfigTarget::AgentBehavior, &patch).is_err());
+        assert!(ensure_admissible(SelfConfigTarget::Agent, &patch).is_err());
 
-        let deltas = diff_docs(SelfConfigTarget::AgentBehavior, &doc, &merged);
+        let deltas = diff_docs(SelfConfigTarget::Agent, &doc, &merged);
         assert_eq!(
             deltas,
             vec![

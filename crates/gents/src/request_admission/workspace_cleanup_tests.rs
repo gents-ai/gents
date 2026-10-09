@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use crate::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
-use crate::identity::{AgentIdentity, KeyIdentity};
+use crate::identity::{KeyIdentity, NodeIdentity};
 use crate::workspace::WorkspaceBindingDoc;
 
 #[derive(Clone, Copy, Debug)]
@@ -35,7 +35,7 @@ impl Fixture {
             "workspace-rejected-request",
             identity.did(),
             identity.did(),
-            "behavior",
+            "agent",
             "session",
             "work",
             "interactive",
@@ -43,7 +43,7 @@ impl Fixture {
             AgentRequestAdmissionRecord::local_self(identity.did()),
         );
         create.workspace_id = Some("cleanup-workspace".to_string());
-        create.workspace_owner_agent_did = Some(identity.did().to_string());
+        create.workspace_owner_node_did = Some(identity.did().to_string());
         create.workspace_authority = Some("readWrite".to_string());
         crate::sign_agent_request_create(&identity, &mut create)
             .await
@@ -65,7 +65,7 @@ impl Fixture {
             request_id: request.request_id.clone(),
             request_doc_id: doc_id,
             authority: "readWrite".to_string(),
-            owner_agent_did: identity.did().to_string(),
+            owner_node_did: identity.did().to_string(),
             seal_hash: None,
             lifecycle_state: "active".to_string(),
         };
@@ -92,8 +92,8 @@ impl Fixture {
     pub(crate) fn lifecycle(&self) -> crate::RequestLifecycle {
         crate::RequestLifecycle::new_with_execution_binding(
             self.node.clone(),
-            "behavior",
-            &self.request.agent_did,
+            "agent",
+            &self.request.node_did,
             self.request.clone(),
             60,
             crate::lifecycle::ExecutionOrigin::Interactive,
@@ -107,7 +107,7 @@ impl Fixture {
                 super::terminalize_pending_request_rejection(
                     &self.node,
                     &self.request.doc_id,
-                    &self.request.agent_did,
+                    &self.request.node_did,
                     "workspace placement is unavailable",
                     "test.workspace_rejection",
                 )
@@ -127,7 +127,7 @@ impl Fixture {
             &self.node,
             &format!(r#"{{
                 AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}) {{ lifecycle_state failure_reason terminal_output }}
-                WorkspaceBinding(order: {{ binding_id: ASC }}) {{ binding_id workspace_id request_id request_doc_id owner_agent_did authority lifecycle_state }}
+                WorkspaceBinding(order: {{ binding_id: ASC }}) {{ binding_id workspace_id request_id request_doc_id owner_node_did authority lifecycle_state }}
             }}"#),
             "test.workspace_rejection_observation",
         )
@@ -140,16 +140,16 @@ impl Fixture {
 
 #[tokio::test]
 async fn malformed_pending_request_still_rejects_without_cleanup_provenance() {
-    for field in ["request_id", "workspace_id", "workspace_owner_agent_did"] {
+    for field in ["request_id", "workspace_id", "workspace_owner_node_did"] {
         let mut fixture = Fixture::new().await;
         fixture.request.request_id = "malformed-workspace-request".to_string();
         let mut input = serde_json::json!({
             "request_id": fixture.request.request_id,
-            "agent_did": fixture.request.agent_did,
+            "node_did": fixture.request.node_did,
             "purpose": "normal",
             "lifecycle_state": "pending",
             "workspace_id": fixture.binding.workspace_id,
-            "workspace_owner_agent_did": fixture.binding.owner_agent_did,
+            "workspace_owner_node_did": fixture.binding.owner_node_did,
         });
         input[field] = Value::Null;
         let input = gents_protocol::graphql::graphql_input_literal(&input).unwrap();
@@ -192,17 +192,12 @@ async fn pending_rejection_releases_only_its_exact_binding_and_only_once() {
         RejectionOwner::ClaimAdmission,
     ] {
         let fixture = Fixture::new().await;
-        for field in [
-            "workspace",
-            "principal",
-            "logical_request",
-            "physical_request",
-        ] {
+        for field in ["workspace", "node", "logical_request", "physical_request"] {
             let mut foreign = fixture.binding.clone();
             foreign.binding_id = format!("foreign-{field}");
             match field {
                 "workspace" => foreign.workspace_id.push_str("-other"),
-                "principal" => foreign.owner_agent_did.push_str("-other"),
+                "node" => foreign.owner_node_did.push_str("-other"),
                 "logical_request" => foreign.request_id.push_str("-other"),
                 "physical_request" => foreign.request_doc_id.push_str("-other"),
                 _ => unreachable!(),

@@ -111,9 +111,9 @@ fn fixture_agent_request(
         purpose: gents_protocol::request_admission::RequestPurpose::Normal,
         doc_id,
         request_id: request_id.to_string(),
-        agent_did: "did:test:test".to_string(),
+        node_did: "did:test:test".to_string(),
         requester_did: None,
-        behavior_id: "general".to_string(),
+        agent_id: "general".to_string(),
         session_id: session_id.to_string(),
         content: content.to_string(),
         max_total_tokens: None,
@@ -124,7 +124,7 @@ fn fixture_agent_request(
         execution_generation: None,
         execution_lease_expires_at: None,
         execution_lease_secs: None,
-        subagent_depth: 0,
+        request_hop: 0,
         caused_by_parent_request_id: None,
         caused_by_parent_request_doc_id: None,
         caused_by_parent_tool_call_id: None,
@@ -135,7 +135,7 @@ fn fixture_agent_request(
         caused_by_correlation: None,
         caused_by_trigger_context: None,
         workspace_id: None,
-        workspace_owner_agent_did: None,
+        workspace_owner_node_did: None,
         workspace_authority: None,
         workspace_seal_hash: None,
     }
@@ -153,12 +153,8 @@ async fn first_visible_flushes_immediately_and_followup_waits_for_cadence() {
             .unwrap(),
     );
     ensure_runtime_schemas(&node).await.unwrap();
-    let hook = DefraSessionHook::with_identity(
-        node.clone(),
-        "general",
-        "did:test:test",
-        FailurePolicy::default(),
-    );
+    let hook =
+        DefraSessionHook::with_identity(node.clone(), "did:test:test", FailurePolicy::default());
     assert!(matches!(
         hook.on_completion_call(&user_text_message("cadence"), &[])
             .await,
@@ -281,12 +277,8 @@ async fn pre_stream_failures_do_not_fabricate_provider_attempt_closures() {
             .unwrap(),
     );
     ensure_runtime_schemas(&node).await.unwrap();
-    let hook = DefraSessionHook::with_identity(
-        node.clone(),
-        "general",
-        "did:test:test",
-        FailurePolicy::default(),
-    );
+    let hook =
+        DefraSessionHook::with_identity(node.clone(), "did:test:test", FailurePolicy::default());
     assert!(matches!(
         hook.on_completion_call(&user_text_message("retry provider"), &[])
             .await,
@@ -386,12 +378,8 @@ async fn persist_partial_turn_publishes_text_only_and_retains_partial_signature_
     );
     ensure_runtime_schemas(&node).await.unwrap();
 
-    let hook = DefraSessionHook::with_identity(
-        node.clone(),
-        "general",
-        "did:test:test",
-        FailurePolicy::default(),
-    );
+    let hook =
+        DefraSessionHook::with_identity(node.clone(), "did:test:test", FailurePolicy::default());
     assert!(matches!(
         hook.on_completion_call(&user_text_message("Inspect the repo"), &[])
             .await,
@@ -506,9 +494,9 @@ async fn persist_partial_turn_publishes_text_only_and_retains_partial_signature_
             request_doc_id: response_doc_id.clone(),
             request_commit_cid: "bafy-test-capture".into(),
             request_id: request_id.clone(),
-            agent_did: "did:test:test".into(),
+            node_did: "did:test:test".into(),
             requester_did: String::new(),
-            behavior_id: "general".into(),
+            agent_id: "general".into(),
             session_id: session_id.clone(),
             model_name: "claude".into(),
             provider_family: None,
@@ -678,10 +666,10 @@ async fn create_pending_request_with_input(
             create_AgentRequest(input: {{
                 request_id: "{request_id}",
                 purpose: "normal",
-                agent_did: "did:test:test",
-                behavior_id: "general",
+                node_did: "did:test:test",
+                agent_id: "general",
                 session_id: "{session_id}",
-                subagent_depth: 0,
+                request_hop: 0,
                 retry_parent_request: "",
                 retry_root_request: "{request_id}",
                 superseded_by_request: "",
@@ -754,7 +742,7 @@ async fn load_message_shapes(
         r#"{{
             AgentMessage(
                 filter: {{ session_id: {{ _eq: "{session_id}" }},
-                    agent_did: {{ _eq: "did:test:test" }}, requester_did: {{ _eq: null }} }},
+                    node_did: {{ _eq: "did:test:test" }}, requester_did: {{ _eq: null }} }},
                 order: {{ sequence: ASC }}
             ) {{ _docID }}
         }}"#
@@ -880,7 +868,6 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
 
     let hook = crate::hook::DefraSessionHook::with_identity(
         node.clone(),
-        "general",
         "did:test:test",
         FailurePolicy::default(),
     );
@@ -1076,12 +1063,8 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
     );
     ensure_runtime_schemas(&node).await.unwrap();
 
-    let hook = DefraSessionHook::with_identity(
-        node.clone(),
-        "general",
-        "did:test:test",
-        FailurePolicy::default(),
-    );
+    let hook =
+        DefraSessionHook::with_identity(node.clone(), "did:test:test", FailurePolicy::default());
     assert!(matches!(
         hook.on_completion_call(&user_text_message("read the source"), &[])
             .await,
@@ -1293,12 +1276,8 @@ async fn multiple_streamed_tool_results_share_one_accumulated_assistant_turn() {
     );
     ensure_runtime_schemas(&node).await.unwrap();
 
-    let hook = DefraSessionHook::with_identity(
-        node.clone(),
-        "general",
-        "did:test:test",
-        FailurePolicy::default(),
-    );
+    let hook =
+        DefraSessionHook::with_identity(node.clone(), "did:test:test", FailurePolicy::default());
     assert!(matches!(
         hook.on_completion_call(&user_text_message("read several files"), &[])
             .await,
@@ -1459,7 +1438,6 @@ async fn post_tool_resumption_keeps_each_provider_turn_separate() {
     // Set up session hook + establish session by persisting user message.
     let hook = crate::hook::DefraSessionHook::with_identity(
         node.clone(),
-        "general",
         "did:test:test",
         FailurePolicy::default(),
     );
@@ -1635,7 +1613,6 @@ async fn turn_retraction_retains_old_bytes_but_publishes_only_the_retry() {
 
     let hook = crate::hook::DefraSessionHook::with_identity(
         node.clone(),
-        "general",
         "did:test:test",
         FailurePolicy::default(),
     );
@@ -1829,12 +1806,8 @@ async fn corrupt_tool_call_arguments_persist_object_shaped() {
     );
     ensure_runtime_schemas(&node).await.unwrap();
 
-    let hook = DefraSessionHook::with_identity(
-        node.clone(),
-        "general",
-        "did:test:test",
-        FailurePolicy::default(),
-    );
+    let hook =
+        DefraSessionHook::with_identity(node.clone(), "did:test:test", FailurePolicy::default());
     assert!(matches!(
         hook.on_completion_call(&user_text_message("describe list_hosts"), &[])
             .await,

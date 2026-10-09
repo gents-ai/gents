@@ -52,9 +52,9 @@ pub(super) fn request(request_id: &str) -> AgentRequest {
         purpose: gents_protocol::request_admission::RequestPurpose::Normal,
         doc_id: format!("doc-{request_id}"),
         request_id: request_id.to_string(),
-        agent_did: "did:test:test".to_string(),
+        node_did: "did:test:test".to_string(),
         requester_did: None,
-        behavior_id: "default".to_string(),
+        agent_id: "default".to_string(),
         session_id: format!("session-{request_id}"),
         content: "hello".to_string(),
         max_total_tokens: None,
@@ -65,7 +65,7 @@ pub(super) fn request(request_id: &str) -> AgentRequest {
         execution_generation: None,
         execution_lease_expires_at: None,
         execution_lease_secs: None,
-        subagent_depth: 0,
+        request_hop: 0,
         caused_by_parent_request_id: None,
         caused_by_parent_request_doc_id: None,
         caused_by_parent_tool_call_id: None,
@@ -77,7 +77,7 @@ pub(super) fn request(request_id: &str) -> AgentRequest {
         caused_by_trigger_context: None,
         workspace_id: None,
         workspace_authority: None,
-        workspace_owner_agent_did: None,
+        workspace_owner_node_did: None,
         workspace_seal_hash: None,
     }
 }
@@ -254,10 +254,10 @@ async fn call_rows(node: &EmbeddedNode) -> Vec<Value> {
                 InferenceCall(order: { call_seq: ASC }) {
                     request_id
                     request_doc_id
-                    agent_did
+                    node_did
                     call_seq
                     backend_id
-                    behavior_id
+                    agent_id
                     call_kind
                     call_state
                     failure_reason
@@ -700,9 +700,9 @@ async fn missing_backend_persists_backend_gone_cancelled_terminal() {
     assert_eq!(rows[0]["failure_reason"], "BackendGone");
     // The terminal row must carry the request's principal and the physical
     // request edge: the restart recovery sweep selects stale rows by
-    // agent_did, so a misattributed BackendGone row would be unrecoverable
+    // node_did, so a misattributed BackendGone row would be unrecoverable
     // for its principal, and the logical request_id alone is not the edge.
-    assert_eq!(rows[0]["agent_did"], "did:test:test");
+    assert_eq!(rows[0]["node_did"], "did:test:test");
     assert_eq!(rows[0]["request_doc_id"], "doc-req-backend-gone");
     assert_reconstructed_slot_count(&rows, "missing", 0);
 }
@@ -1258,8 +1258,8 @@ fn pending_call(request_id: &str, backend_id: &str) -> super::controller::Pendin
         request_doc_id: format!("doc-{request_id}"),
         call_seq: 1,
         backend_id: backend_id.to_string(),
-        behavior_id: "default".to_string(),
-        agent_did: "did:test:test".to_string(),
+        agent_id: "default".to_string(),
+        node_did: "did:test:test".to_string(),
         call_kind: CallKind::Inference,
         attempt: 1,
     }

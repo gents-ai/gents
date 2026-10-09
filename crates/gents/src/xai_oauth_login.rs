@@ -281,12 +281,12 @@ pub fn xai_account_key(access_token: &str) -> Option<String> {
 }
 
 pub fn credential_from_login_tokens(
-    agent_did: impl Into<String>,
+    node_did: impl Into<String>,
     provider: impl Into<String>,
     tokens: &XaiLoginTokens,
     now: chrono::DateTime<Utc>,
 ) -> OAuthCredential {
-    let agent_did = agent_did.into();
+    let node_did = node_did.into();
     let provider = provider.into();
     let access_token_expires_at = crate::oauth_credential::resolve_access_token_expiry(
         &tokens.access_token,
@@ -296,8 +296,8 @@ pub fn credential_from_login_tokens(
 
     OAuthCredential {
         doc_id: None,
-        credential_id: oauth_credential_id(&agent_did, &provider),
-        agent_did,
+        credential_id: oauth_credential_id(&node_did, &provider),
+        node_did,
         provider,
         access_token: tokens.access_token.clone(),
         refresh_token: tokens.refresh_token.clone(),

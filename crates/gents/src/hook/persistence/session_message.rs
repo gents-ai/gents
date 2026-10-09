@@ -47,8 +47,8 @@ impl DefraSessionHook {
                 .context("session-message calling request disappeared")?;
         let tools = crate::session_message::load_caller_session_tools(
             &self.node,
-            &caller.agent_did,
-            &caller.behavior_id,
+            &caller.node_did,
+            &caller.agent_id,
         )
         .await?;
         if !tools.enabled {
@@ -58,7 +58,7 @@ impl DefraSessionHook {
                     tool_name,
                     "/",
                     tool_name,
-                    "the agents tools are not enabled for this behavior",
+                    "the agents tools are not enabled for this agent",
                     tools.target_names(),
                 )
             );
@@ -85,15 +85,13 @@ impl DefraSessionHook {
                         tool_name,
                         "/agent",
                         &agent,
-                        format!("'{agent}' is not an allowed agent for this behavior"),
+                        format!("'{agent}' is not an allowed agent for this agent"),
                         tools.target_names(),
                     )
                 );
             };
-            if target.target_agent_did == caller.agent_did
-                && load_agent_behavior(&self.node, &target.behavior_id)
-                    .await?
-                    .is_none()
+            if target.target_node_did == caller.node_did
+                && load_agent(&self.node, &target.agent_id).await?.is_none()
             {
                 refuse!(
                     FailureClass::ServiceUnavailable,
@@ -101,8 +99,8 @@ impl DefraSessionHook {
                         tool_name,
                         "/agent",
                         format!(
-                            "agent '{agent}' refers to behavior '{}' which no longer exists",
-                            target.behavior_id
+                            "agent '{agent}' refers to agent '{}' which no longer exists",
+                            target.agent_id
                         ),
                         false,
                     )
@@ -110,8 +108,8 @@ impl DefraSessionHook {
             }
             (
                 crate::lifecycle::SessionMessageTarget {
-                    agent_did: target.target_agent_did,
-                    behavior_id: target.behavior_id,
+                    node_did: target.target_node_did,
+                    agent_id: target.agent_id,
                     session_id: uuid::Uuid::new_v4().to_string(),
                 },
                 (parsed.prompt, parsed.task),
@@ -145,7 +143,7 @@ impl DefraSessionHook {
             }
             let Some(target) = crate::session_message::resolve_send_target(
                 &self.node,
-                &caller.agent_did,
+                &caller.node_did,
                 &tools,
                 &target_session,
             )
@@ -166,7 +164,7 @@ impl DefraSessionHook {
                 if let Some(reason) = crate::session_message::interrupt_refusal(
                     &self.node,
                     &crate::session_origin::SessionScope::of_request(&caller),
-                    &crate::session_message::target_scope(&caller.agent_did, &target),
+                    &crate::session_message::target_scope(&caller.node_did, &target),
                 )
                 .await?
                 {
@@ -200,11 +198,11 @@ impl DefraSessionHook {
                 background_budget_exceeded_payload(live)
             );
         }
-        let caller_hop = caller.subagent_depth;
+        let caller_hop = caller.request_hop;
         let rendered = match crate::session_message::render_body(
             &self.node,
-            &caller.agent_did,
-            &target.behavior_id,
+            &caller.node_did,
+            &target.agent_id,
             &target.session_id,
             body,
         )
@@ -222,7 +220,7 @@ impl DefraSessionHook {
             .context("session-message dispatch lacks its physical row")?
             .to_owned();
         let cause = crate::lifecycle::SessionMessageCause {
-            caller_agent_did: caller.agent_did.clone(),
+            caller_node_did: caller.node_did.clone(),
             caller_request_id: caller.request_id.clone(),
             caller_request_doc_id: caller.doc_id.clone(),
             caller_hop,
@@ -248,9 +246,9 @@ impl DefraSessionHook {
         };
         // A local target's own admission would refuse this hop; refuse the
         // call instead. A peer checks its own bound at admission.
-        if target.agent_did == caller.agent_did {
+        if target.node_did == caller.node_did {
             let max_request_hop =
-                crate::request_admission::max_request_hop(&self.node, &caller.agent_did).await?;
+                crate::request_admission::max_request_hop(&self.node, &caller.node_did).await?;
             if !crate::lifecycle::request_hop_within_bound(max_request_hop, plan.hop()) {
                 refuse!(
                     FailureClass::ArgumentInvalid,
@@ -286,7 +284,7 @@ impl DefraSessionHook {
         // so a failed commit never interrupts without delivering. The new
         // request waits behind the interrupted one.
         if interrupt {
-            let scope = crate::session_message::target_scope(&caller.agent_did, &target);
+            let scope = crate::session_message::target_scope(&caller.node_did, &target);
             if let Err(error) = crate::session_message::interrupt_session(&self.node, &scope).await
             {
                 tracing::warn!(
@@ -348,8 +346,8 @@ impl DefraSessionHook {
                 .context("agents tool calling request disappeared")?;
         let tools = crate::session_message::load_caller_session_tools(
             &self.node,
-            &caller.agent_did,
-            &caller.behavior_id,
+            &caller.node_did,
+            &caller.agent_id,
         )
         .await?;
         if !tools.enabled {
@@ -357,7 +355,7 @@ impl DefraSessionHook {
                 tool_name,
                 "/",
                 tool_name,
-                "the agents tools are not enabled for this behavior",
+                "the agents tools are not enabled for this agent",
                 tools.target_names(),
             ));
         }
@@ -388,7 +386,7 @@ impl DefraSessionHook {
         let session = parsed.session_id.trim();
         let Some(target) = crate::session_message::resolve_send_target(
             &self.node,
-            &caller.agent_did,
+            &caller.node_did,
             &tools,
             session,
         )
@@ -400,7 +398,7 @@ impl DefraSessionHook {
                 "only the session that started this session may interrupt it",
             ));
         };
-        let target = crate::session_message::target_scope(&caller.agent_did, &target);
+        let target = crate::session_message::target_scope(&caller.node_did, &target);
         if let Some(reason) = crate::session_message::interrupt_refusal(
             &self.node,
             &crate::session_origin::SessionScope::of_request(&caller),
@@ -441,7 +439,7 @@ fn hop_exceeded_payload(tool_name: &str, hop: u32, max_request_hop: u32) -> Stri
         "code": "request_hop_exceeded",
         "path": "/",
         "message": format!(
-            "this message would be hop {hop}, beyond the principal's max_request_hop {max_request_hop}"
+            "this message would be hop {hop}, beyond the node's max_request_hop {max_request_hop}"
         ),
         "retryable": false,
         "service_id": "session",

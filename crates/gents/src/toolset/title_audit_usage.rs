@@ -159,7 +159,7 @@ pub async fn load_parent_inclusive_audit_usage(
 ) -> Result<ParentAuditUsage> {
     let parent_doc_id = nonempty(exact_parent.doc_id.as_deref(), "parent physical request")?;
     let parent_id = nonempty(Some(&exact_parent.request_id), "parent logical request")?;
-    let agent = nonempty(exact_parent.agent_did.as_deref(), "parent agent")?;
+    let agent = nonempty(exact_parent.node_did.as_deref(), "parent agent")?;
     let session = nonempty(exact_parent.session_id.as_deref(), "parent session")?;
     let parent_doc = escape_graphql_string(parent_doc_id);
     let response = graphql_with_transaction_retry(
@@ -180,10 +180,10 @@ pub async fn load_parent_inclusive_audit_usage(
     anyhow::ensure!(
         parent.doc_id.as_deref() == Some(parent_doc_id)
             && parent.request_id == parent_id
-            && parent.agent_did.as_deref() == Some(agent)
+            && parent.node_did.as_deref() == Some(agent)
             && parent.session_id.as_deref() == Some(session)
             && parent.requester_did == exact_parent.requester_did
-            && parent.behavior_id == exact_parent.behavior_id
+            && parent.agent_id == exact_parent.agent_id
             && parent.purpose == Some(RequestPurpose::Normal),
         "audit usage parent crossed its exact normal request scope"
     );
@@ -221,7 +221,7 @@ pub async fn load_parent_inclusive_audit_usage(
     let response = graphql_with_transaction_retry(
         node,
         &format!(
-            r#"{{ InferenceCall(filter: {{ agent_did: {{ _eq: "{agent_filter}" }}, request_doc_id: {{ _in: [{docs}] }} }}) {{ _docID call_id request_doc_id request_id backend_id call_state ended_at prompt_tokens completion_tokens }} }}"#
+            r#"{{ InferenceCall(filter: {{ node_did: {{ _eq: "{agent_filter}" }}, request_doc_id: {{ _in: [{docs}] }} }}) {{ _docID call_id request_doc_id request_id backend_id call_state ended_at prompt_tokens completion_tokens }} }}"#
         ),
         "load exact parent and title inference usage",
     )

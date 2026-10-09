@@ -41,7 +41,7 @@ pub(crate) struct IsolatedWorkspaceRecord {
     pub workspace_id: String,
     pub work_unit_id: Option<String>,
     pub caused_by_invocation_id: Option<String>,
-    pub owner_agent_did: String,
+    pub owner_node_did: String,
     pub writer_principal: String,
     pub integrator_principal: String,
     pub lifecycle_state: String,
@@ -52,7 +52,7 @@ pub(crate) struct IsolatedWorkspaceRecord {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct WorkspacePlacementRecord {
     pub workspace_id: String,
-    pub owner_agent_did: String,
+    pub owner_node_did: String,
     pub host_path: String,
     pub observed_tree_hash: Option<String>,
 }
@@ -81,7 +81,7 @@ pub(crate) struct WorkspaceBindInput<'a> {
     pub authority: WorkspaceAuthority,
     pub seal_hash: Option<&'a str>,
     pub request_cwd: Option<&'a Path>,
-    pub agent_did: &'a str,
+    pub node_did: &'a str,
     pub operator_tool_root: Option<&'a Path>,
     pub workspace_write_sandbox_enforced: bool,
     pub live_tree_hash: Option<&'a str>,
@@ -98,12 +98,12 @@ pub(crate) fn workspace_authority_file_mode(authority: WorkspaceAuthority) -> Fi
 pub(crate) fn request_workspace_owner(request: &AgentRequest) -> Result<&str> {
     gents_protocol::request_admission::validate_workspace_reference(
         request.workspace_id.as_deref(),
-        request.workspace_owner_agent_did.as_deref(),
+        request.workspace_owner_node_did.as_deref(),
         request.workspace_authority.as_deref(),
         request.workspace_seal_hash.as_deref(),
     )?;
     request
-        .workspace_owner_agent_did
+        .workspace_owner_node_did
         .as_deref()
         .context("workspace owner principal is missing")
 }
@@ -172,7 +172,7 @@ async fn resolve_request_workspace_overlay_on_host(
         node,
         request,
         &workspace,
-        &workspace.owner_agent_did,
+        &workspace.owner_node_did,
         overlay.authority,
     )
     .await?;
@@ -183,7 +183,7 @@ async fn resolve_request_workspace_overlay_on_host(
                 request,
                 execution_generation,
                 &overlay.root,
-                &workspace.owner_agent_did,
+                &workspace.owner_node_did,
                 workspace
                     .seal_hash
                     .as_deref()
@@ -261,9 +261,9 @@ async fn load_request_workspace_overlay(
         load_isolated_workspace_record(node, workspace_id, request_workspace_owner(request)?)
             .await?
             .ok_or_else(|| anyhow!("isolated workspace {workspace_id} not found"))?;
-    require_workspace_principal(&workspace, &request.agent_did, authority)?;
-    let agent_did = request_workspace_owner(request)?;
-    let placement = load_workspace_placement(node, workspace_id, agent_did)
+    require_workspace_principal(&workspace, &request.node_did, authority)?;
+    let node_did = request_workspace_owner(request)?;
+    let placement = load_workspace_placement(node, workspace_id, node_did)
         .await?
         .ok_or_else(|| {
             anyhow!("workspace placement for {workspace_id} not found on this principal")
@@ -291,7 +291,7 @@ async fn load_request_workspace_overlay(
             authority,
             seal_hash: optional_id(request.workspace_seal_hash.as_deref()),
             request_cwd: request_cwd.as_deref(),
-            agent_did,
+            node_did,
             operator_tool_root,
             workspace_write_sandbox_enforced: sandbox_enforced,
             live_tree_hash: live_tree_hash.as_deref(),
@@ -331,8 +331,7 @@ pub(crate) fn bind_workspace_overlay(
         );
     }
     anyhow::ensure!(
-        workspace.owner_agent_did == input.agent_did
-            && placement.owner_agent_did == input.agent_did,
+        workspace.owner_node_did == input.node_did && placement.owner_node_did == input.node_did,
         "workspace and placement must match the signed workspace owner"
     );
 
@@ -469,18 +468,18 @@ async fn ensure_request_binding(
     node: &EmbeddedNode,
     request: &AgentRequest,
     workspace: &IsolatedWorkspaceRecord,
-    agent_did: &str,
+    node_did: &str,
     authority: WorkspaceAuthority,
 ) -> Result<()> {
     let existing =
-        load_workspace_bindings_for(node, &workspace.workspace_id, &workspace.owner_agent_did)
+        load_workspace_bindings_for(node, &workspace.workspace_id, &workspace.owner_node_did)
             .await?;
     let candidate = new_binding(
         &workspace.workspace_id,
         &request.request_id,
         &request.doc_id,
         authority,
-        agent_did,
+        node_did,
         optional_id(request.workspace_seal_hash.as_deref())
             .or(optional_id(workspace.seal_hash.as_deref())),
     );
@@ -545,7 +544,7 @@ pub(super) async fn previous_exclusive_is_stale(
         &active.request_doc_id,
         &active.request_id,
         workspace_id,
-        &active.owner_agent_did,
+        &active.owner_node_did,
     )
     .await?)
 }
@@ -562,7 +561,7 @@ async fn request_is_live(
     request_doc_id: &str,
     request_id: &str,
     workspace_id: &str,
-    agent_did: &str,
+    node_did: &str,
 ) -> Result<bool> {
     anyhow::ensure!(
         !request_doc_id.trim().is_empty(),
@@ -573,9 +572,9 @@ async fn request_is_live(
         r#"{{
             AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, limit: 1) {{
                 request_id
-                agent_did
+                node_did
                 lifecycle_state
-                workspace_id workspace_owner_agent_did
+                workspace_id workspace_owner_node_did
             }}
         }}"#
     );
@@ -587,9 +586,9 @@ async fn request_is_live(
     anyhow::ensure!(
         row.request_id == request_id
             && row.workspace_id.as_deref() == Some(workspace_id)
-            && row.workspace_owner_agent_did.as_deref() == Some(agent_did)
+            && row.workspace_owner_node_did.as_deref() == Some(node_did)
             && row
-                .agent_did
+                .node_did
                 .as_deref()
                 .is_some_and(|did| !did.trim().is_empty()),
         "workspace binding physical request has different logical identity or workspace owner"
@@ -600,21 +599,21 @@ async fn request_is_live(
 pub(super) async fn load_workspace_bindings_for(
     node: &EmbeddedNode,
     workspace_id: &str,
-    agent_did: &str,
+    node_did: &str,
 ) -> Result<Vec<WorkspaceBindingDoc>> {
-    let owner = escape_graphql_string(agent_did);
+    let owner = escape_graphql_string(node_did);
     let escaped = escape_graphql_string(workspace_id);
     let query = format!(
         r#"{{
             WorkspaceBinding(
-                filter: {{ workspace_id: {{ _eq: "{escaped}" }}, owner_agent_did: {{ _eq: "{owner}" }} }}
+                filter: {{ workspace_id: {{ _eq: "{escaped}" }}, owner_node_did: {{ _eq: "{owner}" }} }}
             ) {{
                 binding_id
                 workspace_id
                 request_id
                 request_doc_id
                 authority
-                owner_agent_did
+                owner_node_did
                 seal_hash
                 lifecycle_state
             }}
@@ -627,7 +626,7 @@ pub(super) async fn load_workspace_bindings_for(
             .iter()
             .all(|binding| binding.workspace_id == workspace_id
                 && !binding.request_doc_id.trim().is_empty()
-                && !binding.owner_agent_did.trim().is_empty()),
+                && !binding.owner_node_did.trim().is_empty()),
         "workspace binding is missing its physical request or principal identity"
     );
     Ok(bindings)
@@ -671,7 +670,7 @@ struct IsolatedWorkspaceRow {
     workspace_id: Option<String>,
     work_unit_id: Option<String>,
     caused_by_invocation_id: Option<String>,
-    owner_agent_did: Option<String>,
+    owner_node_did: Option<String>,
     writer_principal: Option<String>,
     integrator_principal: Option<String>,
     lifecycle_state: Option<String>,
@@ -682,24 +681,24 @@ struct IsolatedWorkspaceRow {
 #[derive(Deserialize)]
 struct WorkspacePlacementRow {
     workspace_id: Option<String>,
-    owner_agent_did: Option<String>,
+    owner_node_did: Option<String>,
     host_path: Option<String>,
     observed_tree_hash: Option<String>,
 }
 
-pub(crate) fn isolated_workspace_record_query(workspace_id: &str, agent_did: &str) -> String {
+pub(crate) fn isolated_workspace_record_query(workspace_id: &str, node_did: &str) -> String {
     let escaped = escape_graphql_string(workspace_id);
-    let owner = escape_graphql_string(agent_did);
+    let owner = escape_graphql_string(node_did);
     format!(
         r#"{{
             IsolatedWorkspace(
-                filter: {{ workspace_id: {{ _eq: "{escaped}" }}, owner_agent_did: {{ _eq: "{owner}" }} }},
+                filter: {{ workspace_id: {{ _eq: "{escaped}" }}, owner_node_did: {{ _eq: "{owner}" }} }},
                 limit: 2
             ) {{
                 workspace_id
                 work_unit_id
                 caused_by_invocation_id
-                owner_agent_did
+                owner_node_did
                 writer_principal
                 integrator_principal
                 lifecycle_state
@@ -730,8 +729,8 @@ fn decode_isolated_workspace_record(row: IsolatedWorkspaceRow) -> Result<Isolate
     let workspace_id = optional_id(row.workspace_id.as_deref())
         .ok_or_else(|| anyhow!("IsolatedWorkspace is missing workspace_id"))?
         .to_string();
-    let owner_agent_did = optional_id(row.owner_agent_did.as_deref())
-        .ok_or_else(|| anyhow!("IsolatedWorkspace {workspace_id} is missing owner_agent_did"))?
+    let owner_node_did = optional_id(row.owner_node_did.as_deref())
+        .ok_or_else(|| anyhow!("IsolatedWorkspace {workspace_id} is missing owner_node_did"))?
         .to_string();
     let lifecycle_state = optional_id(row.lifecycle_state.as_deref())
         .ok_or_else(|| anyhow!("IsolatedWorkspace {workspace_id} is missing lifecycle_state"))?
@@ -746,7 +745,7 @@ fn decode_isolated_workspace_record(row: IsolatedWorkspaceRow) -> Result<Isolate
         workspace_id,
         work_unit_id: row.work_unit_id,
         caused_by_invocation_id: row.caused_by_invocation_id,
-        owner_agent_did,
+        owner_node_did,
         writer_principal,
         integrator_principal,
         lifecycle_state,
@@ -760,9 +759,9 @@ fn decode_isolated_workspace_record(row: IsolatedWorkspaceRow) -> Result<Isolate
 pub(crate) async fn load_isolated_workspace_record(
     node: &EmbeddedNode,
     workspace_id: &str,
-    agent_did: &str,
+    node_did: &str,
 ) -> Result<Option<IsolatedWorkspaceRecord>> {
-    let query = isolated_workspace_record_query(workspace_id, agent_did);
+    let query = isolated_workspace_record_query(workspace_id, node_did);
     let response = graphql_with_transaction_retry(node, &query, "load IsolatedWorkspace").await?;
     let mut found = rows::<IsolatedWorkspaceRow>(&response, "IsolatedWorkspace")?;
     anyhow::ensure!(found.len() <= 1, "ambiguous principal-scoped workspace");
@@ -775,21 +774,21 @@ pub(crate) async fn load_isolated_workspace_record(
 async fn load_workspace_placement(
     node: &EmbeddedNode,
     workspace_id: &str,
-    agent_did: &str,
+    node_did: &str,
 ) -> Result<Option<WorkspacePlacementRecord>> {
     let escaped_workspace = escape_graphql_string(workspace_id);
-    let escaped_owner = escape_graphql_string(agent_did);
+    let escaped_owner = escape_graphql_string(node_did);
     let query = format!(
         r#"{{
             WorkspacePlacement(
                 filter: {{
                     workspace_id: {{ _eq: "{escaped_workspace}" }},
-                    owner_agent_did: {{ _eq: "{escaped_owner}" }}
+                    owner_node_did: {{ _eq: "{escaped_owner}" }}
                 }},
                 limit: 2
             ) {{
                 workspace_id
-                owner_agent_did
+                owner_node_did
                 host_path
                 observed_tree_hash
             }}
@@ -807,15 +806,15 @@ async fn load_workspace_placement(
     let workspace_id = optional_id(row.workspace_id.as_deref())
         .ok_or_else(|| anyhow!("WorkspacePlacement is missing workspace_id"))?
         .to_string();
-    let owner_agent_did = optional_id(row.owner_agent_did.as_deref())
-        .ok_or_else(|| anyhow!("WorkspacePlacement {workspace_id} is missing owner_agent_did"))?
+    let owner_node_did = optional_id(row.owner_node_did.as_deref())
+        .ok_or_else(|| anyhow!("WorkspacePlacement {workspace_id} is missing owner_node_did"))?
         .to_string();
     let host_path = optional_id(row.host_path.as_deref())
         .ok_or_else(|| anyhow!("WorkspacePlacement {workspace_id} is missing host_path"))?
         .to_string();
     Ok(Some(WorkspacePlacementRecord {
         workspace_id,
-        owner_agent_did,
+        owner_node_did,
         host_path,
         observed_tree_hash: optional_id(row.observed_tree_hash.as_deref()).map(str::to_string),
     }))

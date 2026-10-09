@@ -266,7 +266,7 @@ async fn commit_success(
         result_id: format!("res-{}", invocation.invocation_id),
         invocation_id: invocation.invocation_id.clone(),
         binding_id: Some(invocation.origin.binding_id().to_owned()),
-        owner_agent_did: invocation.owner_agent_did.clone(),
+        owner_node_did: invocation.owner_node_did.clone(),
         workspace_id: None,
         work_unit_id: None,
         caused_by_correlation: correlation,
@@ -479,11 +479,11 @@ mod tests {
         let owner = "did:key:zPluginOwner";
         let setup = format!(
             r#"mutation {{
-                create_Callback(input: {{callback_id:"cb-echo",agent_did:"{owner}",enabled:true,
+                create_Callback(input: {{callback_id:"cb-echo",node_did:"{owner}",enabled:true,
                     handler:{{kind:"plugin",plugin:"team/plugin",digest:"{digest}",correlation_field:"job_run",
                         outputs:[{{name:"echoed",collection:"Echoed",schema:"Echoed/v1",correlation_field:"run_ref",cardinality:"one",required:true}}]}}}}) {{_docID}}
-                create_EventSource(input: {{event_source_id:"jobs",agent_did:"{owner}",source_collection:"Job",event_kind:"created"}}) {{_docID}}
-                create_CallbackBinding(input: {{binding_id:"bind-echo",agent_did:"{owner}",event_source_id:"jobs",callback_id:"cb-echo",input_fields:["job_run","text","path","origin"],enabled:true}}) {{_docID}}
+                create_EventSource(input: {{event_source_id:"jobs",node_did:"{owner}",source_collection:"Job",event_kind:"created"}}) {{_docID}}
+                create_CallbackBinding(input: {{binding_id:"bind-echo",node_did:"{owner}",event_source_id:"jobs",callback_id:"cb-echo",input_fields:["job_run","text","path","origin"],enabled:true}}) {{_docID}}
             }}"#
         );
         let response = node.execute(&setup).await;

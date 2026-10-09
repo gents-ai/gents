@@ -15,17 +15,17 @@ enum WritePlan {
 
 struct ControlledWriter {
     plans: std::sync::Mutex<VecDeque<WritePlan>>,
-    attempts: mpsc::UnboundedSender<BehaviorReadinessProcessState>,
+    attempts: mpsc::UnboundedSender<NodeReadinessProcessState>,
     release: Semaphore,
-    persisted: tokio::sync::Mutex<Vec<BehaviorReadinessProcessState>>,
+    persisted: tokio::sync::Mutex<Vec<NodeReadinessProcessState>>,
 }
 
 #[async_trait::async_trait]
-impl BehaviorReadinessWriter for ControlledWriter {
+impl NodeReadinessWriter for ControlledWriter {
     async fn upsert(
         &self,
-        _agent_did: &str,
-        snapshot: &BehaviorReadinessSnapshot,
+        _node_did: &str,
+        snapshot: &NodeReadinessSnapshot,
         _updated_at: &str,
     ) -> Result<()> {
         let plan = self
@@ -69,7 +69,7 @@ async fn generated_readiness_publication_traces_write_only_semantic_changes() {
             release: Semaphore::new(0),
             persisted: tokio::sync::Mutex::new(Vec::new()),
         });
-        let (owner, publisher) = BehaviorReadinessPublisherHandle::start_with_writer(
+        let (owner, publisher) = NodeReadinessPublisherHandle::start_with_writer(
             writer,
             "did:test:semantic-readiness-writer",
             Duration::from_millis(1),
@@ -79,15 +79,15 @@ async fn generated_readiness_publication_traces_write_only_semantic_changes() {
             let (process, expected) = match state {
                 0 => (
                     ProcessLifecycleState::Recovering,
-                    BehaviorReadinessProcessState::Recovering,
+                    NodeReadinessProcessState::Recovering,
                 ),
                 1 => (
                     ProcessLifecycleState::Ready,
-                    BehaviorReadinessProcessState::Ready,
+                    NodeReadinessProcessState::Ready,
                 ),
                 2 => (
                     ProcessLifecycleState::Shutdown,
-                    BehaviorReadinessProcessState::Shutdown,
+                    NodeReadinessProcessState::Shutdown,
                 ),
                 other => panic!("unmodeled readiness state {other}"),
             };
@@ -120,7 +120,7 @@ async fn persistence_retry_is_bounded_and_leaves_committed_state_unchanged() {
         release: Semaphore::new(0),
         persisted: tokio::sync::Mutex::new(Vec::new()),
     });
-    let (owner, publisher) = BehaviorReadinessPublisherHandle::start_with_writer(
+    let (owner, publisher) = NodeReadinessPublisherHandle::start_with_writer(
         writer.clone(),
         "did:test:bounded-readiness-writer",
         Duration::from_millis(1),
@@ -140,12 +140,12 @@ async fn persistence_retry_is_bounded_and_leaves_committed_state_unchanged() {
     assert!(writer.persisted.lock().await.is_empty());
     assert_eq!(
         publisher.observation(),
-        BehaviorAdmissionObservation::default()
+        AgentAdmissionObservation::default()
     );
     publisher.initialize("general").await.unwrap();
     assert_eq!(
         *writer.persisted.lock().await,
-        vec![BehaviorReadinessProcessState::Recovering],
+        vec![NodeReadinessProcessState::Recovering],
         "a later valid command must recover from a bounded write failure"
     );
     owner.close().await.unwrap();
@@ -165,7 +165,7 @@ async fn close_remains_bounded_when_write_attempts_timeout() {
         release: Semaphore::new(0),
         persisted: tokio::sync::Mutex::new(Vec::new()),
     });
-    let (owner, publisher) = BehaviorReadinessPublisherHandle::start_with_writer(
+    let (owner, publisher) = NodeReadinessPublisherHandle::start_with_writer(
         writer,
         "did:test:cancellable-readiness-writer",
         Duration::from_millis(1),
@@ -173,7 +173,7 @@ async fn close_remains_bounded_when_write_attempts_timeout() {
     publisher.initialize("general").await.unwrap();
     assert_eq!(
         attempts_rx.recv().await,
-        Some(BehaviorReadinessProcessState::Recovering)
+        Some(NodeReadinessProcessState::Recovering)
     );
 
     let ready = tokio::spawn(async move {
@@ -183,7 +183,7 @@ async fn close_remains_bounded_when_write_attempts_timeout() {
     });
     assert_eq!(
         attempts_rx.recv().await,
-        Some(BehaviorReadinessProcessState::Ready)
+        Some(NodeReadinessProcessState::Ready)
     );
     tokio::time::timeout(Duration::from_secs(3), owner.close())
         .await
@@ -210,7 +210,7 @@ async fn saturated_command_queue_cannot_block_owner_close_forever() {
         release: Semaphore::new(0),
         persisted: tokio::sync::Mutex::new(Vec::new()),
     });
-    let (owner, publisher) = BehaviorReadinessPublisherHandle::start_with_writer(
+    let (owner, publisher) = NodeReadinessPublisherHandle::start_with_writer(
         writer,
         "did:test:saturated-readiness-writer",
         Duration::from_millis(1),
@@ -218,7 +218,7 @@ async fn saturated_command_queue_cannot_block_owner_close_forever() {
     publisher.initialize("general").await.unwrap();
     assert_eq!(
         attempts_rx.recv().await,
-        Some(BehaviorReadinessProcessState::Recovering)
+        Some(NodeReadinessProcessState::Recovering)
     );
 
     let blocked = {
@@ -231,7 +231,7 @@ async fn saturated_command_queue_cannot_block_owner_close_forever() {
     };
     assert_eq!(
         attempts_rx.recv().await,
-        Some(BehaviorReadinessProcessState::Ready)
+        Some(NodeReadinessProcessState::Ready)
     );
     let queued = (0..64)
         .map(|generation| {
@@ -268,14 +268,11 @@ async fn saturated_command_queue_cannot_block_owner_close_forever() {
 }
 
 async fn test_publisher(
-    agent_did: &str,
-) -> (
-    BehaviorReadinessPublisherOwner,
-    BehaviorReadinessPublisherHandle,
-) {
+    node_did: &str,
+) -> (NodeReadinessPublisherOwner, NodeReadinessPublisherHandle) {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    BehaviorReadinessPublisherHandle::start(node, agent_did)
+    NodeReadinessPublisherHandle::start(node, node_did)
 }
 
 #[tokio::test]
@@ -287,11 +284,11 @@ async fn replacement_ready_cannot_clear_demotion_until_source_generation_advance
         .send(|ack| Command::PublishSource {
             source: ReadinessSource {
                 active_generation: 1,
-                default_behavior_id: "general".to_string(),
+                default_agent_id: "general".to_string(),
                 entries: BTreeMap::from([(
                     "general".to_string(),
-                    BehaviorReadinessSourceEntry {
-                        behavior_id: "general".to_string(),
+                    AgentReadinessSourceEntry {
+                        agent_id: "general".to_string(),
                         dispatcher_present: true,
                         unavailable_reason: None,
                         startup_demoted: false,
@@ -326,11 +323,11 @@ async fn replacement_ready_cannot_clear_demotion_until_source_generation_advance
         .send(|ack| Command::PublishSource {
             source: ReadinessSource {
                 active_generation: 2,
-                default_behavior_id: "general".to_string(),
+                default_agent_id: "general".to_string(),
                 entries: BTreeMap::from([(
                     "general".to_string(),
-                    BehaviorReadinessSourceEntry {
-                        behavior_id: "general".to_string(),
+                    AgentReadinessSourceEntry {
+                        agent_id: "general".to_string(),
                         dispatcher_present: true,
                         unavailable_reason: None,
                         startup_demoted: false,
@@ -356,11 +353,11 @@ async fn invalid_source_leaves_committed_standing_and_observation_usable() {
         .send(|ack| Command::PublishSource {
             source: ReadinessSource {
                 active_generation: 1,
-                default_behavior_id: "general".to_string(),
+                default_agent_id: "general".to_string(),
                 entries: BTreeMap::from([(
                     "general".to_string(),
-                    BehaviorReadinessSourceEntry {
-                        behavior_id: "general".to_string(),
+                    AgentReadinessSourceEntry {
+                        agent_id: "general".to_string(),
                         dispatcher_present: true,
                         unavailable_reason: None,
                         startup_demoted: false,
@@ -382,11 +379,11 @@ async fn invalid_source_leaves_committed_standing_and_observation_usable() {
         .send(|ack| Command::PublishSource {
             source: ReadinessSource {
                 active_generation: 2,
-                default_behavior_id: "missing".to_string(),
+                default_agent_id: "missing".to_string(),
                 entries: BTreeMap::from([(
                     "general".to_string(),
-                    BehaviorReadinessSourceEntry {
-                        behavior_id: "general".to_string(),
+                    AgentReadinessSourceEntry {
+                        agent_id: "general".to_string(),
                         dispatcher_present: true,
                         unavailable_reason: None,
                         startup_demoted: false,
@@ -409,11 +406,11 @@ async fn invalid_source_leaves_committed_standing_and_observation_usable() {
         .send(|ack| Command::PublishSource {
             source: ReadinessSource {
                 active_generation: 2,
-                default_behavior_id: "general".to_string(),
+                default_agent_id: "general".to_string(),
                 entries: BTreeMap::from([(
                     "general".to_string(),
-                    BehaviorReadinessSourceEntry {
-                        behavior_id: "general".to_string(),
+                    AgentReadinessSourceEntry {
+                        agent_id: "general".to_string(),
                         dispatcher_present: true,
                         unavailable_reason: None,
                         startup_demoted: false,
@@ -440,11 +437,11 @@ async fn unchanged_demoted_slot_stays_demoted_across_unrelated_global_generation
             .send(|ack| Command::PublishSource {
                 source: ReadinessSource {
                     active_generation,
-                    default_behavior_id: "general".to_string(),
+                    default_agent_id: "general".to_string(),
                     entries: BTreeMap::from([(
                         "general".to_string(),
-                        BehaviorReadinessSourceEntry {
-                            behavior_id: "general".to_string(),
+                        AgentReadinessSourceEntry {
+                            agent_id: "general".to_string(),
                             dispatcher_present: true,
                             unavailable_reason: None,
                             startup_demoted: false,
@@ -506,7 +503,7 @@ async fn ordered_writer_retries_without_overtake_and_flushes_terminal_state() {
         release: Semaphore::new(0),
         persisted: tokio::sync::Mutex::new(Vec::new()),
     });
-    let (owner, publisher) = BehaviorReadinessPublisherHandle::start_with_writer(
+    let (owner, publisher) = NodeReadinessPublisherHandle::start_with_writer(
         writer.clone(),
         "did:test:ordered-readiness-writer",
         Duration::from_millis(5),
@@ -514,7 +511,7 @@ async fn ordered_writer_retries_without_overtake_and_flushes_terminal_state() {
     publisher.initialize("general").await.unwrap();
     assert_eq!(
         attempts_rx.recv().await,
-        Some(BehaviorReadinessProcessState::Recovering)
+        Some(NodeReadinessProcessState::Recovering)
     );
 
     let ready = {
@@ -527,7 +524,7 @@ async fn ordered_writer_retries_without_overtake_and_flushes_terminal_state() {
     };
     assert_eq!(
         attempts_rx.recv().await,
-        Some(BehaviorReadinessProcessState::Ready)
+        Some(NodeReadinessProcessState::Ready)
     );
     let shutdown = {
         let publisher = publisher.clone();
@@ -547,12 +544,12 @@ async fn ordered_writer_retries_without_overtake_and_flushes_terminal_state() {
     writer.release.add_permits(1);
     assert_eq!(
         attempts_rx.recv().await,
-        Some(BehaviorReadinessProcessState::Ready),
+        Some(NodeReadinessProcessState::Ready),
         "the failed Ready snapshot must retry before Shutdown"
     );
     assert_eq!(
         attempts_rx.recv().await,
-        Some(BehaviorReadinessProcessState::Shutdown)
+        Some(NodeReadinessProcessState::Shutdown)
     );
     let close = tokio::spawn(owner.close());
     tokio::task::yield_now().await;
@@ -569,9 +566,9 @@ async fn ordered_writer_retries_without_overtake_and_flushes_terminal_state() {
     assert_eq!(
         *writer.persisted.lock().await,
         vec![
-            BehaviorReadinessProcessState::Recovering,
-            BehaviorReadinessProcessState::Ready,
-            BehaviorReadinessProcessState::Shutdown,
+            NodeReadinessProcessState::Recovering,
+            NodeReadinessProcessState::Ready,
+            NodeReadinessProcessState::Shutdown,
         ]
     );
 }

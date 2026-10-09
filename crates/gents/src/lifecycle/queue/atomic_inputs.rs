@@ -16,7 +16,7 @@ pub(crate) struct ToolNotificationPublication {
 struct BackgroundCompletionGateKey {
     node: usize,
     session_id: String,
-    agent_did: String,
+    node_did: String,
     queue_key: String,
 }
 
@@ -30,7 +30,7 @@ struct BackgroundCompletionGateKey {
 pub(super) fn background_completion_gate(
     node: &EmbeddedNode,
     session_id: &str,
-    agent_did: &str,
+    node_did: &str,
     queue_key: &str,
 ) -> Arc<BackgroundCompletionGate> {
     static GATES: OnceLock<
@@ -40,7 +40,7 @@ pub(super) fn background_completion_gate(
     let key = BackgroundCompletionGateKey {
         node: node as *const EmbeddedNode as usize,
         session_id: session_id.to_string(),
-        agent_did: agent_did.to_string(),
+        node_did: node_did.to_string(),
         queue_key: queue_key.to_string(),
     };
     let mut gates = GATES
@@ -86,12 +86,12 @@ pub(crate) async fn persist_background_completion_with_message_canonical(
         .context("atomic background completion enqueue requires a queue key")?
         .to_string();
 
-    let gate = background_completion_gate(node, &parent.session_id, &parent.agent_did, &queue_key);
+    let gate = background_completion_gate(node, &parent.session_id, &parent.node_did, &queue_key);
     let _guard = gate.lock().await;
 
-    let behavior_id = parent_behavior_id(parent)?;
+    let agent_id = parent_agent_id(parent)?;
     let queue_key_ref = &queue_key;
-    let behavior_id = &behavior_id;
+    let agent_id = &agent_id;
     let queue = &queue;
 
     let mut enqueued = crate::config_client::ConfigAccess::transact_local_idempotent(
@@ -107,7 +107,7 @@ pub(crate) async fn persist_background_completion_with_message_canonical(
                     notification_content,
                     message_key,
                     queue_key_ref,
-                    behavior_id,
+                    agent_id,
                     wake_content,
                     queue,
                     existing_notification_doc_id,
@@ -129,7 +129,7 @@ pub(crate) async fn persist_background_completion_with_message_canonical(
         let active_request = reconcile_coalesced_pending_request(
             node,
             &parent.session_id,
-            &parent.agent_did,
+            &parent.node_did,
             QueueSource::BackgroundCompletion,
             &queue_key,
         )
@@ -229,7 +229,7 @@ pub(crate) async fn persist_background_completion_with_message_waking(
                     .execute(&format!(
                         r#"mutation {{ create_AgentToolCall(input: {{
                 tool_call_key: "{}", tool_call_id: "{}", request_id: "{}",
-                request_doc_id: "{}", agent_did: "{}", requester_did: {}, session_id: "{}",
+                request_doc_id: "{}", node_did: "{}", requester_did: {}, session_id: "{}",
                 tool_name: "fixture", message_sequence: 1, await_mode: "background",
                 status: "completed", lifecycle_state: "completed"
             }}) {{ _docID }} }}"#,
@@ -237,7 +237,7 @@ pub(crate) async fn persist_background_completion_with_message_waking(
                         escape_graphql_string(&tool_key),
                         escape_graphql_string(&parent.request_id),
                         escape_graphql_string(&parent.doc_id),
-                        escape_graphql_string(&parent.agent_did),
+                        escape_graphql_string(&parent.node_did),
                         parent
                             .requester_did
                             .as_deref()
@@ -248,7 +248,7 @@ pub(crate) async fn persist_background_completion_with_message_waking(
                     .await?;
                 let tool_doc = crate::graphql::created_doc_id(&created, "AgentToolCall")?;
                 let segment = OutputSegment {
-                    agent_did: parent.agent_did.clone(),
+                    node_did: parent.node_did.clone(),
                     requester_did: parent.requester_did.clone(),
                     session_id: parent.session_id.clone(),
                     request_doc_id: parent.doc_id.clone(),
@@ -317,7 +317,7 @@ async fn background_completion_transaction_attempt(
     content: &str,
     message_key: &str,
     queue_key: &str,
-    behavior_id: &str,
+    agent_id: &str,
     wake_content: &str,
     queue: &RequestQueue,
     existing_notification_doc_id: Option<&str>,
@@ -327,7 +327,7 @@ async fn background_completion_transaction_attempt(
     use sha2::{Digest, Sha256};
 
     let escaped_session_id = escape_graphql_string(&parent.session_id);
-    let escaped_agent_did = escape_graphql_string(&parent.agent_did);
+    let escaped_node_did = escape_graphql_string(&parent.node_did);
     let notification_filter = match existing_notification_doc_id {
         Some(doc_id) => format!("_docID: {{ _eq: \"{}\" }}", escape_graphql_string(doc_id)),
         None => format!(
@@ -336,7 +336,7 @@ async fn background_completion_transaction_attempt(
         ),
     };
     let mut scope_hasher = Sha256::new();
-    for component in [&parent.agent_did, &parent.session_id, queue_key] {
+    for component in [&parent.node_did, &parent.session_id, queue_key] {
         scope_hasher.update((component.len() as u64).to_be_bytes());
         scope_hasher.update(component.as_bytes());
     }
@@ -355,7 +355,7 @@ async fn background_completion_transaction_attempt(
                 pending: AgentRequest(
                     filter: {{
                         session_id: {{ _eq: "{escaped_session_id}" }},
-                        agent_did: {{ _eq: "{escaped_agent_did}" }},
+                        node_did: {{ _eq: "{escaped_node_did}" }},
                         lifecycle_state: {{ _eq: "pending" }}
                     }},
                     order: [{{ created_at: ASC }}, {{ request_id: ASC }}]
@@ -364,12 +364,12 @@ async fn background_completion_transaction_attempt(
                     request_id
                     session_id
                     input
-                    subagent_depth
+                    request_hop
                 }}
                 generations: AgentRequest(
                     filter: {{
                         session_id: {{ _eq: "{escaped_session_id}" }},
-                        agent_did: {{ _eq: "{escaped_agent_did}" }},
+                        node_did: {{ _eq: "{escaped_node_did}" }},
                         retry_key: {{ _like: "{escaped_retry_key_pattern}" }}
                     }}
                 ) {{
@@ -396,14 +396,14 @@ async fn background_completion_transaction_attempt(
         let (_, reconstructed) = crate::session::load_canonical_message_in_txn(
             txn,
             &row.doc_id,
-            &parent.agent_did,
+            &parent.node_did,
             parent.requester_did.as_deref(),
         )
         .await?;
         anyhow::ensure!(
             row.message.message_key == message_key
                 && row.message.session_id == parent.session_id
-                && row.message.agent_did == parent.agent_did
+                && row.message.node_did == parent.node_did
                 && row.message.requester_did == parent.requester_did
                 && row.message.role == gents_protocol::output::MessageRole::User
                 && reconstructed == gents_protocol::message::Message::user(content)
@@ -417,13 +417,13 @@ async fn background_completion_transaction_attempt(
             .request_doc_id
             .as_deref()
             .context("canonical notification replay has no request binding")?;
-        let binding = txn.execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ _docID request_id session_id agent_did input }} }}"#,
+        let binding = txn.execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ _docID request_id session_id node_did input }} }}"#,
             escape_graphql_string(doc_id))).await?;
         let rows: Vec<AgentRequestRow> =
             serde_json::from_value(binding["data"]["AgentRequest"].clone())?;
         anyhow::ensure!(
             rows.len() == 1
-                && rows[0].agent_did.as_deref() == Some(parent.agent_did.as_str())
+                && rows[0].node_did.as_deref() == Some(parent.node_did.as_str())
                 && rows[0].session_id.as_deref() == Some(parent.session_id.as_str()),
             "canonical notification replay request binding is invalid"
         );
@@ -447,7 +447,7 @@ async fn background_completion_transaction_attempt(
     }
 
     let current_hop =
-        crate::session::load_session_current_hop_in_txn(txn, &parent.agent_did, &parent.session_id)
+        crate::session::load_session_current_hop_in_txn(txn, &parent.node_did, &parent.session_id)
             .await?;
     // A wake over the bound is written like any other and refused at
     // admission, so it becomes the session's latest request and every later
@@ -465,7 +465,7 @@ async fn background_completion_transaction_attempt(
     }) {
         Some(row)
             if row
-                .subagent_depth
+                .request_hop
                 .and_then(|hop| u32::try_from(hop).ok())
                 .unwrap_or(0)
                 >= wake_hop =>
@@ -476,7 +476,7 @@ async fn background_completion_transaction_attempt(
         None => (None, None),
     };
     let message_sequence =
-        next_append_sequence_in_transaction(txn, &parent.agent_did, &parent.session_id).await?;
+        next_append_sequence_in_transaction(txn, &parent.node_did, &parent.session_id).await?;
     let mut max_generation = None::<u64>;
     for row in response["data"]["generations"]
         .as_array()
@@ -518,7 +518,7 @@ async fn background_completion_transaction_attempt(
             let request_mutation = session_request_create_mutation_at_hop(
                 parent,
                 wake_hop,
-                behavior_id,
+                agent_id,
                 wake_content,
                 ExecutionOrigin::Scheduled,
                 wake_input,
@@ -537,7 +537,7 @@ async fn background_completion_transaction_attempt(
                 let superseded = txn
                     .execute(&super::coalescing::supersede_pending_mutation(
                         lower_doc_id,
-                        &parent.agent_did,
+                        &parent.node_did,
                         &request_id,
                         &doc_id,
                         "raised to the hop of a later completion",
@@ -550,7 +550,7 @@ async fn background_completion_transaction_attempt(
                 {
                     crate::trigger_engine::durable::publish_request_outcome(
                         txn,
-                        &parent.agent_did,
+                        &parent.node_did,
                         &lower.request_id,
                         "superseded",
                         "raised to the hop of a later completion",
@@ -634,7 +634,7 @@ async fn publish_native_tool_notification(
         facts["data"]["AgentOutputSegment"]
             .as_array()
             .context("tool output query omitted rows")?,
-        &parent.agent_did,
+        &parent.node_did,
         Some(&parent.session_id),
         parent.requester_did.as_deref(),
     )?
@@ -687,7 +687,7 @@ async fn publish_native_tool_notification(
     let message = TranscriptMessage {
         message_key: message_key.to_owned(),
         session_id: parent.session_id.clone(),
-        agent_did: parent.agent_did.clone(),
+        node_did: parent.node_did.clone(),
         requester_did: parent.requester_did.clone(),
         request_doc_id: Some(binding_request_doc_id.to_owned()),
         publication: MessagePublication::ToolDelivery {
@@ -733,11 +733,11 @@ pub(super) async fn steering_transaction_attempt(
 
 pub(crate) async fn next_append_sequence_in_transaction(
     txn: &ConfigApplyTxn<'_>,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
 ) -> Result<u32> {
     let response = txn
-        .execute(&append_sequence_query(agent_did, session_id))
+        .execute(&append_sequence_query(node_did, session_id))
         .await?;
     let message_max = response["data"]["AgentMessage"]
         .as_array()
@@ -763,20 +763,20 @@ pub(crate) async fn next_append_sequence_in_transaction(
     Ok(message_max.max(reserved_max) + 1)
 }
 
-pub(super) fn append_sequence_query(agent_did: &str, session_id: &str) -> String {
-    let escaped_agent_did = escape_graphql_string(agent_did);
+pub(super) fn append_sequence_query(node_did: &str, session_id: &str) -> String {
+    let escaped_node_did = escape_graphql_string(node_did);
     let escaped_session_id = escape_graphql_string(session_id);
     format!(
         r#"{{
                 AgentMessage(
-                    filter: {{ session_id: {{ _eq: "{escaped_session_id}" }}, agent_did: {{ _eq: "{escaped_agent_did}" }} }},
-                    order: [{{ agent_did: DESC }}, {{ session_id: DESC }}, {{ sequence: DESC }}],
+                    filter: {{ session_id: {{ _eq: "{escaped_session_id}" }}, node_did: {{ _eq: "{escaped_node_did}" }} }},
+                    order: [{{ node_did: DESC }}, {{ session_id: DESC }}, {{ sequence: DESC }}],
                     limit: 1
                 ) {{ sequence }}
                 AgentToolCall(
                     filter: {{
                         session_id: {{ _eq: "{escaped_session_id}" }},
-                        agent_did: {{ _eq: "{escaped_agent_did}" }},
+                        node_did: {{ _eq: "{escaped_node_did}" }},
                         await_mode: {{ _eq: "background" }}
                     }}
                 ) {{ message_sequence }}

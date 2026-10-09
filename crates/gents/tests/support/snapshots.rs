@@ -9,7 +9,7 @@ use super::{first_optional_row, first_row};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestSnapshot {
     pub lifecycle_state: RequestLifecycleState,
-    pub behavior_id: String,
+    pub agent_id: String,
     pub backend_id: String,
     pub execution_origin: String,
     pub retry_parent_request: String,
@@ -28,7 +28,7 @@ impl From<AgentRequestRow> for RequestSnapshot {
             lifecycle_state: row
                 .lifecycle_state
                 .expect("request snapshot is missing lifecycle_state"),
-            behavior_id: row.behavior_id.unwrap_or_default(),
+            agent_id: row.agent_id.unwrap_or_default(),
             backend_id: row.backend_id.unwrap_or_default(),
             execution_origin: row.execution_origin.unwrap_or_default(),
             retry_parent_request: row.retry_parent_request.unwrap_or_default(),
@@ -63,7 +63,7 @@ pub struct RuntimeSnapshot {
     pub reconcile_phase: String,
     pub active_generation: i64,
     pub router_generation: i64,
-    pub default_behavior_id: String,
+    pub default_agent_id: String,
     pub last_reconcile_result: String,
     pub last_reconcile_error: String,
 }
@@ -96,7 +96,7 @@ pub async fn fetch_request_snapshot(node: &EmbeddedNode, doc_id: &str) -> Reques
             ) {{
                 request_id
                 lifecycle_state
-                behavior_id
+                agent_id
                 backend_id
                 execution_origin
                 retry_parent_request
@@ -216,7 +216,7 @@ pub async fn fetch_session_snapshot(
         .execute(&format!(
             r#"{{
         AgentSession(filter: {{session_id: {{_eq: "{session_id}"}}}}, limit: 2) {{
-            session_id agent_did requester_did behavior_id created_at closed_at tags
+            session_id node_did requester_did agent_id created_at closed_at tags
             title
             provenance
             observation
@@ -246,21 +246,21 @@ pub async fn fetch_session_snapshot(
 
 pub async fn fetch_runtime_snapshot(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
 ) -> Option<RuntimeSnapshot> {
-    let agent_did = escape_graphql_string(agent_did);
+    let node_did = escape_graphql_string(node_did);
     let query = format!(
         r#"{{
-            AgentBehaviorReadiness(
-                filter: {{ agent_did: {{ _eq: "{agent_did}" }} }},
+            NodeReadiness(
+                filter: {{ node_did: {{ _eq: "{node_did}" }} }},
                 limit: 1
             ) {{
-                agent_did
+                node_did
                 snapshot_json
                 updated_at
             }}
-            AgentRuntime(
-                filter: {{ agent_did: {{ _eq: "{agent_did}" }} }},
+            NodeRuntime(
+                filter: {{ node_did: {{ _eq: "{node_did}" }} }},
                 limit: 1
             ) {{
                 reconcile_phase
@@ -270,33 +270,34 @@ pub async fn fetch_runtime_snapshot(
         }}"#
     );
     let resp = node.execute(&query).await;
-    let diagnostic = first_optional_row::<RuntimeDiagnosticSnapshot>(&resp, "AgentRuntime")?;
-    let readiness_row = first_optional_row::<gents_protocol::row::AgentBehaviorReadinessRow>(
+    let diagnostic = first_optional_row::<RuntimeDiagnosticSnapshot>(&resp, "NodeRuntime")?;
+    let readiness_row = first_optional_row::<gents_protocol::node_readiness::NodeReadinessRow>(
         &resp,
-        "AgentBehaviorReadiness",
+        "NodeReadiness",
     )?;
     let readiness =
-        gents_protocol::row::decode_behavior_readiness_snapshot(&readiness_row, &agent_did).ok()?;
+        gents_protocol::node_readiness::decode_node_readiness_snapshot(&readiness_row, &node_did)
+            .ok()?;
     Some(RuntimeSnapshot {
         process_state: readiness.process_state.as_str().to_string(),
         reconcile_phase: diagnostic.reconcile_phase,
         active_generation: i64::try_from(readiness.active_generation).unwrap_or(i64::MAX),
         router_generation: i64::try_from(readiness.router_generation).unwrap_or(i64::MAX),
-        default_behavior_id: readiness.default_behavior_id,
+        default_agent_id: readiness.default_agent_id,
         last_reconcile_result: diagnostic.last_reconcile_result,
         last_reconcile_error: diagnostic.last_reconcile_error,
     })
 }
 
-pub async fn fetch_behavior_readiness_snapshot(
+pub async fn fetch_node_readiness_snapshot(
     node: &EmbeddedNode,
-    agent_did: &str,
-) -> Option<gents_protocol::row::BehaviorReadinessSnapshot> {
-    let agent_did = escape_graphql_string(agent_did);
+    node_did: &str,
+) -> Option<gents_protocol::node_readiness::NodeReadinessSnapshot> {
+    let node_did = escape_graphql_string(node_did);
     let query = format!(
         r#"{{
-            AgentBehaviorReadiness(
-                filter: {{ agent_did: {{ _eq: "{agent_did}" }} }},
+            NodeReadiness(
+                filter: {{ node_did: {{ _eq: "{node_did}" }} }},
                 limit: 1
             ) {{
                 snapshot_json
@@ -307,7 +308,7 @@ pub async fn fetch_behavior_readiness_snapshot(
     response
         .data
         .as_ref()
-        .and_then(|data| data.get("AgentBehaviorReadiness"))
+        .and_then(|data| data.get("NodeReadiness"))
         .and_then(serde_json::Value::as_array)
         .and_then(|rows| rows.first())
         .and_then(|row| row.get("snapshot_json"))
@@ -339,7 +340,7 @@ pub async fn fetch_message_snapshots_for_session(
                 order: {{ sequence: ASC }}
             ) {{
                 _docID
-                agent_did
+                node_did
                 requester_did
             }}
         }}"#
@@ -355,12 +356,12 @@ pub async fn fetch_message_snapshots_for_session(
     let mut snapshots = Vec::with_capacity(rows.len());
     for row in rows {
         let header_id = row["_docID"].as_str().expect("physical message identity");
-        let agent_did = row["agent_did"].as_str().expect("message principal");
+        let node_did = row["node_did"].as_str().expect("message principal");
         let requester_did = row["requester_did"].as_str();
         let (header, native) = gents::session::load_canonical_message_from_node(
             node,
             header_id,
-            agent_did,
+            node_did,
             requester_did,
         )
         .await
@@ -387,7 +388,7 @@ pub async fn fetch_message_snapshots_for_session(
 pub struct ToolCallSnapshot {
     #[serde(rename = "_docID")]
     pub doc_id: String,
-    pub agent_did: String,
+    pub node_did: String,
     pub requester_did: Option<String>,
     pub tool_call_key: String,
     #[serde(default)]
@@ -452,7 +453,7 @@ impl ToolCallSnapshot {
         let message = gents::tool_call_lifecycle::load_tool_call_result(
             &gents::config_client::ConfigAccess::Local(node),
             &self.doc_id,
-            &self.agent_did,
+            &self.node_did,
             &self.session_id,
             self.requester_did.as_deref(),
         )
@@ -468,7 +469,7 @@ impl ToolCallSnapshot {
         gents::tool_call_lifecycle::load_tool_call_arguments(
             &gents::config_client::ConfigAccess::Local(node),
             &self.doc_id,
-            &self.agent_did,
+            &self.node_did,
             &self.session_id,
             self.requester_did.as_deref(),
         )
@@ -480,6 +481,7 @@ impl ToolCallSnapshot {
 /// `arguments`/`result` are `None` until the owner can reconstruct them.
 #[derive(Debug, Clone)]
 pub struct ToolCallPayload {
+    pub tool_call_id: String,
     pub tool_name: String,
     pub status: Option<String>,
     pub lifecycle_state: Option<String>,
@@ -498,6 +500,7 @@ pub async fn fetch_tool_call_payloads_for_request(
     let mut payloads = Vec::new();
     for call in fetch_tool_call_snapshots(node, &filter).await {
         payloads.push(ToolCallPayload {
+            tool_call_id: call.tool_call_id.clone(),
             arguments: call.try_load_arguments(node.clone()).await.ok(),
             result: call.try_load_result(node.clone()).await.ok(),
             tool_name: call.tool_name,
@@ -526,7 +529,7 @@ async fn fetch_tool_call_snapshots(node: &EmbeddedNode, filter: &str) -> Vec<Too
                 filter: {{ {filter} }},
                 order: {{ message_sequence: ASC }}
             ) {{
-                _docID agent_did requester_did tool_call_key request_id session_id message_sequence tool_name tool_call_id
+                _docID node_did requester_did tool_call_key request_id session_id message_sequence tool_name tool_call_id
                 status lifecycle_state started_at deadline_at completed_at
                 selected_service_id selected_tool_name tool_failure_class
                 denial_reason denied_argv denied_command denied_argument denied_subcommand
@@ -546,7 +549,7 @@ async fn fetch_tool_call_snapshots(node: &EmbeddedNode, filter: &str) -> Vec<Too
 
 #[derive(Debug, PartialEq, Eq, Deserialize)]
 pub struct ToolResultSnapshot {
-    pub agent_did: String,
+    pub node_did: String,
     pub session_id: String,
     pub tool_name: String,
     pub tool_input: String,
@@ -568,7 +571,7 @@ pub async fn fetch_tool_result_snapshots_for_session(
                 filter: {{ session_id: {{ _eq: "{session_id}" }} }},
                 order: {{ created_at: ASC }}
             ) {{
-                agent_did session_id tool_name tool_input output_text
+                node_did session_id tool_name tool_input output_text
                 truncated truncation_metadata tool_call_doc_id created_at
             }}
         }}"#

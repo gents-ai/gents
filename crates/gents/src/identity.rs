@@ -25,19 +25,19 @@ pub struct ServiceAccount {
 /// behavior owner's DID and signing identity. The assembly path validates the
 /// owner relationship before the behavior becomes runnable.
 #[derive(Clone)]
-pub struct RuntimePrincipal {
-    pub agent_did: String,
-    pub identity: Arc<dyn AgentIdentity>,
-    pub default_behavior_id: String,
+pub struct RuntimeNode {
+    pub node_did: String,
+    pub identity: Arc<dyn NodeIdentity>,
+    pub default_agent_id: String,
     pub display_name: Option<String>,
     pub enabled: bool,
 }
 
-impl std::fmt::Debug for RuntimePrincipal {
+impl std::fmt::Debug for RuntimeNode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RuntimePrincipal")
-            .field("agent_did", &self.agent_did)
-            .field("default_behavior_id", &self.default_behavior_id)
+        f.debug_struct("RuntimeNode")
+            .field("node_did", &self.node_did)
+            .field("default_agent_id", &self.default_agent_id)
             .field("display_name", &self.display_name)
             .field("enabled", &self.enabled)
             .finish_non_exhaustive()
@@ -45,7 +45,7 @@ impl std::fmt::Debug for RuntimePrincipal {
 }
 
 #[async_trait]
-pub trait AgentIdentity: Send + Sync {
+pub trait NodeIdentity: Send + Sync {
     fn did(&self) -> &str;
 
     async fn sign(&self, payload: &[u8]) -> Result<Vec<u8>>;
@@ -219,7 +219,7 @@ pub async fn as_node_identity<F: std::future::Future>(
 }
 
 #[async_trait]
-impl AgentIdentity for KeyIdentity {
+impl NodeIdentity for KeyIdentity {
     fn did(&self) -> &str {
         &self.did
     }
@@ -320,7 +320,7 @@ impl std::fmt::Debug for RegisteredIdentity {
 }
 
 #[async_trait]
-impl AgentIdentity for RegisteredIdentity {
+impl NodeIdentity for RegisteredIdentity {
     fn did(&self) -> &str {
         &self.did
     }

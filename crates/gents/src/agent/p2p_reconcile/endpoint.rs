@@ -14,7 +14,7 @@ use gents_protocol::network_token::EndpointRecord;
 use tokio_util::sync::CancellationToken;
 
 use crate::graphql::escape_graphql_string;
-use crate::identity::AgentIdentity;
+use crate::identity::NodeIdentity;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct EndpointBinding {
@@ -30,7 +30,7 @@ struct PublishedEndpoint {
 
 pub async fn run_endpoint_heartbeat(
     node: Arc<EmbeddedNode>,
-    identity: Arc<dyn AgentIdentity>,
+    identity: Arc<dyn NodeIdentity>,
     cancel: CancellationToken,
 ) -> Result<()> {
     let scope = Arc::clone(&node);
@@ -39,7 +39,7 @@ pub async fn run_endpoint_heartbeat(
 
 async fn endpoint_heartbeat(
     node: Arc<EmbeddedNode>,
-    identity: Arc<dyn AgentIdentity>,
+    identity: Arc<dyn NodeIdentity>,
     cancel: CancellationToken,
 ) -> Result<()> {
     let Some(p2p) = node.p2p_arc() else {
@@ -96,7 +96,7 @@ async fn endpoint_heartbeat(
 async fn tick_endpoint(
     node: &EmbeddedNode,
     p2p: &Arc<dyn defra_p2p_adapter::P2POperations>,
-    identity: &dyn AgentIdentity,
+    identity: &dyn NodeIdentity,
     published: &mut Option<PublishedEndpoint>,
     renewal_interval: Duration,
 ) -> Result<()> {

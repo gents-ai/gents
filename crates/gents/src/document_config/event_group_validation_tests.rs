@@ -4,7 +4,7 @@ use serde_json::{json, Value};
 
 fn source(group: Value) -> EventSource {
     serde_json::from_value(json!({
-        "agent_did": "did:key:group-validation",
+        "node_did": "did:key:group-validation",
         "event_source_id": "results",
         "source_collection": "ReviewResult",
         "correlation_field": "review_id",

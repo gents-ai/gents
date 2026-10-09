@@ -30,7 +30,7 @@
 //!
 //! Reads and writes use the node identity installed on `EmbeddedNode`. DefraDB
 //! therefore signs the commit at the same boundary used by every other runtime
-//! write. The `agent_did` column remains application data; it is not treated as
+//! write. The `node_did` column remains application data; it is not treated as
 //! proof of authorship.
 
 use std::sync::Arc;
@@ -75,9 +75,9 @@ impl DefraRenderedRequestSink {
                     request_commit_cid
                     request_id
                     session_id
-                    agent_did
+                    node_did
                     requester_did
-                    behavior_id
+                    agent_id
                     capture_scope
                     turn_index
                     attempt
@@ -147,9 +147,9 @@ impl DefraRenderedRequestSink {
                     request_commit_cid: "{request_commit_cid}",
                     request_id: "{request_id}",
                     session_id: "{session_id}",
-                    agent_did: "{agent_did}",
+                    node_did: "{node_did}",
                     requester_did: "{requester_did}",
-                    behavior_id: "{behavior_id}",
+                    agent_id: "{agent_id}",
                     capture_scope: "{capture_scope}",
                     turn_index: {turn_index},
                     attempt: {attempt},
@@ -167,9 +167,9 @@ impl DefraRenderedRequestSink {
             request_commit_cid = escape_graphql_string(&rendered.request_commit_cid),
             request_id = escape_graphql_string(&rendered.request_id),
             session_id = escape_graphql_string(&rendered.session_id),
-            agent_did = escape_graphql_string(&rendered.agent_did),
+            node_did = escape_graphql_string(&rendered.node_did),
             requester_did = escape_graphql_string(&rendered.requester_did),
-            behavior_id = escape_graphql_string(&rendered.behavior_id),
+            agent_id = escape_graphql_string(&rendered.agent_id),
             capture_scope = escape_graphql_string(&rendered.capture_scope),
             turn_index = rendered.turn_index,
             attempt = rendered.attempt,
@@ -507,9 +507,9 @@ fn canonical_capture_fact(rendered: &RenderedCompletionRequest) -> Result<Value>
         "request_commit_cid": rendered.request_commit_cid,
         "request_id": rendered.request_id,
         "session_id": rendered.session_id,
-        "agent_did": rendered.agent_did,
+        "node_did": rendered.node_did,
         "requester_did": rendered.requester_did,
-        "behavior_id": rendered.behavior_id,
+        "agent_id": rendered.agent_id,
         "capture_scope": rendered.capture_scope,
         "turn_index": rendered.turn_index,
         "attempt": rendered.attempt,
@@ -570,15 +570,15 @@ async fn prior_block_pins_in_txn(
         .to_owned();
     let query = format!(
         r#"{{ {collection}(filter: {{
-                agent_did: {{_eq: "{agent_did}"}}, requester_did: {{_eq: "{requester_did}"}},
+                node_did: {{_eq: "{node_did}"}}, requester_did: {{_eq: "{requester_did}"}},
                 session_id: {{_eq: "{session_id}"}}, source: {{_eq: "{source}"}},
                 capture_scope: {{_eq: "{capture_scope}"}}
-            }}, order: [{{agent_did: DESC}}, {{requester_did: DESC}}, {{session_id: DESC}},
+            }}, order: [{{node_did: DESC}}, {{requester_did: DESC}}, {{session_id: DESC}},
                 {{source: DESC}}, {{capture_scope: DESC}}, {{created_at: DESC}}], limit: 1) {{
                 capture_version request_json
             }} }}"#,
         collection = RENDERED_REQUEST_COLLECTION,
-        agent_did = escape_graphql_string(&rendered.agent_did),
+        node_did = escape_graphql_string(&rendered.node_did),
         requester_did = escape_graphql_string(&rendered.requester_did),
         session_id = escape_graphql_string(&rendered.session_id),
         source = escape_graphql_string(&source),
@@ -844,9 +844,9 @@ mod tests {
             capture_scope: capture_scope.clone(),
             turn_index,
             attempt: 0,
-            agent_did: "did:key:test".into(),
+            node_did: "did:key:test".into(),
             requester_did: String::new(),
-            behavior_id: "behavior".into(),
+            agent_id: "behavior".into(),
             session_id: "session".into(),
             model_name: "model".into(),
             source: super::super::RenderedRequestSource::OpenAiChatCompletions,

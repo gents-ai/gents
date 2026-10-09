@@ -16,8 +16,8 @@ fn test_plugins() -> Arc<gents::plugin::executor::PluginExecutor> {
     Arc::new(gents::plugin::executor::PluginExecutor::default())
 }
 
-const AGENT_DID: &str = "did:key:zSelfConfigE2E";
-const BEHAVIOR_ID: &str = "self-config-behavior";
+const NODE_DID: &str = "did:key:zSelfConfigE2E";
+const AGENT_ID: &str = "self-config-behavior";
 const CONTEXT_ID: &str = "self-config-context";
 const TOOLS_ID: &str = "self-config-tools";
 const PROFILE_ID: &str = "self-config-profile";
@@ -26,14 +26,14 @@ const SECRET: &str = "sk-secret-should-never-leak";
 
 async fn seed_config(node: &Arc<EmbeddedNode>) {
     let config: PackConfig = serde_json::from_value(json!({
-        "agent_principal":{"agent_did":AGENT_DID,"default_behavior_id":BEHAVIOR_ID},
-        "agent_behaviors":[{"agent_did":AGENT_DID,"behavior_id":BEHAVIOR_ID,"context_id":CONTEXT_ID,"inference_profile_id":PROFILE_ID}],
-        "contexts":[{"agent_did":AGENT_DID,"context_id":CONTEXT_ID,"system_prompt":"original prompt","tools_id":TOOLS_ID}],
-        "tools":[{"agent_did":AGENT_DID,"tools_id":TOOLS_ID,"self_config":{"enable_self_config":true}}],
-        "inference_profiles":[{"agent_did":AGENT_DID,"profile_id":PROFILE_ID,"backend_id":BACKEND_ID,"model_name":"model-small","sampling_id":"sampling","execution_id":"execution"}],
-        "inference_sampling":[{"agent_did":AGENT_DID,"sampling_id":"sampling","temperature":0.7}],
-        "inference_execution":[{"agent_did":AGENT_DID,"execution_id":"execution","max_turns":40}],
-        "inference_backends":[{"agent_did":AGENT_DID,"backend_id":BACKEND_ID,"name":"Local","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:11434/v1","auth":{"kind":"api_key","key":SECRET},"max_concurrent":1}]
+        "node":{"node_did":NODE_DID,"default_agent_id":AGENT_ID},
+        "agents":[{"node_did":NODE_DID,"agent_id":AGENT_ID,"context_id":CONTEXT_ID,"inference_profile_id":PROFILE_ID}],
+        "contexts":[{"node_did":NODE_DID,"context_id":CONTEXT_ID,"system_prompt":"original prompt","tools_id":TOOLS_ID}],
+        "tools":[{"node_did":NODE_DID,"tools_id":TOOLS_ID,"self_config":{"enable_self_config":true}}],
+        "inference_profiles":[{"node_did":NODE_DID,"profile_id":PROFILE_ID,"backend_id":BACKEND_ID,"model_name":"model-small","sampling_id":"sampling","execution_id":"execution"}],
+        "inference_sampling":[{"node_did":NODE_DID,"sampling_id":"sampling","temperature":0.7}],
+        "inference_execution":[{"node_did":NODE_DID,"execution_id":"execution","max_turns":40}],
+        "inference_backends":[{"node_did":NODE_DID,"backend_id":BACKEND_ID,"name":"Local","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:11434/v1","auth":{"kind":"api_key","key":SECRET},"max_concurrent":1}]
     })).unwrap();
     let plan = DesiredStateApplyPlan::from_pack_config(&config).unwrap();
     ConfigAccess::Local(node.clone())
@@ -52,7 +52,7 @@ async fn read(node: &Arc<EmbeddedNode>, collection: Collection, id: &str) -> Val
             let id = id.clone();
             Box::pin(async move {
                 Ok(
-                    read_desired_state_record_in_txn(txn, collection, AGENT_DID, &id)
+                    read_desired_state_record_in_txn(txn, collection, NODE_DID, &id)
                         .await?
                         .unwrap()
                         .1,
@@ -66,7 +66,7 @@ async fn read(node: &Arc<EmbeddedNode>, collection: Collection, id: &str) -> Val
 fn tool_config(categories: &[&str], no_lockout: bool, preview: bool) -> SelfConfigToolConfig {
     SelfConfigToolConfig {
         enabled: true,
-        behavior_id: BEHAVIOR_ID.into(),
+        agent_id: AGENT_ID.into(),
         categories: categories.iter().map(|s| s.to_string()).collect(),
         no_lockout,
         preview,
@@ -105,8 +105,8 @@ fn legacy_test_call_as_config_argv(name: &str, args: &Value) -> Vec<String> {
             let category = preview["category"].as_str().unwrap();
             let kind = preview.get("kind").and_then(Value::as_str);
             let head = match (category, kind) {
-                ("behavior", Some("context")) => {
-                    vec!["behavior".into(), "context".into(), "preview".into()]
+                ("agent", Some("context")) => {
+                    vec!["agent".into(), "context".into(), "preview".into()]
                 }
                 ("tools", _) => vec!["tools".into(), "preview".into()],
                 ("profile", target) => {
@@ -121,10 +121,10 @@ fn legacy_test_call_as_config_argv(name: &str, args: &Value) -> Vec<String> {
             };
             patch(head, &preview["patch"])
         }
-        "configure_behavior" => {
+        "configure_agent" => {
             assert_eq!(args.get("target").and_then(Value::as_str), Some("context"));
             patch(
-                vec!["behavior".into(), "context".into(), "edit".into()],
+                vec!["agent".into(), "context".into(), "edit".into()],
                 &args["patch"],
             )
         }
@@ -156,14 +156,14 @@ async fn configure_context_and_profile_preserve_identity_and_reject_partial_comm
     seed_config(&db.node).await;
     let tools = build_self_config_tools(
         db.node.clone(),
-        AGENT_DID.into(),
+        NODE_DID.into(),
         None,
-        &tool_config(&["behavior", "profile"], false, false),
+        &tool_config(&["agent", "profile"], false, false),
         test_plugins(),
     );
     call_tool(
         &tools,
-        "configure_behavior",
+        "configure_agent",
         json!({"target":"context","patch":{"system_prompt":"sharper prompt"}}),
     )
     .await
@@ -182,7 +182,7 @@ async fn configure_context_and_profile_preserve_identity_and_reject_partial_comm
     let before = read(&db.node, Collection::InferenceProfile, PROFILE_ID).await;
     assert_eq!(before["model_name"], "model-large");
     for patch in [
-        json!({"agent_did":"did:key:zAttacker","model_name":"hijacked"}),
+        json!({"node_did":"did:key:zAttacker","model_name":"hijacked"}),
         json!({"backend_id":"missing-backend","model_name":"half applied?"}),
     ] {
         call_tool(&tools, "configure_profile", json!({"patch":patch}))
@@ -194,8 +194,8 @@ async fn configure_context_and_profile_preserve_identity_and_reject_partial_comm
         );
     }
     assert_eq!(
-        read(&db.node, Collection::AgentBehavior, BEHAVIOR_ID).await["agent_did"],
-        AGENT_DID
+        read(&db.node, Collection::Agent, AGENT_ID).await["node_did"],
+        NODE_DID
     );
 }
 
@@ -205,7 +205,7 @@ async fn configure_tools_respects_gate_and_no_lockout() {
     seed_config(&db.node).await;
     let tools = build_self_config_tools(
         db.node.clone(),
-        AGENT_DID.into(),
+        NODE_DID.into(),
         None,
         &tool_config(&["tools"], true, false),
         test_plugins(),
@@ -236,7 +236,7 @@ async fn configure_tools_respects_gate_and_no_lockout() {
     assert_eq!(read(&db.node, Collection::Tools, TOOLS_ID).await, before);
     let tools = build_self_config_tools(
         db.node.clone(),
-        AGENT_DID.into(),
+        NODE_DID.into(),
         None,
         &tool_config(&["tools"], false, false),
         test_plugins(),
@@ -258,7 +258,7 @@ async fn configure_tools_respects_gate_and_no_lockout() {
 async fn get_my_config_redacts_secrets_and_preview_does_not_write() {
     let db = test_db("self-config-read").await;
     seed_config(&db.node).await;
-    let mut config = tool_config(&["behavior", "tools", "profile", "backend"], false, true);
+    let mut config = tool_config(&["agent", "tools", "profile", "backend"], false, true);
     config.process_ceiling = SelfConfigProcessCeiling {
         file_mode: FileToolMode::ReadWrite,
         bash_mode: BashMode::Unrestricted,
@@ -266,14 +266,14 @@ async fn get_my_config_redacts_secrets_and_preview_does_not_write() {
     };
     let tools = build_self_config_tools(
         db.node.clone(),
-        AGENT_DID.into(),
+        NODE_DID.into(),
         None,
         &config,
         test_plugins(),
     );
     let output = call_tool(&tools, "get_my_config", json!({})).await.unwrap();
     let config: Value = serde_json::from_str(&output).unwrap();
-    assert_eq!(config["behavior"]["behavior_id"], BEHAVIOR_ID);
+    assert_eq!(config["agent"]["agent_id"], AGENT_ID);
     assert_eq!(config["context"]["context_id"], CONTEXT_ID);
     assert_eq!(config["inference_profile"]["profile_id"], PROFILE_ID);
     assert_eq!(config["documents"]["Tools"]["tools_id"], TOOLS_ID);
@@ -290,7 +290,7 @@ async fn get_my_config_redacts_secrets_and_preview_does_not_write() {
         "Unrestricted"
     );
     assert_eq!(
-        config["runtime_effective"]["behavior_narrowing"]["requested_file_mode"],
+        config["runtime_effective"]["agent_narrowing"]["requested_file_mode"],
         "Off"
     );
     assert_eq!(config["runtime_effective"]["effective"]["file_mode"], "Off");
@@ -299,7 +299,7 @@ async fn get_my_config_redacts_secrets_and_preview_does_not_write() {
         "backend credentials must never leave the read owner"
     );
     let before = read(&db.node, Collection::AgentContext, CONTEXT_ID).await;
-    let preview=call_tool(&tools,"get_my_config",json!({"preview":{"category":"behavior","kind":"context","patch":{"system_prompt":"previewed prompt"}}})).await.unwrap();
+    let preview=call_tool(&tools,"get_my_config",json!({"preview":{"category":"agent","kind":"context","patch":{"system_prompt":"previewed prompt"}}})).await.unwrap();
     assert!(
         preview.contains("previewed prompt") && preview.contains("nothing was written"),
         "{preview}"
@@ -316,7 +316,7 @@ async fn typed_patch_values_reject_injection_and_protected_auth_without_writes()
     seed_config(&db.node).await;
     let tools = build_self_config_tools(
         db.node.clone(),
-        AGENT_DID.into(),
+        NODE_DID.into(),
         None,
         &tool_config(&["backend"], false, false),
         test_plugins(),
@@ -357,18 +357,18 @@ async fn configure_event_source_rejects_filter_and_collection_injection() {
     seed_config(&db.node).await;
     let tools = build_self_config_tools(
         db.node.clone(),
-        AGENT_DID.into(),
+        NODE_DID.into(),
         None,
         &tool_config(&["automation"], false, false),
         test_plugins(),
     );
     for filter in [
         json!(
-            r#"{} ] }, limit: 1) { _docID } AgentBehavior(filter: { _and: [ {} ] }, limit: 1) { context_id } X(filter: { _and: [ {}"#
+            r#"{} ] }, limit: 1) { _docID } Agent(filter: { _and: [ {} ] }, limit: 1) { context_id } X(filter: { _and: [ {}"#
         ),
         json!("{ a: 1 } # "),
         json!("{ a: 1 }) { x } ("),
-        json!({r#"x: 1 }) { _docID } create_AgentBehavior(input: { behavior_id: "evil-injected" }) { _docID } #"#:1}),
+        json!({r#"x: 1 }) { _docID } create_Agent(input: { agent_id: "evil-injected" }) { _docID } #"#:1}),
     ] {
         call_tool(&tools,"configure_automation",json!({"kind":"event_source","id":"source","patch":{"source_collection":"CustomerSignup","filter":filter}})).await.expect_err("invalid filter rejected before publication");
     }
@@ -388,11 +388,11 @@ async fn configure_event_source_rejects_filter_and_collection_injection() {
         .expect_err("collection identifiers cannot contain GraphQL syntax");
     }
     let rows = ConfigAccess::Local(db.node.clone())
-        .execute("{ EventSource { _docID } AgentBehavior { behavior_id } }")
+        .execute("{ EventSource { _docID } Agent { agent_id } }")
         .await
         .unwrap();
     assert!(rows["data"]["EventSource"].as_array().unwrap().is_empty());
-    assert_eq!(rows["data"]["AgentBehavior"].as_array().unwrap().len(), 1);
+    assert_eq!(rows["data"]["Agent"].as_array().unwrap().len(), 1);
     // Self-config installs schemas before sources that watch them.
     db.node
         .add_schema("type CustomerSignup { kind: String }")
@@ -411,7 +411,7 @@ async fn configure_automation_creates_one_chain_and_preserves_runtime_ownership(
     seed_config(&db.node).await;
     let tools = build_self_config_tools(
         db.node.clone(),
-        AGENT_DID.into(),
+        NODE_DID.into(),
         None,
         &tool_config(&["automation"], false, false),
         test_plugins(),
@@ -456,13 +456,13 @@ async fn configure_automation_creates_one_chain_and_preserves_runtime_ownership(
     call_tool(
         &tools,
         "configure_automation",
-        json!({"kind":"task","id":"nightly","patch":{"behavior_id":"someone-else"}}),
+        json!({"kind":"task","id":"nightly","patch":{"agent_id":"someone-else"}}),
     )
     .await
-    .expect_err("task behavior is protected");
+    .expect_err("task agent is protected");
     assert_eq!(
-        read(&db.node, Collection::Task, "nightly").await["behavior_id"],
-        BEHAVIOR_ID
+        read(&db.node, Collection::Task, "nightly").await["agent_id"],
+        AGENT_ID
     );
 }
 
@@ -473,17 +473,17 @@ async fn self_only_boundaries_reject_foreign_references_and_corrupted_bindings()
     // Corrupt storage explicitly to exercise the self-config reader's fail-closed
     // behavior independently of the normal writer's reference validation.
     for query in [
-        r#"mutation { create_Tools(input:{agent_did:"did:key:zVictim", tools_id:"victim-tools"}) {_docID} }"#,
-        r#"mutation { create_Task(input:{agent_did:"did:key:zVictim", task_id:"victim-task", behavior_id:"victim", prompt_template:"Victim"}) {_docID} }"#,
+        r#"mutation { create_Tools(input:{node_did:"did:key:zVictim", tools_id:"victim-tools"}) {_docID} }"#,
+        r#"mutation { create_Task(input:{node_did:"did:key:zVictim", task_id:"victim-task", agent_id:"victim", prompt_template:"Victim"}) {_docID} }"#,
     ] {
         let response = db.node.execute(query).await;
         assert!(!response.has_errors(), "{:?}", response.errors);
     }
     let tools = build_self_config_tools(
         db.node.clone(),
-        AGENT_DID.into(),
+        NODE_DID.into(),
         None,
-        &tool_config(&["behavior", "tools", "automation"], false, false),
+        &tool_config(&["agent", "tools", "automation"], false, false),
         test_plugins(),
     );
     call_tool(&tools,"configure_automation",json!({"kind":"schedule","id":"cadence","patch":{"cadence":{"kind":"interval","interval_secs":60}}})).await.unwrap();
@@ -491,7 +491,7 @@ async fn self_only_boundaries_reject_foreign_references_and_corrupted_bindings()
     let before = read(&db.node, Collection::AgentContext, CONTEXT_ID).await;
     call_tool(
         &tools,
-        "configure_behavior",
+        "configure_agent",
         json!({"target":"context","patch":{"tools_id":"victim-tools","system_prompt":"hijacked"}}),
     )
     .await
@@ -505,13 +505,13 @@ async fn self_only_boundaries_reject_foreign_references_and_corrupted_bindings()
     // as well as the proposed one, so it cannot take over a sibling trigger.
     for query in [
         format!(
-            r#"mutation {{ create_AgentBehavior(input:{{agent_did:"{AGENT_DID}", behavior_id:"sibling", context_id:"{CONTEXT_ID}", inference_profile_id:"{PROFILE_ID}"}}) {{_docID}} }}"#
+            r#"mutation {{ create_Agent(input:{{node_did:"{NODE_DID}", agent_id:"sibling", context_id:"{CONTEXT_ID}", inference_profile_id:"{PROFILE_ID}"}}) {{_docID}} }}"#
         ),
         format!(
-            r#"mutation {{ create_Task(input:{{agent_did:"{AGENT_DID}", task_id:"sibling-task", behavior_id:"sibling", prompt_template:"Sibling work"}}) {{_docID}} }}"#
+            r#"mutation {{ create_Task(input:{{node_did:"{NODE_DID}", task_id:"sibling-task", agent_id:"sibling", prompt_template:"Sibling work"}}) {{_docID}} }}"#
         ),
         format!(
-            r#"mutation {{ create_Trigger(input:{{agent_did:"{AGENT_DID}", trigger_id:"sibling-trigger", task_id:"sibling-task", source:{{kind:"schedule",schedule_id:"cadence"}}}}) {{_docID}} }}"#
+            r#"mutation {{ create_Trigger(input:{{node_did:"{NODE_DID}", trigger_id:"sibling-trigger", task_id:"sibling-task", source:{{kind:"schedule",schedule_id:"cadence"}}}}) {{_docID}} }}"#
         ),
     ] {
         let response = db.node.execute(&query).await;
@@ -535,7 +535,7 @@ async fn self_only_boundaries_reject_foreign_references_and_corrupted_bindings()
         read(&db.node, Collection::Trigger, "sibling-trigger").await["task_id"],
         "sibling-task"
     );
-    let response=db.node.execute(&format!(r#"mutation {{ update_AgentContext(filter:{{agent_did:{{_eq:"{AGENT_DID}"}}, context_id:{{_eq:"{CONTEXT_ID}"}}}}, input:{{tools_id:"victim-tools"}}) {{_docID}} }}"#)).await;
+    let response=db.node.execute(&format!(r#"mutation {{ update_AgentContext(filter:{{node_did:{{_eq:"{NODE_DID}"}}, context_id:{{_eq:"{CONTEXT_ID}"}}}}, input:{{tools_id:"victim-tools"}}) {{_docID}} }}"#)).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
     call_tool(
         &tools,
@@ -544,7 +544,7 @@ async fn self_only_boundaries_reject_foreign_references_and_corrupted_bindings()
     )
     .await
     .expect_err("corrupt binding must not grant access to foreign tools");
-    let response=db.node.execute(r#"{ Tools(filter:{agent_did:{_eq:"did:key:zVictim"}, tools_id:{_eq:"victim-tools"}}) {host} }"#).await;
+    let response=db.node.execute(r#"{ Tools(filter:{node_did:{_eq:"did:key:zVictim"}, tools_id:{_eq:"victim-tools"}}) {host} }"#).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
     assert!(response.data.unwrap()["Tools"][0]["host"].is_null());
 }
@@ -557,12 +557,12 @@ async fn writes_require_an_acp_addressable_agent_identity() {
         db.node.clone(),
         "not-a-did".into(),
         None,
-        &tool_config(&["behavior"], false, false),
+        &tool_config(&["agent"], false, false),
         test_plugins(),
     );
     let error = call_tool(
         &tools,
-        "configure_behavior",
+        "configure_agent",
         json!({"target":"context","patch":{"system_prompt":"should not land"}}),
     )
     .await

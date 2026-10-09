@@ -7,10 +7,10 @@
       {
         "collection": "AgentSession",
         "document": {
-          "agent_did": "$trial",
+          "node_did": "$trial",
           "requester_did": "$trial",
           "session_id": "vault-rotation",
-          "behavior_id": "engineer",
+          "agent_id": "engineer",
           "created_at": "2025-01-01T00:00:00Z",
           "closed_at": null,
           "title": {

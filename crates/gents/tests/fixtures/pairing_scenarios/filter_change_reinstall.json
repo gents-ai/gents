@@ -7,7 +7,7 @@
       "peer": "B",
       "replicator_addresses": ["/ip4/127.0.0.1/tcp/4103/p2p/peer-b"],
       "replicator_filter": {
-        "AgentRequest": { "field": "agent_did", "value": "did:key:alice" }
+        "AgentRequest": { "field": "node_did", "value": "did:key:alice" }
       }
     },
     { "op": "Reconcile", "node": "A" },
@@ -18,7 +18,7 @@
       "peer": "B",
       "replicator_addresses": ["/ip4/127.0.0.1/tcp/4103/p2p/peer-b"],
       "replicator_filter": {
-        "AgentRequest": { "field": "agent_did", "value": "did:key:bob" }
+        "AgentRequest": { "field": "node_did", "value": "did:key:bob" }
       }
     },
     { "op": "Reconcile", "node": "A" },

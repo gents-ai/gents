@@ -24,7 +24,7 @@ fn checked_in_targets_decode_through_runtime_configuration() {
             "{name} stores a key"
         );
         let backend = target.backend("did:key:owner");
-        assert_eq!(backend.agent_did, "did:key:owner");
+        assert_eq!(backend.node_did, "did:key:owner");
         gents::document_config::InferenceBackend::from_value(
             &serde_json::to_value(&backend).unwrap(),
         )
@@ -45,18 +45,18 @@ fn targets_reject_extra_documents_owners_and_dangling_profiles() {
     let profile = serde_json::json!({"profile_id": "p", "backend_id": "b", "model_name": "m"});
     let decode = |value| InferenceTarget::decode("t".into(), value);
     let target = decode(serde_json::json!({
-        "agent_principal": {}, "inference_backends": [backend], "inference_profiles": [profile]
+        "node": {}, "inference_backends": [backend], "inference_profiles": [profile]
     }))
     .unwrap();
     assert_eq!((target.model(), target.backend_id()), ("m", "b"));
     for invalid in [
-        serde_json::json!({"agent_principal": {}, "inference_backends": [backend]}),
-        serde_json::json!({"agent_principal": {}, "inference_backends": [backend, backend], "inference_profiles": [profile]}),
-        serde_json::json!({"agent_principal": {"display_name": "x"}, "inference_backends": [backend], "inference_profiles": [profile]}),
-        serde_json::json!({"agent_principal": {"agent_did": "did:key:other"}, "inference_backends": [backend], "inference_profiles": [profile]}),
-        serde_json::json!({"agent_principal": {}, "inference_backends": [backend], "inference_profiles": [{"profile_id": "p", "backend_id": "missing", "model_name": "m"}]}),
-        serde_json::json!({"agent_principal": {}, "inference_backends": [backend], "inference_profiles": [profile], "contexts": [{"context_id": "c"}]}),
-        serde_json::json!({"agent_principal": {}, "inference_backends": [{"backend_id": "b", "name": "b", "provider_kind": "OpenAiCompatible", "endpoint": "http://127.0.0.1:9/v1", "auth": {"kind": "environment", "variable": " "}}], "inference_profiles": [profile]}),
+        serde_json::json!({"node": {}, "inference_backends": [backend]}),
+        serde_json::json!({"node": {}, "inference_backends": [backend, backend], "inference_profiles": [profile]}),
+        serde_json::json!({"node": {"display_name": "x"}, "inference_backends": [backend], "inference_profiles": [profile]}),
+        serde_json::json!({"node": {"node_did": "did:key:other"}, "inference_backends": [backend], "inference_profiles": [profile]}),
+        serde_json::json!({"node": {}, "inference_backends": [backend], "inference_profiles": [{"profile_id": "p", "backend_id": "missing", "model_name": "m"}]}),
+        serde_json::json!({"node": {}, "inference_backends": [backend], "inference_profiles": [profile], "contexts": [{"context_id": "c"}]}),
+        serde_json::json!({"node": {}, "inference_backends": [{"backend_id": "b", "name": "b", "provider_kind": "OpenAiCompatible", "endpoint": "http://127.0.0.1:9/v1", "auth": {"kind": "environment", "variable": " "}}], "inference_profiles": [profile]}),
     ] {
         assert!(decode(invalid.clone()).is_err(), "accepted {invalid}");
     }
@@ -96,7 +96,7 @@ fn targets_are_literal_and_never_hold_inline_keys() {
     let profile = serde_json::json!({"profile_id": "p", "backend_id": "b", "model_name": "m"});
     let backend = |endpoint: &str, auth: serde_json::Value| {
         serde_json::json!({
-            "agent_principal": {},
+            "node": {},
             "inference_backends": [{
                 "backend_id": "b", "name": "b", "provider_kind": "OpenAiCompatible",
                 "endpoint": endpoint, "auth": auth
@@ -115,18 +115,17 @@ fn targets_are_literal_and_never_hold_inline_keys() {
     let error = InferenceTarget::decode(
         "t".into(),
         serde_json::json!({
-            "agent_principal": {},
+            "node": {},
             "inference_backends": [{
                 "backend_id": "b", "name": "b", "provider_kind": "ClaudeCliSubscription",
-                "endpoint": "https://api.anthropic.com", "auth": {"kind": "principal_oauth"}
+                "endpoint": "https://api.anthropic.com", "auth": {"kind": "node_oauth"}
             }],
             "inference_profiles": [profile]
         }),
     )
     .unwrap_err();
     assert!(
-        format!("{error:#}")
-            .contains("PrincipalOAuth targets are not supported for fresh-principal evals"),
+        format!("{error:#}").contains("NodeOAuth targets are not supported for fresh-node evals"),
         "{error:#}"
     );
     // `${PATH}` is set in every test process; a literal target must not expand it.

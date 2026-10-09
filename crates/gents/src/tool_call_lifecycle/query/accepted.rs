@@ -19,25 +19,18 @@ impl ToolCallLifecycle {
     pub(crate) async fn load_accepted_for_dispatch(
         node: &EmbeddedNode,
         tool_doc_id: &str,
-        agent_did: &str,
+        node_did: &str,
         session_id: &str,
         requester_did: Option<&str>,
     ) -> Result<AcceptedToolCall> {
-        Self::load_direct_binding(
-            node,
-            tool_doc_id,
-            agent_did,
-            session_id,
-            requester_did,
-            true,
-        )
-        .await
+        Self::load_direct_binding(node, tool_doc_id, node_did, session_id, requester_did, true)
+            .await
     }
 
     pub(super) async fn load_direct_binding(
         node: &EmbeddedNode,
         tool_doc_id: &str,
-        agent_did: &str,
+        node_did: &str,
         session_id: &str,
         requester_did: Option<&str>,
         require_complete: bool,
@@ -49,7 +42,7 @@ impl ToolCallLifecycle {
             |txn| {
                 Box::pin(async move {
                     let scope =
-                        crate::session::session_scope_filter(agent_did, session_id, requester_did);
+                        crate::session::session_scope_filter(node_did, session_id, requester_did);
                     let tool_id = escape_graphql_string(tool_doc_id);
                     let response = txn
                         .execute(&format!(
@@ -108,7 +101,7 @@ impl ToolCallLifecycle {
                     let (message, _) = crate::session::load_canonical_message_in_txn(
                         txn,
                         &header.doc_id,
-                        agent_did,
+                        node_did,
                         requester_did,
                     )
                     .await?;

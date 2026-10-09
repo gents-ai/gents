@@ -125,7 +125,7 @@ async fn remote_node() -> Arc<defra_node::EmbeddedNode> {
     crate::ensure_runtime_schemas(&node).await.unwrap();
     for (owner, port) in [("did:test:owner", 8080), ("did:test:foreign", 9090)] {
         let owner = crate::graphql::escape_graphql_string(owner);
-        let response = node.execute(&format!(r#"mutation {{ create_ToolServiceRegistry(input: {{ agent_did: "{owner}", service_id: "shared", hostname: "remote", mcp_port: {port}, enabled: true }}) {{ _docID }} }}"#)).await;
+        let response = node.execute(&format!(r#"mutation {{ create_ToolServiceRegistry(input: {{ node_did: "{owner}", service_id: "shared", hostname: "remote", mcp_port: {port}, enabled: true }}) {{ _docID }} }}"#)).await;
         assert!(!response.has_errors(), "{:?}", response.errors);
     }
     node
@@ -147,7 +147,7 @@ fn remote_context(
         health: crate::health_checker::ServiceHealthMap::new(),
         local_hostname: "local".into(),
         local_subnet: None,
-        agent_did: "did:test:owner".into(),
+        node_did: "did:test:owner".into(),
         allowed_mcp_service_ids: vec!["shared".into()],
         remote_tools: remote_selection(&["shared"], &["selected"]),
     }
@@ -236,7 +236,7 @@ async fn scoped_discovery_and_flat_dispatch_have_identical_permissions() {
             context.health,
             "local".into(),
             None,
-            context.agent_did,
+            context.node_did,
             context.allowed_mcp_service_ids,
             context.remote_tools,
         )
@@ -278,12 +278,12 @@ async fn scoped_discovery_and_flat_dispatch_have_identical_permissions() {
 async fn disabled_and_duplicate_registry_identity_fail_before_dispatch() {
     let node = remote_node().await;
     let context = remote_context(node.clone(), crate::mcp_pool::McpPool::new());
-    let result = node.execute(r#"mutation { update_ToolServiceRegistry(filter: { agent_did: {_eq: "did:test:owner"}}, input: {enabled: false}) {_docID} }"#).await;
+    let result = node.execute(r#"mutation { update_ToolServiceRegistry(filter: { node_did: {_eq: "did:test:owner"}}, input: {enabled: false}) {_docID} }"#).await;
     assert!(!result.has_errors(), "{:?}", result.errors);
     assert!(super::shared::lookup_service(&context, "shared")
         .await
         .is_err());
-    let result = node.execute(r#"mutation { create_ToolServiceRegistry(input: {agent_did: "did:test:owner", service_id: "shared", hostname: "other", mcp_port: 9000}) {_docID} }"#).await;
+    let result = node.execute(r#"mutation { create_ToolServiceRegistry(input: {node_did: "did:test:owner", service_id: "shared", hostname: "other", mcp_port: 9000}) {_docID} }"#).await;
     assert!(
         result.has_errors(),
         "the canonical unique owner/service identity must reject duplicate rows"

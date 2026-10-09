@@ -39,8 +39,8 @@ fn explicit_matches(
 ) -> bool {
     matches_hint(&explicit.workspace_id, &source.workspace_id)
         && matches_hint(
-            &explicit.workspace_owner_agent_did,
-            &source.workspace_owner_agent_did,
+            &explicit.workspace_owner_node_did,
+            &source.workspace_owner_node_did,
         )
         && matches_hint(&explicit.workspace_seal_hash, &source.workspace_seal_hash)
         && present(explicit.workspace_authority.as_deref())
@@ -50,7 +50,7 @@ fn explicit_matches(
 fn from_row(row: &AgentRequestRow) -> WorkspaceLineage {
     WorkspaceLineage {
         workspace_id: row.workspace_id.clone(),
-        workspace_owner_agent_did: row.workspace_owner_agent_did.clone(),
+        workspace_owner_node_did: row.workspace_owner_node_did.clone(),
         workspace_authority: row.workspace_authority.clone(),
         workspace_seal_hash: row.workspace_seal_hash.clone(),
     }
@@ -66,7 +66,7 @@ fn from_input(input: &Value) -> Result<WorkspaceLineage> {
     };
     Ok(WorkspaceLineage {
         workspace_id: field("workspace_id")?,
-        workspace_owner_agent_did: None,
+        workspace_owner_node_did: None,
         workspace_authority: field("workspace_authority")?,
         workspace_seal_hash: field("workspace_seal_hash")?,
     })
@@ -89,7 +89,7 @@ async fn stamp_from_workspace_owner(
     let workspace = crate::workspace::decode_isolated_workspace_record_response(&response)?
         .context("isolated workspace for graph entry is missing")?;
     anyhow::ensure!(
-        workspace.owner_agent_did == owner,
+        workspace.owner_node_did == owner,
         "graph input workspace owner mismatch"
     );
     crate::workspace::apply_workspace_lineage_stamp(lineage, &workspace)
@@ -263,7 +263,7 @@ pub(crate) async fn finalize_graph_workspace(
     } else if authority.is_some() && stamped.workspace_id.is_some() {
         let inherited_seal = stamped.workspace_seal_hash.clone();
         let workspace_owner = stamped
-            .workspace_owner_agent_did
+            .workspace_owner_node_did
             .clone()
             .context("authenticated entry lacks workspace owner scope")?;
         stamp_from_workspace_owner(executor, &mut stamped, &workspace_owner).await?;
@@ -319,7 +319,7 @@ pub(crate) async fn fence_root_workspace_in_txn(
     };
     let explicit = WorkspaceLineage {
         workspace_id: request.workspace_id.clone(),
-        workspace_owner_agent_did: request.workspace_owner_agent_did.clone(),
+        workspace_owner_node_did: request.workspace_owner_node_did.clone(),
         workspace_authority: request.workspace_authority.clone(),
         workspace_seal_hash: request.workspace_seal_hash.clone(),
     };
@@ -327,7 +327,7 @@ pub(crate) async fn fence_root_workspace_in_txn(
         txn,
         trigger,
         request.caused_by_correlation.as_deref(),
-        &request.agent_did,
+        &request.node_did,
         request.caused_by_source_doc_id.as_deref(),
         &explicit,
     )
@@ -339,7 +339,7 @@ pub(crate) async fn fence_root_workspace_in_txn(
         txn,
         trigger,
         request.caused_by_correlation.as_deref(),
-        &request.agent_did,
+        &request.node_did,
     )
     .await?
     {
@@ -357,7 +357,7 @@ pub(crate) async fn fence_root_workspace_in_txn(
     };
     anyhow::ensure!(
         explicit.workspace_id == expected.workspace_id
-            && explicit.workspace_owner_agent_did == expected.workspace_owner_agent_did
+            && explicit.workspace_owner_node_did == expected.workspace_owner_node_did
             && explicit.workspace_authority == expected.workspace_authority
             && explicit.workspace_seal_hash == expected.workspace_seal_hash,
         "signed graph workspace tuple differs from resolved publication evidence"
@@ -549,7 +549,7 @@ pub(crate) async fn resolve_graph_session(
             #[cfg(test)]
             root_doc_id: row.doc_id.clone().unwrap_or_default(),
             session_id: row.session_id.clone().unwrap_or_default(),
-            owner: row.agent_did.clone().unwrap_or_default(),
+            owner: row.node_did.clone().unwrap_or_default(),
             correlation: row.caused_by_correlation.clone().unwrap_or_default(),
             revision: row
                 .caused_by_trigger_id

@@ -499,7 +499,7 @@ mod tests {
     fn definition() -> serde_json::Value {
         json!({
             "definition_id": "monitor-findings",
-            "agent_did": "did:key:owner",
+            "node_did": "did:key:owner",
             "comparability_version": 1,
             "subject": {"kind": "agent", "inference_slots": ["primary"]},
             "cases": [{
@@ -877,7 +877,7 @@ mod tests {
     #[test]
     fn a_pack_config_carries_eval_definitions() {
         let pack: crate::document_config::PackConfig = serde_json::from_value(json!({
-            "agent_principal": {"agent_did": "did:key:owner"},
+            "node": {"node_did": "did:key:owner"},
             "eval_definitions": [definition()]
         }))
         .unwrap();

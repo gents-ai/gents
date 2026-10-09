@@ -11,7 +11,7 @@ use serde::Deserialize;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio_util::sync::CancellationToken;
 
-use crate::identity::AgentIdentity;
+use crate::identity::NodeIdentity;
 
 use super::enrollment_store::{EnrollmentProjection, GraphqlEnrollmentStore};
 use super::graphql_helpers::{graphql_string_list_literal, rows};
@@ -44,7 +44,7 @@ pub struct EnrollmentAuthorizationFence {
     pub member_did: String,
     pub member_peer: String,
     pub member_ticket: String,
-    pub owner_agent: String,
+    pub owner_node: String,
     pub request_digest: String,
     pub authorization_sequence: u64,
     pub authorization_expires_at: String,
@@ -89,7 +89,7 @@ pub trait PeerAdmissionAuthority: Send + Sync {
     async fn fresh_member_authorized_for_agent(
         &self,
         member_did: &str,
-        owner_agent: &str,
+        owner_node: &str,
     ) -> Result<bool>;
 }
 
@@ -189,12 +189,12 @@ impl PeerAdmissionAuthority for EnrollmentAuthorityHandle {
     async fn fresh_member_authorized_for_agent(
         &self,
         member_did: &str,
-        owner_agent: &str,
+        owner_node: &str,
     ) -> Result<bool> {
         Ok(self
             .fresh_member_authorization(member_did)
             .await?
-            .is_some_and(|authorization| authorization.owner_agent == owner_agent))
+            .is_some_and(|authorization| authorization.owner_node == owner_node))
     }
 }
 
@@ -303,7 +303,7 @@ impl EnrollmentAuthorityOwner {
 /// `source="enrollment"` data-plane rows, and retries exact terminal delivery.
 pub async fn run_enrollment_reconciler(
     node: Arc<EmbeddedNode>,
-    identity: Arc<dyn AgentIdentity>,
+    identity: Arc<dyn NodeIdentity>,
     mut owner: EnrollmentAuthorityOwner,
     cancel: CancellationToken,
 ) -> Result<()> {
@@ -454,7 +454,7 @@ fn exact_authorization_fence(
         member_did: active.request.candidate_did.clone(),
         member_peer: active.request.candidate_peer.clone(),
         member_ticket: active.request.candidate_ticket.clone(),
-        owner_agent: active.request.owner_agent.clone(),
+        owner_node: active.request.owner_agent.clone(),
         request_digest: active.request.request_digest.clone(),
         authorization_sequence: active.revision.sequence,
         authorization_expires_at: active.revision.authorization_expires_at.clone(),
@@ -517,7 +517,7 @@ fn exact_peer_authorization_fence(
 
 async fn sweep_enrollment(
     node: &Arc<EmbeddedNode>,
-    identity: &Arc<dyn AgentIdentity>,
+    identity: &Arc<dyn NodeIdentity>,
     store: &GraphqlEnrollmentStore,
     pairing_admin: &EmbeddedRemoteP2pAdmin,
     owner: &EnrollmentAuthorityOwner,
@@ -547,7 +547,7 @@ async fn sweep_enrollment(
 
 async fn record_applied_route_receipts(
     node: &Arc<EmbeddedNode>,
-    identity: &Arc<dyn AgentIdentity>,
+    identity: &Arc<dyn NodeIdentity>,
     store: &GraphqlEnrollmentStore,
     pairing_admin: &EmbeddedRemoteP2pAdmin,
     projection: &EnrollmentProjection,
@@ -563,7 +563,7 @@ async fn record_applied_route_receipts(
             super::EnrollmentEndpointEntry {
                 desired_id: active.request.candidate_peer.clone(),
                 peer_id: active.request.candidate_peer.clone(),
-                agent_did: active.request.candidate_did.clone(),
+                node_did: active.request.candidate_did.clone(),
                 address: active.request.candidate_ticket.clone(),
                 request_digest: active.request.request_digest.clone(),
                 authorization_sequence: active.revision.sequence,
@@ -718,7 +718,7 @@ async fn reconcile_data_plane(
         node,
         r#"{
                 PeerPairingDesired {
-                    peer_id agent_did template source collections replicator_addresses
+                    peer_id node_did template source collections replicator_addresses
                     enrollment_request_digest enrollment_authorization_sequence
                     enrollment_authorization_expires_at
                 }
@@ -857,7 +857,7 @@ fn upsert_enrollment_route_mutation(
             upsert_PeerPairingDesired(
                 filter: {{ peer_id: {{ _eq: "{peer_id}" }}, source: {{ _eq: "enrollment" }} }},
                 add: {{
-                    peer_id: "{peer_id}", agent_did: "{local_did}", template: "client",
+                    peer_id: "{peer_id}", node_did: "{local_did}", template: "client",
                     source: "enrollment", collections: {collections},
                     enrollment_request_digest: "{request_digest}",
                     enrollment_authorization_sequence: {},
@@ -865,7 +865,7 @@ fn upsert_enrollment_route_mutation(
                     replicator_addresses: {address}, created_at: "{now}", updated_at: "{now}"
                 }},
                 update: {{
-                    agent_did: "{local_did}", template: "client", source: "enrollment",
+                    node_did: "{local_did}", template: "client", source: "enrollment",
                     enrollment_request_digest: "{request_digest}",
                     enrollment_authorization_sequence: {},
                     enrollment_authorization_expires_at: "{authorization_expires_at}",
@@ -891,7 +891,7 @@ fn delete_enrollment_route_mutation(peer_id: &str) -> String {
 #[derive(Debug, Deserialize)]
 struct EnrollmentRouteRow {
     peer_id: String,
-    agent_did: Option<String>,
+    node_did: Option<String>,
     template: Option<String>,
     source: Option<String>,
     collections: Option<Vec<String>>,
@@ -909,7 +909,7 @@ impl EnrollmentRouteRow {
         template: &str,
         collections: &BTreeSet<String>,
     ) -> bool {
-        self.agent_did.as_deref() == Some(local_did)
+        self.node_did.as_deref() == Some(local_did)
             && self.template.as_deref() == Some(template)
             && self.source.as_deref() == Some(SOURCE_ENROLLMENT)
             && self.enrollment_request_digest.as_deref() == Some(&route.request_digest)
@@ -1064,8 +1064,8 @@ mod tests {
 
     async fn create_enrollment_request(
         node: Arc<EmbeddedNode>,
-        target: &dyn AgentIdentity,
-        member: &dyn AgentIdentity,
+        target: &dyn NodeIdentity,
+        member: &dyn NodeIdentity,
         active: &ActiveEnrollment,
         label: &str,
     ) -> crate::watcher::AgentRequest {
@@ -1161,17 +1161,17 @@ mod tests {
     async fn final_claim_fence_reloads_revocation_expiry_supersession_and_read_failure() {
         let target_dir = tempfile::tempdir().unwrap();
         let member_dir = tempfile::tempdir().unwrap();
-        let target: Arc<dyn AgentIdentity> = Arc::new(
+        let target: Arc<dyn NodeIdentity> = Arc::new(
             KeyIdentity::load_or_create(target_dir.path().join("target.key"), None).unwrap(),
         );
-        let member: Arc<dyn AgentIdentity> = Arc::new(
+        let member: Arc<dyn NodeIdentity> = Arc::new(
             KeyIdentity::load_or_create(member_dir.path().join("member.key"), None).unwrap(),
         );
         let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
         crate::schema::ensure_runtime_schemas(node.as_ref())
             .await
             .unwrap();
-        crate::test_support::install_test_behavior(node.as_ref(), target.did(), "behavior-1").await;
+        crate::test_support::install_test_agent(node.as_ref(), target.did(), "behavior-1").await;
 
         let mut generation_one = active_enrollment(1, "2030-01-01T00:10:00Z");
         generation_one.request.candidate_did = member.did().to_string();

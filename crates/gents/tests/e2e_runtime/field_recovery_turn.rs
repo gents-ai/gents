@@ -1,12 +1,12 @@
 use crate::support::{
     accepted_turn::{boot_prepared_accepted_turn, prepare_accepted_turn, AcceptedTurnSpec},
-    fixtures::configure_behavior_tools,
+    fixtures::configure_agent_tools,
     live_inference::wait_for_request_terminal,
     streaming_backend::StreamChunk,
     test_db,
 };
 use gents::document_config::{DatastoreTools, QueryToolDecl, SurfaceToolDecl, Tools};
-use gents::{AgentIdentity, Collection, DatastoreToolSurfaceDocument};
+use gents::{Collection, DatastoreToolSurfaceDocument, NodeIdentity};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{sync::Arc, time::Duration};
@@ -58,27 +58,27 @@ async fn writer_recovers_complete_large_task_contract_in_provider_input() {
         AcceptedTurnSpec {
             backend_id: "field-recovery",
             model: "field-recovery-model",
-            parent_behavior_id: behavior,
-            configured_behavior_ids: &[behavior],
+            parent_agent_id: behavior,
+            configured_agent_ids: &[behavior],
             request_id: "field-recovery-request",
             session_id: "field-recovery-session",
             prompt: "Read the complete writer task contract.",
             accepted_chunks: chunks,
             child_plans: vec![],
             valid_until: None,
-            subagent_depth: None,
+            request_hop: None,
             request_setup: None,
         },
     )
     .await;
-    configure_behavior_tools(
+    configure_agent_tools(
         &db.node,
         &did,
         behavior,
         None,
         Tools {
             tools_id: "writer-tools".into(),
-            agent_did: did.clone(),
+            node_did: did.clone(),
             datastore: Some(DatastoreTools {
                 datastore_tool_surface_ids: Some(vec!["writer-contract".into()]),
                 ..Default::default()
@@ -89,7 +89,7 @@ async fn writer_recovers_complete_large_task_contract_in_provider_input() {
             Collection::DatastoreToolSurface,
             serde_json::to_value(DatastoreToolSurfaceDocument {
                 surface_id: "writer-contract".into(),
-                agent_did: did.clone(),
+                node_did: did.clone(),
                 display_name: None,
                 enabled: true,
                 entries: Some(vec![SurfaceToolDecl::Query(QueryToolDecl {
@@ -106,8 +106,8 @@ async fn writer_recovers_complete_large_task_contract_in_provider_input() {
         )],
     )
     .await;
-    let identity: Arc<dyn AgentIdentity> = db.node_identity.clone();
-    let agent = gents::Gents::from_default_behavior_documents(
+    let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
+    let agent = gents::Gents::from_default_agent_documents(
         db.node.clone(),
         identity,
         gents::DocumentRuntimeOptions::default(),

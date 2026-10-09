@@ -66,8 +66,8 @@ impl EthToolDocument {
     pub fn validate(&self) -> Result<()> {
         anyhow::ensure!(!self.tool_id.trim().is_empty(), "EthTool requires tool_id");
         anyhow::ensure!(
-            !self.agent_did.trim().is_empty(),
-            "EthTool requires agent_did"
+            !self.node_did.trim().is_empty(),
+            "EthTool requires node_did"
         );
         if let Some(chain_id) = self.chain_id {
             anyhow::ensure!(chain_id > 0, "EthTool chain_id must be positive");
@@ -112,8 +112,8 @@ fn tool_fields() -> Result<String> {
     )
 }
 
-pub async fn list_eth_tools(node: &EmbeddedNode, agent_did: &str) -> Result<Vec<EthToolDocument>> {
-    Ok(list_eth_tool_records(node, agent_did)
+pub async fn list_eth_tools(node: &EmbeddedNode, node_did: &str) -> Result<Vec<EthToolDocument>> {
+    Ok(list_eth_tool_records(node, node_did)
         .await?
         .into_iter()
         .map(|(_, tool)| tool)
@@ -122,30 +122,30 @@ pub async fn list_eth_tools(node: &EmbeddedNode, agent_did: &str) -> Result<Vec<
 
 pub(crate) async fn list_eth_tool_records(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
 ) -> Result<Vec<(String, EthToolDocument)>> {
     anyhow::ensure!(
-        !agent_did.trim().is_empty(),
+        !node_did.trim().is_empty(),
         "Ethereum tool owner is required"
     );
-    let owner = escape_graphql_string(agent_did);
+    let owner = escape_graphql_string(node_did);
     let query = format!(
-        "{{ EthTool(filter: {{agent_did: {{_eq: \"{owner}\"}}}}) {{_docID {}}} }}",
+        "{{ EthTool(filter: {{node_did: {{_eq: \"{owner}\"}}}}) {{_docID {}}} }}",
         tool_fields()?
     );
     let response = graphql_with_transaction_retry(node, &query, "list EthTool").await?;
     super::serde_helpers::try_rows_with_doc_id(response.data.as_ref(), "EthTool")
 }
 
-pub fn eth_tool_by_id_query(agent_did: &str, tool_id: &str) -> Result<String> {
+pub fn eth_tool_by_id_query(node_did: &str, tool_id: &str) -> Result<String> {
     anyhow::ensure!(
-        !agent_did.trim().is_empty() && !tool_id.trim().is_empty(),
+        !node_did.trim().is_empty() && !tool_id.trim().is_empty(),
         "Ethereum owner and tool ID are required"
     );
-    let owner = escape_graphql_string(agent_did);
+    let owner = escape_graphql_string(node_did);
     let id = escape_graphql_string(tool_id);
     Ok(format!(
-        "{{ EthTool(filter: {{agent_did: {{_eq: \"{owner}\"}}, tool_id: {{_eq: \"{id}\"}}}}, limit: 2) {{_docID {}}} }}",
+        "{{ EthTool(filter: {{node_did: {{_eq: \"{owner}\"}}, tool_id: {{_eq: \"{id}\"}}}}, limit: 2) {{_docID {}}} }}",
         tool_fields()?
     ))
 }

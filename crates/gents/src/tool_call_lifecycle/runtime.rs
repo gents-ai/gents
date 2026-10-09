@@ -57,8 +57,8 @@ pub(crate) struct CurrentToolRuntimeContext {
     pub(crate) correlation: Option<String>,
     pub(crate) source_fields: std::collections::BTreeMap<String, String>,
     pub(crate) requester_did: Option<String>,
-    pub(crate) agent_did: Option<String>,
-    pub(crate) behavior_id: Option<String>,
+    pub(crate) node_did: Option<String>,
+    pub(crate) agent_id: Option<String>,
     pub(crate) request_id: Option<String>,
 }
 
@@ -122,8 +122,8 @@ pub(crate) fn current_tool_runtime_context() -> Option<CurrentToolRuntimeContext
         correlation: scope.correlation,
         source_fields: scope.source_fields,
         requester_did: scope.requester_did,
-        agent_did: scope.agent_did,
-        behavior_id: scope.behavior_id,
+        node_did: scope.node_did,
+        agent_id: scope.agent_id,
         request_id: scope.request_id,
     })
 }

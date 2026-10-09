@@ -27,8 +27,8 @@ use crate::workspace::{
 pub(crate) const SUCCEEDED_REPAIR_WINDOW: Duration = Duration::from_secs(24 * 60 * 60);
 pub(crate) const SUCCEEDED_REPAIR_LIMIT: u32 = 256;
 
-const INVOCATION_FIELDS: &str = "invocation_id owner_agent_did callback_id origin input idempotency_key caused_by_correlation lifecycle_state attempts action_plan action_journal error claimed_at created_at";
-const RESULT_FIELDS: &str = "result_id invocation_id binding_id owner_agent_did workspace_id work_unit_id caused_by_correlation created_at";
+const INVOCATION_FIELDS: &str = "invocation_id owner_node_did callback_id origin input idempotency_key caused_by_correlation lifecycle_state attempts action_plan action_journal error claimed_at created_at";
+const RESULT_FIELDS: &str = "result_id invocation_id binding_id owner_node_did workspace_id work_unit_id caused_by_correlation created_at";
 
 const ISOLATED_WORKSPACE_FIELDS: &str = r#"
     workspace_id
@@ -38,7 +38,7 @@ const ISOLATED_WORKSPACE_FIELDS: &str = r#"
     branch
     creation_policy
     adapter
-    owner_agent_did
+    owner_node_did
     writer_principal
     integrator_principal
     instruction_manifest
@@ -51,7 +51,7 @@ const ISOLATED_WORKSPACE_FIELDS: &str = r#"
 
 const PLACEMENT_FIELDS: &str = r#"
     workspace_id
-    owner_agent_did
+    owner_node_did
     host_path
     repository_placement_id
     adapter
@@ -84,7 +84,7 @@ pub struct CallbackInvocationDoc {
     pub input: serde_json::Value,
     pub invocation_id: String,
     /// Principal whose runtime owns execution and recovery.
-    pub owner_agent_did: String,
+    pub owner_node_did: String,
     pub callback_id: String,
     pub origin: crate::document_config::CallbackInvocationOrigin,
     pub idempotency_key: String,
@@ -156,7 +156,7 @@ pub struct CallbackResultDoc {
     #[serde(default)]
     pub binding_id: Option<String>,
     /// Principal whose runtime owns execution and recovery.
-    pub owner_agent_did: String,
+    pub owner_node_did: String,
     #[serde(default)]
     pub workspace_id: Option<String>,
     #[serde(default)]
@@ -205,7 +205,7 @@ pub fn parse_string_list(raw: Option<&str>) -> Vec<String> {
 pub fn validate_callback_binding(binding: &CallbackBindingDoc) -> Result<()> {
     for (name, value) in [
         ("binding_id", &binding.binding_id),
-        ("agent_did", &binding.agent_did),
+        ("node_did", &binding.node_did),
         ("callback_id", &binding.callback_id),
         ("event_source_id", &binding.event_source_id),
     ] {
@@ -336,7 +336,7 @@ pub async fn list_enabled_bindings(
     let (fields, _) =
         crate::config_client::config_projection(crate::Collection::CallbackBinding, None)?;
     let query = format!(
-        "{{ CallbackBinding(filter: {{ agent_did: {{ _eq: \"{}\" }} }}) {{ {} }} }}",
+        "{{ CallbackBinding(filter: {{ node_did: {{ _eq: \"{}\" }} }}) {{ {} }} }}",
         escape_graphql_string(owner),
         fields.join(" ")
     );
@@ -345,7 +345,7 @@ pub async fn list_enabled_bindings(
     let mut ids = HashSet::new();
     for binding in &bindings {
         anyhow::ensure!(
-            binding.agent_did == owner && ids.insert(&binding.binding_id),
+            binding.node_did == owner && ids.insert(&binding.binding_id),
             "ambiguous or foreign CallbackBinding"
         );
         validate_callback_binding(binding)?;
@@ -386,17 +386,17 @@ pub async fn load_event_source(
 
 pub async fn load_trusted_callback_signers(node: &EmbeddedNode) -> Result<BTreeSet<String>> {
     let query = r#"{
-        AgentPrincipal(filter: { enabled: { _eq: true } }) {
-            agent_did
+        Node(filter: { enabled: { _eq: true } }) {
+            node_did
         }
     }"#;
     let response =
-        graphql_with_transaction_retry(node, query, "query trusted AgentPrincipal signers").await?;
-    let rows: Vec<Value> = rows(&response, "AgentPrincipal")?;
+        graphql_with_transaction_retry(node, query, "query trusted Node signers").await?;
+    let rows: Vec<Value> = rows(&response, "Node")?;
     Ok(rows
         .into_iter()
         .filter_map(|row| {
-            row.get("agent_did")
+            row.get("node_did")
                 .and_then(Value::as_str)
                 .map(str::trim)
                 .filter(|did| !did.is_empty())
@@ -413,7 +413,7 @@ pub async fn load_invocation(
     let query = format!(
         r#"{{
             CallbackInvocation(
-                filter: {{ invocation_id: {{ _eq: "{id}" }}, owner_agent_did: {{ _eq: "{owner}" }} }},
+                filter: {{ invocation_id: {{ _eq: "{id}" }}, owner_node_did: {{ _eq: "{owner}" }} }},
                 limit: 2
             ) {{ {INVOCATION_FIELDS} }}
         }}"#,
@@ -438,7 +438,7 @@ pub async fn load_invocation_by_key(
     let query = format!(
         r#"{{
             CallbackInvocation(
-                filter: {{ idempotency_key: {{ _eq: "{key}" }}, owner_agent_did: {{ _eq: "{owner}" }} }},
+                filter: {{ idempotency_key: {{ _eq: "{key}" }}, owner_node_did: {{ _eq: "{owner}" }} }},
                 limit: 2
             ) {{ {INVOCATION_FIELDS} }}
         }}"#,
@@ -457,28 +457,25 @@ pub async fn load_invocation_by_key(
 
 pub async fn list_recoverable_invocations(
     node: &EmbeddedNode,
-    owner_agent_did: &str,
+    owner_node_did: &str,
 ) -> Result<Vec<CallbackInvocationDoc>> {
-    let mut invocations = query_owner_invocations(
-        node,
-        owner_agent_did,
-        r#"["pending", "claimed", "running"]"#,
-    )
-    .await?;
-    invocations.extend(list_recent_succeeded_missing_result(node, owner_agent_did).await?);
+    let mut invocations =
+        query_owner_invocations(node, owner_node_did, r#"["pending", "claimed", "running"]"#)
+            .await?;
+    invocations.extend(list_recent_succeeded_missing_result(node, owner_node_did).await?);
     Ok(invocations)
 }
 
 async fn list_recent_succeeded_missing_result(
     node: &EmbeddedNode,
-    owner_agent_did: &str,
+    owner_node_did: &str,
 ) -> Result<Vec<CallbackInvocationDoc>> {
     let cutoff = succeeded_repair_cutoff(chrono::Utc::now());
     let query = format!(
         r#"{{
             CallbackInvocation(
                 filter: {{
-                    owner_agent_did: {{ _eq: "{owner}" }},
+                    owner_node_did: {{ _eq: "{owner}" }},
                     lifecycle_state: {{ _eq: "succeeded" }},
                     created_at: {{ _ge: "{cutoff}" }}
                 }},
@@ -486,7 +483,7 @@ async fn list_recent_succeeded_missing_result(
                 limit: {limit}
             ) {{ {INVOCATION_FIELDS} }}
         }}"#,
-        owner = escape_graphql_string(owner_agent_did),
+        owner = escape_graphql_string(owner_node_did),
         cutoff = escape_graphql_string(&cutoff),
         limit = SUCCEEDED_REPAIR_LIMIT,
     );
@@ -500,7 +497,7 @@ async fn list_recent_succeeded_missing_result(
     let results = load_callback_results_for_invocations(
         node,
         succeeded.iter().map(|row| row.invocation_id.as_str()),
-        owner_agent_did,
+        owner_node_did,
     )
     .await?;
     Ok(succeeded_missing_result(succeeded, &results))
@@ -510,14 +507,14 @@ async fn list_recent_succeeded_missing_result(
 /// the same window and page as the succeeded-without-result repair.
 pub async fn list_recent_failed(
     node: &EmbeddedNode,
-    owner_agent_did: &str,
+    owner_node_did: &str,
 ) -> Result<Vec<CallbackInvocationDoc>> {
     let cutoff = succeeded_repair_cutoff(chrono::Utc::now());
     let query = format!(
         r#"{{
             CallbackInvocation(
                 filter: {{
-                    owner_agent_did: {{ _eq: "{owner}" }},
+                    owner_node_did: {{ _eq: "{owner}" }},
                     lifecycle_state: {{ _eq: "failed" }},
                     created_at: {{ _ge: "{cutoff}" }}
                 }},
@@ -525,7 +522,7 @@ pub async fn list_recent_failed(
                 limit: {limit}
             ) {{ {INVOCATION_FIELDS} }}
         }}"#,
-        owner = escape_graphql_string(owner_agent_did),
+        owner = escape_graphql_string(owner_node_did),
         cutoff = escape_graphql_string(&cutoff),
         limit = SUCCEEDED_REPAIR_LIMIT,
     );
@@ -568,7 +565,7 @@ async fn load_callback_results_for_invocations(
     let query = format!(
         r#"{{
             CallbackResult(
-                filter: {{ invocation_id: {{ _in: [{ids}] }}, owner_agent_did: {{ _eq: "{owner}" }} }},
+                filter: {{ invocation_id: {{ _in: [{ids}] }}, owner_node_did: {{ _eq: "{owner}" }} }},
                 limit: {limit}
             ) {{ invocation_id }}
         }}"#,
@@ -588,20 +585,20 @@ async fn load_callback_results_for_invocations(
 
 async fn query_owner_invocations(
     node: &EmbeddedNode,
-    owner_agent_did: &str,
+    owner_node_did: &str,
     states: &str,
 ) -> Result<Vec<CallbackInvocationDoc>> {
     let query = format!(
         r#"{{
             CallbackInvocation(
                 filter: {{
-                    owner_agent_did: {{ _eq: "{owner}" }},
+                    owner_node_did: {{ _eq: "{owner}" }},
                     lifecycle_state: {{ _in: {states} }}
                 }},
                 order: {{ created_at: ASC }}
             ) {{ {INVOCATION_FIELDS} }}
         }}"#,
-        owner = escape_graphql_string(owner_agent_did),
+        owner = escape_graphql_string(owner_node_did),
         states = states,
     );
     let response = graphql_with_transaction_retry(node, &query, "query CallbackInvocation states")
@@ -618,7 +615,7 @@ pub async fn load_callback_result(
     let query = format!(
         r#"{{
             CallbackResult(
-                filter: {{ invocation_id: {{ _eq: "{id}" }}, owner_agent_did: {{ _eq: "{owner}" }} }},
+                filter: {{ invocation_id: {{ _eq: "{id}" }}, owner_node_did: {{ _eq: "{owner}" }} }},
                 limit: 2
             ) {{ {RESULT_FIELDS} }}
         }}"#,
@@ -642,7 +639,7 @@ pub async fn create_pending_invocation(
     if let Some(existing) = load_invocation_by_key(
         node,
         &invocation.idempotency_key,
-        &invocation.owner_agent_did,
+        &invocation.owner_node_did,
     )
     .await?
     {
@@ -653,7 +650,7 @@ pub async fn create_pending_invocation(
         .clone()
         .unwrap_or_else(|| chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
     let input = serde_json::json!({
-        "invocation_id": invocation.invocation_id, "owner_agent_did": invocation.owner_agent_did,
+        "invocation_id": invocation.invocation_id, "owner_node_did": invocation.owner_node_did,
         "callback_id": invocation.callback_id, "origin": invocation.origin,
         "input": callback_input_for_storage(&invocation.input),
         "idempotency_key": invocation.idempotency_key,
@@ -678,7 +675,7 @@ pub async fn create_pending_invocation(
         Ok(_) => load_invocation_by_key(
             node,
             &invocation.idempotency_key,
-            &invocation.owner_agent_did,
+            &invocation.owner_node_did,
         )
         .await?
         .ok_or_else(|| anyhow!("created CallbackInvocation missing after write")),
@@ -686,7 +683,7 @@ pub async fn create_pending_invocation(
             if let Some(existing) = load_invocation_by_key(
                 node,
                 &invocation.idempotency_key,
-                &invocation.owner_agent_did,
+                &invocation.owner_node_did,
             )
             .await?
             {
@@ -716,7 +713,7 @@ pub(super) fn update_invocation_mutation(
             update_CallbackInvocation(
                 filter: {{
                     invocation_id: {{ _eq: "{id}" }},
-                    owner_agent_did: {{ _eq: "{owner}" }}
+                    owner_node_did: {{ _eq: "{owner}" }}
                     {state_filter}
                 }},
                 input: {{
@@ -730,7 +727,7 @@ pub(super) fn update_invocation_mutation(
             ) {{ _docID }}
         }}"#,
         id = escape_graphql_string(&invocation.invocation_id),
-        owner = escape_graphql_string(&invocation.owner_agent_did),
+        owner = escape_graphql_string(&invocation.owner_node_did),
         state = escape_graphql_string(&invocation.lifecycle_state),
         attempts = invocation.attempts.unwrap_or(0),
         plan = optional_graphql_string_field("action_plan", invocation.action_plan.as_deref()),
@@ -770,7 +767,7 @@ pub(super) fn create_callback_result_mutation(result: &CallbackResultDoc) -> Str
                 result_id: "{result_id}",
                 invocation_id: "{invocation_id}",
                 {binding_id}
-                owner_agent_did: "{owner}",
+                owner_node_did: "{owner}",
                 {workspace}
                 {work_unit_id}
                 {correlation}
@@ -780,7 +777,7 @@ pub(super) fn create_callback_result_mutation(result: &CallbackResultDoc) -> Str
         result_id = escape_graphql_string(&result.result_id),
         invocation_id = escape_graphql_string(&result.invocation_id),
         binding_id = optional_graphql_string_field("binding_id", result.binding_id.as_deref()),
-        owner = escape_graphql_string(&result.owner_agent_did),
+        owner = escape_graphql_string(&result.owner_node_did),
         workspace = optional_graphql_string_field("workspace_id", result.workspace_id.as_deref()),
         work_unit_id =
             optional_graphql_string_field("work_unit_id", result.work_unit_id.as_deref()),
@@ -797,18 +794,18 @@ pub async fn create_callback_result(
     result: &CallbackResultDoc,
 ) -> Result<CallbackResultDoc> {
     if let Some(existing) =
-        load_callback_result(node, &result.invocation_id, &result.owner_agent_did).await?
+        load_callback_result(node, &result.invocation_id, &result.owner_node_did).await?
     {
         return Ok(existing);
     }
     let mutation = create_callback_result_mutation(result);
     match committed_mutation(node, "callback.create_result", &mutation).await {
-        Ok(_) => load_callback_result(node, &result.invocation_id, &result.owner_agent_did)
+        Ok(_) => load_callback_result(node, &result.invocation_id, &result.owner_node_did)
             .await?
             .ok_or_else(|| anyhow!("created CallbackResult missing after write")),
         Err(error) => {
             if let Some(existing) =
-                load_callback_result(node, &result.invocation_id, &result.owner_agent_did).await?
+                load_callback_result(node, &result.invocation_id, &result.owner_node_did).await?
             {
                 return Ok(existing);
             }
@@ -831,7 +828,7 @@ pub async fn load_repository_placement(
     .await?;
     Ok(row.map(|row| RepositoryPlacementRef {
         repository_id: row.repository_id,
-        owner_agent_did: row.agent_did,
+        owner_node_did: row.node_did,
         host_path: PathBuf::from(row.host_path),
         enabled: row.enabled,
     }))
@@ -880,7 +877,7 @@ pub(crate) async fn load_isolated_workspace(
     let query = format!(
         r#"{{
             IsolatedWorkspace(
-                filter: {{ workspace_id: {{ _eq: "{id}" }}, owner_agent_did: {{ _eq: "{owner}" }} }},
+                filter: {{ workspace_id: {{ _eq: "{id}" }}, owner_node_did: {{ _eq: "{owner}" }} }},
                 limit: 2
             ) {{ {ISOLATED_WORKSPACE_FIELDS} }}
         }}"#,
@@ -905,7 +902,7 @@ pub(crate) async fn load_workspace_placement(
     let query = format!(
         r#"{{
             WorkspacePlacement(
-                filter: {{ workspace_id: {{ _eq: "{id}" }}, owner_agent_did: {{ _eq: "{owner}" }} }},
+                filter: {{ workspace_id: {{ _eq: "{id}" }}, owner_node_did: {{ _eq: "{owner}" }} }},
                 limit: 2
             ) {{ {PLACEMENT_FIELDS} }}
         }}"#,

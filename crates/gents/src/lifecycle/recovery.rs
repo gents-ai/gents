@@ -20,10 +20,10 @@ struct ActiveRequestRecoveryReport {
 }
 
 impl RequestLifecycle {
-    pub async fn recover_all(node: &EmbeddedNode, agent_did: &str) -> Result<RecoveryReport> {
-        let active = recover_active_requests(node, agent_did).await?;
-        crate::trigger_engine::durable::recover_outcomes(node, agent_did).await?;
-        let background_wakes_redriven = Self::redrive_failed_background_wakeups(node, agent_did)
+    pub async fn recover_all(node: &EmbeddedNode, node_did: &str) -> Result<RecoveryReport> {
+        let active = recover_active_requests(node, node_did).await?;
+        crate::trigger_engine::durable::recover_outcomes(node, node_did).await?;
+        let background_wakes_redriven = Self::redrive_failed_background_wakeups(node, node_did)
             .await?
             .redriven;
         Ok(RecoveryReport {
@@ -35,9 +35,9 @@ impl RequestLifecycle {
 
     /// Owner-scoped terminal-convergence re-drive (#664).
     ///
-    /// Under `subagent-host` replication a routed `AgentRequest` is replicated
+    /// Under `agent-target-host` replication a routed `AgentRequest` is replicated
     /// to its `requester_did` peer. Safety already holds (the watcher
-    /// `agent_did` filter never lets that peer claim a foreign replica), but
+    /// `node_did` filter never lets that peer claim a foreign replica), but
     /// liveness does not: when the owner terminalizes, the terminal delta
     /// reaches the requester via a single one-shot PushLog that can drop, and
     /// there is no per-doc anti-entropy on a running peer (defradb.rs#1074) to
@@ -59,23 +59,23 @@ impl RequestLifecycle {
     /// by a bounded full replicator replay when the pairing reconnects; that path
     /// authors no same-value request delta and therefore grows no request history.
     ///
-    /// `agent_did` MUST be the runtime's own DID: only the owner re-asserts its
+    /// `node_did` MUST be the runtime's own DID: only the owner re-asserts its
     /// own documents; peers stay passive (a peer-authored delta to a foreign doc
-    /// would fork the CRDT, not converge it). `agent_did` itself is never
+    /// would fork the CRDT, not converge it). `node_did` itself is never
     /// written (it is `@immutable`); only the mutable terminal `lifecycle_state`
     /// and bounded attempt counter are written together in one document update.
     ///
     pub async fn redrive_terminal_convergence(
         node: &EmbeddedNode,
-        agent_did: &str,
+        node_did: &str,
     ) -> Result<TerminalRedriveReport> {
-        let escaped_agent_did = escape_graphql_string(agent_did);
+        let escaped_node_did = escape_graphql_string(node_did);
         let terminal_states = RequestLifecycleState::terminal_graphql_list();
         let query = format!(
             r#"{{
                 AgentRequest(
                     filter: {{
-                        agent_did: {{ _eq: "{escaped_agent_did}" }},
+                        node_did: {{ _eq: "{escaped_node_did}" }},
                         requester_did: {{ _neq: null }},
                         lifecycle_state: {{ _in: {terminal_states} }},
                         terminal_redrive_attempts: {{ _lt: {cap} }}
@@ -125,7 +125,7 @@ impl RequestLifecycle {
             let next_attempts = attempts.saturating_add(1);
             let escaped_doc_id = escape_graphql_string(doc_id);
             let escaped_lifecycle_state = escape_graphql_string(lifecycle_state.as_str());
-            // Defense-in-depth: the candidate query is already `agent_did == self`
+            // Defense-in-depth: the candidate query is already `node_did == self`
             // scoped, but keep the mutation itself owner-scoped too, matching the
             // queue.rs seam guards — a re-drive must never touch a foreign replica.
             let mutation = format!(
@@ -133,7 +133,7 @@ impl RequestLifecycle {
                     update_AgentRequest(
                         docID: "{escaped_doc_id}", filter: {{
                             _docID: {{ _eq: "{escaped_doc_id}" }},
-                            agent_did: {{ _eq: "{escaped_agent_did}" }},
+                            node_did: {{ _eq: "{escaped_node_did}" }},
                             requester_did: {{ _neq: null }},
                             lifecycle_state: {{ _eq: "{escaped_lifecycle_state}" }},
                             terminal_redrive_attempts: {{ _eq: {attempts} }}
@@ -186,34 +186,34 @@ impl RequestLifecycle {
 
     pub async fn repair_terminal_requests(
         node: &EmbeddedNode,
-        agent_did: &str,
+        node_did: &str,
     ) -> Result<TerminalRepairReport> {
-        Ok(recover_active_requests(node, agent_did).await?.requests)
+        Ok(recover_active_requests(node, node_did).await?.requests)
     }
 }
 
 async fn recover_active_requests(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
 ) -> Result<ActiveRequestRecoveryReport> {
     let active_states = RequestLifecycleState::graphql_list([
         RequestLifecycleState::Claimed,
         RequestLifecycleState::Processing,
     ]);
-    let escaped_agent_did = escape_graphql_string(agent_did);
+    let escaped_node_did = escape_graphql_string(node_did);
     let query = format!(
         r#"{{
             AgentRequest(
                 filter: {{
-                    agent_did: {{ _eq: "{escaped_agent_did}" }},
+                    node_did: {{ _eq: "{escaped_node_did}" }},
                     lifecycle_state: {{ _in: {active_states} }}
                 }}
             ) {{
                 _docID
                 request_id
-                agent_did
+                node_did
                 requester_did
-                behavior_id
+                agent_id
                 session_id
                 interrupt_requested_at
                 execution_generation

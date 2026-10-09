@@ -323,7 +323,7 @@ mod tests {
         let store = incompatible_store(&error, &data).expect("typed refusal");
         assert_eq!(store.kind, IncompatibleStoreKind::UnknownLineage);
         assert!(
-            node.get_collection(gents_protocol::schemas::AGENT_PRINCIPAL_NAME)
+            node.get_collection(gents_protocol::schemas::NODE_NAME)
                 .unwrap()
                 .is_none(),
             "the refusal must precede baseline registration"
@@ -344,7 +344,7 @@ mod tests {
 
         let error = crate::identity::KeyIdentity::load_existing(&key, None)
             .map(|_| ())
-            .context("loading agent identity key")
+            .context("loading node identity key")
             .unwrap_err();
         let store = incompatible_store(&error, &temp.path().join("data")).expect("typed");
         assert_eq!(store.kind, IncompatibleStoreKind::InsecureKey);

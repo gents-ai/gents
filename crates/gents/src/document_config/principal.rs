@@ -50,27 +50,27 @@ pub struct Node {
     pub tags: Vec<String>,
 }
 
-pub async fn load_agent_principal(node: &EmbeddedNode, agent_did: &str) -> Result<Option<Node>> {
-    Ok(load_agent_principal_record(node, agent_did)
+pub async fn load_node(node: &EmbeddedNode, node_did: &str) -> Result<Option<Node>> {
+    Ok(load_node_record(node, node_did)
         .await?
         .map(|(_, principal)| principal))
 }
 
-pub(crate) async fn load_agent_principal_record(
+pub(crate) async fn load_node_record(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
 ) -> Result<Option<(String, Node)>> {
-    let escaped_agent_did = escape_graphql_string(agent_did);
+    let escaped_node_did = escape_graphql_string(node_did);
     let query = format!(
         r#"{{
-            AgentPrincipal(
-                filter: {{ agent_did: {{ _eq: "{escaped_agent_did}" }} }},
+            Node(
+                filter: {{ node_did: {{ _eq: "{escaped_node_did}" }} }},
                 limit: 1
             ) {{
                 _docID
-                agent_did
+                node_did
                 display_name
-                default_behavior_id
+                default_agent_id
                 enabled
                 created_at
                 created_by
@@ -79,59 +79,55 @@ pub(crate) async fn load_agent_principal_record(
         }}"#
     );
 
-    let resp = graphql_with_transaction_retry(node, &query, "query AgentPrincipal").await?;
+    let resp = graphql_with_transaction_retry(node, &query, "query Node").await?;
 
-    Ok(first_row_with_doc_id(resp.data.as_ref(), "AgentPrincipal"))
+    Ok(first_row_with_doc_id(resp.data.as_ref(), "Node"))
 }
 
-/// Raw fixture writer for tests that stage a principal before its behaviors.
+/// Raw fixture writer for tests that stage a principal before its agents.
 /// Production principals publish through the desired-state plan, which
 /// validates the default behavior with the documents it names.
 #[cfg(test)]
-pub(crate) async fn upsert_agent_principal(
+pub(crate) async fn upsert_node(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     display_name: Option<&str>,
-    default_behavior_id: Option<&str>,
+    default_agent_id: Option<&str>,
     enabled: bool,
 ) -> Result<()> {
     use super::serde_helpers::{default_display_name_for_did, normalize_optional_string};
-    let escaped_agent_did = escape_graphql_string(agent_did);
-    let fallback_display_name = default_display_name_for_did(agent_did);
+    let escaped_node_did = escape_graphql_string(node_did);
+    let fallback_display_name = default_display_name_for_did(node_did);
     let display_name =
         normalize_optional_string(display_name).unwrap_or(fallback_display_name.as_str());
     let escaped_display_name = escape_graphql_string(display_name);
-    let default_behavior_id = normalize_optional_string(default_behavior_id)
+    let default_agent_id = normalize_optional_string(default_agent_id)
         .map(|id| format!("\"{}\"", escape_graphql_string(id)))
         .unwrap_or_else(|| "null".to_string());
-    let escaped_created_by = escape_graphql_string(agent_did);
+    let escaped_created_by = escape_graphql_string(node_did);
     let created_at = chrono::Utc::now().to_rfc3339();
     let mutation = format!(
         r#"mutation {{
-            upsert_AgentPrincipal(
-                filter: {{ agent_did: {{ _eq: "{escaped_agent_did}" }} }},
+            upsert_Node(
+                filter: {{ node_did: {{ _eq: "{escaped_node_did}" }} }},
                 add: {{
-                    agent_did: "{escaped_agent_did}",
+                    node_did: "{escaped_node_did}",
                     display_name: "{escaped_display_name}",
-                    default_behavior_id: {default_behavior_id},
+                    default_agent_id: {default_agent_id},
                     enabled: {enabled},
                     created_at: "{created_at}",
                     created_by: "{escaped_created_by}"
                 }},
                 update: {{
                     display_name: "{escaped_display_name}",
-                    default_behavior_id: {default_behavior_id},
+                    default_agent_id: {default_agent_id},
                     enabled: {enabled}
                 }}
             ) {{ _docID }}
         }}"#
     );
 
-    crate::config_client::ConfigAccess::write_local(
-        node,
-        "document.upsert_agent_principal",
-        &mutation,
-    )
-    .await?;
+    crate::config_client::ConfigAccess::write_local(node, "document.upsert_node", &mutation)
+        .await?;
     Ok(())
 }

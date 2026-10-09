@@ -266,10 +266,10 @@ pub fn repository_placement_upsert_mutation(
     Ok(format!(
         r#"mutation {{
             upsert_RepositoryPlacement(
-                filter: {{ repository_id: {{ _eq: "{repository_id}" }}, agent_did: {{ _eq: "{owner_node_did}" }} }},
+                filter: {{ repository_id: {{ _eq: "{repository_id}" }}, node_did: {{ _eq: "{owner_node_did}" }} }},
                 add: {{
                     repository_id: "{repository_id}",
-                    agent_did: "{owner_node_did}",
+                    node_did: "{owner_node_did}",
                     host_path: "{host_path}",
                     enabled: {enabled},
                     updated_at: "{updated_at}"

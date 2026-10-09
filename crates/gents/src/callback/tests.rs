@@ -37,10 +37,10 @@ use super::{
 };
 
 fn binding() -> CallbackBindingDoc {
-    serde_json::from_value(json!({"binding_id":"bind-1","agent_did":"did:key:zWriter","event_source_id":"events","callback_id":"cb-1","input_fields":["work_unit_id","repository_id","base_sha","branch","owned_files"]})).unwrap()
+    serde_json::from_value(json!({"binding_id":"bind-1","node_did":"did:key:zWriter","event_source_id":"events","callback_id":"cb-1","input_fields":["work_unit_id","repository_id","base_sha","branch","owned_files"]})).unwrap()
 }
 fn callback() -> crate::document_config::Callback {
-    serde_json::from_value(json!({"callback_id":"cb-1","agent_did":"did:key:zWriter","handler":{"kind":"built_in","emitter":"create_workspace"},"capabilities":["create_workspace","observe_dirty_base","clone_artifacts"]})).unwrap()
+    serde_json::from_value(json!({"callback_id":"cb-1","node_did":"did:key:zWriter","handler":{"kind":"built_in","emitter":"create_workspace"},"capabilities":["create_workspace","observe_dirty_base","clone_artifacts"]})).unwrap()
 }
 
 fn lean_journal(states: &[String]) -> Vec<ActionJournalEntry> {
@@ -73,7 +73,7 @@ fn generated_recovery_and_denial_match_runtime_owners() {
 
         let mut denied = CallbackInvocationDoc {
             invocation_id: "inv-1".into(),
-            owner_agent_did: "did:key:zWriter".into(),
+            owner_node_did: "did:key:zWriter".into(),
             callback_id: "cb-1".into(),
             input: json!({}),
             origin: crate::document_config::CallbackInvocationOrigin::Event {
@@ -151,7 +151,7 @@ fn callback_result_requires_succeeded_complete_journal_and_docs() {
         branch: "topic".into(),
         creation_policy: "git_worktree_diff".into(),
         adapter: "git_worktree".into(),
-        owner_agent_did: "deploy-1".into(),
+        owner_node_did: "deploy-1".into(),
         writer_principal: "did:key:zW".into(),
         integrator_principal: "did:key:zI".into(),
         instruction_manifest: "{}".into(),
@@ -162,7 +162,7 @@ fn callback_result_requires_succeeded_complete_journal_and_docs() {
     };
     let placement = crate::workspace::WorkspacePlacementDoc {
         workspace_id: "ws-1".into(),
-        owner_agent_did: "deploy-1".into(),
+        owner_node_did: "deploy-1".into(),
         host_path: "/tmp/ws".into(),
         repository_placement_id: "repo-1".into(),
         adapter: "git_worktree".into(),
@@ -208,7 +208,7 @@ fn callback_result_requires_succeeded_complete_journal_and_docs() {
 fn non_owner_does_not_claim_invocation_or_workspace_request() {
     let invocation = CallbackInvocationDoc {
         invocation_id: "inv-1".into(),
-        owner_agent_did: "deploy-owner".into(),
+        owner_node_did: "deploy-owner".into(),
         callback_id: "cb-1".into(),
         input: json!({}),
         origin: crate::document_config::CallbackInvocationOrigin::Event {
@@ -269,7 +269,7 @@ fn succeeded_without_result_repair_is_windowed_and_batched() {
 
     let row = |id: &str| CallbackInvocationDoc {
         invocation_id: id.into(),
-        owner_agent_did: "deploy-1".into(),
+        owner_node_did: "deploy-1".into(),
         callback_id: "cb-1".into(),
         input: json!({}),
         origin: crate::document_config::CallbackInvocationOrigin::Event {
@@ -336,7 +336,7 @@ fn recovery_reuses_stored_action_plan() {
     let plan = emit_plan_from_source(&callback(), &source).unwrap();
     let mut invocation = CallbackInvocationDoc {
         invocation_id: "inv-1".into(),
-        owner_agent_did: "deploy-1".into(),
+        owner_node_did: "deploy-1".into(),
         callback_id: "cb-1".into(),
         input: json!({}),
         origin: crate::document_config::CallbackInvocationOrigin::Event {
@@ -403,7 +403,7 @@ fn wasm_recovery_reuses_stored_plan_without_reloading_module() {
     let journal = vec![ActionJournalEntry::new(0, ActionJournalState::Executing)];
     let invocation = CallbackInvocationDoc {
         invocation_id: "inv-wasm-recover".into(),
-        owner_agent_did: "deploy-1".into(),
+        owner_node_did: "deploy-1".into(),
         callback_id: "cb-1".into(),
         input: json!({}),
         origin: crate::document_config::CallbackInvocationOrigin::Event {
@@ -596,10 +596,10 @@ fn callback_result_only_after_workspace_docs_are_durable() {
     ));
 
     let mut ctx = HostExecutorContext {
-        owner_agent_did: "deploy-1".into(),
+        owner_node_did: "deploy-1".into(),
         repository: RepositoryPlacementRef {
             repository_id: "repo-1".into(),
-            owner_agent_did: "deploy-1".into(),
+            owner_node_did: "deploy-1".into(),
             host_path: fx.repo.clone(),
             enabled: true,
         },
@@ -639,7 +639,7 @@ async fn test_node() -> Arc<defra_node::EmbeddedNode> {
 #[tokio::test]
 async fn first_seen_source_create_materializes_owner_invocation() {
     let node = test_node().await;
-    let owner_agent_did = "did:key:zWriter".to_owned();
+    let owner_node_did = "did:key:zWriter".to_owned();
     node.add_schema(
         r#"
         type WorkUnit {
@@ -655,9 +655,9 @@ async fn first_seen_source_create_materializes_owner_invocation() {
     .expect("WorkUnit schema");
 
     let binding_mutation = r#"mutation {
-        create_Callback(input: {callback_id:"cb-scan",agent_did:"did:key:zWriter",handler:{kind:"built_in",emitter:"create_workspace"},capabilities:["create_workspace","observe_dirty_base"],enabled:true}) {_docID}
-        create_EventSource(input: {event_source_id:"events-scan",agent_did:"did:key:zWriter",source_collection:"WorkUnit",event_kind:"created"}) {_docID}
-        create_CallbackBinding(input: {binding_id:"bind-scan",agent_did:"did:key:zWriter",event_source_id:"events-scan",callback_id:"cb-scan",input_fields:["work_unit_id","repository_id","base_sha","branch","owned_files"],enabled:true}) {_docID}
+        create_Callback(input: {callback_id:"cb-scan",node_did:"did:key:zWriter",handler:{kind:"built_in",emitter:"create_workspace"},capabilities:["create_workspace","observe_dirty_base"],enabled:true}) {_docID}
+        create_EventSource(input: {event_source_id:"events-scan",node_did:"did:key:zWriter",source_collection:"WorkUnit",event_kind:"created"}) {_docID}
+        create_CallbackBinding(input: {binding_id:"bind-scan",node_did:"did:key:zWriter",event_source_id:"events-scan",callback_id:"cb-scan",input_fields:["work_unit_id","repository_id","base_sha","branch","owned_files"],enabled:true}) {_docID}
     }"#;
     let response = node.execute(&binding_mutation).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
@@ -667,7 +667,7 @@ async fn first_seen_source_create_materializes_owner_invocation() {
         .unwrap();
     let source = tokio::time::timeout(
         std::time::Duration::from_secs(5),
-        super::documents::load_event_source(&node, "events-scan", &owner_agent_did),
+        super::documents::load_event_source(&node, "events-scan", &owner_node_did),
     )
     .await
     .expect("callback configuration lookup must not wait for the mutation gate")
@@ -677,8 +677,7 @@ async fn first_seen_source_create_materializes_owner_invocation() {
     held.discard().await.unwrap();
 
     let cancel = tokio_util::sync::CancellationToken::new();
-    let mut engine =
-        super::CallbackEngine::new(node.clone(), owner_agent_did.clone(), None, cancel);
+    let mut engine = super::CallbackEngine::new(node.clone(), owner_node_did.clone(), None, cancel);
     engine.reconcile_bindings().await;
 
     let create = r#"mutation {
@@ -752,18 +751,18 @@ async fn first_seen_source_create_materializes_owner_invocation() {
     let query = format!(
         r#"{{
             CallbackInvocation(
-                filter: {{ owner_agent_did: {{ _eq: "{owner}" }} }},
+                filter: {{ owner_node_did: {{ _eq: "{owner}" }} }},
                 limit: 10
             ) {{
                 invocation_id
-                owner_agent_did
+                owner_node_did
                 lifecycle_state
                 idempotency_key
                 input
                 origin
             }}
         }}"#,
-        owner = crate::graphql::escape_graphql_string(&owner_agent_did),
+        owner = crate::graphql::escape_graphql_string(&owner_node_did),
     );
     let response = node.execute(&query).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
@@ -775,7 +774,7 @@ async fn first_seen_source_create_materializes_owner_invocation() {
         .cloned()
         .unwrap_or_default();
     assert_eq!(rows.len(), 1, "{rows:?}");
-    assert_eq!(rows[0]["owner_agent_did"], owner_agent_did);
+    assert_eq!(rows[0]["owner_node_did"], owner_node_did);
     assert_eq!(rows[0]["origin"]["source_doc_id"], doc_id);
     assert_eq!(rows[0]["input"]["work_unit_id"], "unit-scan");
     assert!(rows[0]["input"].get("_docID").is_none());
@@ -799,7 +798,7 @@ fn module_doc(wasm: &[u8], args: &serde_json::Value, signer: &str) -> CallbackMo
     let module_id = compute_module_id(wasm, args, 1).unwrap();
     CallbackModuleDoc {
         module_id,
-        agent_did: "did:key:zWriter".into(),
+        node_did: "did:key:zWriter".into(),
         tags: vec![],
         abi_version: Some(1),
         wasm_bytes: Some(STANDARD.encode(wasm)),
@@ -1171,7 +1170,7 @@ fn create_callback_result_mutation_renders_absent_fields_as_null_not_empty_strin
         result_id: "res-1".to_owned(),
         invocation_id: "inv-1".to_owned(),
         binding_id: None,
-        owner_agent_did: "did:key:zWriter".to_owned(),
+        owner_node_did: "did:key:zWriter".to_owned(),
         workspace_id: None,
         work_unit_id: None,
         caused_by_correlation: None,
@@ -1219,7 +1218,7 @@ fn update_invocation_mutation_renders_absent_fields_as_null_not_empty_string() {
     };
     let invocation = CallbackInvocationDoc {
         invocation_id: "inv-1".into(),
-        owner_agent_did: "did:key:zWriter".into(),
+        owner_node_did: "did:key:zWriter".into(),
         callback_id: "cb-1".into(),
         input: json!({}),
         origin: origin.clone(),
@@ -1273,7 +1272,7 @@ async fn callback_results_are_selectable_by_their_binding() {
                 result_id: format!("res-{invocation_id}"),
                 invocation_id: invocation_id.to_owned(),
                 binding_id: Some(binding_id.to_owned()),
-                owner_agent_did: "did:key:zWriter".to_owned(),
+                owner_node_did: "did:key:zWriter".to_owned(),
                 workspace_id: None,
                 work_unit_id: None,
                 caused_by_correlation: None,
@@ -1368,7 +1367,7 @@ impl Backlog {
         ]
         .into_iter()
         .map(|(collection, mut value)| {
-            value["agent_did"] = json!(BACKLOG_OWNER);
+            value["node_did"] = json!(BACKLOG_OWNER);
             DesiredStateApplyDocument {
                 collection,
                 add: value.clone(),

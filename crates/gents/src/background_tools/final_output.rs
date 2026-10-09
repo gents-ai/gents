@@ -23,7 +23,7 @@ pub async fn load_caused_request_terminal(
             let id = escape_graphql_string(caused_request_doc_id);
             let response = txn.execute_local_response(&format!(r#"{{
                 AgentRequest(filter: {{ _docID: {{ _eq: "{id}" }} }}) {{
-                    _docID request_id agent_did requester_did session_id lifecycle_state
+                    _docID request_id node_did requester_did session_id lifecycle_state
                     failure_reason terminal_output
                 }}
             }}"#)).await?;
@@ -52,7 +52,7 @@ pub async fn load_caused_request_terminal(
                     let TerminalOutput::Message { message_doc_id } = selection else {
                         return Ok(Some(CausedRequestTerminal::Completed { output: String::new() }));
                     };
-                    let agent_did = row.agent_did.as_deref().context("caused request missing agent_did")?;
+                    let node_did = row.node_did.as_deref().context("caused request missing node_did")?;
                     let session_id = row.session_id.as_deref().context("caused request missing session_id")?;
                     let header_id = escape_graphql_string(&message_doc_id);
                     let available = txn.execute_local_response(&format!(
@@ -65,7 +65,7 @@ pub async fn load_caused_request_terminal(
                     }
                     anyhow::ensure!(facts.len() == 1, "ambiguous physical caused terminal header");
                     let (header, message) = match crate::session::load_canonical_message_in_txn(
-                        txn, &message_doc_id, agent_did, row.requester_did.as_deref()
+                        txn, &message_doc_id, node_did, row.requester_did.as_deref()
                     ).await {
                         Ok(value) => value,
                         Err(error) if error.downcast_ref::<ReconstructionError>()

@@ -43,7 +43,7 @@ fn merge_desired(
 fn self_pairing_row_is_not_materialized() {
     let base = desired_from_pairing_row(
         PairingStateRow {
-            agent_did: Some("did:key:self".to_string()),
+            node_did: Some("did:key:self".to_string()),
             collections: None,
             replicator_addresses: Some(vec!["iroh-ticket".to_string()]),
             template: Some("machine".to_string()),
@@ -61,7 +61,7 @@ fn explicit_client_route_keeps_requester_and_owner_across_remote_admin() {
     let desired = desired_from_pairing_row(
         PairingStateRow {
             peer_id: Some("directory-a:runtime-to-client".to_string()),
-            agent_did: Some("did:key:mandrake".to_string()),
+            node_did: Some("did:key:mandrake".to_string()),
             replicator_addresses: Some(vec!["iroh-ticket".to_string()]),
             template: Some("client".to_string()),
             ..Default::default()
@@ -96,7 +96,7 @@ fn merge_desired_unions_control_and_data_plane_state() {
         collections: set(&["AgentRequest"]),
         replicator_addresses: set(&["/ip4/1/tcp/1/p2p/peer-a"]),
         replicator_collections: set(&["AgentRequest"]),
-        replicator_filter: one_filter("AgentRequest", "agent_did", "did:key:a"),
+        replicator_filter: one_filter("AgentRequest", "node_did", "did:key:a"),
         template_ids: BTreeSet::new(),
     };
 
@@ -119,7 +119,7 @@ fn merge_desired_unions_control_and_data_plane_state() {
             .replicator_filter
             .get("AgentRequest")
             .and_then(single_string_eq),
-        Some(("agent_did", "did:key:a"))
+        Some(("node_did", "did:key:a"))
     );
     assert!(!merged.replicator_filter.contains_key("ControlA"));
 }
@@ -130,7 +130,7 @@ fn data_plane_only_desired_is_replicator_only() {
         collections: set(&["AgentRequest"]),
         replicator_addresses: set(&["/ip4/1/tcp/1/p2p/peer-a"]),
         replicator_collections: set(&["AgentRequest"]),
-        replicator_filter: one_filter("AgentRequest", "agent_did", "did:key:a"),
+        replicator_filter: one_filter("AgentRequest", "node_did", "did:key:a"),
         template_ids: BTreeSet::new(),
     };
 
@@ -147,7 +147,7 @@ fn data_plane_only_desired_is_replicator_only() {
 fn data_plane_gate_accepts_current_enrollment_endpoint() {
     let enrollment_entries = vec![EnrollmentEndpointEntry {
         peer_id: "peer-network".to_string(),
-        agent_did: "did:key:network".to_string(),
+        node_did: "did:key:network".to_string(),
         address: "/ticket/network".to_string(),
         desired_id: "peer-network".to_string(),
         request_digest: "digest".to_string(),
@@ -165,7 +165,7 @@ fn data_plane_gate_accepts_current_enrollment_endpoint() {
 fn enrollment_base_and_local_data_plane_have_disjoint_owners() {
     let enrollment_entries = vec![EnrollmentEndpointEntry {
         peer_id: "peer-network".to_string(),
-        agent_did: "did:key:network".to_string(),
+        node_did: "did:key:network".to_string(),
         address: "/ticket/network".to_string(),
         desired_id: "peer-network".to_string(),
         request_digest: "digest".to_string(),
@@ -242,7 +242,7 @@ fn enrollment_base_and_local_data_plane_have_disjoint_owners() {
             enrollment_request_digest: Some("digest".to_string()),
             enrollment_authorization_sequence: Some(1),
             enrollment_authorization_expires_at: Some("2099-09-29T00:00:00Z".to_string()),
-            agent_did: Some("did:key:attacker".to_string()),
+            node_did: Some("did:key:attacker".to_string()),
             template: Some("app-collections".to_string()),
             collections: Some(vec!["HostileCollection".to_string()]),
             replicator_addresses: Some(vec!["/ticket/attacker".to_string()]),
@@ -252,7 +252,7 @@ fn enrollment_base_and_local_data_plane_have_disjoint_owners() {
         "did:key:self",
     )
     .expect("the enrollment owner matches");
-    assert_eq!(canonical.agent_did.as_deref(), Some("did:key:self"));
+    assert_eq!(canonical.node_did.as_deref(), Some("did:key:self"));
     assert_eq!(canonical.template.as_deref(), Some("client"));
     assert_eq!(canonical.collections, None);
     assert_eq!(
@@ -265,7 +265,7 @@ fn enrollment_base_and_local_data_plane_have_disjoint_owners() {
 fn data_plane_gate_rejects_self_endpoint_from_both_sources() {
     let enrollment_entries = vec![EnrollmentEndpointEntry {
         peer_id: "peer-self".to_string(),
-        agent_did: "did:key:self".to_string(),
+        node_did: "did:key:self".to_string(),
         address: "/ticket/self".to_string(),
         desired_id: "peer-self".to_string(),
         request_digest: "digest".to_string(),
@@ -282,7 +282,7 @@ fn data_plane_gate_rejects_self_endpoint_from_both_sources() {
 fn data_plane_desired_uses_signed_endpoint_address_and_requester_did() {
     let signed_endpoint = EnrollmentEndpointEntry {
         peer_id: "peer-b".to_string(),
-        agent_did: "did:key:peer-b".to_string(),
+        node_did: "did:key:peer-b".to_string(),
         address: "/ip4/127.0.0.1/tcp/4001/p2p/peer-b".to_string(),
         desired_id: "peer-b".to_string(),
         request_digest: "digest".to_string(),
@@ -291,7 +291,7 @@ fn data_plane_desired_uses_signed_endpoint_address_and_requester_did() {
     };
     let desired = data_plane_desired_from_pairing_row(
         PairingStateRow {
-            agent_did: None,
+            node_did: None,
             collections: None,
             replicator_addresses: Some(vec!["/ip4/192.0.2.1/tcp/9999/p2p/forged".to_string()]),
             template: Some("conversation".to_string()),
@@ -320,7 +320,7 @@ fn data_plane_desired_uses_signed_endpoint_address_and_requester_did() {
 fn enrolled_client_outbound_route_preserves_directional_authority() {
     let signed_endpoint = EnrollmentEndpointEntry {
         peer_id: "runtime-peer".to_string(),
-        agent_did: "did:key:runtime".to_string(),
+        node_did: "did:key:runtime".to_string(),
         address: "/ip4/127.0.0.1/tcp/4001/p2p/runtime-peer".to_string(),
         desired_id: "runtime-peer:client-to-runtime".to_string(),
         request_digest: "digest".to_string(),
@@ -330,7 +330,7 @@ fn enrolled_client_outbound_route_preserves_directional_authority() {
     let desired = data_plane_desired_from_pairing_row(
         PairingStateRow {
             peer_id: Some("runtime-peer:client-to-runtime".to_string()),
-            agent_did: Some("did:key:phone".to_string()),
+            node_did: Some("did:key:phone".to_string()),
             replicator_addresses: Some(vec![signed_endpoint.address.clone()]),
             template: Some("client".to_string()),
             source: Some("enrollment".to_string()),
@@ -343,7 +343,7 @@ fn enrolled_client_outbound_route_preserves_directional_authority() {
     .expect("some client data-plane layer");
 
     assert!(desired.replicator_collections.contains("AgentRequest"));
-    assert!(!desired.replicator_collections.contains("AgentBehavior"));
+    assert!(!desired.replicator_collections.contains("Agent"));
     let encoded = serde_json::to_string(
         desired
             .replicator_filter
@@ -353,7 +353,7 @@ fn enrolled_client_outbound_route_preserves_directional_authority() {
     .unwrap();
     assert!(encoded.contains("requester_did"));
     assert!(encoded.contains("did:key:phone"));
-    assert!(encoded.contains("agent_did"));
+    assert!(encoded.contains("node_did"));
     assert!(encoded.contains("did:key:runtime"));
 }
 
@@ -361,7 +361,7 @@ fn enrolled_client_outbound_route_preserves_directional_authority() {
 fn enrollment_owned_base_route_has_explicit_runtime_to_client_direction() {
     let signed_endpoint = EnrollmentEndpointEntry {
         peer_id: "phone-peer".to_string(),
-        agent_did: "did:key:phone".to_string(),
+        node_did: "did:key:phone".to_string(),
         address: "/ip4/127.0.0.1/tcp/4001/p2p/phone-peer".to_string(),
         desired_id: "phone-peer".to_string(),
         request_digest: "digest".to_string(),
@@ -371,7 +371,7 @@ fn enrollment_owned_base_route_has_explicit_runtime_to_client_direction() {
     let desired = data_plane_desired_from_pairing_row(
         PairingStateRow {
             peer_id: Some("phone-peer".to_string()),
-            agent_did: Some("did:key:runtime".to_string()),
+            node_did: Some("did:key:runtime".to_string()),
             replicator_addresses: Some(vec![signed_endpoint.address.clone()]),
             template: Some("client".to_string()),
             source: Some("enrollment".to_string()),
@@ -383,7 +383,7 @@ fn enrollment_owned_base_route_has_explicit_runtime_to_client_direction() {
     .expect("enrollment-owned client route")
     .expect("some enrollment base layer");
 
-    assert!(desired.replicator_collections.contains("AgentBehavior"));
+    assert!(desired.replicator_collections.contains("Agent"));
     let encoded = serde_json::to_string(
         desired
             .replicator_filter
@@ -393,7 +393,7 @@ fn enrollment_owned_base_route_has_explicit_runtime_to_client_direction() {
     .unwrap();
     assert!(encoded.contains("requester_did"));
     assert!(encoded.contains("did:key:phone"));
-    assert!(encoded.contains("agent_did"));
+    assert!(encoded.contains("node_did"));
     assert!(encoded.contains("did:key:runtime"));
 }
 
@@ -401,7 +401,7 @@ fn enrollment_owned_base_route_has_explicit_runtime_to_client_direction() {
 fn protocol_collection_in_app_data_plane_is_rejected_without_stalling_control_pairing() {
     let signed_endpoint = EnrollmentEndpointEntry {
         peer_id: "peer-app".to_string(),
-        agent_did: "did:key:app".to_string(),
+        node_did: "did:key:app".to_string(),
         address: "/ip4/127.0.0.1/tcp/4001/p2p/peer-app".to_string(),
         desired_id: "peer-app".to_string(),
         request_digest: "digest".to_string(),
@@ -426,7 +426,7 @@ fn protocol_collection_in_app_data_plane_is_rejected_without_stalling_control_pa
 
     let control = PairingDesired {
         replicator_addresses: set(&[signed_endpoint.address.as_str()]),
-        replicator_collections: set(&["AgentNetwork"]),
+        replicator_collections: set(&["Network"]),
         template_ids: set(&["enrollment-base"]),
         ..Default::default()
     };
@@ -438,10 +438,10 @@ fn protocol_collection_in_app_data_plane_is_rejected_without_stalling_control_pa
 }
 
 #[test]
-fn data_plane_subagent_coordinator_uses_signed_peer_for_addressed_requests() {
+fn data_plane_agent_target_caller_uses_signed_peer_for_addressed_requests() {
     let signed_endpoint = EnrollmentEndpointEntry {
         peer_id: "peer-b".to_string(),
-        agent_did: "did:key:host".to_string(),
+        node_did: "did:key:host".to_string(),
         address: "/ip4/127.0.0.1/tcp/4001/p2p/peer-b".to_string(),
         desired_id: "peer-b".to_string(),
         request_digest: "digest".to_string(),
@@ -450,10 +450,10 @@ fn data_plane_subagent_coordinator_uses_signed_peer_for_addressed_requests() {
     };
     let desired = data_plane_desired_from_pairing_row(
         PairingStateRow {
-            agent_did: Some("did:key:coord".to_string()),
+            node_did: Some("did:key:coord".to_string()),
             collections: None,
             replicator_addresses: Some(vec![signed_endpoint.address.clone()]),
-            template: Some("subagent-coordinator".to_string()),
+            template: Some("agent-target-caller".to_string()),
             ..Default::default()
         },
         &signed_endpoint,
@@ -463,7 +463,7 @@ fn data_plane_subagent_coordinator_uses_signed_peer_for_addressed_requests() {
     .expect("some data-plane layer");
 
     // The full template → (collections, filters) shape is owned by
-    // `subagent_coordinator_template_filters_only_addressed_requests` in
+    // `agent_target_caller_template_filters_only_addressed_requests` in
     // `engine/tests/desired_state.rs`; here only the unique data-plane
     // claim is re-proven: the coordinator survives the signed-endpoint
     // merge with its addressed-request filter intact.
@@ -473,15 +473,15 @@ fn data_plane_subagent_coordinator_uses_signed_peer_for_addressed_requests() {
             .replicator_filter
             .get("AgentRequest")
             .and_then(single_string_eq),
-        Some(("agent_did", "did:key:host"))
+        Some(("node_did", "did:key:host"))
     );
 }
 
 #[test]
-fn data_plane_subagent_host_scopes_return_projection_to_signed_requester() {
+fn data_plane_agent_target_host_scopes_return_projection_to_signed_requester() {
     let signed_endpoint = EnrollmentEndpointEntry {
         peer_id: "peer-a".to_string(),
-        agent_did: "did:key:coord".to_string(),
+        node_did: "did:key:coord".to_string(),
         address: "/ip4/127.0.0.1/tcp/4001/p2p/peer-a".to_string(),
         desired_id: "peer-a".to_string(),
         request_digest: "digest".to_string(),
@@ -490,10 +490,10 @@ fn data_plane_subagent_host_scopes_return_projection_to_signed_requester() {
     };
     let desired = data_plane_desired_from_pairing_row(
         PairingStateRow {
-            agent_did: Some("did:key:host".to_string()),
+            node_did: Some("did:key:host".to_string()),
             collections: None,
             replicator_addresses: Some(vec![signed_endpoint.address.clone()]),
-            template: Some("subagent-host".to_string()),
+            template: Some("agent-target-host".to_string()),
             ..Default::default()
         },
         &signed_endpoint,
@@ -503,7 +503,7 @@ fn data_plane_subagent_host_scopes_return_projection_to_signed_requester() {
     .expect("some data-plane layer");
 
     // The full template → (collections, filters) shape is owned by
-    // `subagent_host_template_filters_return_projection_to_requester` in
+    // `agent_target_host_template_filters_return_projection_to_requester` in
     // `engine/tests/desired_state.rs`; here only the unique data-plane
     // claim is re-proven: the host projection survives the signed-endpoint
     // merge with its requester-scoped filters intact.
@@ -520,10 +520,10 @@ fn data_plane_subagent_host_scopes_return_projection_to_signed_requester() {
 }
 
 #[test]
-fn data_plane_desired_rejects_foreign_agent_did_scope() {
+fn data_plane_desired_rejects_foreign_node_did_scope() {
     let signed_endpoint = EnrollmentEndpointEntry {
         peer_id: "peer-b".to_string(),
-        agent_did: "did:key:peer-b".to_string(),
+        node_did: "did:key:peer-b".to_string(),
         address: "/ip4/127.0.0.1/tcp/4001/p2p/peer-b".to_string(),
         desired_id: "peer-b".to_string(),
         request_digest: "digest".to_string(),
@@ -532,7 +532,7 @@ fn data_plane_desired_rejects_foreign_agent_did_scope() {
     };
     let error = data_plane_desired_from_pairing_row(
         PairingStateRow {
-            agent_did: Some("did:key:someone-else".to_string()),
+            node_did: Some("did:key:someone-else".to_string()),
             collections: None,
             replicator_addresses: Some(vec![signed_endpoint.address.clone()]),
             template: Some("conversation".to_string()),
@@ -1314,12 +1314,12 @@ async fn read_failure_noops_without_remote_reads() {
 
 #[tokio::test]
 async fn degraded_first_sweep_preserves_startup_replay_without_repeats() {
-    let filter = one_filter("AgentRequest", "agent_did", "did:key:local-owner");
+    let filter = one_filter("AgentRequest", "node_did", "did:key:local-owner");
     let desired = PairingDesired {
         replicator_addresses: set(&[TEST_TRANSPORT_ADDRESS_A]),
         replicator_collections: set(&["AgentRequest"]),
         replicator_filter: filter.clone(),
-        template_ids: set(&["subagent-host"]),
+        template_ids: set(&["agent-target-host"]),
         ..Default::default()
     };
     let store = MockStore {
@@ -1397,12 +1397,12 @@ async fn degraded_first_sweep_preserves_startup_replay_without_repeats() {
 
 #[tokio::test]
 async fn desired_read_failure_during_reconnect_keeps_replay_pending() {
-    let filter = one_filter("AgentRequest", "agent_did", "did:key:local-owner");
+    let filter = one_filter("AgentRequest", "node_did", "did:key:local-owner");
     let desired = PairingDesired {
         replicator_addresses: set(&["addr1"]),
         replicator_collections: set(&["AgentRequest"]),
         replicator_filter: filter.clone(),
-        template_ids: set(&["subagent-host"]),
+        template_ids: set(&["agent-target-host"]),
         ..Default::default()
     };
     let store = MockStore {
@@ -1461,12 +1461,12 @@ async fn desired_read_failure_during_reconnect_keeps_replay_pending() {
 
 #[tokio::test]
 async fn failed_reconnect_replay_is_healed_by_next_tick_diff() {
-    let filter = one_filter("AgentRequest", "agent_did", "did:key:local-owner");
+    let filter = one_filter("AgentRequest", "node_did", "did:key:local-owner");
     let store = MockStore::with_desired(Some(PairingDesired {
         replicator_addresses: set(&["addr1"]),
         replicator_collections: set(&["AgentRequest"]),
         replicator_filter: filter.clone(),
-        template_ids: set(&["subagent-host"]),
+        template_ids: set(&["agent-target-host"]),
         ..Default::default()
     }));
     *store.applied.lock().unwrap() = PairingApplied {
@@ -1560,13 +1560,13 @@ async fn install_updates_applied_after_success() {
 }
 
 #[tokio::test]
-async fn reconnect_force_replays_converged_subagent_replicator() {
-    let filter = one_filter("AgentRequest", "agent_did", "did:key:local-owner");
+async fn reconnect_force_replays_converged_agent_target_replicator() {
+    let filter = one_filter("AgentRequest", "node_did", "did:key:local-owner");
     let store = MockStore::with_desired(Some(PairingDesired {
         replicator_addresses: set(&["addr1"]),
         replicator_collections: set(&["AgentRequest"]),
         replicator_filter: filter.clone(),
-        template_ids: set(&["subagent-host"]),
+        template_ids: set(&["agent-target-host"]),
         ..Default::default()
     }));
     *store.applied.lock().unwrap() = PairingApplied {
@@ -1606,12 +1606,12 @@ async fn reconnect_force_replays_converged_subagent_replicator() {
 
 #[tokio::test]
 async fn inbound_reconnect_force_replays_without_owner_redial() {
-    let filter = one_filter("AgentRequest", "agent_did", "did:key:local-owner");
+    let filter = one_filter("AgentRequest", "node_did", "did:key:local-owner");
     let store = MockStore::with_desired(Some(PairingDesired {
         replicator_addresses: set(&[TEST_TRANSPORT_ADDRESS_A]),
         replicator_collections: set(&["AgentRequest"]),
         replicator_filter: filter.clone(),
-        template_ids: set(&["subagent-host"]),
+        template_ids: set(&["agent-target-host"]),
         ..Default::default()
     }));
     *store.applied.lock().unwrap() = PairingApplied {
@@ -1663,14 +1663,14 @@ async fn active_peer_skips_redial_and_upgrades_data_plane_replicator() {
     // Desired now includes the conversation data plane: same address, new
     // collection, and a scoped filter (identity change ⇒ reinstall).
     let store = MockStore::with_desired(Some(PairingDesired {
-        collections: set(&["AgentNetwork", "AgentRequest"]),
+        collections: set(&["Network", "AgentRequest"]),
         replicator_addresses: set(&[TEST_TRANSPORT_ADDRESS_A]),
         replicator_filter: conversation_filter.clone(),
         ..Default::default()
     }));
     // Control-plane pairing already applied: unfiltered replicator on addr1.
     *store.applied.lock().unwrap() = PairingApplied {
-        collections: set(&["AgentNetwork"]),
+        collections: set(&["Network"]),
         replicator_addresses: set(&[TEST_TRANSPORT_ADDRESS_A]),
         replicator_filter: PairingFilters::new(),
     };
@@ -1679,12 +1679,12 @@ async fn active_peer_skips_redial_and_upgrades_data_plane_replicator() {
         fail_connect: true,
         ..Default::default()
     };
-    *admin.collections.lock().unwrap() = set(&[&mock_collection_id("AgentNetwork")]);
+    *admin.collections.lock().unwrap() = set(&[&mock_collection_id("Network")]);
     admin.replicators.lock().unwrap().insert(
         TEST_TRANSPORT_ADDRESS_A.into(),
         RemoteReplicator {
             id: Some("id-current-endpoint".into()),
-            collections: vec!["AgentNetwork".into()],
+            collections: vec!["Network".into()],
             address: Some(TEST_TRANSPORT_ADDRESS_A.into()),
             filters: Some(Default::default()),
         },
@@ -1785,7 +1785,7 @@ async fn matching_applied_repairs_restored_unfiltered_stale_address() {
     let peer_id = "6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb";
     let stale_address = format!("127.0.0.1:56091/p2p/{peer_id}");
     let desired_address = format!("127.0.0.1:56092/p2p/{peer_id}");
-    let filter = one_filter("AgentRequest", "agent_did", "did:key:mandrake");
+    let filter = one_filter("AgentRequest", "node_did", "did:key:mandrake");
     let store = MockStore::with_desired(Some(PairingDesired {
         replicator_addresses: set(&[&desired_address]),
         replicator_collections: set(&["AgentRequest"]),
@@ -1831,7 +1831,7 @@ async fn matching_applied_repairs_restored_unfiltered_stale_address() {
 
 #[tokio::test]
 async fn omitted_live_filters_force_current_protocol_repair() {
-    let filter = one_filter("AgentRequest", "agent_did", "did:key:mandrake");
+    let filter = one_filter("AgentRequest", "node_did", "did:key:mandrake");
     let store = MockStore::with_desired(Some(PairingDesired {
         replicator_addresses: set(&["addr1"]),
         replicator_collections: set(&["AgentRequest"]),
@@ -1869,7 +1869,7 @@ async fn omitted_live_filters_force_current_protocol_repair() {
 /// unready.
 #[tokio::test]
 async fn known_empty_live_filters_repair_a_scoped_route() {
-    let filter = one_filter("AgentRequest", "agent_did", "did:key:mandrake");
+    let filter = one_filter("AgentRequest", "node_did", "did:key:mandrake");
     let store = MockStore::with_desired(Some(PairingDesired {
         replicator_addresses: set(&["addr1"]),
         replicator_collections: set(&["AgentRequest"]),
@@ -2138,9 +2138,9 @@ async fn grown_replicator_collection_set_reinstalls_replicator() {
     // The control-plane layer merges in: same address, same filter,
     // larger replicator collection set plus the control subscription.
     *store.desired.lock().unwrap() = Ok(Some(PairingDesired {
-        collections: set(&["AgentNetwork"]),
+        collections: set(&["Network"]),
         replicator_addresses: set(&["addr1"]),
-        replicator_collections: set(&["AgentNetwork", "AgentRequest"]),
+        replicator_collections: set(&["Network", "AgentRequest"]),
         replicator_filter: conversation_filter,
         ..Default::default()
     }));
@@ -2151,7 +2151,7 @@ async fn grown_replicator_collection_set_reinstalls_replicator() {
     assert_eq!(
         second.ops_applied,
         vec![
-            DiffOp::InstallCollection("AgentNetwork".into()),
+            DiffOp::InstallCollection("Network".into()),
             DiffOp::TeardownReplicator("addr1".into()),
             DiffOp::InstallReplicator("addr1".into()),
         ]
@@ -2160,8 +2160,8 @@ async fn grown_replicator_collection_set_reinstalls_replicator() {
     assert_eq!(
         admin.replicators.lock().unwrap()["addr1"].collections,
         vec![
-            mock_collection_id("AgentNetwork"),
-            mock_collection_id("AgentRequest")
+            mock_collection_id("AgentRequest"),
+            mock_collection_id("Network")
         ]
     );
 
@@ -2434,7 +2434,7 @@ async fn add_replicator_records_filters_at_seam() {
     let mut filters = PairingFilters::default();
     filters.insert(
         "AgentRequest".to_string(),
-        equality_filter("agent_did", "did:key:alice"),
+        equality_filter("node_did", "did:key:alice"),
     );
     admin
         .add_replicator(&addresses, &collections, &filters)
@@ -2446,18 +2446,18 @@ async fn add_replicator_records_filters_at_seam() {
     let recorded = &calls[1].1;
     assert_eq!(recorded.len(), 1);
     let pred = recorded.get("AgentRequest").expect("AgentRequest filter");
-    assert_eq!(single_string_eq(pred), Some(("agent_did", "did:key:alice")));
+    assert_eq!(single_string_eq(pred), Some(("node_did", "did:key:alice")));
 }
 
 /// #714 C1 regression: the `machine` template's session data-plane set must
 /// scope to the same requester DID `conversation` uses on the data plane,
-/// while `AgentDirectoryEntry` is restricted to this issuer's source-owned
+/// while `NodeDirectoryEntry` is restricted to this issuer's source-owned
 /// projection.
 #[test]
 fn data_plane_desired_machine_scopes_session_set_and_owned_directory() {
     let signed_endpoint = EnrollmentEndpointEntry {
         peer_id: "peer-b".to_string(),
-        agent_did: "did:key:peer-b".to_string(),
+        node_did: "did:key:peer-b".to_string(),
         address: "/ip4/127.0.0.1/tcp/4001/p2p/peer-b".to_string(),
         desired_id: "peer-b".to_string(),
         request_digest: "digest".to_string(),
@@ -2466,7 +2466,7 @@ fn data_plane_desired_machine_scopes_session_set_and_owned_directory() {
     };
     let desired = data_plane_desired_from_pairing_row(
         PairingStateRow {
-            agent_did: None,
+            node_did: None,
             collections: None,
             replicator_addresses: Some(vec![signed_endpoint.address.clone()]),
             template: Some("machine".to_string()),
@@ -2480,7 +2480,7 @@ fn data_plane_desired_machine_scopes_session_set_and_owned_directory() {
 
     assert!(desired
         .replicator_collections
-        .contains(crate::agent::p2p_reconcile::templates::AGENT_DIRECTORY_COLLECTION));
+        .contains(crate::agent::p2p_reconcile::templates::NODE_DIRECTORY_COLLECTION));
     for col in [
         "AgentRequest",
         "AgentOutputSegment",
@@ -2501,7 +2501,7 @@ fn data_plane_desired_machine_scopes_session_set_and_owned_directory() {
     assert_eq!(
         desired
             .replicator_filter
-            .get(crate::agent::p2p_reconcile::templates::AGENT_DIRECTORY_COLLECTION)
+            .get(crate::agent::p2p_reconcile::templates::NODE_DIRECTORY_COLLECTION)
             .and_then(single_string_eq),
         Some(("source_did", "did:key:self"))
     );

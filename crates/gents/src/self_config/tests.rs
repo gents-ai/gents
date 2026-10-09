@@ -2,7 +2,7 @@
 //! (identity-scoped writes, reconcile pickup) lives in
 //! `tests/e2e_runtime/self_config_tools.rs`.
 
-use super::command::{behavior_params, help_patch_contracts};
+use super::command::{agent_params, help_patch_contracts};
 use super::*;
 
 fn test_plugins() -> Arc<crate::plugin::executor::PluginExecutor> {
@@ -82,7 +82,7 @@ impl rig::completion::CompletionModel for RootReadModel {
 pub(super) fn config(categories: &[&str]) -> SelfConfigToolConfig {
     SelfConfigToolConfig {
         enabled: true,
-        behavior_id: "beh-test".to_string(),
+        agent_id: "beh-test".to_string(),
         categories: categories.iter().map(|c| c.to_string()).collect(),
         no_lockout: false,
         preview: false,
@@ -94,7 +94,7 @@ pub(super) fn config(categories: &[&str]) -> SelfConfigToolConfig {
 
 #[test]
 fn tool_names_follow_enabled_categories() {
-    let names = self_config_tool_names(&config(&["behavior", "tools", "profile"]));
+    let names = self_config_tool_names(&config(&["agent", "tools", "profile"]));
     assert_eq!(
         names,
         vec![CONFIG_TOOL_NAME.to_string()],
@@ -107,7 +107,7 @@ fn tool_names_follow_enabled_categories() {
 
 #[test]
 fn pack_install_requires_its_separate_opt_in() {
-    let without_install = config(&["behavior"]);
+    let without_install = config(&["agent"]);
     assert_eq!(self_config_tool_names(&without_install), [CONFIG_TOOL_NAME]);
 
     let mut with_install = without_install;
@@ -128,7 +128,7 @@ fn every_tool_name_is_reserved_builtin() {
 #[test]
 fn help_contracts_conform_to_canonical_types_and_enum_vocabulary() {
     let all_contracts = [
-        "behavior",
+        "agent",
         "tools",
         "profile",
         "backend",
@@ -136,7 +136,7 @@ fn help_contracts_conform_to_canonical_types_and_enum_vocabulary() {
         "automation",
         "datastore",
         "skill",
-        "subagent-target",
+        "agent-target",
         "execution",
     ]
     .into_iter()
@@ -213,9 +213,9 @@ fn help_contracts_conform_to_canonical_types_and_enum_vocabulary() {
         "remote",
     );
     assert_fields(
-        &shapes["subagents"],
-        canonical_struct_fields::<SubagentTools>().unwrap(),
-        "subagents",
+        &shapes["agents"],
+        canonical_struct_fields::<AgentTools>().unwrap(),
+        "agents",
     );
     assert_fields(
         &shapes["built_ins"],
@@ -306,7 +306,7 @@ fn help_contracts_conform_to_canonical_types_and_enum_vocabulary() {
 }
 
 #[tokio::test]
-async fn build_fails_closed_without_agent_did() {
+async fn build_fails_closed_without_node_did() {
     let tempdir = tempfile::tempdir().expect("tempdir");
     let node = defra_node::EmbeddedNode::builder()
         .data_path(tempdir.path().join("data"))
@@ -317,12 +317,12 @@ async fn build_fails_closed_without_agent_did() {
         std::sync::Arc::new(node),
         String::new(),
         None,
-        &config(&["behavior"]),
+        &config(&["agent"]),
         test_plugins(),
     );
     assert!(
         tools.is_empty(),
-        "an empty agent DID must register no self-config tools"
+        "an empty node DID must register no self-config tools"
     );
 }
 
@@ -341,7 +341,7 @@ async fn build_registers_gated_family() {
         std::sync::Arc::new(node),
         "did:key:zSelfConfigTest".to_string(),
         None,
-        &config(&["behavior", "backend"]),
+        &config(&["agent", "backend"]),
         test_plugins(),
     );
     assert_eq!(
@@ -371,24 +371,24 @@ async fn build_registers_gated_family() {
 }
 
 #[tokio::test]
-async fn pack_install_uses_current_principal_and_inference_chain() {
-    let node = build_persona_node().await;
-    let identity = persona_identity("pack-install");
-    let agent_did = identity.did().to_string();
-    crate::test_support::install_test_behavior(&node, &agent_did, "setup").await;
+async fn pack_install_uses_current_node_and_inference_chain() {
+    let node = build_agent_node().await;
+    let identity = agent_identity("pack-install");
+    let node_did = identity.did().to_string();
+    crate::test_support::install_test_agent(&node, &node_did, "setup").await;
     for role in ["coordinator", "worker", "verifier"] {
-        crate::test_support::install_test_behavior(&node, &agent_did, role).await;
+        crate::test_support::install_test_agent(&node, &node_did, role).await;
     }
 
     // The pack resolves from the home's store: the registry is never asked.
     let (_home, plugins) = crate::test_support::home_with_fixture_pack("review_graph");
     let mut tool_config = config(&[]);
-    tool_config.behavior_id = "setup".to_string();
+    tool_config.agent_id = "setup".to_string();
     tool_config.enable_pack_install = true;
     tool_config.enable_graph_tools = true;
     let tools = build_self_config_tools(
         node.clone(),
-        agent_did.clone(),
+        node_did.clone(),
         Some(identity),
         &tool_config,
         plugins,
@@ -492,8 +492,8 @@ async fn pack_install_uses_current_principal_and_inference_chain() {
 
     let response = node
         .execute(&format!(
-            "{{ GraphDefinition(filter: {{agent_did: {{_eq: \"{}\"}}}}) {{graph_id agent_did active_revision_digest}} }}",
-            crate::graphql::escape_graphql_string(&agent_did)
+            "{{ GraphDefinition(filter: {{node_did: {{_eq: \"{}\"}}}}) {{graph_id node_did active_revision_digest}} }}",
+            crate::graphql::escape_graphql_string(&node_did)
         ))
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
@@ -502,7 +502,7 @@ async fn pack_install_uses_current_principal_and_inference_chain() {
         .unwrap()
         .clone();
     assert_eq!(definitions.len(), 1);
-    assert_eq!(definitions[0]["agent_did"], agent_did);
+    assert_eq!(definitions[0]["node_did"], node_did);
     assert_eq!(definitions[0]["graph_id"], "code-review");
     assert_eq!(
         definitions[0]["active_revision_digest"],
@@ -535,10 +535,10 @@ async fn pack_install_uses_current_principal_and_inference_chain() {
         .expect_err("a digest not returned by preview is rejected");
     assert!(rejected.to_string().contains("preview again"));
 
-    let owner = crate::graphql::escape_graphql_string(&agent_did);
+    let owner = crate::graphql::escape_graphql_string(&node_did);
     let tagged = node
         .execute(&format!(
-            r#"mutation {{ update_AgentBehavior(filter: {{agent_did: {{_eq: "{owner}"}}, behavior_id: {{_eq: "review-recon"}}}}, input: {{tags: ["gents:pack:review_graph", "user:favorite"]}}) {{_docID}} }}"#
+            r#"mutation {{ update_Agent(filter: {{node_did: {{_eq: "{owner}"}}, agent_id: {{_eq: "review-recon"}}}}, input: {{tags: ["gents:pack:review_graph", "user:favorite"]}}) {{_docID}} }}"#
         ))
         .await;
     assert!(!tagged.has_errors(), "{:?}", tagged.errors);
@@ -580,12 +580,12 @@ async fn pack_install_uses_current_principal_and_inference_chain() {
     );
     let tags = node
         .execute(&format!(
-            r#"{{ AgentBehavior(filter: {{agent_did: {{_eq: "{owner}"}}, behavior_id: {{_eq: "review-recon"}}}}) {{tags}} }}"#
+            r#"{{ Agent(filter: {{node_did: {{_eq: "{owner}"}}, agent_id: {{_eq: "review-recon"}}}}) {{tags}} }}"#
         ))
         .await;
     assert!(!tags.has_errors(), "{:?}", tags.errors);
     assert_eq!(
-        tags.data.unwrap()["AgentBehavior"][0]["tags"],
+        tags.data.unwrap()["Agent"][0]["tags"],
         json!(["gents:pack:review_graph", "user:favorite"])
     );
     let list = tools
@@ -597,7 +597,7 @@ async fn pack_install_uses_current_principal_and_inference_chain() {
         .expect("installed graph is discoverable on the same node");
     let list: Value = serde_json::from_str(&list).unwrap();
     assert_eq!(list["node_bound"], true);
-    assert_eq!(list["agent_did"], agent_did);
+    assert_eq!(list["node_did"], node_did);
     assert_eq!(list["graphs"][0]["definition"]["graph_id"], "code-review");
     assert_eq!(
         list["graphs"][0]["active_plan"]["digest"],
@@ -607,7 +607,7 @@ async fn pack_install_uses_current_principal_and_inference_chain() {
     let runs = node
         .execute(&format!(
             r#"{{ GraphRun(filter: {{owner_did: {{_eq: "{}"}}}}) {{run_id}} }}"#,
-            crate::graphql::escape_graphql_string(&agent_did)
+            crate::graphql::escape_graphql_string(&node_did)
         ))
         .await;
     assert!(!runs.has_errors(), "{:?}", runs.errors);
@@ -627,9 +627,9 @@ async fn pack_install_uses_current_principal_and_inference_chain() {
 
     let response = node
         .execute(&format!(
-            "{{ GraphDefinition(filter: {{agent_did: {{_eq: \"{}\"}}}}) {{graph_id}} PackInstallation(filter: {{agent_did: {{_eq: \"{}\"}}}}) {{_docID}} }}",
-            crate::graphql::escape_graphql_string(&agent_did),
-            crate::graphql::escape_graphql_string(&agent_did)
+            "{{ GraphDefinition(filter: {{node_did: {{_eq: \"{}\"}}}}) {{graph_id}} PackInstallation(filter: {{node_did: {{_eq: \"{}\"}}}}) {{_docID}} }}",
+            crate::graphql::escape_graphql_string(&node_did),
+            crate::graphql::escape_graphql_string(&node_did)
         ))
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
@@ -649,21 +649,21 @@ async fn pack_tool(
     label: &str,
     plugins: Arc<crate::plugin::executor::PluginExecutor>,
 ) -> (Arc<EmbeddedNode>, String, Vec<Box<dyn ToolDyn>>) {
-    let node = build_persona_node().await;
-    let identity = persona_identity(label);
-    let agent_did = identity.did().to_string();
-    crate::test_support::install_test_behavior(&node, &agent_did, "setup").await;
+    let node = build_agent_node().await;
+    let identity = agent_identity(label);
+    let node_did = identity.did().to_string();
+    crate::test_support::install_test_agent(&node, &node_did, "setup").await;
     let mut tool_config = config(&[]);
-    tool_config.behavior_id = "setup".to_string();
+    tool_config.agent_id = "setup".to_string();
     tool_config.enable_pack_install = true;
     let tools = build_self_config_tools(
         node.clone(),
-        agent_did.clone(),
+        node_did.clone(),
         Some(identity),
         &tool_config,
         plugins,
     );
-    (node, agent_did, tools)
+    (node, node_did, tools)
 }
 
 async fn config_call(
@@ -845,7 +845,7 @@ async fn pack_install_puts_a_sealed_plugin_in_the_home_and_refuses_one_that_asks
     )
     .unwrap();
     let (home, plugins) = crate::test_support::home_with_pack_dir(&dir);
-    let (node_2, agent_did_2, tools) = pack_tool("pack-plugins-authority", plugins).await;
+    let (node_2, node_did_2, tools) = pack_tool("pack-plugins-authority", plugins).await;
     let mut preview_argv = vec!["pack", "preview", "install", "fixture/prepared_graph"];
     preview_argv.extend(slot);
     let preview: Value =
@@ -879,8 +879,8 @@ async fn pack_install_puts_a_sealed_plugin_in_the_home_and_refuses_one_that_asks
     );
     let graphs = node_2
         .execute(&format!(
-            "{{ GraphDefinition(filter: {{agent_did: {{_eq: \"{}\"}}}}) {{graph_id}} }}",
-            crate::graphql::escape_graphql_string(&agent_did_2)
+            "{{ GraphDefinition(filter: {{node_did: {{_eq: \"{}\"}}}}) {{graph_id}} }}",
+            crate::graphql::escape_graphql_string(&node_did_2)
         ))
         .await;
     assert!(graphs.data.unwrap()["GraphDefinition"]
@@ -891,10 +891,10 @@ async fn pack_install_puts_a_sealed_plugin_in_the_home_and_refuses_one_that_asks
 
 #[tokio::test]
 async fn graph_tools_start_observe_and_cancel_on_the_current_node() {
-    let node = build_persona_node().await;
-    let identity = persona_identity("graph-tools");
-    let agent_did = identity.did().to_string();
-    crate::test_support::install_test_behavior(&node, &agent_did, "setup").await;
+    let node = build_agent_node().await;
+    let identity = agent_identity("graph-tools");
+    let node_did = identity.did().to_string();
+    crate::test_support::install_test_agent(&node, &node_did, "setup").await;
     let repository = tempfile::tempdir().expect("repository");
     let git = |args: &[&str]| {
         let output = std::process::Command::new("git")
@@ -921,7 +921,7 @@ async fn graph_tools_start_observe_and_cancel_on_the_current_node() {
     git(&["commit", "--quiet", "-m", "head"]);
 
     let mut tool_config = config(&["tools"]);
-    tool_config.behavior_id = "setup".to_owned();
+    tool_config.agent_id = "setup".to_owned();
     tool_config.enable_pack_install = true;
     tool_config.enable_graph_tools = true;
     tool_config.process_ceiling = crate::tool_surface::SelfConfigProcessCeiling {
@@ -932,7 +932,7 @@ async fn graph_tools_start_observe_and_cancel_on_the_current_node() {
     let (_home, plugins) = crate::test_support::home_with_fixture_pack("review_graph");
     let tools = build_self_config_tools(
         node.clone(),
-        agent_did.clone(),
+        node_did.clone(),
         Some(identity.clone()),
         &tool_config,
         plugins.clone(),
@@ -956,7 +956,7 @@ async fn graph_tools_start_observe_and_cancel_on_the_current_node() {
         ]}),
     )
     .await
-    .expect("current behavior receives explicit read authority");
+    .expect("current agent receives explicit read authority");
     let preview = call(
         CONFIG_TOOL_NAME,
         json!({"argv": [
@@ -1007,7 +1007,7 @@ async fn graph_tools_start_observe_and_cancel_on_the_current_node() {
         &access,
         repository.path(),
         &head_ref,
-        &agent_did,
+        &node_did,
     )
     .await
     .expect("read-only workspace provisions");
@@ -1017,7 +1017,7 @@ async fn graph_tools_start_observe_and_cancel_on_the_current_node() {
         "head_ref": head_ref,
         "workspace_id": workspace.workspace.workspace_id,
         "workspace_authority": "readOnly",
-        "workspace_owner_agent_did": workspace.workspace.owner_agent_did,
+        "workspace_owner_node_did": workspace.workspace.owner_node_did,
         "lens_count": "4",
         "lens_min": "4",
         "lens_max": "4",
@@ -1029,7 +1029,7 @@ async fn graph_tools_start_observe_and_cancel_on_the_current_node() {
     tool_config.enable_pack_install = false;
     let tools = build_self_config_tools(
         node,
-        agent_did.clone(),
+        node_did.clone(),
         Some(identity),
         &tool_config,
         plugins,
@@ -1055,19 +1055,15 @@ async fn graph_tools_start_observe_and_cancel_on_the_current_node() {
         .expect("session observers decode the run from the durable reply");
     let started: Value = serde_json::from_str(&started).unwrap();
     assert_eq!(started["node_bound"], true);
-    assert_eq!(started["principal"], agent_did);
+    assert_eq!(started["node"], node_did);
     assert_eq!(started["observed"]["status"], "running");
     let run_id = started["receipt"]["run_id"].as_str().unwrap();
     assert_eq!(receipt.run_id, run_id);
     assert_eq!(
-        crate::graph_pipeline::load_graph_run_view_with_access(
-            &access,
-            &agent_did,
-            &receipt.run_id
-        )
-        .await
-        .expect("the decoded run loads through the canonical view owner")
-        .run_id,
+        crate::graph_pipeline::load_graph_run_view_with_access(&access, &node_did, &receipt.run_id)
+            .await
+            .expect("the decoded run loads through the canonical view owner")
+            .run_id,
         run_id
     );
 
@@ -1076,7 +1072,7 @@ async fn graph_tools_start_observe_and_cancel_on_the_current_node() {
         .expect("same-node status is readable");
     let observed: Value = serde_json::from_str(&observed).unwrap();
     assert_eq!(observed["run_id"], run_id);
-    assert_eq!(observed["owner_did"], agent_did);
+    assert_eq!(observed["owner_did"], node_did);
     assert_eq!(observed["status"], "running");
 
     let not_yet_a_result = call(GET_GRAPH_RESULT_TOOL_NAME, json!({"run_id": run_id}))
@@ -1094,7 +1090,7 @@ async fn graph_tools_start_observe_and_cancel_on_the_current_node() {
     .expect("same-node cancellation is persisted");
     let cancelled: Value = serde_json::from_str(&cancelled).unwrap();
     assert_eq!(cancelled["run_id"], run_id);
-    assert_eq!(cancelled["cancellation_requested_by"], agent_did);
+    assert_eq!(cancelled["cancellation_requested_by"], node_did);
     assert_eq!(cancelled["cancellation_reason"], "test cleanup");
     assert_ne!(cancelled["status"], "succeeded");
 }
@@ -1105,18 +1101,18 @@ async fn graph_tools_start_observe_and_cancel_on_the_current_node() {
 /// `list_graphs` returns start the graph's only entry on the default input.
 #[tokio::test]
 async fn run_graph_by_graph_id_is_selected_through_the_shared_owner() {
-    let node = build_persona_node().await;
-    let identity = persona_identity("run-graph-by-id");
-    let agent_did = identity.did().to_string();
-    crate::test_support::install_test_behavior(&node, &agent_did, "setup").await;
+    let node = build_agent_node().await;
+    let identity = agent_identity("run-graph-by-id");
+    let node_did = identity.did().to_string();
+    crate::test_support::install_test_agent(&node, &node_did, "setup").await;
     let (_home, plugins) = crate::test_support::home_with_fixture_pack("review_graph");
     let mut tool_config = config(&[]);
-    tool_config.behavior_id = "setup".to_owned();
+    tool_config.agent_id = "setup".to_owned();
     tool_config.enable_pack_install = true;
     tool_config.enable_graph_tools = true;
     let tools = build_self_config_tools(
         node.clone(),
-        agent_did,
+        node_did,
         Some(identity),
         &tool_config,
         plugins,
@@ -1209,7 +1205,7 @@ async fn run_graph_description_makes_entry_optional_for_every_selection() {
     let mut tool_config = config(&[]);
     tool_config.enable_graph_tools = true;
     let tools = build_self_config_tools(
-        build_persona_node().await,
+        build_agent_node().await,
         "did:key:zSelfConfigTest".to_owned(),
         None,
         &tool_config,
@@ -1235,18 +1231,18 @@ async fn run_graph_description_makes_entry_optional_for_every_selection() {
 /// run tool.
 #[tokio::test]
 async fn list_graphs_value_is_the_in_session_reply_and_names_no_run_tool_without_one() {
-    let node = build_persona_node().await;
-    let identity = persona_identity("list-graphs-value");
-    let agent_did = identity.did().to_string();
-    crate::test_support::install_test_behavior(&node, &agent_did, "setup").await;
+    let node = build_agent_node().await;
+    let identity = agent_identity("list-graphs-value");
+    let node_did = identity.did().to_string();
+    crate::test_support::install_test_agent(&node, &node_did, "setup").await;
     let mut tool_config = config(&["tools"]);
-    tool_config.behavior_id = "setup".to_owned();
+    tool_config.agent_id = "setup".to_owned();
     tool_config.enable_pack_install = true;
     tool_config.enable_graph_tools = true;
     let (_home, plugins) = crate::test_support::home_with_fixture_pack("review_graph");
     let tools = build_self_config_tools(
         node.clone(),
-        agent_did.clone(),
+        node_did.clone(),
         Some(identity),
         &tool_config,
         plugins,
@@ -1289,7 +1285,7 @@ async fn list_graphs_value_is_the_in_session_reply_and_names_no_run_tool_without
         serde_json::from_str(&call(LIST_GRAPHS_TOOL_NAME, json!({})).await.unwrap()).unwrap();
     let access = graph_access(&node);
     let shared: Value = serde_json::from_str(
-        &list_graphs_value(&access, &agent_did, Some(RUN_GRAPH_TOOL_NAME))
+        &list_graphs_value(&access, &node_did, Some(RUN_GRAPH_TOOL_NAME))
             .await
             .unwrap(),
     )
@@ -1305,7 +1301,7 @@ async fn list_graphs_value_is_the_in_session_reply_and_names_no_run_tool_without
     );
 
     let read_only: Value =
-        serde_json::from_str(&list_graphs_value(&access, &agent_did, None).await.unwrap()).unwrap();
+        serde_json::from_str(&list_graphs_value(&access, &node_did, None).await.unwrap()).unwrap();
     let listed = read_only["graphs"].as_array().unwrap();
     assert_eq!(listed.len(), graphs.len());
     assert!(
@@ -1315,7 +1311,7 @@ async fn list_graphs_value_is_the_in_session_reply_and_names_no_run_tool_without
 }
 
 /// `RunGraphTool`'s host-ceiling gate for an entry whose `prepare` declares a
-/// `git_diff` host step: refused when the current behavior has no effective
+/// `git_diff` host step: refused when the current agent has no effective
 /// read authority, and refused again once it does but the named repository
 /// escapes the effective root. Both refusals happen before any plugin runs,
 /// so the fixture's prepare plugin never needs to actually resolve, and both
@@ -1323,13 +1319,13 @@ async fn list_graphs_value_is_the_in_session_reply_and_names_no_run_tool_without
 /// ceiling gate).
 #[tokio::test]
 async fn run_graph_refuses_a_git_diff_prepare_without_ceiling_authority() {
-    let node = build_persona_node().await;
-    let identity = persona_identity("prepare-ceiling");
-    let agent_did = identity.did().to_string();
-    crate::test_support::install_test_behavior(&node, &agent_did, "setup").await;
+    let node = build_agent_node().await;
+    let identity = agent_identity("prepare-ceiling");
+    let node_did = identity.did().to_string();
+    crate::test_support::install_test_agent(&node, &node_did, "setup").await;
 
     let options = crate::graph_package::GraphPackageInstallBindings {
-        agent_did: agent_did.clone(),
+        node_did: node_did.clone(),
         inference_slots: BTreeMap::from([
             ("coordinator".to_owned(), "setup:inference".to_owned()),
             ("worker".to_owned(), "setup:inference".to_owned()),
@@ -1353,7 +1349,7 @@ async fn run_graph_refuses_a_git_diff_prepare_without_ceiling_authority() {
     let access = graph_access(&node);
     let receipt = crate::graph_package::install_loaded_graph_package(
         &access,
-        &agent_did,
+        &node_did,
         &package,
         &options,
         None,
@@ -1363,7 +1359,7 @@ async fn run_graph_refuses_a_git_diff_prepare_without_ceiling_authority() {
     .expect("mutated fixture installs");
     crate::graph_pipeline::activate_graph_revision_with_access(
         &access,
-        &agent_did,
+        &node_did,
         &receipt.graph_id,
         &receipt.revision_digest,
         None,
@@ -1372,15 +1368,15 @@ async fn run_graph_refuses_a_git_diff_prepare_without_ceiling_authority() {
     .expect("fixture revision activates");
 
     let mut tool_config = config(&["tools"]);
-    tool_config.behavior_id = "setup".to_owned();
+    tool_config.agent_id = "setup".to_owned();
     tool_config.enable_graph_tools = true;
 
     // No process ceiling has been granted at all: `process_ceiling` defaults
     // to `file_mode: Off`, so effective authority is `Off` regardless of
-    // anything the behavior itself requests.
+    // anything the agent itself requests.
     let tools = build_self_config_tools(
         node.clone(),
-        agent_did.clone(),
+        node_did.clone(),
         Some(identity.clone()),
         &tool_config,
         test_plugins(),
@@ -1419,7 +1415,7 @@ async fn run_graph_refuses_a_git_diff_prepare_without_ceiling_authority() {
 
     // Grant a read-only process ceiling rooted at a directory that does not
     // contain the repository the operator is about to name, and request
-    // that same root on the behavior itself (the effective root is the meet
+    // that same root on the agent itself (the effective root is the meet
     // of the two).
     let allowed_root = tempfile::tempdir().expect("allowed root");
     let outside = tempfile::tempdir().expect("outside directory");
@@ -1428,13 +1424,8 @@ async fn run_graph_refuses_a_git_diff_prepare_without_ceiling_authority() {
         bash_mode: crate::tool_surface::BashMode::Off,
         root: Some(allowed_root.path().to_owned()),
     };
-    let tools = build_self_config_tools(
-        node,
-        agent_did,
-        Some(identity),
-        &tool_config,
-        test_plugins(),
-    );
+    let tools =
+        build_self_config_tools(node, node_did, Some(identity), &tool_config, test_plugins());
     let call = |name: &str, args: Value| {
         tools
             .iter()
@@ -1453,7 +1444,7 @@ async fn run_graph_refuses_a_git_diff_prepare_without_ceiling_authority() {
         ]}),
     )
     .await
-    .expect("current behavior receives effective read authority");
+    .expect("current agent receives effective read authority");
 
     let outside_of_ceiling = call(
         RUN_GRAPH_TOOL_NAME,
@@ -1484,13 +1475,13 @@ async fn run_graph_refuses_a_git_diff_prepare_without_ceiling_authority() {
 /// operator's.
 #[tokio::test]
 async fn run_graph_prepares_host_input_under_the_effective_root() {
-    let node = build_persona_node().await;
-    let identity = persona_identity("prepare-under-root");
-    let agent_did = identity.did().to_string();
-    crate::test_support::install_test_behavior(&node, &agent_did, "setup").await;
+    let node = build_agent_node().await;
+    let identity = agent_identity("prepare-under-root");
+    let node_did = identity.did().to_string();
+    crate::test_support::install_test_agent(&node, &node_did, "setup").await;
 
     let options = crate::graph_package::GraphPackageInstallBindings {
-        agent_did: agent_did.clone(),
+        node_did: node_did.clone(),
         inference_slots: BTreeMap::from([("worker".to_owned(), "setup:inference".to_owned())]),
     };
     let plugin_output = json!({
@@ -1550,7 +1541,7 @@ async fn run_graph_prepares_host_input_under_the_effective_root() {
     let access = graph_access(&node);
     let receipt = crate::graph_package::install_loaded_graph_package(
         &access,
-        &agent_did,
+        &node_did,
         &package,
         &options,
         None,
@@ -1560,7 +1551,7 @@ async fn run_graph_prepares_host_input_under_the_effective_root() {
     .expect("fixture installs");
     crate::graph_pipeline::activate_graph_revision_with_access(
         &access,
-        &agent_did,
+        &node_did,
         &receipt.graph_id,
         &receipt.revision_digest,
         None,
@@ -1588,7 +1579,7 @@ async fn run_graph_prepares_host_input_under_the_effective_root() {
     git(&["commit", "--quiet", "-m", "head"]);
 
     let mut tool_config = config(&["tools"]);
-    tool_config.behavior_id = "setup".to_owned();
+    tool_config.agent_id = "setup".to_owned();
     tool_config.enable_graph_tools = true;
     tool_config.process_ceiling = crate::tool_surface::SelfConfigProcessCeiling {
         file_mode: crate::tool_surface::FileToolMode::ReadOnly,
@@ -1597,7 +1588,7 @@ async fn run_graph_prepares_host_input_under_the_effective_root() {
     };
     let tools = build_self_config_tools(
         node.clone(),
-        agent_did,
+        node_did,
         Some(identity),
         &tool_config,
         plugins,
@@ -1620,7 +1611,7 @@ async fn run_graph_prepares_host_input_under_the_effective_root() {
         ]}),
     )
     .await
-    .expect("current behavior receives effective read authority");
+    .expect("current agent receives effective read authority");
 
     let started = call(
         RUN_GRAPH_TOOL_NAME,
@@ -1664,20 +1655,15 @@ async fn run_graph_prepares_host_input_under_the_effective_root() {
 
 #[tokio::test]
 async fn config_tools_cannot_self_grant_pack_install() {
-    let node = build_persona_node().await;
-    let identity = persona_identity("pack-self-grant");
-    let agent_did = identity.did().to_string();
-    crate::test_support::install_test_behavior(&node, &agent_did, "setup").await;
+    let node = build_agent_node().await;
+    let identity = agent_identity("pack-self-grant");
+    let node_did = identity.did().to_string();
+    crate::test_support::install_test_agent(&node, &node_did, "setup").await;
 
     let mut tool_config = config(&["tools"]);
-    tool_config.behavior_id = "setup".to_string();
-    let tools = build_self_config_tools(
-        node,
-        agent_did,
-        Some(identity),
-        &tool_config,
-        test_plugins(),
-    );
+    tool_config.agent_id = "setup".to_string();
+    let tools =
+        build_self_config_tools(node, node_did, Some(identity), &tool_config, test_plugins());
     let tool = tools
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
@@ -1741,7 +1727,7 @@ async fn operator_replace_tools(node: &defra_node::EmbeddedNode, tools: Value) {
 async fn operator_grant_pack_install(node: &defra_node::EmbeddedNode, owner: &str, tools_id: &str) {
     operator_replace_tools(
         node,
-        json!({"agent_did": owner, "tools_id": tools_id,
+        json!({"node_did": owner, "tools_id": tools_id,
                "self_config": {"enable_self_config": true, "enable_pack_install": true}}),
     )
     .await;
@@ -1749,13 +1735,13 @@ async fn operator_grant_pack_install(node: &defra_node::EmbeddedNode, owner: &st
 
 #[tokio::test]
 async fn config_tools_unrelated_edit_on_granted_tools_is_accepted() {
-    let node = build_persona_node().await;
-    let identity = persona_identity("granted-tools-edit");
+    let node = build_agent_node().await;
+    let identity = agent_identity("granted-tools-edit");
     let owner = identity.did().to_string();
-    crate::test_support::install_test_behavior(&node, &owner, "granted").await;
+    crate::test_support::install_test_agent(&node, &owner, "granted").await;
     operator_grant_pack_install(&node, &owner, "granted:tools").await;
     let mut tool_config = config(&["tools"]);
-    tool_config.behavior_id = "granted".to_string();
+    tool_config.agent_id = "granted".to_string();
     let tools = build_self_config_tools(node, owner, Some(identity), &tool_config, test_plugins());
 
     let edited = call_config_tool(
@@ -1764,7 +1750,7 @@ async fn config_tools_unrelated_edit_on_granted_tools_is_accepted() {
             "tools".into(),
             "edit".into(),
             "--set".into(),
-            r#"subagents={"enabled":true}"#.into(),
+            r#"agents={"enabled":true}"#.into(),
         ],
     )
     .await
@@ -1792,19 +1778,14 @@ async fn config_tools_unrelated_edit_on_granted_tools_is_accepted() {
 
 #[tokio::test]
 async fn built_ins_enable_graph_tools_remains_self_grantable() {
-    let node = build_persona_node().await;
-    let identity = persona_identity("graph-tools-self-grant");
-    let agent_did = identity.did().to_string();
-    crate::test_support::install_test_behavior(&node, &agent_did, "setup").await;
+    let node = build_agent_node().await;
+    let identity = agent_identity("graph-tools-self-grant");
+    let node_did = identity.did().to_string();
+    crate::test_support::install_test_agent(&node, &node_did, "setup").await;
     let mut tool_config = config(&["tools"]);
-    tool_config.behavior_id = "setup".to_string();
-    let tools = build_self_config_tools(
-        node,
-        agent_did,
-        Some(identity),
-        &tool_config,
-        test_plugins(),
-    );
+    tool_config.agent_id = "setup".to_string();
+    let tools =
+        build_self_config_tools(node, node_did, Some(identity), &tool_config, test_plugins());
     let applied = call_config_tool(
         &tools,
         vec![
@@ -1824,27 +1805,22 @@ async fn built_ins_enable_graph_tools_remains_self_grantable() {
 
 #[tokio::test]
 async fn config_tools_holder_may_grant_pack_install_to_a_sibling() {
-    let node = build_persona_node().await;
-    let identity = persona_identity("pack-holder-sibling");
-    let agent_did = identity.did().to_string();
-    crate::test_support::install_test_behavior(&node, &agent_did, "setup").await;
-    crate::test_support::install_test_behavior(&node, &agent_did, "sibling").await;
-    let mut tool_config = config(&["persona", "tools"]);
-    tool_config.behavior_id = "setup".to_string();
+    let node = build_agent_node().await;
+    let identity = agent_identity("pack-holder-sibling");
+    let node_did = identity.did().to_string();
+    crate::test_support::install_test_agent(&node, &node_did, "setup").await;
+    crate::test_support::install_test_agent(&node, &node_did, "sibling").await;
+    let mut tool_config = config(&["node", "tools"]);
+    tool_config.agent_id = "setup".to_string();
     tool_config.enable_pack_install = true;
-    let tools = build_self_config_tools(
-        node,
-        agent_did,
-        Some(identity),
-        &tool_config,
-        test_plugins(),
-    );
+    let tools =
+        build_self_config_tools(node, node_did, Some(identity), &tool_config, test_plugins());
     let applied = call_config_tool(
         &tools,
         vec![
             "tools".into(),
             "edit".into(),
-            "--behavior".into(),
+            "--agent".into(),
             "sibling".into(),
             "--set".into(),
             r#"self_config={"enable_self_config":true,"enable_pack_install":true}"#.into(),
@@ -1897,16 +1873,16 @@ async fn reselection_tools(
     label: &str,
     hold_pack_install: bool,
 ) -> Vec<Box<dyn crate::llm::tool::ToolDyn>> {
-    let node = build_persona_node().await;
-    let identity = persona_identity(label);
+    let node = build_agent_node().await;
+    let identity = agent_identity(label);
     let owner = identity.did().to_string();
-    for behavior in ["worker", "sibling", "granted", "granted-2"] {
-        crate::test_support::install_test_behavior(&node, &owner, behavior).await;
+    for agent in ["worker", "sibling", "granted", "granted-2"] {
+        crate::test_support::install_test_agent(&node, &owner, agent).await;
     }
     operator_grant_pack_install(&node, &owner, "granted:tools").await;
     operator_grant_pack_install(&node, &owner, "granted-2:tools").await;
-    let mut tool_config = config(&["persona", "behavior", "tools"]);
-    tool_config.behavior_id = "worker".to_owned();
+    let mut tool_config = config(&["node", "agent", "tools"]);
+    tool_config.agent_id = "worker".to_owned();
     tool_config.enable_pack_install = hold_pack_install;
     build_self_config_tools(node, owner, Some(identity), &tool_config, test_plugins())
 }
@@ -1915,9 +1891,9 @@ async fn reselection_tools(
 async fn context_reselect_cannot_acquire_grants() {
     let tools = reselection_tools("context-reselect", false).await;
     for target in [None, Some("sibling")] {
-        let mut argv = argv_of(&["behavior", "context", "edit"]);
+        let mut argv = argv_of(&["agent", "context", "edit"]);
         if let Some(target) = target {
-            argv.extend(argv_of(&["--behavior", target]));
+            argv.extend(argv_of(&["--agent", target]));
         }
         argv.extend(argv_of(&["--set", r#"tools_id="granted:tools""#]));
         let refused = config_call_message(&tools, argv)
@@ -1936,13 +1912,7 @@ async fn context_reselect_cannot_acquire_grants() {
     }
     let missing = call_config_tool(
         &tools,
-        argv_of(&[
-            "behavior",
-            "context",
-            "edit",
-            "--set",
-            r#"tools_id="missing""#,
-        ]),
+        argv_of(&["agent", "context", "edit", "--set", r#"tools_id="missing""#]),
     )
     .await
     .expect_err("a missing Tools reference is still refused");
@@ -1954,7 +1924,7 @@ async fn context_reselect_cannot_acquire_grants() {
     call_config_tool(
         &holder,
         argv_of(&[
-            "behavior",
+            "agent",
             "context",
             "edit",
             "--set",
@@ -1966,13 +1936,13 @@ async fn context_reselect_cannot_acquire_grants() {
 }
 
 #[tokio::test]
-async fn behavior_reselect_cannot_acquire_grants() {
-    let tools = reselection_tools("behavior-reselect", false).await;
+async fn agent_reselect_cannot_acquire_grants() {
+    let tools = reselection_tools("agent-reselect", false).await;
     for target in ["worker", "sibling"] {
         let refused = config_call_message(
             &tools,
             argv_of(&[
-                "behavior",
+                "agent",
                 "edit",
                 target,
                 "--set",
@@ -1980,7 +1950,7 @@ async fn behavior_reselect_cannot_acquire_grants() {
             ]),
         )
         .await
-        .expect_err("re-pointing a Behavior at a granted chain must not acquire the grant");
+        .expect_err("re-pointing a Agent at a granted chain must not acquire the grant");
         assert!(
             refused.contains(
                 "context_id \"granted:context\" selects Tools carrying an operator grant this agent does not hold"
@@ -1988,11 +1958,11 @@ async fn behavior_reselect_cannot_acquire_grants() {
             "{target}: {refused}"
         );
     }
-    let holder = reselection_tools("behavior-reselect-holder", true).await;
+    let holder = reselection_tools("agent-reselect-holder", true).await;
     call_config_tool(
         &holder,
         argv_of(&[
-            "behavior",
+            "agent",
             "edit",
             "sibling",
             "--set",
@@ -2011,10 +1981,10 @@ async fn context_reselect_between_granted_tools_is_accepted() {
     call_config_tool(
         &tools,
         argv_of(&[
-            "behavior",
+            "agent",
             "context",
             "edit",
-            "--behavior",
+            "--agent",
             "granted",
             "--set",
             r#"tools_id="granted-2:tools""#,
@@ -2047,19 +2017,19 @@ async fn context_create_selecting_granted_tools_requires_the_grant() {
         .expect("an agent holding the grant may create a Context that selects it");
 }
 
-// -- behavior commands (#Task 5) --
+// -- agent commands (#Task 5) --
 
 #[test]
-fn behavior_edit_arguments_distinguish_omission_clear_and_set() {
-    let args: ConfigurePersonaParams = serde_json::from_value(json!({
+fn agent_edit_arguments_distinguish_omission_clear_and_set() {
+    let args: ConfigureAgentParams = serde_json::from_value(json!({
         "action": "edit",
-        "behavior_id": "review",
+        "agent_id": "review",
         "display_name": "Review reconnaissance",
         "root": null
     }))
     .expect("valid sparse edit arguments");
     assert_eq!(
-        persona_edit_fields(&args),
+        agent_edit_fields(&args),
         vec!["display_name".to_string(), "root".to_string()]
     );
     assert_eq!(
@@ -2071,7 +2041,7 @@ fn behavior_edit_arguments_distinguish_omission_clear_and_set() {
     assert_eq!(args.system_prompt, StringUpdate::Omitted);
 }
 
-pub(super) async fn build_persona_node() -> std::sync::Arc<defra_node::EmbeddedNode> {
+pub(super) async fn build_agent_node() -> std::sync::Arc<defra_node::EmbeddedNode> {
     let tempdir = tempfile::tempdir().expect("tempdir");
     let node = defra_node::EmbeddedNode::builder()
         .data_path(tempdir.path().join("data"))
@@ -2084,7 +2054,7 @@ pub(super) async fn build_persona_node() -> std::sync::Arc<defra_node::EmbeddedN
     std::sync::Arc::new(node)
 }
 
-pub(super) fn persona_identity(label: &str) -> std::sync::Arc<dyn crate::AgentIdentity> {
+pub(super) fn agent_identity(label: &str) -> std::sync::Arc<dyn crate::NodeIdentity> {
     let tempdir = tempfile::tempdir().expect("identity tempdir");
     std::sync::Arc::new(
         crate::KeyIdentity::load_or_create(&tempdir.path().join(format!("{label}.key")), None)
@@ -2094,10 +2064,10 @@ pub(super) fn persona_identity(label: &str) -> std::sync::Arc<dyn crate::AgentId
 
 #[tokio::test]
 async fn automation_rejects_invalid_template_before_publication_and_can_recover() {
-    let node = build_persona_node().await;
-    let identity = persona_identity("template-config");
+    let node = build_agent_node().await;
+    let identity = agent_identity("template-config");
     let owner = identity.did().to_string();
-    crate::test_support::install_test_behavior(&node, &owner, "beh-test").await;
+    crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
     let mut grants = config(&["automation"]);
     grants.preview = true;
     let tools =
@@ -2146,10 +2116,10 @@ async fn automation_rejects_invalid_template_before_publication_and_can_recover(
 
 #[tokio::test]
 async fn automation_rejects_a_count_field_the_runtime_cannot_read_and_can_recover() {
-    let node = build_persona_node().await;
-    let identity = persona_identity("event-source-config");
+    let node = build_agent_node().await;
+    let identity = agent_identity("event-source-config");
     let owner = identity.did().to_string();
-    crate::test_support::install_test_behavior(&node, &owner, "beh-test").await;
+    crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
     node.add_schema("type SelfConfigProbe { batch: String flag: Boolean total: Int }")
         .await
         .unwrap();
@@ -2216,10 +2186,10 @@ async fn automation_rejects_a_count_field_the_runtime_cannot_read_and_can_recove
 
 #[tokio::test]
 async fn skill_import_previews_without_writes_and_requires_file_authority() {
-    let node = build_persona_node().await;
-    let identity = persona_identity("skill-import");
+    let node = build_agent_node().await;
+    let identity = agent_identity("skill-import");
     let owner = identity.did().to_string();
-    crate::test_support::install_test_behavior(&node, &owner, "beh-test").await;
+    crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
     let root = tempfile::tempdir().unwrap();
     let file = root.path().join("SKILL.md");
     std::fs::write(
@@ -2227,7 +2197,7 @@ async fn skill_import_previews_without_writes_and_requires_file_authority() {
         "---\nname: Review\ndescription: Review code\n---\nCheck the diff carefully.",
     )
     .unwrap();
-    let mut grants = config(&["tools", "behavior"]);
+    let mut grants = config(&["tools", "agent"]);
     grants.preview = true;
     let command = |args: &[&str]| args.iter().map(|s| (*s).to_owned()).collect();
     let denied_tools = build_self_config_tools(
@@ -2336,7 +2306,7 @@ async fn skill_import_previews_without_writes_and_requires_file_authority() {
     call_config_tool(
         &tools,
         command(&[
-            "behavior",
+            "agent",
             "context",
             "edit",
             "--set",
@@ -2363,10 +2333,10 @@ async fn skill_import_previews_without_writes_and_requires_file_authority() {
 
 #[tokio::test]
 async fn configuration_discovery_is_read_only_root_bounded_and_sanitized() {
-    let node = build_persona_node().await;
-    let identity = persona_identity("configuration-discovery");
+    let node = build_agent_node().await;
+    let identity = agent_identity("configuration-discovery");
     let owner = identity.did().to_string();
-    crate::test_support::install_test_behavior(&node, &owner, "beh-test").await;
+    crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
     let root = tempfile::tempdir().unwrap();
     let source = root.path().join("synthetic-codex");
     std::fs::create_dir_all(&source).unwrap();
@@ -2492,10 +2462,10 @@ async fn setup_discovery_clarification_apply_and_verification_preserve_disabled_
         DiscoverySourceOutcome, MappingSupportLevel,
     };
 
-    let node = build_persona_node().await;
-    let identity = persona_identity("setup-discovery-flow");
+    let node = build_agent_node().await;
+    let identity = agent_identity("setup-discovery-flow");
     let owner = identity.did().to_string();
-    crate::test_support::install_test_behavior(&node, &owner, "beh-test").await;
+    crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
 
     let root = tempfile::tempdir().unwrap();
     let user_root = root.path().join("synthetic-user/.codex");
@@ -2525,7 +2495,7 @@ async fn setup_discovery_clarification_apply_and_verification_preserve_disabled_
     )
     .unwrap();
 
-    let mut grants = config(&["tools", "behavior", "backend"]);
+    let mut grants = config(&["tools", "agent", "backend"]);
     grants.preview = true;
     grants.process_ceiling = crate::tool_surface::SelfConfigProcessCeiling {
         file_mode: crate::tool_surface::FileToolMode::ReadOnly,
@@ -2616,16 +2586,14 @@ async fn setup_discovery_clarification_apply_and_verification_preserve_disabled_
     let command = |args: &[&str]| args.iter().map(|value| (*value).to_owned()).collect();
     let context_before = call_config_tool(
         &tools,
-        command(&["behavior", "context", "get", "--behavior", "beh-test"]),
+        command(&["agent", "context", "get", "--agent", "beh-test"]),
     )
     .await
     .unwrap();
-    let backend_before = call_config_tool(
-        &tools,
-        command(&["backend", "get", "--behavior", "beh-test"]),
-    )
-    .await
-    .unwrap();
+    let backend_before =
+        call_config_tool(&tools, command(&["backend", "get", "--agent", "beh-test"]))
+            .await
+            .unwrap();
     assert!(!backend_before.contains("FAKE_DISCOVERY_SECRET_123"));
     let services_before = crate::registry::configured_mcp_services(&node, &owner)
         .await
@@ -2643,10 +2611,10 @@ async fn setup_discovery_clarification_apply_and_verification_preserve_disabled_
         &call_config_tool(
             &tools,
             vec![
-                "behavior".into(),
+                "agent".into(),
                 "context".into(),
                 "preview".into(),
-                "--behavior".into(),
+                "--agent".into(),
                 "beh-test".into(),
                 "--set".into(),
                 prompt_patch.clone(),
@@ -2660,7 +2628,7 @@ async fn setup_discovery_clarification_apply_and_verification_preserve_disabled_
     assert_eq!(
         call_config_tool(
             &tools,
-            command(&["behavior", "context", "get", "--behavior", "beh-test"]),
+            command(&["agent", "context", "get", "--agent", "beh-test"]),
         )
         .await
         .unwrap(),
@@ -2672,10 +2640,10 @@ async fn setup_discovery_clarification_apply_and_verification_preserve_disabled_
     call_config_tool(
         &tools,
         vec![
-            "behavior".into(),
+            "agent".into(),
             "context".into(),
             "edit".into(),
-            "--behavior".into(),
+            "--agent".into(),
             "beh-test".into(),
             "--set".into(),
             prompt_patch,
@@ -2687,7 +2655,7 @@ async fn setup_discovery_clarification_apply_and_verification_preserve_disabled_
     let verified: Value = serde_json::from_str(
         &call_config_tool(
             &tools,
-            command(&["behavior", "context", "get", "--behavior", "beh-test"]),
+            command(&["agent", "context", "get", "--agent", "beh-test"]),
         )
         .await
         .unwrap(),
@@ -2695,12 +2663,9 @@ async fn setup_discovery_clarification_apply_and_verification_preserve_disabled_
     .unwrap();
     assert_eq!(verified["document"]["system_prompt"], approved_prompt);
     assert_eq!(
-        call_config_tool(
-            &tools,
-            command(&["backend", "get", "--behavior", "beh-test"]),
-        )
-        .await
-        .unwrap(),
+        call_config_tool(&tools, command(&["backend", "get", "--agent", "beh-test"]),)
+            .await
+            .unwrap(),
         backend_before,
         "discovery-backed setup must not modify operator-owned inference credentials"
     );
@@ -2726,10 +2691,10 @@ async fn setup_discovery_clarification_apply_and_verification_preserve_disabled_
 
 #[tokio::test]
 async fn datastore_preview_create_and_sparse_edit_use_owned_patch_path() {
-    let node = build_persona_node().await;
-    let identity = persona_identity("datastore-config");
+    let node = build_agent_node().await;
+    let identity = agent_identity("datastore-config");
     let owner = identity.did().to_string();
-    crate::test_support::install_test_behavior(&node, &owner, "beh-test").await;
+    crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
     let mut grants = config(&["tools"]);
     grants.preview = true;
     let tools = build_self_config_tools(
@@ -2883,13 +2848,7 @@ async fn datastore_preview_create_and_sparse_edit_use_owned_patch_path() {
     .is_err());
     assert!(call_config_tool(
         &tools,
-        command(&[
-            "datastore",
-            "edit",
-            "jobs",
-            "--set",
-            "agent_did=\"foreign\"",
-        ])
+        command(&["datastore", "edit", "jobs", "--set", "node_did=\"foreign\"",])
     )
     .await
     .is_err());
@@ -2948,13 +2907,11 @@ async fn datastore_preview_create_and_sparse_edit_use_owned_patch_path() {
     ))
     .await
     .unwrap();
-    core.apply(behavior_request(
+    core.apply(agent_request(
         &core,
         vec![(
             "tags".into(),
-            Some(json!([
-                crate::agent::persona_ops::SETUP_STEWARD_BEHAVIOR_TAG
-            ])),
+            Some(json!([crate::self_config::ENGINEER_AGENT_TAG])),
         )],
     ))
     .await
@@ -2975,12 +2932,12 @@ async fn datastore_preview_create_and_sparse_edit_use_owned_patch_path() {
 
 #[tokio::test]
 async fn structured_config_preview_and_apply_round_trip_literal_prompt() {
-    let node = build_persona_node().await;
-    let identity = persona_identity("structured-config");
+    let node = build_agent_node().await;
+    let identity = agent_identity("structured-config");
     let owner = identity.did().to_string();
-    crate::test_support::install_test_behavior(&node, &owner, "working").await;
-    let mut settings = config(&["behavior"]);
-    settings.behavior_id = "working".into();
+    crate::test_support::install_test_agent(&node, &owner, "working").await;
+    let mut settings = config(&["agent"]);
+    settings.agent_id = "working".into();
     settings.preview = true;
     let tools = build_self_config_tools(
         node.clone(),
@@ -2993,11 +2950,10 @@ async fn structured_config_preview_and_apply_round_trip_literal_prompt() {
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
         .unwrap();
-    let read = json!({"argv":["behavior","context","get"]}).to_string();
+    let read = json!({"argv":["agent","context","get"]}).to_string();
     let before = tool.call(read.clone()).await.unwrap();
     let prompt = "Quoted \"text\"\nActual newline; literal \\n; Unicode λ; {{ doc.message }}";
-    let mut request =
-        json!({"argv":["behavior","context","preview"],"set":{"system_prompt":prompt}});
+    let mut request = json!({"argv":["agent","context","preview"],"set":{"system_prompt":prompt}});
     let preview: Value =
         serde_json::from_str(&tool.call(request.to_string()).await.unwrap()).unwrap();
     assert_eq!(preview["committed"], false);
@@ -3009,7 +2965,7 @@ async fn structured_config_preview_and_apply_round_trip_literal_prompt() {
     assert_eq!(applied["config_execution"]["mutation_entered"], true);
     let after: Value = serde_json::from_str(&tool.call(read.clone()).await.unwrap()).unwrap();
     assert_eq!(after["document"]["system_prompt"], prompt);
-    request["set"] = json!({"agent_did":"foreign"});
+    request["set"] = json!({"node_did":"foreign"});
     assert!(tool.call(request.to_string()).await.is_err());
     assert_eq!(
         serde_json::from_str::<Value>(&tool.call(read).await.unwrap()).unwrap(),
@@ -3036,10 +2992,10 @@ pub(super) async fn call_config_tool(
 #[tokio::test]
 async fn outcome_schema_error_returns_an_executable_schema_recovery() {
     use crate::llm::tool::Tool;
-    let node = build_persona_node().await;
-    let identity = persona_identity("schema-recovery");
+    let node = build_agent_node().await;
+    let identity = agent_identity("schema-recovery");
     let owner = identity.did().to_string();
-    crate::test_support::install_test_behavior(&node, &owner, "beh-test").await;
+    crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
     let access = crate::config_client::ConfigAccess::Local(node.clone());
     access
         .add_schema("type Delivery { body: String }")
@@ -3097,12 +3053,12 @@ async fn outcome_schema_error_returns_an_executable_schema_recovery() {
 
 #[tokio::test]
 async fn config_errors_name_the_next_call() {
-    let node = build_persona_node().await;
-    let identity = persona_identity("next-call");
+    let node = build_agent_node().await;
+    let identity = agent_identity("next-call");
     let owner = identity.did().to_string();
-    crate::test_support::install_test_behavior(&node, &owner, "beh-test").await;
-    crate::test_support::install_test_behavior(&node, &owner, &format!("{owner}:builder")).await;
-    let mut grants = config(&["persona", "tools"]);
+    crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
+    crate::test_support::install_test_agent(&node, &owner, &format!("{owner}:builder")).await;
+    let mut grants = config(&["node", "tools"]);
     grants.preview = true;
     let tools = build_self_config_tools(
         node.clone(),
@@ -3124,7 +3080,7 @@ async fn config_errors_name_the_next_call() {
     };
 
     // A context preview cannot attach a skill that is only proposed.
-    let skill = failure(json!({"argv":["behavior","context","preview"],"options":{"behavior":"builder"},"set":{"skill_ids":["eval-coding-check"]}})).await;
+    let skill = failure(json!({"argv":["agent","context","preview"],"options":{"agent":"builder"},"set":{"skill_ids":["eval-coding-check"]}})).await;
     let message = skill["error"].as_str().unwrap();
     assert!(
         message.starts_with("Skill \"eval-coding-check\" does not exist yet"),
@@ -3143,7 +3099,7 @@ async fn config_errors_name_the_next_call() {
         .unwrap();
     assert_eq!(skill["config_execution"]["mutation_entered"], false);
 
-    let tools_ref = failure(json!({"argv":["behavior","context","preview"],"options":{"behavior":"builder"},"set":{"tools_id":"proposed-tools"}})).await;
+    let tools_ref = failure(json!({"argv":["agent","context","preview"],"options":{"agent":"builder"},"set":{"tools_id":"proposed-tools"}})).await;
     let message = tools_ref["error"].as_str().unwrap();
     assert!(
         message.contains("create it with its own resource command first"),
@@ -3160,45 +3116,44 @@ async fn config_errors_name_the_next_call() {
 
     // preview edit is preview; a stray positional gets the whole correct call.
     let aliased = tool
-        .call(json!({"argv":["behavior","context","preview","edit"],"options":{"behavior":"builder"},"set":{"skill_ids":[]}}).to_string())
+        .call(json!({"argv":["agent","context","preview","edit"],"options":{"agent":"builder"},"set":{"skill_ids":[]}}).to_string())
         .await
         .unwrap();
     assert!(aliased.contains("\"committed\": false"), "{aliased}");
     let stray =
-        failure(json!({"argv":["behavior","context","edit","builder"],"set":{"skill_ids":[]}}))
-            .await;
+        failure(json!({"argv":["agent","context","edit","builder"],"set":{"skill_ids":[]}})).await;
     let message = stray["error"].as_str().unwrap();
     assert!(
-        message.contains(r#"behavior context edit takes no positional argument "builder""#)
-            && message.contains(r#"{"argv":["behavior","context","edit"],"options":{"behavior":"BEHAVIOR_ID"},"set":{"FIELD":VALUE}}"#),
+        message.contains(r#"agent context edit takes no positional argument "builder""#)
+            && message.contains(r#"{"argv":["agent","context","edit"],"options":{"agent":"AGENT_ID"},"set":{"FIELD":VALUE}}"#),
         "{message}"
     );
     assert_eq!(stray["config_execution"]["mutation_entered"], false);
 
     // A display name or differently cased slug suggests the slug.
-    let named = failure(json!({"argv":["behavior","get","Builder"]})).await;
+    let named = failure(json!({"argv":["agent","get","Builder"]})).await;
     assert_eq!(
         named["error"],
-        "unknown behavior_id \"Builder\"; did you mean \"builder\"?"
+        "unknown agent_id \"Builder\"; did you mean \"builder\"?"
     );
     let core = SelfConfigCore::new(node.clone(), owner.clone(), "beh-test".into()).unwrap();
-    core.apply(behavior_request(
+    core.apply(agent_request(
         &core,
         vec![("display_name".into(), Some(json!("Night Shift")))],
     ))
     .await
     .unwrap();
-    let display = failure(json!({"argv":["behavior","get","night shift"]})).await;
+    let display = failure(json!({"argv":["agent","get","night shift"]})).await;
     assert_eq!(
         display["error"],
-        "unknown behavior_id \"night shift\"; did you mean \"beh-test\"?"
+        "unknown agent_id \"night shift\"; did you mean \"beh-test\"?"
     );
-    let unknown = failure(json!({"argv":["behavior","get","nobody"]})).await;
+    let unknown = failure(json!({"argv":["agent","get","nobody"]})).await;
     assert!(
         unknown["error"]
             .as_str()
             .unwrap()
-            .contains(r#"copy an exact ID from ["behavior","list"]"#),
+            .contains(r#"copy an exact ID from ["agent","list"]"#),
         "{unknown}"
     );
     node.shutdown().await;
@@ -3206,12 +3161,12 @@ async fn config_errors_name_the_next_call() {
 
 #[tokio::test]
 async fn config_execution_receipts_separate_rejected_syntax_from_write_dispatch() {
-    let node = build_persona_node().await;
-    let identity = persona_identity("config-execution");
+    let node = build_agent_node().await;
+    let identity = agent_identity("config-execution");
     let owner = identity.did().to_string();
-    crate::test_support::install_test_behavior(&node, &owner, "beh-test").await;
+    crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
     let mut grants = config(&[
-        "persona",
+        "node",
         "tools",
         "automation",
         "profile",
@@ -3227,7 +3182,7 @@ async fn config_execution_receipts_separate_rejected_syntax_from_write_dispatch(
         .unwrap();
     for (args, mutation) in [
         (
-            json!({"argv":["behavior","create","preview"],"set":{"system_prompt":"literal"}}),
+            json!({"argv":["agent","create","preview"],"set":{"system_prompt":"literal"}}),
             false,
         ),
         (json!({"argv":["unknown","operation"]}), false),
@@ -3257,7 +3212,7 @@ async fn config_execution_receipts_separate_rejected_syntax_from_write_dispatch(
         ),
         (json!({"argv":["schema","install"]}), false),
         (
-            json!({"argv":["automation","edit","task"],"target_id":"missing","set":{"display_name":"Missing behavior"},"options":{"behavior":"missing"}}),
+            json!({"argv":["automation","edit","task"],"target_id":"missing","set":{"display_name":"Missing agent"},"options":{"agent":"missing"}}),
             false,
         ),
     ] {
@@ -3285,64 +3240,64 @@ async fn config_execution_receipts_separate_rejected_syntax_from_write_dispatch(
 }
 
 #[tokio::test]
-async fn persona_category_gates_the_tool() {
-    let node = build_persona_node().await;
-    let identity = persona_identity("persona-gate");
-    let agent_did = identity.did().to_string();
+async fn agent_category_gates_the_tool() {
+    let node = build_agent_node().await;
+    let identity = agent_identity("agent-gate");
+    let node_did = identity.did().to_string();
 
-    let without_persona = build_self_config_tools(
+    let without_agent = build_self_config_tools(
         node.clone(),
-        agent_did.clone(),
+        node_did.clone(),
         None,
-        &config(&["behavior"]),
+        &config(&["tools"]),
         test_plugins(),
     );
-    let error = call_config_tool(&without_persona, vec!["behavior".into(), "list".into()])
+    let error = call_config_tool(&without_agent, vec!["agent".into(), "list".into()])
         .await
-        .expect_err("catalog read requires persona grant");
-    assert!(error.contains("catalog grant"), "{error}");
+        .expect_err("catalog read requires agent grant");
+    assert!(error.contains("not granted"), "{error}");
 
-    let with_persona = build_self_config_tools(
+    let with_agent = build_self_config_tools(
         node,
-        agent_did,
+        node_did,
         Some(identity),
-        &config(&["persona"]),
+        &config(&["node"]),
         test_plugins(),
     );
-    assert!(with_persona
+    assert!(with_agent
         .iter()
         .any(|tool| tool.name() == CONFIG_TOOL_NAME));
 }
 
 #[tokio::test]
-async fn persona_unknown_action_errors_cleanly() {
-    let node = build_persona_node().await;
-    let identity = persona_identity("persona-unknown");
+async fn agent_unknown_action_errors_cleanly() {
+    let node = build_agent_node().await;
+    let identity = agent_identity("agent-unknown");
     let tools = build_self_config_tools(
         node,
         identity.did().to_string(),
         Some(identity),
-        &config(&["persona"]),
+        &config(&["node"]),
         test_plugins(),
     );
 
-    let error = call_config_tool(&tools, vec!["behavior".into(), "unknown-action".into()])
+    let error = call_config_tool(&tools, vec!["agent".into(), "unknown-action".into()])
         .await
         .expect_err("unknown action must error");
     assert!(
-        error.contains("unknown behavior verb"),
+        error.contains("unknown agent verb"),
         "error should name the bad action: {error}"
     );
 }
 
 #[tokio::test]
-async fn behavior_only_grant_cannot_change_default_and_writes_require_exact_signer() {
-    let node = build_persona_node().await;
-    let identity = persona_identity("behavior-only-owner");
+async fn agent_only_grant_cannot_acquire_node_authority_and_writes_require_exact_signer() {
+    let node = build_agent_node().await;
+    let identity = agent_identity("agent-only-owner");
     let owner = identity.did().to_string();
-    crate::test_support::install_test_behavior(&node, &owner, "current").await;
-    let mut tool_config = config(&["behavior"]);
-    tool_config.behavior_id = "current".into();
+    crate::test_support::install_test_agent(&node, &owner, "current").await;
+    let mut tool_config = config(&["agent"]);
+    tool_config.agent_id = "current".into();
     tool_config.preview = true;
     let tools = build_self_config_tools(
         node.clone(),
@@ -3351,23 +3306,42 @@ async fn behavior_only_grant_cannot_change_default_and_writes_require_exact_sign
         &tool_config,
         test_plugins(),
     );
-    let tool = tools
-        .iter()
-        .find(|tool| tool.name() == CONFIG_TOOL_NAME)
-        .unwrap();
-    let rejected = tool
-        .call(
-            json!({"argv":[
-                "behavior", "preview", "edit", "--id", "current", "--default"
-            ]})
-            .to_string(),
-        )
-        .await
-        .expect_err("current-only grant cannot change principal selection");
-    assert!(rejected.to_string().contains("behavior catalog grant"));
-
-    let foreign_identity = persona_identity("foreign-signer");
-    let params = behavior_params(
+    for argv in [
+        vec!["agent", "list"],
+        vec!["agent", "preview", "default", "current"],
+        vec!["agent", "default", "current"],
+        vec![
+            "agent",
+            "create",
+            "--display-name",
+            "Other",
+            "--system-prompt",
+            "Other instructions",
+            "--profile",
+            "current:inference",
+        ],
+    ] {
+        let error = call_config_tool(&tools, argv.into_iter().map(str::to_owned).collect())
+            .await
+            .expect_err("agent-only authority cannot manage the node catalog");
+        assert!(error.contains("category node"), "{error}");
+    }
+    let edited = call_config_tool(
+        &tools,
+        vec![
+            "agent".into(),
+            "update".into(),
+            "current".into(),
+            "--set".into(),
+            r#"display_name="Renamed""#.into(),
+        ],
+    )
+    .await
+    .expect("agent authority can edit its own document");
+    let edited: Value = serde_json::from_str(&edited).unwrap();
+    assert_eq!(edited["committed"], true);
+    let foreign_identity = agent_identity("foreign-signer");
+    let params = agent_params(
         "edit",
         None,
         &[
@@ -3378,7 +3352,7 @@ async fn behavior_only_grant_cannot_change_default_and_writes_require_exact_sign
         ],
     )
     .unwrap();
-    let rejected = persona_mutate(
+    let rejected = agent_mutate(
         &node,
         &owner,
         foreign_identity.as_ref(),
@@ -3387,22 +3361,20 @@ async fn behavior_only_grant_cannot_change_default_and_writes_require_exact_sign
         &OperatorGrants::default(),
     )
     .await
-    .expect_err("foreign signer must fail before authoring a request");
-    assert!(rejected
-        .to_string()
-        .contains("exact local principal signer"));
+    .expect_err("foreign signer must fail before publishing configuration");
+    assert!(rejected.to_string().contains("exact local node identity"));
 }
 
 #[tokio::test]
 async fn config_lists_are_bounded_paginated_and_inference_inventory_is_read_only() {
-    let node = build_persona_node().await;
-    let identity = persona_identity("config-inventory");
+    let node = build_agent_node().await;
+    let identity = agent_identity("config-inventory");
     let owner = identity.did().to_string();
-    for behavior in ["alpha", "beta", "gamma"] {
-        crate::test_support::install_test_behavior(&node, &owner, behavior).await;
+    for agent in ["alpha", "beta", "gamma"] {
+        crate::test_support::install_test_agent(&node, &owner, agent).await;
     }
-    let mut tool_config = config(&["persona", "profile", "backend"]);
-    tool_config.behavior_id = "alpha".into();
+    let mut tool_config = config(&["node", "profile", "backend"]);
+    tool_config.agent_id = "alpha".into();
     let tools = build_self_config_tools(node, owner, Some(identity), &tool_config, test_plugins());
     let config = tools
         .iter()
@@ -3411,7 +3383,7 @@ async fn config_lists_are_bounded_paginated_and_inference_inventory_is_read_only
 
     let first: Value = serde_json::from_str(
         &config
-            .call(json!({"argv":["behavior", "list", "--limit", "1"]}).to_string())
+            .call(json!({"argv":["agent", "list", "--limit", "1"]}).to_string())
             .await
             .unwrap(),
     )
@@ -3421,25 +3393,22 @@ async fn config_lists_are_bounded_paginated_and_inference_inventory_is_read_only
     let cursor = first["page"]["next_cursor"].as_str().unwrap();
     let second: Value = serde_json::from_str(
         &config
-            .call(
-                json!({"argv":["behavior", "list", "--limit", "1", "--cursor", cursor]})
-                    .to_string(),
-            )
+            .call(json!({"argv":["agent", "list", "--limit", "1", "--cursor", cursor]}).to_string())
             .await
             .unwrap(),
     )
     .unwrap();
-    assert_ne!(first["behaviors"][0], second["behaviors"][0]);
+    assert_ne!(first["agents"][0], second["agents"][0]);
 
-    let behavior_id = first["behaviors"][0]["behavior_id"].as_str().unwrap();
+    let agent_id = first["agents"][0]["agent_id"].as_str().unwrap();
     let inspected: Value = serde_json::from_str(
         &config
-            .call(json!({"argv":["behavior", "get", behavior_id]}).to_string())
+            .call(json!({"argv":["agent", "get", agent_id]}).to_string())
             .await
             .unwrap(),
     )
     .unwrap();
-    assert_eq!(inspected["behavior_id"], behavior_id);
+    assert_eq!(inspected["agent_id"], agent_id);
 
     for resource in ["profile", "backend"] {
         let inventory: Value = serde_json::from_str(
@@ -3484,12 +3453,12 @@ async fn config_creates_and_discovers_an_unauthenticated_local_backend() {
             .unwrap();
     });
 
-    let node = build_persona_node().await;
-    let identity = persona_identity("local-backend-create");
+    let node = build_agent_node().await;
+    let identity = agent_identity("local-backend-create");
     let owner = identity.did().to_string();
-    crate::test_support::install_test_behavior(&node, &owner, "setup").await;
+    crate::test_support::install_test_agent(&node, &owner, "setup").await;
     let mut tool_config = config(&["backend", "profile"]);
-    tool_config.behavior_id = "setup".into();
+    tool_config.agent_id = "setup".into();
     tool_config.preview = true;
     let tools = build_self_config_tools(node, owner, Some(identity), &tool_config, test_plugins());
     let endpoint = format!("http://{address}/v1");
@@ -3591,22 +3560,20 @@ async fn config_creates_and_discovers_an_unauthenticated_local_backend() {
 }
 
 #[tokio::test]
-async fn config_targets_owned_working_behavior_for_all_bound_documents() {
-    let node = build_persona_node().await;
-    let identity = persona_identity("targeted-config");
+async fn config_targets_owned_working_agent_for_all_bound_documents() {
+    let node = build_agent_node().await;
+    let identity = agent_identity("targeted-config");
     let owner = identity.did().to_string();
-    for behavior in ["setup", "working"] {
-        crate::test_support::install_test_behavior(&node, &owner, behavior).await;
+    for agent in ["setup", "working"] {
+        crate::test_support::install_test_agent(&node, &owner, agent).await;
     }
     let setup = SelfConfigCore::new(node.clone(), owner.clone(), "setup".into()).unwrap();
     setup
-        .apply(behavior_request(
+        .apply(agent_request(
             &setup,
             vec![(
                 "tags".into(),
-                Some(json!([
-                    crate::agent::persona_ops::SETUP_STEWARD_BEHAVIOR_TAG
-                ])),
+                Some(json!([crate::self_config::ENGINEER_AGENT_TAG])),
             )],
         ))
         .await
@@ -3622,8 +3589,8 @@ async fn config_targets_owned_working_behavior_for_all_bound_documents() {
         .await
         .unwrap();
 
-    let mut tool_config = config(&["persona", "behavior", "tools", "profile", "backend"]);
-    tool_config.behavior_id = "setup".into();
+    let mut tool_config = config(&["node", "agent", "tools", "profile", "backend"]);
+    tool_config.agent_id = "setup".into();
     tool_config.preview = true;
     tool_config.no_lockout = true;
     let tools = build_self_config_tools(
@@ -3637,7 +3604,7 @@ async fn config_targets_owned_working_behavior_for_all_bound_documents() {
     call_config_tool(
         &tools,
         vec![
-            "behavior".into(),
+            "agent".into(),
             "edit".into(),
             "working".into(),
             "--set".into(),
@@ -3649,10 +3616,10 @@ async fn config_targets_owned_working_behavior_for_all_bound_documents() {
     call_config_tool(
         &tools,
         vec![
-            "behavior".into(),
+            "agent".into(),
             "context".into(),
             "edit".into(),
-            "--behavior".into(),
+            "--agent".into(),
             "working".into(),
             "--set".into(),
             "system_prompt=\"Review carefully.\"".into(),
@@ -3667,9 +3634,9 @@ async fn config_targets_owned_working_behavior_for_all_bound_documents() {
         vec![
             "tools".into(),
             "edit".into(),
-            "--behavior=working".into(),
+            "--agent=working".into(),
             "--set".into(),
-            "subagents={\"target_ids\":[],\"enabled\":false}".into(),
+            "agents={\"target_ids\":[],\"enabled\":false}".into(),
             "--set".into(),
             "remote={\"services\":[]}".into(),
         ],
@@ -3681,7 +3648,7 @@ async fn config_targets_owned_working_behavior_for_all_bound_documents() {
         vec![
             "profile".into(),
             "edit".into(),
-            "--behavior".into(),
+            "--agent".into(),
             "working".into(),
             "--set".into(),
             "display_name=\"Working profile\"".into(),
@@ -3693,23 +3660,23 @@ async fn config_targets_owned_working_behavior_for_all_bound_documents() {
     let working: Value = serde_json::from_str(
         &call_config_tool(
             &tools,
-            vec!["get".into(), "--behavior".into(), "working".into()],
+            vec!["get".into(), "--agent".into(), "working".into()],
         )
         .await
         .unwrap(),
     )
     .unwrap();
-    assert_eq!(working["behavior"]["tags"], json!(["ui:review"]));
+    assert_eq!(working["agent"]["tags"], json!(["ui:review"]));
     assert_eq!(working["context"]["system_prompt"], "Review carefully.");
-    assert_eq!(working["documents"]["Tools"]["subagents"]["enabled"], false);
+    assert_eq!(working["documents"]["Tools"]["agents"]["enabled"], false);
     assert!(working["documents"]["Tools"]["remote"]["services"].is_null());
     assert!(
         working["documents"]["Tools"]["self_config"].is_null(),
-        "targeting a sibling must protect the invoking Setup chain without granting config to the sibling"
+        "targeting a sibling must protect the invoking Engineer chain without granting config to the sibling"
     );
     let working_core = SelfConfigCore::new(node.clone(), owner.clone(), "working".into()).unwrap();
     working_core
-        .apply(behavior_request(
+        .apply(agent_request(
             &working_core,
             vec![(
                 "inference_profile_id".into(),
@@ -3723,20 +3690,20 @@ async fn config_targets_owned_working_behavior_for_all_bound_documents() {
         vec![
             "backend".into(),
             "edit".into(),
-            "--behavior".into(),
+            "--agent".into(),
             "working".into(),
             "--set".into(),
             "enabled=false".into(),
         ],
     )
     .await
-    .expect_err("a sibling edit must not disable the invoking Setup backend");
+    .expect_err("a sibling edit must not disable the invoking Engineer backend");
     assert!(
         shared_backend.contains("backend disabled"),
         "{shared_backend}"
     );
     working_core
-        .apply(behavior_request(
+        .apply(agent_request(
             &working_core,
             vec![(
                 "inference_profile_id".into(),
@@ -3754,13 +3721,13 @@ async fn config_targets_owned_working_behavior_for_all_bound_documents() {
         .await
         .unwrap();
     assert!(
-        help.contains("Fields of Tools:") && help.contains("subagents"),
+        help.contains("Fields of Tools:") && help.contains("agents"),
         "{help}"
     );
     let shapes = call_config_tool(&tools, vec!["tools".into(), "edit".into(), "--help".into()])
         .await
         .unwrap();
-    assert!(shapes.contains("\"subagents\":{\"enabled\""), "{shapes}");
+    assert!(shapes.contains("\"agents\":{\"enabled\""), "{shapes}");
     assert!(shapes.contains("target_ids"), "{shapes}");
 
     let mailbox_help = call_config_tool(
@@ -3827,7 +3794,7 @@ async fn config_targets_owned_working_behavior_for_all_bound_documents() {
         &call_config_tool(
             &tools,
             vec![
-                "behavior".into(),
+                "agent".into(),
                 "preview".into(),
                 "default".into(),
                 "working".into(),
@@ -3839,7 +3806,7 @@ async fn config_targets_owned_working_behavior_for_all_bound_documents() {
     .unwrap();
     assert_eq!(default_preview["committed"], false);
     assert_eq!(default_preview["admitted"], true);
-    assert_eq!(default_preview["proposed_values"]["make_default"], true);
+    assert_eq!(default_preview["make_default"], true);
 
     // The Engineer edits its own Tools; only a lockout is refused (#1796).
     call_config_tool(
@@ -3847,7 +3814,7 @@ async fn config_targets_owned_working_behavior_for_all_bound_documents() {
         vec![
             "tools".into(),
             "edit".into(),
-            "--behavior".into(),
+            "--agent".into(),
             "setup".into(),
             "--set".into(),
             "tags=[\"changed\"]".into(),
@@ -3872,7 +3839,7 @@ async fn config_targets_owned_working_behavior_for_all_bound_documents() {
     );
 
     // Lean siblingToolsAllowed: both reference observations happen in the
-    // same patch transaction. Sharing either the Context or Tools with Setup
+    // same patch transaction. Sharing either the Context or Tools with Engineer
     // must reject without mutating the shared document.
     working_core
         .apply(anchored_request(
@@ -3887,14 +3854,14 @@ async fn config_targets_owned_working_behavior_for_all_bound_documents() {
         vec![
             "tools".into(),
             "edit".into(),
-            "--behavior".into(),
+            "--agent".into(),
             "working".into(),
             "--set".into(),
             "display_name=\"must not land\"".into(),
         ],
     )
     .await
-    .expect_err("Tools shared with Setup must be protected transactionally");
+    .expect_err("Tools shared with Engineer must be protected transactionally");
     assert!(
         shared_tools.contains("unshared Context and Tools"),
         "{shared_tools}"
@@ -3908,7 +3875,7 @@ async fn config_targets_owned_working_behavior_for_all_bound_documents() {
         .await
         .unwrap();
     working_core
-        .apply(behavior_request(
+        .apply(agent_request(
             &working_core,
             vec![("context_id".into(), Some(json!("setup:context")))],
         ))
@@ -3917,17 +3884,17 @@ async fn config_targets_owned_working_behavior_for_all_bound_documents() {
     let shared_context = call_config_tool(
         &tools,
         vec![
-            "behavior".into(),
+            "agent".into(),
             "context".into(),
             "edit".into(),
-            "--behavior".into(),
+            "--agent".into(),
             "working".into(),
             "--set".into(),
             "display_name=\"must not land\"".into(),
         ],
     )
     .await
-    .expect_err("Context shared with Setup must be protected transactionally");
+    .expect_err("Context shared with Engineer must be protected transactionally");
     assert!(
         shared_context.contains("unshared Context and Tools"),
         "{shared_context}"
@@ -3936,13 +3903,13 @@ async fn config_targets_owned_working_behavior_for_all_bound_documents() {
 
 #[tokio::test]
 async fn cleanup_previews_and_removes_exact_unreferenced_cycles_atomically() {
-    let node = build_persona_node().await;
-    let identity = persona_identity("config-cleanup");
+    let node = build_agent_node().await;
+    let identity = agent_identity("config-cleanup");
     let owner = identity.did().to_string();
-    for behavior in ["beh-test", "orphan"] {
-        crate::test_support::install_test_behavior(&node, &owner, behavior).await;
+    for agent in ["beh-test", "orphan"] {
+        crate::test_support::install_test_agent(&node, &owner, agent).await;
     }
-    let mut tool_config = config(&["persona", "tools", "profile", "backend"]);
+    let mut tool_config = config(&["node", "tools", "profile", "backend"]);
     tool_config.preview = true;
     let tools = build_self_config_tools(node, owner, Some(identity), &tool_config, test_plugins());
 
@@ -3963,7 +3930,7 @@ async fn cleanup_previews_and_removes_exact_unreferenced_cycles_atomically() {
     );
 
     let targets = [
-        "behavior=orphan",
+        "agent=orphan",
         "context=orphan:context",
         "tools=orphan:tools",
         "profile=orphan:inference",
@@ -3985,19 +3952,16 @@ async fn cleanup_previews_and_removes_exact_unreferenced_cycles_atomically() {
     .unwrap();
     assert_eq!(preview["committed"], false);
     assert_eq!(preview["targets"].as_array().unwrap().len(), targets.len());
-    call_config_tool(
-        &tools,
-        vec!["behavior".into(), "get".into(), "orphan".into()],
-    )
-    .await
-    .expect("preview performs no writes");
+    call_config_tool(&tools, vec!["agent".into(), "get".into(), "orphan".into()])
+        .await
+        .expect("preview performs no writes");
 
     call_config_tool(
         &tools,
         vec![
             "backend".into(),
             "edit".into(),
-            "--behavior".into(),
+            "--agent".into(),
             "orphan".into(),
             "--set".into(),
             "name=\"Changed after preview\"".into(),
@@ -4029,79 +3993,25 @@ async fn cleanup_previews_and_removes_exact_unreferenced_cycles_atomically() {
     )
     .unwrap();
     assert_eq!(removed["committed"], true);
-    let missing = call_config_tool(
-        &tools,
-        vec!["behavior".into(), "get".into(), "orphan".into()],
-    )
-    .await
-    .expect_err("removed behavior is no longer inspectable");
+    let missing = call_config_tool(&tools, vec!["agent".into(), "get".into(), "orphan".into()])
+        .await
+        .expect_err("removed agent is no longer inspectable");
     assert!(
         missing.contains("missing")
             || missing.contains("no owned")
-            || missing.contains("unknown behavior_id"),
+            || missing.contains("unknown agent_id"),
         "{missing}"
     );
 
     call_config_tool(
         &tools,
-        vec!["get".into(), "--behavior".into(), "beh-test".into()],
+        vec!["get".into(), "--agent".into(), "beh-test".into()],
     )
     .await
     .expect("cleanup preserves unrelated configuration");
 }
 
-#[derive(serde::Deserialize)]
-struct PersonaRequestRowForTest {
-    request_key: Option<String>,
-    requester_did: Option<String>,
-    agent_did: Option<String>,
-    op: Option<String>,
-    clone_from: Option<String>,
-    preset: Option<String>,
-    edit_fields: Option<Vec<String>>,
-}
-
-async fn load_persona_rows_for_test(
-    node: &defra_node::EmbeddedNode,
-    agent_did: &str,
-) -> Vec<PersonaRequestRowForTest> {
-    let agent_did = crate::graphql::escape_graphql_string(agent_did);
-    let query = format!(
-        r#"{{
-            PersonaConfigRequest(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}) {{
-                request_key
-                requester_did
-                agent_did
-                op
-                clone_from
-                preset
-                edit_fields
-            }}
-        }}"#
-    );
-    let response = node.execute(&query).await;
-    assert!(
-        !response.has_errors(),
-        "query failed: {:?}",
-        response.errors
-    );
-    serde_json::from_value(
-        response
-            .data
-            .as_ref()
-            .and_then(|data| data.get("PersonaConfigRequest"))
-            .cloned()
-            .unwrap_or(serde_json::Value::Array(Vec::new())),
-    )
-    .expect("decode rows")
-}
-
-/// Owns the tool as `Box<dyn ToolDyn>` so it can be moved into a spawned
-/// task: `config behavior` polls for up to 5s internally, and this test
-/// must run a manual reconciler tick concurrently — NOT a background task —
-/// while that poll is in flight, so the tool's own call observes the
-/// converged status instead of timing out at "pending".
-fn take_persona_tool(
+fn take_agent_tool(
     tools: Vec<Box<dyn crate::llm::tool::ToolDyn>>,
 ) -> Box<dyn crate::llm::tool::ToolDyn> {
     tools
@@ -4111,19 +4021,22 @@ fn take_persona_tool(
 }
 
 #[tokio::test]
-async fn behavior_default_uses_the_signed_persona_request_owner() {
-    let node = build_persona_node().await;
-    let identity = persona_identity("behavior-default");
-    let agent_did = identity.did().to_string();
-    for behavior in ["seed", "working"] {
-        crate::test_support::install_test_behavior(&node, &agent_did, behavior).await;
+async fn agent_default_commits_through_the_agent_owner() {
+    let node = build_agent_node().await;
+    let identity = agent_identity("agent-default");
+    let node_did = identity.did().to_string();
+    for agent in ["seed", "working"] {
+        crate::test_support::install_test_agent(&node, &node_did, agent).await;
     }
-    let mut tool_config = config(&["persona"]);
-    tool_config.behavior_id = "seed".into();
+    crate::document_config::upsert_node(&node, &node_did, None, Some("seed"), true)
+        .await
+        .unwrap();
+    let mut tool_config = config(&["node"]);
+    tool_config.agent_id = "seed".into();
     tool_config.preview = true;
     let tools = build_self_config_tools(
         node.clone(),
-        agent_did.clone(),
+        node_did.clone(),
         Some(identity.clone()),
         &tool_config,
         test_plugins(),
@@ -4132,7 +4045,7 @@ async fn behavior_default_uses_the_signed_persona_request_owner() {
         &call_config_tool(
             &tools,
             vec![
-                "behavior".into(),
+                "agent".into(),
                 "preview".into(),
                 "default".into(),
                 "working".into(),
@@ -4143,42 +4056,26 @@ async fn behavior_default_uses_the_signed_persona_request_owner() {
     )
     .unwrap();
     assert_eq!(preview["admitted"], true);
-    assert!(load_persona_rows_for_test(&node, &agent_did)
-        .await
-        .is_empty());
-
-    let tool = take_persona_tool(tools);
-    let call = tokio::spawn(async move {
-        tool.call(json!({"argv":["behavior", "default", "working"]}).to_string())
-            .await
-    });
-    let mut request_key = None;
-    for _ in 0..50 {
-        if let Some(row) = load_persona_rows_for_test(&node, &agent_did)
-            .await
-            .into_iter()
-            .next()
-        {
-            assert!(row.edit_fields.as_deref().unwrap_or_default().is_empty());
-            request_key = row.request_key;
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-    }
-    let request_key = request_key.expect("config behavior default authors a request row");
-    let store = crate::agent::p2p_reconcile::GraphqlPersonaRequestStore::with_local_identity(
-        node.clone(),
-        None,
-        identity,
-    );
-    let outcome = crate::agent::p2p_reconcile::reconcile_persona_tick(&store, &node)
-        .await
-        .unwrap();
-    assert!(outcome.applied.contains(&request_key), "{outcome:?}");
-    let output: Value = serde_json::from_str(&call.await.unwrap().unwrap()).unwrap();
-    assert_eq!(output["effective"]["is_default"], true);
     assert_eq!(
-        principal_default_behavior(&node, &agent_did)
+        node_default_agent(&node, &node_did)
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("seed")
+    );
+    let output: Value = serde_json::from_str(
+        &call_config_tool(
+            &tools,
+            vec!["agent".into(), "default".into(), "working".into()],
+        )
+        .await
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(output["committed"], true);
+    assert_eq!(output["agent_id"], "working");
+    assert_eq!(
+        node_default_agent(&node, &node_did)
             .await
             .unwrap()
             .as_deref(),
@@ -4187,25 +4084,25 @@ async fn behavior_default_uses_the_signed_persona_request_owner() {
 }
 
 #[tokio::test]
-async fn persona_create_authors_row_and_applies_after_manual_tick() {
-    let node = build_persona_node().await;
-    let identity = persona_identity("persona-create");
-    let agent_did = identity.did().to_string();
+async fn agent_create_commits_and_resolves_after_restart() {
+    let node = build_agent_node().await;
+    let identity = agent_identity("agent-create");
+    let node_did = identity.did().to_string();
 
-    crate::test_support::install_test_behavior(&node, &agent_did, "seed").await;
+    crate::test_support::install_test_agent(&node, &node_did, "seed").await;
     let profile_id = "seed:inference";
 
     let tools = build_self_config_tools(
         node.clone(),
-        agent_did.clone(),
+        node_did.clone(),
         Some(identity.clone()),
-        &config(&["persona"]),
+        &config(&["node"]),
         test_plugins(),
     );
     let rejected_preview = call_config_tool(
         &tools,
         vec![
-            "behavior".into(),
+            "agent".into(),
             "preview".into(),
             "create".into(),
             "--display-name".into(),
@@ -4224,11 +4121,11 @@ async fn persona_create_authors_row_and_applies_after_manual_tick() {
     assert!(rejected_preview["rejection"]
         .as_str()
         .unwrap()
-        .contains("system_prompt is required"));
+        .contains("fresh agents require system_prompt"));
     let admitted_preview = call_config_tool(
         &tools,
         vec![
-            "behavior".into(),
+            "agent".into(),
             "preview".into(),
             "create".into(),
             "--display-name".into(),
@@ -4249,19 +4146,25 @@ async fn persona_create_authors_row_and_applies_after_manual_tick() {
     let admitted_preview: Value = serde_json::from_str(&admitted_preview).unwrap();
     assert_eq!(admitted_preview["committed"], false);
     assert_eq!(admitted_preview["admitted"], true);
-    assert!(admitted_preview.get("preset_requested").is_some());
-    assert!(admitted_preview.get("preset_effective").is_none());
-    assert!(admitted_preview["note"]
-        .as_str()
-        .unwrap()
-        .contains("does not verify materialization"));
-    assert!(load_persona_rows_for_test(&node, &agent_did)
-        .await
-        .is_empty());
-    let tool = take_persona_tool(tools);
+    assert_eq!(admitted_preview["operation"], "create");
+    assert_eq!(admitted_preview["make_default"], true);
+    assert_eq!(
+        admitted_preview["agent"]["display_name"],
+        "Research Assistant"
+    );
+    assert_eq!(
+        admitted_preview["agent"]["inference_profile_id"],
+        profile_id
+    );
+    assert_eq!(
+        admitted_preview["agent"]["context_id"],
+        format!("{node_did}:research-assistant:context")
+    );
+    assert_eq!(crate::list_agents(&node, &node_did).await.unwrap().len(), 1);
+    let tool = take_agent_tool(tools);
 
     let args = json!({"argv": [
-        "behavior", "create",
+        "agent", "create",
         "--display-name", "Research Assistant",
         "--description", "Researches a focused question",
         "--system-prompt", "Research the question and cite evidence.",
@@ -4271,52 +4174,15 @@ async fn persona_create_authors_row_and_applies_after_manual_tick() {
     ]})
     .to_string();
 
-    // The tool call's internal poll runs to completion in the background
-    // while THIS task drives one manual reconciler tick — the exact
-    // production reconciler, called directly, never the spawned background
-    // loop — so the call converges on "applied" instead of waiting out its
-    // full 5s "still pending" ceiling.
-    let call_handle = tokio::spawn(async move { tool.call(args).await });
-
-    let mut request_key = None;
-    for _ in 0..50 {
-        let rows = load_persona_rows_for_test(&node, &agent_did).await;
-        if let Some(row) = rows.into_iter().next() {
-            assert_eq!(
-                row.requester_did.as_deref(),
-                Some(agent_did.as_str()),
-                "self-authored requests set requester_did == agent_did"
-            );
-            assert_eq!(row.agent_did.as_deref(), Some(agent_did.as_str()));
-            assert!(row.edit_fields.as_deref().unwrap_or_default().is_empty());
-            request_key = row.request_key;
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-    }
-    let request_key = request_key.expect("config behavior authors a PersonaConfigRequest row");
-
-    let store = crate::agent::p2p_reconcile::GraphqlPersonaRequestStore::with_local_identity(
-        node.clone(),
-        None,
-        identity.clone(),
-    );
-    let outcome = crate::agent::p2p_reconcile::reconcile_persona_tick(&store, &node)
+    let output = tool.call(args).await.expect("direct agent create commits");
+    let agents = crate::list_agents(&node, &node_did)
         .await
-        .expect("manual reconcile tick");
-    assert!(
-        outcome.applied.contains(&request_key),
-        "manual tick must apply the pending request: {outcome:?}"
-    );
-
-    let behaviors = crate::list_agent_behaviors(&node, &agent_did)
-        .await
-        .expect("list behaviors");
-    let created: Vec<_> = behaviors
+        .expect("list agents");
+    let created: Vec<_> = agents
         .iter()
-        .filter(|behavior| behavior.behavior_id != "seed")
+        .filter(|agent| agent.agent_id != "seed")
         .collect();
-    assert_eq!(created.len(), 1, "exactly one new behavior materialized");
+    assert_eq!(created.len(), 1, "exactly one new agent materialized");
     assert_eq!(
         created[0].display_name,
         Some("Research Assistant".to_string())
@@ -4325,7 +4191,7 @@ async fn persona_create_authors_row_and_applies_after_manual_tick() {
         created[0]
             .context_id
             .as_deref()
-            .expect("created behavior has context"),
+            .expect("created agent has context"),
     );
     let response = node
         .execute(&format!(
@@ -4356,34 +4222,28 @@ async fn persona_create_authors_row_and_applies_after_manual_tick() {
         .and_then(serde_json::Value::as_str);
     assert_eq!(description, Some("Researches a focused question"));
 
-    let output = call_handle
-        .await
-        .expect("tool call task joins")
-        .expect("config behavior call succeeds");
-    assert!(
-        output.contains("\"status\": \"applied\""),
-        "the tool's own poll must observe the manual tick's outcome: {output}"
-    );
-    assert!(output.contains(&request_key), "{output}");
     let output: Value = serde_json::from_str(&output).unwrap();
+    assert_eq!(output["committed"], true);
+    assert_eq!(output["agent_id"], created[0].agent_id);
+    let effective: Value = serde_json::from_str(
+        &agent_inspect(&node, &node_did, &created[0].agent_id, &Default::default())
+            .await
+            .unwrap(),
+    )
+    .unwrap();
     assert_eq!(
-        output["materialized_ids"]["behavior_id"],
-        created[0].behavior_id
-    );
-    assert_eq!(
-        output["effective"]["effective_config"]["context"]["system_prompt"],
+        effective["effective_config"]["context"]["system_prompt"],
         "Research the question and cite evidence."
     );
-    assert_eq!(output["activation"]["durable"], "confirmed");
     assert_eq!(
-        output["effective"]["effective_config"]["tool_grants"]["configured"],
+        effective["effective_config"]["tool_grants"]["configured"],
         json!({"lsp": false, "native_graph_tools": false, "network_mode": "inherit"})
     );
     let grant_tools = build_self_config_tools(
         node.clone(),
-        agent_did.clone(),
+        node_did.clone(),
         Some(identity.clone()),
-        &config(&["persona", "tools"]),
+        &config(&["node", "tools"]),
         test_plugins(),
     );
     let selected = call_config_tool(
@@ -4391,8 +4251,8 @@ async fn persona_create_authors_row_and_applies_after_manual_tick() {
         vec![
             "tools".into(),
             "edit".into(),
-            "--behavior".into(),
-            created[0].behavior_id.clone(),
+            "--agent".into(),
+            created[0].agent_id.clone(),
             "--set".into(),
             r#"integrations={"lsp":{}}"#.into(),
             "--set".into(),
@@ -4407,11 +4267,7 @@ async fn persona_create_authors_row_and_applies_after_manual_tick() {
     assert_eq!(applied["committed"], true);
     let selected = call_config_tool(
         &grant_tools,
-        vec![
-            "get".into(),
-            "--behavior".into(),
-            created[0].behavior_id.clone(),
-        ],
+        vec!["get".into(), "--agent".into(), created[0].agent_id.clone()],
     )
     .await
     .expect("inspect the selected sibling after the canonical tools patch");
@@ -4434,26 +4290,26 @@ async fn persona_create_authors_row_and_applies_after_manual_tick() {
         ),
     )
     .await
-    .expect("restart-style runtime resolution accepts the materialized behavior");
-    assert_eq!(snapshot.default_behavior_id, created[0].behavior_id);
-    let runtime_behavior = snapshot
-        .behaviors
-        .get(&created[0].behavior_id)
+    .expect("restart-style runtime resolution accepts the materialized agent");
+    assert_eq!(snapshot.default_agent_id, created[0].agent_id);
+    let runtime_agent = snapshot
+        .agents
+        .get(&created[0].agent_id)
         .unwrap_or_else(|| {
             panic!(
                 "new default is runnable after re-resolution: {:?}",
-                snapshot.unavailable_behaviors
+                snapshot.unavailable_agents
             )
         });
     assert_eq!(
-        runtime_behavior.system_prompt,
+        runtime_agent.system_prompt,
         "Research the question and cite evidence."
     );
-    let names = runtime_behavior
+    let names = runtime_agent
         .tools
-        .resolve(node.as_ref(), &agent_did, &Default::default())
+        .resolve(node.as_ref(), &node_did, &Default::default())
         .await
-        .expect("new behavior tool surface resolves after restart")
+        .expect("new agent tool surface resolves after restart")
         .tool_names();
     assert!(names.iter().any(|name| name == "lsp"), "{names:?}");
     assert!(
@@ -4467,87 +4323,68 @@ async fn persona_create_authors_row_and_applies_after_manual_tick() {
 }
 
 #[tokio::test]
-async fn persona_clone_accepts_sibling_behavior_id() {
-    let node = build_persona_node().await;
-    let identity = persona_identity("persona-clone");
-    let agent_did = identity.did().to_string();
-    let qualified_sibling_id = "sibling-behavior".to_owned();
-    crate::test_support::install_test_behavior(&node, &agent_did, &qualified_sibling_id).await;
-    let profile_id = "sibling-behavior:inference";
+async fn agent_clone_accepts_sibling_agent_id() {
+    let node = build_agent_node().await;
+    let identity = agent_identity("agent-clone");
+    let node_did = identity.did().to_string();
+    let qualified_sibling_id = "sibling-agent".to_owned();
+    crate::test_support::install_test_agent(&node, &node_did, &qualified_sibling_id).await;
+    let profile_id = "sibling-agent:inference";
 
     let tools = build_self_config_tools(
         node.clone(),
-        agent_did.clone(),
+        node_did.clone(),
         Some(identity.clone()),
-        &config(&["persona"]),
+        &config(&["node"]),
         test_plugins(),
     );
-    let tool = take_persona_tool(tools);
+    let tool = take_agent_tool(tools);
     let args = json!({"argv": [
-        "behavior", "clone",
-        "--display-name", "Cloned Persona",
-        "--from", "sibling-behavior",
+        "agent", "clone",
+        "--display-name", "Cloned Agent",
+        "--from", "sibling-agent",
         "--profile", profile_id
     ]})
     .to_string();
-    let call_handle = tokio::spawn(async move { tool.call(args).await });
-
-    let mut request_key = None;
-    for _ in 0..50 {
-        let rows = load_persona_rows_for_test(&node, &agent_did).await;
-        if let Some(row) = rows.into_iter().next() {
-            assert_eq!(row.op.as_deref(), Some("create"));
-            assert_eq!(
-                row.clone_from.as_deref(),
-                Some(qualified_sibling_id.as_str()),
-                "clone_from must resolve to the sibling's fully-qualified behavior_id"
-            );
-            assert!(row.preset.is_none(), "clone must not also set a preset");
-            request_key = row.request_key;
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-    }
-    let request_key = request_key.expect("config behavior authors a PersonaConfigRequest row");
-
-    let store = crate::agent::p2p_reconcile::GraphqlPersonaRequestStore::with_local_identity(
-        node.clone(),
-        None,
-        identity,
-    );
-    let outcome = crate::agent::p2p_reconcile::reconcile_persona_tick(&store, &node)
+    let output: Value =
+        serde_json::from_str(&tool.call(args).await.expect("clone commits")).unwrap();
+    assert_eq!(output["committed"], true);
+    let source = crate::list_agents(&node, &node_did)
         .await
-        .expect("manual reconcile tick");
-    assert!(
-        outcome.applied.contains(&request_key),
-        "cloning from an enabled sibling must be admitted and applied: {outcome:?}"
-    );
-
-    let output = call_handle
+        .unwrap()
+        .into_iter()
+        .find(|a| a.agent_id == qualified_sibling_id)
+        .unwrap();
+    let cloned = crate::list_agents(&node, &node_did)
         .await
-        .expect("tool call task joins")
-        .expect("config behavior clone call succeeds");
-    assert!(output.contains("\"status\": \"applied\""), "{output}");
+        .unwrap()
+        .into_iter()
+        .find(|a| Some(a.agent_id.as_str()) == output["agent_id"].as_str())
+        .unwrap();
+    assert_eq!(source.inference_profile_id, cloned.inference_profile_id);
+    assert_ne!(source.context_id, cloned.context_id);
 }
 
 #[tokio::test]
-async fn persona_clone_cannot_copy_unheld_grants() {
-    let node = build_persona_node().await;
-    let identity = persona_identity("persona-clone-grants");
-    let agent_did = identity.did().to_string();
-    crate::test_support::install_test_behavior(&node, &agent_did, "granted").await;
-    operator_grant_pack_install(&node, &agent_did, "granted:tools").await;
+async fn agent_clone_cannot_copy_unheld_grants() {
+    let node = build_agent_node().await;
+    let identity = agent_identity("persona-clone-grants");
+    let node_did = identity.did().to_string();
+    crate::test_support::install_test_agent(&node, &node_did, "granted").await;
+    operator_grant_pack_install(&node, &node_did, "granted:tools").await;
+    let mut tool_config = config(&["node"]);
+    tool_config.preview = true;
     let tools = build_self_config_tools(
         node.clone(),
-        agent_did.clone(),
+        node_did.clone(),
         Some(identity.clone()),
-        &config(&["persona"]),
+        &tool_config,
         test_plugins(),
     );
-    let tool = take_persona_tool(tools);
+    let tool = take_agent_tool(tools);
     for argv in [
         json!([
-            "behavior",
+            "agent",
             "clone",
             "--display-name",
             "Granted Copy",
@@ -4557,7 +4394,7 @@ async fn persona_clone_cannot_copy_unheld_grants() {
             "granted:inference"
         ]),
         json!([
-            "behavior",
+            "agent",
             "preview",
             "clone",
             "--display-name",
@@ -4568,11 +4405,20 @@ async fn persona_clone_cannot_copy_unheld_grants() {
             "granted:inference"
         ]),
     ] {
-        let refused = config_error_message(
-            tool.call(json!({"argv": argv}).to_string())
-                .await
-                .expect_err("a clone must not copy grants the invoking agent does not hold"),
-        );
+        let refused = if argv[1] == "preview" {
+            let output: Value =
+                serde_json::from_str(&tool.call(json!({"argv": argv}).to_string()).await.unwrap())
+                    .unwrap();
+            assert_eq!(output["admitted"], false);
+            assert_eq!(output["committed"], false);
+            output["rejection"].as_str().unwrap().to_owned()
+        } else {
+            config_error_message(
+                tool.call(json!({"argv": argv}).to_string())
+                    .await
+                    .expect_err("a clone must not copy grants the invoking agent does not hold"),
+            )
+        };
         assert!(
             refused.contains(
                 "clone source \"granted\" carries an operator grant this agent does not hold"
@@ -4585,70 +4431,66 @@ async fn persona_clone_cannot_copy_unheld_grants() {
         );
     }
     assert!(
-        load_persona_rows_for_test(&node, &agent_did)
+        crate::list_agents(&node, &node_did)
             .await
-            .is_empty(),
-        "the refused clone must not author a request"
+            .unwrap()
+            .iter()
+            .all(|agent| agent.display_name.as_deref() != Some("Granted Copy")),
+        "the refused clone must not publish an Agent"
     );
 }
 
 #[tokio::test]
-async fn persona_clone_by_holder_copies_granted_source() {
-    let node = build_persona_node().await;
-    let identity = persona_identity("persona-clone-holder");
-    let agent_did = identity.did().to_string();
-    crate::test_support::install_test_behavior(&node, &agent_did, "granted").await;
-    operator_grant_pack_install(&node, &agent_did, "granted:tools").await;
-    let mut tool_config = config(&["persona"]);
+async fn agent_clone_by_holder_copies_granted_source() {
+    let node = build_agent_node().await;
+    let identity = agent_identity("persona-clone-holder");
+    let node_did = identity.did().to_string();
+    crate::test_support::install_test_agent(&node, &node_did, "granted").await;
+    operator_grant_pack_install(&node, &node_did, "granted:tools").await;
+    let mut tool_config = config(&["node"]);
     tool_config.enable_pack_install = true;
+    tool_config.preview = true;
     let tools = build_self_config_tools(
         node.clone(),
-        agent_did.clone(),
+        node_did.clone(),
         Some(identity),
         &tool_config,
         test_plugins(),
     );
-    let tool = take_persona_tool(tools);
+    let tool = take_agent_tool(tools);
     tool.call(
-        json!({"argv": ["behavior", "preview", "clone", "--display-name", "Granted Copy",
+        json!({"argv": ["agent", "preview", "clone", "--display-name", "Granted Copy",
                         "--from", "granted", "--profile", "granted:inference"]})
         .to_string(),
     )
     .await
     .expect("a holder may preview copying a granted source");
-    let args = json!({"argv": ["behavior", "clone", "--display-name", "Granted Copy",
+    let args = json!({"argv": ["agent", "clone", "--display-name", "Granted Copy",
                                "--from", "granted", "--profile", "granted:inference"]})
     .to_string();
-    let call = tokio::spawn(async move { tool.call(args).await });
-    let mut authored = false;
-    for _ in 0..50 {
-        if load_persona_rows_for_test(&node, &agent_did)
-            .await
-            .iter()
-            .any(|row| row.clone_from.as_deref() == Some("granted"))
-        {
-            authored = true;
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-    }
-    call.abort();
+    let output: Value =
+        serde_json::from_str(&tool.call(args).await.expect("a holder's clone commits")).unwrap();
+    assert_eq!(output["committed"], true);
     assert!(
-        authored,
-        "a holder's clone of a granted source authors a request"
+        crate::list_agents(&node, &node_did)
+            .await
+            .unwrap()
+            .iter()
+            .any(|agent| Some(agent.agent_id.as_str()) == output["agent_id"].as_str()),
+        "a holder's clone publishes its Agent"
     );
 }
 
 #[tokio::test]
 async fn canonical_self_config_preview_and_apply_preserve_scope_and_reject_lockout() {
-    let node = build_persona_node().await;
-    let identity = persona_identity("canonical-self-config");
-    let other = persona_identity("other-self-config");
+    let node = build_agent_node().await;
+    let identity = agent_identity("canonical-self-config");
+    let other = agent_identity("other-self-config");
     let owner = identity.did().to_string();
     let foreign = other.did().to_string();
-    crate::test_support::install_test_behavior(&node, &owner, "same").await;
-    crate::test_support::install_test_behavior(&node, &foreign, "same").await;
-    crate::test_support::install_test_behavior(&node, &owner, "unconfigured").await;
+    crate::test_support::install_test_agent(&node, &owner, "same").await;
+    crate::test_support::install_test_agent(&node, &foreign, "same").await;
+    crate::test_support::install_test_agent(&node, &owner, "unconfigured").await;
     let core = SelfConfigCore::new(node.clone(), owner.clone(), "same".into()).unwrap();
     let patch = vec![(
         "self_config".into(),
@@ -4671,7 +4513,7 @@ async fn canonical_self_config_preview_and_apply_preserve_scope_and_reject_locko
         .await
         .is_err());
     assert!(guarded
-        .preview(behavior_request(
+        .preview(agent_request(
             &guarded,
             vec![("context_id".into(), Some(json!("unconfigured:context")))]
         ))
@@ -4711,11 +4553,11 @@ async fn canonical_self_config_preview_and_apply_preserve_scope_and_reject_locko
 
 #[tokio::test]
 async fn direct_tools_preview_and_apply_enforce_and_persist_canonical_workspace_root() {
-    let node = build_persona_node().await;
-    let identity = persona_identity("tools-root-policy");
+    let node = build_agent_node().await;
+    let identity = agent_identity("tools-root-policy");
     let owner = identity.did().to_string();
-    let behavior_id = "root-policy";
-    crate::test_support::install_test_behavior(&node, &owner, behavior_id).await;
+    let agent_id = "root-policy";
+    crate::test_support::install_test_agent(&node, &owner, agent_id).await;
     let ceiling = tempfile::tempdir().unwrap();
     let selected = ceiling.path().join("selected");
     let sibling = ceiling.path().join("sibling");
@@ -4732,7 +4574,7 @@ async fn direct_tools_preview_and_apply_enforce_and_persist_canonical_workspace_
     )
     .await
     .unwrap();
-    let core = SelfConfigCore::new(node.clone(), owner.clone(), behavior_id.into())
+    let core = SelfConfigCore::new(node.clone(), owner.clone(), agent_id.into())
         .unwrap()
         .with_process_ceiling(crate::tool_surface::SelfConfigProcessCeiling {
             file_mode: crate::tool_surface::FileToolMode::ReadOnly,
@@ -4767,7 +4609,7 @@ async fn direct_tools_preview_and_apply_enforce_and_persist_canonical_workspace_
     core.apply(tools_request(&core, patch(&authored_inside)))
         .await
         .expect("apply admits the selected root");
-    let tools_id = format!("{behavior_id}:tools");
+    let tools_id = format!("{agent_id}:tools");
     let persisted: crate::document_config::Tools =
         crate::config_client::ConfigAccess::Local(node.clone())
             .transact("test.self_config.read_tools", |txn| {
@@ -4803,14 +4645,14 @@ async fn direct_tools_preview_and_apply_enforce_and_persist_canonical_workspace_
 
 #[tokio::test]
 async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tools() {
-    let node = build_persona_node().await;
-    let identity = persona_identity("descendant-root-self-config");
+    let node = build_agent_node().await;
+    let identity = agent_identity("descendant-root-self-config");
     let owner = identity.did().to_string();
-    let seed_behavior = "beh-test";
-    crate::test_support::install_test_behavior(&node, &owner, seed_behavior).await;
-    crate::upsert_agent_principal(&node, &owner, None, Some(seed_behavior), true)
+    let seed_agent = "beh-test";
+    crate::test_support::install_test_agent(&node, &owner, seed_agent).await;
+    crate::upsert_node(&node, &owner, None, Some(seed_agent), true)
         .await
-        .expect("bind default behavior");
+        .expect("bind default agent");
 
     let operator_root = tempfile::tempdir().expect("operator root");
     let selected_root = operator_root.path().join("projects").join("mandrake");
@@ -4841,7 +4683,7 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
     crate::config_client::ConfigAccess::transact_local(
         &node,
         Some(fixture_actor.clone()),
-        "test.persona.workspace_root",
+        "test.agent.workspace_root",
         |txn| {
             let mutation = &workspace_root_mutation;
             Box::pin(async move { txn.execute_local_response(mutation).await.map(|_| ()) })
@@ -4850,23 +4692,23 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
     .await
     .expect("publish selected WorkspaceRoot");
 
-    let mut tool_config = config(&["persona"]);
-    tool_config.behavior_id = seed_behavior.into();
+    let mut tool_config = config(&["node"]);
+    tool_config.agent_id = seed_agent.into();
     tool_config.process_ceiling = crate::tool_surface::SelfConfigProcessCeiling {
         file_mode: crate::tool_surface::FileToolMode::ReadOnly,
         bash_mode: crate::tool_surface::BashMode::Off,
         root: Some(operator_root.path().to_path_buf()),
     };
-    let persona_tools = build_self_config_tools(
+    let agent_tools = build_self_config_tools(
         node.clone(),
         owner.clone(),
         Some(identity.clone()),
         &tool_config,
         test_plugins(),
     );
-    let profile_id = format!("{seed_behavior}:inference");
+    let profile_id = format!("{seed_agent}:inference");
     let command = |preview: bool| {
-        let mut argv = vec!["behavior".to_string()];
+        let mut argv = vec!["agent".to_string()];
         if preview {
             argv.push("preview".to_string());
         }
@@ -4887,56 +4729,29 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
         argv
     };
     let preview: Value = serde_json::from_str(
-        &call_config_tool(&persona_tools, command(true))
+        &call_config_tool(&agent_tools, command(true))
             .await
-            .expect("behavior preview accepts the published descendant"),
+            .expect("agent preview accepts the published descendant"),
     )
     .expect("preview json");
     assert_eq!(preview["committed"], false);
     assert_eq!(preview["admitted"], true);
-    assert!(load_persona_rows_for_test(&node, &owner).await.is_empty());
-
-    let tool = take_persona_tool(persona_tools);
-    let apply_args = json!({"argv": command(false)}).to_string();
-    let call_handle = tokio::spawn(async move { tool.call(apply_args).await });
-    let mut request_key = None;
-    for _ in 0..50 {
-        if let Some(row) = load_persona_rows_for_test(&node, &owner)
-            .await
-            .into_iter()
-            .next()
-        {
-            request_key = row.request_key;
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-    }
-    let request_key = request_key.expect("behavior create authors PersonaConfigRequest");
-    let store = crate::agent::p2p_reconcile::GraphqlPersonaRequestStore::with_local_identity(
-        node.clone(),
-        Some(operator_root.path().to_path_buf()),
-        identity.clone(),
-    );
-    let outcome = crate::agent::p2p_reconcile::reconcile_persona_tick(&store, &node)
+    assert_eq!(crate::list_agents(&node, &owner).await.unwrap().len(), 1);
+    let output = call_config_tool(&agent_tools, command(false))
         .await
-        .expect("persona reconcile tick");
-    assert!(outcome.applied.contains(&request_key), "{outcome:?}");
-    let output = call_handle
+        .expect("direct create commits");
+    let output: Value = serde_json::from_str(&output).unwrap();
+    assert_eq!(output["committed"], true);
+    let agents = crate::list_agents(&node, &owner)
         .await
-        .expect("behavior create task joins")
-        .expect("behavior create observes applied status");
-    assert!(output.contains("\"status\": \"applied\""), "{output}");
-
-    let behaviors = crate::list_agent_behaviors(&node, &owner)
-        .await
-        .expect("list materialized behaviors");
-    let created = behaviors
+        .expect("list materialized agents");
+    let created = agents
         .iter()
-        .find(|behavior| behavior.behavior_id != seed_behavior)
-        .expect("persona reconciler materialized one behavior");
+        .find(|agent| agent.agent_id != seed_agent)
+        .expect("agent reconciler materialized one agent");
     let runtime_view = crate::agent::document_view::load_document_runtime_view(&node, &owner)
         .await
-        .expect("fresh runtime view after persona publication");
+        .expect("fresh runtime view after agent publication");
     let context_id = created.context_id.as_ref().expect("created context");
     let tools_id = runtime_view.contexts[context_id]
         .value
@@ -4952,7 +4767,7 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
             .as_ref()
             .and_then(|host| host.root.as_deref()),
         Some(canonical_selected.to_string_lossy().as_ref()),
-        "persona apply must persist the canonical selected root, not the operator ceiling"
+        "agent apply must persist the canonical selected root, not the operator ceiling"
     );
 
     let snapshot = crate::agent::resolve_document_runtime_snapshot(
@@ -4965,22 +4780,20 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
     )
     .await
     .expect("fresh request runtime snapshot");
-    let runtime_behavior = snapshot
-        .behaviors
-        .get(&created.behavior_id)
-        .expect("fresh request behavior is runnable")
+    let runtime_agent = snapshot
+        .agents
+        .get(&created.agent_id)
+        .expect("fresh request agent is runnable")
         .clone();
     let surface = Arc::new(
-        runtime_behavior
+        runtime_agent
             .tools
             .resolve(node.as_ref(), &owner, &Default::default())
             .await
             .expect("resolve fresh-request tool surface"),
     );
-    let runtime = crate::tool_surface::ToolRuntimeContext::oneshot_with_agent_did(
-        node.clone(),
-        owner.clone(),
-    );
+    let runtime =
+        crate::tool_surface::ToolRuntimeContext::oneshot_with_node_did(node.clone(), owner.clone());
 
     let cases = [
         (
@@ -5007,26 +4820,26 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
             &node,
             fixture_actor.clone(),
             &owner,
-            &created.behavior_id,
+            &created.agent_id,
             &format!("descendant-root-{label}"),
             "Read the requested workspace path.",
             json!({}),
         )
         .await
-        .expect("enqueue a fresh request for the reconciled behavior");
+        .expect("enqueue a fresh request for the reconciled agent");
         let request = crate::request_admission::load_request_for_admission_test(
             node.as_ref(),
             &request_doc_id,
         )
         .await
         .expect("load the fresh request through the admission representation");
-        assert_eq!(request.behavior_id, created.behavior_id);
+        assert_eq!(request.agent_id, created.agent_id);
         let turns = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let provider_inputs = Arc::new(std::sync::Mutex::new(Vec::new()));
 
         crate::agent::process_owned_request_with_model_for_test(
             node.clone(),
-            runtime_behavior.clone(),
+            runtime_agent.clone(),
             surface.clone(),
             &runtime,
             RootReadModel {
@@ -5094,10 +4907,10 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
 
 #[tokio::test]
 async fn backend_self_config_protects_raw_keys_in_writes_reads_and_diffs() {
-    let node = build_persona_node().await;
-    let identity = persona_identity("self-config-secret");
+    let node = build_agent_node().await;
+    let identity = agent_identity("self-config-secret");
     let owner = identity.did().to_string();
-    crate::test_support::install_test_behavior(&node, &owner, "secret").await;
+    crate::test_support::install_test_agent(&node, &owner, "secret").await;
     let core = SelfConfigCore::new(node.clone(), owner.clone(), "secret".into()).unwrap();
     let raw = vec![(
         "auth".into(),
@@ -5106,7 +4919,7 @@ async fn backend_self_config_protects_raw_keys_in_writes_reads_and_diffs() {
     assert!(core.preview(backend_request(raw.clone())).await.is_err());
     assert!(core.apply(backend_request(raw)).await.is_err());
     let owner = escape_graphql_string(&owner);
-    let response=node.execute(&format!(r#"mutation {{update_InferenceBackend(filter:{{agent_did:{{_eq:"{owner}"}},backend_id:{{_eq:"secret:backend"}}}},input:{{auth:{{kind:"api_key",key:"operator-secret"}}}}) {{_docID}}}}"#)).await;
+    let response=node.execute(&format!(r#"mutation {{update_InferenceBackend(filter:{{node_did:{{_eq:"{owner}"}},backend_id:{{_eq:"secret:backend"}}}},input:{{auth:{{kind:"api_key",key:"operator-secret"}}}}) {{_docID}}}}"#)).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
     // Lean authPatchAllowed permits preserving an existing raw key exactly.
     core.preview(backend_request(vec![(
@@ -5144,10 +4957,10 @@ async fn backend_self_config_protects_raw_keys_in_writes_reads_and_diffs() {
 async fn unrelated_backend_patch_keeps_environment_reference_unresolved() {
     const VARIABLE: &str = "GENTS_TEST_UNRELATED_PATCH_ENV_REFERENCE";
     const SENTINEL: &str = "sentinel-env-secret-never-stored";
-    let node = build_persona_node().await;
-    let identity = persona_identity("self-config-env-reference");
+    let node = build_agent_node().await;
+    let identity = agent_identity("self-config-env-reference");
     let owner = identity.did().to_string();
-    crate::test_support::install_test_behavior(&node, &owner, "envref").await;
+    crate::test_support::install_test_agent(&node, &owner, "envref").await;
     let core = SelfConfigCore::new(node.clone(), owner.clone(), "envref".into()).unwrap();
     let reference = json!({"kind":"environment","variable":VARIABLE});
     core.apply(backend_request(vec![(
@@ -5164,7 +4977,7 @@ async fn unrelated_backend_patch_keeps_environment_reference_unresolved() {
         async move {
             let response = node
                 .execute(&format!(
-                    r#"{{ InferenceBackend(filter: {{agent_did: {{_eq: "{owner}"}}, backend_id: {{_eq: "envref:backend"}}}}) {{ name connect_timeout_secs auth }} }}"#
+                    r#"{{ InferenceBackend(filter: {{node_did: {{_eq: "{owner}"}}, backend_id: {{_eq: "envref:backend"}}}}) {{ name connect_timeout_secs auth }} }}"#
                 ))
                 .await;
             assert!(!response.has_errors(), "{:?}", response.errors);
@@ -5208,15 +5021,15 @@ async fn unrelated_backend_patch_keeps_environment_reference_unresolved() {
 /// The account fence lives in `validate`, so it holds with no-lockout off.
 #[tokio::test]
 async fn backend_self_config_cannot_set_or_change_an_oauth_account() {
-    let node = build_persona_node().await;
-    let identity = persona_identity("self-config-account");
+    let node = build_agent_node().await;
+    let identity = agent_identity("self-config-account");
     let owner = identity.did().to_string();
-    crate::test_support::install_test_behavior(&node, &owner, "acct").await;
+    crate::test_support::install_test_agent(&node, &owner, "acct").await;
     let core = SelfConfigCore::new(node.clone(), owner.clone(), "acct".into()).unwrap();
     let access = crate::config_client::ConfigAccess::Local(node.clone());
     let store = |kind: &str, auth: Value| {
         let backend: crate::InferenceBackend = serde_json::from_value(json!({
-            "agent_did": owner, "backend_id": "acct:backend", "name": "Test inference",
+            "node_did": owner, "backend_id": "acct:backend", "name": "Test inference",
             "provider_kind": kind, "endpoint": "http://127.0.0.1:1/v1", "auth": auth,
         }))
         .unwrap();
@@ -5253,11 +5066,8 @@ async fn backend_self_config_cannot_set_or_change_an_oauth_account() {
         json!({"kind":"environment","variable":"KEY"}),
     )
     .await;
-    refused(to_oauth(
-        json!({"kind":"principal_oauth","account_ref":"a1"}),
-    ))
-    .await;
-    let original = to_oauth(json!({"kind":"principal_oauth"}));
+    refused(to_oauth(json!({"kind":"node_oauth","account_ref":"a1"}))).await;
+    let original = to_oauth(json!({"kind":"node_oauth"}));
     core.preview(backend_request(original.clone()))
         .await
         .unwrap();
@@ -5265,14 +5075,11 @@ async fn backend_self_config_cannot_set_or_change_an_oauth_account() {
 
     store(
         "ChatGptCodex",
-        json!({"kind":"principal_oauth","account_ref":"a1"}),
+        json!({"kind":"node_oauth","account_ref":"a1"}),
     )
     .await;
-    refused(to_oauth(
-        json!({"kind":"principal_oauth","account_ref":"a2"}),
-    ))
-    .await;
-    refused(to_oauth(json!({"kind":"principal_oauth"}))).await;
+    refused(to_oauth(json!({"kind":"node_oauth","account_ref":"a2"}))).await;
+    refused(to_oauth(json!({"kind":"node_oauth"}))).await;
     let endpoint = vec![("endpoint".into(), Some(json!("http://127.0.0.1:2/v1")))];
     core.preview(backend_request(endpoint.clone()))
         .await
@@ -5281,41 +5088,41 @@ async fn backend_self_config_cannot_set_or_change_an_oauth_account() {
 }
 
 /// Two ChatGPT accounts and Grok's original account, a profile on each
-/// (`p-original`, `p-chat-b`, `p-grok`); the behavior's own profile is on the
+/// (`p-original`, `p-chat-b`, `p-grok`); the agent's own profile is on the
 /// original ChatGPT account and its context has an unset-profile compaction.
 /// Spare contexts `ctx-original` and `ctx-chat-b` use compactions `c-original`
 /// and `c-chat-b` on those profiles. No-lockout stays off.
 async fn account_choice_core(
-    behavior: &str,
+    agent: &str,
 ) -> (
     std::sync::Arc<defra_node::EmbeddedNode>,
-    std::sync::Arc<dyn crate::AgentIdentity>,
+    std::sync::Arc<dyn crate::NodeIdentity>,
     SelfConfigCore,
 ) {
-    let node = build_persona_node().await;
-    let identity = persona_identity(behavior);
+    let node = build_agent_node().await;
+    let identity = agent_identity(agent);
     let owner = identity.did().to_string();
-    crate::test_support::install_test_behavior(&node, &owner, behavior).await;
+    crate::test_support::install_test_agent(&node, &owner, agent).await;
     let access = crate::config_client::ConfigAccess::Local(node.clone());
     for (id, kind, auth) in [
         (
             "chat-original",
             "ChatGptCodex",
-            json!({"kind":"principal_oauth"}),
+            json!({"kind":"node_oauth"}),
         ),
         (
             "chat-b",
             "ChatGptCodex",
-            json!({"kind":"principal_oauth","account_ref":"acct-b"}),
+            json!({"kind":"node_oauth","account_ref":"acct-b"}),
         ),
         (
             "grok-original",
             "XaiGrokOAuth",
-            json!({"kind":"principal_oauth"}),
+            json!({"kind":"node_oauth"}),
         ),
     ] {
         let backend: crate::InferenceBackend = serde_json::from_value(json!({
-            "agent_did": owner, "backend_id": id, "name": id, "provider_kind": kind,
+            "node_did": owner, "backend_id": id, "name": id, "provider_kind": kind,
             "endpoint": "http://127.0.0.1:1/v1", "auth": auth,
         }))
         .unwrap();
@@ -5324,13 +5131,13 @@ async fn account_choice_core(
             .unwrap();
     }
     for (id, backend) in [
-        (format!("{behavior}:inference"), "chat-original"),
+        (format!("{agent}:inference"), "chat-original"),
         ("p-original".into(), "chat-original"),
         ("p-chat-b".into(), "chat-b"),
         ("p-grok".into(), "grok-original"),
     ] {
         let profile: crate::document_config::InferenceProfile = serde_json::from_value(json!({
-            "agent_did": owner, "profile_id": id, "backend_id": backend,
+            "node_did": owner, "profile_id": id, "backend_id": backend,
             "model_name": "test-model",
         }))
         .unwrap();
@@ -5338,17 +5145,17 @@ async fn account_choice_core(
             .await
             .unwrap();
     }
-    let compaction = format!("{behavior}:compaction");
+    let compaction = format!("{agent}:compaction");
     let plan = crate::config_client::DesiredStateApplyPlan::new(
         [
             (
                 crate::Collection::Compaction,
-                json!({"agent_did": owner, "compaction_id": compaction}),
+                json!({"node_did": owner, "compaction_id": compaction}),
             ),
             (
                 crate::Collection::AgentContext,
-                json!({"agent_did": owner, "context_id": format!("{behavior}:context"),
-                    "tools_id": format!("{behavior}:tools"), "compaction_id": compaction}),
+                json!({"node_did": owner, "context_id": format!("{agent}:context"),
+                    "tools_id": format!("{agent}:tools"), "compaction_id": compaction}),
             ),
         ]
         .into_iter()
@@ -5357,12 +5164,12 @@ async fn account_choice_core(
             [
                 (
                     crate::Collection::Compaction,
-                    json!({"agent_did": owner, "compaction_id": compaction,
+                    json!({"node_did": owner, "compaction_id": compaction,
                         "inference_profile_id": format!("p-{account}")}),
                 ),
                 (
                     crate::Collection::AgentContext,
-                    json!({"agent_did": owner, "context_id": format!("ctx-{account}"),
+                    json!({"node_did": owner, "context_id": format!("ctx-{account}"),
                         "compaction_id": compaction}),
                 ),
             ]
@@ -5383,7 +5190,7 @@ async fn account_choice_core(
     })
     .await
     .unwrap();
-    let core = SelfConfigCore::new(node.clone(), owner, behavior.into()).unwrap();
+    let core = SelfConfigCore::new(node.clone(), owner, agent.into()).unwrap();
     (node, identity, core)
 }
 
@@ -5403,7 +5210,7 @@ async fn assert_account_choice_refused(
 #[tokio::test]
 async fn profile_self_config_cannot_pick_another_account() {
     let (_, _, core) = account_choice_core("pick").await;
-    let owner = core.agent_did().to_owned();
+    let owner = core.node_did().to_owned();
     let to = |backend: &str| vec![("backend_id".into(), Some(json!(backend)))];
     assert_account_choice_refused(&core, || profile_request(to("chat-b"))).await;
     core.preview(profile_request(to("grok-original")))
@@ -5421,39 +5228,39 @@ async fn profile_self_config_cannot_pick_another_account() {
 }
 
 #[tokio::test]
-async fn behavior_profile_pick_cannot_switch_account() {
-    let (_, _, core) = account_choice_core("behavior-pick").await;
+async fn agent_profile_pick_cannot_switch_account() {
+    let (_, _, core) = account_choice_core("agent-pick").await;
     let to = |profile: &str| vec![("inference_profile_id".into(), Some(json!(profile)))];
-    assert_account_choice_refused(&core, || behavior_request(&core, to("p-chat-b"))).await;
-    core.apply(behavior_request(&core, to("p-original")))
+    assert_account_choice_refused(&core, || agent_request(&core, to("p-chat-b"))).await;
+    core.apply(agent_request(&core, to("p-original")))
         .await
         .unwrap();
-    core.preview(behavior_request(&core, to("p-grok")))
+    core.preview(agent_request(&core, to("p-grok")))
         .await
         .unwrap();
-    core.apply(behavior_request(&core, to("p-grok")))
+    core.apply(agent_request(&core, to("p-grok")))
         .await
         .unwrap();
 }
 
 /// [`account_choice_core`] plus Grok backend `grok-g2` on account `g2` (profile
-/// `p-grok-g2`) and the principal's Grok sign-ins: the original row (no
+/// `p-grok-g2`) and the node's Grok sign-ins: the original row (no
 /// connection time) and `g2`, each enabled as given.
-async fn grok_accounts_core(behavior: &str, original: bool, g2: bool) -> SelfConfigCore {
-    let (node, _, core) = account_choice_core(behavior).await;
-    let owner = core.agent_did().to_owned();
+async fn grok_accounts_core(agent: &str, original: bool, g2: bool) -> SelfConfigCore {
+    let (node, _, core) = account_choice_core(agent).await;
+    let owner = core.node_did().to_owned();
     let access = crate::config_client::ConfigAccess::Local(node.clone());
     let backend: crate::InferenceBackend = serde_json::from_value(json!({
-        "agent_did": owner, "backend_id": "grok-g2", "name": "grok-g2",
+        "node_did": owner, "backend_id": "grok-g2", "name": "grok-g2",
         "provider_kind": "XaiGrokOAuth", "endpoint": "http://127.0.0.1:1/v1",
-        "auth": {"kind":"principal_oauth","account_ref":"g2"},
+        "auth": {"kind":"node_oauth","account_ref":"g2"},
     }))
     .unwrap();
     crate::config_client::write_inference_backend_document(&access, &backend)
         .await
         .unwrap();
     let profile: crate::document_config::InferenceProfile = serde_json::from_value(json!({
-        "agent_did": owner, "profile_id": "p-grok-g2", "backend_id": "grok-g2",
+        "node_did": owner, "profile_id": "p-grok-g2", "backend_id": "grok-g2",
         "model_name": "test-model",
     }))
     .unwrap();
@@ -5469,7 +5276,7 @@ async fn grok_accounts_core(behavior: &str, original: bool, g2: bool) -> SelfCon
                 Some(account_ref) => format!("{original_id}:{account_ref}"),
                 None => original_id,
             },
-            agent_did: owner.clone(),
+            node_did: owner.clone(),
             provider: provider.to_string(),
             access_token: "access-TEST".into(),
             refresh_token: "refresh-TEST".into(),
@@ -5496,22 +5303,20 @@ async fn grok_accounts_core(behavior: &str, original: bool, g2: bool) -> SelfCon
 async fn default_account_follows_the_resolver() {
     let to = |profile: &str| vec![("inference_profile_id".into(), Some(json!(profile)))];
     let accepted = |core: SelfConfigCore, profile: &'static str| async move {
-        core.preview(behavior_request(&core, to(profile)))
+        core.preview(agent_request(&core, to(profile)))
             .await
             .unwrap();
-        core.apply(behavior_request(&core, to(profile)))
-            .await
-            .unwrap();
+        core.apply(agent_request(&core, to(profile))).await.unwrap();
     };
 
     // The original is disabled, so g2 is Grok's default account.
     let core = grok_accounts_core("default-g2", false, true).await;
-    assert_account_choice_refused(&core, || behavior_request(&core, to("p-grok"))).await;
+    assert_account_choice_refused(&core, || agent_request(&core, to("p-grok"))).await;
     accepted(core, "p-grok-g2").await;
 
     // Both enabled: the original has no connection time, so it sorts first.
     let core = grok_accounts_core("default-original", true, true).await;
-    assert_account_choice_refused(&core, || behavior_request(&core, to("p-grok-g2"))).await;
+    assert_account_choice_refused(&core, || agent_request(&core, to("p-grok-g2"))).await;
     accepted(core, "p-grok").await;
 
     // None enabled: the no-reference backend is allowed and fails at run time.
@@ -5519,7 +5324,7 @@ async fn default_account_follows_the_resolver() {
     accepted(core, "p-grok").await;
 }
 
-/// An unset compaction profile reuses the behavior's, so that is its current.
+/// An unset compaction profile reuses the agent's, so that is its current.
 #[tokio::test]
 async fn compaction_profile_pick_cannot_switch_account() {
     let (_, _, core) = account_choice_core("compaction-pick").await;
@@ -5536,40 +5341,40 @@ async fn compaction_profile_pick_cannot_switch_account() {
     core.apply(to("p-grok")).await.unwrap();
 }
 
-/// Compaction runs on its own profile, else the behavior's; re-pointing the
-/// context's compaction or the behavior's context is a pick too.
+/// Compaction runs on its own profile, else the agent's; re-pointing the
+/// context's compaction or the agent's context is a pick too.
 #[tokio::test]
 async fn compaction_reference_pick_cannot_switch_account() {
     let (_, _, core) = account_choice_core("compaction-ref-pick").await;
     let context = |compaction: &str| {
-        protect_working_behavior(anchored_request(
+        protect_working_agent(anchored_request(
             SelfConfigTarget::AgentContext,
             "context_id",
             vec![("compaction_id".into(), Some(json!(compaction)))],
         ))
     };
-    let behavior = |context: &str| {
-        protect_working_behavior(behavior_request(
+    let agent = |context: &str| {
+        protect_working_agent(agent_request(
             &core,
             vec![("context_id".into(), Some(json!(context)))],
         ))
     };
     assert_account_choice_refused(&core, || context("c-chat-b")).await;
-    assert_account_choice_refused(&core, || behavior("ctx-chat-b")).await;
+    assert_account_choice_refused(&core, || agent("ctx-chat-b")).await;
     core.preview(context("c-original")).await.unwrap();
     core.apply(context("c-original")).await.unwrap();
-    core.preview(behavior("ctx-original")).await.unwrap();
-    core.apply(behavior("ctx-original")).await.unwrap();
+    core.preview(agent("ctx-original")).await.unwrap();
+    core.apply(agent("ctx-original")).await.unwrap();
 }
 
-/// Create and clone have no current backend; edit's is the target behavior's.
-/// The fence runs before the signed request is written.
+/// Create and clone have no current backend; edit's is the target agent's.
+/// The fence runs in the configuration publication transaction.
 #[tokio::test]
-async fn persona_profile_pick_cannot_switch_account() {
-    let (node, identity, core) = account_choice_core("persona-pick").await;
-    let owner = core.agent_did().to_owned();
+async fn agent_management_profile_pick_cannot_switch_account() {
+    let (node, identity, core) = account_choice_core("agent-pick").await;
+    let owner = core.node_did().to_owned();
     let params = |action: &str, argv: &[&str]| {
-        behavior_params(
+        agent_params(
             action,
             None,
             &argv.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>(),
@@ -5598,7 +5403,7 @@ async fn persona_profile_pick_cannot_switch_account() {
             "clone",
             &[
                 "--from",
-                "persona-pick",
+                "agent-pick",
                 "--display-name",
                 "Picker clone",
                 "--profile",
@@ -5606,9 +5411,9 @@ async fn persona_profile_pick_cannot_switch_account() {
             ],
         )
     };
-    let edit = params("edit", &["--id", "persona-pick", "--profile", "p-chat-b"]);
+    let edit = params("edit", &["--id", "agent-pick", "--profile", "p-chat-b"]);
     for refused in [create("p-chat-b"), clone("p-chat-b"), edit] {
-        let error = persona_mutate(
+        let error = agent_mutate(
             &node,
             &owner,
             identity.as_ref(),
@@ -5623,14 +5428,14 @@ async fn persona_profile_pick_cannot_switch_account() {
             "{error:#}"
         );
     }
-    assert!(load_persona_rows_for_test(&node, &owner).await.is_empty());
+    assert_eq!(crate::list_agents(&node, &owner).await.unwrap().len(), 1);
     for accepted in [
         create("p-grok"),
         clone("p-grok"),
-        params("edit", &["--id", "persona-pick", "--profile", "p-original"]),
-        params("edit", &["--id", "persona-pick", "--profile", "p-grok"]),
+        params("edit", &["--id", "agent-pick", "--profile", "p-original"]),
+        params("edit", &["--id", "agent-pick", "--profile", "p-grok"]),
     ] {
-        persona_mutate(
+        agent_mutate(
             &node,
             &owner,
             identity.as_ref(),
@@ -5645,9 +5450,9 @@ async fn persona_profile_pick_cannot_switch_account() {
 
 /// Preview runs the write's account check, so the two agree.
 #[tokio::test]
-async fn persona_preview_agrees_with_the_account_choice_fence() {
+async fn agent_preview_agrees_with_the_account_choice_fence() {
     let (node, _, core) = account_choice_core("preview-pick").await;
-    let owner = core.agent_did().to_owned();
+    let owner = core.node_did().to_owned();
     let create = [
         "--display-name",
         "Picker",
@@ -5673,17 +5478,11 @@ async fn persona_preview_agrees_with_the_account_choice_fence() {
             .chain(&["--profile", profile])
             .map(|arg| (*arg).to_owned())
             .collect();
-        let params = behavior_params("preview", Some(operation.into()), &argv).unwrap();
+        let params = agent_params("preview", Some(operation.into()), &argv).unwrap();
         let preview: Value = serde_json::from_str(
-            &persona_preview(
-                &node,
-                &owner,
-                &params,
-                &Default::default(),
-                &OperatorGrants::default(),
-            )
-            .await
-            .unwrap(),
+            &agent_preview(&node, &owner, &params, &Default::default())
+                .await
+                .unwrap(),
         )
         .unwrap();
         assert_eq!(
@@ -5705,16 +5504,16 @@ async fn persona_preview_agrees_with_the_account_choice_fence() {
 /// backend than the clone's own profile; that inherited backend is a pick
 /// from the profile's, as when re-pointing the context.
 #[tokio::test]
-async fn persona_clone_inherited_compaction_cannot_switch_account() {
+async fn agent_clone_inherited_compaction_cannot_switch_account() {
     let (node, identity, core) = account_choice_core("clone-pick").await;
-    let owner = core.agent_did().to_owned();
+    let owner = core.node_did().to_owned();
     let sources = ["original", "chat-b"]
         .into_iter()
         .map(|account| {
-            let value = json!({"agent_did": owner, "behavior_id": format!("src-{account}"),
+            let value = json!({"node_did": owner, "agent_id": format!("src-{account}"),
                 "context_id": format!("ctx-{account}"), "inference_profile_id": "p-original"});
             crate::config_client::DesiredStateApplyDocument {
-                collection: crate::Collection::AgentBehavior,
+                collection: crate::Collection::Agent,
                 add: value.clone(),
                 update: value,
             }
@@ -5727,6 +5526,7 @@ async fn persona_clone_inherited_compaction_cannot_switch_account() {
     })
     .await
     .unwrap();
+    let before = crate::list_agents(&node, &owner).await.unwrap();
     let clone = |action: &str, source: &str, profile: &str| {
         let name = format!("{source} on {profile}");
         let argv = [
@@ -5739,11 +5539,11 @@ async fn persona_clone_inherited_compaction_cannot_switch_account() {
         ];
         let argv: Vec<String> = argv.iter().map(|arg| (*arg).to_owned()).collect();
         let operation = (action == "preview").then(|| "clone".to_owned());
-        behavior_params(action, operation, &argv).unwrap()
+        agent_params(action, operation, &argv).unwrap()
     };
     for (source, profile) in [("src-chat-b", "p-original"), ("src-chat-b", "p-grok")] {
         let preview: Value = serde_json::from_str(
-            &persona_preview(
+            &agent_preview(
                 &node,
                 &owner,
                 &clone("preview", source, profile),
@@ -5755,7 +5555,7 @@ async fn persona_clone_inherited_compaction_cannot_switch_account() {
         )
         .unwrap();
         assert_eq!(preview["admitted"], false, "{source} {profile}: {preview}");
-        let error = persona_mutate(
+        let error = agent_mutate(
             &node,
             &owner,
             identity.as_ref(),
@@ -5770,9 +5570,9 @@ async fn persona_clone_inherited_compaction_cannot_switch_account() {
             "{error:#}"
         );
     }
-    assert!(load_persona_rows_for_test(&node, &owner).await.is_empty());
+    assert_eq!(crate::list_agents(&node, &owner).await.unwrap(), before);
     for profile in ["p-original", "p-grok"] {
-        persona_mutate(
+        agent_mutate(
             &node,
             &owner,
             identity.as_ref(),
@@ -5789,13 +5589,13 @@ async fn persona_clone_inherited_compaction_cannot_switch_account() {
 async fn pack_inference_slot_cannot_pick_another_account() {
     let (node, identity, core) = account_choice_core("pack-pick").await;
     let mut tool_config = config(&[]);
-    tool_config.behavior_id = "pack-pick".into();
+    tool_config.agent_id = "pack-pick".into();
     tool_config.enable_pack_install = true;
     tool_config.enable_graph_tools = true;
     let (_home, plugins) = crate::test_support::home_with_fixture_pack("review_graph");
     let tools = build_self_config_tools(
         node,
-        core.agent_did().to_owned(),
+        core.node_did().to_owned(),
         Some(identity),
         &tool_config,
         plugins,
@@ -5850,10 +5650,10 @@ async fn pack_inference_slot_cannot_pick_another_account() {
 
 #[tokio::test]
 async fn explicit_tools_grant_preserves_lsp_settings_guard_for_preview_and_apply() {
-    let node = build_persona_node().await;
-    let identity = persona_identity("self-config-lsp-guard");
+    let node = build_agent_node().await;
+    let identity = agent_identity("self-config-lsp-guard");
     let owner = identity.did().to_string();
-    crate::test_support::install_test_behavior(&node, &owner, "beh-test").await;
+    crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
     let mut tool_config = config(&["tools"]);
     tool_config.preview = true;
     let tools = build_self_config_tools(node, owner, None, &tool_config, test_plugins());
@@ -5910,12 +5710,12 @@ async fn explicit_tools_grant_preserves_lsp_settings_guard_for_preview_and_apply
 
 #[tokio::test]
 async fn profile_edit_rejects_a_context_window_above_the_advertised_maximum() {
-    let node = build_persona_node().await;
-    let identity = persona_identity("profile-context-window");
+    let node = build_agent_node().await;
+    let identity = agent_identity("profile-context-window");
     let owner = identity.did().to_string();
-    crate::test_support::install_test_behavior(&node, &owner, "setup").await;
+    crate::test_support::install_test_agent(&node, &owner, "setup").await;
     let backend: crate::document_config::InferenceBackend = serde_json::from_value(json!({
-        "agent_did": owner, "backend_id": "setup:backend", "name": "Test inference",
+        "node_did": owner, "backend_id": "setup:backend", "name": "Test inference",
         "provider_kind": "OpenAiCompatible", "endpoint": "http://127.0.0.1:1/v1",
         "auth": {"kind": "unauthenticated"},
     }))
@@ -5924,7 +5724,7 @@ async fn profile_edit_rejects_a_context_window_above_the_advertised_maximum() {
         &node,
         &backend,
         serde_json::from_value(json!({
-            "agent_did": null,
+            "node_did": null,
             "observed_at": "2026-09-25T00:00:00Z",
             "models": [{"model_name":"test-model","context_window":272000,"max_context_window":872000}],
         }))
@@ -5933,14 +5733,14 @@ async fn profile_edit_rejects_a_context_window_above_the_advertised_maximum() {
     .await
     .unwrap();
     let mut tool_config = config(&["profile"]);
-    tool_config.behavior_id = "setup".into();
+    tool_config.agent_id = "setup".into();
     tool_config.preview = true;
     let tools = build_self_config_tools(node, owner, Some(identity), &tool_config, test_plugins());
     let edit = |verb: &str, window: u64| -> Vec<String> {
         vec![
             "profile".into(),
             verb.into(),
-            "--behavior".into(),
+            "--agent".into(),
             "setup".into(),
             "--set".into(),
             format!("context_window={window}"),
@@ -5964,7 +5764,7 @@ async fn profile_edit_rejects_a_context_window_above_the_advertised_maximum() {
         vec![
             "profile".into(),
             "get".into(),
-            "--behavior".into(),
+            "--agent".into(),
             "setup".into(),
         ],
     )
@@ -5977,21 +5777,19 @@ async fn profile_edit_rejects_a_context_window_above_the_advertised_maximum() {
 /// and only a self-lockout is refused.
 #[tokio::test]
 async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out() {
-    let node = build_persona_node().await;
-    let identity = persona_identity("engineer-god-mode");
+    let node = build_agent_node().await;
+    let identity = agent_identity("engineer-god-mode");
     let owner = identity.did().to_string();
-    for behavior in ["setup", "lead", "caller"] {
-        crate::test_support::install_test_behavior(&node, &owner, behavior).await;
+    for agent in ["setup", "lead", "caller"] {
+        crate::test_support::install_test_agent(&node, &owner, agent).await;
     }
     let setup = SelfConfigCore::new(node.clone(), owner.clone(), "setup".into()).unwrap();
     setup
-        .apply(behavior_request(
+        .apply(agent_request(
             &setup,
             vec![(
                 "tags".into(),
-                Some(json!([
-                    crate::agent::persona_ops::SETUP_STEWARD_BEHAVIOR_TAG
-                ])),
+                Some(json!([crate::self_config::ENGINEER_AGENT_TAG])),
             )],
         ))
         .await
@@ -6004,13 +5802,13 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
                     "self_config".into(),
                     Some(json!({"enable_self_config": true, "self_config_no_lockout": true})),
                 ),
-                ("subagents".into(), Some(json!({"enabled": true}))),
+                ("agents".into(), Some(json!({"enabled": true}))),
             ],
         ))
         .await
         .unwrap();
-    let mut grants = config(&["persona", "behavior", "tools", "profile", "automation"]);
-    grants.behavior_id = "setup".into();
+    let mut grants = config(&["node", "agent", "tools", "profile", "automation"]);
+    grants.agent_id = "setup".into();
     grants.preview = true;
     grants.no_lockout = true;
     let tools = build_self_config_tools(
@@ -6025,20 +5823,20 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
         serde_json::from_str(&result.unwrap_or_else(|error| panic!("{error}"))).unwrap()
     };
 
-    // #2058: SubagentTarget through the desired-state owner.
+    // #2058: AgentTarget through the desired-state owner.
     let target_patch = [
         "--set",
         "name=\"gatekeeper\"",
         "--set",
-        &format!("target_agent_did={}", json!(owner)),
+        &format!("target_node_did={}", json!(owner)),
         "--set",
-        "behavior_id=\"lead\"",
+        "agent_id=\"lead\"",
     ];
     let preview = ok(call_config_tool(
         &tools,
         command(
             &[
-                &["subagent-target", "preview", "create", "gatekeeper"][..],
+                &["agent-target", "preview", "create", "gatekeeper"][..],
                 &target_patch,
             ]
             .concat(),
@@ -6049,16 +5847,16 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
     let missing = call_config_tool(
         &tools,
         command(&[
-            "subagent-target",
+            "agent-target",
             "preview",
             "create",
             "dangling",
             "--set",
             "name=\"dangling\"",
             "--set",
-            &format!("target_agent_did={}", json!(owner)),
+            &format!("target_node_did={}", json!(owner)),
             "--set",
-            "behavior_id=\"missing\"",
+            "agent_id=\"missing\"",
         ]),
     )
     .await
@@ -6066,21 +5864,15 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
     assert!(missing.contains("missing"), "{missing}");
     ok(call_config_tool(
         &tools,
-        command(
-            &[
-                &["subagent-target", "create", "gatekeeper"][..],
-                &target_patch,
-            ]
-            .concat(),
-        ),
+        command(&[&["agent-target", "create", "gatekeeper"][..], &target_patch].concat()),
     )
     .await);
-    let listed = ok(call_config_tool(&tools, command(&["subagent-target", "list"])).await);
+    let listed = ok(call_config_tool(&tools, command(&["agent-target", "list"])).await);
     assert_eq!(listed["items"][0]["target_id"], "gatekeeper");
     ok(call_config_tool(
         &tools,
         command(&[
-            "subagent-target",
+            "agent-target",
             "edit",
             "gatekeeper",
             "--set",
@@ -6090,12 +5882,12 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
     .await);
 
     for selection in [
-        r#"subagents={"target_ids":["gatekeeper"]}"#,
-        r#"subagents={"enabled":false,"target_ids":["gatekeeper"]}"#,
+        r#"agents={"target_ids":["gatekeeper"]}"#,
+        r#"agents={"enabled":false,"target_ids":["gatekeeper"]}"#,
     ] {
         let receipt = ok(call_config_tool(
             &tools,
-            command(&["tools", "edit", "--behavior", "caller", "--set", selection]),
+            command(&["tools", "edit", "--agent", "caller", "--set", selection]),
         )
         .await);
         assert_eq!(receipt["committed"], true);
@@ -6104,10 +5896,10 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
             .unwrap()
             .contains("Selected targets are inactive"));
         let stored =
-            ok(call_config_tool(&tools, command(&["tools", "get", "--behavior", "caller"])).await);
-        assert_ne!(stored["document"]["subagents"]["enabled"], true);
+            ok(call_config_tool(&tools, command(&["tools", "get", "--agent", "caller"])).await);
+        assert_ne!(stored["document"]["agents"]["enabled"], true);
         assert_eq!(
-            stored["document"]["subagents"]["target_ids"],
+            stored["document"]["agents"]["target_ids"],
             json!(["gatekeeper"])
         );
     }
@@ -6117,10 +5909,10 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
         command(&[
             "tools",
             "edit",
-            "--behavior",
+            "--agent",
             "caller",
             "--set",
-            r#"subagents={"enabled":true,"target_ids":["gatekeeper"]}"#,
+            r#"agents={"enabled":true,"target_ids":["gatekeeper"]}"#,
         ]),
     )
     .await);
@@ -6129,10 +5921,10 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
         .unwrap()
         .contains("Selected targets are inactive"));
     let recovered =
-        ok(call_config_tool(&tools, command(&["tools", "get", "--behavior", "caller"])).await);
-    assert_eq!(recovered["document"]["subagents"]["enabled"], true);
+        ok(call_config_tool(&tools, command(&["tools", "get", "--agent", "caller"])).await);
+    assert_eq!(recovered["document"]["agents"]["enabled"], true);
     assert_eq!(
-        recovered["document"]["subagents"]["target_ids"],
+        recovered["document"]["agents"]["target_ids"],
         json!(["gatekeeper"])
     );
 
@@ -6141,10 +5933,10 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
         command(&[
             "tools",
             "edit",
-            "--behavior",
+            "--agent",
             "caller",
             "--set",
-            r#"subagents={"enabled":true}"#,
+            r#"agents={"enabled":true}"#,
         ]),
     )
     .await);
@@ -6156,7 +5948,7 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
             "tools",
             "edit",
             "--set",
-            r#"subagents={"enabled":true,"target_ids":["gatekeeper"]}"#,
+            r#"agents={"enabled":true,"target_ids":["gatekeeper"]}"#,
             "--set",
             r#"built_ins={"enable_session_history_tool":true}"#,
             "--set",
@@ -6169,10 +5961,10 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
         .unwrap()
         .contains("Selected targets are inactive"));
     let stored = ok(call_config_tool(&tools, command(&["tools", "get"])).await);
-    assert_eq!(stored["document"]["subagents"]["enabled"], true);
+    assert_eq!(stored["document"]["agents"]["enabled"], true);
     for (patch, refusal) in [
         (
-            r#"subagents={"enabled":false,"target_ids":["gatekeeper"]}"#,
+            r#"agents={"enabled":false,"target_ids":["gatekeeper"]}"#,
             "agents tools must remain enabled",
         ),
         (
@@ -6197,53 +5989,43 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
     }
     let disable = call_config_tool(
         &tools,
-        command(&["behavior", "edit", "setup", "--set", "enabled=false"]),
+        command(&["agent", "edit", "setup", "--set", "enabled=false"]),
     )
     .await
     .unwrap_err();
     assert!(disable.contains("no-lockout"), "{disable}");
-    // Two-step self-disable: the Setup tag and the persona disable path.
+    // Two-step self-disable: the Engineer tag and the agent disable path.
     let untag = call_config_tool(
         &tools,
-        command(&[
-            "behavior",
-            "edit",
-            "setup",
-            "--set",
-            "tags=[\"ui:engineer\"]",
-        ]),
+        command(&["agent", "edit", "setup", "--set", "tags=[\"ui:engineer\"]"]),
     )
     .await
     .unwrap_err();
-    assert!(untag.contains("Setup tag must remain"), "{untag}");
+    assert!(untag.contains("Engineer tag must remain"), "{untag}");
     ok(call_config_tool(
         &tools,
         command(&[
-            "behavior",
+            "agent",
             "edit",
             "setup",
             "--set",
             &format!(
                 "tags={}",
-                json!([
-                    crate::agent::persona_ops::SETUP_STEWARD_BEHAVIOR_TAG,
-                    "ui:engineer"
-                ])
+                json!([crate::self_config::ENGINEER_AGENT_TAG, "ui:engineer"])
             ),
         ]),
     )
     .await);
-    let persona_disable =
-        call_config_tool(&tools, command(&["behavior", "disable", "--id", "setup"]))
-            .await
-            .unwrap_err();
-    assert!(persona_disable.contains("no-lockout"), "{persona_disable}");
+    let agent_disable = call_config_tool(&tools, command(&["agent", "disable", "--id", "setup"]))
+        .await
+        .unwrap_err();
+    assert!(agent_disable.contains("no-lockout"), "{agent_disable}");
     // A selected target the runtime could not resolve is refused at publication.
     for name in ["\"\"", "\"   \""] {
         let blank = call_config_tool(
             &tools,
             command(&[
-                "subagent-target",
+                "agent-target",
                 "edit",
                 "gatekeeper",
                 "--set",
@@ -6252,13 +6034,13 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
         )
         .await
         .unwrap_err();
-        assert!(blank.contains("invalid SubagentTarget"), "{blank}");
+        assert!(blank.contains("invalid AgentTarget"), "{blank}");
     }
     ok(call_config_tool(
         &tools,
         command(
             &[
-                &["subagent-target", "create", "gatekeeper-twin"][..],
+                &["agent-target", "create", "gatekeeper-twin"][..],
                 &target_patch,
             ]
             .concat(),
@@ -6271,13 +6053,13 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
             "tools",
             "edit",
             "--set",
-            r#"subagents={"enabled":true,"target_ids":["gatekeeper","gatekeeper-twin"]}"#,
+            r#"agents={"enabled":true,"target_ids":["gatekeeper","gatekeeper-twin"]}"#,
         ]),
     )
     .await
     .unwrap_err();
     assert!(
-        duplicate.contains("duplicate subagent target name"),
+        duplicate.contains("duplicate agent target name"),
         "{duplicate}"
     );
 
@@ -6347,7 +6129,7 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
         command(&[
             "profile",
             "edit",
-            "--behavior",
+            "--agent",
             "lead",
             "--set",
             "execution_id=\"lead-execution\"",
@@ -6360,7 +6142,7 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
             "profile",
             "edit",
             "execution",
-            "--behavior",
+            "--agent",
             "lead",
             "--set",
             "max_turns=12",
@@ -6373,7 +6155,7 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
     assert_eq!(execution["effective"]["max_turns"], 12);
     let bound = ok(call_config_tool(
         &tools,
-        command(&["profile", "get", "execution", "--behavior", "lead"]),
+        command(&["profile", "get", "execution", "--agent", "lead"]),
     )
     .await);
     assert_eq!(bound["effective"], execution["effective"]);
@@ -6386,7 +6168,7 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
             "edit",
             "task",
             "engineer-inbox",
-            "--behavior",
+            "--agent",
             "setup",
             "--set",
             "prompt_template=\"Review {{ doc.message }}\"",
@@ -6397,23 +6179,18 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
     // Delete through the reference-aware cleanup owner once deselected.
     assert!(call_config_tool(
         &tools,
-        command(&[
-            "cleanup",
-            "preview",
-            "--target",
-            "subagent-target=gatekeeper"
-        ]),
+        command(&["cleanup", "preview", "--target", "agent-target=gatekeeper"]),
     )
     .await
     .is_err());
     let refused = call_config_tool(
         &tools,
-        command(&["tools", "edit", "--set", r#"subagents={"enabled":true}"#]),
+        command(&["tools", "edit", "--set", r#"agents={"enabled":true}"#]),
     )
     .await
     .unwrap_err();
     assert!(
-        refused.contains("drop existing settings from your own Tools: subagents.target_ids")
+        refused.contains("drop existing settings from your own Tools: agents.target_ids")
             && refused.contains("allow-drop"),
         "{refused}"
     );
@@ -6423,20 +6200,15 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
             "tools",
             "edit",
             "--allow-drop",
-            "subagents",
+            "agents",
             "--set",
-            r#"subagents={"enabled":true}"#,
+            r#"agents={"enabled":true}"#,
         ]),
     )
     .await);
     let cleanup = ok(call_config_tool(
         &tools,
-        command(&[
-            "cleanup",
-            "preview",
-            "--target",
-            "subagent-target=gatekeeper",
-        ]),
+        command(&["cleanup", "preview", "--target", "agent-target=gatekeeper"]),
     )
     .await);
     let digest = cleanup["plan_digest"].as_str().unwrap().to_owned();
@@ -6448,7 +6220,7 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
             "--digest",
             &digest,
             "--target",
-            "subagent-target=gatekeeper",
+            "agent-target=gatekeeper",
         ]),
     )
     .await);
@@ -6457,14 +6229,14 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
 #[tokio::test]
 async fn backend_reads_expose_operator_catalogs_without_credentials_or_provider_calls() {
     const SECRET: &str = "operator-api-key-never-exposed";
-    let node = build_persona_node().await;
-    let identity = persona_identity("backend-catalog-read");
+    let node = build_agent_node().await;
+    let identity = agent_identity("backend-catalog-read");
     let owner = identity.did().to_string();
-    crate::test_support::install_test_behavior(&node, &owner, "setup").await;
+    crate::test_support::install_test_agent(&node, &owner, "setup").await;
     let access = crate::config_client::ConfigAccess::Local(node.clone());
     let backend = |id: &str, kind: &str, auth: Value| -> crate::document_config::InferenceBackend {
         serde_json::from_value(json!({
-            "agent_did": owner, "backend_id": id, "name": id, "provider_kind": kind,
+            "node_did": owner, "backend_id": id, "name": id, "provider_kind": kind,
             "endpoint": "http://127.0.0.1:1/v1", "auth": auth,
         }))
         .unwrap()
@@ -6472,7 +6244,7 @@ async fn backend_reads_expose_operator_catalogs_without_credentials_or_provider_
     let claude = backend(
         "claude",
         "ClaudeCliSubscription",
-        json!({"kind": "principal_oauth"}),
+        json!({"kind": "node_oauth"}),
     );
     let keyed = backend(
         "keyed",
@@ -6508,7 +6280,7 @@ async fn backend_reads_expose_operator_catalogs_without_credentials_or_provider_
         .unwrap();
 
     let mut tool_config = config(&["backend"]);
-    tool_config.behavior_id = "setup".into();
+    tool_config.agent_id = "setup".into();
     tool_config.preview = true;
     let tools = build_self_config_tools(node, owner, Some(identity), &tool_config, test_plugins());
     let call = |argv: &[&str]| {
@@ -6892,7 +6664,7 @@ async fn seed_account_view(node: &std::sync::Arc<defra_node::EmbeddedNode>, owne
             Some(account_ref) => format!("{}:{account_ref}", oauth_credential_id(owner, provider)),
             None => oauth_credential_id(owner, provider),
         },
-        agent_did: owner.to_string(),
+        node_did: owner.to_string(),
         provider: provider.to_string(),
         access_token: "access-SECRET".into(),
         refresh_token: "refresh-SECRET".into(),
@@ -6908,7 +6680,7 @@ async fn seed_account_view(node: &std::sync::Arc<defra_node::EmbeddedNode>, owne
         provider_account_key: None,
         label: Some(label.to_string()),
     };
-    upsert_oauth_credential(node, &account(None, "Personal", true))
+    upsert_oauth_credential(node, &account(None, "Agentl", true))
         .await
         .unwrap();
     upsert_oauth_credential(node, &account(Some("acct-l2"), "Work", false))
@@ -6919,13 +6691,13 @@ async fn seed_account_view(node: &std::sync::Arc<defra_node::EmbeddedNode>, owne
         (
             "backend-usage-claude",
             "ClaudeCliSubscription",
-            json!({ "kind": "principal_oauth" }),
+            json!({ "kind": "node_oauth" }),
             "claude-cli://subscription",
         ),
         (
             "backend-usage-work",
             "ClaudeCliSubscription",
-            json!({ "kind": "principal_oauth", "account_ref": "acct-l2" }),
+            json!({ "kind": "node_oauth", "account_ref": "acct-l2" }),
             "claude-cli://subscription",
         ),
         (
@@ -6936,7 +6708,7 @@ async fn seed_account_view(node: &std::sync::Arc<defra_node::EmbeddedNode>, owne
         ),
     ] {
         let backend: crate::InferenceBackend = serde_json::from_value(json!({
-            "agent_did": owner,
+            "node_did": owner,
             "backend_id": backend_id,
             "name": backend_id,
             "provider_kind": kind,
@@ -6949,7 +6721,7 @@ async fn seed_account_view(node: &std::sync::Arc<defra_node::EmbeddedNode>, owne
             .unwrap();
     }
     let profile = serde_json::from_value(json!({
-        "agent_did": owner,
+        "node_did": owner,
         "profile_id": "profile-usage-a",
         "backend_id": "backend-usage-claude",
         "model_name": "model-x",
@@ -6962,7 +6734,7 @@ async fn seed_account_view(node: &std::sync::Arc<defra_node::EmbeddedNode>, owne
         node,
         &crate::usage_observation::UsageAccount::Credential {
             doc_id: None,
-            agent_did: owner.to_string(),
+            node_did: owner.to_string(),
             provider: provider.to_string(),
             account_ref: None,
         },
@@ -6984,13 +6756,13 @@ async fn seed_account_view(node: &std::sync::Arc<defra_node::EmbeddedNode>, owne
 
 #[tokio::test]
 async fn config_backend_accounts_lists_accounts_and_usage_read_only() {
-    let node = build_persona_node().await;
-    let identity = persona_identity("config-accounts");
+    let node = build_agent_node().await;
+    let identity = agent_identity("config-accounts");
     let owner = identity.did().to_string();
-    crate::test_support::install_test_behavior(&node, &owner, "alpha").await;
+    crate::test_support::install_test_agent(&node, &owner, "alpha").await;
     seed_account_view(&node, &owner).await;
-    let mut tool_config = config(&["persona", "profile", "backend"]);
-    tool_config.behavior_id = "alpha".into();
+    let mut tool_config = config(&["node", "profile", "backend"]);
+    tool_config.agent_id = "alpha".into();
     let tools = build_self_config_tools(
         node.clone(),
         owner,
@@ -7017,11 +6789,11 @@ async fn config_backend_accounts_lists_accounts_and_usage_read_only() {
             .find(|item| item["label"] == label)
             .unwrap_or_else(|| panic!("no {label}: {text}"))
     };
-    let personal = item("Personal");
-    assert_eq!(personal["provider"], "claude-subscription");
-    assert_eq!(personal["state"], "enabled");
-    assert_eq!(personal["profiles"], json!(["profile-usage-a"]));
-    assert_eq!(personal["usage"]["windows"][0]["used_pct"], 42.0);
+    let agentl = item("Agentl");
+    assert_eq!(agentl["provider"], "claude-subscription");
+    assert_eq!(agentl["state"], "enabled");
+    assert_eq!(agentl["profiles"], json!(["profile-usage-a"]));
+    assert_eq!(agentl["usage"]["windows"][0]["used_pct"], 42.0);
     let work = item("Work");
     assert_eq!(work["state"], "disabled");
     assert_eq!(work["usage"], Value::Null);
@@ -7058,12 +6830,12 @@ async fn config_backend_accounts_lists_accounts_and_usage_read_only() {
 
 #[tokio::test]
 async fn config_backend_accounts_needs_the_backend_grant() {
-    let node = build_persona_node().await;
-    let identity = persona_identity("config-accounts-grant");
+    let node = build_agent_node().await;
+    let identity = agent_identity("config-accounts-grant");
     let owner = identity.did().to_string();
-    crate::test_support::install_test_behavior(&node, &owner, "alpha").await;
-    let mut tool_config = config(&["persona", "profile"]);
-    tool_config.behavior_id = "alpha".into();
+    crate::test_support::install_test_agent(&node, &owner, "alpha").await;
+    let mut tool_config = config(&["node", "profile"]);
+    tool_config.agent_id = "alpha".into();
     let tools = build_self_config_tools(node, owner, Some(identity), &tool_config, test_plugins());
     let config = tools
         .iter()
@@ -7073,4 +6845,588 @@ async fn config_backend_accounts_needs_the_backend_grant() {
         .call(json!({"argv":["backend", "accounts"]}).to_string())
         .await
         .is_err());
+}
+
+#[tokio::test]
+async fn agent_management_clears_optional_fields_and_refuses_ignored_tool_modifiers() {
+    let node = build_agent_node().await;
+    let identity = agent_identity("agent-clear");
+    let owner = identity.did().to_owned();
+    crate::test_support::install_test_agent(&node, &owner, "seed").await;
+    let created: Value = serde_json::from_str(
+        &agent_mutate(
+            &node,
+            &owner,
+            identity.as_ref(),
+            &ConfigureAgentParams {
+                action: "create".into(),
+                display_name: StringUpdate::Set("Clearable".into()),
+                description: StringUpdate::Set("Original description".into()),
+                system_prompt: StringUpdate::Set("Original instructions".into()),
+                profile_id: StringUpdate::Set("seed:inference".into()),
+                ..Default::default()
+            },
+            &Default::default(),
+        )
+        .await
+        .unwrap(),
+    )
+    .unwrap();
+    let id = created["agent_id"].as_str().unwrap().to_owned();
+    let edit = ConfigureAgentParams {
+        action: "edit".into(),
+        agent_id: Some(id.clone()),
+        display_name: StringUpdate::Clear,
+        description: StringUpdate::Clear,
+        system_prompt: StringUpdate::Clear,
+        ..Default::default()
+    };
+    agent_mutate(&node, &owner, identity.as_ref(), &edit, &Default::default())
+        .await
+        .unwrap();
+    let stored = crate::list_agents(&node, &owner)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|agent| agent.agent_id == id)
+        .unwrap();
+    assert_eq!(stored.display_name, None);
+    assert_eq!(stored.description, None);
+    let effective = SelfConfigCore::new(node.clone(), owner.clone(), id.clone())
+        .unwrap()
+        .read_effective_config(&BTreeSet::new(), false, false)
+        .await
+        .unwrap();
+    assert!(
+        effective["context"]["system_prompt"].is_null(),
+        "{effective}"
+    );
+    assert_eq!(stored.inference_profile_id, "seed:inference");
+    let invalid = ConfigureAgentParams {
+        root: StringUpdate::Set("/ignored".into()),
+        ..edit
+    };
+    let error = agent_mutate(
+        &node,
+        &owner,
+        identity.as_ref(),
+        &invalid,
+        &Default::default(),
+    )
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("tools update"), "{error:#}");
+    let after = crate::list_agents(&node, &owner)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|agent| agent.agent_id == id)
+        .unwrap();
+    assert_eq!(stored, after);
+}
+
+#[tokio::test]
+async fn no_lockout_rejects_current_agent_disable_in_preview_and_commit() {
+    let node = build_agent_node().await;
+    let identity = agent_identity("disable-preview-parity");
+    let owner = identity.did().to_owned();
+    for id in ["current", "default"] {
+        crate::test_support::install_test_agent(&node, &owner, id).await;
+    }
+    crate::document_config::upsert_node(&node, &owner, None, Some("default"), true)
+        .await
+        .unwrap();
+    let mut grants = config(&["node"]);
+    grants.agent_id = "current".into();
+    grants.no_lockout = true;
+    grants.preview = true;
+    let tools = build_self_config_tools(
+        node.clone(),
+        owner.clone(),
+        Some(identity),
+        &grants,
+        test_plugins(),
+    );
+    for argv in [
+        vec!["agent", "preview", "disable", "--id", "current"],
+        vec!["agent", "disable", "--id", "current"],
+    ] {
+        let error = call_config_tool(&tools, argv.into_iter().map(str::to_owned).collect())
+            .await
+            .unwrap_err();
+        assert!(
+            error.contains("no-lockout guard: agent must remain enabled"),
+            "{error}"
+        );
+    }
+    let current = crate::list_agents(&node, &owner)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|agent| agent.agent_id == "current")
+        .unwrap();
+    assert!(current.enabled);
+}
+
+#[tokio::test]
+async fn agent_only_edits_preserve_an_optional_absent_context() {
+    let node = build_agent_node().await;
+    let identity = agent_identity("contextless-agent-edit");
+    let owner = identity.did().to_owned();
+    for id in ["current", "other"] {
+        crate::test_support::install_test_agent(&node, &owner, id).await;
+    }
+    let core = SelfConfigCore::new(node.clone(), owner.clone(), "current".into()).unwrap();
+    core.apply(agent_request(&core, vec![("context_id".into(), None)]))
+        .await
+        .unwrap();
+    let mut grants = config(&["agent"]);
+    grants.agent_id = "current".into();
+    grants.preview = true;
+    let tools = build_self_config_tools(
+        node.clone(),
+        owner.clone(),
+        Some(identity),
+        &grants,
+        test_plugins(),
+    );
+    for (prefix, committed) in [
+        (vec!["agent", "preview", "edit", "current"], false),
+        (vec!["agent", "edit", "current"], true),
+    ] {
+        let mut argv: Vec<String> = prefix.into_iter().map(str::to_owned).collect();
+        argv.extend(
+            [
+                "--set",
+                r#"display_name="Contextless""#,
+                "--set",
+                r#"inference_profile_id="other:inference""#,
+            ]
+            .into_iter()
+            .map(str::to_owned),
+        );
+        let result: Value =
+            serde_json::from_str(&call_config_tool(&tools, argv).await.unwrap()).unwrap();
+        assert_eq!(result["committed"], committed);
+    }
+    let current = crate::list_agents(&node, &owner)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|agent| agent.agent_id == "current")
+        .unwrap();
+    assert_eq!(current.display_name.as_deref(), Some("Contextless"));
+    assert_eq!(current.inference_profile_id, "other:inference");
+    assert_eq!(current.context_id, None);
+}
+
+#[tokio::test]
+async fn public_agent_management_previews_without_publishing_and_checks_signer() {
+    let node = build_agent_node().await;
+    let identity = agent_identity("public-agent-management");
+    let owner = identity.did().to_owned();
+    crate::test_support::install_test_agent(&node, &owner, "seed").await;
+    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let mut args = ConfigureAgentParams {
+        action: "preview".into(),
+        operation: Some("create".into()),
+        display_name: StringUpdate::Set("Public agent".into()),
+        system_prompt: StringUpdate::Set("Complete the requested work.".into()),
+        profile_id: StringUpdate::Set("seed:inference".into()),
+        ..Default::default()
+    };
+    let preview: Value = serde_json::from_str(
+        &configure_agent(
+            &access,
+            &owner,
+            identity.as_ref(),
+            &args,
+            &Default::default(),
+        )
+        .await
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(preview["admitted"], true);
+    assert_eq!(preview["committed"], false);
+    assert_eq!(crate::list_agents(&node, &owner).await.unwrap().len(), 1);
+    args.action = "create".into();
+    args.operation = None;
+    let foreign = agent_identity("public-agent-foreign");
+    let error = configure_agent(
+        &access,
+        &owner,
+        foreign.as_ref(),
+        &args,
+        &Default::default(),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        error.to_string().contains("exact local node identity"),
+        "{error:#}"
+    );
+    assert_eq!(crate::list_agents(&node, &owner).await.unwrap().len(), 1);
+    let committed: Value = serde_json::from_str(
+        &configure_agent(
+            &access,
+            &owner,
+            identity.as_ref(),
+            &args,
+            &Default::default(),
+        )
+        .await
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(committed["admitted"], true);
+    assert_eq!(committed["committed"], true);
+    assert_eq!(committed["agent_id"], preview["agent_id"]);
+    assert_eq!(crate::list_agents(&node, &owner).await.unwrap().len(), 2);
+}
+
+#[test]
+fn agent_decision_rejects_fields_outside_the_edit_contract() {
+    let view = agent::AgentCatalogView {
+        agents: BTreeMap::from([("target".into(), true)]),
+        ..Default::default()
+    };
+    for field in ["enabled", "node_did", "context_id", "unexpected"] {
+        let error = agent::decide_agent_operation(
+            &view,
+            &agent::AgentOperation::Edit(vec![(field.into(), Some(json!(true)))]),
+            "target",
+            false,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("unsupported agent edit field"));
+    }
+}
+
+#[tokio::test]
+async fn public_agent_edit_preserves_disabled_state_and_rejects_clone_options() {
+    let node = build_agent_node().await;
+    let identity = agent_identity("disabled-agent-edit");
+    let owner = identity.did().to_owned();
+    crate::test_support::install_test_agent(&node, &owner, "target").await;
+    let mut stored = crate::load_agent(&node, "target").await.unwrap().unwrap();
+    stored.enabled = false;
+    crate::upsert_agent(&node, &stored).await.unwrap();
+    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let mut args = ConfigureAgentParams {
+        action: "preview".into(),
+        operation: Some("edit".into()),
+        agent_id: Some("target".into()),
+        display_name: StringUpdate::Set("Edited while disabled".into()),
+        ..Default::default()
+    };
+    let preview: Value = serde_json::from_str(
+        &configure_agent(
+            &access,
+            &owner,
+            identity.as_ref(),
+            &args,
+            &Default::default(),
+        )
+        .await
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(preview["committed"], false);
+    assert_eq!(preview["agent"]["enabled"], false);
+    assert_eq!(
+        crate::load_agent(&node, "target").await.unwrap(),
+        Some(stored.clone())
+    );
+    args.action = "edit".into();
+    args.operation = None;
+    args.clone_from = Some("target".into());
+    let error = configure_agent(
+        &access,
+        &owner,
+        identity.as_ref(),
+        &args,
+        &Default::default(),
+    )
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("does not accept clone_from"));
+    assert_eq!(
+        crate::load_agent(&node, "target").await.unwrap(),
+        Some(stored.clone())
+    );
+    args.clone_from = None;
+    configure_agent(
+        &access,
+        &owner,
+        identity.as_ref(),
+        &args,
+        &Default::default(),
+    )
+    .await
+    .unwrap();
+    stored.display_name = Some("Edited while disabled".into());
+    assert_eq!(
+        crate::load_agent(&node, "target").await.unwrap(),
+        Some(stored.clone())
+    );
+    args.profile_id = StringUpdate::Set("missing-profile".into());
+    assert!(configure_agent(
+        &access,
+        &owner,
+        identity.as_ref(),
+        &args,
+        &Default::default()
+    )
+    .await
+    .is_err());
+    assert_eq!(
+        crate::load_agent(&node, "target").await.unwrap(),
+        Some(stored.clone())
+    );
+    args.profile_id = StringUpdate::Omitted;
+    args.make_default = true;
+    assert!(configure_agent(
+        &access,
+        &owner,
+        identity.as_ref(),
+        &args,
+        &Default::default()
+    )
+    .await
+    .is_err());
+    assert_eq!(
+        crate::load_agent(&node, "target").await.unwrap(),
+        Some(stored)
+    );
+}
+
+#[tokio::test]
+async fn public_prompt_edits_require_an_existing_unshared_context_without_partial_writes() {
+    let node = build_agent_node().await;
+    let identity = agent_identity("prompt-context-ownership");
+    let owner = identity.did().to_owned();
+    for id in ["missing", "shared", "sibling", "private"] {
+        crate::test_support::install_test_agent(&node, &owner, id).await;
+    }
+    let mut missing = crate::load_agent(&node, "missing").await.unwrap().unwrap();
+    missing.context_id = None;
+    crate::upsert_agent(&node, &missing).await.unwrap();
+    let shared = crate::load_agent(&node, "shared").await.unwrap().unwrap();
+    let mut sibling = crate::load_agent(&node, "sibling").await.unwrap().unwrap();
+    sibling.context_id = shared.context_id;
+    crate::upsert_agent(&node, &sibling).await.unwrap();
+    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let query = "query { Agent(order: {agent_id: ASC}) { agent_id display_name context_id inference_profile_id enabled } AgentContext(order: {context_id: ASC}) { context_id display_name system_prompt tools_id } }";
+    let before = access.execute(query).await.unwrap();
+    for (target, expected) in [
+        ("missing", "agent has no context"),
+        ("shared", "unshared context"),
+    ] {
+        for preview in [true, false] {
+            let args = ConfigureAgentParams {
+                action: if preview { "preview" } else { "edit" }.into(),
+                operation: preview.then(|| "edit".into()),
+                agent_id: Some(target.into()),
+                display_name: StringUpdate::Set("Must not be published".into()),
+                system_prompt: StringUpdate::Set("Replacement instructions".into()),
+                ..Default::default()
+            };
+            let error = configure_agent(
+                &access,
+                &owner,
+                identity.as_ref(),
+                &args,
+                &Default::default(),
+            )
+            .await
+            .unwrap_err();
+            assert!(error.to_string().contains(expected), "{error:#}");
+            assert_eq!(access.execute(query).await.unwrap(), before);
+        }
+    }
+    let private = crate::load_agent(&node, "private").await.unwrap().unwrap();
+    let args = ConfigureAgentParams {
+        action: "edit".into(),
+        agent_id: Some("private".into()),
+        system_prompt: StringUpdate::Set("Private replacement instructions".into()),
+        ..Default::default()
+    };
+    configure_agent(
+        &access,
+        &owner,
+        identity.as_ref(),
+        &args,
+        &Default::default(),
+    )
+    .await
+    .unwrap();
+    let after = access.execute(query).await.unwrap();
+    assert_eq!(after["data"]["Agent"], before["data"]["Agent"]);
+    let mut expected_contexts = before["data"]["AgentContext"].clone();
+    let changed = expected_contexts
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|context| context["context_id"].as_str() == private.context_id.as_deref())
+        .unwrap();
+    changed["system_prompt"] = json!("Private replacement instructions");
+    assert_eq!(after["data"]["AgentContext"], expected_contexts);
+}
+
+#[test]
+fn operator_grants_decode_and_preserve_main_bounds() {
+    use super::ops::{guard_tools_keep_grants, OperatorGrants};
+    let empty = json!({});
+    let granted = json!({"self_config":{"enable_self_config":true,"enable_pack_install":true}});
+    let malformed = json!({"self_config":{"unknown":true}});
+    assert_eq!(
+        OperatorGrants::from_tools_json(empty.as_object().unwrap()).unwrap(),
+        OperatorGrants::default()
+    );
+    assert!(OperatorGrants::from_tools_json(malformed.as_object().unwrap()).is_err());
+    assert!(guard_tools_keep_grants(
+        &OperatorGrants::default(),
+        None,
+        granted.as_object().unwrap()
+    )
+    .is_err());
+    assert!(guard_tools_keep_grants(
+        &OperatorGrants::default(),
+        Some(granted.as_object().unwrap()),
+        granted.as_object().unwrap()
+    )
+    .is_ok());
+    assert!(guard_tools_keep_grants(
+        &OperatorGrants { pack_install: true },
+        None,
+        granted.as_object().unwrap()
+    )
+    .is_ok());
+    assert!(guard_tools_keep_grants(
+        &OperatorGrants::default(),
+        Some(granted.as_object().unwrap()),
+        empty.as_object().unwrap()
+    )
+    .is_ok());
+}
+
+async fn grant_pack_install_for_test(node: &defra_node::EmbeddedNode, owner: &str, tools_id: &str) {
+    let value = json!({"node_did":owner,"tools_id":tools_id,"self_config":{"enable_self_config":true,"enable_pack_install":true}});
+    let plan = crate::config_client::DesiredStateApplyPlan::new(vec![
+        crate::config_client::DesiredStateApplyDocument {
+            collection: crate::Collection::Tools,
+            add: value.clone(),
+            update: value,
+        },
+    ])
+    .unwrap();
+    crate::config_client::ConfigAccess::transact_local(node, None, "test.operator_grant", |txn| {
+        let plan = &plan;
+        Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, plan).await })
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn model_clone_is_atomically_grant_bounded_but_operator_clone_is_not() {
+    let node = build_agent_node().await;
+    let identity = agent_identity("clone-grant-bound");
+    let owner = identity.did().to_owned();
+    for id in ["worker", "source"] {
+        crate::test_support::install_test_agent(&node, &owner, id).await;
+    }
+    grant_pack_install_for_test(&node, &owner, "source:tools").await;
+    let core = SelfConfigCore::new(node.clone(), owner.clone(), "worker".into()).unwrap();
+    let args = ConfigureAgentParams {
+        action: "clone".into(),
+        display_name: StringUpdate::Set("Bound clone".into()),
+        clone_from: Some("source".into()),
+        profile_id: StringUpdate::Set("source:inference".into()),
+        ..Default::default()
+    };
+    let before = crate::list_agents(&node, &owner).await.unwrap();
+    let preview: Value = serde_json::from_str(
+        &agent_management::model_agent_preview(&core, &args)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(preview["admitted"], false);
+    assert!(preview["rejection"]
+        .as_str()
+        .unwrap()
+        .contains("cannot be self-granted"));
+    let error = agent_management::model_agent_mutate(&core, identity.as_ref(), &args)
+        .await
+        .unwrap_err();
+    assert!(format!("{error:#}").contains("cannot be self-granted"));
+    assert_eq!(crate::list_agents(&node, &owner).await.unwrap(), before);
+    let holder = core.with_held_grants(ops::OperatorGrants { pack_install: true });
+    let accepted: Value = serde_json::from_str(
+        &agent_management::model_agent_mutate(&holder, identity.as_ref(), &args)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(accepted["committed"], true);
+    let mut operator_args = args;
+    operator_args.display_name = StringUpdate::Set("Operator clone".into());
+    let operator: Value = serde_json::from_str(
+        &configure_agent(
+            &crate::config_client::ConfigAccess::Local(node.clone()),
+            &owner,
+            identity.as_ref(),
+            &operator_args,
+            &Default::default(),
+        )
+        .await
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(operator["committed"], true);
+}
+
+#[tokio::test]
+async fn model_reselection_and_existing_sibling_grants_use_invoker_bounds() {
+    let node = build_agent_node().await;
+    let identity = agent_identity("reselection-grant-bound");
+    let owner = identity.did().to_owned();
+    for id in ["worker", "sibling", "granted"] {
+        crate::test_support::install_test_agent(&node, &owner, id).await;
+    }
+    grant_pack_install_for_test(&node, &owner, "granted:tools").await;
+    let core = SelfConfigCore::new(node.clone(), owner.clone(), "sibling".into())
+        .unwrap()
+        .with_lockout_agent_id("worker".into());
+    for preview in [true, false] {
+        let request = protect_working_agent(agent_request(
+            &core,
+            vec![("context_id".into(), Some(json!("granted:context")))],
+        ));
+        let result = if preview {
+            core.preview(request).await
+        } else {
+            core.apply(request).await
+        };
+        assert!(format!("{:#}", result.unwrap_err()).contains("cannot be self-granted"));
+    }
+    let holder = core.with_held_grants(ops::OperatorGrants { pack_install: true });
+    holder
+        .apply(protect_working_agent(agent_request(
+            &holder,
+            vec![("context_id".into(), Some(json!("granted:context")))],
+        )))
+        .await
+        .unwrap();
+    let no_grant = SelfConfigCore::new(node.clone(), owner, "sibling".into()).unwrap();
+    no_grant
+        .apply(tools_request(
+            &no_grant,
+            vec![("built_ins".into(), Some(json!({"enable_graph_tools":true})))],
+        ))
+        .await
+        .unwrap();
+    no_grant.apply(tools_request(&no_grant, vec![("self_config".into(), Some(json!({"enable_self_config":true,"enable_pack_install":true,"self_config_preview":true})))])).await.unwrap();
 }

@@ -94,23 +94,27 @@ impl InferenceProfile {
     }
 }
 
-pub fn default_inference_profile_id_for_behavior(behavior_id: &str) -> String {
-    format!("{behavior_id}-profile")
+pub fn default_inference_profile_id_for_agent(agent_id: &str) -> String {
+    format!("{agent_id}-profile")
+}
+
+pub fn default_inference_profile_id_for_node(node_did: &str) -> String {
+    format!("{node_did}:default-profile")
 }
 
 pub async fn load_inference_profile(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     profile_id: &str,
 ) -> Result<Option<InferenceProfile>> {
-    Ok(load_inference_profile_record(node, agent_did, profile_id)
+    Ok(load_inference_profile_record(node, node_did, profile_id)
         .await?
         .map(|(_, profile)| profile))
 }
 
 pub(crate) async fn load_inference_profile_record(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     profile_id: &str,
 ) -> Result<Option<(String, InferenceProfile)>> {
     crate::config_client::ConfigAccess::transact_local(
@@ -122,7 +126,7 @@ pub(crate) async fn load_inference_profile_record(
                 crate::config_client::read_desired_state_record_in_txn(
                     txn,
                     crate::collection::Collection::InferenceProfile,
-                    agent_did,
+                    node_did,
                     profile_id,
                 )
                 .await?
@@ -136,9 +140,9 @@ pub(crate) async fn load_inference_profile_record(
 
 pub async fn list_inference_profile_records(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
 ) -> Result<Vec<(String, InferenceProfile)>> {
-    let escaped_agent_did = escape_graphql_string(agent_did);
+    let escaped_node_did = escape_graphql_string(node_did);
     let (fields, _) = crate::config_client::config_projection(
         crate::collection::Collection::InferenceProfile,
         None,
@@ -147,7 +151,7 @@ pub async fn list_inference_profile_records(
     let query = format!(
         r#"{{
             InferenceProfile(
-                filter: {{ agent_did: {{ _eq: "{escaped_agent_did}" }} }},
+                filter: {{ node_did: {{ _eq: "{escaped_node_did}" }} }},
                 order: {{ profile_id: ASC }}
             ) {{
                 _docID
@@ -176,7 +180,7 @@ pub async fn list_inference_profile_records(
                 .context("configuration row missing physical ID")?;
             let document: InferenceProfile = serde_json::from_value(row)?;
             anyhow::ensure!(
-                document.agent_did == agent_did,
+                document.node_did == node_did,
                 "foreign InferenceProfile row"
             );
             anyhow::ensure!(
@@ -226,7 +230,7 @@ mod tests {
 
     #[test]
     fn effort_is_typed_and_explicit_limits_do_not_default_invalid_values() {
-        let value = json!({"agent_did":"owner","profile_id":"profile","backend_id":"backend","model_name":"model","reasoning_effort":"high"});
+        let value = json!({"node_did":"owner","profile_id":"profile","backend_id":"backend","model_name":"model","reasoning_effort":"high"});
         let mut profile: InferenceProfile = serde_json::from_value(value.clone()).unwrap();
         assert_eq!(profile.reasoning_effort, Some(ReasoningEffort::High));
         assert_eq!(serde_json::to_value(&profile).unwrap(), value);

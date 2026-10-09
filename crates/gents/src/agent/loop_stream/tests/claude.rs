@@ -409,7 +409,7 @@ fn anthropic_api_key_client_runs_a_messages_turn_on_fixtures() {
                 None,
             )
             .unwrap();
-            let mut behavior = crate::agent::PendingAgentBehavior::new("anthropic-key-turn")
+            let mut behavior = crate::agent::PendingAgent::new("anthropic-key-turn")
                 .build_with_identity_for_test(identity);
             behavior.backend_provider_kind = crate::BackendProviderKind::AnthropicApiKey;
             let client = build_backend_client(

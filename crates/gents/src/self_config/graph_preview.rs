@@ -71,7 +71,7 @@ impl Tool for PreviewGraphTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let caller_did = self.core.agent_did();
+        let caller_did = self.core.node_did();
         let authority = GraphPreviewAuthority {
             caller_did: caller_did.to_owned(),
             preview_tool_granted: true,
@@ -81,8 +81,8 @@ impl Tool for PreviewGraphTool {
             tools_and_outputs_verified: false,
         };
         let storage_disposition = "unknown_until_approved_publication";
-        let limitation = "Syntax/topology and proposed caller admission only. Artifact identities are prospective, not an exact creation set: GraphRevision digest/revision_id are global and can conflict across principals, while GraphDefinition/EventSource/Trigger identities are principal-scoped. Authoritative StageCapability values remain pack-owned; publication must inspect storage and separately resolve Tasks, ACP, tools, outputs, and the matching digest through the transaction owner.";
-        if args.intent.agent_did != caller_did {
+        let limitation = "Syntax/topology and proposed caller admission only. Artifact identities are prospective, not an exact creation set: GraphRevision digest/revision_id are global and can conflict across nodes, while GraphDefinition/EventSource/Trigger identities are node-scoped. Authoritative StageCapability values remain pack-owned; publication must inspect storage and separately resolve Tasks, ACP, tools, outputs, and the matching digest through the transaction owner.";
+        if args.intent.node_did != caller_did {
             return Ok(PreviewGraphResponse {
                 committed: false,
                 syntax_and_topology_valid: false,
@@ -93,10 +93,10 @@ impl Tool for PreviewGraphTool {
                 prospective_artifact_identities: Vec::new(),
                 diagnostics: vec![Diagnostic {
                     code: crate::graph_pipeline::DiagnosticCode::UnauthorizedCapability,
-                    path: "/agent_did".to_owned(),
+                    path: "/node_did".to_owned(),
                     message: format!(
-                        "graph proposal owner {:?} does not match invoking principal {:?}",
-                        args.intent.agent_did, caller_did
+                        "graph proposal owner {:?} does not match invoking node {:?}",
+                        args.intent.node_did, caller_did
                     ),
                 }],
                 storage_disposition,
@@ -160,7 +160,7 @@ mod tests {
 
     fn capability_for(owner: &str) -> StageCapability {
         StageCapability {
-            agent_did: owner.to_owned(),
+            node_did: owner.to_owned(),
             capability_id: "score".to_owned(),
             revision: "v1".to_owned(),
             target: crate::graph_pipeline::StageTarget::Task {
@@ -194,7 +194,7 @@ mod tests {
 
     fn intent_for(owner: &str, capability_id: &str) -> GraphIntent {
         GraphIntent {
-            agent_did: owner.to_owned(),
+            node_did: owner.to_owned(),
             graph_id: "session-evaluation".to_owned(),
             nodes: vec![GraphNode {
                 session: None,
@@ -389,7 +389,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn same_graph_shares_global_revision_but_scopes_principal_artifacts() {
+    async fn same_graph_shares_global_revision_but_scopes_node_artifacts() {
         let node = node().await;
         let other = "did:key:preview-other";
         let before = persisted_graph_documents(&node).await;
@@ -429,7 +429,7 @@ mod tests {
         assert_eq!(first_global, second_global);
         assert_eq!(first_global.len(), 1);
         assert_eq!(first_global[0].collection, "GraphRevision");
-        assert!(first_global[0].principal_did.is_none());
+        assert!(first_global[0].node_did.is_none());
         assert_eq!(
             first_global[0]
                 .identity_keys
@@ -444,7 +444,7 @@ mod tests {
                 .iter()
                 .filter(|document| {
                     document.identity_scope
-                        == crate::graph_pipeline::GraphArtifactIdentityScope::Principal
+                        == crate::graph_pipeline::GraphArtifactIdentityScope::Node
                 })
                 .collect::<Vec<_>>(),
             second
@@ -452,7 +452,7 @@ mod tests {
                 .iter()
                 .filter(|document| {
                     document.identity_scope
-                        == crate::graph_pipeline::GraphArtifactIdentityScope::Principal
+                        == crate::graph_pipeline::GraphArtifactIdentityScope::Node
                 })
                 .collect::<Vec<_>>()
         );
@@ -460,18 +460,16 @@ mod tests {
             .prospective_artifact_identities
             .iter()
             .filter(|document| {
-                document.identity_scope
-                    == crate::graph_pipeline::GraphArtifactIdentityScope::Principal
+                document.identity_scope == crate::graph_pipeline::GraphArtifactIdentityScope::Node
             })
-            .all(|document| document.principal_did.as_deref() == Some(OWNER)));
+            .all(|document| document.node_did.as_deref() == Some(OWNER)));
         assert!(second
             .prospective_artifact_identities
             .iter()
             .filter(|document| {
-                document.identity_scope
-                    == crate::graph_pipeline::GraphArtifactIdentityScope::Principal
+                document.identity_scope == crate::graph_pipeline::GraphArtifactIdentityScope::Node
             })
-            .all(|document| document.principal_did.as_deref() == Some(other)));
+            .all(|document| document.node_did.as_deref() == Some(other)));
         assert_eq!(before, persisted_graph_documents(&node).await);
         node.shutdown().await;
     }
@@ -567,10 +565,10 @@ mod tests {
         let stored = node
             .execute(&format!(
                 r#"{{
-                    GraphDefinition(filter: {{agent_did: {{_eq: "{escaped_owner}"}}}}) {{graph_id agent_did}}
+                    GraphDefinition(filter: {{node_did: {{_eq: "{escaped_owner}"}}}}) {{graph_id node_did}}
                     GraphRevision(filter: {{digest: {{_eq: "{escaped_digest}"}}}}) {{revision_id digest owner_did}}
-                    EventSource(filter: {{agent_did: {{_eq: "{escaped_owner}"}}}}) {{event_source_id agent_did}}
-                    Trigger(filter: {{agent_did: {{_eq: "{escaped_owner}"}}}}) {{trigger_id agent_did}}
+                    EventSource(filter: {{node_did: {{_eq: "{escaped_owner}"}}}}) {{event_source_id node_did}}
+                    Trigger(filter: {{node_did: {{_eq: "{escaped_owner}"}}}}) {{trigger_id node_did}}
                 }}"#
             ))
             .await;
@@ -578,7 +576,7 @@ mod tests {
         let stored = stored.data.unwrap();
         for artifact in &response.prospective_artifact_identities {
             let owner_field = match artifact.collection.as_str() {
-                "GraphDefinition" | "EventSource" | "Trigger" => Some("agent_did"),
+                "GraphDefinition" | "EventSource" | "Trigger" => Some("node_did"),
                 "GraphRevision" => None,
                 other => panic!("unexpected preview collection {other}"),
             };
@@ -591,9 +589,8 @@ mod tests {
                         .identity_keys
                         .iter()
                         .all(|(field, value)| row[field] == *value)
-                        && owner_field.is_none_or(|field| {
-                            row[field] == artifact.principal_did.as_deref().unwrap()
-                        })
+                        && owner_field
+                            .is_none_or(|field| row[field] == artifact.node_did.as_deref().unwrap())
                 }));
         }
         node.shutdown().await;
@@ -661,7 +658,7 @@ mod tests {
     async fn preview_tool_requires_graph_tools_and_the_pack_publication_grant() {
         let node = node().await;
         let mut config = SelfConfigToolConfig {
-            behavior_id: "working".to_owned(),
+            agent_id: "working".to_owned(),
             ..Default::default()
         };
         assert!(!super::super::build_self_config_tools(

@@ -8,11 +8,10 @@ use gents::config_client::{
     ConfigAccess, DesiredStateApplyPlan,
 };
 use gents::defra_node::{EmbeddedNode, HttpConfig};
-use gents::document_config::{AgentPrincipal, BackendAuth, PackConfig};
+use gents::document_config::{BackendAuth, Node, PackConfig};
 use gents::{
-    default_behavior_id_for_agent, ensure_runtime_schemas, AgentIdentity, Collection,
-    DocumentRuntimeOptions, Gents, InferenceBackend, KeyIdentity, McpPool, ToolCeiling,
-    DEFAULT_MAX_TURNS,
+    default_agent_id_for_node, ensure_runtime_schemas, Collection, DocumentRuntimeOptions, Gents,
+    InferenceBackend, KeyIdentity, McpPool, NodeIdentity, ToolCeiling, DEFAULT_MAX_TURNS,
 };
 use tokio::sync::watch;
 
@@ -39,7 +38,7 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt().with_target(false).init();
     let data_dir = PathBuf::from(env_or("GENTS_DATA_DIR", "./var/defradb"));
     let http_port = env_or_u16("GENTS_HTTP_PORT", 9191);
-    let agent_name = env_or("GENTS_NAME", "demo");
+    let node_name = env_or("GENTS_NAME", "demo");
     let backend_id = env_or("GENTS_BACKEND_ID", "demo-backend");
     let model_endpoint = env_or("GENTS_MODEL_ENDPOINT", "http://127.0.0.1:8000/v1");
     let model_name = env_or("GENTS_MODEL_NAME", "default");
@@ -47,12 +46,12 @@ async fn main() -> Result<()> {
     let deadline_secs = env_or_u64("GENTS_DEADLINE_SECS", 900);
     let key_path = std::env::var("GENTS_KEY_PATH")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| data_dir.join("keys").join(format!("{agent_name}.key")));
+        .unwrap_or_else(|_| data_dir.join("keys").join(format!("{node_name}.key")));
 
     let http_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), http_port);
     let identity = Arc::new(
         KeyIdentity::load_or_create(key_path, None)
-            .context("creating or loading agent identity key")?,
+            .context("creating or loading node identity key")?,
     );
     let node = Arc::new(
         EmbeddedNode::builder()
@@ -76,7 +75,7 @@ async fn main() -> Result<()> {
     )
     .await?;
 
-    let agent = Gents::from_default_behavior_documents(
+    let agent = Gents::from_default_agent_documents(
         node,
         identity.clone(),
         DocumentRuntimeOptions {
@@ -96,8 +95,8 @@ async fn main() -> Result<()> {
     });
 
     tracing::info!(
-        agent_name,
-        agent_did = agent.agent_did(),
+        node_name,
+        node_did = agent.node_did(),
         graphql = %format!("http://127.0.0.1:{http_port}/api/v0/graphql"),
         backend_id,
         "serving default behavior"
@@ -108,7 +107,7 @@ async fn main() -> Result<()> {
 
 async fn seed_demo_documents(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     backend_id: &str,
     model_endpoint: &str,
     model_name: &str,
@@ -118,27 +117,27 @@ async fn seed_demo_documents(
     let deadline_secs = i64::try_from(deadline_secs).context("deadline exceeds supported range")?;
     ConfigAccess::transact_local(node, None, "example.default_config", |txn| {
         Box::pin(async move {
-            let mut principal: AgentPrincipal = match read_desired_state_record_in_txn(
-                txn, Collection::AgentPrincipal, agent_did, agent_did,
+            let mut principal: Node = match read_desired_state_record_in_txn(
+                txn, Collection::Node, node_did, node_did,
             ).await? {
                 Some((_, value)) => serde_json::from_value(value)?,
-                None => serde_json::from_value(serde_json::json!({"agent_did":agent_did}))?,
+                None => serde_json::from_value(serde_json::json!({"node_did":node_did}))?,
             };
-            let behavior_id = principal.default_behavior_id.clone()
-                .unwrap_or_else(|| default_behavior_id_for_agent(agent_did));
-            principal.default_behavior_id = Some(behavior_id.clone());
-            let profile_id = format!("{behavior_id}:demo-profile");
-            let tools_id = format!("{behavior_id}:demo-tools");
-            let context_id = format!("{behavior_id}:demo-context");
-            let execution_id = format!("{behavior_id}:demo-execution");
-            let compaction_id = format!("{behavior_id}:demo-compaction");
+            let agent_id = principal.default_agent_id.clone()
+                .unwrap_or_else(|| default_agent_id_for_node(node_did));
+            principal.default_agent_id = Some(agent_id.clone());
+            let profile_id = format!("{agent_id}:demo-profile");
+            let tools_id = format!("{agent_id}:demo-tools");
+            let context_id = format!("{agent_id}:demo-context");
+            let execution_id = format!("{agent_id}:demo-execution");
+            let compaction_id = format!("{agent_id}:demo-compaction");
             let created_at = read_desired_state_record_in_txn(
-                txn, Collection::AgentBehavior, agent_did, &behavior_id,
+                txn, Collection::Agent, node_did, &agent_id,
             ).await?.and_then(|(_, value)| value.get("created_at").cloned());
-            let mut backend = match load_inference_backend_in_txn(txn, agent_did, backend_id).await? {
+            let mut backend = match load_inference_backend_in_txn(txn, node_did, backend_id).await? {
                 Some(existing) => existing,
                 None => serde_json::from_value::<InferenceBackend>(serde_json::json!({
-                    "agent_did":agent_did,"backend_id":backend_id,"name":backend_id,
+                    "node_did":node_did,"backend_id":backend_id,"name":backend_id,
                     "provider_kind":"OpenAiCompatible","endpoint":model_endpoint,
                     "auth":BackendAuth::Unauthenticated,"max_concurrent":2,"max_queue_depth":100
                 }))?,
@@ -148,21 +147,21 @@ async fn seed_demo_documents(
             backend.endpoint = model_endpoint.to_owned();
             backend.enabled = true;
             let config: PackConfig = serde_json::from_value(serde_json::json!({
-                "agent_principal":principal,
-                "agent_behaviors":[{"agent_did":agent_did,"behavior_id":behavior_id,
+                "node":principal,
+                "agents":[{"node_did":node_did,"agent_id":agent_id,
                     "display_name":"Default","context_id":context_id,"inference_profile_id":profile_id,"created_at":created_at}],
-                "contexts":[{"agent_did":agent_did,"context_id":context_id,
+                "contexts":[{"node_did":node_did,"context_id":context_id,
                     "system_prompt":system_prompt,"tools_id":tools_id,"compaction_id":compaction_id}],
-                "compactions":[{"agent_did":agent_did,"compaction_id":compaction_id,
+                "compactions":[{"node_did":node_did,"compaction_id":compaction_id,
                     "strategy":"StripThenSummarize","threshold":0.75}],
-                "tools":[{"agent_did":agent_did,"tools_id":tools_id,"display_name":"Demo Tools",
+                "tools":[{"node_did":node_did,"tools_id":tools_id,"display_name":"Demo Tools",
                     "host":{"files":{"mode":"ReadOnly"},"bash":{"mode":"ReadOnly"}},
                     "built_ins":{"enable_goal_tools":true,"enable_goal_creation":false}}],
                 "inference_backends":[backend],
-                "inference_profiles":[{"agent_did":agent_did,"profile_id":profile_id,"display_name":"Demo",
+                "inference_profiles":[{"node_did":node_did,"profile_id":profile_id,"display_name":"Demo",
                     "backend_id":backend_id,"model_name":model_name,"context_window":131072,
                     "max_output_tokens":32768,"execution_id":execution_id}],
-                "inference_execution":[{"agent_did":agent_did,"execution_id":execution_id,
+                "inference_execution":[{"node_did":node_did,"execution_id":execution_id,
                     "max_turns":DEFAULT_MAX_TURNS,"stream_batch_ms":1000,
                     "stream_liveness_timeout_secs":60.min(deadline_secs.saturating_sub(1)),"deadline_duration_secs":deadline_secs}]
             }))?;
@@ -197,7 +196,7 @@ mod tests {
             .await?;
         }
         let backend: InferenceBackend = serde_json::from_value(json!({
-            "agent_did":"did:test:demo-a","backend_id":"backend","name":"Backend",
+            "node_did":"did:test:demo-a","backend_id":"backend","name":"Backend",
             "provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1",
             "auth":{"kind":"api_key","key":"preserved-key"},"max_concurrent":7,"max_queue_depth":17
         }))?;
@@ -230,7 +229,7 @@ mod tests {
                         .await?
                         .unwrap();
                     assert_eq!(other.endpoint, "http://localhost:8000/v1");
-                    let id = default_behavior_id_for_agent("did:test:demo-a");
+                    let id = default_agent_id_for_node("did:test:demo-a");
                     let (_, tools) = read_desired_state_record_in_txn(
                         txn,
                         Collection::Tools,

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use gents::AgentIdentity;
+use gents::NodeIdentity;
 
 use crate::mailbox_tool_turn::{configure_engineer_mailbox, request_state};
 use crate::support::accepted_turn::{
@@ -11,7 +11,7 @@ use crate::support::live_inference::wait_for_request_terminal;
 use crate::support::streaming_backend::{StreamChunk, StreamResponse};
 use crate::support::test_db;
 
-const BEHAVIOR: &str = "mailbox-turn-engineer";
+const AGENT: &str = "mailbox-turn-engineer";
 
 async fn queue_user_message(
     db: &crate::support::TestDb,
@@ -26,7 +26,7 @@ async fn queue_user_message(
         request_id,
         did,
         did,
-        BEHAVIOR,
+        AGENT,
         session_id,
         content,
         "interactive",
@@ -63,8 +63,8 @@ async fn messages_queued_behind_a_busy_turn_are_answered_by_one_inference() {
         AcceptedTurnSpec {
             backend_id: "queued-user-messages-backend",
             model: "queued-user-messages-model",
-            parent_behavior_id: BEHAVIOR,
-            configured_behavior_ids: &[BEHAVIOR],
+            parent_agent_id: AGENT,
+            configured_agent_ids: &[AGENT],
             request_id: asking,
             session_id,
             prompt,
@@ -75,7 +75,7 @@ async fn messages_queued_behind_a_busy_turn_are_answered_by_one_inference() {
             )],
             child_plans: Vec::new(),
             valid_until: None,
-            subagent_depth: None,
+            request_hop: None,
             request_setup: None,
         },
     )
@@ -83,8 +83,8 @@ async fn messages_queued_behind_a_busy_turn_are_answered_by_one_inference() {
     // The active turn's next provider turn waits on the test.
     prepared.backend.enable_dynamic_followups(prompt);
     configure_engineer_mailbox(&db, &did).await;
-    let identity: Arc<dyn AgentIdentity> = db.node_identity.clone();
-    let agent = gents::Gents::from_default_behavior_documents(
+    let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
+    let agent = gents::Gents::from_default_agent_documents(
         db.node.clone(),
         identity,
         gents::DocumentRuntimeOptions::default(),

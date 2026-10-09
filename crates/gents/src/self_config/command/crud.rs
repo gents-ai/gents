@@ -5,7 +5,7 @@ pub(super) fn resource_target(resource: &str) -> Option<SelfConfigTarget> {
 }
 
 impl ConfigCommandTool {
-    /// Familiar resource verbs adapt to the existing patch, persona and cleanup
+    /// Familiar resource verbs adapt to the existing patch, agent and cleanup
     /// owners. They neither widen category grants nor bypass per-resource guards.
     pub(super) async fn crud(&self, argv: &[String]) -> Result<Option<String>> {
         let Some(resource) = argv.first().map(String::as_str) else {
@@ -57,7 +57,7 @@ impl ConfigCommandTool {
             .pretty()
             .map(Some);
         }
-        if target == SelfConfigTarget::AgentBehavior {
+        if target == SelfConfigTarget::Agent {
             if verb == "update" {
                 let mut old = if preview {
                     vec!["preview".into(), "edit".into()]
@@ -65,7 +65,7 @@ impl ConfigCommandTool {
                     vec!["edit".into()]
                 };
                 old.extend_from_slice(args);
-                return self.behavior(&old).await.map(Some);
+                return self.agent(&old).await.map(Some);
             }
             return Ok(None);
         }
@@ -80,7 +80,7 @@ impl ConfigCommandTool {
                 | "schedule"
                 | "event-source"
                 | "execution"
-                | "subagent-target"
+                | "agent-target"
         );
         let handled = match verb {
             "list" | "update" => true,
@@ -129,7 +129,7 @@ impl ConfigCommandTool {
             anyhow::ensure!(!preview, "get is read-only; omit preview");
             let mut bound = vec!["get".into()];
             bound.extend_from_slice(args);
-            return self.behavior_context(&bound).await.map(Some);
+            return self.agent_context(&bound).await.map(Some);
         }
         if verb == "get" {
             anyhow::ensure!(
@@ -145,7 +145,7 @@ impl ConfigCommandTool {
             let mut old = vec![if preview { "preview" } else { "edit" }.into()];
             old.extend_from_slice(args);
             return match resource {
-                "context" => self.behavior_context(&old).await,
+                "context" => self.agent_context(&old).await,
                 "tools" => self.bound_document(resource, &old).await,
                 "profile" => self.profile(&old).await,
                 "backend" => self.backend(&old).await,
@@ -155,7 +155,7 @@ impl ConfigCommandTool {
         }
         let id = required_resource_id(args.first(), "document ID")?.clone();
         let create = verb == "create";
-        let (behavior, rest) = extract_behavior_target(&args[1..])?;
+        let (agent, rest) = extract_agent_target(&args[1..])?;
         let (allow_drop, rest) = extract_allow_drop(&rest)?;
         anyhow::ensure!(
             allow_drop.is_empty() || target == SelfConfigTarget::Tools,
@@ -168,11 +168,11 @@ impl ConfigCommandTool {
         } else {
             parse_patch(&rest, target)?
         };
-        if target == SelfConfigTarget::SubagentTarget {
-            if create && !patch.iter().any(|(field, _)| field == "target_agent_did") {
-                patch.push(("target_agent_did".into(), Some(json!(self.agent_did))));
+        if target == SelfConfigTarget::AgentTarget {
+            if create && !patch.iter().any(|(field, _)| field == "target_node_did") {
+                patch.push(("target_node_did".into(), Some(json!(self.node_did))));
             }
-            self.resolve_target_behavior(&id, &mut patch).await?;
+            self.resolve_target_agent(&id, &mut patch).await?;
         }
         let mut core = if matches!(
             target,
@@ -181,10 +181,10 @@ impl ConfigCommandTool {
                 | SelfConfigTarget::Schedule
                 | SelfConfigTarget::EventSource
         ) {
-            self.automation_core(target, &id, create, behavior.as_deref(), &patch)
+            self.automation_core(target, &id, create, agent.as_deref(), &patch)
                 .await?
         } else {
-            anyhow::ensure!(behavior.is_none(), "{resource} with an exact ID does not accept options.behavior; the ID identifies the document");
+            anyhow::ensure!(agent.is_none(), "{resource} with an exact ID does not accept options.agent; the ID identifies the document");
             self.core.clone()
         };
         let contextual = matches!(
@@ -193,8 +193,8 @@ impl ConfigCommandTool {
         );
         let mut bound = false;
         if contextual && !create {
-            if let Some(behavior) = self.document_behavior(target, &id).await? {
-                core = self.target_core(Some(&behavior), resource).await?;
+            if let Some(agent) = self.document_agent(target, &id).await? {
+                core = self.target_core(Some(&agent), resource).await?;
                 bound = true;
             }
         }
@@ -204,7 +204,7 @@ impl ConfigCommandTool {
             }
             SelfConfigTarget::InferenceBackend if create => {
                 let mut request = local_backend_create_request(
-                    self.agent_did.clone(),
+                    self.node_did.clone(),
                     id.clone(),
                     String::new(),
                     None,
@@ -222,7 +222,7 @@ impl ConfigCommandTool {
         };
         if contextual {
             if bound {
-                request = protect_working_behavior(request);
+                request = protect_working_agent(request);
             }
             let validate = request.validate;
             let expected_id = id.clone();
@@ -232,14 +232,14 @@ impl ConfigCommandTool {
                 Box::pin(async move {
                     if !create {
                         if bound {
-                            anyhow::ensure!(anchor.ref_id(target.unique_field()).as_deref() == Some(id.as_str()), "document binding changed; get the behavior again before updating {id:?}");
+                            anyhow::ensure!(anchor.ref_id(target.unique_field()).as_deref() == Some(id.as_str()), "document binding changed; get the agent again before updating {id:?}");
                         } else {
                             let owner = anchor
                                 .doc
-                                .get("agent_did")
+                                .get("node_did")
                                 .and_then(Value::as_str)
                                 .context("missing owner")?;
-                            anyhow::ensure!(document_behavior_in_txn(txn, target, owner, &id).await?.is_none(), "document {id:?} was selected during this call; retry the update against its current behavior");
+                            anyhow::ensure!(document_agent_in_txn(txn, target, owner, &id).await?.is_none(), "document {id:?} was selected during this call; retry the update against its current agent");
                         }
                     }
                     validation.await
@@ -271,10 +271,10 @@ impl ConfigCommandTool {
                 | SelfConfigTarget::Schedule
                 | SelfConfigTarget::EventSource
         ) {
-            let owner = self.agent_did.clone();
+            let owner = self.node_did.clone();
             request.on_create = Box::new(move |id, doc| {
                 doc.insert(target.unique_field().into(), json!(id));
-                doc.insert("agent_did".into(), json!(owner));
+                doc.insert("node_did".into(), json!(owner));
                 Ok(())
             });
         }
@@ -290,16 +290,16 @@ impl ConfigCommandTool {
         target: SelfConfigTarget,
         id: &str,
         create: bool,
-        behavior: Option<&str>,
+        agent: Option<&str>,
         patch: &SelfConfigPatch,
     ) -> Result<SelfConfigCore> {
-        if behavior.is_some()
+        if agent.is_some()
             || !matches!(target, SelfConfigTarget::Task | SelfConfigTarget::Trigger)
             || target == SelfConfigTarget::Task && create
         {
-            return self.target_core(behavior, "automation").await;
+            return self.target_core(agent, "automation").await;
         }
-        let owner = &self.agent_did;
+        let owner = &self.node_did;
         let task = crate::config_client::ConfigAccess::transact_local(
             &self.node,
             Some(self.core.identity()?),
@@ -337,11 +337,11 @@ impl ConfigCommandTool {
             },
         )
         .await?;
-        let behavior = task
+        let agent = task
             .as_ref()
-            .and_then(|(_, doc)| doc.get("behavior_id"))
+            .and_then(|(_, doc)| doc.get("agent_id"))
             .and_then(Value::as_str);
-        self.target_core(behavior, "automation").await
+        self.target_core(agent, "automation").await
     }
 
     fn ensure_crud_resource(&self, target: SelfConfigTarget) -> Result<()> {
@@ -349,7 +349,7 @@ impl ConfigCommandTool {
             target,
             SelfConfigTarget::AgentContext | SelfConfigTarget::Tools
         ) {
-            anyhow::ensure!(self.categories.contains("persona"), "exact-ID context/tools operations require the behavior catalog grant; use options.behavior to edit your selected configuration");
+            anyhow::ensure!(self.categories.contains("node"), "exact-ID context/tools operations require the agent catalog grant; use options.agent to edit your selected configuration");
         }
         if target == SelfConfigTarget::AgentContext {
             return Ok(());
@@ -360,17 +360,13 @@ impl ConfigCommandTool {
         })
     }
 
-    async fn document_behavior(
-        &self,
-        target: SelfConfigTarget,
-        id: &str,
-    ) -> Result<Option<String>> {
-        let owner = &self.agent_did;
+    async fn document_agent(&self, target: SelfConfigTarget, id: &str) -> Result<Option<String>> {
+        let owner = &self.node_did;
         crate::config_client::ConfigAccess::transact_local(
             &self.node,
             Some(self.core.identity()?),
-            "self_config.document_behavior",
-            |txn| Box::pin(async move { document_behavior_in_txn(txn, target, owner, id).await }),
+            "self_config.document_agent",
+            |txn| Box::pin(async move { document_agent_in_txn(txn, target, owner, id).await }),
         )
         .await
     }
@@ -456,11 +452,11 @@ async fn document_referrers(
     id: &str,
 ) -> Result<Vec<Value>> {
     let (collection, field, key) = if target == SelfConfigTarget::AgentContext {
-        ("AgentBehavior", "context_id", "behavior_id")
+        ("Agent", "context_id", "agent_id")
     } else {
         ("AgentContext", "tools_id", "context_id")
     };
-    let query = format!("{{ {collection}(filter: {{agent_did: {{_eq: \"{}\"}}, {field}: {{_eq: \"{}\"}}}}) {{{key}}} }}", escape_graphql_string(owner), escape_graphql_string(id));
+    let query = format!("{{ {collection}(filter: {{node_did: {{_eq: \"{}\"}}, {field}: {{_eq: \"{}\"}}}}) {{{key}}} }}", escape_graphql_string(owner), escape_graphql_string(id));
     let response = txn.execute(&query).await?;
     response["data"][collection]
         .as_array()
@@ -468,37 +464,37 @@ async fn document_referrers(
         .context("reference query missing rows")
 }
 
-async fn document_behavior_in_txn(
+async fn document_agent_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     target: SelfConfigTarget,
     owner: &str,
     id: &str,
 ) -> Result<Option<String>> {
     let rows = document_referrers(txn, target, owner, id).await?;
-    anyhow::ensure!(rows.len() <= 1, "targeted configuration requires an unshared Context and Tools; clone the working behavior before editing shared configuration");
+    anyhow::ensure!(rows.len() <= 1, "targeted configuration requires an unshared Context and Tools; clone the working agent before editing shared configuration");
     let Some(row) = rows.first() else {
         return Ok(None);
     };
     if target == SelfConfigTarget::AgentContext {
         return Ok(Some(
-            row["behavior_id"]
+            row["agent_id"]
                 .as_str()
-                .context("referring behavior ID missing")?
+                .context("referring agent ID missing")?
                 .to_owned(),
         ));
     }
     let context = row["context_id"]
         .as_str()
         .context("referring context ID missing")?;
-    let behaviors = document_referrers(txn, SelfConfigTarget::AgentContext, owner, context).await?;
-    anyhow::ensure!(behaviors.len() <= 1, "targeted configuration requires an unshared Context and Tools; clone the working behavior before editing shared configuration");
-    behaviors
+    let agents = document_referrers(txn, SelfConfigTarget::AgentContext, owner, context).await?;
+    anyhow::ensure!(agents.len() <= 1, "targeted configuration requires an unshared Context and Tools; clone the working agent before editing shared configuration");
+    agents
         .first()
         .map(|row| {
-            row["behavior_id"]
+            row["agent_id"]
                 .as_str()
                 .map(str::to_owned)
-                .context("referring behavior ID missing")
+                .context("referring agent ID missing")
         })
         .transpose()
 }

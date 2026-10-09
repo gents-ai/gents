@@ -261,16 +261,16 @@ fn same_probe_inputs(previous: &InferenceBackend, current: &InferenceBackend) ->
         && previous.discovery_timeout_secs == current.discovery_timeout_secs
 }
 
-/// Node + principal used to refresh and resolve agent-scoped OAuth credentials
+/// Embedded database and node DID used to refresh and resolve node-scoped OAuth credentials
 /// during a probe cycle. Refresh and discovery go through the existing
 /// OAuth credential owner (`bootstrap_oauth_client` and the bearer it mints);
 /// this module never touches tokens directly.
 pub struct OAuthProbeContext<'a> {
     pub node: Arc<EmbeddedNode>,
-    pub principal_did: &'a str,
+    pub node_did: &'a str,
 }
 
-/// Refresh (if stale) and read the invoking principal's OAuthCredential through
+/// Refresh (if stale) and read the invoking node's OAuthCredential through
 /// the existing credential owner. Returns the credential document needed by
 /// `discover_models`' OAuth path; failures keep the classified auth-error copy.
 async fn oauth_credential_for_probe(
@@ -282,7 +282,7 @@ async fn oauth_credential_for_probe(
     };
     let (bearer, mut credential) = crate::oauth_http::bootstrap_oauth_client(
         context.node.clone(),
-        context.principal_did,
+        context.node_did,
         provider,
         oauth_refresh_kind(backend.provider_kind),
         oauth_product(backend.provider_kind),
@@ -347,25 +347,25 @@ fn probe_timeout(backend: &InferenceBackend) -> Duration {
 
 /// Persist a successful discovery using the registry's atomic scope merge.
 /// The credential scope is exact: `None` is the shared-credential scope,
-/// `Some(principal)` is that principal's OAuth scope. Failures never write,
+/// `Some(node)` is that node's OAuth scope. Failures never write,
 /// so a previous catalog and its `observed_at` are preserved.
 async fn record_discovered_catalog(
     node: &EmbeddedNode,
     backend: &InferenceBackend,
-    principal_did: Option<&str>,
+    node_did: Option<&str>,
     models: Vec<crate::document_config::AdvertisedModel>,
 ) {
     let catalog = crate::document_config::BackendModelCatalog {
-        agent_did: principal_did.map(str::to_string),
+        node_did: node_did.map(str::to_string),
         observed_at: Utc::now().to_rfc3339(),
         models,
     };
     if let Err(error) = crate::backend_registry::record_model_catalog(node, backend, catalog).await
     {
         tracing::warn!(
-            agent_did = %backend.agent_did,
+            node_did = %backend.node_did,
             backend_id = %backend.backend_id,
-            credential_scope = principal_did.unwrap_or("shared"),
+            credential_scope = node_did.unwrap_or("shared"),
             error = %error,
             "backend probe: discovered models but could not record the catalog; \
              previous observation preserved"
@@ -402,14 +402,14 @@ async fn probe_selected_backends(
     let mut probed_ids = HashSet::new();
 
     for backend in backends {
-        if backend.provider_kind.is_agent_scoped_oauth() && oauth.is_none() {
+        if backend.provider_kind.is_node_scoped_oauth() && oauth.is_none() {
             continue;
         }
         probed_ids.insert(backend.backend_id.clone());
         if selected.is_some_and(|due| !due.contains(&backend.backend_id)) {
             continue;
         }
-        if backend.provider_kind.is_agent_scoped_oauth() {
+        if backend.provider_kind.is_node_scoped_oauth() {
             let Some(context) = oauth.as_ref() else {
                 continue;
             };
@@ -431,7 +431,7 @@ async fn probe_selected_backends(
                             record_discovered_catalog(
                                 context.node.as_ref(),
                                 backend,
-                                Some(context.principal_did),
+                                Some(context.node_did),
                                 models,
                             )
                             .await;
@@ -539,7 +539,7 @@ async fn record_probe_event(
     if event == ProbeEvent::ProbeSuccess {
         match crate::backend_registry::lookup_backend_observation(
             node,
-            &backend.agent_did,
+            &backend.node_did,
             &backend.backend_id,
         )
         .await
@@ -554,7 +554,7 @@ async fn record_probe_event(
                 outcome.promotable.push(backend.backend_id.clone());
             }
             Ok(_) => {}
-            Err(error) => tracing::warn!(agent_did = %backend.agent_did,
+            Err(error) => tracing::warn!(node_did = %backend.node_did,
                 backend_id = %backend.backend_id, %error,
                 "backend probe: could not read promotion observation"),
         }
@@ -578,9 +578,9 @@ pub async fn run_backend_probe_cycle(
     client: &reqwest::Client,
     health_map: &BackendHealthMap,
     options: &BackendProberOptions,
-    principal_did: &str,
+    node_did: &str,
 ) -> ProbeCycleOutcome {
-    run_scheduled_backend_probe_cycle(node, client, health_map, options, principal_did, None).await
+    run_scheduled_backend_probe_cycle(node, client, health_map, options, node_did, None).await
 }
 
 async fn run_scheduled_backend_probe_cycle(
@@ -588,10 +588,10 @@ async fn run_scheduled_backend_probe_cycle(
     client: &reqwest::Client,
     health_map: &BackendHealthMap,
     options: &BackendProberOptions,
-    principal_did: &str,
+    node_did: &str,
     schedule: Option<(&mut ProbeSchedule, bool)>,
 ) -> ProbeCycleOutcome {
-    let backends = match list_enabled_backends_for_agent(node.as_ref(), principal_did).await {
+    let backends = match list_enabled_backends_for_agent(node.as_ref(), node_did).await {
         Ok(backends) => backends,
         Err(error) => {
             tracing::warn!(error = %error, "backend probe: could not list backends");
@@ -610,7 +610,7 @@ async fn run_scheduled_backend_probe_cycle(
         options,
         Some(OAuthProbeContext {
             node: node.clone(),
-            principal_did,
+            node_did,
         }),
         selected.as_ref(),
     )
@@ -624,7 +624,7 @@ async fn run_scheduled_backend_probe_cycle(
     }) {
         match set_backend_probe_status_with_last_probe(
             node.as_ref(),
-            &backend.agent_did,
+            &backend.node_did,
             &backend.backend_id,
             "healthy",
             now,
@@ -632,12 +632,12 @@ async fn run_scheduled_backend_probe_cycle(
         .await
         {
             Ok(()) => tracing::info!(
-                agent_did = %backend.agent_did,
+                node_did = %backend.node_did,
                 backend_id = %backend.backend_id,
                 "backend probe: promoted shared document unknown -> healthy"
             ),
             Err(error) => tracing::warn!(
-                agent_did = %backend.agent_did,
+                node_did = %backend.node_did,
                 backend_id = %backend.backend_id,
                 error = %error,
                 "backend probe: reachable but failed to persist promotion"
@@ -654,7 +654,7 @@ pub fn spawn_backend_prober(
     options: BackendProberOptions,
     health_events_tx: mpsc::Sender<()>,
     cancel: CancellationToken,
-    principal_did: String,
+    node_did: String,
 ) -> tokio::task::JoinHandle<()> {
     let mut changes = node.subscribe_document_changes();
     tokio::spawn(async move {
@@ -706,7 +706,7 @@ pub fn spawn_backend_prober(
                 &client,
                 &health_map,
                 &options,
-                &principal_did,
+                &node_did,
                 Some((&mut schedule, periodic)),
             )
             .await;
@@ -1003,7 +1003,7 @@ mod tests {
 
     fn backend(backend_id: &str, endpoint: String) -> InferenceBackend {
         InferenceBackend {
-            agent_did: "did:key:backend-owner".to_string(),
+            node_did: "did:key:backend-owner".to_string(),
             backend_id: backend_id.to_string(),
             name: backend_id.to_string(),
             provider_kind: crate::backend_provider::BackendProviderKind::OpenAiCompatible,
@@ -1046,7 +1046,7 @@ mod tests {
         upsert_backend_configuration(node, backend).await;
         crate::backend_registry::set_backend_probe_status(
             node,
-            &backend.agent_did,
+            &backend.node_did,
             &backend.backend_id,
             status,
         )
@@ -1105,7 +1105,7 @@ mod tests {
             loop {
                 let observation = crate::backend_registry::lookup_backend_observation(
                     node,
-                    &backend.agent_did,
+                    &backend.node_did,
                     &backend.backend_id,
                 )
                 .await
@@ -1142,7 +1142,7 @@ mod tests {
             },
             events,
             cancel.clone(),
-            initial.agent_did.clone(),
+            initial.node_did.clone(),
         ));
         wait_for_promotion(&node, &initial).await;
         let initial_health = health.get(&initial.backend_id).await.unwrap();
@@ -1187,7 +1187,7 @@ mod tests {
         assert_modeled_probe(None, &failing_before, "probeFail");
         let observation = crate::backend_registry::lookup_backend_observation(
             &node,
-            &reachable.agent_did,
+            &reachable.node_did,
             &reachable.backend_id,
         )
         .await
@@ -1206,7 +1206,7 @@ mod tests {
         .unwrap();
         crate::backend_registry::set_backend_probe_status(
             &node,
-            &failing.agent_did,
+            &failing.node_did,
             &failing.backend_id,
             "healthy",
         )
@@ -1278,7 +1278,7 @@ mod tests {
             .unwrap()
             .with_removals(vec![(
                 crate::Collection::InferenceBackend,
-                value.agent_did.clone(),
+                value.node_did.clone(),
                 value.backend_id.clone(),
             )])
             .unwrap();
@@ -1509,12 +1509,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn runtime_probe_cycle_scopes_same_named_backends_to_its_principal() {
+    async fn runtime_probe_cycle_scopes_same_named_backends_to_its_node() {
         let node = Arc::new(test_node().await);
         let listener = ModelsListener::start();
         let local = backend("same", listener.endpoint());
         let mut foreign = backend("same", "http://127.0.0.1:1/v1".into());
-        foreign.agent_did = "did:key:foreign-owner".into();
+        foreign.node_did = "did:key:foreign-owner".into();
         seed_backend_observation(&node, &local, "unknown").await;
         seed_backend_observation(&node, &foreign, "unknown").await;
         let health = BackendHealthMap::new();
@@ -1523,7 +1523,7 @@ mod tests {
             &reqwest::Client::new(),
             &health,
             &probe_options(),
-            &local.agent_did,
+            &local.node_did,
         )
         .await;
         assert_eq!(outcome.promotable, vec!["same"]);
@@ -1533,7 +1533,7 @@ mod tests {
         );
         let foreign_observation = crate::backend_registry::lookup_backend_observation(
             &node,
-            &foreign.agent_did,
+            &foreign.node_did,
             &foreign.backend_id,
         )
         .await
@@ -1554,7 +1554,7 @@ mod tests {
         // so the runtime-level prober must leave it alone entirely.
         let mut codex = backend("codex", "http://127.0.0.1:1/v1".to_string());
         codex.provider_kind = crate::backend_provider::BackendProviderKind::ChatGptCodex;
-        codex.auth = crate::document_config::BackendAuth::PrincipalOAuth { account_ref: None };
+        codex.auth = crate::document_config::BackendAuth::NodeOAuth { account_ref: None };
         let outcome = probe_backends_cycle(
             &node,
             &client,
@@ -1576,7 +1576,7 @@ mod tests {
             crate::claude_subscription::DEFAULT_BACKEND_ENDPOINT.to_string(),
         );
         claude.provider_kind = crate::backend_provider::BackendProviderKind::ClaudeCliSubscription;
-        claude.auth = crate::document_config::BackendAuth::PrincipalOAuth { account_ref: None };
+        claude.auth = crate::document_config::BackendAuth::NodeOAuth { account_ref: None };
         claude
     }
 
@@ -1587,7 +1587,7 @@ mod tests {
     ) -> InferenceBackend {
         let mut backend = backend(id, endpoint.to_string());
         backend.provider_kind = kind;
-        backend.auth = crate::document_config::BackendAuth::PrincipalOAuth { account_ref: None };
+        backend.auth = crate::document_config::BackendAuth::NodeOAuth { account_ref: None };
         backend
     }
 
@@ -1608,7 +1608,7 @@ mod tests {
             BackendHealthMap::new(),
         );
         let mut claude = claude_backend();
-        claude.agent_did = did.to_string();
+        claude.node_did = did.to_string();
         let models = ModelsListener::start();
         claude.endpoint = models.endpoint();
         seed_backend_observation(&node, &claude, "unknown").await;
@@ -1621,7 +1621,7 @@ mod tests {
             &options,
             Some(OAuthProbeContext {
                 node: node.clone(),
-                principal_did: did,
+                node_did: did,
             }),
         )
         .await;
@@ -1639,7 +1639,7 @@ mod tests {
         let account = crate::oauth_credential::OAuthCredential {
             doc_id: None,
             credential_id: format!("{provider}:{did}:acct-b"),
-            agent_did: did.to_string(),
+            node_did: did.to_string(),
             provider: provider.to_string(),
             access_token: "access-TEST".into(),
             refresh_token: "refresh-TEST".into(),
@@ -1668,8 +1668,8 @@ mod tests {
             "grok",
             "https://cli-chat-proxy.grok.com/v1",
         );
-        grok.agent_did = did.to_string();
-        grok.auth = crate::document_config::BackendAuth::PrincipalOAuth {
+        grok.node_did = did.to_string();
+        grok.auth = crate::document_config::BackendAuth::NodeOAuth {
             account_ref: Some("acct-b".into()),
         };
         let models = ModelsListener::start();
@@ -1684,7 +1684,7 @@ mod tests {
             &options,
             Some(OAuthProbeContext {
                 node: node.clone(),
-                principal_did: did,
+                node_did: did,
             }),
         )
         .await;
@@ -1719,8 +1719,8 @@ mod tests {
             "grok",
             "https://cli-chat-proxy.grok.com/v1",
         );
-        grok.agent_did = did.to_string();
-        grok.auth = crate::document_config::BackendAuth::PrincipalOAuth {
+        grok.node_did = did.to_string();
+        grok.auth = crate::document_config::BackendAuth::NodeOAuth {
             account_ref: Some("acct-b".into()),
         };
         let models = ModelsListener::start();
@@ -1735,7 +1735,7 @@ mod tests {
             &options,
             Some(OAuthProbeContext {
                 node: node.clone(),
-                principal_did: did,
+                node_did: did,
             }),
         )
         .await;
@@ -1775,7 +1775,7 @@ mod tests {
             "grok",
             "https://cli-chat-proxy.grok.com/v1",
         );
-        grok.agent_did = did.to_string();
+        grok.node_did = did.to_string();
         let models = ModelsListener::start();
         grok.endpoint = models.endpoint();
         seed_backend_observation(&node, &grok, "unknown").await;
@@ -1789,7 +1789,7 @@ mod tests {
                 &options,
                 Some(OAuthProbeContext {
                     node: node.clone(),
-                    principal_did: did,
+                    node_did: did,
                 }),
             )
             .await;
@@ -1835,7 +1835,7 @@ mod tests {
                 &options,
                 Some(OAuthProbeContext {
                     node: node.clone(),
-                    principal_did: did,
+                    node_did: did,
                 }),
             )
             .await;
@@ -1879,7 +1879,7 @@ mod tests {
             BackendHealthMap::new(),
         );
         let mut claude = claude_backend();
-        claude.agent_did = did.to_string();
+        claude.node_did = did.to_string();
         let models = ModelsListener::start();
         claude.endpoint = models.endpoint();
         seed_backend_observation(&node, &claude, "unknown").await;
@@ -1906,7 +1906,7 @@ mod tests {
             &options,
             Some(OAuthProbeContext {
                 node: node.clone(),
-                principal_did: did,
+                node_did: did,
             }),
         )
         .await;
@@ -1970,10 +1970,10 @@ mod tests {
         );
         let models = ModelsListener::start();
         let mut claude = claude_backend();
-        claude.agent_did = did.to_string();
+        claude.node_did = did.to_string();
         claude.endpoint = models.endpoint();
         let mut next = backend("next", models.endpoint());
-        next.agent_did = did.to_string();
+        next.node_did = did.to_string();
         seed_backend_observation(&node, &claude, "unknown").await;
         seed_backend_observation(&node, &next, "unknown").await;
 
@@ -2003,7 +2003,7 @@ mod tests {
                 &options,
                 Some(OAuthProbeContext {
                     node: node.clone(),
-                    principal_did: did,
+                    node_did: did,
                 }),
             ),
         )
@@ -2049,7 +2049,7 @@ mod tests {
             &options,
             Some(OAuthProbeContext {
                 node: node.clone(),
-                principal_did: "did:key:z6MkNobody",
+                node_did: "did:key:z6MkNobody",
             }),
         )
         .await;
@@ -2059,7 +2059,7 @@ mod tests {
             .last_error
             .clone()
             .unwrap_or_default()
-            .contains("gents codex-login --agent-did did:key:z6MkNobody"));
+            .contains("gents codex-login --node-did did:key:z6MkNobody"));
     }
 
     #[tokio::test]
@@ -2098,7 +2098,7 @@ mod tests {
         assert_eq!(K::XaiGrokOAuth.oauth_provider(), Some("xai-oauth"));
         assert_eq!(K::ChatGptCodex.oauth_provider(), Some("chatgpt-codex"));
         assert_eq!(K::OpenAiCompatible.oauth_provider(), None);
-        assert!(K::ClaudeCliSubscription.is_agent_scoped_oauth());
+        assert!(K::ClaudeCliSubscription.is_node_scoped_oauth());
     }
 
     #[tokio::test]

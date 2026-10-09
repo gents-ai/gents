@@ -2,7 +2,7 @@
   "manifest_version": 1,
   "name": "eval_trigger",
   "version": "1.0.0",
-  "description": "Eval-runner seed-stage subject: one behavior, one task fired by an EventSource on SeedItem.",
+  "description": "Eval-runner seed-stage subject: one agent, one task fired by an EventSource on SeedItem.",
   "authors": [
     "gents-ai contributors"
   ],
@@ -12,15 +12,15 @@
   "kind": "documents",
   "assets": [
     "README.md",
-    "agent_behaviors/seeded/system_prompt.md",
+    "agents/seeded/system_prompt.md",
     "pack_config.json"
   ],
   "config": "pack_config.json",
   "inference_slots": [
     {
       "name": "primary",
-      "description": "Runs the seeded behavior.",
-      "behaviors": [
+      "description": "Runs the seeded agent.",
+      "agents": [
         "seeded"
       ]
     }

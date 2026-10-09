@@ -16,12 +16,12 @@ where
     Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
 }
 
-pub(super) fn default_display_name_for_did(agent_did: &str) -> String {
-    agent_did
+pub(super) fn default_display_name_for_did(node_did: &str) -> String {
+    node_did
         .rsplit(':')
         .next()
         .filter(|segment| !segment.trim().is_empty())
-        .unwrap_or(agent_did)
+        .unwrap_or(node_did)
         .to_string()
 }
 

@@ -3,8 +3,8 @@ use serde_json::json;
 
 #[test]
 fn task_templates_and_goal_settings_keep_existing_authoring_guards() {
-    let base = json!({"agent_did":"owner", "task_id":"task", "behavior_id":"behavior",
-        "prompt_template":"{{ node.node_did }} {{ node.behavior_id }} {{ ctx.now }} {{ doc.name }}"});
+    let base = json!({"node_did":"owner", "task_id":"task", "agent_id":"behavior",
+        "prompt_template":"{{ node.node_did }} {{ node.agent_id }} {{ ctx.now }} {{ doc.name }}"});
     let decode = |value| serde_json::from_value::<Task>(value).unwrap();
     decode(base.clone()).validate().unwrap();
     let mut goal = base.clone();
@@ -48,7 +48,7 @@ fn task_templates_and_goal_settings_keep_existing_authoring_guards() {
 fn task_hook_admission_matches_existing_lean_guards() {
     let task = |hooks| {
         serde_json::from_value::<Task>(json!({
-            "agent_did":"owner", "task_id":"task", "behavior_id":"behavior",
+            "node_did":"owner", "task_id":"task", "agent_id":"behavior",
             "prompt_template":"literal", "hooks":hooks
         }))
         .unwrap()
@@ -85,7 +85,7 @@ fn task_hook_admission_matches_existing_lean_guards() {
 #[test]
 fn task_templates_naming_what_the_engine_cannot_provide_are_refused() {
     let task = |field: &str, template: &str| {
-        let mut value = json!({"agent_did":"owner", "task_id":"task", "behavior_id":"behavior",
+        let mut value = json!({"node_did":"owner", "task_id":"task", "agent_id":"behavior",
             "prompt_template":"{{ doc.name }}"});
         value[field] = json!(template);
         serde_json::from_value::<Task>(value).unwrap()
@@ -127,7 +127,7 @@ fn task_templates_naming_what_the_engine_cannot_provide_are_refused() {
     task(
         "prompt_template",
         "{{ doc.customer.name | upper }} {{ args.mode | default('review') }} \
-         {{ event.correlation }} {{ node.behavior_id }} at {{ ctx.now }}\
+         {{ event.correlation }} {{ node.agent_id }} at {{ ctx.now }}\
          {% for row in group.docs %} {{ row.title | default('untitled') }}{% endfor %}\
          {{ doc.rows | select(args.test_name, doc.threshold) | list }}",
     )

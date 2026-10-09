@@ -86,8 +86,8 @@ async fn resolve_created_agent_request_doc_id(
 pub(crate) async fn write_pending_agent_request_with_lineage_workspace_and_conversation_title(
     node: &EmbeddedNode,
     actor: ::identity::Did,
-    agent_did: &str,
-    behavior_id: &str,
+    node_did: &str,
+    agent_id: &str,
     content: &str,
     execution_origin: ExecutionOrigin,
     trigger_lineage: TriggerLineage,
@@ -109,8 +109,8 @@ pub(crate) async fn write_pending_agent_request_with_lineage_workspace_and_conve
         .map(str::to_string)
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let create = build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title(
-        agent_did,
-        behavior_id,
+        node_did,
+        agent_id,
         content,
         execution_origin,
         trigger_lineage,
@@ -196,13 +196,13 @@ async fn publish_graph_root_request(
 /// Callers which need to stage additional controller documents in the same
 /// transaction can precompute the request/session/retry identity, then pass the
 /// returned immutable create document to their atomic submit seam. The ordinary
-/// trigger path above deliberately keeps its existing create behavior.
+/// trigger path above deliberately keeps its existing create path.
 /// `requester_did` is the requester that owns the existing session a runtime
 /// fire is delivered into; `None` is the target itself.
 #[allow(clippy::too_many_arguments)]
 pub async fn build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title(
-    agent_did: &str,
-    behavior_id: &str,
+    node_did: &str,
+    agent_id: &str,
     content: &str,
     execution_origin: ExecutionOrigin,
     trigger_lineage: TriggerLineage,
@@ -255,14 +255,14 @@ pub async fn build_signed_pending_agent_request_with_lineage_workspace_and_conve
     };
     let admission = match trigger_lineage.trigger_kind.as_deref() {
         Some("manual") | None => {
-            gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(agent_did)
+            gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(node_did)
         }
         Some("event" | "schedule") => {
             let source = trigger_lineage.trigger_id.as_deref().ok_or_else(|| {
                 anyhow::anyhow!("runtime trigger request requires a durable trigger id")
             })?;
             gents_protocol::request_admission::AgentRequestAdmissionRecord::runtime_automated_trigger(
-                agent_did, source,
+                node_did, source,
             )
         }
         Some(kind) => anyhow::bail!("unsupported runtime request trigger kind {kind}"),
@@ -270,8 +270,8 @@ pub async fn build_signed_pending_agent_request_with_lineage_workspace_and_conve
     let identity = RequestIdentity {
         requester_did: requester_did.map(str::to_owned),
         request_id: request_id.to_string(),
-        agent_did: agent_did.to_string(),
-        behavior_id: behavior_id.to_string(),
+        node_did: node_did.to_string(),
+        agent_id: agent_id.to_string(),
         session_id: session_id.to_string(),
         content: content.to_string(),
         execution_origin,
@@ -296,11 +296,11 @@ pub async fn build_signed_pending_agent_request_with_lineage_workspace_and_conve
 /// The identity fields every writer decides for a fresh `AgentRequest`:
 /// who it is for, what session it belongs to, and what it says.
 pub struct RequestIdentity {
-    /// Defaults to the target agent when omitted.
+    /// Defaults to the target node when omitted.
     pub requester_did: Option<String>,
     pub request_id: String,
-    pub agent_did: String,
-    pub behavior_id: String,
+    pub node_did: String,
+    pub agent_id: String,
     pub session_id: String,
     pub content: String,
     pub execution_origin: ExecutionOrigin,
@@ -309,7 +309,7 @@ pub struct RequestIdentity {
 
 /// Causal lineage: the logical and physical identifiers of the request (and,
 /// for `agent_new`/`agent_message`, the tool call) that caused this one,
-/// plus the resulting causal hop (`subagent_depth`). A request-only link is a
+/// plus the resulting causal hop (`request_hop`). A request-only link is a
 /// control continuation that copies its predecessor's hop.
 #[derive(Default)]
 pub struct ParentLink {
@@ -346,7 +346,7 @@ pub struct RequestSpec {
     pub trigger_lineage: TriggerLineage,
     pub trigger_doc_id: Option<String>,
     pub workspace: Option<WorkspaceLineage>,
-    pub subagent: Option<ParentLink>,
+    pub parent: Option<ParentLink>,
     /// `None` means this is not a retry: `retry_root_request` defaults to
     /// this request's own id and `max_retries` to `DEFAULT_REQUEST_MAX_RETRIES`.
     pub retry: Option<RetryLink>,
@@ -358,8 +358,8 @@ pub struct RequestSpec {
 impl RequestSpec {
     /// A `RequestSpec` with only identity and admission decided; every
     /// other field takes the default a writer wants when it isn't a
-    /// trigger-lineage-carrying, workspace-bound, subagent-linked, retried,
-    /// request. Callers set only what they need
+    /// trigger-lineage-carrying, workspace-bound, agent-target-linked,
+    /// retried, request. Callers set only what they need
     /// via struct-update syntax:
     /// `RequestSpec { retry_key: Some(key), ..RequestSpec::new(RequestPurpose::Normal, identity, admission) }`.
     pub fn new(
@@ -375,7 +375,7 @@ impl RequestSpec {
             trigger_lineage: TriggerLineage::default(),
             trigger_doc_id: None,
             workspace: None,
-            subagent: None,
+            parent: None,
             retry: None,
             input: Default::default(),
             retry_key: None,
@@ -385,11 +385,11 @@ impl RequestSpec {
 }
 
 /// How the built `AgentRequestCreate` is signed: as the already-registered
-/// runtime principal named by `spec.identity.agent_did` (the common case for
+/// runtime node named by `spec.identity.node_did` (the common case for
 /// runtime-authored requests), or with an explicit caller-held identity.
 pub enum RequestSigner<'a> {
     RegisteredTarget,
-    Identity(&'a dyn crate::identity::AgentIdentity),
+    Identity(&'a dyn crate::identity::NodeIdentity),
 }
 
 /// Build and stamp one `AgentRequestCreate`, unsigned. This is the sole
@@ -413,7 +413,7 @@ pub(crate) fn build_request(
         trigger_lineage,
         trigger_doc_id,
         workspace,
-        subagent,
+        parent,
         retry,
         input,
         retry_key,
@@ -421,14 +421,14 @@ pub(crate) fn build_request(
     } = spec;
 
     let request_id = identity.request_id.clone();
-    let agent_did = identity.agent_did.clone();
+    let node_did = identity.node_did.clone();
 
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
         purpose,
         identity.request_id,
-        identity.agent_did,
-        identity.requester_did.unwrap_or(agent_did),
-        identity.behavior_id,
+        identity.node_did,
+        identity.requester_did.unwrap_or(node_did),
+        identity.agent_id,
         identity.session_id,
         identity.content,
         identity.execution_origin.as_str(),
@@ -450,13 +450,13 @@ pub(crate) fn build_request(
 
     if let Some(workspace) = workspace {
         create.workspace_id = workspace.workspace_id;
-        create.workspace_owner_agent_did = workspace.workspace_owner_agent_did;
+        create.workspace_owner_node_did = workspace.workspace_owner_node_did;
         create.workspace_authority = workspace.workspace_authority;
         create.workspace_seal_hash = workspace.workspace_seal_hash;
     }
 
-    create.subagent_depth = subagent.as_ref().map_or(0, |link| link.depth);
-    if let Some(link) = subagent {
+    create.request_hop = parent.as_ref().map_or(0, |link| link.depth);
+    if let Some(link) = parent {
         create.caused_by_parent_request_id = Some(link.parent_request_id);
         create.caused_by_parent_request_doc_id = Some(link.parent_request_doc_id);
         create.caused_by_parent_tool_call_id = link.parent_tool_call_id;
@@ -487,7 +487,7 @@ pub(crate) fn build_request(
 }
 
 /// Sign an `AgentRequestCreate` built by `build_request`, either as the
-/// already-registered runtime principal named by `create.agent_did` or with
+/// already-registered runtime node named by `create.node_did` or with
 /// an explicit caller-held identity.
 pub(crate) async fn sign_request(
     create: &mut gents_protocol::request_admission::AgentRequestCreate,
@@ -531,18 +531,18 @@ pub(crate) async fn write_pending_title_request(
     );
     let identity = RequestIdentity {
         request_id: uuid::Uuid::new_v4().to_string(),
-        agent_did: parent.agent_did.clone(),
-        requester_did: Some(parent.agent_did.clone()),
-        behavior_id: parent.behavior_id.clone(),
+        node_did: parent.node_did.clone(),
+        requester_did: Some(parent.node_did.clone()),
+        agent_id: parent.agent_id.clone(),
         session_id: parent.session_id.clone(),
         content,
         execution_origin: ExecutionOrigin::Interactive,
         created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
     };
     let admission =
-        AgentRequestAdmissionRecord::runtime_local_control(&parent.agent_did, &parent.request_id);
+        AgentRequestAdmissionRecord::runtime_local_control(&parent.node_did, &parent.request_id);
     let spec = RequestSpec {
-        subagent: Some(ParentLink {
+        parent: Some(ParentLink {
             parent_request_id: parent.request_id.clone(),
             parent_request_doc_id: parent.doc_id.clone(),
             ..Default::default()
@@ -594,10 +594,10 @@ pub fn request_hop_within_bound(max_request_hop: u32, hop: u32) -> bool {
 }
 
 /// The calling edge an `agent_new`/`agent_message` request records: the
-/// caller's principal (its requester and signer), request and tool call.
+/// caller's DID (its requester and signer), request and tool call.
 #[derive(Debug, Clone)]
 pub(crate) struct SessionMessageCause {
-    pub(crate) caller_agent_did: String,
+    pub(crate) caller_node_did: String,
     pub(crate) caller_request_id: String,
     pub(crate) caller_request_doc_id: String,
     pub(crate) caller_hop: u32,
@@ -606,19 +606,19 @@ pub(crate) struct SessionMessageCause {
     pub(crate) correlation: Option<String>,
 }
 
-/// Where a session-message request runs. The target principal's own
-/// behavior configures it; nothing is inherited from the caller.
+/// Where a session-message request runs. The target node's own
+/// agent configures it; nothing is inherited from the caller.
 #[derive(Debug, Clone)]
 pub(crate) struct SessionMessageTarget {
-    pub(crate) agent_did: String,
-    pub(crate) behavior_id: String,
+    pub(crate) node_did: String,
+    pub(crate) agent_id: String,
     pub(crate) session_id: String,
 }
 
 /// Build and sign the request an `agent_new`/`agent_message` call
 /// materializes at `hop` (Lean `DurableLineage.sessionMessageWrite`). This is
 /// the single writer of the calling edge (`caused_by_parent_*`). The caller is
-/// the requester and signer: its own principal admits it as LocalSelf, any
+/// the requester and signer: its own node admits it as LocalSelf, any
 /// other target as Peer under that target's ACP. A steering delivery carries
 /// `queue`, which orders it after the busy session's active request.
 pub(crate) async fn build_session_message_request(
@@ -640,16 +640,16 @@ pub(crate) async fn build_session_message_request(
         "session-message lineage requires the full calling request and tool call edge"
     );
     let prompt_selection = crate::skills::prompt_slash_skill_selection(content);
-    let admission = if target.agent_did == cause.caller_agent_did {
-        AgentRequestAdmissionRecord::local_self(&cause.caller_agent_did)
+    let admission = if target.node_did == cause.caller_node_did {
+        AgentRequestAdmissionRecord::local_self(&cause.caller_node_did)
     } else {
-        AgentRequestAdmissionRecord::peer(&cause.caller_agent_did)
+        AgentRequestAdmissionRecord::peer(&cause.caller_node_did)
     };
     let identity = RequestIdentity {
-        requester_did: Some(cause.caller_agent_did.clone()),
+        requester_did: Some(cause.caller_node_did.clone()),
         request_id: request_id.to_owned(),
-        agent_did: target.agent_did.clone(),
-        behavior_id: target.behavior_id.clone(),
+        node_did: target.node_did.clone(),
+        agent_id: target.agent_id.clone(),
         session_id: target.session_id.clone(),
         content: prompt_selection.prompt.clone(),
         execution_origin: ExecutionOrigin::Interactive,
@@ -672,7 +672,7 @@ pub(crate) async fn build_session_message_request(
             correlation: cause.correlation.clone(),
             ..Default::default()
         },
-        subagent: Some(ParentLink {
+        parent: Some(ParentLink {
             depth: hop,
             parent_request_id: cause.caller_request_id.clone(),
             parent_request_doc_id: cause.caller_request_doc_id.clone(),
@@ -684,7 +684,7 @@ pub(crate) async fn build_session_message_request(
         ..RequestSpec::new(RequestPurpose::Normal, identity, admission)
     };
     let signer = crate::identity::RegisteredIdentity::from_registered_did(
-        cause.caller_agent_did.clone(),
+        cause.caller_node_did.clone(),
         None,
     )
     .context("load the caller's registered identity to sign its session message")?;
@@ -759,17 +759,17 @@ impl RequestLifecycle {
         self.execution_lease_duration_secs = duration.as_secs().max(1);
     }
 
-    pub fn new_with_agent_did(
+    pub fn new_with_node_did(
         node: Arc<EmbeddedNode>,
-        agent_name: &str,
-        agent_did: &str,
+        agent_id: &str,
+        node_did: &str,
         request: AgentRequest,
         deadline_duration_secs: u64,
     ) -> Self {
         Self::new_with_execution_binding(
             node,
-            agent_name,
-            agent_did,
+            agent_id,
+            node_did,
             request,
             deadline_duration_secs,
             ExecutionOrigin::Interactive,
@@ -779,17 +779,17 @@ impl RequestLifecycle {
 
     pub fn new_with_execution_binding(
         node: Arc<EmbeddedNode>,
-        _agent_name: &str,
-        _agent_did: &str,
+        _agent_id: &str,
+        _node_did: &str,
         request: AgentRequest,
         deadline_duration_secs: u64,
         execution_origin: ExecutionOrigin,
         backend_id: impl Into<String>,
     ) -> Self {
-        let behavior_id = request.behavior_id.clone();
+        let agent_id = request.agent_id.clone();
         Self {
             node,
-            behavior_id,
+            agent_id,
             execution_origin,
             backend_id: backend_id.into(),
             failure_reason: None,
@@ -812,8 +812,8 @@ impl RequestLifecycle {
     #[allow(clippy::too_many_arguments)]
     pub async fn materialize_claimed_with_execution_binding(
         node: Arc<EmbeddedNode>,
-        agent_name: &str,
-        identity: Arc<dyn crate::identity::AgentIdentity>,
+        agent_id: &str,
+        identity: Arc<dyn crate::identity::NodeIdentity>,
         content: &str,
         deadline_duration_secs: u64,
         execution_origin: ExecutionOrigin,
@@ -822,7 +822,7 @@ impl RequestLifecycle {
     ) -> Result<Self> {
         let mut lifecycle = Self::materialize_pending_with_execution_binding(
             node,
-            agent_name,
+            agent_id,
             identity,
             content,
             deadline_duration_secs,
@@ -842,28 +842,28 @@ impl RequestLifecycle {
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn materialize_pending_with_execution_binding(
         node: Arc<EmbeddedNode>,
-        agent_name: &str,
-        identity: Arc<dyn crate::identity::AgentIdentity>,
+        agent_id: &str,
+        identity: Arc<dyn crate::identity::NodeIdentity>,
         content: &str,
         deadline_duration_secs: u64,
         execution_origin: ExecutionOrigin,
         backend_id: impl Into<String>,
         trigger_lineage: TriggerLineage,
     ) -> Result<Self> {
-        let agent_did = identity.did().to_string();
+        let node_did = identity.did().to_string();
         let backend_id = backend_id.into();
-        let behavior_id = agent_name.to_string();
+        let agent_id = agent_id.to_string();
         let request_id = uuid::Uuid::new_v4().to_string();
         let session_id = uuid::Uuid::new_v4().to_string();
         validate_trigger_provenance(&trigger_lineage)?;
         let created_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         let admission =
-            gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&agent_did);
+            gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&node_did);
         let request_identity = RequestIdentity {
             requester_did: None,
             request_id: request_id.clone(),
-            agent_did: agent_did.clone(),
-            behavior_id: behavior_id.clone(),
+            node_did: node_did.clone(),
+            agent_id: agent_id.clone(),
             session_id: session_id.clone(),
             content: content.to_string(),
             execution_origin,
@@ -901,9 +901,9 @@ impl RequestLifecycle {
             purpose: create.purpose,
             doc_id,
             request_id,
-            agent_did: agent_did.clone(),
-            requester_did: Some(agent_did.clone()),
-            behavior_id,
+            node_did: node_did.clone(),
+            requester_did: Some(node_did.clone()),
+            agent_id: agent_id.clone(),
             session_id,
             content: content.to_string(),
             max_total_tokens: None,
@@ -914,7 +914,7 @@ impl RequestLifecycle {
             execution_generation: None,
             execution_lease_expires_at: None,
             execution_lease_secs: None,
-            subagent_depth: 0,
+            request_hop: 0,
             caused_by_parent_request_id: None,
             caused_by_parent_request_doc_id: None,
             caused_by_parent_tool_call_id: None,
@@ -925,7 +925,7 @@ impl RequestLifecycle {
             caused_by_correlation: create.caused_by_correlation,
             caused_by_trigger_context: create.caused_by_trigger_context,
             workspace_id: None,
-            workspace_owner_agent_did: None,
+            workspace_owner_node_did: None,
             workspace_authority: None,
             workspace_seal_hash: None,
         };
@@ -933,13 +933,13 @@ impl RequestLifecycle {
             node.as_ref(),
             identity.as_ref(),
             &queued_request,
-            agent_name,
+            &agent_id,
         )
         .await?;
         let lifecycle = Self::new_with_execution_binding(
             node,
-            agent_name,
-            &agent_did,
+            &agent_id,
+            &node_did,
             request,
             deadline_duration_secs,
             execution_origin,
@@ -963,8 +963,8 @@ impl RequestLifecycle {
         &self.backend_id
     }
 
-    pub fn behavior_id(&self) -> &str {
-        &self.behavior_id
+    pub fn agent_id(&self) -> &str {
+        &self.agent_id
     }
 }
 
@@ -980,8 +980,8 @@ pub(super) async fn apply_request_session_projection(
     // is refused rather than attached (Lean `Enrollment.runtimeRequesterScope`).
     let response = txn
         .execute(&format!(
-            r#"{{ AgentSession(filter: {{ agent_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
-            escape_graphql_string(&request.agent_did),
+            r#"{{ AgentSession(filter: {{ node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
+            escape_graphql_string(&request.node_did),
             escape_graphql_string(&request.session_id),
             session::AGENT_SESSION_FIELDS,
         ))
@@ -1004,11 +1004,11 @@ pub(super) async fn apply_request_session_projection(
             }
             .into());
         }
-        if existing.session.behavior_id != request.behavior_id {
-            return Err(ClaimAdmissionError::SessionBehaviorMismatch {
+        if existing.session.agent_id != request.agent_id {
+            return Err(ClaimAdmissionError::SessionAgentMismatch {
                 session_id: request.session_id.clone(),
-                existing_behavior_id: existing.session.behavior_id,
-                requested_behavior_id: request.behavior_id.clone(),
+                existing_agent_id: existing.session.agent_id,
+                requested_agent_id: request.agent_id.clone(),
             }
             .into());
         }
@@ -1016,8 +1016,8 @@ pub(super) async fn apply_request_session_projection(
     session::ensure_session_in_txn(
         txn,
         &request.session_id,
-        &request.agent_did,
-        &request.behavior_id,
+        &request.node_did,
+        &request.agent_id,
         request.requester_did.as_deref(),
         request.input.initial_title.clone(),
         request
@@ -1033,14 +1033,14 @@ pub(super) async fn apply_request_session_projection(
     session::reopen_session_in_txn(
         txn,
         &request.session_id,
-        &request.agent_did,
+        &request.node_did,
         request.requester_did.as_deref(),
         now,
     )
     .await?;
     let owner = session::load_agent_session_row_in_txn(
         txn,
-        &request.agent_did,
+        &request.node_did,
         &request.session_id,
         request.requester_did.as_deref(),
     )
@@ -1068,7 +1068,7 @@ mod pin_tests {
     //! shared with the other pinning modules via `lifecycle::test_support`)
     //! so the emitted `admission_signature` is stable across runs; the only
     //! other source of nondeterminism in these writers is an internally
-    //! generated `created_at` (and, at the subagent site, an internally
+    //! generated `created_at` (and, at the agent-target site, an internally
     //! generated `session_id`), which each test either normalizes out of
     //! the comparison or avoids by reproducing the writer's pure
     //! DTO-construction statements with a fixed timestamp in place of
@@ -1117,7 +1117,7 @@ mod pin_tests {
         let create =
             build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title(
                 PIN_FIXED_DID,
-                "behavior-1",
+                "agent-1",
                 "hello agent",
                 ExecutionOrigin::Interactive,
                 TriggerLineage {
@@ -1142,7 +1142,7 @@ mod pin_tests {
         let normalized = normalize_dynamic_fields(&create, &fields);
         assert_eq!(
             normalized,
-            "request_id: \"req-materialize-pending-manual\", purpose: \"normal\", agent_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", requester_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", behavior_id: \"behavior-1\", session_id: \"sess-materialize-pending-manual\", retry_root_request: \"req-materialize-pending-manual\", content: \"hello agent\", input: { initial_title: { source: \"task\", text: \"My Conversation\" } }, execution_origin: \"interactive\", caused_by_trigger_kind: \"manual\", created_at: \"<CREATED_AT>\", retry_count: 0, max_retries: 3, subagent_depth: 0, admission_kind: \"local-self\", admission_signer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", admission_signature: \"<SIGNATURE>\", lifecycle_state: \"pending\", failure_reason: \"\""
+            "request_id: \"req-materialize-pending-manual\", purpose: \"normal\", node_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", requester_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", agent_id: \"agent-1\", session_id: \"sess-materialize-pending-manual\", retry_root_request: \"req-materialize-pending-manual\", content: \"hello agent\", input: { initial_title: { source: \"task\", text: \"My Conversation\" } }, execution_origin: \"interactive\", caused_by_trigger_kind: \"manual\", created_at: \"<CREATED_AT>\", retry_count: 0, max_retries: 3, request_hop: 0, admission_kind: \"local-self\", admission_signer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", admission_signature: \"<SIGNATURE>\", lifecycle_state: \"pending\", failure_reason: \"\""
         );
     }
 
@@ -1160,7 +1160,7 @@ mod pin_tests {
         };
         let workspace_lineage = WorkspaceLineage {
             workspace_id: Some("ws-1".to_string()),
-            workspace_owner_agent_did: Some("did:key:workspace-owner".to_string()),
+            workspace_owner_node_did: Some("did:key:workspace-owner".to_string()),
             workspace_authority: Some("readWrite".to_string()),
             workspace_seal_hash: Some("seal-1".to_string()),
         };
@@ -1168,7 +1168,7 @@ mod pin_tests {
         let create =
             build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title(
                 PIN_FIXED_DID,
-                "behavior-1",
+                "agent-1",
                 "hello agent",
                 ExecutionOrigin::Scheduled,
                 trigger_lineage,
@@ -1187,7 +1187,7 @@ mod pin_tests {
         let normalized = normalize_dynamic_fields(&create, &fields);
         assert_eq!(
             normalized,
-            "request_id: \"req-materialize-pending-event\", purpose: \"normal\", agent_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", requester_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", behavior_id: \"behavior-1\", session_id: \"sess-materialize-pending-event\", retry_root_request: \"req-materialize-pending-event\", retry_key: \"retry-key-1\", content: \"hello agent\", input: { initial_title: { source: \"task\", text: \"My Conversation\" } }, execution_origin: \"scheduled\", caused_by_trigger_id: \"trigger-1\", caused_by_trigger_doc_id: \"trigger-doc-1\", caused_by_trigger_kind: \"event\", caused_by_correlation: \"corr-1\", caused_by_trigger_context: \"{\\\"k\\\":\\\"v\\\"}\", caused_by_source_doc_id: \"source-doc-1\", created_at: \"<CREATED_AT>\", retry_count: 0, max_retries: 3, subagent_depth: 0, workspace_id: \"ws-1\", workspace_owner_agent_did: \"did:key:workspace-owner\", workspace_authority: \"readWrite\", workspace_seal_hash: \"seal-1\", admission_kind: \"runtime-internal\", admission_signer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", admission_signature: \"<SIGNATURE>\", runtime_issuer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", runtime_source_request_id: \"trigger-1\", runtime_source_kind: \"automated-trigger\", lifecycle_state: \"workspaceBindingPending\", failure_reason: \"\""
+            "request_id: \"req-materialize-pending-event\", purpose: \"normal\", node_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", requester_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", agent_id: \"agent-1\", session_id: \"sess-materialize-pending-event\", retry_root_request: \"req-materialize-pending-event\", retry_key: \"retry-key-1\", content: \"hello agent\", input: { initial_title: { source: \"task\", text: \"My Conversation\" } }, execution_origin: \"scheduled\", caused_by_trigger_id: \"trigger-1\", caused_by_trigger_doc_id: \"trigger-doc-1\", caused_by_trigger_kind: \"event\", caused_by_correlation: \"corr-1\", caused_by_trigger_context: \"{\\\"k\\\":\\\"v\\\"}\", caused_by_source_doc_id: \"source-doc-1\", created_at: \"<CREATED_AT>\", retry_count: 0, max_retries: 3, request_hop: 0, workspace_id: \"ws-1\", workspace_owner_node_did: \"did:key:workspace-owner\", workspace_authority: \"readWrite\", workspace_seal_hash: \"seal-1\", admission_kind: \"runtime-internal\", admission_signer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", admission_signature: \"<SIGNATURE>\", runtime_issuer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", runtime_source_request_id: \"trigger-1\", runtime_source_kind: \"automated-trigger\", lifecycle_state: \"workspaceBindingPending\", failure_reason: \"\""
         );
     }
 }
@@ -1267,7 +1267,7 @@ async fn stage_task_delivery(
             crate::config_client::event_source_cursor::validate_event_admission(txn, fire).await?;
         }
         anyhow::ensure!(
-            create.agent_did == fire.identity.owner_did
+            create.node_did == fire.identity.owner_did
                 && create.request_id == fire.request_id
                 && create.session_id == fire.session_id,
             "Task receipt and signed request identity disagree"
@@ -1289,7 +1289,7 @@ async fn stage_task_delivery(
                 anyhow::ensure!(
                     goal_id
                         == &crate::goal::deterministic_goal_id(
-                            &create.agent_did,
+                            &create.node_did,
                             &create.session_id
                         ),
                     "Task receipt has a noncanonical Goal identity"
@@ -1319,7 +1319,7 @@ async fn stage_task_delivery(
                 .starts_with(&format!("manual:{}:", fire.task_id));
         let session = crate::session::load_agent_session_row_in_txn(
             txn,
-            &create.agent_did,
+            &create.node_did,
             &create.session_id,
             Some(create.requester_did.as_str()),
         )
@@ -1349,8 +1349,8 @@ async fn stage_task_delivery(
         }
         if let Some(session) = session {
             anyhow::ensure!(
-                session.session.behavior_id == create.behavior_id,
-                "Task target session has a different behavior"
+                session.session.agent_id == create.agent_id,
+                "Task target session has a different agent"
             );
             anyhow::ensure!(
                 session.session.closed_at.is_none(),
@@ -1361,7 +1361,7 @@ async fn stage_task_delivery(
         txn.execute(&create.graphql_mutation().map_err(anyhow::Error::msg)?)
             .await?;
     }
-    let query = format!("{{ AgentRequest(filter: {{agent_did: {{_eq: \"{}\"}}, request_id: {{_eq: \"{}\"}}}}) {{ _docID session_id }} }}",
+    let query = format!("{{ AgentRequest(filter: {{node_did: {{_eq: \"{}\"}}, request_id: {{_eq: \"{}\"}}}}) {{ _docID session_id }} }}",
         escape_graphql_string(&fire.identity.owner_did), escape_graphql_string(&fire.request_id));
     let response = txn.execute(&query).await?;
     let rows = response
@@ -1436,7 +1436,7 @@ mod task_delivery_tests {
         let create =
             build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title(
                 PIN_FIXED_DID,
-                "behavior",
+                "agent",
                 "complete assignment",
                 ExecutionOrigin::Interactive,
                 TriggerLineage {

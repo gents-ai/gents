@@ -1,12 +1,12 @@
 {
-  "agent_principal": {},
+  "node": {},
   "eval_definitions": [
     {
       "definition_id": "configurator-l3-datastore",
       "comparability_version": 8,
       "title": "The Engineer \u2014 Datastore L3 component: schema, scoped surface, selection, live call",
       "subject": {
-        "kind": "behavior",
+        "kind": "agent",
         "inference_slots": [
           "engineer"
         ]
@@ -19,7 +19,7 @@
         "./cases/val_ds_finish_partial_setup.json",
         "./cases/val_ds_automation_seed_to_output.json",
         "./cases/val_ds_row_persists_across_stages.json",
-        "./cases/held_ds_surface_on_new_behavior.json"
+        "./cases/held_ds_surface_on_new_agent.json"
       ]
     }
   ]

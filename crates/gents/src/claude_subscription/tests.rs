@@ -165,7 +165,7 @@ async fn build_without_a_credential_fails_closed_with_the_login_hint() {
         .expect_err("missing");
     assert!(
         err.to_string()
-            .contains("gents claude-login --agent-did did:key:z6MkNobody"),
+            .contains("gents claude-login --node-did did:key:z6MkNobody"),
         "{err:#}"
     );
 }
@@ -261,7 +261,7 @@ fn kind_round_trips_and_is_agent_scoped() {
         crate::BackendProviderKind::ClaudeCliSubscription.as_str(),
         "ClaudeCliSubscription"
     );
-    assert!(crate::BackendProviderKind::ClaudeCliSubscription.is_agent_scoped_oauth());
+    assert!(crate::BackendProviderKind::ClaudeCliSubscription.is_node_scoped_oauth());
 }
 
 #[test]
@@ -271,7 +271,7 @@ fn anthropic_api_key_is_a_shared_key_kind_on_the_messages_wire() {
     assert_eq!(kind, Kind::AnthropicApiKey);
     assert_eq!(kind.as_str(), "AnthropicApiKey");
     assert!(Kind::ALL.contains(&kind));
-    assert!(!kind.is_agent_scoped_oauth());
+    assert!(!kind.is_node_scoped_oauth());
     let messages_kinds: Vec<_> = Kind::ALL
         .into_iter()
         .filter(|kind| kind.uses_messages_wire())
@@ -299,7 +299,7 @@ async fn usage_wiring_claude_built_client_holds_its_account_reporter() {
             "{}:acct-ref-2",
             crate::oauth_credential::oauth_credential_id(did, CLAUDE_OAUTH_PROVIDER)
         ),
-        agent_did: did.to_string(),
+        node_did: did.to_string(),
         provider: CLAUDE_OAUTH_PROVIDER.to_string(),
         access_token: "access-TEST".into(),
         refresh_token: "refresh-TEST".into(),
@@ -330,7 +330,7 @@ async fn usage_wiring_claude_built_client_holds_its_account_reporter() {
             .map(|reporter| reporter.account.clone()),
         Some(crate::usage_observation::UsageAccount::Credential {
             doc_id: Some(doc_id),
-            agent_did: did.to_string(),
+            node_did: did.to_string(),
             provider: CLAUDE_OAUTH_PROVIDER.to_string(),
             account_ref: Some("acct-ref-2".into()),
         })

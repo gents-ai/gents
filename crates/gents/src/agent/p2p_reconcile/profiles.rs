@@ -83,12 +83,12 @@ pub fn expand_p2p_collection_profile_ids<'a>(
 }
 
 const RUNTIME_COLLECTIONS: &[&str] = &[
-    "AgentPrincipal",
-    "AgentBehavior",
+    "Node",
+    "Agent",
     "AgentContext",
     "CompactionConfig",
     "Tools",
-    "SubagentTarget",
+    "AgentTarget",
     "InferenceProfile",
     "InferenceSampling",
     "InferenceExecution",
@@ -99,8 +99,8 @@ const RUNTIME_COLLECTIONS: &[&str] = &[
     "ChainKeyBinding",
     "EthTool",
     "InferenceBackend",
-    "AgentRuntime",
-    "AgentBehaviorReadiness",
+    "NodeRuntime",
+    "NodeReadiness",
     "AgentRequest",
     "AgentOutputSegment",
     "AgentSession",
@@ -115,12 +115,12 @@ const RUNTIME_COLLECTIONS: &[&str] = &[
 ];
 
 const AGENT_COLLECTIONS: &[&str] = &[
-    "AgentPrincipal",
-    "AgentBehavior",
+    "Node",
+    "Agent",
     "AgentContext",
     "CompactionConfig",
     "Tools",
-    "SubagentTarget",
+    "AgentTarget",
     "InferenceProfile",
     "InferenceSampling",
     "InferenceExecution",
@@ -131,17 +131,17 @@ const AGENT_COLLECTIONS: &[&str] = &[
     "ChainKeyBinding",
     "EthTool",
     "InferenceBackend",
-    "AgentRuntime",
-    "AgentBehaviorReadiness",
+    "NodeRuntime",
+    "NodeReadiness",
 ];
 
 const DESKTOP_CONFIG_COLLECTIONS: &[&str] = &[
-    "AgentPrincipal",
-    "AgentBehavior",
+    "Node",
+    "Agent",
     "AgentContext",
     "CompactionConfig",
     "Tools",
-    "SubagentTarget",
+    "AgentTarget",
     "InferenceProfile",
     "InferenceSampling",
     "InferenceExecution",
@@ -170,12 +170,12 @@ const TOOL_SERVICE_COLLECTIONS: &[&str] = &["ToolServiceRegistry"];
 
 const DISCOVERY_COLLECTIONS: &[&str] = &[
     "PeerRegistry",
-    "AgentPrincipal",
-    "AgentBehavior",
+    "Node",
+    "Agent",
     "AgentContext",
     "CompactionConfig",
     "Tools",
-    "SubagentTarget",
+    "AgentTarget",
     "InferenceProfile",
     "InferenceSampling",
     "InferenceExecution",
@@ -185,8 +185,8 @@ const DISCOVERY_COLLECTIONS: &[&str] = &[
     "DatastoreToolSurface",
     "ChainKeyBinding",
     "EthTool",
-    "AgentRuntime",
-    "AgentBehaviorReadiness",
+    "NodeRuntime",
+    "NodeReadiness",
 ];
 
 #[cfg(test)]

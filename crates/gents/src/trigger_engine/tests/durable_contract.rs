@@ -83,8 +83,8 @@ fn receipt(fire: &Fire, index: usize) -> TriggerFire {
 fn request_mutation(receipt: &TriggerFire) -> String {
     format!(
         r#"mutation {{ create_AgentRequest(input: {{
-        request_id: "{}", agent_did: "{}", session_id: "{}",
-        behavior_id: "general", content: "contract task", purpose: "normal", lifecycle_state: "pending",
+        request_id: "{}", node_did: "{}", session_id: "{}",
+        agent_id: "general", content: "contract task", purpose: "normal", lifecycle_state: "pending",
         created_at: "{}"
     }}) {{ _docID }} }}"#,
         escape_graphql_string(&receipt.request_id),
@@ -355,7 +355,7 @@ async fn generated_terminal_outcome_action_traces_use_native_owners() {
                         .iter()
                         .find(|row| row.request_id == identity.request_id())
                         .unwrap();
-                    access.write("test.inject_goal_publication_gap", &format!("mutation {{update_Goal(filter: {{agent_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}}}}, input: {{status: \"{}\"}}) {{_docID}}}}",
+                    access.write("test.inject_goal_publication_gap", &format!("mutation {{update_Goal(filter: {{node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}}}}, input: {{status: \"{}\"}}) {{_docID}}}}",
                         escape_graphql_string(&identity.owner_did), escape_graphql_string(request.session_id.as_deref().unwrap()), escape_graphql_string(&status))).await.unwrap();
                 }
                 OutcomeAction::Recover { commit } => {
@@ -381,7 +381,7 @@ async fn generated_terminal_outcome_action_traces_use_native_owners() {
                     publication["reason"].as_str().unwrap().to_owned(),
                 );
             }
-            let response = access.execute("{FireOutcome {handoff_id terminal_state} TriggerFire {fire_key goal_assignment_applied} Goal {agent_did session_id assignment_root_request_doc_id status}}").await.unwrap();
+            let response = access.execute("{FireOutcome {handoff_id terminal_state} TriggerFire {fire_key goal_assignment_applied} Goal {node_did session_id assignment_root_request_doc_id status}}").await.unwrap();
             let outcomes = response["data"]["FireOutcome"].as_array().unwrap();
             assert_eq!(
                 outcomes.len(),
@@ -457,7 +457,7 @@ async fn generated_terminal_outcome_action_traces_use_native_owners() {
                 let goal = goals
                     .iter()
                     .find(|row| {
-                        row["agent_did"] == binding.owner && row["session_id"] == binding.session
+                        row["node_did"] == binding.owner && row["session_id"] == binding.session
                     })
                     .unwrap();
                 let assignment = requests
@@ -556,12 +556,12 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
         access.transact("test.arrival_config", |txn| Box::pin(async move {
             txn.execute_with_variables(
                 "mutation($input:EventSourceMutationInputArg!){create_EventSource(input:$input){_docID}}",
-                &serde_json::json!({"input":{"agent_did":"owner-a","event_source_id":"source",
+                &serde_json::json!({"input":{"node_did":"owner-a","event_source_id":"source",
                     "source_collection":"Work","event_kind":"created", "filter":"{eligible: {_eq: true}}"}}),
             ).await?;
             txn.execute_with_variables(
                 "mutation($input:TriggerMutationInputArg!){create_Trigger(input:$input){_docID}}",
-                &serde_json::json!({"input":{"agent_did":"owner-a","trigger_id":"handoff",
+                &serde_json::json!({"input":{"node_did":"owner-a","trigger_id":"handoff",
                     "task_id":"contract-task","source":{"kind":"event","event_source_id":"source"},
                     "enabled":case["enabled"], "concurrency":case["mode"]}}),
             ).await?;
@@ -753,7 +753,7 @@ async fn admit_callback_arrival(node: &defra_node::EmbeddedNode, doc_id: &str, v
         &crate::callback::CallbackInvocationDoc {
             input: serde_json::json!({}),
             invocation_id: uuid::Uuid::new_v4().to_string(),
-            owner_agent_did: "owner-a".into(),
+            owner_node_did: "owner-a".into(),
             callback_id: "callback".into(),
             origin: crate::document_config::CallbackInvocationOrigin::Event {
                 binding_id: "handoff".into(),
@@ -804,18 +804,18 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
         access.transact("test.callback_arrival_config", |txn| Box::pin(async move {
             txn.execute_with_variables(
                 "mutation($input:CallbackMutationInputArg!){create_Callback(input:$input){_docID}}",
-                &serde_json::json!({"input":{"agent_did":"owner-a","callback_id":"callback",
+                &serde_json::json!({"input":{"node_did":"owner-a","callback_id":"callback",
                     "enabled":callback_enabled,
                     "handler":{"kind":"built_in","emitter":"create_workspace"}}}),
             ).await?;
             txn.execute_with_variables(
                 "mutation($input:EventSourceMutationInputArg!){create_EventSource(input:$input){_docID}}",
-                &serde_json::json!({"input":{"agent_did":"owner-a","event_source_id":"source",
+                &serde_json::json!({"input":{"node_did":"owner-a","event_source_id":"source",
                     "source_collection":"Work","event_kind":"created", "filter":"{eligible: {_eq: true}}"}}),
             ).await?;
             txn.execute_with_variables(
                 "mutation($input:CallbackBindingMutationInputArg!){create_CallbackBinding(input:$input){_docID}}",
-                &serde_json::json!({"input":{"agent_did":"owner-a","binding_id":"handoff",
+                &serde_json::json!({"input":{"node_did":"owner-a","binding_id":"handoff",
                     "event_source_id":"source","callback_id":"callback","enabled":binding_enabled}}),
             ).await?;
             event_source_cursor::load_or_seed(txn, "owner-a", &handoff_binding()).await?;

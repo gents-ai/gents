@@ -40,10 +40,10 @@ impl PairingDesired {
         }
     }
 
-    pub fn uses_subagent_template(&self) -> bool {
+    pub fn uses_agent_target_template(&self) -> bool {
         self.template_ids
             .iter()
-            .any(|template| template.starts_with("subagent-"))
+            .any(|template| template.starts_with("agent-target-"))
     }
 }
 
@@ -476,7 +476,7 @@ mod tests {
         let desired = PairingDesired {
             collections: BTreeSet::new(),
             replicator_addresses: s(&["addr1"]),
-            replicator_filter: filter("agent_did", "did:key:bob"),
+            replicator_filter: filter("node_did", "did:key:bob"),
             ..Default::default()
         };
         let actual = PairingActual {
@@ -487,7 +487,7 @@ mod tests {
         let applied = PairingApplied {
             collections: BTreeSet::new(),
             replicator_addresses: s(&["addr1"]),
-            replicator_filter: filter("agent_did", "did:key:alice"),
+            replicator_filter: filter("node_did", "did:key:alice"),
             ..Default::default()
         };
         assert_eq!(
@@ -502,7 +502,7 @@ mod tests {
     /// An unchanged filter on a converged pairing yields no replicator churn.
     #[test]
     fn unchanged_filter_does_not_reinstall_replicator() {
-        let f = filter("agent_did", "did:key:bob");
+        let f = filter("node_did", "did:key:bob");
         let desired = PairingDesired {
             collections: BTreeSet::new(),
             replicator_addresses: s(&["addr1"]),
@@ -537,19 +537,19 @@ mod tests {
     #[test]
     fn changed_replicator_collections_reinstall_replicator() {
         let desired = PairingDesired {
-            collections: s(&["AgentNetwork"]),
+            collections: s(&["Network"]),
             replicator_addresses: s(&["addr1"]),
-            replicator_collections: s(&["AgentNetwork", "AgentRequest"]),
+            replicator_collections: s(&["Network", "AgentRequest"]),
             ..Default::default()
         };
         let actual = PairingActual {
-            collections: s(&["AgentNetwork"]),
+            collections: s(&["Network"]),
             replicator_addresses: s(&["addr1"]),
             replicator_collections: BTreeMap::from([("addr1".to_string(), s(&["AgentRequest"]))]),
             ..Default::default()
         };
         let applied = PairingApplied {
-            collections: s(&["AgentNetwork"]),
+            collections: s(&["Network"]),
             replicator_addresses: s(&["addr1"]),
             ..Default::default()
         };
@@ -566,18 +566,18 @@ mod tests {
     #[test]
     fn matching_replicator_collections_do_not_reinstall() {
         let desired = PairingDesired {
-            collections: s(&["AgentNetwork"]),
+            collections: s(&["Network"]),
             replicator_addresses: s(&["addr1"]),
             ..Default::default()
         };
         let actual = PairingActual {
-            collections: s(&["AgentNetwork"]),
+            collections: s(&["Network"]),
             replicator_addresses: s(&["addr1"]),
-            replicator_collections: BTreeMap::from([("addr1".to_string(), s(&["AgentNetwork"]))]),
+            replicator_collections: BTreeMap::from([("addr1".to_string(), s(&["Network"]))]),
             ..Default::default()
         };
         let applied = PairingApplied {
-            collections: s(&["AgentNetwork"]),
+            collections: s(&["Network"]),
             replicator_addresses: s(&["addr1"]),
             ..Default::default()
         };
@@ -589,17 +589,17 @@ mod tests {
     #[test]
     fn unobservable_replicator_collections_do_not_reinstall() {
         let desired = PairingDesired {
-            collections: s(&["AgentNetwork"]),
+            collections: s(&["Network"]),
             replicator_addresses: s(&["addr1"]),
             ..Default::default()
         };
         let actual = PairingActual {
-            collections: s(&["AgentNetwork"]),
+            collections: s(&["Network"]),
             replicator_addresses: s(&["addr1"]),
             ..Default::default()
         };
         let applied = PairingApplied {
-            collections: s(&["AgentNetwork"]),
+            collections: s(&["Network"]),
             replicator_addresses: s(&["addr1"]),
             ..Default::default()
         };

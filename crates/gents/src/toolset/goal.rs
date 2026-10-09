@@ -141,7 +141,7 @@ mod tests {
     #[test]
     fn goal_arguments_reject_model_supplied_ownership() {
         assert!(serde_json::from_str::<CreateGoalArgs>(
-            r#"{"objective":"ship","agent_did":"did:test:other"}"#,
+            r#"{"objective":"ship","node_did":"did:test:other"}"#,
         )
         .is_err());
         assert!(serde_json::from_str::<CreateGoalArgs>(

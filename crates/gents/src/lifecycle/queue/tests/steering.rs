@@ -4,10 +4,10 @@ use crate::lean_vocab_test::LeanQueuedSteeringAction as Action;
 #[tokio::test]
 async fn steering_admission_keeps_signed_content_queued_without_transcript_publication() {
     let db = test_db("steering-admission-only").await;
-    let mut parent = parent_request(db.agent_did(), "steering-session");
+    let mut parent = parent_request(db.node_did(), "steering-session");
     parent.doc_id = insert_raw_queue_request(
         &db.node,
-        db.agent_did(),
+        db.node_did(),
         &parent.request_id,
         &parent.session_id,
         &RequestInput::default(),
@@ -77,10 +77,10 @@ async fn generated_pending_steering_terminals_retain_signed_admission_without_ou
         assert!(case.entry.queued_after.is_some(), "{}", case.name);
 
         let db = test_db("generated-steering-terminal").await;
-        let mut parent = parent_request(db.agent_did(), "generated-steering-session");
+        let mut parent = parent_request(db.node_did(), "generated-steering-session");
         parent.doc_id = insert_raw_queue_request(
             &db.node,
-            db.agent_did(),
+            db.node_did(),
             &parent.request_id,
             &parent.session_id,
             &RequestInput::default(),
@@ -125,10 +125,10 @@ async fn generated_pending_steering_terminals_retain_signed_admission_without_ou
                 .await
                 .unwrap()
                 .unwrap();
-        let mut lifecycle = RequestLifecycle::new_with_agent_did(
+        let mut lifecycle = RequestLifecycle::new_with_node_did(
             db.node.clone(),
-            TEST_BEHAVIOR_ID,
-            db.agent_did(),
+            TEST_AGENT_ID,
+            db.node_did(),
             request,
             60,
         );
@@ -138,8 +138,8 @@ async fn generated_pending_steering_terminals_retain_signed_admission_without_ou
                 crate::interrupt::interrupt_request_by_doc_id(
                     &db.node,
                     &enqueued.doc_id,
-                    db.agent_did(),
-                    Some(db.agent_did()),
+                    db.node_did(),
+                    Some(db.node_did()),
                 )
                 .await
                 .unwrap();
@@ -212,28 +212,27 @@ async fn generated_owned_prepublication_terminals_retain_signed_admission_withou
         assert_eq!(case.queue_active, None, "{}", case.name);
 
         let db = test_db("generated-owned-steering-terminal").await;
-        crate::session::ensure_session_with_behavior_id_and_requester_did(
+        crate::session::ensure_session_with_agent_id_and_requester_did(
             &db.node,
             "generated-owned-steering-session",
-            TEST_BEHAVIOR_ID,
-            db.agent_did(),
-            TEST_BEHAVIOR_ID,
-            Some(db.agent_did()),
+            db.node_did(),
+            TEST_AGENT_ID,
+            Some(db.node_did()),
         )
         .await
         .unwrap();
         let mut parent_create = gents_protocol::request_admission::AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
             "parent-request",
-            db.agent_did(),
-            db.agent_did(),
-            TEST_BEHAVIOR_ID,
+            db.node_did(),
+            db.node_did(),
+            TEST_AGENT_ID,
             "generated-owned-steering-session",
             "parent input",
             "interactive",
             chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
             gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
-                db.agent_did(),
+                db.node_did(),
             ),
         );
         crate::sign_agent_request_create(db.identity.as_ref(), &mut parent_create)
@@ -296,10 +295,10 @@ async fn generated_owned_prepublication_terminals_retain_signed_admission_withou
                 .await
                 .unwrap()
                 .expect("parent queue fixture");
-        let mut parent_lifecycle = RequestLifecycle::new_with_agent_did(
+        let mut parent_lifecycle = RequestLifecycle::new_with_node_did(
             db.node.clone(),
-            TEST_BEHAVIOR_ID,
-            db.agent_did(),
+            TEST_AGENT_ID,
+            db.node_did(),
             parent_row,
             60,
         );
@@ -313,10 +312,10 @@ async fn generated_owned_prepublication_terminals_retain_signed_admission_withou
                 .await
                 .unwrap()
                 .expect("signed queued steering request");
-        let mut lifecycle = RequestLifecycle::new_with_agent_did(
+        let mut lifecycle = RequestLifecycle::new_with_node_did(
             db.node.clone(),
-            TEST_BEHAVIOR_ID,
-            db.agent_did(),
+            TEST_AGENT_ID,
+            db.node_did(),
             request,
             60,
         );
@@ -326,7 +325,7 @@ async fn generated_owned_prepublication_terminals_retain_signed_admission_withou
             "{}",
             case.name
         );
-        let writer = DefraStreamWriter::new(db.node.clone(), db.agent_did(), Duration::ZERO);
+        let writer = DefraStreamWriter::new(db.node.clone(), db.node_did(), Duration::ZERO);
         lifecycle.begin_owned_execution(&writer).await.unwrap();
 
         // This is the real owner handoff after claim/begin but before an
@@ -337,8 +336,8 @@ async fn generated_owned_prepublication_terminals_retain_signed_admission_withou
             crate::interrupt::interrupt_request_by_doc_id(
                 &db.node,
                 &enqueued.doc_id,
-                db.agent_did(),
-                Some(db.agent_did()),
+                db.node_did(),
+                Some(db.node_did()),
             )
             .await
             .unwrap();
@@ -396,8 +395,8 @@ async fn generated_owned_prepublication_terminals_retain_signed_admission_withou
             crate::interrupt::active_session_request(
                 &db.node,
                 &parent.session_id,
-                db.agent_did(),
-                Some(db.agent_did()),
+                db.node_did(),
+                Some(db.node_did()),
             )
             .await
             .unwrap()

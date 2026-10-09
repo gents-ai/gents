@@ -32,7 +32,7 @@ use super::session_hydration_closure::{
 };
 use super::templates::{conjunctive_string_eq, decode_pairing_filters};
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
-use crate::identity::AgentIdentity;
+use crate::identity::NodeIdentity;
 use crate::session::canonical_rows::{
     decode_output_segment_row, decode_transcript_message_row, AGENT_MESSAGE_FIELDS,
     AGENT_OUTPUT_SEGMENT_FIELDS,
@@ -103,7 +103,7 @@ struct AdmittedHydration {
 struct HydrationRequestRow {
     pub request_key: String,
     pub requester_did: String,
-    pub agent_did: String,
+    pub node_did: String,
     pub session_id: String,
 }
 
@@ -160,7 +160,7 @@ async fn admit_or_reject(
     let request = match HydrationRequest::from_row(
         row.request_key.clone(),
         row.requester_did.clone(),
-        row.agent_did.clone(),
+        row.node_did.clone(),
         row.session_id.clone(),
     ) {
         Ok(request) => request,
@@ -335,7 +335,7 @@ async fn deliver_with_bounded_retry(
 pub async fn run_session_hydration_reconciler(
     node: Arc<EmbeddedNode>,
     enrollment: EnrollmentAuthorityHandle,
-    identity: Arc<dyn AgentIdentity>,
+    identity: Arc<dyn NodeIdentity>,
     cancel: CancellationToken,
 ) -> Result<()> {
     let hydration_collection_id = node
@@ -428,7 +428,7 @@ async fn sweep_hydration_requests(
 struct GraphqlHydrationStore {
     node: Arc<EmbeddedNode>,
     enrollment: EnrollmentAuthorityHandle,
-    identity: Arc<dyn AgentIdentity>,
+    identity: Arc<dyn NodeIdentity>,
 }
 
 struct EmbeddedHydrationDelivery {
@@ -450,14 +450,14 @@ impl HydrationDelivery for EmbeddedHydrationDelivery {
 struct PendingRow {
     request_key: Option<String>,
     requester_did: Option<String>,
-    agent_did: Option<String>,
+    node_did: Option<String>,
     session_id: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct DesiredPairingRow {
     peer_id: Option<String>,
-    agent_did: Option<String>,
+    node_did: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -470,7 +470,7 @@ struct AppliedPairingRow {
 struct SessionRow {
     session_id: Option<String>,
     requester_did: Option<String>,
-    agent_did: Option<String>,
+    node_did: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -478,20 +478,20 @@ struct TranscriptRow {
     #[serde(rename = "_docID")]
     doc_id: Option<String>,
     requester_did: Option<String>,
-    agent_did: Option<String>,
+    node_did: Option<String>,
     session_id: Option<String>,
 }
 
 #[async_trait]
 impl HydrationRequestStore for GraphqlHydrationStore {
     async fn load_pending_requests(&self) -> Result<Vec<HydrationRequestRow>> {
-        let agent_did = escape_graphql_string(self.identity.did());
+        let node_did = escape_graphql_string(self.identity.did());
         let query = format!(
             r#"{{
-            SessionHydrationRequest(filter: {{ status: {{ _eq: "pending" }}, agent_did: {{ _eq: "{agent_did}" }} }}) {{
+            SessionHydrationRequest(filter: {{ status: {{ _eq: "pending" }}, node_did: {{ _eq: "{node_did}" }} }}) {{
                 request_key
                 requester_did
-                agent_did
+                node_did
                 session_id
             }}
         }}"#
@@ -508,7 +508,7 @@ impl HydrationRequestStore for GraphqlHydrationStore {
                 Some(HydrationRequestRow {
                     request_key: row.request_key.filter(|value| !value.is_empty())?,
                     requester_did: row.requester_did.unwrap_or_default(),
-                    agent_did: row.agent_did.unwrap_or_default(),
+                    node_did: row.node_did.unwrap_or_default(),
                     session_id: row.session_id.unwrap_or_default(),
                 })
             })
@@ -533,7 +533,7 @@ impl HydrationRequestStore for GraphqlHydrationStore {
             .filter_map(|row| {
                 Some((
                     row.peer_id.filter(|value| !value.is_empty())?,
-                    row.agent_did.filter(|value| !value.is_empty())?,
+                    row.node_did.filter(|value| !value.is_empty())?,
                 ))
             })
             .collect::<BTreeMap<_, _>>();
@@ -547,7 +547,7 @@ impl HydrationRequestStore for GraphqlHydrationStore {
                 Some(SessionOwner {
                     session_id: row.session_id.filter(|value| !value.is_empty())?,
                     requester_did: row.requester_did.unwrap_or_default(),
-                    agent_did: row.agent_did.unwrap_or_default(),
+                    node_did: row.node_did.unwrap_or_default(),
                 })
             })
             .collect();
@@ -575,9 +575,9 @@ impl HydrationRequestStore for GraphqlHydrationStore {
 
     async fn load_selection(&self, request: &HydrationRequest) -> Result<HydrationSelection> {
         let session_id = escape_graphql_string(&request.session_id);
-        let agent_did = escape_graphql_string(&request.agent_did);
+        let node_did = escape_graphql_string(&request.node_did);
         let requester_did = escape_graphql_string(&request.requester_did);
-        let query = hydration_selection_query(&session_id, &agent_did, &requester_did);
+        let query = hydration_selection_query(&session_id, &node_did, &requester_did);
         let response =
             graphql_with_transaction_retry(&self.node, &query, "query session hydration selection")
                 .await?;
@@ -638,7 +638,7 @@ impl HydrationRequestStore for GraphqlHydrationStore {
         load_origin_headers(
             self.node.as_ref(),
             &mut root_headers,
-            &request.agent_did,
+            &request.node_did,
             &request.requester_did,
         )
         .await?;
@@ -650,7 +650,7 @@ impl HydrationRequestStore for GraphqlHydrationStore {
             self.node.as_ref(),
             &root_headers,
             &mut output_segments,
-            &request.agent_did,
+            &request.node_did,
             &request.requester_did,
         )
         .await?;
@@ -669,7 +669,7 @@ impl HydrationRequestStore for GraphqlHydrationStore {
                             collection,
                             doc_id: row.doc_id.filter(|value| !value.is_empty())?,
                             requester_did: row.requester_did.unwrap_or_default(),
-                            agent_did: row.agent_did.unwrap_or_default(),
+                            node_did: row.node_did.unwrap_or_default(),
                             session_id: row.session_id.unwrap_or_default(),
                         })
                     }),
@@ -680,7 +680,7 @@ impl HydrationRequestStore for GraphqlHydrationStore {
             &root_headers,
             &output_segments,
             &mut bases,
-            &request.agent_did,
+            &request.node_did,
             &request.requester_did,
         )
         .await?;
@@ -692,7 +692,7 @@ impl HydrationRequestStore for GraphqlHydrationStore {
             denied_headers: &[],
             denied_segments: &[],
             dependency_denials: &[],
-            agent_did: &request.agent_did,
+            node_did: &request.node_did,
             requester_did: Some(&request.requester_did),
             session_id: &request.session_id,
         })
@@ -706,7 +706,7 @@ impl HydrationRequestStore for GraphqlHydrationStore {
                     collection: row.collection,
                     doc_id: row.doc_id,
                     requester_did: row.requester_did,
-                    agent_did: row.agent_did,
+                    node_did: row.node_did,
                     session_id: row.session_id,
                 }),
         );
@@ -723,7 +723,7 @@ impl HydrationRequestStore for GraphqlHydrationStore {
                 collection: row.collection,
                 doc_id: row.doc_id.clone(),
                 requester_did: row.requester_did.clone(),
-                agent_did: row.agent_did.clone(),
+                node_did: row.node_did.clone(),
                 session_id: row.session_id.clone(),
             });
         }
@@ -804,7 +804,7 @@ impl HydrationRequestStore for GraphqlHydrationStore {
 async fn load_origin_headers(
     node: &EmbeddedNode,
     headers: &mut Vec<crate::session::canonical_rows::TranscriptMessageRow>,
-    agent_did: &str,
+    node_did: &str,
     requester_did: &str,
 ) -> Result<()> {
     let mut loaded = headers
@@ -824,10 +824,10 @@ async fn load_origin_headers(
             return Ok(());
         };
         let id = escape_graphql_string(&doc_id);
-        let agent = escape_graphql_string(agent_did);
+        let agent = escape_graphql_string(node_did);
         let requester = escape_graphql_string(requester_did);
         let response = graphql_with_transaction_retry(node, &format!(
-            r#"{{ AgentMessage(filter: {{ _docID: {{ _eq: "{id}" }}, agent_did: {{ _eq: "{agent}" }}, requester_did: {{ _eq: "{requester}" }} }}) {{ {AGENT_MESSAGE_FIELDS} }} }}"#
+            r#"{{ AgentMessage(filter: {{ _docID: {{ _eq: "{id}" }}, node_did: {{ _eq: "{agent}" }}, requester_did: {{ _eq: "{requester}" }} }}) {{ {AGENT_MESSAGE_FIELDS} }} }}"#
         ), "query exact authorized hydration origin").await?;
         let decoded = rows::<serde_json::Value>(&response, "AgentMessage")?
             .iter()
@@ -846,7 +846,7 @@ async fn load_referenced_segments(
     node: &EmbeddedNode,
     headers: &[crate::session::canonical_rows::TranscriptMessageRow],
     segments: &mut Vec<crate::session::canonical_rows::OutputSegmentRow>,
-    agent_did: &str,
+    node_did: &str,
     requester_did: &str,
 ) -> Result<()> {
     let request_ids = headers
@@ -874,7 +874,7 @@ async fn load_referenced_segments(
         let values = rows::<serde_json::Value>(&response, "AgentOutputSegment")?;
         for row in crate::session::canonical_rows::decode_scoped_request_output_segments(
             &values,
-            agent_did,
+            node_did,
             None,
             Some(requester_did),
         )? {
@@ -891,7 +891,7 @@ async fn load_referenced_bases(
     headers: &[crate::session::canonical_rows::TranscriptMessageRow],
     segments: &[crate::session::canonical_rows::OutputSegmentRow],
     bases: &mut Vec<ScopedDocument>,
-    agent_did: &str,
+    node_did: &str,
     requester_did: &str,
 ) -> Result<()> {
     use gents_protocol::output::{MessageBlock, MessagePublication, OutputSource};
@@ -930,7 +930,7 @@ async fn load_referenced_bases(
             ));
         }
     }
-    let agent = escape_graphql_string(agent_did);
+    let agent = escape_graphql_string(node_did);
     let requester = escape_graphql_string(requester_did);
     for (collection, doc_id) in wanted {
         if bases
@@ -942,7 +942,7 @@ async fn load_referenced_bases(
         let name = hydration_collection_name(collection);
         let id = escape_graphql_string(&doc_id);
         let response = graphql_with_transaction_retry(node, &format!(
-            r#"{{ {name}(filter: {{ _docID: {{ _eq: "{id}" }}, agent_did: {{ _eq: "{agent}" }}, requester_did: {{ _eq: "{requester}" }} }}) {{ _docID requester_did agent_did session_id }} }}"#
+            r#"{{ {name}(filter: {{ _docID: {{ _eq: "{id}" }}, node_did: {{ _eq: "{agent}" }}, requester_did: {{ _eq: "{requester}" }} }}) {{ _docID requester_did node_did session_id }} }}"#
         ), "query exact authorized hydration provenance").await?;
         let found = rows::<TranscriptRow>(&response, name)?;
         anyhow::ensure!(
@@ -956,7 +956,7 @@ async fn load_referenced_bases(
                 .doc_id
                 .context("hydration provenance omitted physical id")?,
             requester_did: row.requester_did.unwrap_or_default(),
-            agent_did: row.agent_did.unwrap_or_default(),
+            node_did: row.node_did.unwrap_or_default(),
             session_id: row.session_id.unwrap_or_default(),
         });
     }
@@ -975,7 +975,7 @@ impl GraphqlHydrationStore {
             version: SESSION_HYDRATION_RECEIPT_VERSION,
             request_key: request.request_key.clone(),
             requester_did: request.requester_did.clone(),
-            agent_did: request.agent_did.clone(),
+            node_did: request.node_did.clone(),
             session_id: request.session_id.clone(),
             status: status.to_string(),
             status_detail: status_detail.to_string(),
@@ -985,7 +985,7 @@ impl GraphqlHydrationStore {
             signature: Vec::new(),
         };
         anyhow::ensure!(
-            receipt.agent_did == receipt.signer_did,
+            receipt.node_did == receipt.signer_did,
             "hydration reconciler cannot sign for another agent"
         );
         receipt.signature = self.identity.sign(&receipt.signing_payload()?).await?;
@@ -998,35 +998,35 @@ fn hydration_admission_query(session_id: &str, peer_id: &str) -> String {
     format!(
         r#"{{
             PeerPairingDesired(filter: {{ peer_id: {{ _eq: "{peer_id}" }}, source: {{ _eq: "enrollment" }} }}) {{
-                peer_id agent_did
+                peer_id node_did
             }}
             PeerPairingApplied(filter: {{ peer_id: {{ _eq: "{peer_id}" }} }}) {{
                 peer_id replicator_filter
             }}
             AgentSession(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{
-                session_id requester_did agent_did
+                session_id requester_did node_did
             }}
         }}"#
     )
 }
 
-fn hydration_selection_query(session_id: &str, agent_did: &str, requester_did: &str) -> String {
+fn hydration_selection_query(session_id: &str, node_did: &str, requester_did: &str) -> String {
     format!(
         r#"{{
-            AgentRequest(filter: {{ session_id: {{ _eq: "{session_id}" }}, agent_did: {{ _eq: "{agent_did}" }}, requester_did: {{ _eq: "{requester_did}" }} }}) {{
-                _docID request_id requester_did agent_did session_id lifecycle_state terminal_output
+            AgentRequest(filter: {{ session_id: {{ _eq: "{session_id}" }}, node_did: {{ _eq: "{node_did}" }}, requester_did: {{ _eq: "{requester_did}" }} }}) {{
+                _docID request_id requester_did node_did session_id lifecycle_state terminal_output
             }}
-            AgentMessage(filter: {{ session_id: {{ _eq: "{session_id}" }}, agent_did: {{ _eq: "{agent_did}" }}, requester_did: {{ _eq: "{requester_did}" }} }}) {{
+            AgentMessage(filter: {{ session_id: {{ _eq: "{session_id}" }}, node_did: {{ _eq: "{node_did}" }}, requester_did: {{ _eq: "{requester_did}" }} }}) {{
                 {AGENT_MESSAGE_FIELDS}
             }}
-            AgentToolCall(filter: {{ session_id: {{ _eq: "{session_id}" }}, agent_did: {{ _eq: "{agent_did}" }}, requester_did: {{ _eq: "{requester_did}" }} }}) {{
-                _docID requester_did agent_did session_id
+            AgentToolCall(filter: {{ session_id: {{ _eq: "{session_id}" }}, node_did: {{ _eq: "{node_did}" }}, requester_did: {{ _eq: "{requester_did}" }} }}) {{
+                _docID requester_did node_did session_id
             }}
-            AgentOutputSegment(filter: {{ session_id: {{ _eq: "{session_id}" }}, agent_did: {{ _eq: "{agent_did}" }}, requester_did: {{ _eq: "{requester_did}" }} }}) {{
+            AgentOutputSegment(filter: {{ session_id: {{ _eq: "{session_id}" }}, node_did: {{ _eq: "{node_did}" }}, requester_did: {{ _eq: "{requester_did}" }} }}) {{
                 {AGENT_OUTPUT_SEGMENT_FIELDS}
             }}
-            CompactionEntry(filter: {{ session_id: {{ _eq: "{session_id}" }}, agent_did: {{ _eq: "{agent_did}" }}, requester_did: {{ _eq: "{requester_did}" }} }}) {{
-                _docID requester_did agent_did session_id
+            CompactionEntry(filter: {{ session_id: {{ _eq: "{session_id}" }}, node_did: {{ _eq: "{node_did}" }}, requester_did: {{ _eq: "{requester_did}" }} }}) {{
+                _docID requester_did node_did session_id
             }}
         }}"#
     )
@@ -1041,14 +1041,14 @@ fn applied_pairing_route(
     let filters = decode_pairing_filters(row.replicator_filter.as_deref()?).ok()?;
     let request_filter = filters.get("SessionHydrationRequest")?;
     let requester_did = conjunctive_string_eq(request_filter, "requester_did")?;
-    let applied_agent = conjunctive_string_eq(request_filter, "agent_did")?;
+    let applied_agent = conjunctive_string_eq(request_filter, "node_did")?;
     if applied_agent != desired_agent {
         return None;
     }
     Some(AppliedPairingRoute {
         peer_id,
         requester_did: requester_did.to_string(),
-        agent_did: applied_agent.to_string(),
+        node_did: applied_agent.to_string(),
     })
 }
 
@@ -1058,7 +1058,7 @@ fn terminal_mutation(
 ) -> Result<String> {
     let request_key = escape_graphql_string(&request.request_key);
     let requester_did = escape_graphql_string(&request.requester_did);
-    let agent_did = escape_graphql_string(&request.agent_did);
+    let node_did = escape_graphql_string(&request.node_did);
     let session_id = escape_graphql_string(&request.session_id);
     let status = escape_graphql_string(&receipt.status);
     let detail = escape_graphql_string(&receipt.status_detail);
@@ -1073,7 +1073,7 @@ fn terminal_mutation(
                 filter: {{
                     request_key: {{ _eq: "{request_key}" }},
                     requester_did: {{ _eq: "{requester_did}" }},
-                    agent_did: {{ _eq: "{agent_did}" }},
+                    node_did: {{ _eq: "{node_did}" }},
                     session_id: {{ _eq: "{session_id}" }},
                     status: {{ _eq: "pending" }}
                 }},
@@ -1291,21 +1291,21 @@ mod tests {
             collection: gents_protocol::session_hydration::SessionHydrationCollection::AgentMessage,
             doc_id: "owned".into(),
             requester_did: "did:key:requester-1".into(),
-            agent_did: "did:key:agent-1".into(),
+            node_did: "did:key:agent-1".into(),
             session_id: "session-1".into(),
         };
         MemoryStore {
             pending: vec![HydrationRequestRow {
                 request_key: "peer-1:session-1".into(),
                 requester_did: "did:key:requester-1".into(),
-                agent_did: "did:key:agent-1".into(),
+                node_did: "did:key:agent-1".into(),
                 session_id: "session-1".into(),
             }],
             catalog: HydrationCatalog {
                 applied_pairing_routes: BTreeSet::from([AppliedPairingRoute {
                     peer_id: "peer-1".into(),
                     requester_did: "did:key:requester-1".into(),
-                    agent_did: "did:key:agent-1".into(),
+                    node_did: "did:key:agent-1".into(),
                 }]),
                 selected_network_id: "network-1".into(),
                 verified_active_memberships: BTreeSet::from([VerifiedActiveMembership {
@@ -1315,7 +1315,7 @@ mod tests {
                 sessions: BTreeSet::from([SessionOwner {
                     session_id: "session-1".into(),
                     requester_did: "did:key:requester-1".into(),
-                    agent_did: "did:key:agent-1".into(),
+                    node_did: "did:key:agent-1".into(),
                 }]),
                 documents: BTreeSet::from([document]),
                 authorized_reference_closure: BTreeSet::new(),
@@ -1337,7 +1337,7 @@ mod tests {
             member_did: "did:key:requester-1".into(),
             member_peer: "peer-1".into(),
             member_ticket: "ticket-1".into(),
-            owner_agent: "did:key:agent-1".into(),
+            owner_node: "did:key:agent-1".into(),
             request_digest: "digest-1".into(),
             authorization_sequence: 1,
             authorization_expires_at: "2099-09-29T00:00:00Z".into(),
@@ -1504,7 +1504,7 @@ mod tests {
     fn applied_pairing_requires_exact_requester_and_desired_agent() {
         let filter = combine_filters(
             equality_filter("requester_did", "did:key:requester-1"),
-            equality_filter("agent_did", "did:key:agent-1"),
+            equality_filter("node_did", "did:key:agent-1"),
         );
         let raw = serde_json::to_string(&BTreeMap::from([(
             "SessionHydrationRequest".to_string(),
@@ -1561,7 +1561,7 @@ mod tests {
             pending: vec![HydrationRequestRow {
                 request_key: "peer-1:session-1".into(),
                 requester_did: "did:key:requester-1".into(),
-                agent_did: "did:key:agent-1".into(),
+                node_did: "did:key:agent-1".into(),
                 session_id: "session-1".into(),
             }],
             catalog: HydrationCatalog::default(),
@@ -1590,7 +1590,7 @@ mod tests {
         HydrationRequestRow {
             request_key: "peer-1:session-2".into(),
             requester_did: "did:key:requester-1".into(),
-            agent_did: "did:key:agent-1".into(),
+            node_did: "did:key:agent-1".into(),
             session_id: "session-2".into(),
         }
     }

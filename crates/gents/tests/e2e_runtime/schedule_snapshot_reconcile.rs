@@ -3,9 +3,9 @@ use std::time::Duration;
 
 use chrono::{Duration as ChronoDuration, Utc};
 use gents::graphql::escape_graphql_string;
-use gents::{AgentIdentity, DocumentRuntimeOptions, Gents, KeyIdentity, ToolCeiling};
+use gents::{DocumentRuntimeOptions, Gents, KeyIdentity, NodeIdentity, ToolCeiling};
 
-use crate::support::fixtures::bind_default_behavior_backend;
+use crate::support::fixtures::bind_default_agent_backend;
 use crate::support::mock_endpoint::MockModelEndpoint;
 use crate::support::snapshots::{fetch_runtime_snapshot, is_routed_ready_after, RuntimeSnapshot};
 use crate::support::test_db;
@@ -45,10 +45,10 @@ async fn create_task(
     node: &gents::defra_node::EmbeddedNode,
     owner: &str,
     task_id: &str,
-    behavior_id: &str,
+    agent_id: &str,
     prompt_template: &str,
 ) {
-    apply_documents(node, vec![(gents::Collection::Task, serde_json::json!({"agent_did":owner,"task_id":task_id,"display_name":task_id,"behavior_id":behavior_id,"prompt_template":prompt_template}))]).await;
+    apply_documents(node, vec![(gents::Collection::Task, serde_json::json!({"node_did":owner,"task_id":task_id,"display_name":task_id,"agent_id":agent_id,"prompt_template":prompt_template}))]).await;
 }
 
 async fn create_schedule(
@@ -58,7 +58,7 @@ async fn create_schedule(
     task_id: &str,
 ) {
     let trigger = serde_json::json!({
-        "agent_did": owner,
+        "node_did": owner,
         "trigger_id": schedule_id,
         "task_id": task_id,
         "source": {"kind": "schedule", "schedule_id": schedule_id},
@@ -70,7 +70,7 @@ async fn create_schedule(
         vec![
             (
                 gents::Collection::Schedule,
-                serde_json::json!({"agent_did":owner,"schedule_id":schedule_id,"cadence":{"kind":"interval","interval_secs":60}}),
+                serde_json::json!({"node_did":owner,"schedule_id":schedule_id,"cadence":{"kind":"interval","interval_secs":60}}),
             ),
             (gents::Collection::Trigger, trigger),
         ],
@@ -93,7 +93,7 @@ async fn set_trigger_enabled_and_cursor(
         r#"mutation {{
             update_Trigger(
                 filter: {{
-                    agent_did: {{ _eq: "{}" }},
+                    node_did: {{ _eq: "{}" }},
                     trigger_id: {{ _eq: "{}" }}
                 }},
                 input: {{ enabled: {enabled}{next_run_at} }}
@@ -126,14 +126,14 @@ async fn create_event_trigger(
     event_kind: &str,
 ) {
     apply_documents(node, vec![
-        (gents::Collection::EventSource, serde_json::json!({"agent_did":owner,"event_source_id":trigger_id,"source_collection":source_collection,"event_kind":event_kind})),
-        (gents::Collection::Trigger, serde_json::json!({"agent_did":owner,"trigger_id":trigger_id,"task_id":task_id,"source":{"kind":"event","event_source_id":trigger_id},"concurrency":"serial"})),
+        (gents::Collection::EventSource, serde_json::json!({"node_did":owner,"event_source_id":trigger_id,"source_collection":source_collection,"event_kind":event_kind})),
+        (gents::Collection::Trigger, serde_json::json!({"node_did":owner,"trigger_id":trigger_id,"task_id":task_id,"source":{"kind":"event","event_source_id":trigger_id},"concurrency":"serial"})),
     ]).await;
 }
 
 async fn wait_for_runtime_snapshot<F>(
     node: &gents::defra_node::EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     predicate: F,
 ) -> RuntimeSnapshot
 where
@@ -141,13 +141,13 @@ where
 {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     loop {
-        let snapshot = fetch_runtime_snapshot(node, agent_did).await;
+        let snapshot = fetch_runtime_snapshot(node, node_did).await;
         if snapshot.as_ref().is_some_and(&predicate) {
             return snapshot.unwrap();
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "timed out waiting for runtime snapshot for {agent_did}; last snapshot: {snapshot:?}"
+            "timed out waiting for runtime snapshot for {node_did}; last snapshot: {snapshot:?}"
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
@@ -160,7 +160,7 @@ async fn fetch_schedule_agent_requests(
 ) -> Vec<serde_json::Value> {
     let response = node
         .execute(&format!(
-            r#"{{ AgentRequest(filter: {{ agent_did: {{ _eq: "{}" }}, caused_by_trigger_id: {{ _eq: "{}" }}, caused_by_trigger_kind: {{ _eq: "schedule" }} }}, limit: 2) {{ content behavior_id execution_origin caused_by_trigger_id caused_by_trigger_kind }} }}"#,
+            r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{}" }}, caused_by_trigger_id: {{ _eq: "{}" }}, caused_by_trigger_kind: {{ _eq: "schedule" }} }}, limit: 2) {{ content agent_id execution_origin caused_by_trigger_id caused_by_trigger_kind }} }}"#,
             escape_graphql_string(owner),
             escape_graphql_string(trigger_id),
         ))
@@ -175,7 +175,7 @@ async fn fetch_trigger_observation(
 ) -> serde_json::Value {
     let response = node
         .execute(&format!(
-            r#"{{ Trigger(filter: {{ agent_did: {{ _eq: "{}" }}, trigger_id: {{ _eq: "{}" }} }}, limit: 2) {{ task_id source enabled next_run_at last_status last_error fire_count }} }}"#,
+            r#"{{ Trigger(filter: {{ node_did: {{ _eq: "{}" }}, trigger_id: {{ _eq: "{}" }} }}, limit: 2) {{ task_id source enabled next_run_at last_status last_error fire_count }} }}"#,
             escape_graphql_string(owner),
             escape_graphql_string(trigger_id),
         ))
@@ -189,14 +189,14 @@ async fn fetch_trigger_observation(
 async fn schedule_insert_and_trigger_disable_bump_active_generation() {
     let db = test_db("schedule-snapshot-reconcile").await;
     let identity = Arc::new(test_identity("schedule-snapshot-reconcile"));
-    bind_default_behavior_backend(
+    bind_default_agent_backend(
         db.node.as_ref(),
         identity.did(),
         "backend-schedule-snapshot-reconcile",
         UNUSED_BACKEND_ENDPOINT,
     )
     .await;
-    let agent = Gents::from_default_behavior_documents(
+    let agent = Gents::from_default_agent_documents(
         db.node.clone(),
         identity,
         DocumentRuntimeOptions {
@@ -206,13 +206,13 @@ async fn schedule_insert_and_trigger_disable_bump_active_generation() {
     )
     .await
     .unwrap();
-    let agent_did = agent.agent_did().to_string();
-    let default_behavior_id = agent.default_behavior_id().to_string();
+    let node_did = agent.node_did().to_string();
+    let default_agent_id = agent.default_agent_id().to_string();
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
 
-    let startup = wait_for_runtime_snapshot(db.node.as_ref(), &agent_did, |snapshot| {
+    let startup = wait_for_runtime_snapshot(db.node.as_ref(), &node_did, |snapshot| {
         is_routed_ready_after(snapshot, 0)
     })
     .await;
@@ -225,25 +225,25 @@ async fn schedule_insert_and_trigger_disable_bump_active_generation() {
 
     create_task(
         db.node.as_ref(),
-        &agent_did,
+        &node_did,
         "task-reconcile-alpha",
-        &default_behavior_id,
+        &default_agent_id,
         "alpha prompt",
     )
     .await;
     create_schedule(
         db.node.as_ref(),
-        &agent_did,
+        &node_did,
         "schedule-reconcile-alpha",
         "task-reconcile-alpha",
     )
     .await;
 
-    let reconciled = wait_for_runtime_snapshot(db.node.as_ref(), &agent_did, |snapshot| {
+    let reconciled = wait_for_runtime_snapshot(db.node.as_ref(), &node_did, |snapshot| {
         is_routed_ready_after(snapshot, initial_generation)
     })
     .await;
-    assert_eq!(reconciled.default_behavior_id, default_behavior_id);
+    assert_eq!(reconciled.default_agent_id, default_agent_id);
     assert!(
         reconciled.last_reconcile_error.is_empty(),
         "post-insert reconcile should be clean, got error={:?}",
@@ -258,13 +258,13 @@ async fn schedule_insert_and_trigger_disable_bump_active_generation() {
     let due = (Utc::now() - ChronoDuration::seconds(60)).to_rfc3339();
     set_trigger_enabled_and_cursor(
         db.node.as_ref(),
-        &agent_did,
+        &node_did,
         "schedule-reconcile-alpha",
         false,
         Some(&due),
     )
     .await;
-    let disabled = wait_for_runtime_snapshot(db.node.as_ref(), &agent_did, |snapshot| {
+    let disabled = wait_for_runtime_snapshot(db.node.as_ref(), &node_did, |snapshot| {
         is_routed_ready_after(snapshot, reconciled.active_generation)
     })
     .await;
@@ -278,12 +278,12 @@ async fn schedule_insert_and_trigger_disable_bump_active_generation() {
     // generation is published, however, the active schedule set must stop
     // producing requests.
     let requests_after_reconcile =
-        fetch_schedule_agent_requests(db.node.as_ref(), &agent_did, "schedule-reconcile-alpha")
+        fetch_schedule_agent_requests(db.node.as_ref(), &node_did, "schedule-reconcile-alpha")
             .await
             .len();
     tokio::time::sleep(Duration::from_millis(1_500)).await;
     assert_eq!(
-        fetch_schedule_agent_requests(db.node.as_ref(), &agent_did, "schedule-reconcile-alpha")
+        fetch_schedule_agent_requests(db.node.as_ref(), &node_did, "schedule-reconcile-alpha")
             .await
             .len(),
         requests_after_reconcile,
@@ -299,14 +299,14 @@ async fn scheduled_fire_persists_task_content_and_trigger_writeback() {
     let db = test_db("scheduled-fire-writeback").await;
     let identity = Arc::new(test_identity("scheduled-fire-writeback"));
     let endpoint = MockModelEndpoint::start("default").unwrap();
-    bind_default_behavior_backend(
+    bind_default_agent_backend(
         db.node.as_ref(),
         identity.did(),
         "backend-scheduled-fire-writeback",
         endpoint.endpoint(),
     )
     .await;
-    let agent = Gents::from_default_behavior_documents(
+    let agent = Gents::from_default_agent_documents(
         db.node.clone(),
         identity,
         DocumentRuntimeOptions {
@@ -316,12 +316,12 @@ async fn scheduled_fire_persists_task_content_and_trigger_writeback() {
     )
     .await
     .unwrap();
-    let agent_did = agent.agent_did().to_string();
-    let default_behavior_id = agent.default_behavior_id().to_string();
+    let node_did = agent.node_did().to_string();
+    let default_agent_id = agent.default_agent_id().to_string();
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
 
-    let startup = wait_for_runtime_snapshot(db.node.as_ref(), &agent_did, |snapshot| {
+    let startup = wait_for_runtime_snapshot(db.node.as_ref(), &node_did, |snapshot| {
         is_routed_ready_after(snapshot, 0)
     })
     .await;
@@ -331,16 +331,16 @@ async fn scheduled_fire_persists_task_content_and_trigger_writeback() {
     const TASK_PROMPT: &str = "render this exact configured schedule task";
     create_task(
         db.node.as_ref(),
-        &agent_did,
+        &node_did,
         TASK_ID,
-        &default_behavior_id,
+        &default_agent_id,
         TASK_PROMPT,
     )
     .await;
     let due = (Utc::now() - ChronoDuration::seconds(2)).to_rfc3339();
-    create_schedule(db.node.as_ref(), &agent_did, TRIGGER_ID, TASK_ID).await;
+    create_schedule(db.node.as_ref(), &node_did, TRIGGER_ID, TASK_ID).await;
 
-    let reconciled = wait_for_runtime_snapshot(db.node.as_ref(), &agent_did, |snapshot| {
+    let reconciled = wait_for_runtime_snapshot(db.node.as_ref(), &node_did, |snapshot| {
         is_routed_ready_after(snapshot, startup.active_generation)
     })
     .await;
@@ -350,13 +350,11 @@ async fn scheduled_fire_persists_task_content_and_trigger_writeback() {
         reconciled.last_reconcile_error
     );
 
-    set_trigger_enabled_and_cursor(db.node.as_ref(), &agent_did, TRIGGER_ID, true, Some(&due))
-        .await;
+    set_trigger_enabled_and_cursor(db.node.as_ref(), &node_did, TRIGGER_ID, true, Some(&due)).await;
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
     let request = loop {
-        let requests =
-            fetch_schedule_agent_requests(db.node.as_ref(), &agent_did, TRIGGER_ID).await;
+        let requests = fetch_schedule_agent_requests(db.node.as_ref(), &node_did, TRIGGER_ID).await;
         if let Some(request) = requests.into_iter().next() {
             break request;
         }
@@ -367,14 +365,14 @@ async fn scheduled_fire_persists_task_content_and_trigger_writeback() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     };
     assert_eq!(request["content"], TASK_PROMPT);
-    assert_eq!(request["behavior_id"], default_behavior_id);
+    assert_eq!(request["agent_id"], default_agent_id);
     assert_eq!(request["execution_origin"], "scheduled");
     assert_eq!(request["caused_by_trigger_id"], TRIGGER_ID);
     assert_eq!(request["caused_by_trigger_kind"], "schedule");
 
     let writeback_deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     let trigger = loop {
-        let trigger = fetch_trigger_observation(db.node.as_ref(), &agent_did, TRIGGER_ID).await;
+        let trigger = fetch_trigger_observation(db.node.as_ref(), &node_did, TRIGGER_ID).await;
         if trigger["last_status"] == "fired" {
             break trigger;
         }
@@ -403,14 +401,14 @@ async fn scheduled_fire_persists_task_content_and_trigger_writeback() {
 async fn event_source_trigger_insert_bumps_active_generation() {
     let db = test_db("event-trigger-snapshot-reconcile").await;
     let identity = Arc::new(test_identity("event-trigger-snapshot-reconcile"));
-    bind_default_behavior_backend(
+    bind_default_agent_backend(
         db.node.as_ref(),
         identity.did(),
         "backend-event-trigger-snapshot-reconcile",
         UNUSED_BACKEND_ENDPOINT,
     )
     .await;
-    let agent = Gents::from_default_behavior_documents(
+    let agent = Gents::from_default_agent_documents(
         db.node.clone(),
         identity,
         DocumentRuntimeOptions {
@@ -420,13 +418,13 @@ async fn event_source_trigger_insert_bumps_active_generation() {
     )
     .await
     .unwrap();
-    let agent_did = agent.agent_did().to_string();
-    let default_behavior_id = agent.default_behavior_id().to_string();
+    let node_did = agent.node_did().to_string();
+    let default_agent_id = agent.default_agent_id().to_string();
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
 
-    let startup = wait_for_runtime_snapshot(db.node.as_ref(), &agent_did, |snapshot| {
+    let startup = wait_for_runtime_snapshot(db.node.as_ref(), &node_did, |snapshot| {
         is_routed_ready_after(snapshot, 0)
     })
     .await;
@@ -439,15 +437,15 @@ async fn event_source_trigger_insert_bumps_active_generation() {
 
     create_task(
         db.node.as_ref(),
-        &agent_did,
+        &node_did,
         "task-event-trigger-alpha",
-        &default_behavior_id,
+        &default_agent_id,
         "alpha prompt",
     )
     .await;
     create_event_trigger(
         db.node.as_ref(),
-        &agent_did,
+        &node_did,
         "event-trigger-alpha",
         "task-event-trigger-alpha",
         "AgentMessage",
@@ -455,11 +453,11 @@ async fn event_source_trigger_insert_bumps_active_generation() {
     )
     .await;
 
-    let reconciled = wait_for_runtime_snapshot(db.node.as_ref(), &agent_did, |snapshot| {
+    let reconciled = wait_for_runtime_snapshot(db.node.as_ref(), &node_did, |snapshot| {
         is_routed_ready_after(snapshot, initial_generation)
     })
     .await;
-    assert_eq!(reconciled.default_behavior_id, default_behavior_id);
+    assert_eq!(reconciled.default_agent_id, default_agent_id);
     assert!(
         reconciled.last_reconcile_error.is_empty(),
         "post-insert reconcile should be clean, got error={:?}",

@@ -169,7 +169,7 @@ impl PolicyDeniedOwner {
                         health: crate::health_checker::ServiceHealthMap::new(),
                         local_hostname: "local".into(),
                         local_subnet: None,
-                        agent_did: "did:test:test".into(),
+                        node_did: "did:test:test".into(),
                         allowed_mcp_service_ids: vec!["selected-service".into()],
                         remote_tools: crate::document_config::RemoteTools {
                             services: vec![crate::document_config::RemoteServiceTools {
@@ -1221,7 +1221,7 @@ async fn background_output_query_work_is_independent_of_principal_history() {
     let (node, _hook, _writer, lifecycle) = owned_test_hook().await;
     let request_id = lifecycle.request().doc_id.clone();
     let template = gents_protocol::output::OutputSegment {
-        agent_did: "did:test:owner".into(),
+        node_did: "did:test:owner".into(),
         requester_did: None,
         session_id: "session".into(),
         request_doc_id: request_id.clone(),

@@ -67,7 +67,7 @@ const PACK_VAR: &str = "GENTS_OPTIMIZATION_LIVE_PACK";
 /// The id of the definition inside that pack (M3 names it `monitor-findings`).
 const DEFINITION_VAR: &str = "GENTS_OPTIMIZATION_LIVE_DEFINITION_ID";
 /// The behavior whose context is optimized; `monitor` unless overridden.
-const BEHAVIOR_VAR: &str = "GENTS_OPTIMIZATION_LIVE_BEHAVIOR";
+const AGENT_VAR: &str = "GENTS_OPTIMIZATION_LIVE_AGENT";
 /// A serialized `PolicyV2`; `PolicyV2::uncalibrated()` unless set.
 const POLICY_VAR: &str = "GENTS_OPTIMIZATION_LIVE_POLICY";
 /// Trials per case for both arms; 2 unless set.
@@ -180,7 +180,7 @@ impl Fixture {
         );
         let definition_id = std::env::var(DEFINITION_VAR)
             .unwrap_or_else(|_| panic!("{DEFINITION_VAR} must name the definition in that pack"));
-        let behavior = std::env::var(BEHAVIOR_VAR).unwrap_or_else(|_| "monitor".into());
+        let behavior = std::env::var(AGENT_VAR).unwrap_or_else(|_| "monitor".into());
         let policy = match std::env::var(POLICY_VAR) {
             Ok(raw) => serde_json::from_str::<PolicyV2>(&raw)
                 .unwrap_or_else(|error| panic!("{POLICY_VAR} is not a PolicyV2: {error}")),
@@ -203,7 +203,7 @@ impl Fixture {
             .unwrap();
         let access = ConfigAccess::Local(home.node.clone());
         let owner = home.did().to_string();
-        gents::ensure_agent_principal(home.node.as_ref(), &owner)
+        gents::ensure_node(home.node.as_ref(), &owner)
             .await
             .unwrap();
         let dirs = tempfile::tempdir().unwrap();
@@ -256,7 +256,7 @@ impl Fixture {
                 ),
                 (
                     Collection::InferenceSampling,
-                    json!({"agent_did": owner, "sampling_id": "live", "temperature": 0.0}),
+                    json!({"node_did": owner, "sampling_id": "live", "temperature": 0.0}),
                 ),
                 (
                     Collection::InferenceProfile,
@@ -280,7 +280,7 @@ impl Fixture {
             job_id: job_id.into(),
             owner: owner.clone(),
             evaluator_did: owner,
-            behavior_id: behavior,
+            agent_id: behavior,
             target: JobTarget::Context,
             definition_id,
             inference_profile_id: "live".into(),
@@ -408,7 +408,7 @@ fn live_subject(pack: &Path, owner: &str, behavior: &str) -> Vec<(Collection, Va
         .filter(|document| {
             !matches!(
                 document.collection,
-                Collection::AgentPrincipal | Collection::EvalDefinition
+                Collection::Node | Collection::EvalDefinition
             )
         })
         .map(|document| (document.collection, document.add.clone()))

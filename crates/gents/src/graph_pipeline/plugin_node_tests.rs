@@ -29,7 +29,7 @@ fn echo_plan(digest: &str, max_attempts: Option<u32>) -> GraphPlan {
     };
     compile_graph(
         &GraphIntent {
-            agent_did: graph_test_owner().to_owned(),
+            node_did: graph_test_owner().to_owned(),
             tags: vec![],
             graph_id: "echo-pipeline".to_owned(),
             nodes: vec![GraphNode {
@@ -64,7 +64,7 @@ fn echo_plan(digest: &str, max_attempts: Option<u32>) -> GraphPlan {
             },
         },
         &[StageCapability {
-            agent_did: graph_test_owner().to_owned(),
+            node_did: graph_test_owner().to_owned(),
             tags: vec![],
             workspace_authority: None,
             capability_id: "echo".to_owned(),

@@ -28,7 +28,7 @@ pub async fn load_session_context_details(
         node,
         &format!(
             r#"{{ AgentRequest(filter: {{
-        agent_did: {{_eq: "{}"}}, requester_did: {{_eq: {requester}}},
+        node_did: {{_eq: "{}"}}, requester_did: {{_eq: {requester}}},
         session_id: {{_eq: "{}"}}, request_id: {{_eq: "{}"}}
     }}, limit: 2) {{_docID}} }}"#,
             escape_graphql_string(agent),
@@ -53,7 +53,7 @@ pub async fn load_session_context_details(
         node,
         &format!(
             r#"{{ RenderedRequest(filter: {{
-        request_doc_id: {{_eq: "{}"}}, agent_did: {{_eq: "{}"}},
+        request_doc_id: {{_eq: "{}"}}, node_did: {{_eq: "{}"}},
         session_id: {{_eq: "{}"}}, capture_scope: {{_like: "inference.%"}},
         turn_index: {{_eq: {}}}, attempt: {{_eq: {}}}
     }}, limit: 2) {{capture_version source request_json provenance_json}} }}"#,
@@ -117,7 +117,7 @@ pub async fn load_session_context_details(
         Ok(details) => Ok(details),
         Err(error) => {
             tracing::debug!(
-                agent_did = agent,
+                node_did = agent,
                 session_id = session,
                 request_id = %context.request_id,
                 call_id = %context.call_id,

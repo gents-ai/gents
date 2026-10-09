@@ -88,7 +88,7 @@ pub fn limits_from_module(module: &CallbackModuleDoc) -> Result<CallbackModuleLi
 /// Install/apply predicate for CallbackModule (fail closed).
 ///
 /// v1 is an **installer allowlist**, not a cryptographic signature: `signer_did`
-/// must be an enabled `AgentPrincipal` DID. `provenance` is a required non-empty
+/// must be an enabled `Node` DID. `provenance` is a required non-empty
 /// operator note (pack name, review URL, etc.), not a signature over bytes.
 /// `CallbackBinding.principal_did` is the workspace writer and is not required
 /// to equal `signer_did`. Call this before first use. Recovery that already

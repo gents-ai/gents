@@ -21,7 +21,6 @@ pub mod backend_registry;
 pub mod background_completion;
 mod background_completion_diagnostics;
 pub(crate) mod background_tools;
-mod behavior_readiness_publisher;
 pub mod blocked_turn;
 pub(crate) mod callback;
 pub mod chatgpt_codex;
@@ -60,6 +59,7 @@ pub mod interrupt;
 #[cfg(test)]
 pub(crate) mod lean_vocab_test;
 pub mod native_logging;
+mod node_readiness_publisher;
 pub mod oauth_credential;
 pub(crate) mod oauth_http;
 pub mod openai_wire;
@@ -214,32 +214,32 @@ pub(crate) mod test_support {
         }
     }
 
-    /// Install an explicit, inert inference/context/tools chain for a named test behavior.
+    /// Install an explicit, inert inference/context/tools chain for a named test agent.
     /// Schemas must already be registered. The principal's default is never changed.
-    pub(crate) async fn install_test_behavior(
+    pub(crate) async fn install_test_agent(
         node: &defra_node::EmbeddedNode,
         owner: &str,
-        behavior_id: &str,
+        agent_id: &str,
     ) {
         use crate::config_client::{
             ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
         };
         use crate::Collection;
         use serde_json::json;
-        crate::ensure_agent_principal(node, owner).await.unwrap();
-        let context = format!("{behavior_id}:context");
-        let tools = format!("{behavior_id}:tools");
-        let profile = format!("{behavior_id}:inference");
-        let backend = format!("{behavior_id}:backend");
+        crate::ensure_node(node, owner).await.unwrap();
+        let context = format!("{agent_id}:context");
+        let tools = format!("{agent_id}:tools");
+        let profile = format!("{agent_id}:inference");
+        let backend = format!("{agent_id}:backend");
         let documents = [
-            (Collection::AgentBehavior, json!({"agent_did":owner,"behavior_id":behavior_id,"context_id":context,"inference_profile_id":profile})),
-            (Collection::AgentContext, json!({"agent_did":owner,"context_id":context,"tools_id":tools})),
-            (Collection::Tools, json!({"agent_did":owner,"tools_id":tools})),
-            (Collection::InferenceProfile, json!({"agent_did":owner,"profile_id":profile,"backend_id":backend,"model_name":"test-model"})),
-            (Collection::InferenceBackend, json!({"agent_did":owner,"backend_id":backend,"name":"Test inference","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:1/v1","auth":{"kind":"unauthenticated"}})),
+            (Collection::Agent, json!({"node_did":owner,"agent_id":agent_id,"context_id":context,"inference_profile_id":profile})),
+            (Collection::AgentContext, json!({"node_did":owner,"context_id":context,"tools_id":tools})),
+            (Collection::Tools, json!({"node_did":owner,"tools_id":tools})),
+            (Collection::InferenceProfile, json!({"node_did":owner,"profile_id":profile,"backend_id":backend,"model_name":"test-model"})),
+            (Collection::InferenceBackend, json!({"node_did":owner,"backend_id":backend,"name":"Test inference","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:1/v1","auth":{"kind":"unauthenticated"}})),
         ].into_iter().map(|(collection,value)| DesiredStateApplyDocument {collection,add:value.clone(),update:value}).collect();
         let plan = DesiredStateApplyPlan::new(documents).unwrap();
-        ConfigAccess::transact_local(node, None, "test.install_behavior", |txn| {
+        ConfigAccess::transact_local(node, None, "test.install_agent", |txn| {
             let plan = &plan;
             Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, plan).await })
         })
@@ -343,7 +343,7 @@ pub(crate) mod test_support {
         plugin_output: &serde_json::Value,
     ) -> crate::graph_package::LoadedGraphPackage {
         let scope = crate::pack::PackInstallOptions {
-            agent_did: options.agent_did.clone(),
+            node_did: options.node_did.clone(),
         };
         let (_guard, dir) = fixture_pack_copy(name, plugin_output);
         let (bytes, _) = crate::pack_archive::pack_dir(&dir)
@@ -486,7 +486,7 @@ pub use admission::call_state_holds_backend_slot;
 pub use admission::BackendAdmissionConfig;
 pub use admission::{document_configured_from_fields, InferenceCall, InferenceCallRecoveryReport};
 pub use agent::{
-    BehaviorBuilder, DocumentRuntimeOptions, Gents, GentsBuilder, ProcessLifecycleObserver,
+    AgentBuilder, DocumentRuntimeOptions, Gents, GentsBuilder, ProcessLifecycleObserver,
     ProcessLifecycleState, RuntimeSnapshotObserver,
 };
 pub use backend_health::{
@@ -504,7 +504,7 @@ pub use background_completion_diagnostics::{
 };
 pub use compaction::CompactionStrategy;
 pub use config::{
-    ReasoningEffort, ResolvedBehavior, SamplingConfig, DEFAULT_COMPACTION_THRESHOLD,
+    ReasoningEffort, ResolvedAgent, SamplingConfig, DEFAULT_COMPACTION_THRESHOLD,
     DEFAULT_CONTEXT_WINDOW, DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_MAX_OUTPUT_TOKENS,
     DEFAULT_MAX_TURNS, DEFAULT_MODEL_NAME, DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
     DEFAULT_STREAM_BATCH_MS, DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
@@ -512,20 +512,19 @@ pub use config::{
 pub use config_client::ConfigAccess;
 pub use defra_node;
 #[cfg(test)]
-pub(crate) use document_config::upsert_agent_principal;
+pub(crate) use document_config::upsert_node;
 pub use document_config::{
-    chain_key_binding_by_id_query, create_chain_key_binding_mutation,
-    default_behavior_id_for_agent, default_inference_profile_id_for_behavior,
-    delete_chain_key_binding_mutation, deserialize_dual_shape, ensure_agent_principal,
-    eth_tool_by_id_query, is_reserved_builtin_tool_name, list_agent_behaviors,
-    list_chain_key_bindings_query, list_datastore_tool_surfaces, list_eth_tools,
-    list_inference_profile_records, load_agent_behavior, load_agent_principal,
-    load_inference_profile, merge_datastore_tool_surfaces, upsert_agent_behavior,
+    chain_key_binding_by_id_query, create_chain_key_binding_mutation, default_agent_id_for_node,
+    default_inference_profile_id_for_agent, default_inference_profile_id_for_node,
+    delete_chain_key_binding_mutation, deserialize_dual_shape, ensure_node, eth_tool_by_id_query,
+    is_reserved_builtin_tool_name, list_agents, list_chain_key_bindings_query,
+    list_datastore_tool_surfaces, list_eth_tools, list_inference_profile_records, load_agent,
+    load_inference_profile, load_node, merge_datastore_tool_surfaces, upsert_agent,
     upsert_chain_key_binding, upsert_chain_key_binding_mutation, upsert_inference_profile,
-    AgentBehavior as AgentBehaviorDocument, ChainKeyBindingDocument, ConfigReferences,
+    Agent as AgentDocument, AgentTargetDocument, ChainKeyBindingDocument, ConfigReferences,
     DatastoreToolSurfaceDocument, EthToolDocument, InferenceProfile, MergedSurfaceTools,
-    QueryToolDecl, SubagentTargetDocument, SurfaceToolDecl, Tools, WriteToolDecl, WriteToolField,
-    WriteToolFieldFill, WriteToolOutputObligation, WriteToolOutputObligationScope,
+    QueryToolDecl, SurfaceToolDecl, Tools, WriteToolDecl, WriteToolField, WriteToolFieldFill,
+    WriteToolOutputObligation, WriteToolOutputObligationScope,
 };
 pub use external_adapter_capture::{
     import_external_adapter_capture_to_derived_view, ExternalAdapterCapture, ExternalAdapterImport,
@@ -542,7 +541,7 @@ pub use hook::{
 pub use identity::{
     load_macos_keychain_identity, load_macos_secure_enclave_identity,
     load_or_create_macos_keychain_identity, load_or_create_macos_secure_enclave_identity,
-    AgentIdentity, KeyIdentity, RegisteredIdentity, RuntimePrincipal, ServiceAccount,
+    KeyIdentity, NodeIdentity, RegisteredIdentity, RuntimeNode, ServiceAccount,
 };
 pub use interrupt::{
     fetch_interrupt_requested_at, fetch_interrupt_requested_at_by_doc_id, interrupt_request,
@@ -585,13 +584,13 @@ pub use runtime_snapshot::{
     MAX_EVENT_TRIGGER_GROUP_DOCS,
 };
 #[cfg(feature = "agent-memory")]
-pub use schema::AGENT_MEMORY_SCHEMA;
+pub use schema::NODE_MEMORY_SCHEMA;
 pub use schema::{
-    ensure_runtime_schemas, AGENT_BEHAVIOR_SCHEMA, AGENT_MESSAGE_SCHEMA,
-    AGENT_OUTPUT_SEGMENT_SCHEMA, AGENT_PRINCIPAL_SCHEMA, AGENT_REQUEST_SCHEMA,
-    AGENT_RUNTIME_SCHEMA, AGENT_SESSION_SCHEMA, AGENT_TOOL_CALL_SCHEMA, COMPACTION_ENTRY_SCHEMA,
-    GOAL_SCHEMA, INFERENCE_BACKEND_SCHEMA, INFERENCE_CALL_SCHEMA, INFERENCE_PROFILE_SCHEMA,
-    MAILBOX_ITEM_SCHEMA, OAUTH_CREDENTIAL_SCHEMA, SCHEDULE_SCHEMA, TASK_SCHEMA, TOOLS_SCHEMA,
+    ensure_runtime_schemas, AGENT_MESSAGE_SCHEMA, AGENT_OUTPUT_SEGMENT_SCHEMA,
+    AGENT_REQUEST_SCHEMA, AGENT_SCHEMA, AGENT_SESSION_SCHEMA, AGENT_TOOL_CALL_SCHEMA,
+    COMPACTION_ENTRY_SCHEMA, GOAL_SCHEMA, INFERENCE_BACKEND_SCHEMA, INFERENCE_CALL_SCHEMA,
+    INFERENCE_PROFILE_SCHEMA, MAILBOX_ITEM_SCHEMA, NODE_RUNTIME_SCHEMA, NODE_SCHEMA,
+    OAUTH_CREDENTIAL_SCHEMA, SCHEDULE_SCHEMA, TASK_SCHEMA, TOOLS_SCHEMA,
     TOOL_SERVICE_HEALTH_STATE_SCHEMA, TOOL_SERVICE_REGISTRY_SCHEMA,
 };
 pub use session::load_history;
@@ -603,8 +602,9 @@ pub use template::{
 };
 pub use tool_control::{cancel_background_tool_call, CancelBackgroundToolCallOutcome};
 pub use tool_surface::{
-    cli_tool, BashMode, BehaviorToolConfig, CustomToolFactory, FileToolMode, ResolvedToolSelection,
-    ToolCeiling, ToolPolicyVersion, ToolRuntimeContext, ToolSurface, TOOL_POLICY_V1,
+    cli_tool, AgentToolSurfaceConfig, BashMode, CustomToolFactory, FileToolMode,
+    ResolvedToolSelection, ToolCeiling, ToolPolicyVersion, ToolRuntimeContext, ToolSurface,
+    TOOL_POLICY_V1,
 };
 pub use toolset::{
     build_native_tools, enable_self_runner, CliToolConfig, CommandExecutionMode,
@@ -620,7 +620,7 @@ pub use watcher::{AgentRequest, DefraWatcher, Watcher};
 
 #[doc(hidden)]
 pub mod __test_internals {
-    pub use crate::agent::principal_assembly::BehaviorBuildError;
+    pub use crate::agent::principal_assembly::AgentBuildError;
     pub use crate::lifecycle::activate_workspace_bound_request;
     pub use crate::lifecycle::materialize::EnqueuedAgentRequest;
     pub use crate::lifecycle::queue::{reconcile_coalesced_pending_request, QueueSource};

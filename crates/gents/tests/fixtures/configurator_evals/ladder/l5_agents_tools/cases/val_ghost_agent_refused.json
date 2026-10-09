@@ -1,5 +1,5 @@
 {
-  "case_id": "val-ghost-behavior-refused",
+  "case_id": "val-ghost-agent-refused",
   "split": "validation",
   "reducer": "all",
   "stages": [
@@ -47,15 +47,15 @@
       "capture": [
         {
           "kind": "documents",
-          "name": "behaviors",
-          "collection": "AgentBehavior",
+          "name": "agents",
+          "collection": "Agent",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
           "fields": [
-            "behavior_id",
+            "agent_id",
             "display_name",
             "context_id",
             "enabled",
@@ -67,7 +67,7 @@
           "name": "contexts",
           "collection": "AgentContext",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
@@ -82,7 +82,7 @@
           "name": "tools",
           "collection": "Tools",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
@@ -90,25 +90,25 @@
             "tools_id",
             "host",
             "datastore",
-            "subagents",
+            "agents",
             "self_config"
           ]
         },
         {
           "kind": "documents",
           "name": "targets",
-          "collection": "SubagentTarget",
+          "collection": "AgentTarget",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
           "fields": [
             "target_id",
-            "agent_did",
+            "node_did",
             "name",
-            "target_agent_did",
-            "behavior_id"
+            "target_node_did",
+            "agent_id"
           ]
         }
       ]

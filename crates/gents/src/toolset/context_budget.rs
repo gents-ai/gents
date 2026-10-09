@@ -41,8 +41,8 @@ pub struct LastRequestContextSnapshot {
 
 #[derive(Debug, Deserialize)]
 struct ContextEnvelope {
-    #[serde(rename = "AgentBehavior", default)]
-    behaviors: Vec<BehaviorRow>,
+    #[serde(rename = "Agent", default)]
+    agents: Vec<AgentRow>,
     #[serde(rename = "InferenceProfile", default)]
     profiles: Vec<ProfileRow>,
     #[serde(rename = "AgentRequest", default)]
@@ -60,7 +60,7 @@ struct CompactionEnvelope {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-struct BehaviorRow {
+struct AgentRow {
     #[serde(default)]
     inference_profile_id: Option<String>,
     #[serde(default)]
@@ -123,14 +123,14 @@ impl From<anyhow::Error> for ContextBudgetToolError {
 #[derive(Clone)]
 pub struct ContextBudgetTool {
     node: Arc<EmbeddedNode>,
-    agent_did: String,
+    node_did: String,
 }
 
 impl ContextBudgetTool {
-    pub fn new(node: Arc<EmbeddedNode>, agent_did: impl Into<String>) -> Self {
+    pub fn new(node: Arc<EmbeddedNode>, node_did: impl Into<String>) -> Self {
         Self {
             node,
-            agent_did: agent_did.into(),
+            node_did: node_did.into(),
         }
     }
 }
@@ -158,7 +158,7 @@ impl Tool for ContextBudgetTool {
     }
 
     async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let snapshot = load_context_budget_snapshot(&self.node, &self.agent_did).await?;
+        let snapshot = load_context_budget_snapshot(&self.node, &self.node_did).await?;
         crate::tool_output::render(
             &snapshot,
             &[
@@ -180,29 +180,29 @@ impl Tool for ContextBudgetTool {
 
 pub fn build_context_budget_tool(
     node: Arc<EmbeddedNode>,
-    agent_did: impl Into<String>,
+    node_did: impl Into<String>,
 ) -> Box<dyn ToolDyn> {
-    Box::new(ContextBudgetTool::new(node, agent_did))
+    Box::new(ContextBudgetTool::new(node, node_did))
 }
 
 pub async fn load_context_budget_snapshot(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
 ) -> Result<ContextBudgetSnapshot> {
-    let agent_did = agent_did.trim();
-    if agent_did.is_empty() {
-        bail!("context_budget tool requires a running agent DID");
+    let node_did = node_did.trim();
+    if node_did.is_empty() {
+        bail!("context_budget tool requires a running node DID");
     }
 
     let resp =
-        graphql_with_transaction_retry(node, &context_query(agent_did), "loading context budget")
+        graphql_with_transaction_retry(node, &context_query(node_did), "loading context budget")
             .await?;
     let envelope: ContextEnvelope = decode(resp.data.as_ref(), "context budget")?;
     let last_request = latest_request_context(&envelope.inference_calls)?;
     let max_tokens = last_request
         .as_ref()
         .map(|request| request.accounting.context_window as i64)
-        .or_else(|| max_context_window(&envelope.behaviors, &envelope.profiles));
+        .or_else(|| max_context_window(&envelope.agents, &envelope.profiles));
     let session_ids = distinct_session_ids(&envelope.requests);
 
     let compactions = if session_ids.is_empty() {
@@ -210,7 +210,7 @@ pub async fn load_context_budget_snapshot(
     } else {
         let resp = graphql_with_transaction_retry(
             node,
-            &compaction_query(agent_did, &session_ids),
+            &compaction_query(node_did, &session_ids),
             "loading context compactions",
         )
         .await?;
@@ -230,11 +230,11 @@ pub async fn load_context_budget_snapshot(
     ))
 }
 
-fn context_query(agent_did: &str) -> String {
-    let agent_did = escape_graphql_string(agent_did);
+fn context_query(node_did: &str) -> String {
+    let node_did = escape_graphql_string(node_did);
     format!(
         r#"{{
-            AgentBehavior(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}, order: {{ behavior_id: ASC }}) {{
+            Agent(filter: {{ node_did: {{ _eq: "{node_did}" }} }}, order: {{ agent_id: ASC }}) {{
                 inference_profile_id
                 enabled
             }}
@@ -242,13 +242,13 @@ fn context_query(agent_did: &str) -> String {
                 profile_id
                 context_window
             }}
-            AgentRequest(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}, order: {{ created_at: DESC }}, limit: {RECENT_REQUEST_SCAN}) {{
+            AgentRequest(filter: {{ node_did: {{ _eq: "{node_did}" }} }}, order: {{ created_at: DESC }}, limit: {RECENT_REQUEST_SCAN}) {{
                 request_id
                 session_id
             }}
             InferenceCall(
                 filter: {{
-                    agent_did: {{ _eq: "{agent_did}" }},
+                    node_did: {{ _eq: "{node_did}" }},
                     call_kind: {{ _eq: "inference" }}
                 }},
                 order: {{ queued_at: DESC }},
@@ -264,8 +264,8 @@ fn context_query(agent_did: &str) -> String {
     )
 }
 
-fn compaction_query(agent_did: &str, session_ids: &[String]) -> String {
-    let agent_did = escape_graphql_string(agent_did);
+fn compaction_query(node_did: &str, session_ids: &[String]) -> String {
+    let node_did = escape_graphql_string(node_did);
     let list = session_ids
         .iter()
         .map(|id| format!(r#""{}""#, escape_graphql_string(id)))
@@ -274,7 +274,7 @@ fn compaction_query(agent_did: &str, session_ids: &[String]) -> String {
     format!(
         r#"{{
             CompactionEntry(filter: {{ _and: [
-                {{ agent_did: {{ _eq: "{agent_did}" }} }},
+                {{ node_did: {{ _eq: "{node_did}" }} }},
                 {{ session_id: {{ _in: [{list}] }} }}
             ] }}, order: {{ created_at: DESC }}) {{
                 created_at
@@ -282,7 +282,7 @@ fn compaction_query(agent_did: &str, session_ids: &[String]) -> String {
                 compacted_tokens
             }}
             ProviderContextReduction(filter: {{ _and: [
-                {{ agent_did: {{ _eq: "{agent_did}" }} }},
+                {{ node_did: {{ _eq: "{node_did}" }} }},
                 {{ session_id: {{ _in: [{list}] }} }}
             ] }}, order: {{ created_at: DESC }}) {{
                 created_at
@@ -301,7 +301,7 @@ fn decode<T: serde::de::DeserializeOwned>(data: Option<&Value>, label: &str) -> 
     serde_json::from_value(data).with_context(|| format!("decoding {label} query response"))
 }
 
-fn max_context_window(behaviors: &[BehaviorRow], profiles: &[ProfileRow]) -> Option<i64> {
+fn max_context_window(agents: &[AgentRow], profiles: &[ProfileRow]) -> Option<i64> {
     let profiles = profiles
         .iter()
         .filter_map(|profile| {
@@ -311,10 +311,10 @@ fn max_context_window(behaviors: &[BehaviorRow], profiles: &[ProfileRow]) -> Opt
         })
         .collect::<BTreeMap<_, _>>();
 
-    behaviors
+    agents
         .iter()
-        .filter(|behavior| behavior.enabled.unwrap_or(true))
-        .filter_map(|behavior| behavior.inference_profile_id.as_deref())
+        .filter(|agent| agent.enabled.unwrap_or(true))
+        .filter_map(|agent| agent.inference_profile_id.as_deref())
         .filter_map(|profile_id| profiles.get(profile_id.trim()).copied())
         .max()
 }
@@ -417,9 +417,9 @@ mod tests {
                 }) { _docID }
             }"#,
             r#"mutation {
-                create_AgentBehavior(input: {
-                    behavior_id: "behavior-context",
-                    agent_did: "did:key:z-context",
+                create_Agent(input: {
+                    agent_id: "agent-context",
+                    node_did: "did:key:z-context",
                     inference_profile_id: "profile-context",
                     enabled: true
                 }) { _docID }
@@ -428,7 +428,7 @@ mod tests {
                 create_AgentRequest(input: {
                     request_id: "request-context",
                     purpose: "normal",
-                    agent_did: "did:key:z-context",
+                    node_did: "did:key:z-context",
                     session_id: "session-context",
                     lifecycle_state: "completed",
                     created_at: "2026-06-03T10:00:00Z"
@@ -438,7 +438,7 @@ mod tests {
                 create_CompactionEntry(input: {
                     compaction_key: "session-context:1",
                     session_id: "session-context",
-                    agent_did: "did:key:z-context",
+                    node_did: "did:key:z-context",
                     sequence: 1,
                     original_tokens: 800,
                     compacted_tokens: 400,
@@ -448,7 +448,7 @@ mod tests {
             r#"mutation {
                 create_ProviderContextReduction(input: {
                     reduction_key: "context-reduction:1",
-                    agent_did: "did:key:z-context",
+                    node_did: "did:key:z-context",
                     requester_did: null,
                     session_id: "session-context",
                     request_id: "request-context",
@@ -507,7 +507,7 @@ mod tests {
                         call_id: "context-call",
                         request_id: "request-context",
                         request_doc_id: "request-context-doc",
-                        agent_did: "did:key:z-context",
+                        node_did: "did:key:z-context",
                         call_kind: "inference",
                         call_seq: 1,
                         queued_at: "2026-06-03T11:00:00Z",

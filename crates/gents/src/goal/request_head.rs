@@ -11,7 +11,7 @@ use gents_protocol::row::AgentRequestRow;
 /// Historical children can have different inherited optional fields; their
 /// original target signature still binds the exact physical predecessor.
 pub(crate) fn verify_goal_continuation_edge(
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     goal_id: &str,
     parent_row: &AgentRequestRow,
@@ -20,7 +20,7 @@ pub(crate) fn verify_goal_continuation_edge(
     anyhow::ensure!(
         parent_row.purpose == Some(RequestPurpose::Normal)
             && child.purpose == Some(RequestPurpose::Normal)
-            && parent_row.agent_did.as_deref() == Some(agent_did)
+            && parent_row.node_did.as_deref() == Some(node_did)
             && parent_row.session_id.as_deref() == Some(session_id)
             && child.session_id.as_deref() == Some(session_id),
         "continuation predecessor is outside the goal owner/session"
@@ -32,9 +32,9 @@ pub(crate) fn verify_goal_continuation_edge(
         .context("continuation predecessor has no document ID")?;
     verify_runtime_local_control_receipt(
         child,
-        agent_did,
+        node_did,
         &parent_row.request_id,
-        parent_row.requester_did.as_deref().unwrap_or(agent_did),
+        parent_row.requester_did.as_deref().unwrap_or(node_did),
     )?;
     anyhow::ensure!(
         child.caused_by_parent_request_doc_id.as_deref() == Some(parent_doc)
@@ -68,17 +68,17 @@ pub(super) fn verify_goal_continuation_receipt(
     child: &AgentRequestRow,
 ) -> Result<()> {
     let (sequence, wrapup) = verify_goal_continuation_edge(
-        &goal.agent_did,
+        &goal.node_did,
         &goal.session_id,
         &goal.goal_id,
         parent_row,
         child,
     )?;
     let parent = crate::watcher::AgentRequest::try_from(parent_row.clone())?;
-    let behavior = parent.behavior_id.clone();
+    let agent_id = parent.agent_id.clone();
     let expected = prepare_goal_continuation(
         &parent,
-        behavior,
+        agent_id,
         &goal.goal_id,
         child
             .content
@@ -91,7 +91,7 @@ pub(super) fn verify_goal_continuation_receipt(
             .as_deref()
             .context("continuation receipt lacks creation time")?,
         child
-            .subagent_depth
+            .request_hop
             .and_then(|hop| u32::try_from(hop).ok())
             .context("continuation receipt lacks its hop")?,
     )?;
@@ -115,12 +115,12 @@ pub(crate) fn latest_goal_request<'a>(
         .assignment_root_request_doc_id
         .as_deref()
         .map(|root| {
-            authenticated_goal_request_members(&goal.agent_did, &goal.session_id, root, rows)
+            authenticated_goal_request_members(&goal.node_did, &goal.session_id, root, rows)
         })
         .transpose()
         .ok()?;
     latest_scoped_request(
-        &goal.agent_did,
+        &goal.node_did,
         &goal.session_id,
         Some(&goal.goal_id),
         rows,
@@ -133,15 +133,15 @@ pub(crate) fn latest_goal_request<'a>(
 /// Preserve original signed physical ancestry across canonical Goal replacement.
 /// Association with a current Goal is checked separately by the graph owner.
 pub(crate) fn latest_authenticated_session_request<'a>(
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     rows: &'a [AgentRequestRow],
 ) -> Option<&'a AgentRequestRow> {
-    latest_scoped_request(agent_did, session_id, None, rows, None)
+    latest_scoped_request(node_did, session_id, None, rows, None)
 }
 
 fn latest_scoped_request<'a>(
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     goal_id: Option<&str>,
     rows: &'a [AgentRequestRow],
@@ -150,7 +150,7 @@ fn latest_scoped_request<'a>(
     let in_scope = |row: &&AgentRequestRow| {
         allowed_docs.is_none_or(|docs| row.doc_id.as_ref().is_some_and(|doc| docs.contains(doc)))
             && row.purpose == Some(RequestPurpose::Normal)
-            && row.agent_did.as_deref() == Some(agent_did)
+            && row.node_did.as_deref() == Some(node_did)
             && row.session_id.as_deref() == Some(session_id)
     };
     rows.iter().filter(in_scope).find(|parent| {
@@ -165,7 +165,7 @@ fn latest_scoped_request<'a>(
                 && child.caused_by_trigger_kind.as_deref() == Some(GOAL_TRIGGER_KIND)
                 && goal_id.is_none_or(|expected| expected == original_goal_id)
                 && verify_goal_continuation_edge(
-                    agent_did,
+                    node_did,
                     session_id,
                     original_goal_id,
                     parent,
@@ -191,14 +191,14 @@ pub(crate) struct AuthenticatedGoalRequestMembers<'a> {
 /// candidate rows cannot contribute writes to its logical invocation. Each
 /// historical edge retains its own signed Goal ID across Goal replacement.
 pub(crate) fn authenticated_goal_request_members<'a>(
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     current_doc_id: &str,
     rows: &'a [AgentRequestRow],
 ) -> Result<AuthenticatedGoalRequestMembers<'a>> {
     let mut by_doc = std::collections::HashMap::new();
     for row in rows.iter().filter(|row| {
-        row.agent_did.as_deref() == Some(agent_did) && row.session_id.as_deref() == Some(session_id)
+        row.node_did.as_deref() == Some(node_did) && row.session_id.as_deref() == Some(session_id)
     }) {
         let Some(doc) = row.doc_id.as_deref().filter(|doc| !doc.is_empty()) else {
             continue;
@@ -211,7 +211,7 @@ pub(crate) fn authenticated_goal_request_members<'a>(
     let current = *by_doc
         .get(current_doc_id)
         .context("current request is absent from its owner/session observation")?;
-    let entry = authenticated_entry(agent_did, session_id, current, &by_doc)?;
+    let entry = authenticated_entry(node_did, session_id, current, &by_doc)?;
     let entry_doc = entry
         .doc_id
         .as_deref()
@@ -219,7 +219,7 @@ pub(crate) fn authenticated_goal_request_members<'a>(
     let mut member_doc_ids = by_doc
         .iter()
         .filter_map(|(doc, row)| {
-            authenticated_entry(agent_did, session_id, row, &by_doc)
+            authenticated_entry(node_did, session_id, row, &by_doc)
                 .ok()
                 .filter(|root| root.doc_id.as_deref() == Some(entry_doc))
                 .map(|_| (*doc).to_owned())
@@ -246,7 +246,7 @@ pub(crate) fn authenticated_goal_request_members<'a>(
 }
 
 fn authenticated_entry<'a>(
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     mut row: &'a AgentRequestRow,
     by_doc: &std::collections::HashMap<&'a str, &'a AgentRequestRow>,
@@ -273,7 +273,7 @@ fn authenticated_entry<'a>(
         let parent = *by_doc
             .get(parent_doc)
             .context("Goal continuation parent is absent from its owner/session observation")?;
-        verify_goal_continuation_edge(agent_did, session_id, goal_id, parent, row)?;
+        verify_goal_continuation_edge(node_did, session_id, goal_id, parent, row)?;
         row = parent;
     }
 }
@@ -305,10 +305,10 @@ pub(super) async fn retire_stale_assignment_continuations_in_txn(
     let Some(root) = goal.assignment_root_request_doc_id.as_deref() else {
         return Ok(true);
     };
-    let owner = escape_graphql_string(&goal.agent_did);
+    let owner = escape_graphql_string(&goal.node_did);
     let session = escape_graphql_string(&goal.session_id);
     let response = txn.execute_local_response(&format!(
-        r#"{{AgentRequest(filter: {{agent_did: {{_eq: "{owner}"}}, session_id: {{_eq: "{session}"}}}}) {{{}}}}}"#,
+        r#"{{AgentRequest(filter: {{node_did: {{_eq: "{owner}"}}, session_id: {{_eq: "{session}"}}}}) {{{}}}}}"#,
         crate::request_admission::SIGNED_REQUEST_FIELDS
     )).await?;
     let requests: Vec<AgentRequestRow> = crate::graphql::rows(&response, "AgentRequest")?;
@@ -324,7 +324,7 @@ pub(super) async fn retire_stale_assignment_continuations_in_txn(
         return Ok(true);
     }
     let binding =
-        authenticated_goal_request_members(&goal.agent_did, &goal.session_id, root, &requests)?;
+        authenticated_goal_request_members(&goal.node_did, &goal.session_id, root, &requests)?;
     anyhow::ensure!(
         binding.entry.doc_id.as_deref() == Some(root),
         "Task assignment root is a continuation"
@@ -336,7 +336,7 @@ pub(super) async fn retire_stale_assignment_continuations_in_txn(
             .as_deref()
             .context("Goal continuation has no document ID")?;
         let members =
-            authenticated_goal_request_members(&goal.agent_did, &goal.session_id, doc, &requests)?;
+            authenticated_goal_request_members(&goal.node_did, &goal.session_id, doc, &requests)?;
         if assignment_allows(Some(root), members.entry.doc_id.as_deref()) {
             continue;
         }
@@ -344,7 +344,7 @@ pub(super) async fn retire_stale_assignment_continuations_in_txn(
         let reason = "superseded by a newer Task Goal assignment";
         let mutation = crate::lifecycle::queue::supersede_pending_mutation(
             doc,
-            &goal.agent_did,
+            &goal.node_did,
             &binding.entry.request_id,
             root,
             reason,
@@ -358,7 +358,7 @@ pub(super) async fn retire_stale_assignment_continuations_in_txn(
         {
             crate::trigger_engine::durable::publish_request_outcome(
                 txn,
-                &goal.agent_did,
+                &goal.node_did,
                 &row.request_id,
                 "superseded",
                 reason,
@@ -378,8 +378,8 @@ pub(crate) async fn assignment_request_id_in_txn(
         return Ok(None);
     };
     let response = txn.execute_local_response(&format!(
-        r#"{{AgentRequest(filter: {{_docID: {{_eq: "{}"}}, agent_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}}}) {{request_id}}}}"#,
-        escape_graphql_string(root), escape_graphql_string(&goal.agent_did), escape_graphql_string(&goal.session_id)
+        r#"{{AgentRequest(filter: {{_docID: {{_eq: "{}"}}, node_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}}}) {{request_id}}}}"#,
+        escape_graphql_string(root), escape_graphql_string(&goal.node_did), escape_graphql_string(&goal.session_id)
     )).await?;
     let requests: Vec<AgentRequestRow> = crate::graphql::rows(&response, "AgentRequest")?;
     anyhow::ensure!(

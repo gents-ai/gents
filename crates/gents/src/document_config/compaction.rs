@@ -119,7 +119,7 @@ mod tests {
     #[test]
     fn compaction_rejects_nonfinite_thresholds_and_nonpositive_limits() {
         let mut config: CompactionConfig =
-            serde_json::from_value(json!({"agent_did":"owner","compaction_id":"compact"})).unwrap();
+            serde_json::from_value(json!({"node_did":"owner","compaction_id":"compact"})).unwrap();
         assert!(config.validate().is_ok());
         for threshold in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 0.0, -0.1, 1.01] {
             config.threshold = Some(threshold);

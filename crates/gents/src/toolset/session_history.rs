@@ -71,7 +71,7 @@ pub struct SessionHistoryParams {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SessionHistorySnapshot {
-    pub agent_did: String,
+    pub node_did: String,
     pub limit: usize,
     pub sessions: Vec<SessionHistoryRow>,
 }
@@ -81,7 +81,7 @@ pub struct SessionHistoryRow {
     pub session_id: String,
     #[serde(default)]
     pub is_current: bool,
-    pub behavior_id: Option<String>,
+    pub agent_id: Option<String>,
     pub title: Option<gents_protocol::session::SessionTitle>,
     pub tags: Vec<String>,
     pub created_at: Option<String>,
@@ -98,7 +98,7 @@ pub struct SessionHistoryRow {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SessionInvestigationSnapshot {
-    pub agent_did: String,
+    pub node_did: String,
     pub session_id: String,
     pub requests: Vec<SessionRequestEvent>,
     pub tool_calls: SessionToolCallStats,
@@ -149,7 +149,7 @@ pub struct SessionTokenUsage {
     pub incomplete: bool,
 }
 
-/// Read-only accounting for one exact session/principal/requester scope.
+/// Read-only accounting for one exact session/node/requester scope.
 /// Context occupancy and cumulative inference usage are distinct quantities.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SessionInferenceObservation {
@@ -171,23 +171,23 @@ pub struct RequestContextObservation {
 /// newest inference call of one physically resolved, exactly scoped request.
 pub async fn load_request_context_observation(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     requester_did: Option<&str>,
     session_id: &str,
     request_id: &str,
 ) -> Result<Option<RequestContextObservation>> {
     anyhow::ensure!(
-        !agent_did.trim().is_empty()
+        !node_did.trim().is_empty()
             && !session_id.trim().is_empty()
             && !request_id.trim().is_empty(),
-        "request accounting requires a principal, session, and request"
+        "request accounting requires a node, session, and request"
     );
     let requester = requester_did
         .map(|did| format!(r#""{}""#, escape_graphql_string(did)))
         .unwrap_or_else(|| "null".into());
     let response = graphql_with_transaction_retry(node, &format!(r#"{{ AgentRequest(filter: {{
-        purpose: {{_eq: "normal"}}, request_id: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}, agent_did: {{_eq: "{}"}}, requester_did: {{_eq: {requester}}}
-    }}, limit: 2) {{_docID request_id agent_did requester_did session_id}} }}"#, escape_graphql_string(request_id), escape_graphql_string(session_id), escape_graphql_string(agent_did)), "context request ownership").await?;
+        purpose: {{_eq: "normal"}}, request_id: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}, node_did: {{_eq: "{}"}}, requester_did: {{_eq: {requester}}}
+    }}, limit: 2) {{_docID request_id node_did requester_did session_id}} }}"#, escape_graphql_string(request_id), escape_graphql_string(session_id), escape_graphql_string(node_did)), "context request ownership").await?;
     let requests: Vec<AgentRequestRow> = serde_json::from_value(
         response
             .data
@@ -210,11 +210,11 @@ pub async fn load_pinned_request_context_observation(
     node: &EmbeddedNode,
     owner: &AgentRequestRow,
 ) -> Result<Option<RequestContextObservation>> {
-    let agent_did = owner
-        .agent_did
+    let node_did = owner
+        .node_did
         .as_deref()
         .filter(|id| !id.is_empty())
-        .context("context request lacks principal")?;
+        .context("context request lacks node")?;
     anyhow::ensure!(
         owner.session_id.as_deref().is_some_and(|id| !id.is_empty())
             && !owner.request_id.is_empty(),
@@ -226,7 +226,7 @@ pub async fn load_pinned_request_context_observation(
         .filter(|id| !id.is_empty())
         .context("context request lacks physical identity")?;
     let scope = crate::session::session_scope_filter(
-        agent_did,
+        node_did,
         owner.session_id.as_deref().unwrap(),
         owner.requester_did.as_deref(),
     );
@@ -246,11 +246,11 @@ pub async fn load_pinned_request_context_observation(
         node,
         &format!(
             r#"{{ InferenceCall(filter: {{
-        agent_did: {{_eq: "{}"}}, request_doc_id: {{_eq: "{}"}}, call_kind: {{_eq: "inference"}}
+        node_did: {{_eq: "{}"}}, request_doc_id: {{_eq: "{}"}}, call_kind: {{_eq: "inference"}}
     }}, order: [{{queued_at: DESC}}, {{call_seq: DESC}}, {{call_id: DESC}}], limit: 1) {{
         {INFERENCE_DETAIL_FIELDS}
     }} }}"#,
-            escape_graphql_string(agent_did),
+            escape_graphql_string(node_did),
             escape_graphql_string(&doc)
         ),
         "live context observation",
@@ -277,13 +277,13 @@ pub async fn load_pinned_request_context_observation(
 /// Missing requester is an exact null identity, never a wildcard.
 pub async fn load_session_inference_observation(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     requester_did: Option<&str>,
     session_id: &str,
 ) -> Result<SessionInferenceObservation> {
     anyhow::ensure!(
-        !agent_did.trim().is_empty() && !session_id.trim().is_empty(),
-        "session accounting requires a principal and session"
+        !node_did.trim().is_empty() && !session_id.trim().is_empty(),
+        "session accounting requires a node and session"
     );
     let requester = requester_did
         .map(|did| format!(r#""{}""#, escape_graphql_string(did)))
@@ -292,9 +292,9 @@ pub async fn load_session_inference_observation(
         node,
         &format!(
             r#"{{ AgentRequest(filter: {{
-        purpose: {{_eq: "normal"}}, agent_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}, requester_did: {{_eq: {requester}}}
+        purpose: {{_eq: "normal"}}, node_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}, requester_did: {{_eq: {requester}}}
     }}) {{_docID request_id}} }}"#,
-            escape_graphql_string(agent_did),
+            escape_graphql_string(node_did),
             escape_graphql_string(session_id)
         ),
         "session accounting ownership",
@@ -320,7 +320,7 @@ pub async fn load_session_inference_observation(
     for batch in ids.chunks(128) {
         let response = graphql_with_transaction_retry(
             node,
-            &session_investigation_calls_query(agent_did, batch),
+            &session_investigation_calls_query(node_did, batch),
             "session inference observations",
         )
         .await?;
@@ -384,8 +384,8 @@ struct InvestigationEnvelope {
     compactions: Vec<CompactionRow>,
     #[serde(rename = "ProviderContextReduction", default)]
     provider_reductions: Vec<CompactionRow>,
-    #[serde(rename = "AgentBehavior", default)]
-    behaviors: Vec<BehaviorDetailRow>,
+    #[serde(rename = "Agent", default)]
+    agents: Vec<AgentDetailRow>,
     #[serde(rename = "AgentContext", default)]
     contexts: Vec<ContextDetailRow>,
     #[serde(rename = "CompactionConfig", default)]
@@ -407,7 +407,7 @@ struct SessionRow {
     #[serde(default)]
     session_id: String,
     #[serde(default)]
-    behavior_id: Option<String>,
+    agent_id: Option<String>,
     #[serde(default)]
     title: Option<gents_protocol::session::SessionTitle>,
     #[serde(default, deserialize_with = "deserialize_null_tags")]
@@ -485,9 +485,9 @@ struct InferenceDetailRow {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-struct BehaviorDetailRow {
+struct AgentDetailRow {
     #[serde(default)]
-    behavior_id: String,
+    agent_id: String,
     #[serde(default)]
     inference_profile_id: Option<String>,
     #[serde(default)]
@@ -544,14 +544,14 @@ impl From<anyhow::Error> for SessionHistoryToolError {
 #[derive(Clone)]
 pub struct SessionHistoryTool {
     node: Arc<EmbeddedNode>,
-    agent_did: String,
+    node_did: String,
 }
 
 impl SessionHistoryTool {
-    pub fn new(node: Arc<EmbeddedNode>, agent_did: impl Into<String>) -> Self {
+    pub fn new(node: Arc<EmbeddedNode>, node_did: impl Into<String>) -> Self {
         Self {
             node,
-            agent_did: agent_did.into(),
+            node_did: node_did.into(),
         }
     }
 }
@@ -578,7 +578,7 @@ impl Tool for SessionHistoryTool {
                     "limit":{"type":"integer","minimum":1,"maximum":100},
                     "session_id":{"type":"string","minLength":1,"description":"Session ID returned by list or search; required for get and transcript. Output defaults to the current session."},
                     "filter":{"type":"object","additionalProperties":false,"properties":{
-                        "behavior_id":{"type":"string"},"status":{"type":"string","enum":["open","closed"]},
+                        "agent_id":{"type":"string"},"status":{"type":"string","enum":["open","closed"]},
                         "tag":{"type":"string"},"created_after":{"type":"string"},"created_before":{"type":"string"},"text":{"type":"string","description":"Title or session ID substring only; use query to search transcript text."}
                     }},
                     "cursor":{"type":"string","description":"Previous next_cursor with the same action and filters."},"query":{"type":"string","minLength":1,"description":"Required for search: literal case-insensitive substring of title, ID or transcript."},"details":{"type":"boolean","description":"Include accounting and timeline for get."},
@@ -620,21 +620,18 @@ impl Tool for SessionHistoryTool {
 
 pub fn build_session_history_tool(
     node: Arc<EmbeddedNode>,
-    agent_did: impl Into<String>,
+    node_did: impl Into<String>,
 ) -> Box<dyn ToolDyn> {
-    Box::new(SessionHistoryTool::new(node, agent_did))
+    Box::new(SessionHistoryTool::new(node, node_did))
 }
 
 pub async fn load_session_history_snapshot(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     limit: Option<usize>,
 ) -> Result<SessionHistorySnapshot> {
-    let agent = agent_did.trim().to_owned();
-    anyhow::ensure!(
-        !agent.is_empty(),
-        "session history requires a principal DID"
-    );
+    let agent = node_did.trim().to_owned();
+    anyhow::ensure!(!agent.is_empty(), "session history requires a node DID");
     crate::config_client::ConfigAccess::transact_local(node, None, "session.history", move |txn| {
         let agent = agent.clone();
         Box::pin(async move { load_session_history_in_txn(txn, &agent, limit).await })
@@ -644,14 +641,11 @@ pub async fn load_session_history_snapshot(
 
 pub async fn load_session_history_snapshot_with_access(
     access: &crate::config_client::ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
     limit: Option<usize>,
 ) -> Result<SessionHistorySnapshot> {
-    let agent = agent_did.trim().to_owned();
-    anyhow::ensure!(
-        !agent.is_empty(),
-        "session history requires a principal DID"
-    );
+    let agent = node_did.trim().to_owned();
+    anyhow::ensure!(!agent.is_empty(), "session history requires a node DID");
     access
         .transact("session.history", move |txn| {
             let agent = agent.clone();
@@ -662,11 +656,11 @@ pub async fn load_session_history_snapshot_with_access(
 
 async fn load_session_history_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
-    agent_did: &str,
+    node_did: &str,
     limit: Option<usize>,
 ) -> Result<SessionHistorySnapshot> {
     let limit = clamp_limit(limit);
-    let response = txn.execute(&session_index_query(agent_did, limit)).await?;
+    let response = txn.execute(&session_index_query(node_did, limit)).await?;
     let envelope: SessionIndexEnvelope = decode(response.get("data"), "session index")?;
     let ids = envelope
         .sessions
@@ -676,14 +670,14 @@ async fn load_session_history_in_txn(
     let sessions = if ids.is_empty() {
         Vec::new()
     } else {
-        let response = txn.execute(&session_detail_query(agent_did, &ids)).await?;
+        let response = txn.execute(&session_detail_query(node_did, &ids)).await?;
         build_session_rows(
             &ids,
             decode(response.get("data"), "session history details")?,
         )
     };
     Ok(SessionHistorySnapshot {
-        agent_did: agent_did.to_owned(),
+        node_did: node_did.to_owned(),
         limit,
         sessions,
     })
@@ -691,18 +685,18 @@ async fn load_session_history_in_txn(
 
 pub async fn load_session_investigation(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
 ) -> Result<SessionInvestigationSnapshot> {
-    let agent_did = agent_did.trim();
+    let node_did = node_did.trim();
     let session_id = session_id.trim();
-    if agent_did.is_empty() || session_id.is_empty() {
-        bail!("sessions get requires a running agent DID and non-empty session_id");
+    if node_did.is_empty() || session_id.is_empty() {
+        bail!("sessions get requires a running node DID and non-empty session_id");
     }
 
     let response = graphql_with_transaction_retry(
         node,
-        &session_investigation_query(agent_did, session_id),
+        &session_investigation_query(node_did, session_id),
         "loading session investigation",
     )
     .await?;
@@ -721,7 +715,7 @@ pub async fn load_session_investigation(
     }
     let response = graphql_with_transaction_retry(
         node,
-        &session_investigation_calls_query(agent_did, &request_doc_ids),
+        &session_investigation_calls_query(node_did, &request_doc_ids),
         "loading session investigation calls",
     )
     .await?;
@@ -744,17 +738,17 @@ pub async fn load_session_investigation(
         };
         audit_usage.push(observation);
     }
-    let mut snapshot = build_session_investigation(agent_did, session_id, envelope, calls)?;
+    let mut snapshot = build_session_investigation(node_did, session_id, envelope, calls)?;
     snapshot.parent_inclusive_audit_usage = audit_usage;
     Ok(snapshot)
 }
 
-fn session_investigation_query(agent_did: &str, session_id: &str) -> String {
-    session_investigation_scoped_query(agent_did, session_id, None)
+fn session_investigation_query(node_did: &str, session_id: &str) -> String {
+    session_investigation_scoped_query(node_did, session_id, None)
 }
 
 fn session_investigation_scoped_query(
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     requester: Option<Option<&str>>,
 ) -> String {
@@ -767,23 +761,23 @@ fn session_investigation_scoped_query(
             )
         })
         .unwrap_or_default();
-    let agent_did = escape_graphql_string(agent_did);
+    let node_did = escape_graphql_string(node_did);
     let session_id = escape_graphql_string(session_id);
     format!(
         r#"{{
             AgentSession(filter: {{ _and: [
                 {requester_filter}
-                {{ agent_did: {{ _eq: "{agent_did}" }} }},
+                {{ node_did: {{ _eq: "{node_did}" }} }},
                 {{ session_id: {{ _eq: "{session_id}" }} }}
             ] }}) {{
                 session_id
-                behavior_id
+                agent_id
             }}
             AgentRequest(
                 filter: {{ _and: [
                 {requester_filter}
                     {{ purpose: {{ _eq: "normal" }} }},
-                    {{ agent_did: {{ _eq: "{agent_did}" }} }},
+                    {{ node_did: {{ _eq: "{node_did}" }} }},
                     {{ session_id: {{ _eq: "{session_id}" }} }}
                 ] }},
                 order: {{ created_at: ASC }}
@@ -791,9 +785,9 @@ fn session_investigation_scoped_query(
                 _docID
                 request_id
                 purpose
-                agent_did
+                node_did
                 requester_did
-                behavior_id
+                agent_id
                 session_id
                 lifecycle_state
                 created_at
@@ -806,7 +800,7 @@ fn session_investigation_scoped_query(
             AgentToolCall(
                 filter: {{ _and: [
                 {requester_filter}
-                    {{ agent_did: {{ _eq: "{agent_did}" }} }},
+                    {{ node_did: {{ _eq: "{node_did}" }} }},
                     {{ session_id: {{ _eq: "{session_id}" }} }}
                 ] }}
             ) {{
@@ -818,7 +812,7 @@ fn session_investigation_scoped_query(
             CompactionEntry(
                 filter: {{ _and: [
                 {requester_filter}
-                    {{ agent_did: {{ _eq: "{agent_did}" }} }},
+                    {{ node_did: {{ _eq: "{node_did}" }} }},
                     {{ session_id: {{ _eq: "{session_id}" }} }}
                 ] }},
                 order: {{ sequence: ASC }}
@@ -833,7 +827,7 @@ fn session_investigation_scoped_query(
             ProviderContextReduction(
                 filter: {{ _and: [
                 {requester_filter}
-                    {{ agent_did: {{ _eq: "{agent_did}" }} }},
+                    {{ node_did: {{ _eq: "{node_did}" }} }},
                     {{ session_id: {{ _eq: "{session_id}" }} }}
                 ] }},
                 order: {{ created_at: ASC }}
@@ -844,21 +838,21 @@ fn session_investigation_scoped_query(
                 original_tokens
                 compacted_tokens
             }}
-            AgentBehavior(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}) {{
-                behavior_id
+            Agent(filter: {{ node_did: {{ _eq: "{node_did}" }} }}) {{
+                agent_id
                 inference_profile_id
                 context_id
             }}
-            AgentContext(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}) {{
+            AgentContext(filter: {{ node_did: {{ _eq: "{node_did}" }} }}) {{
                 context_id
                 compaction_id
             }}
-            CompactionConfig(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}) {{
+            CompactionConfig(filter: {{ node_did: {{ _eq: "{node_did}" }} }}) {{
                 compaction_id
                 strategy
                 threshold
             }}
-            InferenceProfile(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}) {{
+            InferenceProfile(filter: {{ node_did: {{ _eq: "{node_did}" }} }}) {{
                 profile_id
                 context_window
             }}
@@ -868,32 +862,32 @@ fn session_investigation_scoped_query(
 
 const INFERENCE_DETAIL_FIELDS: &str = "request_doc_id request_id call_id call_seq queued_at started_at ended_at prompt_tokens call_kind completion_tokens cached_input_tokens context_accounting_json";
 
-fn session_investigation_calls_query(agent_did: &str, request_doc_ids: &[String]) -> String {
-    session_investigation_calls_scoped_query(agent_did, request_doc_ids, None)
+fn session_investigation_calls_query(node_did: &str, request_doc_ids: &[String]) -> String {
+    session_investigation_calls_scoped_query(node_did, request_doc_ids, None)
 }
 
 fn session_investigation_calls_scoped_query(
-    agent_did: &str,
+    node_did: &str,
     request_doc_ids: &[String],
     requester: Option<Option<&str>>,
 ) -> String {
     let child_scope = requester
         .map(|did| {
             format!(
-                "agent_did: {{_eq: \"{}\"}}, requester_did: {{_eq: {}}},",
-                escape_graphql_string(agent_did),
+                "node_did: {{_eq: \"{}\"}}, requester_did: {{_eq: {}}},",
+                escape_graphql_string(node_did),
                 did.map(|did| format!("\"{}\"", escape_graphql_string(did)))
                     .unwrap_or_else(|| "null".into())
             )
         })
         .unwrap_or_default();
-    let agent_did = escape_graphql_string(agent_did);
+    let node_did = escape_graphql_string(node_did);
     let request_doc_ids = quoted_graphql_list(request_doc_ids);
     format!(
         r#"{{
             InferenceCall(
                 filter: {{ _and: [
-                    {{ agent_did: {{ _eq: "{agent_did}" }} }},
+                    {{ node_did: {{ _eq: "{node_did}" }} }},
                     {{ request_doc_id: {{ _in: [{request_doc_ids}] }} }}
                 ] }},
                 order: {{ queued_at: ASC }}
@@ -914,7 +908,7 @@ fn session_investigation_calls_scoped_query(
 }
 
 fn build_session_investigation(
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     envelope: InvestigationEnvelope,
     calls: InvestigationCallsEnvelope,
@@ -923,16 +917,16 @@ fn build_session_investigation(
         envelope.sessions.len() == 1,
         "session investigation requires one canonical AgentSession"
     );
-    let behavior_id = clean(envelope.sessions[0].behavior_id.as_ref())
-        .context("canonical AgentSession is missing behavior_id")?;
-    let behavior = {
+    let agent_id = clean(envelope.sessions[0].agent_id.as_ref())
+        .context("canonical AgentSession is missing agent_id")?;
+    let agent = {
         envelope
-            .behaviors
+            .agents
             .iter()
-            .find(|behavior| behavior.behavior_id == behavior_id)
+            .find(|agent| agent.agent_id == agent_id)
     };
-    let context = behavior
-        .and_then(|behavior| behavior.context_id.as_deref())
+    let context = agent
+        .and_then(|agent| agent.context_id.as_deref())
         .and_then(|context_id| {
             envelope
                 .contexts
@@ -947,8 +941,8 @@ fn build_session_investigation(
                 .iter()
                 .find(|config| config.compaction_id == compaction_id)
         });
-    let profile = behavior
-        .and_then(|behavior| behavior.inference_profile_id.as_deref())
+    let profile = agent
+        .and_then(|agent| agent.inference_profile_id.as_deref())
         .and_then(|profile_id| {
             envelope
                 .profiles
@@ -1015,7 +1009,7 @@ fn build_session_investigation(
         .collect();
 
     Ok(SessionInvestigationSnapshot {
-        agent_did: agent_did.to_string(),
+        node_did: node_did.to_string(),
         session_id: session_id.to_string(),
         requests,
         tool_calls,
@@ -1176,24 +1170,24 @@ fn clamp_limit(limit: Option<usize>) -> usize {
     limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT)
 }
 
-fn session_index_query(agent_did: &str, limit: usize) -> String {
+fn session_index_query(node_did: &str, limit: usize) -> String {
     format!(
-        r#"{{AgentSession(filter: {{agent_did: {{_eq: "{}"}}}}, order: [{{created_at: DESC}},{{session_id: DESC}}], limit: {limit}) {{session_id}}}}"#,
-        escape_graphql_string(agent_did)
+        r#"{{AgentSession(filter: {{node_did: {{_eq: "{}"}}}}, order: [{{created_at: DESC}},{{session_id: DESC}}], limit: {limit}) {{session_id}}}}"#,
+        escape_graphql_string(node_did)
     )
 }
 
-fn session_detail_query(agent_did: &str, session_ids: &[String]) -> String {
-    let agent_did = escape_graphql_string(agent_did);
+fn session_detail_query(node_did: &str, session_ids: &[String]) -> String {
+    let node_did = escape_graphql_string(node_did);
     let list = quoted_graphql_list(session_ids);
     format!(
         r#"{{
             AgentSession(filter: {{ _and: [
-                {{ agent_did: {{ _eq: "{agent_did}" }} }},
+                {{ node_did: {{ _eq: "{node_did}" }} }},
                 {{ session_id: {{ _in: [{list}] }} }}
             ] }}) {{
                 session_id
-                behavior_id
+                agent_id
                 title
                 tags
                 created_at
@@ -1202,7 +1196,7 @@ fn session_detail_query(agent_did: &str, session_ids: &[String]) -> String {
             AgentRequest(
                 filter: {{ _and: [
                     {{ purpose: {{ _eq: "normal" }} }},
-                    {{ agent_did: {{ _eq: "{agent_did}" }} }},
+                    {{ node_did: {{ _eq: "{node_did}" }} }},
                     {{ session_id: {{ _in: [{list}] }} }}
                 ] }},
                 order: {{ created_at: DESC }}
@@ -1213,14 +1207,14 @@ fn session_detail_query(agent_did: &str, session_ids: &[String]) -> String {
                 created_at
             }}
             AgentMessage(filter: {{ _and: [
-                {{ agent_did: {{ _eq: "{agent_did}" }} }},
+                {{ node_did: {{ _eq: "{node_did}" }} }},
                 {{ session_id: {{ _in: [{list}] }} }}
             ] }}) {{
                 session_id
                 created_at
             }}
             CompactionEntry(filter: {{ _and: [
-                {{ agent_did: {{ _eq: "{agent_did}" }} }},
+                {{ node_did: {{ _eq: "{node_did}" }} }},
                 {{ session_id: {{ _in: [{list}] }} }}
             ] }}) {{
                 session_id
@@ -1275,7 +1269,7 @@ fn build_session_rows(
             Some(SessionHistoryRow {
                 is_current: false,
                 session_id: session_id.clone(),
-                behavior_id: clean(session.behavior_id.as_ref()),
+                agent_id: clean(session.agent_id.as_ref()),
                 title: session.title.clone(),
                 tags: session.tags.clone(),
                 created_at: clean(session.created_at.as_ref()),
@@ -1412,7 +1406,7 @@ where
 mod tests {
     use std::sync::Arc;
 
-    use crate::identity::{AgentIdentity, KeyIdentity};
+    use crate::identity::{KeyIdentity, NodeIdentity};
     use crate::lifecycle::test_support::{pin_fixed_signing_identity, PIN_FIXED_DID};
     use crate::llm::tool::Tool;
     use crate::session::canonical_rows::{
@@ -1505,15 +1499,15 @@ mod tests {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
         let identities = tempfile::tempdir().unwrap();
-        let agent_identity = pin_fixed_signing_identity(identities.path());
+        let node_identity = pin_fixed_signing_identity(identities.path());
         let other_identity =
             KeyIdentity::load_or_create(identities.path().join("other.key"), None).unwrap();
-        assert_eq!(agent_identity.did(), PIN_FIXED_DID);
+        assert_eq!(node_identity.did(), PIN_FIXED_DID);
 
         for mutation in [
             r#"mutation {
                 create_InferenceProfile(input: {
-                    agent_did: "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
+                    node_did: "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
                     profile_id: "profile-a",
                     backend_id: "backend-a",
                     model_name: "model-a",
@@ -1523,7 +1517,7 @@ mod tests {
             r#"mutation {
                 create_CompactionConfig(input: {
                     compaction_id: "compaction-a",
-                    agent_did: "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
+                    node_did: "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
                     strategy: "StripThenSummarize",
                     threshold: 0.9
                 }) { _docID }
@@ -1531,14 +1525,14 @@ mod tests {
             r#"mutation {
                 create_AgentContext(input: {
                     context_id: "context-a",
-                    agent_did: "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
+                    node_did: "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
                     compaction_id: "compaction-a"
                 }) { _docID }
             }"#,
             r#"mutation {
-                create_AgentBehavior(input: {
-                    behavior_id: "behavior-a",
-                    agent_did: "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
+                create_Agent(input: {
+                    agent_id: "agent-a",
+                    node_did: "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
                     inference_profile_id: "profile-a",
                     context_id: "context-a",
                     enabled: true
@@ -1547,8 +1541,8 @@ mod tests {
             r#"mutation {
                 create_AgentSession(input: {
                     session_id: "session-a",
-                    agent_did: "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
-                    behavior_id: "behavior-a",
+                    node_did: "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
+                    agent_id: "agent-a",
                     title: {text: "OpenAI Agent", source: "user"},
                     tags: ["review"],
                     created_at: "2026-06-03T09:55:00Z"
@@ -1557,8 +1551,8 @@ mod tests {
             r#"mutation {
                 create_AgentSession(input: {
                     session_id: "session-b",
-                    agent_did: "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
-                    behavior_id: "behavior-b",
+                    node_did: "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
+                    agent_id: "agent-b",
                     title: {text: "OpenAI Agent", source: "user"},
                     created_at: "2026-06-03T10:55:00Z",
                     closed_at: "2026-06-03T11:01:00Z"
@@ -1568,7 +1562,7 @@ mod tests {
                 create_CompactionEntry(input: {
                     compaction_key: "session-a:1",
                     session_id: "session-a",
-                    agent_did: "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
+                    node_did: "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
                     sequence: 1,
                     original_tokens: 800,
                     compacted_tokens: 400,
@@ -1580,7 +1574,7 @@ mod tests {
                     tool_call_key: "session-a:tool:1",
                     request_id: "request-a-new",
                     session_id: "session-a",
-                    agent_did: "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
+                    node_did: "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
                     tool_name: "read_file",
                     status: "completed",
                     lifecycle_state: "completed",
@@ -1591,7 +1585,7 @@ mod tests {
                 create_CompactionEntry(input: {
                     compaction_key: "session-a:foreign",
                     session_id: "session-a",
-                    agent_did: "did:key:z-other",
+                    node_did: "did:key:z-other",
                     sequence: 99,
                     original_tokens: 9999,
                     compacted_tokens: 9000,
@@ -1603,27 +1597,27 @@ mod tests {
             assert!(!response.has_errors(), "seed failed: {:?}", response.errors);
         }
 
-        for (request_id, signer, behavior, session, state, created_at) in [
+        for (request_id, signer, agent, session, state, created_at) in [
             (
                 "request-a-old",
-                &agent_identity,
-                "behavior-a",
+                &node_identity,
+                "agent-a",
                 "session-a",
                 "completed",
                 "2026-06-03T10:00:00Z",
             ),
             (
                 "request-a-new",
-                &agent_identity,
-                "behavior-a",
+                &node_identity,
+                "agent-a",
                 "session-a",
                 "processing",
                 "2026-06-03T10:05:00Z",
             ),
             (
                 "request-b-new",
-                &agent_identity,
-                "behavior-b",
+                &node_identity,
+                "agent-b",
                 "session-b",
                 "completed",
                 "2026-06-03T11:00:00Z",
@@ -1631,7 +1625,7 @@ mod tests {
             (
                 "request-other-agent",
                 &other_identity,
-                "behavior-c",
+                "agent-c",
                 "session-c",
                 "completed",
                 "2026-06-03T12:00:00Z",
@@ -1642,7 +1636,7 @@ mod tests {
                 request_id,
                 signer.did(),
                 signer.did(),
-                behavior,
+                agent,
                 session,
                 "session history fixture",
                 "interactive",
@@ -1711,7 +1705,7 @@ mod tests {
         // one provider-turn assistant header, each over a closed source. The
         // document travels as a typed GraphQL variable through the native
         // retry API; the pinned create response key is add_<Collection>.
-        let agent_did: &str = "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7";
+        let node_did: &str = "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7";
         let canonical_messages = [
             (
                 "session-a:1",
@@ -1742,7 +1736,7 @@ mod tests {
         {
             let payload = if index == 0 { "hello" } else { "hi" };
             let segment = gents_protocol::output::OutputSegment {
-                agent_did: agent_did.to_string(),
+                node_did: node_did.to_string(),
                 requester_did: None,
                 session_id: "session-a".to_string(),
                 request_doc_id: request_doc_id.clone(),
@@ -1796,7 +1790,7 @@ mod tests {
             let message = gents_protocol::output::TranscriptMessage {
                 message_key: (*message_key).to_string(),
                 session_id: "session-a".to_string(),
-                agent_did: agent_did.to_string(),
+                node_did: node_did.to_string(),
                 requester_did: None,
                 request_doc_id: Some(request_doc_id.clone()),
                 publication: gents_protocol::output::MessagePublication::RequestExecution {
@@ -1853,7 +1847,7 @@ mod tests {
             "_docID": "retired-doc-1",
             "message_key": "retired:1",
             "session_id": "session-a",
-            "agent_did": agent_did,
+            "node_did": node_did,
             "request_doc_id": request_doc_id,
             "publication": {"kind": "request_execution", "execution_generation": "generation-a"},
             "outcome": "complete",
@@ -1896,7 +1890,7 @@ mod tests {
                 call_id: "session-a:call:1"
                 request_id: "request-a-new"
                 request_doc_id: "{request_doc_id}"
-                agent_did: "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7"
+                node_did: "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7"
                 call_kind: "inference"
                 backend_id: "backend-a"
                 call_state: "completed"
@@ -1947,7 +1941,7 @@ mod tests {
         let mutation = format!(
             r#"mutation {{create_RenderedRequest(input: {{
             capture_key:"context-details", request_doc_id:"{}", request_id:"misleading-alias",
-            agent_did:"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7", session_id:"session-a", capture_scope:"inference.1",
+            node_did:"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7", session_id:"session-a", capture_scope:"inference.1",
             turn_index:{}, attempt:{}, capture_version:1, source:"openai_chat_completions",
             request_json:"{}", provenance_json:"{}"
         }}) {{_docID}}}}"#,
@@ -1999,7 +1993,7 @@ mod tests {
                     "doc_id": "missing-context-details-base",
                     "field_commit_cid": "missing-cid",
                     "depth": 0,
-                    "agent_did": "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
+                    "node_did": "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
                     "requester_did": "",
                     "session_id": "session-a",
                     "source": "openai_chat_completions",
@@ -2017,7 +2011,7 @@ mod tests {
         let mutation = format!(
             r#"mutation {{create_RenderedRequest(input: {{
                 capture_key:"context-details-missing-base", request_doc_id:"{}",
-                request_id:"missing-base", agent_did:"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
+                request_id:"missing-base", node_did:"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
                 session_id:"session-a", capture_scope:"inference.1",
                 turn_index:{}, attempt:{}, capture_version:2,
                 source:"openai_chat_completions", request_json:"{}", provenance_json:"{}"
@@ -2059,7 +2053,7 @@ mod tests {
             let mutation = format!(
                 r#"mutation {{create_RenderedRequest(input: {{
                     capture_key:"{key}", request_doc_id:"{}", request_id:"{key}",
-                    agent_did:"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7", session_id:"session-a",
+                    node_did:"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7", session_id:"session-a",
                     capture_scope:"inference.1", turn_index:{}, attempt:{},
                     capture_version:1, source:"openai_chat_completions",
                     request_json:"{}", provenance_json:"{}"
@@ -2115,8 +2109,8 @@ mod tests {
         ] {
             let mutation = format!(
                 r#"mutation {{ create_AgentSession(input: {{
-                    agent_did: "{}", requester_did: "{}", session_id: "{}",
-                    behavior_id: "shared-behavior", created_at: "2026-09-01T00:00:00Z"
+                    node_did: "{}", requester_did: "{}", session_id: "{}",
+                    agent_id: "shared-agent", created_at: "2026-09-01T00:00:00Z"
                 }}) {{ _docID }} }}"#,
                 escape_graphql_string(identity.did()),
                 escape_graphql_string(identity.did()),
@@ -2130,7 +2124,7 @@ mod tests {
                 request_id,
                 identity.did(),
                 identity.did(),
-                "shared-behavior",
+                "shared-agent",
                 session_id,
                 "sessions current caller fixture",
                 "interactive",
@@ -2164,7 +2158,7 @@ mod tests {
             .await
             .unwrap();
             let snapshot: Value = serde_json::from_str(&output).unwrap();
-            assert_eq!(snapshot["scope"]["agent_did"], owner.did());
+            assert_eq!(snapshot["scope"]["node_did"], owner.did());
             snapshot["sessions"]
                 .as_array()
                 .unwrap()
@@ -2173,11 +2167,11 @@ mod tests {
                 .map(|row| row["session_id"].as_str().unwrap().to_owned())
                 .collect::<Vec<_>>()
         };
-        let scoped_list = |agent_did: String, session_id: &str| {
+        let scoped_list = |node_did: String, session_id: &str| {
             scope_tool_request_identity(
-                Some(agent_did.clone()),
-                Some(agent_did),
-                Some("shared-behavior".into()),
+                Some(node_did.clone()),
+                Some(node_did),
+                Some("shared-agent".into()),
                 Some("caller-request-not-the-latest-request".into()),
                 scope_request_tool_execution_with_session(
                     None,
@@ -2211,7 +2205,7 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(unauthorized.to_string().contains("running principal"));
+        assert!(unauthorized.to_string().contains("running node"));
         assert!(list().await.is_empty());
     }
 
@@ -2223,12 +2217,12 @@ mod tests {
             "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
         );
 
-        let snapshot = load_session_history_snapshot(&tool.node, &tool.agent_did, Some(2))
+        let snapshot = load_session_history_snapshot(&tool.node, &tool.node_did, Some(2))
             .await
             .unwrap();
 
         assert_eq!(
-            snapshot.agent_did,
+            snapshot.node_did,
             "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7"
         );
         assert_eq!(snapshot.limit, 2);
@@ -2251,7 +2245,7 @@ mod tests {
             Some("OpenAI Agent")
         );
         assert_eq!(session_a.tags, vec!["review"]);
-        assert_eq!(session_a.behavior_id.as_deref(), Some("behavior-a"));
+        assert_eq!(session_a.agent_id.as_deref(), Some("agent-a"));
         assert_eq!(session_a.closed_at, None);
         assert_eq!(
             session_a.created_at.as_deref(),
@@ -2316,7 +2310,7 @@ mod tests {
             let encoded = escape_graphql_string(&serde_json::to_string(&accounting).unwrap());
             let response = node.execute(&format!(r#"mutation {{ create_InferenceCall(input: {{
                 call_id: "{id}", call_kind: "{kind}", backend_id: "backend-a", call_state: "completed", call_seq: {sequence}, request_id: "request-a-new",
-                request_doc_id: "{}", agent_did: "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7", queued_at: "2026-06-04T12:00:00Z",
+                request_doc_id: "{}", node_did: "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7", queued_at: "2026-06-04T12:00:00Z",
                 prompt_tokens: 10, completion_tokens: 5, cached_input_tokens: 0, context_accounting_json: "{encoded}"
             }}) {{_docID}} }}"#, escape_graphql_string(doc))).await;
             crate::graphql::ensure_no_errors(&response, "context generation fixture").unwrap();
@@ -2415,7 +2409,7 @@ mod tests {
             "foreign-requester",
             PIN_FIXED_DID,
             &foreign_did,
-            "behavior-a",
+            "agent-a",
             "session-a",
             "foreign requester fixture",
             "interactive",
@@ -2446,7 +2440,7 @@ mod tests {
         // Deliberately reuse an authorized logical alias: only the physical
         // owner may contribute this call to usage.
         let response = node.execute(&format!(r#"mutation {{ create_InferenceCall(input: {{
-            call_id: "foreign-usage", call_seq: 1, call_kind: "inference", agent_did: "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7", request_id: "request-a-new",
+            call_id: "foreign-usage", call_seq: 1, call_kind: "inference", node_did: "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7", request_id: "request-a-new",
             request_doc_id: "{}", backend_id: "backend-a", call_state: "completed", prompt_tokens: 9000, completion_tokens: 1000, cached_input_tokens: 0,
             queued_at: "2026-06-04T12:00:00Z"
         }}) {{_docID}} }}"#, escape_graphql_string(doc))).await;
@@ -2505,7 +2499,7 @@ mod tests {
             "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
         );
 
-        let parsed = load_session_investigation(&tool.node, &tool.agent_did, "session-a")
+        let parsed = load_session_investigation(&tool.node, &tool.node_did, "session-a")
             .await
             .unwrap();
 
@@ -2556,7 +2550,7 @@ mod tests {
                 call_id: "session-a:partial"
                 request_id: "request-a-new"
                 request_doc_id: "{}"
-                agent_did: "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7"
+                node_did: "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7"
                 call_kind: "inference"
                 backend_id: "backend-a"
                 call_state: "completed"
@@ -2577,7 +2571,7 @@ mod tests {
                 call_id: "session-a:invalid-cache"
                 request_id: "request-a-new"
                 request_doc_id: "{}"
-                agent_did: "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7"
+                node_did: "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7"
                 call_kind: "inference"
                 backend_id: "backend-a"
                 call_state: "completed"
@@ -2630,7 +2624,7 @@ mod tests {
             "request-a-new",
             PIN_FIXED_DID,
             PIN_FIXED_DID,
-            "behavior-b",
+            "agent-b",
             "session-b",
             "duplicate-label request fixture",
             "interactive",
@@ -2679,7 +2673,7 @@ mod tests {
                 call_id: "session-b:duplicate-label-call"
                 request_id: "request-a-new"
                 request_doc_id: "{}"
-                agent_did: "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7"
+                node_did: "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7"
                 call_kind: "inference"
                 backend_id: "backend-a"
                 call_state: "completed"

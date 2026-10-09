@@ -207,7 +207,7 @@ pub(crate) trait MaterializerHandle: Send + Sync {
         Box::pin(async { Ok(None) })
     }
 
-    /// Check whether any active runtime `AgentRequest` of `agent_did` is
+    /// Check whether any active runtime `AgentRequest` of `node_did` is
     /// currently bound to this trigger. Used by the concurrency gate to
     /// decide whether a new fire should skip or supersede.
     ///
@@ -216,14 +216,14 @@ pub(crate) trait MaterializerHandle: Send + Sync {
     /// those must never gate this agent's fires (#605).
     fn has_active_runtime_request_for_trigger(
         &self,
-        agent_did: &str,
+        node_did: &str,
         trigger_id: &str,
         excluded_request_id: Option<&str>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<bool>> + Send + '_>>;
 
     fn supersede_active_runtime_requests_for_trigger(
         &self,
-        agent_did: &str,
+        node_did: &str,
         trigger_id: &str,
         excluded_request_id: Option<&str>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<usize>> + Send + '_>>;
@@ -238,7 +238,7 @@ pub(crate) trait MaterializerHandle: Send + Sync {
 
     fn has_materialized_group_request(
         &self,
-        agent_did: &str,
+        node_did: &str,
         trigger_id: &str,
         durable_fire_key: &str,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<bool>> + Send + '_>>;
@@ -247,7 +247,7 @@ pub(crate) trait MaterializerHandle: Send + Sync {
 /// Scaffolding for the trigger engine.
 ///
 /// The engine owns a read handle onto the active runtime snapshot (to look up
-/// behaviors / concurrency / enabled gates at fire time) and a materializer
+/// agents / concurrency / enabled gates at fire time) and a materializer
 /// handle (to create requests). Per-trigger mutexes serialize dispatches that
 /// share a trigger id so the concurrency gate and request materialization
 /// land atomically with respect to each other.
@@ -469,7 +469,7 @@ impl TriggerEngine {
 
         let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         let (node_scope, ctx_scope) =
-            crate::template::task_node_ctx(&snapshot.local_did, &intent.task.behavior_id, &now);
+            crate::template::task_node_ctx(&snapshot.local_did, &intent.task.agent_id, &now);
         if intent.trigger_kind != TriggerKind::Event {
             let unsupported_session = intent
                 .trigger_id
@@ -493,15 +493,15 @@ impl TriggerEngine {
             TriggerKind::Manual | TriggerKind::Schedule
         ) {
             Some(if intent.task.goal_objective_template.is_some() {
-                let Some(behavior) = snapshot.behavior(&intent.task.behavior_id) else {
+                let Some(agent) = snapshot.agent(&intent.task.agent_id) else {
                     let result = FireResult::Errored {
-                        error: "Task behavior unavailable".into(),
+                        error: "Task agent unavailable".into(),
                     };
                     (intent.on_result)(result.clone());
                     return result;
                 };
                 let identity = crate::goal::task_goal_fire_identity(
-                    behavior.agent_did(),
+                    agent.node_did(),
                     &intent.task.task_id,
                     &intent.durable_fire_key,
                 );
@@ -530,10 +530,10 @@ impl TriggerEngine {
             ctx: ctx_scope,
         };
         if intent.trigger_kind == TriggerKind::Event
-            && snapshot.behavior(&intent.task.behavior_id).is_none()
+            && snapshot.agent(&intent.task.agent_id).is_none()
         {
             let result = FireResult::Errored {
-                error: "prepare fire: trigger behavior unavailable".into(),
+                error: "prepare fire: trigger agent unavailable".into(),
             };
             (intent.on_result)(result.clone());
             return result;
@@ -545,9 +545,9 @@ impl TriggerEngine {
                     .get(intent.trigger_id.as_deref().unwrap_or_default())
                     .ok_or_else(|| anyhow::anyhow!("event trigger disappeared"))?;
                 let owner = snapshot
-                    .behavior(&intent.task.behavior_id)
-                    .ok_or_else(|| anyhow::anyhow!("trigger behavior unavailable"))?
-                    .agent_did()
+                    .agent(&intent.task.agent_id)
+                    .ok_or_else(|| anyhow::anyhow!("trigger agent unavailable"))?
+                    .node_did()
                     .to_string();
                 let (source_collection, source_doc_id) = if let Some(group) = &intent.group_vars {
                     (
@@ -608,10 +608,7 @@ impl TriggerEngine {
                     identity,
                     goal_id: intent.task.goal_objective_template.as_ref().map(|_| {
                         crate::goal::deterministic_goal_id(
-                            snapshot
-                                .behavior(&intent.task.behavior_id)
-                                .unwrap()
-                                .agent_did(),
+                            snapshot.agent(&intent.task.agent_id).unwrap().node_did(),
                             &session_id,
                         )
                     }),
@@ -683,24 +680,22 @@ impl TriggerEngine {
         if let Some(delivery) = &mut delivery {
             delivery.receipt.goal_objective = rendered_goal_objective.clone();
         }
-        let concurrency_agent_did = || {
+        let concurrency_node_did = || {
             snapshot
-                .behavior(&intent.task.behavior_id)
-                .map(|behavior| behavior.agent_did().to_string())
+                .agent(&intent.task.agent_id)
+                .map(|agent| agent.node_did().to_string())
                 .ok_or_else(|| {
                     snapshot
-                        .unavailable_public_message(&intent.task.behavior_id)
+                        .unavailable_public_message(&intent.task.agent_id)
                         .map(ToOwned::to_owned)
-                        .unwrap_or_else(|| {
-                            format!("behavior {} is not loaded", intent.task.behavior_id)
-                        })
+                        .unwrap_or_else(|| format!("agent {} is not loaded", intent.task.agent_id))
                 })
         };
         let durable_goal_request_id = match rendered_goal_objective.as_ref() {
-            Some(_) => match concurrency_agent_did() {
-                Ok(agent_did) => Some(
+            Some(_) => match concurrency_node_did() {
+                Ok(node_did) => Some(
                     crate::goal::task_goal_fire_identity(
-                        &agent_did,
+                        &node_did,
                         &intent.task.task_id,
                         &intent.durable_fire_key,
                     )
@@ -742,7 +737,7 @@ impl TriggerEngine {
                 )
                 .await;
         }
-        let agent_did = match concurrency_agent_did() {
+        let node_did = match concurrency_node_did() {
             Ok(did) => did,
             Err(reason) => {
                 let result = FireResult::Errored {
@@ -753,7 +748,7 @@ impl TriggerEngine {
             }
         };
         let lock_key = (
-            agent_did.clone(),
+            node_did.clone(),
             trigger_id.clone(),
             intent
                 .group_vars
@@ -802,7 +797,7 @@ impl TriggerEngine {
             };
             match self
                 .materializer
-                .has_materialized_group_request(&agent_did, &trigger_id, &intent.durable_fire_key)
+                .has_materialized_group_request(&node_did, &trigger_id, &intent.durable_fire_key)
                 .await
             {
                 Ok(true) => {
@@ -836,7 +831,7 @@ impl TriggerEngine {
             (false, ConcurrencyMode::Serial) => match self
                 .materializer
                 .has_active_runtime_request_for_trigger(
-                    &agent_did,
+                    &node_did,
                     &trigger_id,
                     durable_goal_request_id.as_deref(),
                 )
@@ -866,7 +861,7 @@ impl TriggerEngine {
                 if let Err(error) = self
                     .materializer
                     .supersede_active_runtime_requests_for_trigger(
-                        &agent_did,
+                        &node_did,
                         &trigger_id,
                         durable_goal_request_id.as_deref(),
                     )

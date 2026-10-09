@@ -21,16 +21,16 @@ pub(crate) struct TriggerRuntimeUpdate {
 /// Schedule contains cadence only; another trigger may reference the same cadence.
 pub(crate) async fn load_trigger_next_run_at(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     trigger_id: &str,
 ) -> Result<Option<String>> {
     anyhow::ensure!(
-        !agent_did.is_empty(),
+        !node_did.is_empty(),
         "trigger observation owner is required"
     );
     let query = format!(
-        r#"{{ Trigger(filter: {{ agent_did: {{ _eq: "{}" }}, trigger_id: {{ _eq: "{}" }} }}, limit: 2) {{ next_run_at }} }}"#,
-        escape_graphql_string(agent_did),
+        r#"{{ Trigger(filter: {{ node_did: {{ _eq: "{}" }}, trigger_id: {{ _eq: "{}" }} }}, limit: 2) {{ next_run_at }} }}"#,
+        escape_graphql_string(node_did),
         escape_graphql_string(trigger_id)
     );
     let response = graphql_with_transaction_retry(node, &query, "query Trigger cursor").await?;
@@ -54,13 +54,13 @@ pub(crate) async fn load_trigger_next_run_at(
 /// Deleted triggers are harmless; concurrent fire-count updates may undercount.
 pub(crate) async fn update_trigger_runtime_fields(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     trigger_id: &str,
     updates: TriggerRuntimeUpdate,
 ) -> Result<()> {
-    let escaped_owner = escape_graphql_string(agent_did);
+    let escaped_owner = escape_graphql_string(node_did);
     anyhow::ensure!(
-        !agent_did.is_empty(),
+        !node_did.is_empty(),
         "trigger observation owner is required"
     );
     // Short-circuit: nothing to write.
@@ -82,7 +82,7 @@ pub(crate) async fn update_trigger_runtime_fields(
         let query = format!(
             r#"{{
                 Trigger(
-                    filter: {{ agent_did: {{ _eq: "{escaped_owner}" }}, trigger_id: {{ _eq: "{escaped_trigger_id}" }} }},
+                    filter: {{ node_did: {{ _eq: "{escaped_owner}" }}, trigger_id: {{ _eq: "{escaped_trigger_id}" }} }},
                     limit: 2
                 ) {{
                     fire_count
@@ -156,7 +156,7 @@ pub(crate) async fn update_trigger_runtime_fields(
     let mutation = format!(
         r#"mutation {{
             update_Trigger(
-                filter: {{ agent_did: {{ _eq: "{escaped_owner}" }}, trigger_id: {{ _eq: "{escaped_trigger_id}" }} }},
+                filter: {{ node_did: {{ _eq: "{escaped_owner}" }}, trigger_id: {{ _eq: "{escaped_trigger_id}" }} }},
                 input: {input_literal}
             ) {{ _docID }}
         }}"#

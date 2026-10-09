@@ -7,7 +7,7 @@ use crate::admission::{AdmissionRegistry, AdmittedCompletionModel};
 use crate::agent::completion_retry::CompletionRetryPolicy;
 use crate::agent::loop_stream::{AggregateTokenBudget, LoopConfig};
 use crate::backend_provider::BackendProviderKind;
-use crate::config::{ReasoningEffort, ResolvedBehavior};
+use crate::config::{ReasoningEffort, ResolvedAgent};
 use crate::graphql::escape_graphql_string;
 use crate::lifecycle::ExecutionOrigin;
 use crate::openai_wire::OpenAiWireApi;
@@ -19,48 +19,48 @@ fn effective_max_tokens(max_output_tokens: usize, sampling_max_tokens: Option<u6
     sampling_max_tokens.or_else(|| u64::try_from(max_output_tokens).ok())
 }
 
-/// The backend connection a behavior's provider client is built from.
-pub(crate) fn behavior_connection_fingerprint(behavior: &ResolvedBehavior) -> String {
+/// The backend connection an agent_config's provider client is built from.
+pub(crate) fn agent_connection_fingerprint(agent_config: &ResolvedAgent) -> String {
     crate::admission::backend_connection_fingerprint(&crate::backend_registry::BackendFields {
-        backend_id: behavior.backend_id.clone(),
-        backend_provider_kind: behavior.backend_provider_kind,
-        openai_wire_api: behavior.openai_wire_api,
-        backend_endpoint: behavior.backend_endpoint.clone(),
-        backend_auth: behavior.backend_auth.clone(),
+        backend_id: agent_config.backend_id.clone(),
+        backend_provider_kind: agent_config.backend_provider_kind,
+        openai_wire_api: agent_config.openai_wire_api,
+        backend_endpoint: agent_config.backend_endpoint.clone(),
+        backend_auth: agent_config.backend_auth.clone(),
     })
 }
 
-/// Identity of everything a behavior slot builds once and keeps: its resolved
+/// Identity of everything an agent_config slot builds once and keeps: its resolved
 /// configuration plus the keyed connection identity of its inference and
-/// compaction clients. `ResolvedBehavior`'s Debug redacts credentials, so a
+/// compaction clients. `ResolvedAgent`'s Debug redacts credentials, so a
 /// key rotation is visible only through the keyed fingerprints.
-pub(crate) fn behavior_slot_fingerprint(behavior: &ResolvedBehavior) -> String {
-    let compaction = behavior.compaction_inference.as_ref().map(|inference| {
+pub(crate) fn agent_slot_fingerprint(agent_config: &ResolvedAgent) -> String {
+    let compaction = agent_config.compaction_inference.as_ref().map(|inference| {
         crate::admission::backend_connection_fingerprint(&inference.backend.backend_fields())
     });
     format!(
-        "{behavior:?}|connection={}|compaction_connection={compaction:?}",
-        behavior_connection_fingerprint(behavior)
+        "{agent_config:?}|connection={}|compaction_connection={compaction:?}",
+        agent_connection_fingerprint(agent_config)
     )
 }
 
 pub(crate) fn build_admitted_model<C: crate::llm::rig_compat::ProviderClient>(
     client: C,
     admission: AdmissionRegistry,
-    behavior: &ResolvedBehavior,
+    agent_config: &ResolvedAgent,
 ) -> AdmittedCompletionModel<C::CompletionModel> {
     crate::llm::rig_compat::admitted_model(
         client,
         admission,
-        behavior_connection_fingerprint(behavior),
-        &behavior.model_name,
+        agent_connection_fingerprint(agent_config),
+        &agent_config.model_name,
     )
 }
 
 /// Build a loop config for one completion loop.
 ///
 /// `capture_scope` is not decoration. Every loop this factory serves issues
-/// provider calls under the same `(agent_did, session_id, request_id)`, and
+/// provider calls under the same `(node_did, session_id, request_id)`, and
 /// every one of them starts its turn and attempt counters at zero — the owned
 /// inference loop, the compaction summarizer and its JSON fallback, title
 /// generation, and the one-shot runner. The scope is what keeps their first
@@ -68,7 +68,7 @@ pub(crate) fn build_admitted_model<C: crate::llm::rig_compat::ProviderClient>(
 /// makes capture the default for all of them instead of a privilege of the
 /// inference path (#840).
 pub(crate) fn loop_config(
-    behavior: &ResolvedBehavior,
+    agent_config: &ResolvedAgent,
     preamble: String,
     tool_count: usize,
     capture_scope: CaptureScopeKind,
@@ -77,40 +77,43 @@ pub(crate) fn loop_config(
         replay: Default::default(),
         provider_input_counter: std::sync::Arc::new(
             crate::provider_input::ProviderInputCounter::new(
-                behavior.backend_provider_kind,
-                behavior.openai_wire_api,
-                behavior.model_name.clone(),
+                agent_config.backend_provider_kind,
+                agent_config.openai_wire_api,
+                agent_config.model_name.clone(),
             ),
         ),
         preamble: Some(preamble),
         context_message: None,
-        temperature: behavior.sampling.temperature,
-        max_tokens: effective_max_tokens(behavior.max_output_tokens, behavior.sampling.max_tokens),
+        temperature: agent_config.sampling.temperature,
+        max_tokens: effective_max_tokens(
+            agent_config.max_output_tokens,
+            agent_config.sampling.max_tokens,
+        ),
         aggregate_token_budget: None,
         additional_params: authoritative_reasoning_capabilities(
             merge_optional_params(
                 merge_optional_params(
                     reasoning_profile_params(
-                        behavior.backend_provider_kind,
-                        behavior.openai_wire_api,
+                        agent_config.backend_provider_kind,
+                        agent_config.openai_wire_api,
                         crate::inference_setup::sent_reasoning_effort(
-                            behavior.backend_provider_kind,
-                            behavior.openai_wire_api,
-                            &behavior.backend_endpoint,
-                            behavior.resolved_reasoning_efforts.as_deref(),
-                            behavior.sampling.reasoning_effort,
+                            agent_config.backend_provider_kind,
+                            agent_config.openai_wire_api,
+                            &agent_config.backend_endpoint,
+                            agent_config.resolved_reasoning_efforts.as_deref(),
+                            agent_config.sampling.reasoning_effort,
                         ),
                     ),
                     provider_additional_params(
-                        behavior.backend_provider_kind,
-                        behavior.openai_wire_api,
-                        &behavior.backend_endpoint,
+                        agent_config.backend_provider_kind,
+                        agent_config.openai_wire_api,
+                        &agent_config.backend_endpoint,
                     ),
                 ),
-                behavior.sampling.additional_params(),
+                agent_config.sampling.additional_params(),
             ),
-            behavior.backend_provider_kind,
-            behavior.resolved_reasoning_efforts.as_deref(),
+            agent_config.backend_provider_kind,
+            agent_config.resolved_reasoning_efforts.as_deref(),
         ),
         structured_output: None,
         tool_choice: (tool_count > 0).then_some(ToolChoice::Auto),
@@ -122,12 +125,12 @@ pub(crate) fn loop_config(
         reduction_chain_keys: Vec::new(),
         initial_turn_index: 0,
         resume_from_history: false,
-        context_window: behavior.context_window,
-        compaction_threshold: behavior.compaction_threshold(),
+        context_window: agent_config.context_window,
+        compaction_threshold: agent_config.compaction_threshold(),
         retry_policy: CompletionRetryPolicy::scheduled_default(),
-        provider_idle_timeout: Some(behavior.provider_idle_timeout),
+        provider_idle_timeout: Some(agent_config.provider_idle_timeout),
         deadline: None,
-        max_turns: behavior.max_turns,
+        max_turns: agent_config.max_turns,
         output_obligation_gate: None,
         folded_prompts: Vec::new(),
         authored_input: None,
@@ -156,24 +159,30 @@ fn authoritative_reasoning_capabilities(
 }
 
 pub(crate) fn loop_config_for_request(
-    behavior: &ResolvedBehavior,
+    agent_config: &ResolvedAgent,
     preamble: String,
     request: &AgentRequest,
     aggregate_token_budget: Option<AggregateTokenBudget>,
     tool_count: usize,
 ) -> anyhow::Result<LoopConfig> {
-    let mut config = loop_config(behavior, preamble, tool_count, CaptureScopeKind::Inference);
-    behavior
-        .sampling
-        .validate_for_provider(behavior.backend_provider_kind, behavior.openai_wire_api)?;
+    let mut config = loop_config(
+        agent_config,
+        preamble,
+        tool_count,
+        CaptureScopeKind::Inference,
+    );
+    agent_config.sampling.validate_for_provider(
+        agent_config.backend_provider_kind,
+        agent_config.openai_wire_api,
+    )?;
     config.aggregate_token_budget = aggregate_token_budget;
-    let request_additional_params = request_additional_params(behavior, request);
+    let request_additional_params = request_additional_params(agent_config, request);
     if let Some(additional_params) = request_additional_params {
         config.additional_params =
             merge_optional_params(config.additional_params.take(), Some(additional_params));
     }
     let origin = ExecutionOrigin::from_persisted(request.execution_origin.as_deref())?;
-    config.retry_policy = CompletionRetryPolicy::resolve(&behavior.completion_retry, origin);
+    config.retry_policy = CompletionRetryPolicy::resolve(&agent_config.completion_retry, origin);
     config.deadline = parse_request_deadline(request.deadline.as_deref());
     Ok(config)
 }
@@ -289,7 +298,7 @@ fn parse_request_deadline(value: Option<&str>) -> Option<DateTime<Utc>> {
 }
 
 // Moved to gents-loop (G-1): compaction's per-turn summary request also
-// merges additional_params, with no dependency on AgentBehavior otherwise.
+// merges additional_params, with no dependency on Agent otherwise.
 pub(crate) use gents_loop::compaction::merge_optional_params;
 
 /// Maps the inference profile's reasoning effort into each provider's wire
@@ -408,10 +417,10 @@ fn provider_additional_params(
 }
 
 fn request_additional_params(
-    behavior: &ResolvedBehavior,
+    agent_config: &ResolvedAgent,
     request: &AgentRequest,
 ) -> Option<serde_json::Value> {
-    match behavior.backend_provider_kind {
+    match agent_config.backend_provider_kind {
         BackendProviderKind::OpenAiCompatible => openai_cache_scope_params(request),
         BackendProviderKind::ChatGptCodex => {
             let scope = normalize_cache_scope(request.session_id.as_str())
@@ -443,7 +452,7 @@ mod tests;
 /// ordinary inference. The enclosing request later supplies deadline and ledger.
 pub(crate) async fn build_compaction_engine(
     node: std::sync::Arc<EmbeddedNode>,
-    behavior: &ResolvedBehavior,
+    agent_config: &ResolvedAgent,
     admission: AdmissionRegistry,
     build_timeout: std::time::Duration,
 ) -> anyhow::Result<
@@ -452,12 +461,12 @@ pub(crate) async fn build_compaction_engine(
         String,
     )>,
 > {
-    let Some(inference) = &behavior.compaction_inference else {
+    let Some(inference) = &agent_config.compaction_inference else {
         anyhow::ensure!(
             matches!(
-                behavior.compaction_strategy().reduction_mode(),
+                agent_config.compaction_strategy().reduction_mode(),
                 crate::compaction::ReductionMode::StripOnly
-            ) || behavior
+            ) || agent_config
                 .compaction
                 .as_ref()
                 .and_then(|config| config.inference_profile_id.as_ref())
@@ -467,14 +476,14 @@ pub(crate) async fn build_compaction_engine(
         return Ok(None);
     };
     if matches!(
-        behavior.compaction_strategy().reduction_mode(),
+        agent_config.compaction_strategy().reduction_mode(),
         crate::compaction::ReductionMode::StripOnly
     ) {
         return Ok(None);
     }
     anyhow::ensure!(
-        inference.backend.agent_did == behavior.agent_did()
-            && inference.profile.agent_did == behavior.agent_did(),
+        inference.backend.node_did == agent_config.node_did()
+            && inference.profile.node_did == agent_config.node_did(),
         "summary inference must belong to the invoking principal"
     );
     anyhow::ensure!(
@@ -483,7 +492,7 @@ pub(crate) async fn build_compaction_engine(
     );
     inference.backend.validate()?;
     // This is the existing resolved runtime view, not another authored config.
-    let mut summary = behavior.clone();
+    let mut summary = agent_config.clone();
     let backend = inference.backend.backend_fields();
     summary.backend_id = backend.backend_id;
     summary.backend_provider_kind = backend.backend_provider_kind;
@@ -498,7 +507,7 @@ pub(crate) async fn build_compaction_engine(
     summary.max_turns = 0;
     summary.compaction_inference = None;
     let api_key = match &summary.backend_auth {
-        crate::document_config::BackendAuth::PrincipalOAuth { .. } => "no-key".to_owned(),
+        crate::document_config::BackendAuth::NodeOAuth { .. } => "no-key".to_owned(),
         _ => summary.completion_client_api_key()?,
     };
     let client =
@@ -506,9 +515,9 @@ pub(crate) async fn build_compaction_engine(
             .await?;
     let provider_family = client.provider_family().to_owned();
     let source_counter = std::sync::Arc::new(crate::provider_input::ProviderInputCounter::new(
-        behavior.backend_provider_kind,
-        behavior.openai_wire_api,
-        behavior.model_name.clone(),
+        agent_config.backend_provider_kind,
+        agent_config.openai_wire_api,
+        agent_config.model_name.clone(),
     ));
     let config = loop_config(&summary, String::new(), 0, CaptureScopeKind::Compaction);
     let backend_id = inference.backend.backend_id.clone();

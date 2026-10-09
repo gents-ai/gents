@@ -795,11 +795,11 @@ impl Tools {
                 );
             }
         }
-        if let Some(subagents) = &self.subagents {
+        if let Some(agents) = &self.agents {
             names(
                 &mut errors,
-                "subagents.target_ids",
-                subagents.target_ids.iter().map(String::as_str),
+                "agents.target_ids",
+                agents.target_ids.iter().map(String::as_str),
                 false,
             );
         }
@@ -933,23 +933,23 @@ impl Tools {
     }
 }
 
-/// The Tools document a behavior selects, under its owner: behavior ->
-/// context -> `tools_id`. `None` when the behavior has no context or the
+/// The Tools document an agent selects, under its owner: agent ->
+/// context -> `tools_id`. `None` when the agent has no context or the
 /// context selects no Tools; a missing referenced document is an error.
-pub(crate) async fn load_behavior_tools_in_txn(
+pub(crate) async fn load_agent_tools_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     owner: &str,
-    behavior_id: &str,
+    agent_id: &str,
 ) -> anyhow::Result<Option<Tools>> {
     use crate::collection::Collection;
     use crate::config_client::read_desired_state_document_in_txn as read;
     use anyhow::Context as _;
-    let behavior: super::AgentBehavior = serde_json::from_value(
-        read(txn, Collection::AgentBehavior, owner, behavior_id)
+    let agent: super::Agent = serde_json::from_value(
+        read(txn, Collection::Agent, owner, agent_id)
             .await?
-            .with_context(|| format!("AgentBehavior {behavior_id} not found for {owner}"))?,
+            .with_context(|| format!("Agent {agent_id} not found for {owner}"))?,
     )?;
-    let Some(context_id) = behavior.context_id else {
+    let Some(context_id) = agent.context_id else {
         return Ok(None);
     };
     let context: super::AgentContext = serde_json::from_value(
@@ -981,7 +981,7 @@ mod tests {
     #[test]
     fn minimal_tools_round_trip_without_disabled_group_boilerplate() {
         let authored = json!({
-            "tools_id": "coding", "agent_did": "did:key:example",
+            "tools_id": "coding", "node_did": "did:key:example",
             "host": {"root": ".", "files": {"mode": "ReadWrite"}}
         });
         let tools: Tools = serde_json::from_value(authored.clone()).unwrap();
@@ -997,7 +997,7 @@ mod tests {
     #[test]
     fn missing_and_null_remote_defaults_grant_no_tools() {
         let tools: Tools = serde_json::from_value(json!({
-            "tools_id": "research", "agent_did": "did:key:example",
+            "tools_id": "research", "node_did": "did:key:example",
             "remote": {"services": [{"mcp_service_id": "web", "tool_names": null, "style": null}]}
         }))
         .unwrap();
@@ -1009,7 +1009,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(tools).unwrap(),
             json!({
-                "tools_id": "research", "agent_did": "did:key:example",
+                "tools_id": "research", "node_did": "did:key:example",
                 "remote": {"services": [{"mcp_service_id": "web"}]}
             })
         );
@@ -1018,14 +1018,14 @@ mod tests {
     #[test]
     fn explicit_overrides_survive_and_required_references_do_not_default() {
         let authored = json!({
-            "tools_id": "research", "agent_did": "did:key:example",
+            "tools_id": "research", "node_did": "did:key:example",
             "remote": {"services": [{"mcp_service_id": "web", "tool_names": ["search"],
                 "style": "flat", "required": true, "timeout_secs": 45}]},
             "built_ins": {"enable_goal_tools": false}
         });
         let tools: Tools = serde_json::from_value(authored.clone()).unwrap();
         assert_eq!(serde_json::to_value(tools).unwrap(), authored);
-        assert!(serde_json::from_value::<Tools>(json!({"agent_did": "did:key:example"})).is_err());
+        assert!(serde_json::from_value::<Tools>(json!({"node_did": "did:key:example"})).is_err());
         assert!(
             serde_json::from_value::<RemoteServiceTools>(json!({"tool_names": ["search"]}))
                 .is_err()
@@ -1034,7 +1034,7 @@ mod tests {
     fn document(groups: serde_json::Value) -> Tools {
         let mut value = groups;
         value["tools_id"] = "tools".into();
-        value["agent_did"] = "owner".into();
+        value["node_did"] = "owner".into();
         serde_json::from_value(value).unwrap()
     }
 
@@ -1071,7 +1071,7 @@ mod tests {
     #[test]
     fn command_output_caps_round_trip_and_reach_the_selection() {
         let authored = json!({
-            "tools_id": "coding", "agent_did": "did:key:example",
+            "tools_id": "coding", "node_did": "did:key:example",
             "host": {
                 "bash": {"mode": "ReadOnly", "max_output_chars": 64000},
                 "cli": [{"name": "git", "max_output_chars": 2000}, {"name": "jq"}]
@@ -1233,8 +1233,8 @@ mod tests {
             json!({"remote":{"services":[{"mcp_service_id":"remote"},{"mcp_service_id":"remote"}]}}),
             json!({"remote":{"services":[{"mcp_service_id":"remote","tool_names":["search","search"]}]}}),
             json!({"remote":{"services":[{"mcp_service_id":"remote","tool_names":["*"]}]}}),
-            json!({"subagents":{"target_ids":["target","target"]}}),
-            json!({"subagents":{"target_ids":[" "]}}),
+            json!({"agents":{"target_ids":["target","target"]}}),
+            json!({"agents":{"target_ids":[" "]}}),
             json!({"self_config":{"self_config_categories":["unknown"]}}),
             json!({"self_config":{"self_config_categories":["tools","tools"]}}),
             json!({"host":{"bash":{"allowed_argv_prefixes":[[]]}}}),
@@ -1242,7 +1242,7 @@ mod tests {
             assert!(document(value).validate().is_err());
         }
         assert!(
-            document(json!({"subagents":{"target_ids":["existing-target"],"enabled":true}}))
+            document(json!({"agents":{"target_ids":["existing-target"],"enabled":true}}))
                 .validate()
                 .is_ok()
         );
@@ -1254,8 +1254,8 @@ mod tests {
             "allow_cross_principal",
             "cross_principal_spawn_timeout_secs",
         ] {
-            let mut value = json!({"subagents":{"target_ids":["existing-target"]},"tools_id":"tools","agent_did":"owner"});
-            value["subagents"][retired] = json!(true);
+            let mut value = json!({"agents":{"target_ids":["existing-target"]},"tools_id":"tools","node_did":"owner"});
+            value["agents"][retired] = json!(true);
             assert!(serde_json::from_value::<Tools>(value).is_err(), "{retired}");
         }
         assert!(

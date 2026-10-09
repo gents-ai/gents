@@ -1,27 +1,4 @@
-//! Built-in permission preset templates and exact-match classifier
-//! (directory persona catalog, PR 2 / Task 2).
-//!
-//! A "preset" is a named bundle of the permission fields the persona layer
-//! CLASSIFIES on — enough to distinguish `readonly` from `write` from
-//! hand-tuned ("custom") selections, not enough to fully MINT one. Root (a
-//! filesystem dimension, not a permission) and `display_name` are excluded
-//! on principle. Also deliberately excluded, though they DO vary across
-//! init's packages: execution policy, background tool settings,
-//! `enable_meta_tools`, and `enable_defra_query`. A materializer that mints
-//! a canonical `Tools` document from a preset name must source those
-//! init-parity extras from the package profile separately. `PresetFields`
-//! alone under-provisions a write configuration. Conversely, a hand-tuned change to one of
-//! the excluded fields keeps its preset badge: the classifier is a
-//! permissions label, not a byte-identity check over the whole document.
-//!
-//! The template values here are copied **verbatim** from the authoritative
-//! source in `crates/gents-cli/src/commands/init.rs`:
-//! `tool_package_profile` (Readonly/Write arms, ~line 706-751) for
-//! `enable_file_tools` / `file_tools_mode` / `enable_bash` / `bash_mode`, and
-//! `default_command_execution_policy_for_init` (~line 689) confirms these
-//! packages don't set argv prefixes or a custom read-only allowlist (both
-//! empty). `init.rs` is deliberately left untouched by this change — see the
-//! plan's deviation note.
+//! Built-in permission presets and exact-match classification for Tools.
 
 pub const PRESET_READONLY: &str = "readonly";
 pub const PRESET_WRITE: &str = "write";
@@ -139,7 +116,7 @@ mod tests {
     #[test]
     fn canonical_classifier_includes_expanded_datastore_writes() {
         let tools: crate::document_config::Tools = serde_json::from_value(serde_json::json!({
-            "agent_did":"owner", "tools_id":"tools", "host":{
+            "node_did":"owner", "tools_id":"tools", "host":{
                 "files":{"mode":"ReadWrite"}, "bash":{"mode":"Unrestricted"}
             }
         }))

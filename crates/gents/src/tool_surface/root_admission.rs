@@ -11,8 +11,8 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 
 /// One operator-local `WorkspaceRoot` row. The schema intentionally has no
-/// principal field: these rows are host policy shared by every local
-/// principal and never replicate.
+/// node field: these rows are host policy shared by every local
+/// node and never replicate.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct WorkspaceRootDocument {
     pub root_path: Option<String>,
@@ -37,7 +37,7 @@ pub struct WorkspaceRootPolicy {
 /// TOCTOU guarantee.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct RootExecutionGuard {
-    pub(crate) behavior_id: String,
+    pub(crate) agent_id: String,
     pub(crate) selected_root: Option<PathBuf>,
     pub(crate) ceiling_root: Option<PathBuf>,
 }
@@ -48,22 +48,22 @@ impl RootExecutionGuard {
         let Some(selected_root) = self.selected_root.as_deref() else {
             anyhow::ensure!(
                 !policy.configured,
-                "behavior {} has active host tools but no explicit root under current WorkspaceRoot policy",
-                self.behavior_id
+                "agent {} has active host tools but no explicit root under current WorkspaceRoot policy",
+                self.agent_id
             );
             return Ok(());
         };
         match policy.admit(selected_root)? {
             RootAdmission::Admitted(root) if root == selected_root => Ok(()),
             RootAdmission::Admitted(root) => anyhow::bail!(
-                "behavior {} persisted root {} re-resolved to {} at the execution boundary",
-                self.behavior_id,
+                "agent {} persisted root {} re-resolved to {} at the execution boundary",
+                self.agent_id,
                 selected_root.display(),
                 root.display()
             ),
             denied @ RootAdmission::Denied { .. } => anyhow::bail!(
-                "behavior {} persisted root {} is not admitted by current WorkspaceRoot policy at the execution boundary: {}",
-                self.behavior_id,
+                "agent {} persisted root {} is not admitted by current WorkspaceRoot policy at the execution boundary: {}",
+                self.agent_id,
                 selected_root.display(),
                 denied.denial_reason().expect("denied outcome has a reason")
             ),
@@ -174,17 +174,39 @@ pub(crate) async fn load_workspace_root_policy(
     node: &defra_node::EmbeddedNode,
     ceiling_root: Option<&Path>,
 ) -> Result<WorkspaceRootPolicy> {
-    let response = node
-        .execute("{ WorkspaceRoot { root_path enabled } }")
-        .await;
-    if response.has_errors() {
-        anyhow::bail!("querying WorkspaceRoot policy: {:?}", response.errors);
-    }
+    let response = crate::graphql::graphql_with_transaction_retry(
+        node,
+        "{ WorkspaceRoot { root_path enabled } }",
+        "querying WorkspaceRoot policy",
+    )
+    .await?;
     let value = serde_json::json!({"data": response.data.unwrap_or(serde_json::Value::Null)});
     Ok(project_workspace_root_policy(
         decode_workspace_root_rows(&value)?,
         ceiling_root,
     ))
+}
+
+pub fn admit_authored_root(
+    policy: &WorkspaceRootPolicy,
+    authored_root: &str,
+) -> Result<Option<PathBuf>> {
+    let root = authored_root.trim();
+    if root.is_empty() {
+        anyhow::ensure!(
+            !policy.configured,
+            "configured WorkspaceRoot policy requires an explicit root"
+        );
+        return Ok(None);
+    }
+    match policy.admit(Path::new(root))? {
+        RootAdmission::Admitted(root) => Ok(Some(root)),
+        denied @ RootAdmission::Denied { .. } => anyhow::bail!(
+            "Tools.host.root {:?} is not admitted by published WorkspaceRoot policy: {}",
+            root,
+            denied.denial_reason().expect("denied outcome has a reason")
+        ),
+    }
 }
 
 /// Validate and canonicalize the existing `Tools.host.root` field against a
@@ -215,14 +237,8 @@ pub(crate) fn canonicalize_tools_root(
         return Ok(());
     };
 
-    let canonical = match policy.admit(Path::new(authored_root))? {
-        RootAdmission::Admitted(root) => root,
-        denied @ RootAdmission::Denied { .. } => anyhow::bail!(
-            "Tools.host.root {:?} is not admitted by published WorkspaceRoot policy: {}",
-            authored_root,
-            denied.denial_reason().expect("denied outcome has a reason")
-        ),
-    };
+    let canonical = admit_authored_root(policy, authored_root)?
+        .expect("nonblank authored root produces an admitted path");
     tools
         .host
         .as_mut()
@@ -322,7 +338,7 @@ pub(crate) fn resolve_admitted_tool_root<'a>(
         {
             Ok(allowed) => allowed,
             // A malformed catalog row is not authoritative. Publication drops
-            // it; direct callers use the same behavior so BTree ordering cannot
+            // it; direct callers use the same policy so BTree ordering cannot
             // turn a bad sibling row into a candidate-resolution error.
             Err(_) => continue,
         };

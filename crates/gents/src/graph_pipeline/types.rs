@@ -36,7 +36,7 @@ pub struct PortSpec {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub enum StageTarget {
-    /// An agent node: the Task's behavior, prompt and tools run as a model turn.
+    /// An agent node: the Task's agent, prompt and tools run as a model turn.
     Task { task_id: String },
     /// A plugin node: deterministic WASM execution of an installed plugin.
     Plugin {
@@ -79,14 +79,14 @@ impl StageTarget {
 /// Operator-approved interface around a Task or an installed plugin.
 ///
 /// The model can select a capability revision, but cannot author the Task's
-/// behavior, prompt, tools, model, or output permissions, nor the plugin that runs.
+/// agent, prompt, tools, model, or output permissions, nor the plugin that runs.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct StageCapability {
     /// Owner of this capability and its referenced task. Every caller,
     /// including this owner, needs explicit allowed_callers admission and ACP.
-    pub agent_did: String,
+    pub node_did: String,
     pub capability_id: String,
     pub revision: String,
     pub target: StageTarget,
@@ -112,7 +112,7 @@ pub struct StageCapability {
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
     pub allowed_callers: Vec<String>,
-    /// Optional graph execution ceiling; does not select a different behavior
+    /// Optional graph execution ceiling; does not select a different agent
     /// or inference profile from the referenced task.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
@@ -294,7 +294,7 @@ pub struct GraphLimits {
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct GraphIntent {
-    pub agent_did: String,
+    pub node_did: String,
     pub graph_id: String,
     pub nodes: Vec<GraphNode>,
     #[serde(

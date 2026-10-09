@@ -39,13 +39,13 @@ pub struct LogicalWorkspaceIdentity {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepositoryPlacementRef {
     pub repository_id: String,
-    pub owner_agent_did: String,
+    pub owner_node_did: String,
     pub host_path: PathBuf,
     pub enabled: bool,
 }
 
 pub struct HostExecutorContext<'a> {
-    pub owner_agent_did: String,
+    pub owner_node_did: String,
     pub repository: RepositoryPlacementRef,
     pub ceiling: Option<&'a Path>,
     pub capabilities: BTreeSet<String>,
@@ -204,9 +204,9 @@ pub fn execute_create_workspace_plan(
             ctx.repository.repository_id
         )));
     }
-    if ctx.repository.owner_agent_did != ctx.owner_agent_did {
+    if ctx.repository.owner_node_did != ctx.owner_node_did {
         return Err(HostExecuteError::denied(
-            "RepositoryPlacement.owner_agent_did does not match the executing agent DID",
+            "RepositoryPlacement.owner_node_did does not match the executing node DID",
         ));
     }
 
@@ -242,7 +242,7 @@ fn create_workspace_action(
         .load_isolated_workspace(&identity.workspace_id)
         .map_err(|err| HostExecuteError::failed(err.to_string(), false, None))?;
     if let Some(existing) = &existing {
-        if existing.identity() != identity || existing.owner_agent_did != ctx.owner_agent_did {
+        if existing.identity() != identity || existing.owner_node_did != ctx.owner_node_did {
             return Err(HostExecuteError::failed(
                 "workspace creation identity/capability does not match the admitted workspace",
                 true,
@@ -474,7 +474,7 @@ fn persist_docs(
         identity,
         action.creation_policy,
         action.adapter,
-        &ctx.owner_agent_did,
+        &ctx.owner_node_did,
         &ctx.writer_principal,
         &ctx.integrator_principal,
         &ctx.caused_by_invocation_id,
@@ -489,7 +489,7 @@ fn persist_docs(
         .to_string();
     let placement = WorkspacePlacementDoc {
         workspace_id: identity.workspace_id.clone(),
-        owner_agent_did: ctx.owner_agent_did.clone(),
+        owner_node_did: ctx.owner_node_did.clone(),
         host_path,
         repository_placement_id: ctx.repository.repository_id.clone(),
         adapter: action.adapter.as_str().to_string(),
@@ -556,12 +556,12 @@ fn freeze_workspace_base_action(
         .load_placement(&action.workspace_id)
         .map_err(failed)?
         .ok_or_else(|| HostExecuteError::denied("base freeze placement is missing"))?;
-    if !(workspace.owner_agent_did == ctx.owner_agent_did
+    if !(workspace.owner_node_did == ctx.owner_node_did
         && ctx.repository.enabled
-        && ctx.repository.owner_agent_did == ctx.owner_agent_did
+        && ctx.repository.owner_node_did == ctx.owner_node_did
         && workspace.repository_id == ctx.repository.repository_id
         && placement.workspace_id == workspace.workspace_id
-        && placement.owner_agent_did == ctx.owner_agent_did
+        && placement.owner_node_did == ctx.owner_node_did
         && placement.repository_placement_id == ctx.repository.repository_id
         && placement.adapter == workspace.adapter)
     {
@@ -746,7 +746,7 @@ fn seal_workspace_action(
     ) {
         let outcome = load_written_seal(&action.workspace_id, action, ctx.documents)
             .map_err(|err| HostExecuteError::failed(err.to_string(), false, None))?;
-        if outcome.workspace.owner_agent_did != ctx.owner_agent_did {
+        if outcome.workspace.owner_node_did != ctx.owner_node_did {
             return Err(HostExecuteError::denied(
                 "receipt replay belongs to another agent",
             ));
@@ -783,10 +783,10 @@ fn seal_workspace_action(
                 None,
             )
         })?;
-    if workspace.owner_agent_did != ctx.owner_agent_did {
+    if workspace.owner_node_did != ctx.owner_node_did {
         return Err(HostExecuteError::denied(format!(
-            "workspace {} is owned by {}, not executing agent {}",
-            action.workspace_id, workspace.owner_agent_did, ctx.owner_agent_did
+            "workspace {} is owned by {}, not executing node {}",
+            action.workspace_id, workspace.owner_node_did, ctx.owner_node_did
         )));
     }
 
@@ -1110,10 +1110,10 @@ fn integrate_workspace_action(
                 None,
             )
         })?;
-    if workspace.owner_agent_did != ctx.owner_agent_did {
+    if workspace.owner_node_did != ctx.owner_node_did {
         return Err(HostExecuteError::denied(format!(
-            "workspace {} is owned by {}, not executing agent {}",
-            action.workspace_id, workspace.owner_agent_did, ctx.owner_agent_did
+            "workspace {} is owned by {}, not executing node {}",
+            action.workspace_id, workspace.owner_node_did, ctx.owner_node_did
         )));
     }
     let lifecycle = normalize_workspace_lifecycle_state(&workspace.lifecycle_state);
@@ -1585,10 +1585,10 @@ fn cleanup_workspace_action(
                 None,
             )
         })?;
-    if workspace.owner_agent_did != ctx.owner_agent_did {
+    if workspace.owner_node_did != ctx.owner_node_did {
         return Err(HostExecuteError::denied(format!(
-            "workspace {} is owned by {}, not executing agent {}",
-            action.workspace_id, workspace.owner_agent_did, ctx.owner_agent_did
+            "workspace {} is owned by {}, not executing node {}",
+            action.workspace_id, workspace.owner_node_did, ctx.owner_node_did
         )));
     }
 

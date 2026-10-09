@@ -38,9 +38,9 @@ pub(crate) fn definition(cases: &[&str]) -> EvalDefinition {
         .collect();
     serde_json::from_value(json!({
         "definition_id": "report-def",
-        "agent_did": "did:key:owner",
+        "node_did": "did:key:owner",
         "comparability_version": 1,
-        "subject": {"kind": "behavior", "inference_slots": ["primary"]},
+        "subject": {"kind": "agent", "inference_slots": ["primary"]},
         "cases": cases,
     }))
     .expect("the fixture definition parses")
@@ -74,7 +74,7 @@ pub(crate) fn record(
                     label: (*cell_id).into(),
                     subject: SubjectRef {
                         pack_digest: "sha256:pack".into(),
-                        behavior_id: "monitor".into(),
+                        agent_id: "monitor".into(),
                     },
                     inference_profile_id: "local".into(),
                 })
@@ -180,7 +180,7 @@ impl Rows {
                 case_id: at.case.into(),
                 trial_index: at.index,
                 attempt: at.attempt,
-                trial_agent_did: "did:key:trial".into(),
+                trial_node_did: "did:key:trial".into(),
                 session_id: format!("session-{trial_id}"),
                 seed: 1_000 + i64::from(at.index),
                 home_hint: Some(format!("{run_id}/trials/{trial_id}")),

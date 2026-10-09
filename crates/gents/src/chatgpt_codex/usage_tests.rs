@@ -5,22 +5,22 @@ const CODEX_USAGE_HEADERS: &[(&str, &str)] = &[
     ("x-codex-primary-window-minutes", "300"),
 ];
 
-/// A signed-in Codex account for `agent_did`, keyed `key` when given.
+/// A signed-in Codex account for `node_did`, keyed `key` when given.
 async fn seed_codex_account(
     node: &Arc<EmbeddedNode>,
-    agent_did: &str,
+    node_did: &str,
     key: Option<&str>,
 ) -> crate::oauth_credential::OAuthCredential {
     crate::oauth_credential::test_support::seed_credential(
         node,
-        agent_did,
+        node_did,
         CHATGPT_CODEX_PROVIDER,
         Utc::now() + chrono::Duration::hours(1),
     )
     .await;
     let mut row = crate::oauth_credential::resolve_oauth_credential(
         &crate::config_client::ConfigAccess::Local(node.clone()),
-        agent_did,
+        node_did,
         CHATGPT_CODEX_PROVIDER,
         crate::oauth_credential::AccountPick::Reference(None),
     )
@@ -36,14 +36,14 @@ async fn seed_codex_account(
     row
 }
 
-/// Usage keys stored for `agent_did`, polled until `key` shows or 5 s pass.
-async fn usage_keys_until(node: &Arc<EmbeddedNode>, agent_did: &str, key: &str) -> Vec<String> {
+/// Usage keys stored for `node_did`, polled until `key` shows or 5 s pass.
+async fn usage_keys_until(node: &Arc<EmbeddedNode>, node_did: &str, key: &str) -> Vec<String> {
     let access = crate::config_client::ConfigAccess::Local(node.clone());
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
         let response = access
             .execute(&format!(
-                r#"{{ ProviderAccountUsage(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}) {{ usage_key }} }}"#
+                r#"{{ ProviderAccountUsage(filter: {{ node_did: {{ _eq: "{node_did}" }} }}) {{ usage_key }} }}"#
             ))
             .await
             .unwrap();
@@ -120,12 +120,12 @@ async fn usage_wiring_codex_key_backfill_lands_under_the_key() {
 
     let backend: crate::document_config::InferenceBackend =
         serde_json::from_value(serde_json::json!({
-            "agent_did": did,
+            "node_did": did,
             "backend_id": "backend-usage-a",
             "name": "backend-usage-a",
             "provider_kind": "ChatGptCodex",
             "endpoint": url,
-            "auth": { "kind": "principal_oauth" },
+            "auth": { "kind": "node_oauth" },
         }))
         .unwrap();
     let stored = crate::usage_observation::usage_for_backend(

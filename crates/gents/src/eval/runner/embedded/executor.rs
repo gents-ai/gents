@@ -101,7 +101,7 @@ impl EmbeddedExecutor {
             return Err(error).with_context(|| format!("creating {}", workspace.display()));
         }
         let locator = TrialLocator {
-            trial_agent_did: home.did().to_string(),
+            trial_node_did: home.did().to_string(),
             session_id: uuid::Uuid::new_v4().to_string(),
             home_hint: spec
                 .trial_dir
@@ -220,11 +220,11 @@ impl EmbeddedExecutor {
 /// The process ceiling of an embedded trial: file tools, read-write, rooted
 /// at the trial's own workspace, and host bash only when the definition asks
 /// for it. Bash is then capped at `WorkspaceWrite`, the sandboxed mode a
-/// desktop node's write package uses, so no grant a behavior holds can write
+/// desktop node's write package uses, so no grant an agent holds can write
 /// outside the trial root. It replaces the caller's ceiling because the root
 /// is per trial. Freezing still refuses a subject pack that grants itself
 /// host bash under [`Isolation::Embedded`]; a Tools document the subject
-/// writes at run time (a behavior it configures) is narrowed to this ceiling.
+/// writes at run time (an agent it configures) is narrowed to this ceiling.
 fn trial_tool_ceiling(workspace: &Path, host_bash: bool) -> ToolCeiling {
     let mut policy = ToolPolicySurface::ceiling_with_host_modes(
         FileToolMode::ReadWrite,
@@ -256,7 +256,7 @@ where
     if !spec.progress.attached() {
         return stages.await;
     }
-    let observer = LiveObserver::new(&home.node, &locator.trial_agent_did, &spec.stages).await;
+    let observer = LiveObserver::new(&home.node, &locator.trial_node_did, &spec.stages).await;
     let report = || async {
         match observer.snapshot().await {
             Ok(snapshot) => spec.progress.live(snapshot),
@@ -428,7 +428,7 @@ impl TrialExecutor for EmbeddedExecutor {
                 inference_calls: evidence.inference_calls,
                 captures: run_captures(
                     &home.node,
-                    &at.trial_agent_did,
+                    &at.trial_node_did,
                     &at.session_id,
                     &workspace,
                     captures,
@@ -527,7 +527,7 @@ fn workspace_dir(trial_dir: &Path) -> PathBuf {
 
 fn unprovisioned() -> TrialLocator {
     TrialLocator {
-        trial_agent_did: "did:unprovisioned".to_string(),
+        trial_node_did: "did:unprovisioned".to_string(),
         session_id: String::new(),
         home_hint: None,
     }
@@ -559,11 +559,11 @@ async fn install(spec: &TrialSpec, home: &EmbeddedHome, workspace: &Path) -> Res
         spec.pack_digest
     );
 
-    let agent_did = home.did().to_string();
+    let node_did = home.did().to_string();
     let config = load_pack_config(
         &manifest,
         &PackInstallOptions {
-            agent_did: agent_did.clone(),
+            node_did: node_did.clone(),
         },
         &|path| {
             assets
@@ -576,7 +576,7 @@ async fn install(spec: &TrialSpec, home: &EmbeddedHome, workspace: &Path) -> Res
     let config = bind_inference_slots(&manifest, &config, &spec.inference)
         .context("binding the pack's inference slots to the frozen profile")?;
     let mut config = root_host_tools(config, workspace)?;
-    config.agent_principal.default_behavior_id = Some(spec.behavior_id.clone());
+    config.node.default_agent_id = Some(spec.agent_id.clone());
     let access = ConfigAccess::Local(home.node.clone());
     for path in &manifest.schemas {
         let bytes = assets
@@ -588,12 +588,12 @@ async fn install(spec: &TrialSpec, home: &EmbeddedHome, workspace: &Path) -> Res
             .await
             .with_context(|| format!("installing pack schema {path:?}"))?;
     }
-    // The binding first: the pack's behaviors now reference the profile by id,
+    // The binding first: the pack's agents now reference the profile by id,
     // and a reference is only installable once what it names exists.
     apply(
         &access,
         "eval.trial.install_inference",
-        &inference_plan(&spec.inference, &spec.trial_id, &agent_did)?,
+        &inference_plan(&spec.inference, &spec.trial_id, &node_did)?,
     )
     .await
     .context("installing the trial inference binding")?;
@@ -606,12 +606,12 @@ async fn install(spec: &TrialSpec, home: &EmbeddedHome, workspace: &Path) -> Res
     .context("installing the trial pack")?;
 
     install_workspace_root(&home.node, workspace).await?;
-    install_fixtures(&access, &spec.fixtures, workspace, &agent_did).await
+    install_fixtures(&access, &spec.fixtures, workspace, &node_did).await
 }
 
 /// Bind every inference slot the pack declares to the profile the run froze.
 ///
-/// A pack's behaviors may only reference a slot marker
+/// A pack's agents may only reference a slot marker
 /// (`gents:inference-slot:<name>`): [`crate::pack::bind_pack_install_config`]
 /// is what turns those markers into a real profile id, and it is the same
 /// binding `gents pack install` performs. A cell chooses one
@@ -691,20 +691,20 @@ fn read_pack(pack_dir: &Path) -> Result<(PackManifest, BTreeMap<String, Vec<u8>>
 fn inference_plan(
     binding: &InferenceBinding,
     trial_id: &str,
-    agent_did: &str,
+    node_did: &str,
 ) -> Result<DesiredStateApplyPlan> {
     let mut backend = binding.backend.clone();
-    own(&mut backend, "InferenceBackend", agent_did)?;
+    own(&mut backend, "InferenceBackend", node_did)?;
 
     let mut sampling = match binding.sampling.clone() {
         Some(sampling) => sampling,
         None => serde_json::to_value(InferenceSampling {
-            agent_did: agent_did.to_string(),
+            node_did: node_did.to_string(),
             sampling_id: format!("eval-{trial_id}"),
             ..Default::default()
         })?,
     };
-    own(&mut sampling, "InferenceSampling", agent_did)?;
+    own(&mut sampling, "InferenceSampling", node_did)?;
     object(&mut sampling, "InferenceSampling")?.insert("seed".to_string(), json!(binding.seed));
     let sampling_id = sampling
         .get("sampling_id")
@@ -713,7 +713,7 @@ fn inference_plan(
         .to_string();
 
     let mut profile = binding.profile.clone();
-    own(&mut profile, "InferenceProfile", agent_did)?;
+    own(&mut profile, "InferenceProfile", node_did)?;
     object(&mut profile, "InferenceProfile")?.insert("sampling_id".to_string(), json!(sampling_id));
 
     let mut documents = Vec::new();
@@ -723,7 +723,7 @@ fn inference_plan(
     ] {
         if let Some(value) = value {
             let mut value = value.clone();
-            own(&mut value, collection.graphql_type(), agent_did)?;
+            own(&mut value, collection.graphql_type(), node_did)?;
             documents.push(desired(collection, value));
         }
     }
@@ -743,8 +743,8 @@ fn desired(collection: Collection, value: Value) -> DesiredStateApplyDocument {
     }
 }
 
-fn own(value: &mut Value, named: &str, agent_did: &str) -> Result<()> {
-    object(value, named)?.insert("agent_did".to_string(), json!(agent_did));
+fn own(value: &mut Value, named: &str, node_did: &str) -> Result<()> {
+    object(value, named)?.insert("node_did".to_string(), json!(node_did));
     Ok(())
 }
 
@@ -960,7 +960,7 @@ async fn run_stage(
         // submitted: what the home holds is evidence either way.
         captures: run_captures(
             &home.node,
-            &locator.trial_agent_did,
+            &locator.trial_node_did,
             &locator.session_id,
             workspace,
             &stage.captures,
@@ -985,7 +985,7 @@ impl ObservedStage {
     /// subject was never asked anything.
     ///
     /// [`OutcomeKind::Infrastructure`], not `Runtime`: a runtime failure is
-    /// something the subject's own behavior can provoke and classifies as a
+    /// something the subject's own actions can provoke and classifies as a
     /// failure against it, while a request that was never written says only
     /// that the harness broke. Reporting it as a failure would score the
     /// subject zero and close the slot instead of retrying it.
@@ -1042,7 +1042,7 @@ async fn submit_and_observe(
             }
             None => {
                 let request_id = uuid::Uuid::new_v4().to_string();
-                submit_stage(&home.node, locator, &spec.behavior_id, stage, &request_id)
+                submit_stage(&home.node, locator, &spec.agent_id, stage, &request_id)
                     .await
                     .map(|()| StageSubmission::Submitted {
                         request_id,
@@ -1206,7 +1206,7 @@ async fn submit_and_observe(
             None => {
                 trigger_failure(
                     &home.node,
-                    &locator.trial_agent_did,
+                    &locator.trial_node_did,
                     &stage_started,
                     None,
                     &spec.trial_id,
@@ -1260,7 +1260,7 @@ async fn continue_until_done(
             collection,
             filter,
             fields,
-            &locator.trial_agent_did,
+            &locator.trial_node_did,
         )
         .await
         {
@@ -1281,7 +1281,7 @@ async fn continue_until_done(
         }
         let request_id = uuid::Uuid::new_v4().to_string();
         if let Err(error) =
-            submit_stage(&home.node, locator, &spec.behavior_id, &prod, &request_id).await
+            submit_stage(&home.node, locator, &spec.agent_id, &prod, &request_id).await
         {
             tracing::warn!(
                 error = %format!("{error:#}"),
@@ -1469,13 +1469,13 @@ fn provider_reason(
 /// trial, including one attempted in the same timestamp second, is unrelated.
 async fn trigger_failure(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     since: &str,
     source_doc_id: Option<&str>,
     trial_id: &str,
     stage_id: &str,
 ) -> Option<OutcomeKind> {
-    let agent_did = escape_graphql_string(agent_did);
+    let node_did = escape_graphql_string(node_did);
     let since = escape_graphql_string(since);
     let unacknowledged = crate::trigger_engine::UNACKNOWLEDGED_STATUS;
     let source_filter = source_doc_id.map_or_else(String::new, |doc_id| {
@@ -1485,7 +1485,7 @@ async fn trigger_failure(
         )
     });
     let query = format!(
-        r#"{{ Trigger(filter: {{ agent_did: {{ _eq: "{agent_did}" }}, last_status: {{ _in: ["error", "{unacknowledged}"] }}, last_attempt_at: {{ _geq: "{since}" }}{source_filter} }}) {{ trigger_id last_attempt_at last_fired_source_doc_id last_status last_error }} }}"#
+        r#"{{ Trigger(filter: {{ node_did: {{ _eq: "{node_did}" }}, last_status: {{ _in: ["error", "{unacknowledged}"] }}, last_attempt_at: {{ _geq: "{since}" }}{source_filter} }}) {{ trigger_id last_attempt_at last_fired_source_doc_id last_status last_error }} }}"#
     );
     let failing = match graphql_with_transaction_retry(node, &query, "eval trial trigger status")
         .await
@@ -1559,14 +1559,14 @@ async fn interrupt_and_settle(
 
 /// One stage is one `AgentRequest` in the trial's session, built the way
 /// `gents request` builds an interactive one: `local_self` admission, signed as
-/// the registered trial principal, and the session created implicitly by its
+/// the registered trial node, and the session created implicitly by its
 /// first request rather than by a separate `AgentSession` write. The CLI's
 /// `valid_until` and `retry` are unset for a request that is nobody's retry,
 /// which is exactly what `RequestSpec::new` already carries.
 async fn submit_stage(
     node: &EmbeddedNode,
     locator: &TrialLocator,
-    behavior_id: &str,
+    agent_id: &str,
     stage: &StageSpec,
     request_id: &str,
 ) -> Result<()> {
@@ -1575,16 +1575,16 @@ async fn submit_stage(
             gents_protocol::request_admission::RequestPurpose::Normal,
             RequestIdentity {
                 request_id: request_id.to_string(),
-                agent_did: locator.trial_agent_did.clone(),
+                node_did: locator.trial_node_did.clone(),
                 requester_did: None,
-                behavior_id: behavior_id.to_string(),
+                agent_id: agent_id.to_string(),
                 session_id: locator.session_id.clone(),
                 content: stage.prompt.clone(),
                 execution_origin: ExecutionOrigin::Interactive,
                 created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
             },
             gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
-                &locator.trial_agent_did,
+                &locator.trial_node_did,
             ),
         ),
         RequestSigner::RegisteredTarget,
@@ -1777,7 +1777,7 @@ async fn run_captures(
 }
 
 /// `$session` in document captures denotes the durable trial session, not any
-/// other session owned by the same principal. It is bound before GraphQL escaping.
+/// other session owned by the same node. It is bound before GraphQL escaping.
 fn bind_capture_session(value: &Value, session_id: &str) -> Value {
     match value {
         Value::String(text) if text == "$session" => Value::String(session_id.into()),
@@ -2125,11 +2125,11 @@ mod tests {
     #[test]
     fn unrooted_host_tools_are_rooted_at_the_trial_workspace() {
         let config: PackConfig = serde_json::from_value(json!({
-            "agent_principal": {"agent_did": "did:x"},
+            "node": {"node_did": "did:x"},
             "tools": [
-                {"agent_did": "did:x", "tools_id": "files", "host": {"files": {"mode": "ReadOnly"}}},
-                {"agent_did": "did:x", "tools_id": "rooted", "host": {"root": "/elsewhere", "files": {"mode": "ReadOnly"}}},
-                {"agent_did": "did:x", "tools_id": "meta"}
+                {"node_did": "did:x", "tools_id": "files", "host": {"files": {"mode": "ReadOnly"}}},
+                {"node_did": "did:x", "tools_id": "rooted", "host": {"root": "/elsewhere", "files": {"mode": "ReadOnly"}}},
+                {"node_did": "did:x", "tools_id": "meta"}
             ]
         }))
         .unwrap();
@@ -2220,7 +2220,7 @@ mod tests {
             ConfigAccess::write_local(
                 &home.node,
                 "eval.test.normal_request_capture",
-                &format!(r#"mutation {{ create_AgentRequest(input: {{request_id: "{purpose}", purpose: "{purpose}", agent_did: "{did}", behavior_id: "{did}:research-helper", content: "TRAIN-111"}}) {{ _docID }} }}"#),
+                &format!(r#"mutation {{ create_AgentRequest(input: {{request_id: "{purpose}", purpose: "{purpose}", node_did: "{did}", agent_id: "{did}:research-helper", content: "TRAIN-111"}}) {{ _docID }} }}"#),
             )
             .await
             .unwrap();
@@ -2479,7 +2479,7 @@ mod tests {
             captures: Vec::new(),
         };
         let locator = TrialLocator {
-            trial_agent_did: home.did().to_string(),
+            trial_node_did: home.did().to_string(),
             session_id: "s".into(),
             home_hint: None,
         };
@@ -2513,7 +2513,7 @@ mod tests {
 
     /// A pack may only reference an inference slot, so installing one into a
     /// trial home has to bind that slot to the profile the run froze. Without
-    /// the binding the behavior would reach the home still naming
+    /// the binding the agent would reach the home still naming
     /// `gents:inference-slot:primary`, which is no profile at all.
     #[tokio::test]
     async fn installing_a_pack_binds_its_inference_slot_to_the_frozen_profile() {
@@ -2526,7 +2526,7 @@ mod tests {
             pack_digest: materialized_digest(&pack_dir),
             pack_dir,
             inference: frozen_binding(json!("frozen-profile")),
-            behavior_id: "subject".into(),
+            agent_id: "subject".into(),
             ..TrialSpec::empty_for_tests("t1")
         };
 
@@ -2534,15 +2534,15 @@ mod tests {
 
         let response = home
             .node
-            .execute("query { AgentBehavior { behavior_id inference_profile_id } }")
+            .execute("query { Agent { agent_id inference_profile_id } }")
             .await;
         assert!(response.errors.is_empty(), "{:?}", response.errors);
-        let rows = response.data.as_ref().unwrap()["AgentBehavior"]
+        let rows = response.data.as_ref().unwrap()["Agent"]
             .as_array()
             .unwrap()
             .clone();
         assert_eq!(rows.len(), 1, "{rows:?}");
-        assert_eq!(rows[0]["behavior_id"], "subject");
+        assert_eq!(rows[0]["agent_id"], "subject");
         assert_eq!(
             rows[0]["inference_profile_id"], "frozen-profile",
             "the slot marker never reaches the trial home"
@@ -2551,19 +2551,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_trial_subject_supplies_an_omitted_default_behavior() {
+    async fn a_trial_subject_supplies_an_omitted_default_agent() {
         let dir = tempfile::tempdir().unwrap();
         let pack_dir = dir.path().join("pack");
         write_slot_pack(&pack_dir, "gents:inference-slot:primary");
         let path = pack_dir.join("pack_config.json");
-        let mut config: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        config["agent_principal"] = json!({});
+        let config: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert!(config["node"].get("default_agent_id").is_none());
         let bytes = serde_json::to_vec(&config).unwrap();
         std::fs::write(&path, &bytes).unwrap();
         let spec = TrialSpec {
             pack_digest: materialized_digest(&pack_dir),
             pack_dir,
-            behavior_id: "subject".into(),
+            agent_id: "subject".into(),
             inference: frozen_binding(json!("frozen-profile")),
             ..TrialSpec::empty_for_tests("subject-default")
         };
@@ -2574,21 +2574,18 @@ mod tests {
 
         let access = ConfigAccess::Local(home.node.clone());
         let response = access
-            .execute("query { AgentPrincipal { default_behavior_id } }")
+            .execute("query { Node { default_agent_id } }")
             .await
             .unwrap();
-        assert_eq!(
-            response["data"]["AgentPrincipal"][0]["default_behavior_id"],
-            "subject"
-        );
-        let agent = crate::Gents::from_default_behavior_documents(
+        assert_eq!(response["data"]["Node"][0]["default_agent_id"], "subject");
+        let agent = crate::Gents::from_default_agent_documents(
             home.node.clone(),
             home.identity.clone(),
             DocumentRuntimeOptions::default(),
         )
         .await
         .unwrap();
-        assert_eq!(agent.default_behavior_id(), "subject");
+        assert_eq!(agent.default_agent_id(), "subject");
         assert_eq!(std::fs::read(&path).unwrap(), bytes);
         home.node.shutdown().await;
     }
@@ -2669,7 +2666,7 @@ mod tests {
         let spec = TrialSpec {
             pack_digest: materialized_digest(&pack_dir),
             pack_dir,
-            behavior_id: "subject".into(),
+            agent_id: "subject".into(),
             inference: frozen_binding(json!("frozen-profile")),
             fixtures: TrialFixtures {
                 documents: vec![FixtureDocument {
@@ -2729,7 +2726,7 @@ mod tests {
     /// The inference documents a run freezes, with `profile_id` under test.
     fn frozen_binding(profile_id: Value) -> InferenceBinding {
         let mut profile = json!({
-            "agent_did": "did:key:frozen",
+            "node_did": "did:key:frozen",
             "backend_id": "frozen-backend",
             "model_name": "frozen-model",
         });
@@ -2739,7 +2736,7 @@ mod tests {
         InferenceBinding {
             profile,
             backend: json!({
-                "agent_did": "did:key:frozen",
+                "node_did": "did:key:frozen",
                 "backend_id": "frozen-backend",
                 "name": "Frozen backend",
                 "provider_kind": "OpenAiCompatible",
@@ -2753,7 +2750,7 @@ mod tests {
         }
     }
 
-    /// A pack in the only shape the loader accepts: one behavior, assigned to
+    /// A pack in the only shape the loader accepts: one agent, assigned to
     /// one declared inference slot, referencing it by marker.
     fn write_slot_pack(root: &Path, inference_profile_id: &str) {
         std::fs::create_dir_all(root).unwrap();
@@ -2764,15 +2761,15 @@ mod tests {
                 "manifest_version": 1,
                 "name": "slot_fixture",
                 "version": "1.0.0",
-                "description": "A pack whose behavior references an inference slot.",
+                "description": "A pack whose agent references an inference slot.",
                 "authors": ["gents-ai contributors"],
                 "kind": "documents",
                 "assets": ["README.md", "pack_config.json"],
                 "config": "pack_config.json",
                 "inference_slots": [{
                     "name": "primary",
-                    "description": "Runs the subject behavior.",
-                    "behaviors": ["subject"],
+                    "description": "Runs the subject agent.",
+                    "agents": ["subject"],
                 }],
             }))
             .unwrap(),
@@ -2781,9 +2778,9 @@ mod tests {
         std::fs::write(
             root.join("pack_config.json"),
             serde_json::to_vec(&json!({
-                "agent_principal": {},
-                "agent_behaviors": [{
-                    "behavior_id": "subject",
+                "node": {},
+                "agents": [{
+                    "agent_id": "subject",
                     "display_name": "Subject",
                     "inference_profile_id": inference_profile_id,
                 }],
@@ -2823,12 +2820,12 @@ mod tests {
         assert_ne!(materialized, spec.pack_digest);
 
         let locator = executor.provision(&spec).await;
-        assert!(locator.trial_agent_did.starts_with("did:"));
+        assert!(locator.trial_node_did.starts_with("did:"));
         assert_eq!(locator.home_hint.as_deref(), Some("run-1/trials/t1"));
         assert!(spec.trial_dir.join("workspace").is_dir());
 
         let evidence = executor.execute(&spec, CancellationToken::new()).await;
-        assert_eq!(evidence.locator.trial_agent_did, locator.trial_agent_did);
+        assert_eq!(evidence.locator.trial_node_did, locator.trial_node_did);
         assert!(evidence.stages.is_empty());
         assert_eq!(evidence.anchor.requests, 0);
 
@@ -2838,7 +2835,7 @@ mod tests {
         let reopened = EmbeddedHome::open_retained(&spec.trial_dir.join("home"))
             .await
             .expect("the trial home survives the close");
-        assert_eq!(reopened.did(), locator.trial_agent_did);
+        assert_eq!(reopened.did(), locator.trial_node_did);
         reopened.node.shutdown().await;
     }
 
@@ -2884,7 +2881,7 @@ mod tests {
         .await;
         let executor = EmbeddedExecutor::new(DocumentRuntimeOptions::default(), runs_dir.clone());
         let locator = |hint: &str| TrialLocator {
-            trial_agent_did: "did:key:zAny".to_string(),
+            trial_node_did: "did:key:zAny".to_string(),
             session_id: "s-1".to_string(),
             home_hint: Some(hint.to_string()),
         };
@@ -2928,7 +2925,7 @@ mod tests {
         let executor = EmbeddedExecutor::new(DocumentRuntimeOptions::default(), runs_dir);
         for hint in ["linked", "real", "ws"] {
             let locator = TrialLocator {
-                trial_agent_did: "did:key:zAny".to_string(),
+                trial_node_did: "did:key:zAny".to_string(),
                 session_id: "s-1".to_string(),
                 home_hint: Some(hint.to_string()),
             };
@@ -2959,11 +2956,11 @@ mod tests {
         };
 
         let locator = executor.provision(&spec).await;
-        assert!(locator.trial_agent_did.starts_with("did:"));
+        assert!(locator.trial_node_did.starts_with("did:"));
         executor.discard(&spec.trial_id).await;
 
         let evidence = executor.execute(&spec, CancellationToken::new()).await;
-        assert_eq!(evidence.locator.trial_agent_did, "did:unprovisioned");
+        assert_eq!(evidence.locator.trial_node_did, "did:unprovisioned");
         assert!(evidence.stages.is_empty());
     }
 
@@ -2983,7 +2980,7 @@ mod tests {
         // Nothing has registered a signing identity for this DID, so building
         // the stage's signed request fails before anything is written.
         let locator = TrialLocator {
-            trial_agent_did: "did:key:zUnregistered".to_string(),
+            trial_node_did: "did:key:zUnregistered".to_string(),
             session_id: "s-1".to_string(),
             home_hint: None,
         };
@@ -3000,7 +2997,7 @@ mod tests {
                     name: "requests".to_string(),
                     collection: "AgentRequest".to_string(),
                     filter: json!({"request_id": {"_eq": "seeded"}}),
-                    fields: vec!["behavior_id".to_string()],
+                    fields: vec!["agent_id".to_string()],
                 },
                 // No such collection in this home, so the read fails rather
                 // than returning nothing.
@@ -3037,7 +3034,7 @@ mod tests {
             panic!("expected a document capture, got {:?}", evidence.captures);
         };
         assert_eq!(rows.len(), 1, "{rows:?}");
-        assert_eq!(rows[0]["behavior_id"], "seeded-behavior");
+        assert_eq!(rows[0]["agent_id"], "seeded-agent");
         // A capture that could not be read is absent, not empty: an empty one
         // would read as "the subject produced no rows".
         assert!(
@@ -3057,7 +3054,7 @@ mod tests {
         std::fs::create_dir_all(&workspace).unwrap();
         let home = EmbeddedHome::create_temp("runtime-exit").await.unwrap();
         let locator = TrialLocator {
-            trial_agent_did: home.did().to_string(),
+            trial_node_did: home.did().to_string(),
             session_id: "s-1".to_string(),
             home_hint: None,
         };
@@ -3077,7 +3074,7 @@ mod tests {
             Duration::from_secs(30),
             run_stage(
                 &TrialSpec {
-                    behavior_id: "subject".to_string(),
+                    agent_id: "subject".to_string(),
                     ..TrialSpec::empty_for_tests("t1")
                 },
                 &CancellationToken::new(),
@@ -3138,7 +3135,7 @@ mod tests {
             )
             .await,
             None,
-            "another principal's trigger is not this trial's"
+            "another node's trigger is not this trial's"
         );
         home.node.shutdown().await;
     }
@@ -3159,7 +3156,7 @@ mod tests {
         let mut config: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         config["tasks"] = json!([{
             "task_id": "seed-task",
-            "behavior_id": "subject",
+            "agent_id": "subject",
             "prompt_template": "{{ doc.payload.required }}"
         }]);
         config["event_sources"] = json!([{
@@ -3175,7 +3172,7 @@ mod tests {
         let spec = TrialSpec {
             pack_digest: materialized_digest(&pack_dir),
             pack_dir,
-            behavior_id: "subject".into(),
+            agent_id: "subject".into(),
             inference,
             ..TrialSpec::empty_for_tests("seed-template-failure")
         };
@@ -3205,7 +3202,7 @@ mod tests {
         .await
         .unwrap();
         let locator = TrialLocator {
-            trial_agent_did: home.did().to_owned(),
+            trial_node_did: home.did().to_owned(),
             session_id: "seed-session".into(),
             home_hint: None,
         };
@@ -3470,9 +3467,9 @@ mod tests {
             "AgentRequest",
             &json!({
                 "request_id": "fired",
-                "agent_did": home.did(),
+                "node_did": home.did(),
                 "requester_did": home.did(),
-                "behavior_id": "seeded-behavior",
+                "agent_id": "seeded-agent",
                 "session_id": "s-1",
                 "content": "x",
                 "execution_origin": "event",
@@ -3579,7 +3576,7 @@ mod tests {
         error: Option<&str>,
         last_attempt_at: &str,
     ) {
-        let agent_did = escape_graphql_string(home.did());
+        let node_did = escape_graphql_string(home.did());
         let trigger_id = escape_graphql_string(trigger_id);
         let status = escape_graphql_string(status);
         let last_attempt_at = escape_graphql_string(last_attempt_at);
@@ -3587,7 +3584,7 @@ mod tests {
             format!("\"{}\"", escape_graphql_string(error))
         });
         let mutation = format!(
-            r#"mutation {{ create_Trigger(input: {{ trigger_id: "{trigger_id}", agent_did: "{agent_did}", task_id: "task", enabled: true, last_status: "{status}", last_error: {last_error}, last_attempt_at: "{last_attempt_at}" }}) {{ _docID }} }}"#
+            r#"mutation {{ create_Trigger(input: {{ trigger_id: "{trigger_id}", node_did: "{node_did}", task_id: "task", enabled: true, last_status: "{status}", last_error: {last_error}, last_attempt_at: "{last_attempt_at}" }}) {{ _docID }} }}"#
         );
         let response =
             crate::ConfigAccess::write_local_response(&home.node, "eval.test.trigger", &mutation)
@@ -3610,7 +3607,7 @@ mod tests {
             .await
             .unwrap();
         let locator = TrialLocator {
-            trial_agent_did: home.did().to_string(),
+            trial_node_did: home.did().to_string(),
             session_id: "s-1".to_string(),
             home_hint: None,
         };
@@ -3648,14 +3645,14 @@ mod tests {
                     tokio::time::sleep(Duration::from_millis(10)).await;
                 }
             }),
-            agent_did: String::new(),
+            node_did: String::new(),
         };
 
         // No outer timeout: on the paused clock it would expire during the
         // first node read after the runtime exits.
         let evidence = run_stage(
             &TrialSpec {
-                behavior_id: "subject".to_string(),
+                agent_id: "subject".to_string(),
                 ..TrialSpec::empty_for_tests("t1")
             },
             &CancellationToken::new(),
@@ -3680,15 +3677,15 @@ mod tests {
         RunningRuntime {
             shutdown: tokio::sync::watch::channel(false).0,
             handle: tokio::spawn(async { Err(anyhow!("runtime killed")) }),
-            agent_did: String::new(),
+            node_did: String::new(),
         }
     }
 
     async fn seed_request(home: &EmbeddedHome, request_id: &str) {
-        let agent_did = escape_graphql_string(home.did());
+        let node_did = escape_graphql_string(home.did());
         let request_id = escape_graphql_string(request_id);
         let mutation = format!(
-            r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", agent_did: "{agent_did}", requester_did: "{agent_did}", behavior_id: "seeded-behavior", session_id: "s-1", content: "x", execution_origin: "interactive", lifecycle_state: "completed", created_at: "2026-01-01T00:00:00Z" }}) {{ _docID }} }}"#
+            r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", node_did: "{node_did}", requester_did: "{node_did}", agent_id: "seeded-agent", session_id: "s-1", content: "x", execution_origin: "interactive", lifecycle_state: "completed", created_at: "2026-01-01T00:00:00Z" }}) {{ _docID }} }}"#
         );
         let response = home.node.execute(&mutation).await;
         assert!(response.errors.is_empty(), "{:?}", response.errors);
@@ -3713,7 +3710,7 @@ mod tests {
         .unwrap();
         std::fs::write(
             root.join("pack_config.json"),
-            serde_json::to_vec(&json!({"agent_principal": {}})).unwrap(),
+            serde_json::to_vec(&json!({"node": {}})).unwrap(),
         )
         .unwrap();
     }

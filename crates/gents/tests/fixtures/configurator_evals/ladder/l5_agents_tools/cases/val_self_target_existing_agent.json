@@ -1,5 +1,5 @@
 {
-  "case_id": "val-self-target-existing-behavior",
+  "case_id": "val-self-target-existing-agent",
   "split": "validation",
   "reducer": "all",
   "stages": [
@@ -35,15 +35,15 @@
           "check": "crew_spec_match",
           "params": {
             "agents": {
-              "behaviors": "behaviors",
+              "agents": "agents",
               "contexts": "contexts",
               "tools": "tools",
               "expect": [
                 {
-                  "behavior_id": "engineer",
+                  "agent_id": "engineer",
                   "delegates": {
                     "targets": "targets",
-                    "behaviors": [
+                    "agents": [
                       "engineer"
                     ]
                   }
@@ -58,15 +58,15 @@
       "capture": [
         {
           "kind": "documents",
-          "name": "behaviors",
-          "collection": "AgentBehavior",
+          "name": "agents",
+          "collection": "Agent",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
           "fields": [
-            "behavior_id",
+            "agent_id",
             "display_name",
             "context_id",
             "enabled",
@@ -78,7 +78,7 @@
           "name": "contexts",
           "collection": "AgentContext",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
@@ -93,7 +93,7 @@
           "name": "tools",
           "collection": "Tools",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
@@ -101,25 +101,25 @@
             "tools_id",
             "host",
             "datastore",
-            "subagents",
+            "agents",
             "self_config"
           ]
         },
         {
           "kind": "documents",
           "name": "targets",
-          "collection": "SubagentTarget",
+          "collection": "AgentTarget",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
           "fields": [
             "target_id",
-            "agent_did",
+            "node_did",
             "name",
-            "target_agent_did",
-            "behavior_id"
+            "target_node_did",
+            "agent_id"
           ]
         }
       ]
@@ -177,7 +177,7 @@
             "links": [
               {
                 "capture": "helper-request",
-                "key": "behavior_id",
+                "key": "agent_id",
                 "id": "engineer",
                 "field": "caused_by_parent_tool_call_doc_id",
                 "target_capture": "delegation_calls",
@@ -215,14 +215,14 @@
           "name": "trial-sessions",
           "collection": "AgentSession",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
           "fields": [
             "session_id",
-            "behavior_id",
-            "agent_did"
+            "agent_id",
+            "node_did"
           ]
         },
         {
@@ -230,13 +230,13 @@
           "name": "helper-request",
           "collection": "AgentRequest",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             },
             "content": {
               "_like": "%ECHO-2468%"
             },
-            "subagent_depth": {
+            "request_hop": {
               "_gt": 0
             },
             "purpose": {
@@ -247,7 +247,7 @@
             "content",
             "lifecycle_state",
             "terminal_output",
-            "behavior_id",
+            "agent_id",
             "caused_by_parent_tool_call_doc_id"
           ]
         },
@@ -256,7 +256,7 @@
           "name": "delegation_calls",
           "collection": "AgentToolCall",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             },
             "tool_name": {

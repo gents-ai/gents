@@ -9,18 +9,18 @@ use tokio::sync::{watch, OnceCell};
 
 use crate::backend_health::{BackendHealthMap, BackendProberOptions};
 use crate::config::{
-    ResolvedBehavior, DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
+    ResolvedAgent, DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
     DEFAULT_STREAM_BATCH_MS, DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
 };
 use crate::health_checker::HealthCheckerOptions;
 use crate::hook::{BackgroundExecutionRegistry, FailurePolicy};
-use crate::identity::{AgentIdentity, RuntimePrincipal};
+use crate::identity::{NodeIdentity, RuntimeNode};
 use crate::mcp_pool::McpPool;
 use crate::migration;
 use crate::retry::RetryPolicy;
-use crate::runtime_snapshot::{ResolvedRuntimeSnapshot, UnavailableBehavior};
+use crate::runtime_snapshot::{ResolvedRuntimeSnapshot, UnavailableAgent};
 use crate::tool_surface::{
-    BehaviorToolConfig, ResolvedToolSelection, SubagentToolConfig, ToolCeiling,
+    AgentToolConfig, AgentToolSurfaceConfig, ResolvedToolSelection, ToolCeiling,
 };
 use crate::trigger_engine::manual_source::ManualTriggerHandle;
 
@@ -32,8 +32,6 @@ pub(crate) mod document_view;
 pub(crate) mod loop_stream;
 pub(crate) mod output_obligation;
 pub mod p2p_reconcile;
-pub mod persona_ops;
-pub mod persona_presets;
 pub(crate) mod principal_assembly;
 mod reconcile;
 mod runtime;
@@ -44,12 +42,12 @@ mod supervision;
 mod tests;
 pub(crate) mod worker_capacity;
 
-pub(crate) use principal_assembly::assemble_principal_and_behaviors;
-pub(crate) use principal_assembly::BehaviorBuildError;
+pub(crate) use principal_assembly::assemble_node_and_agents;
+pub(crate) use principal_assembly::AgentBuildError;
 
 #[cfg(test)]
-pub(crate) use builder::PendingAgentBehavior;
-pub use builder::{BehaviorBuilder, GentsBuilder};
+pub(crate) use builder::PendingAgent;
+pub use builder::{AgentBuilder, GentsBuilder};
 #[cfg(test)]
 pub(crate) use document_view::load_document_runtime_view;
 
@@ -60,7 +58,7 @@ pub(crate) use document_view::load_document_runtime_view;
 #[cfg(test)]
 pub(crate) async fn process_owned_request_with_model_for_test<M>(
     node: Arc<EmbeddedNode>,
-    behavior: Arc<ResolvedBehavior>,
+    agent_config: Arc<ResolvedAgent>,
     tool_surface: Arc<crate::tool_surface::ToolSurface>,
     tool_runtime: &crate::tool_surface::ToolRuntimeContext,
     model: M,
@@ -70,9 +68,9 @@ where
     M: crate::llm::rig_compat::ProviderModel,
 {
     let allowed_targets =
-        crate::tool_surface::resolve_subagent_target_descriptions(tool_surface.as_ref());
+        crate::tool_surface::resolve_agent_target_descriptions(tool_surface.as_ref());
     let prompt_builder = crate::prompt::LayeredPromptBuilder::new(
-        behavior.as_ref(),
+        agent_config.as_ref(),
         &tool_surface,
         &allowed_targets,
     );
@@ -80,16 +78,16 @@ where
     let loop_tools = Arc::new(tool_surface.build_tools(tool_runtime).await?);
     let runtime_status = crate::runtime_status::RuntimeStatusHandle::new(
         node.clone(),
-        behavior.agent_did().to_string(),
+        agent_config.node_did().to_string(),
     );
     let request_admission = crate::request_admission::AgentRequestAdmissionVerifier::new(
         node.clone(),
-        behavior.principal_identity().clone(),
+        agent_config.node_identity().clone(),
         p2p_reconcile::enrollment_authority_channel().1,
     );
-    let mut daemon = daemon::BehaviorDaemon::new(
+    let mut daemon = daemon::AgentDaemon::new(
         node.clone(),
-        behavior,
+        agent_config,
         None,
         Arc::new(model),
         preamble,
@@ -140,7 +138,7 @@ pub trait RuntimeSnapshotObserver: Send + Sync {
         &self,
         generation: u64,
         configuration_fingerprint: &str,
-        runnable_behavior_ids: &[String],
+        runnable_agent_ids: &[String],
     );
 
     /// Subscription/seed outcome for this exact configuration. Success is not
@@ -184,7 +182,7 @@ pub struct DocumentRuntimeOptions {
 
 #[derive(Clone)]
 pub(crate) struct DocumentResolveContext {
-    pub(crate) identity: Arc<dyn AgentIdentity>,
+    pub(crate) identity: Arc<dyn NodeIdentity>,
     pub(crate) tool_ceiling: ToolCeiling,
     pub(crate) backend_health: BackendHealthMap,
     pub(crate) plugins: Arc<crate::plugin::executor::PluginExecutor>,
@@ -211,9 +209,9 @@ impl DocumentResolveContext {
 #[derive(Clone)]
 pub struct Gents {
     node: Arc<EmbeddedNode>,
-    principal: Arc<RuntimePrincipal>,
-    behaviors: Vec<Arc<ResolvedBehavior>>,
-    unavailable_behaviors: HashMap<String, UnavailableBehavior>,
+    runtime_node: Arc<RuntimeNode>,
+    agents: Vec<Arc<ResolvedAgent>>,
+    unavailable_agents: HashMap<String, UnavailableAgent>,
     document_runtime_context: Option<DocumentResolveContext>,
     mcp_pool: McpPool,
     local_hostname: String,
@@ -252,9 +250,9 @@ impl Gents {
         GentsBuilder::new()
     }
 
-    pub async fn from_default_behavior_documents(
+    pub async fn from_default_agent_documents(
         node: Arc<EmbeddedNode>,
-        identity: Arc<dyn AgentIdentity>,
+        identity: Arc<dyn NodeIdentity>,
         options: DocumentRuntimeOptions,
     ) -> anyhow::Result<Self> {
         if node.node_identity_did().is_none() {
@@ -277,22 +275,22 @@ impl Gents {
         };
         let resolved_snapshot =
             resolve_document_runtime_snapshot(node.as_ref(), &document_runtime_context).await?;
-        let principal = resolved_snapshot
-            .principal
+        let runtime_node = resolved_snapshot
+            .node
             .clone()
-            .context("resolved document runtime snapshot is missing its principal owner")?;
-        let default_behavior_id = principal.default_behavior_id.clone();
-        let mut behaviors = resolved_snapshot
-            .behaviors
+            .context("resolved document runtime snapshot is missing its node owner")?;
+        let default_agent_id = runtime_node.default_agent_id.clone();
+        let mut agents = resolved_snapshot
+            .agents
             .values()
             .cloned()
             .collect::<Vec<_>>();
-        behaviors.sort_by(|left, right| {
-            let left_is_default = left.behavior_id == default_behavior_id;
-            let right_is_default = right.behavior_id == default_behavior_id;
+        agents.sort_by(|left, right| {
+            let left_is_default = left.agent_id == default_agent_id;
+            let right_is_default = right.agent_id == default_agent_id;
             right_is_default
                 .cmp(&left_is_default)
-                .then_with(|| left.behavior_id.cmp(&right.behavior_id))
+                .then_with(|| left.agent_id.cmp(&right.agent_id))
         });
 
         let rendered_request_capture_factory =
@@ -300,9 +298,9 @@ impl Gents {
 
         Ok(Self {
             node,
-            principal,
-            behaviors,
-            unavailable_behaviors: resolved_snapshot.unavailable_behaviors,
+            runtime_node,
+            agents,
+            unavailable_agents: resolved_snapshot.unavailable_agents,
             document_runtime_context: Some(document_runtime_context),
             mcp_pool: options.mcp_pool,
             local_hostname: options
@@ -339,37 +337,37 @@ impl Gents {
         self.backend_health.clone()
     }
 
-    pub fn behaviors(&self) -> &[Arc<ResolvedBehavior>] {
-        &self.behaviors
+    pub fn agents(&self) -> &[Arc<ResolvedAgent>] {
+        &self.agents
     }
 
-    /// Returns the resolved agent principal and signing permission boundary.
+    /// Returns the resolved runtime node and signing permission boundary.
     ///
     /// DefraDB ops issued by this `Gents` are signed by the node identity
     /// configured on its `EmbeddedNode`. That signer may differ from the
-    /// resolved agent principal identity: the node is the durable write author,
-    /// while the principal remains the permission boundary for its behaviors.
-    pub fn principal(&self) -> &RuntimePrincipal {
-        &self.principal
+    /// resolved runtime node identity: the node is the durable write author,
+    /// while the runtime node remains the permission boundary for its agents.
+    pub fn runtime_node(&self) -> &RuntimeNode {
+        &self.runtime_node
     }
 
-    pub(crate) fn principal_arc(&self) -> Arc<RuntimePrincipal> {
-        Arc::clone(&self.principal)
+    pub(crate) fn runtime_node_arc(&self) -> Arc<RuntimeNode> {
+        Arc::clone(&self.runtime_node)
     }
 
-    pub fn agent_did(&self) -> &str {
-        &self.principal.agent_did
+    pub fn node_did(&self) -> &str {
+        &self.runtime_node.node_did
     }
 
-    /// Reads this principal's account usage from its providers now.
+    /// Reads this runtime node's account usage from its providers now.
     pub async fn read_usage(
         &self,
         trigger: crate::usage_observation::UsageTrigger,
         provider: Option<&str>,
     ) -> anyhow::Result<Vec<crate::usage_observation::AccountUsageRead>> {
-        crate::usage_observation::read_principal_usage(
+        crate::usage_observation::read_node_usage(
             self.node.clone(),
-            self.agent_did(),
+            self.node_did(),
             trigger,
             provider,
             &Default::default(),
@@ -378,12 +376,12 @@ impl Gents {
         .await
     }
 
-    pub fn default_behavior_id(&self) -> &str {
-        &self.principal.default_behavior_id
+    pub fn default_agent_id(&self) -> &str {
+        &self.runtime_node.default_agent_id
     }
 
-    pub fn unavailable_behaviors(&self) -> &HashMap<String, UnavailableBehavior> {
-        &self.unavailable_behaviors
+    pub fn unavailable_agents(&self) -> &HashMap<String, UnavailableAgent> {
+        &self.unavailable_agents
     }
 
     pub fn background_execution_registry(&self) -> BackgroundExecutionRegistry {
@@ -454,18 +452,18 @@ pub(crate) async fn resolve_document_runtime_snapshot(
     document_view::resolve_document_runtime_snapshot_from_view(node, context, &view).await
 }
 
-pub(crate) fn behavior_config_from_documents(
-    principal: Arc<RuntimePrincipal>,
-    behavior: &crate::document_config::AgentBehavior,
+pub(crate) fn agent_config_from_documents(
+    principal: Arc<RuntimeNode>,
+    agent_config: &crate::document_config::Agent,
     context: Option<&crate::document_config::AgentContext>,
     compaction: Option<crate::document_config::CompactionConfig>,
     compaction_inference: Option<crate::config::ResolvedInference>,
     inference: &crate::config::ResolvedInference,
     tool_selection: ResolvedToolSelection,
-    subagent_tools: SubagentToolConfig,
+    agent_tools: AgentToolConfig,
     tool_ceiling: &ToolCeiling,
     skills: Vec<crate::skills::Skill>,
-) -> anyhow::Result<ResolvedBehavior> {
+) -> anyhow::Result<ResolvedAgent> {
     let execution = inference.execution.clone().unwrap_or_default();
     let retry = inference.retry_policy.clone().unwrap_or_default();
     let stream_batch_ms = positive_duration_secs_or_default(
@@ -504,9 +502,9 @@ pub(crate) fn behavior_config_from_documents(
     }
     let backend = inference.backend.backend_fields();
     let resolved_max_turns = inference.max_turns()?;
-    Ok(ResolvedBehavior {
-        behavior_id: behavior.behavior_id.clone(),
-        principal,
+    Ok(ResolvedAgent {
+        agent_id: agent_config.agent_id.clone(),
+        node: principal,
         backend_id: backend.backend_id,
         backend_provider_kind: backend.backend_provider_kind,
         openai_wire_api: backend.openai_wire_api,
@@ -522,11 +520,11 @@ pub(crate) fn behavior_config_from_documents(
         system_prompt: context
             .and_then(|context| context.system_prompt.clone())
             .unwrap_or_default(),
-        tools: BehaviorToolConfig::from_selection_with_subagent_tools(
-            &behavior.behavior_id,
+        tools: AgentToolSurfaceConfig::from_selection_with_agent_tools(
+            &agent_config.agent_id,
             tool_selection,
             tool_ceiling,
-            subagent_tools,
+            agent_tools,
             Vec::new(),
         )?,
         compaction,

@@ -119,7 +119,7 @@ async fn first_delivery_on(schema: &str, emit_outcome: bool) -> (Delivery, FireI
 
 impl Delivery {
     async fn cursor(&self) -> String {
-        let owner = event_test_behavior().agent_did().to_owned();
+        let owner = event_test_behavior().node_did().to_owned();
         crate::config_client::ConfigAccess::Local(self.node.clone())
             .transact("test.unacknowledged_cursor", |txn| {
                 let owner = &owner;
@@ -425,7 +425,7 @@ impl MaterializerHandle for PanicMaterializer {
 
     fn has_active_runtime_request_for_trigger(
         &self,
-        _agent_did: &str,
+        _node_did: &str,
         _trigger_id: &str,
         _excluded_request_id: Option<&str>,
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<bool>> + Send + '_>> {
@@ -434,7 +434,7 @@ impl MaterializerHandle for PanicMaterializer {
 
     fn supersede_active_runtime_requests_for_trigger(
         &self,
-        _agent_did: &str,
+        _node_did: &str,
         _trigger_id: &str,
         _excluded_request_id: Option<&str>,
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<usize>> + Send + '_>> {
@@ -451,7 +451,7 @@ impl MaterializerHandle for PanicMaterializer {
 
     fn has_materialized_group_request(
         &self,
-        _agent_did: &str,
+        _node_did: &str,
         _trigger_id: &str,
         _durable_fire_key: &str,
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<bool>> + Send + '_>> {

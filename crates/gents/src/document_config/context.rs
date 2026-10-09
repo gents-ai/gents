@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use super::references::ConfigReferences;
 
-/// Reusable context configuration referenced by a behavior.
+/// Reusable context configuration referenced by an agent.
 ///
 /// This document describes how context is assembled; conversation messages,
 /// activated skills, and generated compaction entries remain session state.

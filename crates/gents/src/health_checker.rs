@@ -272,7 +272,7 @@ impl ServiceHealthMap {
 #[derive(Clone, Copy)]
 pub struct HealthPersistenceContext<'a> {
     pub node: &'a EmbeddedNode,
-    pub agent_did: &'a str,
+    pub node_did: &'a str,
 }
 
 impl Default for ServiceHealthMap {
@@ -294,7 +294,7 @@ pub struct McpHealthCheckService {
     #[serde(default, deserialize_with = "crate::registry::null_as_empty_string")]
     pub mcp_path: String,
     #[serde(default, deserialize_with = "crate::registry::null_as_default")]
-    pub send_agent_did: bool,
+    pub send_node_did: bool,
     pub updated_at: Option<String>,
 }
 
@@ -306,12 +306,12 @@ pub fn spawn_health_checker(
     local_subnet: Option<String>,
     cancel: CancellationToken,
     options: HealthCheckerOptions,
-    agent_did: String,
+    node_did: String,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let persistence = HealthPersistenceContext {
             node: node.as_ref(),
-            agent_did: agent_did.as_str(),
+            node_did: node_did.as_str(),
         };
         if let Err(error) = run_health_check(
             node.as_ref(),
@@ -340,7 +340,7 @@ pub fn spawn_health_checker(
                 _ = ticker.tick() => {
                     let persistence = HealthPersistenceContext {
                         node: node.as_ref(),
-                        agent_did: agent_did.as_str(),
+                        node_did: node_did.as_str(),
                     };
                     if let Err(error) = run_health_check(
                         node.as_ref(),
@@ -370,8 +370,8 @@ async fn run_health_check(
 ) -> Result<()> {
     let owner = persistence
         .as_ref()
-        .map(|context| context.agent_did)
-        .ok_or_else(|| anyhow::anyhow!("registry health checks require a principal scope"))?;
+        .map(|context| context.node_did)
+        .ok_or_else(|| anyhow::anyhow!("registry health checks require a node scope"))?;
     let services = crate::registry::configured_mcp_services(node, owner)
         .await?
         .into_iter()
@@ -383,7 +383,7 @@ async fn run_health_check(
             lan_ip: service.lan_ip.unwrap_or_default(),
             mcp_port: service.mcp_port.and_then(|port| u16::try_from(port).ok()),
             mcp_path: service.mcp_path.unwrap_or_default(),
-            send_agent_did: service.send_agent_did,
+            send_node_did: service.send_node_did,
             // Configuration revisions are not service heartbeats. This probe
             // supplies a fresh observation through the existing health owner.
             updated_at: None,
@@ -500,13 +500,13 @@ pub async fn run_health_check_cycle(
 
         match tokio::time::timeout(
             options.probe_timeout,
-            mcp_pool.list_tools_with_agent_did(
+            mcp_pool.list_tools_with_node_did(
                 &service_id,
                 &endpoint,
                 persistence
                     .as_ref()
-                    .filter(|_| service.send_agent_did)
-                    .map(|p| p.agent_did),
+                    .filter(|_| service.send_node_did)
+                    .map(|p| p.node_did),
             ),
         )
         .await
@@ -760,7 +760,7 @@ async fn upsert_persisted_health_state(
     now: DateTime<Utc>,
 ) -> Result<()> {
     let service_id = escape_graphql_string(&entry.service_id);
-    let agent_did = escape_graphql_string(persistence.agent_did);
+    let node_did = escape_graphql_string(persistence.node_did);
     let endpoint = entry.endpoint.as_deref().unwrap_or("");
     let endpoint = escape_graphql_string(endpoint);
     let status = escape_graphql_string(&entry.status);
@@ -788,11 +788,11 @@ async fn upsert_persisted_health_state(
             upsert_ToolServiceHealthState(
                 filter: {{ _and: [
                     {{ service_id: {{ _eq: "{service_id}" }} }},
-                    {{ agent_did: {{ _eq: "{agent_did}" }} }}
+                    {{ node_did: {{ _eq: "{node_did}" }} }}
                 ] }},
                 add: {{
                     service_id: "{service_id}",
-                    agent_did: "{agent_did}",
+                    node_did: "{node_did}",
                     endpoint: "{endpoint}",
                     status: "{status}",
                     tool_count: {tool_count_fragment},
@@ -838,13 +838,13 @@ async fn delete_persisted_health_state(
     service_id: &str,
 ) {
     let escaped_service = escape_graphql_string(service_id);
-    let escaped_agent = escape_graphql_string(persistence.agent_did);
+    let escaped_agent = escape_graphql_string(persistence.node_did);
     let mutation = format!(
         r#"mutation {{
             delete_ToolServiceHealthState(
                 filter: {{ _and: [
                     {{ service_id: {{ _eq: "{escaped_service}" }} }},
-                    {{ agent_did: {{ _eq: "{escaped_agent}" }} }}
+                    {{ node_did: {{ _eq: "{escaped_agent}" }} }}
                 ] }}
             ) {{ _docID }}
         }}"#
@@ -867,11 +867,11 @@ async fn delete_persisted_health_state(
 async fn load_persisted_service_ids(
     persistence: &HealthPersistenceContext<'_>,
 ) -> Result<HashSet<String>> {
-    let agent_did = escape_graphql_string(persistence.agent_did);
+    let node_did = escape_graphql_string(persistence.node_did);
     let query = format!(
         r#"{{
             ToolServiceHealthState(
-                filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}
+                filter: {{ node_did: {{ _eq: "{node_did}" }} }}
             ) {{
                 service_id
             }}
@@ -913,7 +913,7 @@ mod registry_parsing_tests {
             "lan_ip": null,
             "mcp_port": 9201,
             "mcp_path": null,
-            "send_agent_did": null,
+            "send_node_did": null,
             "updated_at": null,
         });
 
@@ -925,7 +925,7 @@ mod registry_parsing_tests {
         assert_eq!(entry.tailscale_ip, "");
         assert_eq!(entry.lan_ip, "");
         assert_eq!(entry.mcp_port, Some(9201));
-        assert!(!entry.send_agent_did);
+        assert!(!entry.send_node_did);
     }
 
     #[test]
@@ -1005,7 +1005,7 @@ mod tests {
             lan_ip: String::new(),
             mcp_port: Some(9201),
             mcp_path: "/mcp".to_string(),
-            send_agent_did: false,
+            send_node_did: false,
             updated_at: Some(updated_at.to_rfc3339()),
         }
     }
@@ -1230,7 +1230,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn persisted_health_rows_are_principal_scoped_and_stale_rows_sweep_within_the_agent() {
+    async fn persisted_health_rows_are_node_scoped_and_stale_rows_sweep_within_the_agent() {
         let node = crate::oauth_credential::test_support::test_node().await;
         let did_a = "did:key:zHealthA";
         let did_b = "did:key:zHealthB";
@@ -1239,7 +1239,7 @@ mod tests {
             let response = node
                 .execute(&format!(
                     r#"mutation {{ create_ToolServiceRegistry(input: {{
-                agent_did: "{did}", service_id: "observability-mcp", hostname: "local-host",
+                node_did: "{did}", service_id: "observability-mcp", hostname: "local-host",
                 tailscale_ip: "100.64.0.1", mcp_port: 9213, mcp_path: "/mcp", enabled: true
             }}) {{ _docID }} }}"#
                 ))
@@ -1262,7 +1262,7 @@ mod tests {
             let response = node
                 .execute(
                     r#"{ ToolServiceHealthState {
-                _docID service_id agent_did status tool_count failure_count k_max
+                _docID service_id node_did status tool_count failure_count k_max
                 endpoint last_error_class last_error_message
             } }"#,
                 )
@@ -1288,21 +1288,21 @@ mod tests {
                 &HealthCheckerOptions::default(),
                 Some(HealthPersistenceContext {
                     node: &node,
-                    agent_did: did,
+                    node_did: did,
                 }),
             )
             .await
             .unwrap();
             let persisted = rows(&node).await;
             assert_eq!(persisted.len(), if index == 0 { 1 } else { 2 });
-            for principal in [did_a, did_b]
+            for node_did in [did_a, did_b]
                 .into_iter()
                 .take(if index == 0 { 1 } else { 2 })
             {
                 let row = persisted
                     .iter()
-                    .find(|row| row["agent_did"] == principal)
-                    .expect("principal's health row");
+                    .find(|row| row["node_did"] == node_did)
+                    .expect("node's health row");
                 assert_eq!(row["service_id"], "observability-mcp");
                 assert_eq!(row["status"], "healthy");
                 assert_eq!(row["tool_count"], 0);
@@ -1335,11 +1335,11 @@ mod tests {
         }
         assert_eq!(probes.lock().unwrap().len(), 3);
 
-        // An actual registry change makes only this principal's row stale.
+        // An actual registry change makes only this node's row stale.
         let response = node
             .execute(
                 r#"mutation {
-            update_ToolServiceRegistry(filter: { service_id: { _eq: "observability-mcp" }, agent_did: { _eq: "did:key:zHealthA" } },
+            update_ToolServiceRegistry(filter: { service_id: { _eq: "observability-mcp" }, node_did: { _eq: "did:key:zHealthA" } },
                 input: { enabled: false }) { _docID }
         }"#,
             )
@@ -1354,14 +1354,14 @@ mod tests {
             &HealthCheckerOptions::default(),
             Some(HealthPersistenceContext {
                 node: &node,
-                agent_did: did_a,
+                node_did: did_a,
             }),
         )
         .await
         .unwrap();
         let remaining = rows(&node).await;
         assert_eq!(remaining.len(), 1);
-        assert_eq!(remaining[0]["agent_did"], did_b);
+        assert_eq!(remaining[0]["node_did"], did_b);
         assert_eq!(remaining[0]["service_id"], "observability-mcp");
     }
 }

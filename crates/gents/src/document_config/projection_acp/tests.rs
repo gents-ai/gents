@@ -3,7 +3,7 @@ use serde_json::json;
 
 #[test]
 fn canonical_projection_config_guards_apply_through_reference_owner() {
-    let valid = json!({"binding_id":"projection", "agent_did":"owner", "policy_id":"active",
+    let valid = json!({"binding_id":"projection", "node_did":"owner", "policy_id":"active",
         "staged_policy_id":"staged", "previous_policy_id":"previous", "projection_id":"atif_trajectory",
         "resource_map_json": r#"{"AgentSession":"sessions","InferenceCall":"inference"}"#});
     let validate = |value: serde_json::Value| gents_refs("owner", value);

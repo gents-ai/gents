@@ -27,18 +27,18 @@ const MAX_RUN_ACTIVITY_ROWS: usize = 10_000;
 /// maintaining another argument reconstruction path.
 pub(crate) async fn load_session_tool_calls(
     access: &ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
 ) -> Result<Vec<TimelineToolCallRow>> {
     let observations =
-        load_timeline_tool_observations_for_session(access, agent_did, session_id, requester_did)
+        load_timeline_tool_observations_for_session(access, node_did, session_id, requester_did)
             .await?;
     let messages =
-        resolve_timeline_messages_for_session(access, agent_did, session_id, requester_did).await?;
+        resolve_timeline_messages_for_session(access, node_did, session_id, requester_did).await?;
     event_loaders::resolve_timeline_tool_observations(
         access,
-        agent_did,
+        node_did,
         session_id,
         requester_did,
         observations,
@@ -55,14 +55,14 @@ pub(crate) async fn load_session_tool_calls(
 /// the session or run transcript. Deliveries are not resolved.
 pub(crate) async fn load_accepted_tool_arguments(
     access: &ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
     tool_doc_id: &str,
 ) -> Result<Vec<String>> {
     let observations = event_loaders::load_timeline_tool_observation(
         access,
-        agent_did,
+        node_did,
         session_id,
         requester_did,
         tool_doc_id,
@@ -76,7 +76,7 @@ pub(crate) async fn load_accepted_tool_arguments(
             .context("accepted tool lacks its accepted message sequence")?;
         let messages = event_loaders::resolve_timeline_messages_at_sequence(
             access,
-            agent_did,
+            node_did,
             session_id,
             requester_did,
             sequence,
@@ -89,8 +89,8 @@ pub(crate) async fn load_accepted_tool_arguments(
 
 pub async fn load_run_timeline(access: &ConfigAccess, request_id: &str) -> Result<RunTimeline> {
     let mut timeline = build_run_timeline(load_run_timeline_rows(access, request_id).await?);
-    if let Some(agent_did) = timeline.agent_did.as_deref() {
-        match crate::load_background_completion_diagnostics(access, agent_did).await {
+    if let Some(node_did) = timeline.node_did.as_deref() {
+        match crate::load_background_completion_diagnostics(access, node_did).await {
             Ok(diagnostics) => {
                 timeline.background_completions = diagnostics
                     .epochs
@@ -110,7 +110,7 @@ pub async fn load_run_timeline(access: &ConfigAccess, request_id: &str) -> Resul
             }
         }
         // Best effort, like the diagnostics above: the call rows stand alone.
-        if let Err(error) = name_serving_accounts(access, agent_did, &mut timeline.events).await {
+        if let Err(error) = name_serving_accounts(access, node_did, &mut timeline.events).await {
             tracing::debug!(%error, "timeline call accounts unavailable");
         }
     }
@@ -122,14 +122,14 @@ pub async fn load_run_timeline(access: &ConfigAccess, request_id: &str) -> Resul
 /// every account was removed) gets none, as does one with no start time.
 async fn name_serving_accounts(
     access: &ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
     events: &mut [crate::run_timeline::RunTimelineEvent],
 ) -> Result<()> {
-    let accounts = crate::oauth_credential::list_accounts(access, agent_did).await?;
+    let accounts = crate::oauth_credential::list_accounts(access, node_did).await?;
     let backends = access
         .transact("timeline.serving_accounts", |txn| {
             Box::pin(async move {
-                crate::config_client::list_inference_backends_in_txn(txn, agent_did).await
+                crate::config_client::list_inference_backends_in_txn(txn, node_did).await
             })
         })
         .await?;
@@ -189,7 +189,7 @@ pub async fn load_run_activity_rows(
     // Session labels are not identities. Resolve owner/requester scopes from actual
     // selected request rows before loading any canonical session projection.
     let scope_query = format!(
-        "{{ AgentRequest(filter: {{ request_id: {{ _in: [{request_list}] }} }} ) {{ _docID request_id agent_did requester_did session_id }} }}"
+        "{{ AgentRequest(filter: {{ request_id: {{ _in: [{request_list}] }} }} ) {{ _docID request_id node_did requester_did session_id }} }}"
     );
     let scope_rows =
         load_rows::<gents_protocol::row::AgentRequestRow>(access, "AgentRequest", &scope_query)
@@ -206,7 +206,7 @@ pub async fn load_run_activity_rows(
             .filter(|id| session_ids.contains(id))
         {
             let owner = request
-                .agent_did
+                .node_did
                 .as_deref()
                 .filter(|owner| !owner.trim().is_empty())
                 .context("activity request has no session owner")?;
@@ -241,7 +241,7 @@ pub async fn load_run_activity_rows(
                     order: {{ started_at: ASC }}, limit: {limit}
                 ) {{
                     call_id request_id call_seq attempt call_state failure_reason
-                    queued_at started_at ended_at backend_id behavior_id agent_did call_kind
+                    queued_at started_at ended_at backend_id agent_id node_did call_kind
                     prompt_tokens completion_tokens cached_input_tokens context_accounting_json
                 }}
                 AgentToolCall(
@@ -292,7 +292,7 @@ pub async fn load_run_timeline_rows(
             load_timeline_requests_for_session(
                 access,
                 request
-                    .agent_did
+                    .node_did
                     .as_deref()
                     .context("timeline root request has no session owner")?,
                 session_id,
@@ -333,7 +333,7 @@ pub async fn load_run_timeline_rows(
     for request in &requests {
         if let Some(session_id) = request.session_id.as_deref() {
             let owner = request
-                .agent_did
+                .node_did
                 .as_deref()
                 .filter(|owner| !owner.trim().is_empty())
                 .context("timeline session request has no owner")?;
@@ -387,7 +387,7 @@ pub async fn load_run_timeline_rows(
             load_timeline_goal_versions_for_session(
                 access,
                 request
-                    .agent_did
+                    .node_did
                     .as_deref()
                     .context("timeline root request has no goal owner")?,
                 session_id,
@@ -540,7 +540,7 @@ pub async fn load_run_timeline_rows(
     let session = match root_session_id.as_deref() {
         Some(session_id) => {
             let owner = request
-                .agent_did
+                .node_did
                 .as_deref()
                 .filter(|owner| !owner.trim().is_empty())
                 .context("timeline root request has no session owner")?;
@@ -631,15 +631,15 @@ mod tests {
                 r#"mutation {
                     create_AgentSession(input: {
                         session_id: "activity-session"
-                        agent_did: "did:test:agent"
-                        behavior_id: "review"
+                        node_did: "did:test:agent"
+                        agent_id: "review"
                         created_at: "2026-08-26T00:00:00Z"
                     }) { _docID }
                     create_AgentRequest(input: {
                         request_id: "activity-request"
                         purpose: "normal"
-                        agent_did: "did:test:agent"
-                        behavior_id: "review"
+                        node_did: "did:test:agent"
+                        agent_id: "review"
                         session_id: "activity-session"
                         lifecycle_state: "completed"
                         created_at: "2026-08-26T00:00:00Z"
@@ -660,7 +660,7 @@ mod tests {
                         tool_call_key: "activity-tool-key"
                         request_id: "activity-request"
                         session_id: "activity-session"
-                        agent_did: "did:test:agent"
+                        node_did: "did:test:agent"
                         tool_name: "read_file"
                         tool_call_id: "activity-tool"
                         status: "completed"
@@ -721,15 +721,15 @@ mod tests {
                 r#"mutation {
                     create_AgentSession(input: {
                         session_id: "session-timeline"
-                        agent_did: "did:test:agent"
-                        behavior_id: "general"
+                        node_did: "did:test:agent"
+                        agent_id: "general"
                         created_at: "2026-08-14T12:00:00Z"
                     }) { _docID }
                     create_AgentRequest(input: {
                         request_id: "request-timeline"
                         purpose: "normal"
-                        agent_did: "did:test:agent"
-                        behavior_id: "general"
+                        node_did: "did:test:agent"
+                        agent_id: "general"
                         session_id: "session-timeline"
                         content: "run"
                         lifecycle_state: "completed"
@@ -755,8 +755,8 @@ mod tests {
                         request_doc_id: "{request_doc_id}"
                         call_seq: 1
                         backend_id: "backend-a"
-                        behavior_id: "general"
-                        agent_did: "did:test:agent"
+                        agent_id: "general"
+                        node_did: "did:test:agent"
                         call_kind: "inference"
                         attempt: 1
                         call_state: "completed"
@@ -808,9 +808,9 @@ mod tests {
         )
         .unwrap();
         let original = serde_json::from_value(serde_json::json!({
-            "agent_did": did, "backend_id": "claude", "name": "Claude",
+            "node_did": did, "backend_id": "claude", "name": "Claude",
             "provider_kind": spec.provider_kind, "endpoint": spec.endpoint,
-            "auth": {"kind": "principal_oauth"},
+            "auth": {"kind": "node_oauth"},
         }))
         .unwrap();
         crate::config_client::write_inference_backend_document(&access, &original)
@@ -847,8 +847,8 @@ mod tests {
             .execute(&format!(
                 r#"mutation {{
                     create_AgentRequest(input: {{
-                        request_id: "request-accounts" purpose: "normal" agent_did: "{did}"
-                        behavior_id: "general" content: "run" lifecycle_state: "completed"
+                        request_id: "request-accounts" purpose: "normal" node_did: "{did}"
+                        agent_id: "general" content: "run" lifecycle_state: "completed"
                         created_at: "{}"
                     }}) {{ _docID }}
                 }}"#,
@@ -862,7 +862,7 @@ mod tests {
                 r#"create_InferenceCall(input: {{
                     call_id: "{call_id}" request_id: "request-accounts"
                     request_doc_id: "{request_doc_id}" call_seq: {seq}
-                    backend_id: "{backend_id}" agent_did: "{did}" call_kind: "{kind}"
+                    backend_id: "{backend_id}" node_did: "{did}" call_kind: "{kind}"
                     attempt: 1 call_state: "completed" started_at: "{started_at}"
                 }}) {{ _docID }}"#
             )
@@ -953,15 +953,15 @@ mod tests {
                 r#"mutation {
                     create_AgentSession(input: {
                         session_id: "session-goal-history"
-                        agent_did: "did:test:agent"
-                        behavior_id: "general"
+                        node_did: "did:test:agent"
+                        agent_id: "general"
                         created_at: "2026-08-14T12:00:00Z"
                     }) { _docID }
                     create_AgentRequest(input: {
                         request_id: "request-goal-history"
                         purpose: "normal"
-                        agent_did: "did:test:agent"
-                        behavior_id: "general"
+                        node_did: "did:test:agent"
+                        agent_id: "general"
                         session_id: "session-goal-history"
                         content: "ship the timeline"
                         lifecycle_state: "completed"

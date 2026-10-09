@@ -210,7 +210,7 @@ pub struct ToolCallLifecycle {
     /// DID of the agent that owns the session this tool call belongs to. Stamped
     /// onto the AgentToolCall row at create so filtered replication can scope the
     /// collection to one agent (`@immutable` scope key).
-    agent_did: String,
+    node_did: String,
     requester_did: Option<String>,
     tool_call_id: String,
     /// The provider's optional secondary call identity.  This is immutable
@@ -264,7 +264,7 @@ impl ToolCallLifecycle {
     /// dispatch: it deliberately has no create transition.
     pub(crate) fn from_accepted(
         node: Arc<EmbeddedNode>,
-        agent_did: String,
+        node_did: String,
         requester_did: Option<String>,
         accepted: AcceptedToolCall,
         deadline_at: chrono::DateTime<chrono::Utc>,
@@ -281,7 +281,7 @@ impl ToolCallLifecycle {
             request_id: String::new(),
             request_doc_id: Some(accepted.request_doc_id),
             session_id: accepted.session_id,
-            agent_did,
+            node_did,
             requester_did: requester_did.and_then(|did| {
                 let did = did.trim();
                 (!did.is_empty()).then(|| did.to_owned())
@@ -318,7 +318,7 @@ impl ToolCallLifecycle {
         node: Arc<EmbeddedNode>,
         request_id: String,
         session_id: String,
-        agent_did: String,
+        node_did: String,
         tool_call_id: String,
         message_sequence: u32,
         tool_name: String,
@@ -330,7 +330,7 @@ impl ToolCallLifecycle {
             request_id,
             request_doc_id: None,
             session_id,
-            agent_did,
+            node_did,
             requester_did: None,
             tool_call_id,
             call_id: None,
@@ -389,7 +389,7 @@ impl ToolCallLifecycle {
         node: Arc<EmbeddedNode>,
         request_id: String,
         session_id: String,
-        agent_did: String,
+        node_did: String,
         tool_call_id: String,
         message_sequence: u32,
         tool_name: String,
@@ -401,7 +401,7 @@ impl ToolCallLifecycle {
             request_id,
             request_doc_id: None,
             session_id,
-            agent_did,
+            node_did,
             requester_did: None,
             tool_call_id,
             call_id: None,
@@ -494,8 +494,8 @@ impl ToolCallLifecycle {
         &self.session_id
     }
 
-    pub(crate) fn agent_did(&self) -> &str {
-        &self.agent_did
+    pub(crate) fn node_did(&self) -> &str {
+        &self.node_did
     }
 
     pub(crate) fn requester_did(&self) -> Option<&str> {
@@ -510,11 +510,11 @@ impl ToolCallLifecycle {
     /// behavior's current `max_output_chars` for this tool, resolved from
     /// configuration so it holds after a restart.
     pub(crate) async fn output_budget(&self) -> usize {
-        let behavior_id = match &self.request_doc_id {
+        let agent_id = match &self.request_doc_id {
             Some(doc_id) => {
                 match crate::request_binding::load_agent_request_by_doc_id(&self.node, doc_id).await
                 {
-                    Ok(request) => request.map(|request| request.behavior_id),
+                    Ok(request) => request.map(|request| request.agent_id),
                     Err(error) => {
                         tracing::warn!(
                             request_doc_id = %doc_id,
@@ -528,12 +528,12 @@ impl ToolCallLifecycle {
             }
             None => None,
         };
-        match behavior_id {
-            Some(behavior_id) => {
+        match agent_id {
+            Some(agent_id) => {
                 crate::tool_surface::configured_output_budget(
                     &self.node,
-                    &self.agent_did,
-                    &behavior_id,
+                    &self.node_did,
+                    &agent_id,
                     &self.tool_name,
                 )
                 .await

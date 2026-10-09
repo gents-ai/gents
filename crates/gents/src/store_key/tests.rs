@@ -10,7 +10,7 @@ async fn write_credential(node: &defra_node::EmbeddedNode) {
         .expect("schemas");
     let response = node
         .execute(&format!(
-            r#"mutation {{ create_OAuthCredential(input: {{ credential_id: "claude-oauth:did:key:zA", agent_did: "did:key:zA", provider: "claude-oauth", access_token: "{ACCESS_TOKEN}", refresh_token: "{REFRESH_TOKEN}", is_fedramp: false, enabled: true }}) {{ _docID }} }}"#
+            r#"mutation {{ create_OAuthCredential(input: {{ credential_id: "claude-oauth:did:key:zA", node_did: "did:key:zA", provider: "claude-oauth", access_token: "{ACCESS_TOKEN}", refresh_token: "{REFRESH_TOKEN}", is_fedramp: false, enabled: true }}) {{ _docID }} }}"#
         ))
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
@@ -260,7 +260,7 @@ async fn a_plaintext_home_upgrades_without_changing_identity_or_documents() {
     std::fs::write(
         crate::home::init_config_path(&home),
         serde_json::to_vec(&serde_json::json!({
-            "home": home, "agent_name": "a", "agent_did": "did:key:zA",
+            "home": home, "node_name": "a", "node_did": "did:key:zA",
             "key_path": "identity.key", "tool_ceiling": "readonly", "tool_root": null
         }))
         .unwrap(),
@@ -283,7 +283,7 @@ async fn a_plaintext_home_upgrades_without_changing_identity_or_documents() {
     let config = crate::home::read_init_config::<String, String>(&home)
         .unwrap()
         .unwrap();
-    assert_eq!(config.agent_did, "did:key:zA");
+    assert_eq!(config.node_did, "did:key:zA");
     assert_eq!(config.key_path.as_deref(), Some("identity.key"));
     assert!(config.store_encryption.is_some());
     assert!(files_containing(&data, REFRESH_TOKEN.as_bytes()).is_empty());

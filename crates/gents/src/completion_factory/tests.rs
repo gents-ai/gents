@@ -4,8 +4,8 @@ use std::time::Duration;
 
 use crate::agent::completion_retry::CompletionRetryProfileFields;
 use crate::config::SamplingConfig;
-use crate::identity::{AgentIdentity, KeyIdentity, RuntimePrincipal};
-use crate::tool_surface::BehaviorToolConfig;
+use crate::identity::{KeyIdentity, NodeIdentity, RuntimeNode};
+use crate::tool_surface::AgentToolSurfaceConfig;
 use crate::watcher::AgentRequest;
 
 fn request() -> AgentRequest {
@@ -14,9 +14,9 @@ fn request() -> AgentRequest {
         purpose: gents_protocol::request_admission::RequestPurpose::Normal,
         doc_id: String::new(),
         request_id: "request-123".to_string(),
-        agent_did: String::new(),
+        node_did: String::new(),
         requester_did: None,
-        behavior_id: "behavior-test".to_owned(),
+        agent_id: "agent-test".to_owned(),
         session_id: "session-456".to_string(),
         content: String::new(),
         max_total_tokens: None,
@@ -27,7 +27,7 @@ fn request() -> AgentRequest {
         execution_generation: None,
         execution_lease_expires_at: None,
         execution_lease_secs: None,
-        subagent_depth: 0,
+        request_hop: 0,
         caused_by_parent_request_id: None,
         caused_by_parent_request_doc_id: None,
         caused_by_parent_tool_call_id: None,
@@ -38,7 +38,7 @@ fn request() -> AgentRequest {
         caused_by_correlation: None,
         caused_by_trigger_context: None,
         workspace_id: None,
-        workspace_owner_agent_did: None,
+        workspace_owner_node_did: None,
         workspace_authority: None,
         workspace_seal_hash: None,
     }
@@ -280,15 +280,15 @@ fn generated_responses_storage_cases_drive_loop_config() {
     assert!(!cases.is_empty());
     let mut mismatches = Vec::new();
     for case in cases {
-        let mut behavior = behavior_with_retry(Default::default());
-        behavior.backend_provider_kind =
+        let mut agent = agent_with_retry(Default::default());
+        agent.backend_provider_kind =
             BackendProviderKind::parse_optional(Some(&case.family)).expect("Lean family");
-        behavior.openai_wire_api =
+        agent.openai_wire_api =
             serde_json::from_value(serde_json::Value::String(case.wire.clone()))
                 .expect("Lean wire");
-        behavior.backend_endpoint = case.endpoint.clone();
+        agent.backend_endpoint = case.endpoint.clone();
         let config = loop_config(
-            &behavior,
+            &agent,
             "preamble".to_string(),
             0,
             CaptureScopeKind::Inference,
@@ -338,17 +338,17 @@ fn generated_responses_effort_cases_drive_loop_config() {
     assert!(!cases.is_empty());
     let mut mismatches = Vec::new();
     for case in cases {
-        let mut behavior = behavior_with_retry(Default::default());
-        behavior.backend_provider_kind = BackendProviderKind::OpenAiCompatible;
-        behavior.openai_wire_api = crate::OpenAiWireApi::Responses;
-        behavior.backend_endpoint = case.endpoint.clone();
-        behavior.sampling.reasoning_effort = case.requested.as_ref().map(parse);
-        behavior.resolved_reasoning_efforts = case
+        let mut agent = agent_with_retry(Default::default());
+        agent.backend_provider_kind = BackendProviderKind::OpenAiCompatible;
+        agent.openai_wire_api = crate::OpenAiWireApi::Responses;
+        agent.backend_endpoint = case.endpoint.clone();
+        agent.sampling.reasoning_effort = case.requested.as_ref().map(parse);
+        agent.resolved_reasoning_efforts = case
             .advertised
             .as_ref()
             .map(|values| values.iter().map(parse).collect());
         let config = loop_config(
-            &behavior,
+            &agent,
             "preamble".to_string(),
             0,
             CaptureScopeKind::Inference,
@@ -420,7 +420,7 @@ fn sampling_additional_params_omit_dedicated_completion_fields() {
 }
 
 #[test]
-fn effective_max_tokens_falls_back_to_behavior_budget() {
+fn effective_max_tokens_falls_back_to_agent_budget() {
     assert_eq!(effective_max_tokens(4096, None), Some(4096));
 }
 
@@ -448,18 +448,18 @@ fn openai_cache_scope_falls_back_to_request_id() {
 
 #[test]
 fn codex_cache_key_stays_with_session_across_requests() {
-    let mut behavior = behavior_with_retry(Default::default());
-    behavior.backend_provider_kind = BackendProviderKind::ChatGptCodex;
-    behavior.openai_wire_api = crate::OpenAiWireApi::Responses;
+    let mut agent = agent_with_retry(Default::default());
+    agent.backend_provider_kind = BackendProviderKind::ChatGptCodex;
+    agent.openai_wire_api = crate::OpenAiWireApi::Responses;
     let mut request = request();
-    let first = request_additional_params(&behavior, &request).unwrap();
-    let config = loop_config_for_request(&behavior, "system".into(), &request, None, 0).unwrap();
+    let first = request_additional_params(&agent, &request).unwrap();
+    let config = loop_config_for_request(&agent, "system".into(), &request, None, 0).unwrap();
     let params = config.additional_params.unwrap();
     assert_eq!(params["prompt_cache_key"], first["prompt_cache_key"]);
     assert_eq!(params["reasoning"]["effort"], "medium");
     request.request_id = "next-request".to_string();
     assert_eq!(
-        request_additional_params(&behavior, &request),
+        request_additional_params(&agent, &request),
         Some(first.clone())
     );
     assert_eq!(
@@ -467,26 +467,26 @@ fn codex_cache_key_stays_with_session_across_requests() {
         serde_json::json!({"prompt_cache_key": "session-456"})
     );
     request.session_id = "another-session".to_string();
-    assert_ne!(request_additional_params(&behavior, &request), Some(first));
+    assert_ne!(request_additional_params(&agent, &request), Some(first));
 }
 
 #[test]
 fn codex_cache_key_uses_request_when_session_is_absent() {
-    let mut behavior = behavior_with_retry(Default::default());
-    behavior.backend_provider_kind = BackendProviderKind::ChatGptCodex;
+    let mut agent = agent_with_retry(Default::default());
+    agent.backend_provider_kind = BackendProviderKind::ChatGptCodex;
     let mut request = request();
     request.session_id = "  ".to_string();
     assert_eq!(
-        request_additional_params(&behavior, &request),
+        request_additional_params(&agent, &request),
         Some(serde_json::json!({"prompt_cache_key": "request-123"}))
     );
     request.request_id.clear();
-    assert!(request_additional_params(&behavior, &request).is_none());
+    assert!(request_additional_params(&agent, &request).is_none());
 }
 
 #[test]
 fn loop_config_for_request_resolves_completion_retry_policy_and_deadline() {
-    let behavior = behavior_with_retry(CompletionRetryProfileFields {
+    let agent = agent_with_retry(CompletionRetryProfileFields {
         retry_interactive_max: Some(2),
         ..Default::default()
     });
@@ -495,7 +495,7 @@ fn loop_config_for_request_resolves_completion_retry_policy_and_deadline() {
     request.deadline = Some("2030-01-01T00:00:00Z".to_string());
 
     let config =
-        loop_config_for_request(&behavior, "preamble".to_string(), &request, None, 0).unwrap();
+        loop_config_for_request(&agent, "preamble".to_string(), &request, None, 0).unwrap();
 
     assert_eq!(
         config.retry_policy.transport_backoff,
@@ -509,11 +509,11 @@ fn loop_config_for_request_resolves_completion_retry_policy_and_deadline() {
 
 #[test]
 fn loop_config_for_request_rejects_unknown_retry_origin() {
-    let behavior = behavior_with_retry(CompletionRetryProfileFields::default());
+    let agent = agent_with_retry(CompletionRetryProfileFields::default());
     let mut request = request();
     request.execution_origin = Some("legacy-or-missing".to_string());
 
-    let Err(error) = loop_config_for_request(&behavior, "preamble".to_string(), &request, None, 0)
+    let Err(error) = loop_config_for_request(&agent, "preamble".to_string(), &request, None, 0)
     else {
         panic!("unknown execution origin must fail closed");
     };
@@ -559,7 +559,7 @@ fn profile_seed_rejects_provider_paths_without_seed_support() {
         .is_err());
 }
 
-fn behavior_with_retry(completion_retry: CompletionRetryProfileFields) -> ResolvedBehavior {
+fn agent_with_retry(completion_retry: CompletionRetryProfileFields) -> ResolvedAgent {
     let identity = Arc::new(
         KeyIdentity::load_or_create(
             std::env::temp_dir().join(format!("completion-factory-{}.key", uuid::Uuid::new_v4())),
@@ -567,17 +567,17 @@ fn behavior_with_retry(completion_retry: CompletionRetryProfileFields) -> Resolv
         )
         .unwrap(),
     );
-    let principal = Arc::new(RuntimePrincipal {
-        agent_did: identity.did().to_string(),
+    let node = Arc::new(RuntimeNode {
+        node_did: identity.did().to_string(),
         identity,
-        default_behavior_id: "general".to_string(),
+        default_agent_id: "general".to_string(),
         display_name: None,
         enabled: true,
     });
 
-    ResolvedBehavior {
-        behavior_id: "general".to_string(),
-        principal,
+    ResolvedAgent {
+        agent_id: "general".to_string(),
+        node: node,
         backend_id: Some("backend-general".to_string()),
         backend_provider_kind: BackendProviderKind::OpenAiCompatible,
         openai_wire_api: crate::OpenAiWireApi::ChatCompletions,
@@ -590,7 +590,7 @@ fn behavior_with_retry(completion_retry: CompletionRetryProfileFields) -> Resolv
         max_turns: crate::config::DEFAULT_MAX_TURNS,
         max_turns_provenance: crate::config::MaxTurnsProvenance::Default,
         system_prompt: "system".to_string(),
-        tools: BehaviorToolConfig::meta_only(),
+        tools: AgentToolSurfaceConfig::meta_only(),
         compaction: None,
         compaction_inference: None,
         max_total_tokens: None,
@@ -635,7 +635,7 @@ fn claude_advertised_efforts_override_spoofed_additional_params() {
 
 #[test]
 fn runtime_budget_construction_preserves_zero_and_rejects_negative_values() {
-    let behavior = behavior_with_retry(CompletionRetryProfileFields::default());
+    let agent = agent_with_retry(CompletionRetryProfileFields::default());
     for invalid in [-1] {
         let error = parse_aggregate_token_limit(Some(invalid))
             .err()
@@ -654,7 +654,7 @@ fn runtime_budget_construction_preserves_zero_and_rejects_negative_values() {
     request.max_total_tokens = Some(4_096);
     let budget = Some(AggregateTokenBudget::new(4_096));
     assert!(
-        loop_config_for_request(&behavior, "system".to_string(), &request, budget, 0)
+        loop_config_for_request(&agent, "system".to_string(), &request, budget, 0)
             .unwrap()
             .aggregate_token_budget
             .is_some()
@@ -746,8 +746,8 @@ async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
                     request_doc_id: "{doc_id}"
                     call_seq: {index}
                     backend_id: "backend-rehydrate"
-                    behavior_id: "behavior-rehydrate"
-                    agent_did: "did:test:agent"
+                    agent_id: "agent-rehydrate"
+                    node_did: "did:test:agent"
                     call_kind: "{call_kind}"
                     attempt: 1
                     call_state: "completed"
@@ -860,14 +860,14 @@ async fn every_loop_config_arms_the_capture_scope_it_was_built_for() {
         AssemblyBuildPath, AssemblyTrace, RenderedRequestCaptureSink, RenderedRequestContext,
     };
 
-    let behavior = behavior_with_retry(CompletionRetryProfileFields::default());
+    let agent = agent_with_retry(CompletionRetryProfileFields::default());
     let context = RenderedRequestContext {
         request_doc_id: "doc-1".to_string(),
         request_commit_cid: "bafy-request-commit".to_string(),
         request_id: "req-1".to_string(),
-        agent_did: "did:key:agent".to_string(),
+        node_did: "did:key:agent".to_string(),
         requester_did: String::new(),
-        behavior_id: "general".to_string(),
+        agent_id: "general".to_string(),
         session_id: "session-1".to_string(),
         model_name: "model".to_string(),
         provider_family: None,
@@ -886,7 +886,7 @@ async fn every_loop_config_arms_the_capture_scope_it_was_built_for() {
             (CaptureScopeKind::Title, "title.1"),
             (CaptureScopeKind::OneShot, "oneshot.1"),
         ] {
-            let config = loop_config(&behavior, "preamble".to_string(), 0, kind);
+            let config = loop_config(&agent, "preamble".to_string(), 0, kind);
             let on_rendered_request = config
                 .on_rendered_request
                 .clone()
@@ -930,9 +930,9 @@ async fn every_loop_config_arms_the_capture_scope_it_was_built_for() {
 /// silently drop the capture the daemon depends on.
 #[test]
 fn loop_config_for_request_keeps_the_inference_capture_scope() {
-    let behavior = behavior_with_retry(CompletionRetryProfileFields::default());
+    let agent = agent_with_retry(CompletionRetryProfileFields::default());
     let config =
-        loop_config_for_request(&behavior, "preamble".to_string(), &request(), None, 0).unwrap();
+        loop_config_for_request(&agent, "preamble".to_string(), &request(), None, 0).unwrap();
     assert!(
         config.on_rendered_request.is_some(),
         "the request path must arm a rendered-request capture"

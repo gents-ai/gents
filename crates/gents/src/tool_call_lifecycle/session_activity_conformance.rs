@@ -76,7 +76,7 @@ async fn tool_publications_follow_lean_session_activity() {
             let before = before.clone();
             let session = session.clone();
             let session_id = session_id.clone();
-            let agent = admission.agent_did.clone();
+            let agent = admission.node_did.clone();
             Box::pin(async move {
                 txn.execute_with_variables(
                     &format!(r#"mutation($input: AgentSessionMutationInputArg!) {{ update_AgentSession(filter: {{ session_id: {{ _eq: "{session}" }} }}, input: $input) {{ _docID }} }}"#),
@@ -91,7 +91,7 @@ async fn tool_publications_follow_lean_session_activity() {
                 admission.tool = publish_accepted_on_claimed_request(
                     admission.node.clone(),
                     &mut owner,
-                    &admission.agent_did,
+                    &admission.node_did,
                     turn,
                     "test_activity",
                     &format!("tool-activity-{turn}"),
@@ -127,7 +127,7 @@ async fn tool_publications_follow_lean_session_activity() {
                 None,
                 "test.read_tool_activity",
                 |txn| {
-                    let agent = admission.agent_did.clone();
+                    let agent = admission.node_did.clone();
                     let session_id = session_id.clone();
                     Box::pin(async move {
                         Ok(crate::session::load_agent_session_row_in_txn(

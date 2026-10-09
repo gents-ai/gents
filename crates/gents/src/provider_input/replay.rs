@@ -28,7 +28,7 @@ pub(crate) fn owned_replay_input(
                 let boundary = crate::provider_context_reduction::capture_source_boundary(
                     &node,
                     &request.session_id,
-                    &request.agent_did,
+                    &request.node_did,
                     request.requester_did.as_deref(),
                     &request.doc_id,
                     &request_commit_cid,
@@ -38,7 +38,7 @@ pub(crate) fn owned_replay_input(
                 let resolved = crate::session::resolve_canonical_replay_tags(
                     &node,
                     crate::session::CanonicalReplayScope {
-                        agent_did: &request.agent_did,
+                        node_did: &request.node_did,
                         requester_did: request.requester_did.as_deref(),
                         session_id: &request.session_id,
                         request_id: &request.request_id,

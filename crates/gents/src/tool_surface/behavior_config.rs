@@ -6,19 +6,19 @@ use defra_node::EmbeddedNode;
 use crate::toolset::ToolSet;
 
 use super::build::{
-    build_host_tools, dedupe_strings, dedupe_subagent_targets, downgrade_bash,
-    downgrade_file_tools, enabled_mcp_service_ids, measured_available_mcp_service_ids,
+    build_host_tools, dedupe_agent_targets, dedupe_strings, downgrade_bash, downgrade_file_tools,
+    enabled_mcp_service_ids, measured_available_mcp_service_ids,
 };
 use super::modes::{BashMode, FileToolMode, ToolCeiling};
 use super::policy::{EndpointScope, RuntimeToolAvailability, ToolPolicySurface};
 use super::selection::{
-    BackgroundToolConfig, CustomToolFactory, ResolvedToolSelection, SubagentToolConfig,
+    AgentToolConfig, BackgroundToolConfig, CustomToolFactory, ResolvedToolSelection,
 };
 use super::ToolSurface;
 use crate::document_config::{QueryToolDecl, WriteToolDecl};
 
 #[derive(Clone)]
-pub struct BehaviorToolConfig {
+pub struct AgentToolSurfaceConfig {
     host_tools: ToolSet,
     root_execution_guard: Option<super::RootExecutionGuard>,
     enable_meta_tools: bool,
@@ -27,7 +27,7 @@ pub struct BehaviorToolConfig {
     allowed_mcp_service_ids: Vec<String>,
     remote_tools: Option<crate::document_config::RemoteTools>,
     required_mcp_service_ids: Vec<String>,
-    subagent_tools: SubagentToolConfig,
+    agent_tools: AgentToolConfig,
     background_tools: BackgroundToolConfig,
     custom_tools: Vec<CustomToolFactory>,
     enable_memory: bool,
@@ -44,31 +44,31 @@ pub struct BehaviorToolConfig {
     eth_calls: Vec<crate::eth::ResolvedEthCall>,
     plugin_tools: Vec<crate::document_config::PluginToolRef>,
     self_config: super::SelfConfigToolConfig,
-    behavior_policy: ToolPolicySurface,
+    agent_policy: ToolPolicySurface,
     ceiling_policy: ToolPolicySurface,
     static_policy: ToolPolicySurface,
     lsp_config: Option<String>,
     lsp_action_timeout: super::BoundedTimeout,
 }
 
-impl BehaviorToolConfig {
+impl AgentToolSurfaceConfig {
     pub fn meta_only() -> Self {
-        // defra_query is opt-in (#592): the meta-only baseline behavior policy
+        // defra_query is opt-in (#592): the meta-only baseline agent policy
         // disables it, while the ceiling stays permissive so an explicit
         // selection can still enable it.
-        let mut behavior_policy = ToolPolicySurface::ceiling_with_host_modes(
+        let mut agent_policy = ToolPolicySurface::ceiling_with_host_modes(
             super::FileToolMode::Off,
             super::BashMode::Off,
         );
-        behavior_policy.goal_create = false;
-        behavior_policy.defra_query = false;
-        behavior_policy.defra_collections = EndpointScope::none();
-        behavior_policy.self_config = false;
-        behavior_policy.schema_management = false;
-        behavior_policy.p2p_read = false;
-        behavior_policy.p2p_mutate = false;
-        behavior_policy.p2p_collections = EndpointScope::none();
-        behavior_policy.self_config_categories = EndpointScope::none();
+        agent_policy.goal_create = false;
+        agent_policy.defra_query = false;
+        agent_policy.defra_collections = EndpointScope::none();
+        agent_policy.self_config = false;
+        agent_policy.schema_management = false;
+        agent_policy.p2p_read = false;
+        agent_policy.p2p_mutate = false;
+        agent_policy.p2p_collections = EndpointScope::none();
+        agent_policy.self_config_categories = EndpointScope::none();
         Self {
             host_tools: ToolSet::meta_only(),
             root_execution_guard: None,
@@ -78,7 +78,7 @@ impl BehaviorToolConfig {
             allowed_mcp_service_ids: Vec::new(),
             remote_tools: None,
             required_mcp_service_ids: Vec::new(),
-            subagent_tools: SubagentToolConfig::default(),
+            agent_tools: AgentToolConfig::default(),
             background_tools: BackgroundToolConfig::default(),
             custom_tools: Vec::new(),
             enable_memory: false,
@@ -95,50 +95,43 @@ impl BehaviorToolConfig {
             eth_calls: Vec::new(),
             plugin_tools: Vec::new(),
             self_config: super::SelfConfigToolConfig::default(),
-            behavior_policy: behavior_policy.clone(),
+            agent_policy: agent_policy.clone(),
             ceiling_policy: ToolPolicySurface::ceiling_with_host_modes(
                 super::FileToolMode::Off,
                 super::BashMode::Off,
             ),
-            static_policy: behavior_policy,
+            static_policy: agent_policy,
             lsp_config: None,
             lsp_action_timeout: super::BoundedTimeout::lsp_action(None, None),
         }
     }
 
     pub fn from_selection(
-        behavior_name: &str,
+        agent_name: &str,
         selection: ResolvedToolSelection,
         ceiling: &ToolCeiling,
         custom_tools: Vec<CustomToolFactory>,
     ) -> Result<Self> {
-        Self::from_selection_with_subagent_tools(
-            behavior_name,
+        Self::from_selection_with_agent_tools(
+            agent_name,
             selection,
             ceiling,
-            SubagentToolConfig::default(),
+            AgentToolConfig::default(),
             custom_tools,
         )
     }
 
     pub fn from_tools_document(
-        behavior_name: &str,
+        agent_name: &str,
         tools: &crate::document_config::Tools,
         ceiling: &ToolCeiling,
         custom_tools: Vec<CustomToolFactory>,
     ) -> Result<Self> {
-        Self::from_tools_document_with_surfaces(
-            behavior_name,
-            tools,
-            &[],
-            &[],
-            ceiling,
-            custom_tools,
-        )
+        Self::from_tools_document_with_surfaces(agent_name, tools, &[], &[], ceiling, custom_tools)
     }
 
     pub fn from_tools_document_with_surfaces(
-        behavior_name: &str,
+        agent_name: &str,
         tools: &crate::document_config::Tools,
         surfaces: &[crate::document_config::DatastoreToolSurfaceDocument],
         eth_tools: &[crate::document_config::EthToolDocument],
@@ -146,7 +139,7 @@ impl BehaviorToolConfig {
         custom_tools: Vec<CustomToolFactory>,
     ) -> Result<Self> {
         Self::from_tools_documents(
-            behavior_name,
+            agent_name,
             tools,
             surfaces,
             eth_tools,
@@ -157,11 +150,11 @@ impl BehaviorToolConfig {
     }
 
     pub fn from_tools_documents(
-        behavior_name: &str,
+        agent_name: &str,
         tools: &crate::document_config::Tools,
         surfaces: &[crate::document_config::DatastoreToolSurfaceDocument],
         eth_tools: &[crate::document_config::EthToolDocument],
-        targets: &[crate::document_config::SubagentTargetDocument],
+        targets: &[crate::document_config::AgentTargetDocument],
         ceiling: &ToolCeiling,
         custom_tools: Vec<CustomToolFactory>,
     ) -> Result<Self> {
@@ -173,20 +166,20 @@ impl BehaviorToolConfig {
         resolved.surface_of_tool = merged.surface_of_tool;
         resolved.eth_queries = expanded.queries;
         resolved.eth_calls = expanded.calls;
-        Self::from_selection_with_subagent_tools(
-            behavior_name,
+        Self::from_selection_with_agent_tools(
+            agent_name,
             resolved,
             ceiling,
-            SubagentToolConfig::from_document_with_targets(tools, targets)?,
+            AgentToolConfig::from_document_with_targets(tools, targets)?,
             custom_tools,
         )
     }
 
-    pub(crate) fn from_selection_with_subagent_tools(
-        behavior_name: &str,
+    pub(crate) fn from_selection_with_agent_tools(
+        agent_name: &str,
         selection: ResolvedToolSelection,
         ceiling: &ToolCeiling,
-        subagent_tools: SubagentToolConfig,
+        agent_tools: AgentToolConfig,
         custom_tools: Vec<CustomToolFactory>,
     ) -> Result<Self> {
         let custom_tool_names = custom_tools
@@ -203,10 +196,10 @@ impl BehaviorToolConfig {
             crate::toolset::lsp::LspConfigDocument::parse_operator(selection.lsp_config.as_deref())
                 .map_err(|err| anyhow::anyhow!("invalid lsp_config: {err}"))?;
         }
-        let behavior_policy = ToolPolicySurface::from_selection(&selection, &subagent_tools);
+        let agent_policy = ToolPolicySurface::from_selection(&selection, &agent_tools);
         let ceiling_policy = ceiling.policy().clone();
         let static_policy = ToolPolicySurface::effective(
-            &behavior_policy,
+            &agent_policy,
             &ceiling_policy,
             &ToolPolicySurface::runtime_all(),
         );
@@ -251,13 +244,12 @@ impl BehaviorToolConfig {
             eth_calls,
             plugin_tools,
         } = selection;
-        let file_tools =
-            downgrade_file_tools(behavior_name, requested_file_tools, static_policy.file);
-        let bash = downgrade_bash(behavior_name, requested_bash, static_policy.bash.tool);
+        let file_tools = downgrade_file_tools(agent_name, requested_file_tools, static_policy.file);
+        let bash = downgrade_bash(agent_name, requested_bash, static_policy.bash.tool);
         let cli_tool_names = static_policy.filter_cli_names(cli_tool_names);
         let root_was_authored = file_tool_root.is_some();
         let host_tools = build_host_tools(
-            behavior_name,
+            agent_name,
             file_tools,
             bash,
             command_policy,
@@ -275,7 +267,7 @@ impl BehaviorToolConfig {
             || !cli_tool_names.is_empty()
             || static_policy.lsp)
             .then(|| super::RootExecutionGuard {
-                behavior_id: behavior_name.to_string(),
+                agent_id: agent_name.to_string(),
                 selected_root: root_was_authored
                     .then(|| host_tools.read_root().map(ToOwned::to_owned))
                     .flatten(),
@@ -287,18 +279,18 @@ impl BehaviorToolConfig {
         let required_mcp_service_ids = dedupe_strings(required_mcp_service_ids);
         if !required_mcp_service_ids.is_empty() && !static_policy.meta {
             anyhow::bail!(
-                "behavior {behavior_name} requires MCP services but meta tools are disabled by policy"
+                "agent {agent_name} requires MCP services but meta tools are disabled by policy"
             );
         }
         for service_id in &required_mcp_service_ids {
             if !static_policy.mcp_services.permits(service_id) {
                 anyhow::bail!(
-                    "behavior {behavior_name} requires MCP service {service_id:?}, but the effective tool policy denies it"
+                    "agent {agent_name} requires MCP service {service_id:?}, but the effective tool policy denies it"
                 );
             }
             if !effective_allowed_mcp_service_ids.contains(service_id) {
                 anyhow::bail!(
-                    "behavior {behavior_name} requires MCP service {service_id:?}, but its MCP allowlist does not permit it"
+                    "agent {agent_name} requires MCP service {service_id:?}, but its MCP allowlist does not permit it"
                 );
             }
         }
@@ -312,7 +304,7 @@ impl BehaviorToolConfig {
                     // while the runtime registers the ceiling-downgraded
                     // variant. Keep background execution aligned with that
                     // effective surface instead of quarantining an otherwise
-                    // valid behavior after restart.
+                    // valid agent after restart.
                     ("bash_unrestricted", BashMode::ReadOnly) => Some("bash".to_owned()),
                     ("bash_unrestricted" | "bash", BashMode::Off) => None,
                     _ => Some(name),
@@ -342,16 +334,16 @@ impl BehaviorToolConfig {
                 });
             if !allowed_mcp_wrapper && !host_tools.is_backgroundable_tool_name(name) {
                 anyhow::bail!(
-                    "behavior {behavior_name} backgroundable_tool_names entry {name:?} is not a registered backgroundable tool"
+                    "agent {agent_name} backgroundable_tool_names entry {name:?} is not a registered backgroundable tool"
                 );
             }
         }
 
-        let mut effective_subagent_targets = dedupe_subagent_targets(subagent_tools.targets);
-        effective_subagent_targets.retain(|target| {
+        let mut effective_agent_targets = dedupe_agent_targets(agent_tools.targets);
+        effective_agent_targets.retain(|target| {
             static_policy
-                .subagent_targets
-                .permits(&(target.target_agent_did.clone(), target.behavior_id.clone()))
+                .agent_targets
+                .permits(&(target.target_node_did.clone(), target.agent_id.clone()))
         });
 
         Ok(Self {
@@ -363,8 +355,8 @@ impl BehaviorToolConfig {
             allowed_mcp_service_ids: effective_allowed_mcp_service_ids,
             remote_tools,
             required_mcp_service_ids,
-            subagent_tools: SubagentToolConfig {
-                targets: effective_subagent_targets,
+            agent_tools: AgentToolConfig {
+                targets: effective_agent_targets,
                 enabled: static_policy.session_messages,
             },
             background_tools: BackgroundToolConfig {
@@ -393,14 +385,14 @@ impl BehaviorToolConfig {
                         .permits(&plugin.tool_name().to_string())
                 })
                 .collect(),
-            // `behavior_name` is the behavior_id on the document path
-            // (agent.rs `behavior_config_from_documents`): the identity anchor
+            // `agent_name` is the agent_id on the document path
+            // (agent.rs `agent_config_from_documents`): the identity anchor
             // for "my config". Programmatic builder surfaces that enable
             // self-config with a non-document name simply fail doc resolution
             // at call time.
             self_config: super::SelfConfigToolConfig {
                 enabled: static_policy.include_self_config(),
-                behavior_id: behavior_name.to_string(),
+                agent_id: agent_name.to_string(),
                 categories: static_policy.self_config_category_set(),
                 no_lockout: self_config_no_lockout,
                 preview: self_config_preview,
@@ -412,7 +404,7 @@ impl BehaviorToolConfig {
                     root: ceiling.root().map(ToOwned::to_owned),
                 },
             },
-            behavior_policy,
+            agent_policy,
             ceiling_policy,
             static_policy,
             lsp_config,
@@ -465,8 +457,8 @@ impl BehaviorToolConfig {
     }
 
     #[allow(dead_code)]
-    pub(crate) fn subagent_tools(&self) -> &SubagentToolConfig {
-        &self.subagent_tools
+    pub(crate) fn agent_tools(&self) -> &AgentToolConfig {
+        &self.agent_tools
     }
 
     #[allow(dead_code)]
@@ -485,23 +477,23 @@ impl BehaviorToolConfig {
     pub async fn resolve(
         &self,
         node: &EmbeddedNode,
-        agent_did: &str,
+        node_did: &str,
         plugins: &crate::plugin::executor::PluginExecutor,
     ) -> Result<ToolSurface> {
-        self.resolve_with_subagent_tools(node, agent_did, plugins, SubagentToolConfig::default())
+        self.resolve_with_agent_tools(node, node_did, plugins, AgentToolConfig::default())
             .await
     }
 
-    async fn resolve_with_subagent_tools(
+    async fn resolve_with_agent_tools(
         &self,
         node: &EmbeddedNode,
-        agent_did: &str,
+        node_did: &str,
         plugins: &crate::plugin::executor::PluginExecutor,
-        subagent_tools: SubagentToolConfig,
+        agent_tools: AgentToolConfig,
     ) -> Result<ToolSurface> {
-        let available_service_ids = enabled_mcp_service_ids(node, agent_did).await?;
+        let available_service_ids = enabled_mcp_service_ids(node, node_did).await?;
         if !self.required_mcp_service_ids.is_empty() {
-            let measured_available = measured_available_mcp_service_ids(node, agent_did).await?;
+            let measured_available = measured_available_mcp_service_ids(node, node_did).await?;
             let measured_available = measured_available.iter().collect::<HashSet<_>>();
             let missing = self
                 .required_mcp_service_ids
@@ -518,27 +510,27 @@ impl BehaviorToolConfig {
         }
         let availability = RuntimeToolAvailability::from_online_mcp_services(available_service_ids);
         let mut surface =
-            self.resolve_with_subagent_tools_for_runtime_availability(availability, subagent_tools);
+            self.resolve_with_agent_tools_for_runtime_availability(availability, agent_tools);
         surface.plugin_resolutions = resolve_plugin_identities(plugins, &surface.plugin_tools);
         Ok(surface)
     }
 
     #[allow(dead_code)]
-    pub(crate) fn resolve_with_subagent_tools_for_mcp_presence(
+    pub(crate) fn resolve_with_agent_tools_for_mcp_presence(
         &self,
         mcp_services_online: bool,
-        subagent_tools: SubagentToolConfig,
+        agent_tools: AgentToolConfig,
     ) -> ToolSurface {
-        self.resolve_with_subagent_tools_for_runtime_availability(
+        self.resolve_with_agent_tools_for_runtime_availability(
             RuntimeToolAvailability::for_mcp_presence(mcp_services_online),
-            subagent_tools,
+            agent_tools,
         )
     }
 
-    pub(crate) fn resolve_with_subagent_tools_for_runtime_availability(
+    pub(crate) fn resolve_with_agent_tools_for_runtime_availability(
         &self,
         availability: RuntimeToolAvailability,
-        subagent_tools: SubagentToolConfig,
+        agent_tools: AgentToolConfig,
     ) -> ToolSurface {
         let effective_policy = self.static_policy.meet(&availability.policy);
         let include_meta_tools = effective_policy.include_meta_tools();
@@ -557,7 +549,7 @@ impl BehaviorToolConfig {
             include_goal_creation,
             allowed_mcp_service_ids,
             remote_tools: self.remote_tools.clone(),
-            subagent_tools,
+            agent_tools,
             background_tools: self.background_tools.clone(),
             custom_tools: self.custom_tools.clone(),
             enable_memory: effective_policy.memory && self.enable_memory,
@@ -655,7 +647,7 @@ impl BehaviorToolConfig {
                     digest: crate::toolset::lsp::config_digest(&workspace, &servers, &constraints),
                     workspace,
                     session_id: String::new(),
-                    behavior_id: self.self_config.behavior_id.clone(),
+                    agent_id: self.self_config.agent_id.clone(),
                     servers,
                     constraints,
                     format_on_write: doc.format_on_write.unwrap_or(false),
@@ -670,42 +662,40 @@ impl BehaviorToolConfig {
     }
 
     /// Resolve the tool surface, dropping local-DID session targets whose
-    /// behavior is not in the active local set. A target on another principal
+    /// agent is not in the active local set. A target on another node
     /// stays listed: it is admitted there as a Peer request under that
-    /// principal's ACP.
-    pub(crate) async fn resolve_with_available_subagent_targets(
+    /// node's ACP.
+    pub(crate) async fn resolve_with_available_agent_targets(
         &self,
         node: &EmbeddedNode,
-        own_agent_did: &str,
-        active_behavior_ids: &HashSet<String>,
+        own_node_did: &str,
+        active_agent_ids: &HashSet<String>,
         plugins: &crate::plugin::executor::PluginExecutor,
     ) -> Result<ToolSurface> {
-        let mut subagent_tools = self.subagent_tools.clone();
-        subagent_tools.targets.retain(|target| {
-            target.target_agent_did != own_agent_did
-                || active_behavior_ids.contains(&target.behavior_id)
+        let mut agent_tools = self.agent_tools.clone();
+        agent_tools.targets.retain(|target| {
+            target.target_node_did != own_node_did || active_agent_ids.contains(&target.agent_id)
         });
-        self.resolve_with_subagent_tools(node, own_agent_did, plugins, subagent_tools)
+        self.resolve_with_agent_tools(node, own_node_did, plugins, agent_tools)
             .await
     }
 
     #[allow(dead_code)]
-    pub(crate) fn resolve_with_available_subagent_targets_for_mcp_presence(
+    pub(crate) fn resolve_with_available_agent_targets_for_mcp_presence(
         &self,
         mcp_services_online: bool,
-        own_agent_did: &str,
-        active_behavior_ids: &HashSet<String>,
+        own_node_did: &str,
+        active_agent_ids: &HashSet<String>,
     ) -> ToolSurface {
-        let mut subagent_tools = self.subagent_tools.clone();
-        subagent_tools.targets.retain(|target| {
-            target.target_agent_did != own_agent_did
-                || active_behavior_ids.contains(&target.behavior_id)
+        let mut agent_tools = self.agent_tools.clone();
+        agent_tools.targets.retain(|target| {
+            target.target_node_did != own_node_did || active_agent_ids.contains(&target.agent_id)
         });
-        self.resolve_with_subagent_tools_for_mcp_presence(mcp_services_online, subagent_tools)
+        self.resolve_with_agent_tools_for_mcp_presence(mcp_services_online, agent_tools)
     }
 
-    pub(crate) fn behavior_policy(&self) -> &ToolPolicySurface {
-        &self.behavior_policy
+    pub(crate) fn agent_policy(&self) -> &ToolPolicySurface {
+        &self.agent_policy
     }
 
     pub(crate) fn ceiling_policy(&self) -> &ToolPolicySurface {
@@ -717,7 +707,7 @@ impl BehaviorToolConfig {
     }
 }
 
-impl Default for BehaviorToolConfig {
+impl Default for AgentToolSurfaceConfig {
     fn default() -> Self {
         Self::meta_only()
     }
@@ -726,7 +716,7 @@ impl Default for BehaviorToolConfig {
 /// Resolves each surviving plugin reference against the host plugin store for
 /// change detection only (the `plugin_resolutions` field on `ToolSurface`).
 /// A plugin that does not resolve, for any reason, records `None`: tool
-/// building stays the fail-closed gate, and only the behavior naming it is
+/// building stays the fail-closed gate, and only the Agent naming it is
 /// affected.
 fn resolve_plugin_identities(
     plugins: &crate::plugin::executor::PluginExecutor,
@@ -763,9 +753,9 @@ fn effective_string_allowlist(
     }
 }
 
-impl std::fmt::Debug for BehaviorToolConfig {
+impl std::fmt::Debug for AgentToolSurfaceConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("BehaviorToolConfig")
+        f.debug_struct("AgentToolSurfaceConfig")
             .field("host_tools", &self.host_tools)
             .field("enable_meta_tools", &self.enable_meta_tools)
             .field("enable_goal_tools", &self.enable_goal_tools)
@@ -773,7 +763,7 @@ impl std::fmt::Debug for BehaviorToolConfig {
             .field("allowed_mcp_service_ids", &self.allowed_mcp_service_ids)
             .field("remote_tools", &self.remote_tools)
             .field("required_mcp_service_ids", &self.required_mcp_service_ids)
-            .field("subagent_tools", &self.subagent_tools)
+            .field("agent_tools", &self.agent_tools)
             .field("background_tools", &self.background_tools)
             .field(
                 "custom_tools",
@@ -797,7 +787,7 @@ impl std::fmt::Debug for BehaviorToolConfig {
             .field("defra_query_collections", &self.defra_query_collections)
             .field("write_tools", &self.write_tools)
             .field("query_tools", &self.query_tools)
-            .field("behavior_policy", &self.behavior_policy)
+            .field("agent_policy", &self.agent_policy)
             .field("ceiling_policy", &self.ceiling_policy)
             .field("static_policy", &self.static_policy)
             .field("lsp_config", &self.lsp_config)
