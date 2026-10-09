@@ -10,7 +10,7 @@ import type {
 } from "@source-inc/gents-desktop-client";
 
 import { useApp } from "../app/AppContext";
-import { setupErrorMessage } from "../lib/providerLogin";
+import { setupErrorMessage } from "../../lib/setupErrors";
 
 const NO_ACCOUNTS: readonly ProviderAccountView[] = [];
 const NO_USAGE: readonly BackendUsageView[] = [];

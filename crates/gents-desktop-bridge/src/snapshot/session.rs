@@ -244,6 +244,7 @@ pub async fn build_session_snapshot_for_agent_with_transcript(
         }
         snapshot.projection_revision = Some(SessionProjectionRevisionView {
             store_version: projection_revision.store_version,
+            provenance_version: projection_revision.provenance_version,
         });
         snapshot.hydration = hydration;
     }

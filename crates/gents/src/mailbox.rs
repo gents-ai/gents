@@ -744,7 +744,8 @@ impl crate::llm::tool::Tool for MailboxCreateTool {
             MAILBOX_CLOSE_COLLECTIONS,
         )
         .await?;
-        Ok(serde_json::to_string(&receipt).context("serialize notification receipt")?)
+        Ok(crate::tool_output::render(&receipt, &["item", "outcome"])
+            .context("serialize notification receipt")?)
     }
 }
 

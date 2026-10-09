@@ -6,7 +6,7 @@ import type {
   DesktopClientUpdatedListenerFactory,
 } from "@source-inc/gents-desktop-client";
 
-import { useDesktopRuntime } from "../src/hooks/useDesktopRuntime";
+import { useClientRuntime } from "../src/hooks/useClientRuntime";
 import { startClientObservation } from "../src/hooks/clientObservation";
 import { node, testApp } from "./app-fixture";
 import { liveAssistant, sessionSnapshot } from "./timeline-fixture";
@@ -53,7 +53,7 @@ describe("following the client while it runs", () => {
           turnState: "running",
           latestRequestId: "r-1",
           liveCursor: hasLive ? "source" : null,
-          projectionRevision: { storeVersion: 1 },
+          projectionRevision: { storeVersion: 1, provenanceVersion: 1 },
           timelineItems: hasLive
             ? [liveAssistant({ itemKey: "live", content: "hello" })]
             : [],
@@ -63,7 +63,7 @@ describe("following the client while it runs", () => {
           outcome: "unchanged",
           liveCursor: "source",
           requestId: "r-1",
-          revision: { storeVersion: 1 },
+          revision: { storeVersion: 1, provenanceVersion: 1 },
           turnState: "running",
           status: null,
           content: { mode: "unchanged", value: "", byteLen: 5, hash: "4f9f2cab" },
@@ -102,7 +102,7 @@ describe("following the client while it runs", () => {
       snapshot: running,
       selection: { agentDid: AGENT, sessionId: "s-1" },
     });
-    renderHook(() => useDesktopRuntime(app, listen));
+    renderHook(() => useClientRuntime(app, listen));
     await waitFor(() => expect(listen).toHaveBeenCalledOnce());
 
     act(() => app.actions.selectSession("s-2"));
@@ -128,7 +128,7 @@ describe("following the client while it runs", () => {
       selection: { agentDid: AGENT, sessionId: "s-1" },
     });
     renderHook(() =>
-      useDesktopRuntime(
+      useClientRuntime(
         app,
         vi.fn(async () => () => {}),
       ),
@@ -155,7 +155,7 @@ describe("following the client while it runs", () => {
     const api = bridgeApi();
     const app = testApp({ api, snapshot: running });
     renderHook(() =>
-      useDesktopRuntime(
+      useClientRuntime(
         app,
         vi.fn(async () => () => {}),
       ),

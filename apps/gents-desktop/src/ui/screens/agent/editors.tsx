@@ -3,7 +3,7 @@
 import { useExclusivePopover } from "@/hooks/useExclusivePopover";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ExternalLink, FolderOpen, Plus, XIcon } from "lucide-react";
-import { canPickDirectory, pickDirectory } from "@/lib/pickDirectory";
+import { canPickDirectory, pickDirectory } from "../../../lib/nativeShell";
 import { Input } from "@gents/ui/components/input";
 import { Button } from "@gents/ui/components/button";
 import {

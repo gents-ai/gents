@@ -4,7 +4,7 @@ import type {
   InferenceAuthMethod,
   InferenceProviderId,
 } from "@source-inc/gents-desktop-client";
-import { PROVIDER_CREDENTIAL_KIND } from "@/lib/providerLogin";
+import { PROVIDER_CREDENTIAL_KIND, type OauthProvider } from "@/lib/providerLogin";
 
 export const isSubscriptionKind = (kind: string) =>
   kind === "ChatGptCodex" ||
@@ -32,7 +32,8 @@ export const SUBSCRIPTION: Record<
     authMethod: InferenceAuthMethod;
     title: string;
     note: string;
-    login: "codex" | "grok" | "claude";
+    /* the provider its account signs in through */
+    login: OauthProvider;
   }
 > = {
   ChatGptCodex: {
@@ -41,7 +42,7 @@ export const SUBSCRIPTION: Record<
     authMethod: "chat_gpt_oauth",
     title: "ChatGPT / Codex",
     note: "Use an eligible ChatGPT subscription for Codex inference.",
-    login: "codex",
+    login: "openai",
   },
   XaiGrokOAuth: {
     provider: PROVIDER_CREDENTIAL_KIND.grok,
@@ -57,6 +58,6 @@ export const SUBSCRIPTION: Record<
     authMethod: "claude_oauth",
     title: "Anthropic / Claude",
     note: "Use a Claude Pro or Max subscription.",
-    login: "claude",
+    login: "anthropic",
   },
 };

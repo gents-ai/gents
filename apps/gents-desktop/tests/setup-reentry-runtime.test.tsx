@@ -5,15 +5,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DesktopApp } from "../src/hooks/desktopApp";
 import { publish, renderIn, testApp } from "./app-fixture";
 
-vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn(async () => () => {}),
-}));
-
 import {
   BridgeInvokeError,
   type ManagedServerStatus,
 } from "@source-inc/gents-desktop-client";
-import { setupErrorMessage } from "../src/ui/lib/providerLogin";
+import { setupErrorMessage } from "../src/lib/setupErrors";
 import { SetupScreen } from "../src/ui/screens/setup/SetupScreen";
 import { bootstrap, deployment } from "./config-panel-wiring/fixtures";
 

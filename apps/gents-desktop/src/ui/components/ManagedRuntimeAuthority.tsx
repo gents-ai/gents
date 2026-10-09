@@ -11,7 +11,7 @@ import {
 } from "@gents/ui/components/select";
 import type { ManagedServerAuthorityInput } from "@source-inc/gents-desktop-client";
 import { authoritySummary } from "@/lib/managedRuntimeAuthority";
-import { pickDirectory } from "@/lib/pickDirectory";
+import { pickDirectory } from "../../lib/nativeShell";
 
 type ToolCeiling = ManagedServerAuthorityInput["toolCeiling"];
 

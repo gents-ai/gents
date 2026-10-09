@@ -209,8 +209,7 @@ export function AgentsScreen() {
 
 function AddAgentDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const {
-    api,
-    actions: { refreshSnapshot },
+    actions: { requestStatusEnrollment },
   } = useApp();
   const [address, setAddress] = useState("");
   const [busy, setBusy] = useState(false);
@@ -225,8 +224,7 @@ function AddAgentDialog({ open, onClose }: { open: boolean; onClose: () => void 
     setBusy(true);
     setError(null);
     try {
-      const r = await api.requestStatusEnrollment(address.trim());
-      await refreshSnapshot();
+      const r = await requestStatusEnrollment(address.trim());
       toast(`Enrolment request ${r.requestId} sent · waiting for acceptance`);
       setAddress("");
       close();
@@ -363,8 +361,7 @@ const AgentRow = memo(function AgentRow({
   onRemove: (peer: { agentDid: string; peerId: string; label: string }) => void;
 }) {
   const {
-    api,
-    actions: { selectAgent },
+    actions: { selectAgent, fetchPeerStatus },
   } = useApp();
   const live = useFleet(
     (s) =>
@@ -383,12 +380,12 @@ const AgentRow = memo(function AgentRow({
   });
   const check = async () => {
     try {
-      const r = (await api.fetchPeerStatus(d.peerId)) as {
+      const r = (await fetchPeerStatus(d.peerId)) as {
         reachable?: boolean;
       };
       toast(r?.reachable ? `${d.label} is reachable` : `${d.label} is not reachable`);
     } catch (e) {
-      toast(`Status check failed: ${String(e)}`);
+      toast(`Status check failed: ${e instanceof Error ? e.message : String(e)}`);
     }
   };
   return (

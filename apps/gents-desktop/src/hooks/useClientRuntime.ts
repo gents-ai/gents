@@ -13,7 +13,7 @@ import { clientStatus } from "./clientStore";
  * reconciliation and the transcript's workflow are reactions the app sets
  * up when it is made.
  */
-export function useDesktopRuntime(
+export function useClientRuntime(
   app: DesktopApp,
   listenToUpdates: DesktopClientUpdatedListenerFactory,
 ) {

@@ -1,6 +1,6 @@
 import { toast } from "sonner";
 
-import { actionFailure, wasShown } from "../../hooks/desktopShellRuntime";
+import { actionFailure, wasShown } from "../../hooks/actionFailure";
 
 /** Tells the person an action failed, unless the action already did. */
 export function toastFailure(label: string, error: unknown) {

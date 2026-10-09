@@ -423,7 +423,7 @@ async fn manifest_captures_share_blocks_and_grow_linearly_across_turns() {
         let stored = row["request_json"].as_str().unwrap();
         let container: Value = serde_json::from_str(stored).unwrap();
         for payload in ["request_body", "provenance_payload"] {
-            let (record, _) = stored_payload_record(&container, payload);
+            let record = stored_payload_record(&container, payload);
             assert_eq!(record["kind"], "manifest", "payload {payload}");
             referenced_blocks += record["blocks"].as_array().unwrap().len();
         }
@@ -581,11 +581,9 @@ async fn stored_capture_request_json(node: &EmbeddedNode, capture_key: &str) -> 
 }
 
 /// One stored container payload as its capture record, unwrapping the zlib
-/// envelope the writer applies above its size threshold. Returns whether the
-/// payload was stored compressed, so a fixture that crosses the threshold can
-/// pin the manifest-under-compression composition end to end.
-fn stored_payload_record(container: &Value, payload: &str) -> (Value, bool) {
-    let mut record = container[payload].clone();
+/// envelope the writer selects when its size and savings thresholds hold.
+fn stored_payload_record(container: &Value, payload: &str) -> Value {
+    let record = container[payload].clone();
     if record["kind"] == "zlib" {
         use base64::Engine;
         use std::io::Read;
@@ -597,18 +595,15 @@ fn stored_payload_record(container: &Value, payload: &str) -> (Value, bool) {
         flate2::read::ZlibDecoder::new(compressed.as_slice())
             .read_to_string(&mut decoded)
             .expect("zlib envelope decodes");
-        return (
-            serde_json::from_str(&decoded).expect("zlib envelope holds a record"),
-            true,
-        );
+        return serde_json::from_str(&decoded).expect("zlib envelope holds a record");
     }
-    (record, false)
+    record
 }
 
 /// The ordered content keys one manifest payload references; also asserts the
 /// payload is a manifest, so a full-record fallback fails at the call site.
 fn manifest_payload_keys(container: &Value, payload: &str) -> Vec<String> {
-    let (record, _) = stored_payload_record(container, payload);
+    let record = stored_payload_record(container, payload);
     assert_eq!(
         record["kind"], "manifest",
         "payload {payload} must stay a block manifest"
@@ -725,18 +720,6 @@ async fn a_mid_history_edit_reuses_the_intact_tail_blocks() {
         "the pre-edit body must span many blocks for tail reuse to mean anything: {}",
         pre_edit_body.len()
     );
-    // The same manifest is big enough that the writer stores it through the
-    // zlib envelope: pin that composition here, where the row is genuinely
-    // above the compression threshold, so a capture that stopped wrapping —
-    // or wrapped something the reader cannot unwrap — fails this fence.
-    let (pre_edit_record, pre_edit_compressed) =
-        stored_payload_record(&pre_edit_container, "request_body");
-    assert!(
-        pre_edit_compressed,
-        "a {}-block manifest must be stored through the zlib envelope",
-        pre_edit_body.len()
-    );
-    assert_eq!(pre_edit_record["kind"], "manifest");
     let blocks_before = stored_block_keys(db.node.as_ref()).await;
 
     // The edit: the first `KEPT_FROM` messages become one short summary, the

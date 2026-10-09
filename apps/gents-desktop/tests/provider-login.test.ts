@@ -1,22 +1,29 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { watchProviderLoginUrl } from "../src/ui/lib/providerLogin";
+import {
+  createDesktopApiAdapter,
+  tauriTransport,
+} from "@source-inc/gents-desktop-client";
 import { providerSignInState } from "../src/ui/screens/setup/inferenceSetupForm";
 import { ceilingFromInit } from "../src/ui/screens/setup/OnboardingWizard";
 
-const { listen, openExternalUrl } = vi.hoisted(() => ({
+const { listen, openUrl } = vi.hoisted(() => ({
   listen: vi.fn(),
-  openExternalUrl: vi.fn(),
+  openUrl: vi.fn(),
 }));
 vi.mock("@tauri-apps/api/event", () => ({ listen }));
-vi.mock("../src/lib/externalLinks", () => ({ openExternalUrl }));
+vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl }));
 afterEach(() => {
   Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
   vi.clearAllMocks();
 });
 
-it.each(["openai", "anthropic", "grok"] as const)(
+it.each([
+  ["openai", "desktop://codex-login-url"],
+  ["anthropic", "desktop://claude-login-url"],
+  ["grok", "desktop://grok-login-url"],
+] as const)(
   "%s leaves automatic browser opening to native",
-  async (provider) => {
+  async (provider, event) => {
     Object.defineProperty(window, "__TAURI_INTERNALS__", {
       value: {},
       configurable: true,
@@ -24,11 +31,15 @@ it.each(["openai", "anthropic", "grok"] as const)(
     const unlisten = vi.fn();
     listen.mockResolvedValue(unlisten);
     const onUrl = vi.fn();
-    expect(await watchProviderLoginUrl(provider, onUrl)).toBe(unlisten);
-    const handler = listen.mock.calls[0]![1];
+    const windowOpen = vi.spyOn(window, "open").mockReturnValue(null);
+    const api = createDesktopApiAdapter(tauriTransport());
+    expect(await api.watchProviderLoginUrl?.(provider, onUrl)).toBe(unlisten);
+    const [name, handler] = listen.mock.calls[0]!;
+    expect(name).toBe(event);
     handler({ payload: { url: "https://example.test/sign-in" } });
     expect(onUrl).toHaveBeenCalledWith("https://example.test/sign-in");
-    expect(openExternalUrl).not.toHaveBeenCalled();
+    expect(openUrl).not.toHaveBeenCalled();
+    expect(windowOpen).not.toHaveBeenCalled();
   },
 );
 

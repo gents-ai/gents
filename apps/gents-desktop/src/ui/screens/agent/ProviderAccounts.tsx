@@ -5,17 +5,12 @@ import type { NodeView } from "../../../hooks/fleetStore";
 import { useState } from "react";
 import { toast } from "sonner";
 import type {
-  DesktopApiAdapter,
   InferenceBackendView,
   ProviderAccountView,
 } from "@source-inc/gents-desktop-client";
 import { Badge } from "@gents/ui/components/badge";
 import { Button } from "@gents/ui/components/button";
-import {
-  bridgeErrorCode,
-  CREDENTIAL_NOT_SAVED,
-  setupErrorMessage,
-} from "@/lib/providerLogin";
+import { setupErrorMessage } from "../../../lib/setupErrors";
 import { FactRow } from "./editors";
 import { ConfirmDelete } from "./ListDetail";
 import { Row } from "./rows";
@@ -114,17 +109,15 @@ export type AccountAction = {
 export function AccountDialogs({
   deployment,
   accounts,
-  reload,
   acting,
   onClose,
 }: {
   deployment: NodeView;
   accounts: readonly ProviderAccountView[];
-  reload: () => Promise<void>;
   acting: AccountAction | null;
   onClose: () => void;
 }) {
-  const { api } = useApp();
+  const { actions } = useApp();
   const [busy, setBusy] = useState(false);
   const account = acting?.account;
   const warnings = account && accountWarnings(deployment, accounts, account);
@@ -142,18 +135,23 @@ export function AccountDialogs({
       throw new Error(
         `Another account is already labelled “${label}”. Choose another label.`,
       );
-    await api.renameProviderAccount?.(deployment.agentDid, account.credentialId, label);
+    await actions.renameProviderAccount(
+      deployment.agentDid,
+      account.credentialId,
+      label,
+    );
     toast("Renamed");
-    await reload();
   };
   const disconnect = async () => {
     if (!account) return;
     setBusy(true);
     try {
-      await api.disconnectProviderAccount?.(deployment.agentDid, account.credentialId);
+      await actions.disconnectProviderAccount(
+        deployment.agentDid,
+        account.credentialId,
+      );
       toast("Disconnected");
       onClose();
-      await reload();
     } catch (error) {
       toast(`Disconnect failed: ${setupErrorMessage(error)}`);
     } finally {
@@ -197,22 +195,14 @@ export function AccountDialogs({
           noun="account"
           open={acting?.action === "remove"}
           onOpenChange={(open) => !open && onClose()}
-          onDelete={() => removeAccount(api, deployment, account, reload)}
+          onDelete={() =>
+            actions.removeProviderAccount(deployment.agentDid, account.credentialId)
+          }
           warning={warnings?.remove}
         />
       )}
     </>
   );
-}
-
-export async function removeAccount(
-  api: DesktopApiAdapter,
-  deployment: NodeView,
-  account: ProviderAccountView,
-  reload: () => Promise<void>,
-) {
-  await api.removeProviderAccount?.(deployment.agentDid, account.credentialId);
-  await reload();
 }
 
 /* the account card for a subscription backend */
@@ -221,15 +211,13 @@ export function AccountRows({
   kind,
   accountRef,
   accounts,
-  reload,
 }: {
   deployment: NodeView;
   kind: string;
   accountRef: string | null;
   accounts: readonly ProviderAccountView[];
-  reload: () => Promise<void>;
 }) {
-  const { api } = useApp();
+  const { actions } = useApp();
   const sub = SUBSCRIPTION[kind]!;
   const stored = referencedAccount(accounts, sub.provider, accountRef);
   const account = stored?.enabled ? stored : undefined;
@@ -241,28 +229,21 @@ export function AccountRows({
   const signIn = async () => {
     setBusy(true);
     try {
-      if (sub.login === "codex") await api.codexLogin(deployment.agentDid);
-      else if (sub.login === "claude") await api.claudeLogin(deployment.agentDid);
-      else await api.grokLogin(deployment.agentDid);
+      await actions.signInToProvider(deployment.agentDid, sub.login);
       toast("Signed in");
-      await reload();
     } catch (error) {
       toast(`Sign in failed: ${setupErrorMessage(error)}`);
-      if (bridgeErrorCode(error) === CREDENTIAL_NOT_SAVED) await reload();
     } finally {
       setBusy(false);
     }
   };
   const retrySave = async () => {
-    if (!api.retrySaveProviderAccount) return;
     setBusy(true);
     try {
-      await api.retrySaveProviderAccount(deployment.agentDid, sub.provider);
+      await actions.retrySaveProviderAccount(deployment.agentDid, sub.provider);
       toast("Signed in");
-      await reload();
     } catch (error) {
       toast(`Save failed: ${setupErrorMessage(error)}`);
-      await reload();
     } finally {
       setBusy(false);
     }
@@ -271,10 +252,12 @@ export function AccountRows({
     if (!account) return;
     setBusy(true);
     try {
-      await api.disconnectProviderAccount?.(deployment.agentDid, account.credentialId);
+      await actions.disconnectProviderAccount(
+        deployment.agentDid,
+        account.credentialId,
+      );
       toast("Disconnected");
       setConfirmingDisconnect(false);
-      await reload();
     } catch (error) {
       toast(
         `Disconnect failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -329,7 +312,7 @@ export function AccountRows({
               </Button>
             </>
           )}
-          {unsaved && api.retrySaveProviderAccount ? (
+          {unsaved && actions.canRetryProviderSave ? (
             <Button size="sm" variant="brand" disabled={busy} onClick={retrySave}>
               Retry save
             </Button>

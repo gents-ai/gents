@@ -10,28 +10,56 @@ import {
   shouldAutoStartDesktopClient,
   type DesktopStartupPhase,
 } from "../lib/loadingStatus";
-import {
-  ManagedServerStartupError,
-  observeManagedServerOperation,
-  type ManagedServerWait,
-} from "../lib/managedServerStartup";
+import { ManagedServerStartupError } from "../lib/managedServerStartup";
+import { singleFlight } from "../lib/reads";
 import { isMobileTauriShell, ownsAutomaticRecovery } from "../lib/shellPlatform";
-import {
-  delay,
-  logShellEvent,
-  shouldAutoRestartP2P,
-  timingConfig,
-} from "./desktopShellRuntime";
-import { createSnapshotPublicationOwner } from "./desktopSnapshotPublication";
+import { timingConfig } from "./timing";
+import { createSnapshotPublicationOwner } from "./snapshotPublication";
 import { applyFleetSnapshot, equal, shareUnchanged } from "./fleetStore";
-import { restoreManagedServer } from "./managedServerLifecycle";
+import type { LocalServerActions } from "./localServer";
 import { writeSession } from "./sessionStore";
 import type { ShellStores } from "./shellProjection";
 import { createIncompatibleHomeOps } from "./useIncompatibleHome";
 import { clientStatus } from "./clientStore";
 
+function shouldAutoRestartP2P(
+  previous: P2PHealth | null,
+  next: P2PHealth | null,
+  lastAttemptAt: number | null,
+  now: number,
+  cooldownMs: number,
+) {
+  if (!next || next.status !== "wedged") {
+    return false;
+  }
+
+  if (lastAttemptAt !== null && now - lastAttemptAt < cooldownMs) {
+    return false;
+  }
+
+  if (!previous) {
+    return true;
+  }
+
+  return (
+    previous.status !== "wedged" ||
+    previous.consecutiveFailures !== next.consecutiveFailures ||
+    previous.lastError !== next.lastError
+  );
+}
+
+async function delay(ms: number) {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export function logShellEvent(message: string) {
+  console.info(`[live-tauri-shell] ${message}`);
+}
+
 type ClientLifecycleParams = {
   api: DesktopApiAdapter;
+  /** the local server's owner, which startup observes and restarts through */
+  localServer: Pick<LocalServerActions, "restoreLocalServer" | "restartLocalServer">;
   supportsManagedServer: boolean;
   stores: ShellStores;
   /** reads the selected session again after a restart */
@@ -56,6 +84,7 @@ export type ClientRecovery = {
  */
 export function createClientLifecycle({
   api,
+  localServer,
   supportsManagedServer,
   stores,
   refreshSession,
@@ -64,8 +93,6 @@ export function createClientLifecycle({
   const setError = (error: string | null) => clientStatus.setError(client, error);
   const setStarting = (starting: boolean) => clientStatus.setStarting(client, starting);
   const setStopping = (stopping: boolean) => client.setState({ stopping });
-  const setManagedServerWait = (managedServerWait: ManagedServerWait | null) =>
-    client.setState({ managedServerWait });
   const setManagedServerFailure = (
     managedServerFailure: ManagedServerStartupError | null,
   ) => client.setState({ managedServerFailure });
@@ -76,8 +103,6 @@ export function createClientLifecycle({
     lastObservedP2PHealth: null,
   };
   let localServerAvailable: boolean | null = null;
-  let startClientInFlight: Promise<DesktopClientSnapshot> | null = null;
-  let initializationInFlight: Promise<void> | null = null;
   let managedServerWaitAbort: AbortController | null = null;
 
   function clientAutostarts(next: DesktopClientSnapshot) {
@@ -150,31 +175,25 @@ export function createClientLifecycle({
     return accepted;
   }
 
-  async function ensureDesktopClientStarted(): Promise<DesktopClientSnapshot> {
-    if (startClientInFlight) return startClientInFlight;
+  const ensureDesktopClientStarted = singleFlight(async () => {
     setStarting(true);
     setError(null);
-    const pending = (async () => {
-      const isCurrent = publication.checkpoint();
-      try {
-        return await mutateSnapshot(() => api.startDesktopClient());
-      } catch (error) {
-        if (isCurrent() || !publication.snapshot?.client) {
-          setError(String(error));
-          if (client.getState().startupPhase === "starting-client") {
-            setStartupPhase("client-error");
-          }
-          await home.adopt(error);
+    const isCurrent = publication.checkpoint();
+    try {
+      return await mutateSnapshot(() => api.startDesktopClient());
+    } catch (error) {
+      if (isCurrent() || !publication.snapshot?.client) {
+        setError(String(error));
+        if (client.getState().startupPhase === "starting-client") {
+          setStartupPhase("client-error");
         }
-        throw error;
-      } finally {
-        startClientInFlight = null;
-        setStarting(false);
+        await home.adopt(error);
       }
-    })();
-    startClientInFlight = pending;
-    return pending;
-  }
+      throw error;
+    } finally {
+      setStarting(false);
+    }
+  });
 
   /* Automatic recovery, where this window owns it: asked after every read, a
      repeated one included (startup run again reads the same stopped client),
@@ -238,49 +257,37 @@ export function createClientLifecycle({
     }
   }
 
-  function initializeDesktop(): Promise<void> {
-    if (initializationInFlight) return initializationInFlight;
-    const pending = (async () => {
-      recovery.autostartAttempted = false;
-      if (supportsManagedServer && ownsAutomaticRecovery()) {
-        setStartupPhase("checking-managed-server");
-        const abort = new AbortController();
-        managedServerWaitAbort = abort;
-        setManagedServerFailure(null);
-        try {
-          localServerAvailable = await restoreManagedServer(api, {
-            onWait: setManagedServerWait,
-            signal: abort.signal,
-          });
-        } catch (error) {
-          // A legacy or broken ~/.gents must not block first-run setup or
-          // already-saved remote peers. Surface the error after the app is up.
-          localServerAvailable = false;
-          setError(error instanceof Error ? error.message : String(error));
-          if (await home.adopt(error)) {
-            setStartupPhase("managed-server-error");
-            return;
-          }
-          if (error instanceof ManagedServerStartupError) {
-            setManagedServerFailure(error);
-            setStartupPhase("managed-server-error");
-            return;
-          }
+  const initializeDesktop = singleFlight(async (): Promise<void> => {
+    recovery.autostartAttempted = false;
+    if (supportsManagedServer && ownsAutomaticRecovery()) {
+      setStartupPhase("checking-managed-server");
+      const abort = new AbortController();
+      managedServerWaitAbort = abort;
+      setManagedServerFailure(null);
+      try {
+        localServerAvailable = await localServer.restoreLocalServer(abort.signal);
+      } catch (error) {
+        // A legacy or broken ~/.gents must not block first-run setup or
+        // already-saved remote peers. Surface the error after the app is up.
+        localServerAvailable = false;
+        setError(error instanceof Error ? error.message : String(error));
+        if (await home.adopt(error)) {
+          setStartupPhase("managed-server-error");
+          return;
+        }
+        if (error instanceof ManagedServerStartupError) {
+          setManagedServerFailure(error);
+          setStartupPhase("managed-server-error");
+          return;
         }
       }
-      setStartupPhase("loading-configuration");
-      await refreshSnapshot();
-    })().finally(() => {
-      if (initializationInFlight === pending) {
-        initializationInFlight = null;
-      }
-    });
-    initializationInFlight = pending;
-    return pending;
-  }
+    }
+    setStartupPhase("loading-configuration");
+    await refreshSnapshot();
+  });
 
   function skipManagedServerWait() {
-    if (initializationInFlight) {
+    if (initializeDesktop.running) {
       managedServerWaitAbort?.abort();
       return;
     }
@@ -295,7 +302,6 @@ export function createClientLifecycle({
     const status = client.getState().managedServerFailure?.status;
     if (!status?.agentName || !status.effectiveToolCeiling || !api.restartManagedServer)
       return;
-    const restartManagedServer = api.restartManagedServer;
     const agentName = status.agentName;
     const authority = {
       toolCeiling: status.effectiveToolCeiling,
@@ -305,11 +311,7 @@ export function createClientLifecycle({
     setError(null);
     setStartupPhase("checking-managed-server");
     try {
-      await observeManagedServerOperation(
-        api,
-        () => restartManagedServer(agentName, authority),
-        setManagedServerWait,
-      );
+      await localServer.restartLocalServer(agentName, authority);
       await initializeDesktop();
     } catch (error) {
       setError(error instanceof Error ? error.message : String(error));

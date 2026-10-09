@@ -1,14 +1,16 @@
 import type {
   DesktopApiAdapter,
   DesktopClientSnapshot,
+  DesktopOperationsSnapshotRequest,
 } from "@source-inc/gents-desktop-client";
 
-import { createDesktopShellChatActions } from "./desktopShellChatActions";
-import { createDesktopShellConfigActions } from "./desktopShellConfigActions";
-import { createDesktopShellMailboxActions } from "./desktopShellMailboxActions";
-import { createDesktopShellPeerActions } from "./desktopShellPeerActions";
-import { createDesktopShellSelectionActions } from "./desktopShellSelectionActions";
-import { createDesktopShellTaskActions } from "./desktopShellTaskActions";
+import { createChatActions } from "./chatActions";
+import { createConfigActions } from "./configActions";
+import { createHostActions } from "./hostActions";
+import { createMailboxActions } from "./mailboxActions";
+import { createPeerActions } from "./peerActions";
+import { createSelectionActions } from "./selectionActions";
+import { createTaskActions } from "./taskActions";
 import { selection } from "./selectionStore";
 import type { createSessionReads } from "./sessionReads";
 import type { ShellProjection, ShellStores } from "./shellProjection";
@@ -42,7 +44,7 @@ export function createShellActions({
   client: { refreshSnapshot, mutateSnapshot, ensureDesktopClientStarted },
   reportFailure,
 }: ShellActionParams) {
-  const route = createDesktopShellSelectionActions({ stores });
+  const route = createSelectionActions({ stores });
   return {
     ...reads,
     ...route,
@@ -50,7 +52,19 @@ export function createShellActions({
         newest read issued publishes. A failure is the client's own state,
         shown in the banner. */
     refreshSnapshot,
-    ...createDesktopShellMailboxActions({
+    /** Reads the client without publishing it, for a screen checking what
+        its own write left behind. */
+    readSnapshot: () => api.fetchDesktopSnapshot(),
+    /* Read for the screen that shows each answer, which keeps it: no store. */
+    fetchOperationsSnapshot: (request: DesktopOperationsSnapshotRequest) =>
+      api.fetchOperationsSnapshot(request),
+    /** Whether this host has a DB explorer window to open. */
+    canOpenDbExplorer: Boolean(api.openDbExplorer),
+    /** Opens the managed runtime's DB explorer window. */
+    openDbExplorer: async () => {
+      await api.openDbExplorer?.();
+    },
+    ...createMailboxActions({
       api,
       stores,
       refreshSnapshot,
@@ -59,7 +73,7 @@ export function createShellActions({
     /** Puts down the mailbox item the next message was going to answer; the
         item stays open, and the next message is an ordinary one. */
     clearMailboxCause: () => selection.releaseMailboxRoute(stores.selection),
-    ...createDesktopShellPeerActions({
+    ...createPeerActions({
       api,
       stores,
       ensureDesktopClientStarted,
@@ -68,14 +82,15 @@ export function createShellActions({
       reportFailure,
       selectAgent: route.selectAgent,
     }),
-    ...createDesktopShellConfigActions({ api, mutateSnapshot, reportFailure }),
-    ...createDesktopShellTaskActions({
+    ...createConfigActions({ api, mutateSnapshot, reportFailure }),
+    ...createHostActions({ api }),
+    ...createTaskActions({
       api,
       store: stores.selection,
       refreshSnapshot,
       reportFailure,
     }),
-    ...createDesktopShellChatActions({
+    ...createChatActions({
       api,
       stores,
       project,

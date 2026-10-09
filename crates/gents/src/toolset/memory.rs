@@ -141,7 +141,7 @@ impl Tool for MemoryTool {
             }
         };
 
-        serde_json::to_string_pretty(&output)
+        crate::tool_output::render(&output, &["value", "found", "key", "action"])
             .map_err(|error| MemoryToolError(anyhow!("failed to serialize memory output: {error}")))
     }
 }
@@ -324,6 +324,7 @@ mod tests {
         )
         .await
         .expect("read memory");
+        assert!(output.starts_with("{\n  \"value\":"));
         let parsed: Value = serde_json::from_str(&output).unwrap();
 
         assert_eq!(parsed["found"], true);

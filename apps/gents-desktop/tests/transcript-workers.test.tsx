@@ -62,12 +62,13 @@ const caused = (
   lifecycleState: string,
   byRequest: string,
   byToolCall: string,
+  agentDid = AGENT,
 ): CausedCallView => ({
   requestId: byRequest,
   toolCallId: byToolCall,
   caused: {
     requestId,
-    agentDid: AGENT,
+    agentDid,
     sessionId,
     requesterDid: null,
     lifecycleState,
@@ -293,6 +294,25 @@ describe("subagents of a session", () => {
   });
 });
 
+describe("the provenance owner", () => {
+  it("asks once for every screen showing the session, and afresh after they all leave", async () => {
+    const api = apiWith(async () => view([]));
+    const app = appFor(api, [group(call("req-1", "call-1"))]);
+    const first = app.actions.watchSessionProvenance();
+    const second = app.actions.watchSessionProvenance();
+    await waitFor(() => expect(app.stores.provenance.getState().shown).not.toBeNull());
+    expect(api.sessionProvenance).toHaveBeenCalledTimes(1);
+
+    first();
+    second();
+    const again = app.actions.watchSessionProvenance();
+    /* the last answer shows at once while the new ask is out */
+    expect(app.stores.provenance.getState().shown).not.toBeNull();
+    await waitFor(() => expect(api.sessionProvenance).toHaveBeenCalledTimes(2));
+    again();
+  });
+});
+
 describe("subagent lineage freshness", () => {
   it("asks again on a session-list change and keeps the last view on a failed ask", async () => {
     let state = "processing";
@@ -326,19 +346,33 @@ describe("subagent lineage freshness", () => {
     );
   });
 
-  it("asks again when the store observation moves, with no timer of its own", async () => {
+  it("asks again when remote lineage inputs change, with no timer of its own", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       let state = "processing";
       const api = apiWith(async () =>
-        view([caused("r-remote", "session-remote", state, "req-1", "call-1")]),
+        view([
+          caused(
+            "r-remote",
+            "session-remote",
+            state,
+            "req-1",
+            "call-1",
+            "did:key:remote",
+          ),
+        ]),
       );
       const tool = call("req-1", "call-1", "success");
       const items = [group(tool)];
       const app = appFor(api, items);
       const observe = (storeVersion: number) =>
         writeSession(app.stores.session, (session) =>
-          session ? { ...session, projectionRevision: { storeVersion } } : session,
+          session
+            ? {
+                ...session,
+                projectionRevision: { storeVersion, provenanceVersion: storeVersion },
+              }
+            : session,
         );
       observe(1);
       const { result } = renderWorkers(app);
@@ -358,6 +392,66 @@ describe("subagent lineage freshness", () => {
     }
   });
 
+  it.each(["pending", "empty", "completed"])(
+    "discovers new remote lineage after an initially %s read",
+    async (initial) => {
+      let finishFirst!: (value: SessionProvenanceView) => void;
+      let reads = 0;
+      const api = apiWith(() => {
+        if (++reads === 1)
+          return new Promise((resolve) => {
+            finishFirst = resolve;
+          });
+        return Promise.resolve(
+          view([
+            caused(
+              "new-child",
+              "remote-session",
+              "completed",
+              "req-1",
+              "call-1",
+              "did:key:remote",
+            ),
+          ]),
+        );
+      });
+      const tool = call("req-1", "call-1", "success");
+      const app = appFor(api, [group(tool)]);
+      const observe = (version: number) =>
+        writeSession(app.stores.session, (session) =>
+          session
+            ? {
+                ...session,
+                projectionRevision: {
+                  storeVersion: version,
+                  provenanceVersion: version,
+                },
+              }
+            : session,
+        );
+      observe(1);
+      const { result } = renderWorkers(app);
+      await waitFor(() => expect(api.sessionProvenance).toHaveBeenCalledTimes(1));
+      if (initial !== "pending") {
+        await act(async () =>
+          finishFirst(
+            view(
+              initial === "empty"
+                ? []
+                : [caused("old-child", "old-session", "completed", "req-1", "call-1")],
+            ),
+          ),
+        );
+      }
+      act(() => observe(2));
+      if (initial === "pending") await act(async () => finishFirst(view([])));
+      await waitFor(() =>
+        expect(result.current.byToolCall(tool)?.request.requestId).toBe("new-child"),
+      );
+      expect(api.sessionProvenance).toHaveBeenCalledTimes(2);
+    },
+  );
+
   it("shows a lineage read that took longer than the stream moved", async () => {
     /* the first read finds the caused request running; each later read is
        held until the test lets it answer */
@@ -371,7 +465,12 @@ describe("subagent lineage freshness", () => {
     const app = appFor(api, [group(tool)]);
     const observe = (storeVersion: number) =>
       writeSession(app.stores.session, (session) =>
-        session ? { ...session, projectionRevision: { storeVersion } } : session,
+        session
+          ? {
+              ...session,
+              projectionRevision: { storeVersion, provenanceVersion: storeVersion },
+            }
+          : session,
       );
     observe(1);
     const { result } = renderWorkers(app);
@@ -386,48 +485,76 @@ describe("subagent lineage freshness", () => {
     /* the stream moves again while that read is still out */
     act(() => observe(3));
     await act(async () =>
-      held[0]!(view([caused("r-1", "session-1", "completed", "req-1", "call-1")])),
+      held[0]!(view([caused("r-1", "session-1", "processing", "req-1", "call-1")])),
     );
-
+    await waitFor(() => expect(held).toHaveLength(2));
+    await act(async () =>
+      held[1]!(view([caused("r-1", "session-1", "completed", "req-1", "call-1")])),
+    );
     expect(result.current.byToolCall(tool)?.request.lifecycleState).toBe("completed");
+    expect(api.sessionProvenance).toHaveBeenCalledTimes(3);
   });
 
-  it("does not follow streamed live deltas once every caused request settled", async () => {
-    const api = apiWith(async () =>
-      view([caused("r-1", "session-1", "completed", "req-1", "call-1")]),
-    );
-    const tool = call("req-1", "call-1", "success");
-    /* a live delta replaces only the live reply; the rows stay the same objects */
-    const toolRow = group(tool);
-    const items = [toolRow];
-    const app = appFor(api, items);
-    const stream = (storeVersion: number) =>
-      writeSession(app.stores.session, (session) =>
-        session
-          ? {
-              ...session,
-              timelineItems: [
-                toolRow,
-                {
-                  kind: "liveAssistant",
-                  itemKey: "live",
-                  content: `chunk ${storeVersion}`,
-                  reasoning: null,
-                } as RenderedTimelineItem,
-              ],
-              projectionRevision: { storeVersion },
-            }
-          : session,
+  it.each(["processing", "completed"])(
+    "does not reread %s lineage for parent chunks, and observes a remote completion",
+    async (initial) => {
+      let lifecycle = initial;
+      const api = apiWith(async () =>
+        view([
+          caused(
+            "r-1",
+            "session-remote",
+            lifecycle,
+            "req-1",
+            "call-1",
+            "did:key:remote",
+          ),
+        ]),
       );
-    stream(1);
-    const { result } = renderWorkers(app);
-    await waitFor(() =>
-      expect(result.current.byToolCall(tool)?.request.lifecycleState).toBe("completed"),
-    );
-    for (let version = 2; version <= 50; version += 1) act(() => stream(version));
-    await Promise.resolve();
-    expect(api.sessionProvenance).toHaveBeenCalledTimes(1);
-  });
+      const tool = call("req-1", "call-1", "success");
+      const toolRow = group(tool);
+      const app = appFor(api, [toolRow]);
+      const stream = (storeVersion: number, provenanceVersion = 1) =>
+        writeSession(app.stores.session, (session) =>
+          session
+            ? {
+                ...session,
+                timelineItems: [
+                  toolRow,
+                  {
+                    kind: "liveAssistant",
+                    itemKey: "live",
+                    content: `chunk ${storeVersion}`,
+                    reasoning: null,
+                  } as RenderedTimelineItem,
+                ],
+                projectionRevision: { storeVersion, provenanceVersion },
+              }
+            : session,
+        );
+      stream(1);
+      const { result } = renderWorkers(app);
+      await waitFor(() =>
+        expect(result.current.byToolCall(tool)?.request.lifecycleState).toBe(initial),
+      );
+      for (let version = 2; version <= 50; version += 1) {
+        act(() => stream(version));
+        await act(async () => {});
+      }
+      expect(api.sessionProvenance).toHaveBeenCalledTimes(1);
+
+      if (initial === "processing") {
+        lifecycle = "completed";
+        act(() => stream(51, 2));
+        await waitFor(() =>
+          expect(result.current.byToolCall(tool)?.request.lifecycleState).toBe(
+            "completed",
+          ),
+        );
+        expect(api.sessionProvenance).toHaveBeenCalledTimes(2);
+      }
+    },
+  );
 
   it("asks for operations facts only when the transcript has a background process", async () => {
     const api = apiWith(async () => view([]));

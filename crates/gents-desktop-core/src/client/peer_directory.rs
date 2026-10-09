@@ -213,11 +213,25 @@ pub(crate) struct PeerDirectory {
     peers: Vec<PeerRecord>,
     pending_removals: Vec<PeerRecord>,
     retired_enrollments: Vec<RetiredEnrollment>,
-    _lease: Arc<File>,
+    _lease: Arc<PeerDirectoryLease>,
     #[cfg(test)]
     persist_barrier: Option<PersistBarrier>,
     #[cfg(test)]
     fail_persist: bool,
+}
+
+/// The final in-process owner must unlock explicitly: Unix `flock` locks
+/// otherwise survive its close while a concurrently forked child retains an
+/// inherited descriptor, even when that descriptor will close on exec.
+#[derive(Debug)]
+struct PeerDirectoryLease(File);
+
+impl Drop for PeerDirectoryLease {
+    fn drop(&mut self) {
+        if let Err(error) = self.0.unlock() {
+            tracing::warn!(%error, "failed to unlock peer directory lease");
+        }
+    }
 }
 
 #[cfg(test)]
@@ -250,7 +264,7 @@ impl PeerDirectory {
             .with_context(|| format!("opening peer-directory lock {}", lock_path.display()))?;
         match file.try_lock() {
             Ok(()) => {
-                let lease = Arc::new(file);
+                let lease = Arc::new(PeerDirectoryLease(file));
                 // Read only after acquiring the lifetime lease, so an offline
                 // initializer cannot race a live owner's load with a write.
                 let stored = read_stored_directory(&path).await?;
@@ -810,6 +824,29 @@ mod tests {
             retired_enrollments: Vec::new(),
         })
         .is_err());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn last_owner_releases_lease_with_an_inherited_descriptor_open() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let path = tempdir.path().join("peers.json");
+        let directory = PeerDirectory::open_writer(&path).await.unwrap();
+        let clone = directory.clone();
+        // dup and fork share the same open file description and flock lifetime.
+        let inherited = directory._lease.0.try_clone().unwrap();
+        drop(directory);
+
+        let error = PeerDirectory::open_writer(&path).await.unwrap_err();
+        assert!(error.to_string().contains("already owned"));
+
+        drop(clone);
+        let reopened = PeerDirectory::open_writer(&path)
+            .await
+            .expect("last owner must release the lease before inherited descriptors close");
+        assert!(inherited.metadata().is_ok());
+        drop(reopened);
+        drop(inherited);
     }
 
     #[tokio::test]

@@ -607,7 +607,7 @@ impl Tool for SessionHistoryTool {
             }
         })?;
         Ok(if action == "output" {
-            serde_json::to_string(&crate::self_config::Ordered::reading_order(
+            serde_json::to_string(&crate::tool_output::Ordered::reading_order(
                 value,
                 discovery::OUTPUT_ORDER,
             ))

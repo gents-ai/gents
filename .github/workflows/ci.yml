@@ -568,6 +568,11 @@ jobs:
         working-directory: apps/gents-desktop
         run: npm run format:check
 
+      - name: Typecheck desktop tests and bridge harness
+        if: matrix.suite == 'unit'
+        working-directory: apps/gents-desktop
+        run: npm run typecheck
+
       - name: Build desktop frontend
         working-directory: apps/gents-desktop
         run: npm run build

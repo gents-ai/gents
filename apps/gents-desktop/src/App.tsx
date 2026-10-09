@@ -14,7 +14,7 @@ import {
   type DesktopApp,
   type DesktopBridge,
 } from "./hooks/desktopApp";
-import { useDesktopRuntime } from "./hooks/useDesktopRuntime";
+import { useClientRuntime } from "./hooks/useClientRuntime";
 import { useManagedServerTrayControls } from "./hooks/useManagedServerTrayControls";
 import { useMobileBackSwipe } from "./hooks/useMobileBackSwipe";
 import { useMobileVisualViewport } from "./hooks/useMobileVisualViewport";
@@ -109,13 +109,13 @@ function AppHost({ bridge: given }: { bridge?: DesktopBridge }) {
    redrawing every screen. */
 function AppReactions({ app, bridge }: { app: DesktopApp; bridge: DesktopBridge }) {
   const route = useRoute();
-  useDesktopRuntime(app, bridge.listenToUpdates);
+  useClientRuntime(app, bridge.listenToUpdates);
   useFollowRoute(route);
   useWindowTitle(route);
   useDockVisit(route);
   useMobileVisualViewport();
   usePlatformSetup();
-  useManagedServerTrayControls(bridge.api);
+  useManagedServerTrayControls(app);
   return null;
 }
 

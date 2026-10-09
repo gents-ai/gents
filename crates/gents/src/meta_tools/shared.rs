@@ -293,17 +293,21 @@ impl StructuredToolError {
     }
 
     pub(super) fn to_result_text(&self) -> String {
-        serde_json::to_string_pretty(self).unwrap_or_else(|_| {
-            format!(
-                r#"{{"ok":false,"failure_class":"{}","path":"{}","message":"{}","retryable":{},"service_id":"{}","tool_name":"{}"}}"#,
-                self.failure_class,
-                self.path,
-                self.message,
-                self.retryable,
-                self.service_id,
-                self.tool_name
-            )
-        })
+        crate::tool_output::render(
+            self,
+            &[
+                "message",
+                "available_tools",
+                "allowed_mcp_service_ids",
+                "retryable",
+                "ok",
+                "failure_class",
+                "path",
+                "service_id",
+                "tool_name",
+            ],
+        )
+        .expect("MCP error fields serialize")
     }
 }
 

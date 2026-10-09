@@ -131,13 +131,23 @@ async fn filing_a_mailbox_item_returns_a_receipt_and_the_turn_continues() {
         gents::mailbox::NotificationIdentity::Event.write_outcome(false, false),
     )
     .unwrap();
-    let receipt_marker = format!("\"outcome\":{outcome}").replace('"', "\\\"");
     let bodies = runtime.backend.observed_completion_bodies();
-    let followup = bodies.last().expect("follow-up provider turn").to_string();
-    assert!(
-        followup.contains(&receipt_marker),
-        "the receipt must reach the model: {followup}"
-    );
+    let followup = bodies.last().expect("follow-up provider turn");
+    let receipt_text = followup["messages"]
+        .as_array()
+        .expect("follow-up messages")
+        .iter()
+        .find(|message| {
+            message["role"] == "tool" && message["tool_call_id"] == "mailbox-tool-turn-call"
+        })
+        .and_then(|message| message["content"].as_str())
+        .expect("the matching mailbox receipt must reach the model");
+    let receipt: serde_json::Value =
+        serde_json::from_str(receipt_text).expect("mailbox receipt must be valid JSON");
+    assert_eq!(receipt["outcome"], outcome);
+    assert_eq!(receipt["item"]["_docID"], items[0].doc_id);
+    assert_eq!(receipt["item"]["title"], items[0].title);
+    assert_eq!(receipt["item"]["request_id"], request_id);
     runtime.shutdown().await;
 }
 

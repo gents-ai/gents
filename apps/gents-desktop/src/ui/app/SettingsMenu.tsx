@@ -27,11 +27,11 @@ export function SettingsMenu({
   /** the side nav choices only make sense where there is a side nav */
   showNav: boolean;
 }) {
-  const { api } = useApp();
+  const { actions } = useApp();
   const theme = useTheme();
   const nav = useNavMode();
   const openDbExplorer = () => {
-    void api.openDbExplorer?.().catch((e: unknown) => {
+    void actions.openDbExplorer().catch((e: unknown) => {
       toast(`DB explorer failed to open: ${String(e)}`);
     });
   };
@@ -98,7 +98,7 @@ export function SettingsMenu({
             </DropdownMenuGroup>
           </>
         )}
-        {api.openDbExplorer && (
+        {actions.canOpenDbExplorer && (
           <>
             <DropdownMenuSeparator />
             <DropdownMenuGroup>

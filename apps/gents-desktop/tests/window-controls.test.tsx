@@ -13,7 +13,10 @@ const controls = vi.hoisted(() => ({
   onMaximizedChange: vi.fn(),
 }));
 
-vi.mock("../src/lib/windowControls", () => controls);
+vi.mock("../src/lib/nativeShell", async (actual) => ({
+  ...(await actual<typeof import("../src/lib/nativeShell")>()),
+  ...controls,
+}));
 vi.mock("../src/lib/shellPlatform", () => ({
   headerIsWindowBar: () => true,
   isWindowsTauriShell: () => true,

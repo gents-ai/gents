@@ -155,13 +155,13 @@ export function useMailboxCause() {
 
 /** Startup as screens show it. */
 export function useStartup() {
-  const { api, stores, lifecycle } = useApp();
+  const { stores, lifecycle, actions } = useApp();
+  const managedServerWait = useStore(stores.localServer, (s) => s.wait);
   const state = useStore(
     stores.client,
     useShallow((s) => ({
       phase: s.startupPhase,
       error: s.error,
-      managedServerWait: s.managedServerWait,
       managedServerFailure: s.managedServerFailure,
       diagnosticsHint:
         s.snapshot?.bootstrap.diagnosticsHint || s.startupDiagnosticsHint,
@@ -170,12 +170,13 @@ export function useStartup() {
   const failure = state.managedServerFailure;
   return {
     ...state,
+    managedServerWait,
     incompatibleHome: useIncompatibleHome(stores.client, lifecycle.home),
     /* a restart needs the agent and authority the failed start reported */
     canRestartManagedServer: Boolean(
       failure?.status.agentName &&
       failure.status.effectiveToolCeiling &&
-      api.restartManagedServer,
+      actions.localServerOffers.restart,
     ),
   };
 }

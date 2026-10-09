@@ -3,10 +3,6 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderIn, testApp } from "./app-fixture";
 
-vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn(async () => () => {}),
-}));
-
 import type {
   DesktopApiAdapter,
   DesktopClientSnapshot,
@@ -66,7 +62,7 @@ describe("setup provider sign-in", () => {
       );
       expect(await screen.findByText("Account connected")).toBeVisible();
       expect(login(api, provider)).toHaveBeenCalledTimes(1);
-      expect(login(api, provider)).toHaveBeenCalledWith(AGENT);
+      expect(login(api, provider)).toHaveBeenCalledWith(AGENT, null, null);
     },
   );
 
@@ -453,7 +449,7 @@ describe("add another account", () => {
       const { api, onDone } = addForm(provider, { [name]: signedIn("added") });
       await userEvent.click(await screen.findByRole("button", { name: "Sign in" }));
       await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
-      expect(login(api, provider)).toHaveBeenCalledWith(AGENT);
+      expect(login(api, provider)).toHaveBeenCalledWith(AGENT, null, null);
       expect(api.applyConfigComponents).not.toHaveBeenCalled();
     },
   );

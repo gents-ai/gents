@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use defra_node::EmbeddedNode;
 use events::DocumentChangeSubscription;
+use gents_protocol::schemas::AGENT_TOOL_CALL_NAME;
 use tokio::sync::watch;
 
 use super::collection_resolver::CollectionResolver;
@@ -193,7 +194,8 @@ pub fn spawn_observer_with_selection(
                 .get(SESSION_HYDRATION_REQUEST)
                 .map_or(0, HashSet::len);
             if transcript_changed_docs > 0 || hydration_control_changed_docs > 0 {
-                let store_version = store.invalidate_projection();
+                let store_version =
+                    store.invalidate_projection(flushed.contains_key(AGENT_TOOL_CALL_NAME));
                 if transcript_changed_docs > 0 {
                     metrics_for_task
                         .transcript_invalidations

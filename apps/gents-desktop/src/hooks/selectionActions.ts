@@ -17,7 +17,7 @@ type SelectionActionParams = {
  * copy, and each drops the session the screen showed when it no longer
  * applies.
  */
-export function createDesktopShellSelectionActions({ stores }: SelectionActionParams) {
+export function createSelectionActions({ stores }: SelectionActionParams) {
   const store = stores.selection;
   const fleet = () => stores.fleet.getState();
   const dropSession = () => writeSession(stores.session, null);

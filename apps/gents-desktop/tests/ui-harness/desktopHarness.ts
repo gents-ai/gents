@@ -1,6 +1,9 @@
 import type { BackendHealth } from "@source-inc/gents-desktop-client";
 import { deriveDisplayState } from "@source-inc/gents-desktop-operations";
-import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
+import type {
+  AllowedFolder,
+  DesktopApiAdapter,
+} from "@source-inc/gents-desktop-client";
 import type {
   DesktopClientUpdatedHandler,
   DesktopClientUpdatedListenerFactory,
@@ -820,6 +823,7 @@ export function createDesktopUiHarness(
     return { session, requestId };
   }
 
+  let allowedFolders: AllowedFolder[] = [];
   const adapter: DesktopApiAdapter = {
     async fetchDesktopSnapshot() {
       if (scenario === "bridge-unavailable") {
@@ -868,6 +872,44 @@ export function createDesktopUiHarness(
       notify("runtime");
       return snapshot();
     },
+    /* no packs installed and no registry account; the allowed folders
+       are the ones added since the page loaded; no plugin call is asking */
+    async listInstalledPacks() {
+      return { packs: [] };
+    },
+    async listPackPluginSlots() {
+      return { plugins: [], profiles: [] };
+    },
+    async readPackAccount() {
+      throw new Error("Not signed in to the pack registry.");
+    },
+    async searchPacks() {
+      return { packs: [], has_more: false };
+    },
+    async installPack() {},
+    async updatePack() {},
+    async removePack() {},
+    async bindPackPlugin() {},
+    async signInToPackRegistry() {},
+    async signOutOfPackRegistry() {},
+    async listAllowedFolders() {
+      return { dirs: clone(allowedFolders) };
+    },
+    async addAllowedFolder(path, access) {
+      allowedFolders = [
+        ...allowedFolders.filter((dir) => dir.path !== path),
+        { path, access },
+      ];
+      return { dirs: clone(allowedFolders) };
+    },
+    async removeAllowedFolder(path) {
+      allowedFolders = allowedFolders.filter((dir) => dir.path !== path);
+      return { dirs: clone(allowedFolders) };
+    },
+    async listPendingPluginApprovals() {
+      return { requests: [] };
+    },
+    async decidePluginApproval() {},
     ...(scenario === "empty-fleet"
       ? ({
           async managedServerStatus() {
@@ -1136,7 +1178,10 @@ export function createDesktopUiHarness(
       if (timelinePage?.beforeItemKey && olderPageDelayMs > 0)
         await wait(olderPageDelayMs);
       const snapshot = clone(session);
-      snapshot.projectionRevision = { storeVersion };
+      snapshot.projectionRevision = {
+        storeVersion,
+        provenanceVersion: liveSourceEpoch,
+      };
       snapshot.liveCursor = session.timelineItems.some(
         (item) => item.kind === "liveAssistant",
       )
@@ -1195,7 +1240,7 @@ export function createDesktopUiHarness(
     async fetchSessionLiveDelta(request) {
       const session = sessions.get(request.sessionId);
       if (!session || session.latestRequestId !== request.requestId) return null;
-      const revision = { storeVersion };
+      const revision = { storeVersion, provenanceVersion: liveSourceEpoch };
       const liveCursor = `${session.agentDid}:${request.sessionId}:${session.latestRequestId}:${liveSourceEpoch}`;
       if (request.baseLiveCursor !== liveCursor) {
         return {

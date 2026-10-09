@@ -1,7 +1,7 @@
 import { testApp } from "./app-fixture";
 import { describe, expect, it, vi } from "vitest";
 
-import { createDesktopShellTaskActions } from "../src/hooks/desktopShellTaskActions";
+import { createTaskActions } from "../src/hooks/taskActions";
 import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
 import { createSelectionStore, selection } from "../src/hooks/selectionStore";
 
@@ -21,7 +21,7 @@ function fixture(runTask: () => Promise<unknown>, runSchedule = runTask) {
     refreshSnapshot: vi.fn(async () => undefined),
     reportFailure: vi.fn(),
   };
-  const actions = createDesktopShellTaskActions({
+  const actions = createTaskActions({
     ...effects,
     api: { runTask, runSchedule } as unknown as DesktopApiAdapter,
     store,

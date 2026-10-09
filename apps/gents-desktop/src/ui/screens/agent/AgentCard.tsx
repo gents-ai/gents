@@ -44,7 +44,9 @@ function pulse(
 }
 
 export function AgentCard({ deployment }: { deployment: NodeView }) {
-  const { api } = useApp();
+  const {
+    actions: { fetchOperationsSnapshot },
+  } = useApp();
   const authority = useToolAuthority();
   const agent = deployment.agentPrincipal;
   const name = agent.displayName ?? deployment.label;
@@ -53,14 +55,14 @@ export function AgentCard({ deployment }: { deployment: NodeView }) {
   const sessions = useFleet((s) => s.sessionsOf[nodeKeyOf(deployment)] ?? NO_SESSIONS);
   useEffect(() => {
     let alive = true;
-    void api.fetchOperationsSnapshot({ agentDid: deployment.agentDid }).then(
+    void fetchOperationsSnapshot({ agentDid: deployment.agentDid }).then(
       (o) => alive && setOps(o),
       () => alive && setOps(null),
     );
     return () => {
       alive = false;
     };
-  }, [api, deployment.agentDid, sessions]);
+  }, [fetchOperationsSnapshot, deployment.agentDid, sessions]);
   const now = pulse(sessions, ops);
   const facts = [
     authority.ceiling ?? null,

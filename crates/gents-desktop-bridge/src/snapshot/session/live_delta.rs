@@ -270,6 +270,7 @@ pub(crate) fn build_session_live_delta_from_store(
 ) -> SessionLiveDeltaView {
     let revision = SessionProjectionRevisionView {
         store_version: revision.store_version,
+        provenance_version: revision.provenance_version,
     };
     let turn_state = agent_did.map_or_else(
         || store.derive_turn_for_request(request_id),

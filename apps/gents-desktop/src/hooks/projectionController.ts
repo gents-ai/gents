@@ -3,19 +3,33 @@ import {
   type DesktopSessionSnapshot,
 } from "@source-inc/gents-desktop-client";
 
-import type { DesktopUpdateRefreshScope } from "./desktopShellRuntime";
+export type DesktopUpdateRefreshScope =
+  "snapshot" | "sessionDelta" | "session" | "sessionEvent" | "full";
+
+export function desktopUpdateRefreshScope(
+  reason: string | undefined,
+  selectedSessionId: string | null,
+  selectedTrackedRequestId: string | null,
+): DesktopUpdateRefreshScope {
+  if (reason === "health") return "snapshot";
+  if (selectedSessionId && selectedTrackedRequestId) {
+    if (reason === "store") return "sessionDelta";
+    return "sessionEvent";
+  }
+  return "full";
+}
 
 const SNAPSHOT = 1 << 0;
 const SESSION_DELTA = 1 << 1;
 const SESSION = 1 << 2;
 const INDEX_AFTER_TERMINAL = 1 << 3;
 
-export type DesktopProjectionController = {
+export type ProjectionController = {
   request: (scope: DesktopUpdateRefreshScope) => Promise<void>;
   dispose: () => void;
 };
 
-type DesktopProjectionControllerOptions = {
+type ProjectionControllerOptions = {
   currentSessionId: () => string | null;
   refreshSnapshot: () => Promise<void>;
   refreshSession: (sessionId: string | null) => Promise<DesktopSessionSnapshot | null>;
@@ -46,13 +60,13 @@ function requestedWork(scope: DesktopUpdateRefreshScope) {
  * DefraDB projection, and terminal session state schedules the fleet/index
  * projection exactly once. React only receives the resulting bounded view.
  */
-export function createDesktopProjectionController({
+export function createProjectionController({
   currentSessionId,
   refreshSnapshot,
   refreshSession,
   refreshSessionLiveDelta,
   onError = () => {},
-}: DesktopProjectionControllerOptions): DesktopProjectionController {
+}: ProjectionControllerOptions): ProjectionController {
   let active: Promise<Promise<void>[]> | null = null;
   let snapshotActive: Promise<void> | null = null;
   let snapshotPending = false;

@@ -1478,10 +1478,10 @@ fn validate_git_branch_args(
 
 #[derive(Serialize)]
 struct CommandOutput {
-    #[serde(flatten)]
-    metadata: CommandMetadata,
     stdout: String,
     stderr: String,
+    #[serde(flatten)]
+    metadata: CommandMetadata,
 }
 
 #[derive(Serialize)]

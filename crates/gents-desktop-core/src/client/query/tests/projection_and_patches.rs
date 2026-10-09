@@ -283,6 +283,7 @@ async fn title_request_patch_preserves_existence_without_public_projection() {
             r#"mutation {
                 normal: create_AgentRequest(input: {
                     request_id: "patch-normal",
+                    caused_by_parent_tool_call_doc_id: "parent-tool-physical",
                     purpose: "normal",
                     agent_did: "did:test:agent",
                     behavior_id: "default",
@@ -332,6 +333,12 @@ async fn title_request_patch_preserves_existence_without_public_projection() {
     assert_eq!(mixed.observed_documents, 2);
     assert_eq!(mixed.store.requests.len(), 1);
     assert_eq!(mixed.store.requests[0].request_id, "patch-normal");
+    assert_eq!(
+        mixed.store.requests[0]
+            .caused_by_parent_tool_call_doc_id
+            .as_deref(),
+        Some("parent-tool-physical")
+    );
 
     let missing = fetch_doc_patch(
         node.as_ref(),

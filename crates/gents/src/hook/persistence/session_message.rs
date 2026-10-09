@@ -262,7 +262,10 @@ impl DefraSessionHook {
             match crate::session_message::commit(&self.node, &cause, &mut lifecycle, plan, !create)
                 .await
             {
-                Ok(receipt) => serde_json::to_string(&receipt)?,
+                Ok(receipt) => crate::tool_output::render(
+                    &receipt,
+                    &["status", "session_id", "request_id", "tool_call_id"],
+                )?,
                 Err(error) => {
                     // The durable row is still pending, so nothing was
                     // delivered and the invocation reply is the failure. On an

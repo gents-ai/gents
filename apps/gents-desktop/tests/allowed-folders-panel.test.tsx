@@ -1,58 +1,59 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const call = vi.fn();
-vi.mock("../src/ui/screens/agent/bridgeCall", () => ({
-  call: (...args: unknown[]) => call(...args),
-  message: (error: unknown) => String(error),
-}));
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 
 import { AllowedFoldersPanel } from "../src/ui/screens/agent/AllowedFoldersPanel";
+import { renderIn, testApp } from "./app-fixture";
+
+const list = vi.fn();
+const add = vi.fn();
+const remove = vi.fn();
+/* every folder command answers with the list as it now stands */
+const answering = (dirs: { path: string; access: string }[]) => {
+  for (const command of [list, add, remove]) command.mockResolvedValue({ dirs });
+};
+const show = () =>
+  renderIn(
+    testApp({
+      api: {
+        listAllowedFolders: list,
+        addAllowedFolder: add,
+        removeAllowedFolder: remove,
+      },
+    }),
+    <AllowedFoldersPanel />,
+  );
 
 describe("AllowedFoldersPanel", () => {
   beforeEach(() => {
-    call.mockReset();
+    for (const command of [list, add, remove]) command.mockReset();
   });
 
   it("says none are added and that the working folder is readable", async () => {
-    call.mockResolvedValue({ dirs: [] });
-    render(<AllowedFoldersPanel />);
+    answering([]);
+    show();
     await screen.findByText("None added");
-    expect(call).toHaveBeenCalledWith("desktop_allowed_dirs_list", {});
+    expect(list).toHaveBeenCalled();
     expect(screen.queryByText("Remove")).toBeNull();
   });
 
   it("toggles the access of a configured folder and removes it", async () => {
-    call.mockResolvedValue({ dirs: [{ path: "/docs", access: "read" }] });
-    render(<AllowedFoldersPanel />);
+    answering([{ path: "/docs", access: "read" }]);
+    show();
     fireEvent.click(await screen.findByText("Read only"));
-    await waitFor(() =>
-      expect(call).toHaveBeenCalledWith("desktop_allowed_dirs_add", {
-        path: "/docs",
-        access: "read_write",
-      }),
-    );
+    await waitFor(() => expect(add).toHaveBeenCalledWith("/docs", "read_write"));
     fireEvent.click(await screen.findByText("Remove"));
-    await waitFor(() =>
-      expect(call).toHaveBeenCalledWith("desktop_allowed_dirs_remove", {
-        path: "/docs",
-      }),
-    );
+    await waitFor(() => expect(remove).toHaveBeenCalledWith("/docs"));
   });
 
   it("adds a typed folder read-only when no picker exists", async () => {
-    call.mockResolvedValue({ dirs: [] });
-    render(<AllowedFoldersPanel />);
+    answering([]);
+    show();
     fireEvent.change(await screen.findByLabelText("Folder path"), {
       target: { value: "/data" },
     });
     fireEvent.click(screen.getByText("Add"));
-    await waitFor(() =>
-      expect(call).toHaveBeenCalledWith("desktop_allowed_dirs_add", {
-        path: "/data",
-        access: "read",
-      }),
-    );
+    await waitFor(() => expect(add).toHaveBeenCalledWith("/data", "read"));
   });
 });

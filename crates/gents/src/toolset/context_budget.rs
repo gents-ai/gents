@@ -159,7 +159,18 @@ impl Tool for ContextBudgetTool {
 
     async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
         let snapshot = load_context_budget_snapshot(&self.node, &self.agent_did).await?;
-        serde_json::to_string_pretty(&snapshot).map_err(|error| {
+        crate::tool_output::render(
+            &snapshot,
+            &[
+                "current_estimate",
+                "max_tokens",
+                "utilization_percent",
+                "last_request",
+                "compaction_count",
+                "last_compacted_at",
+            ],
+        )
+        .map_err(|error| {
             ContextBudgetToolError(anyhow!(
                 "failed to serialize context budget output: {error}"
             ))

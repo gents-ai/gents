@@ -2,7 +2,7 @@ import { useStore } from "zustand";
 import { createStore, type StoreApi } from "zustand/vanilla";
 
 import { createSelectors, type WithSelectors } from "./createSelectors";
-import { acceptsAsyncResult } from "./desktopShellRuntime";
+import { acceptsAsyncResult } from "./observationOrdering";
 
 /** What the person is looking at: a node, a session on it (null for a new
     one), and the behavior a message goes to. */

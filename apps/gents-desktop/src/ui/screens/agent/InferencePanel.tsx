@@ -285,7 +285,6 @@ export function InferencePanel({
               deployment={deployment}
               backend={backend}
               accounts={accounts}
-              reload={reload}
               usage={{
                 view: usageOf(backend.backendId),
                 refresh: providerUsage.refresh,
@@ -297,7 +296,6 @@ export function InferencePanel({
       <AccountDialogs
         deployment={deployment}
         accounts={accounts}
-        reload={reload}
         acting={acting}
         onClose={() => setActing(null)}
       />

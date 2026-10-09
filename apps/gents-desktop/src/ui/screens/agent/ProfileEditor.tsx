@@ -132,8 +132,7 @@ export function ProfileEditor({
   draft?: { onSaved: (profileId: string) => void; onCancel: () => void };
 }) {
   const {
-    api,
-    actions: { changeConfig },
+    actions: { changeConfig, getInferenceBackendRecommendation },
   } = useApp();
   const base = {
     name: "agent" as const,
@@ -299,7 +298,7 @@ export function ProfileEditor({
     error: recommendationError,
     choose,
   } = useModelRecommendation({
-    api,
+    recommend: getInferenceBackendRecommendation,
     backendId: d.draft.backendId,
     modelName: d.draft.modelName,
     backend: selectedBackend,

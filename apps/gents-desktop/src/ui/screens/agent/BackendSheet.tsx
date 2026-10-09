@@ -13,7 +13,7 @@ export function BackendSheet({
   backendId: string | null;
   onClose: () => void;
 }) {
-  const { accounts, reload } = useAccounts(deployment.agentDid);
+  const { accounts } = useAccounts(deployment.agentDid);
   const backend =
     deployment.inferenceBackends.find((b) => b.backendId === backendId) ?? null;
   return (
@@ -54,7 +54,6 @@ export function BackendSheet({
           deployment={deployment}
           backend={backend}
           accounts={accounts}
-          reload={reload}
           embedded
         />
       )}

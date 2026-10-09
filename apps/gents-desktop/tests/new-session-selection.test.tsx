@@ -12,9 +12,9 @@ import { applyFleetSnapshot } from "../src/hooks/fleetStore";
 import { readSession, writeSession } from "../src/hooks/sessionStore";
 import { admittingProjection, shellStores } from "./shell-fixture";
 import { reconcileSelection } from "../src/hooks/selectionReconcile";
-import { createDesktopShellSelectionActions } from "../src/hooks/desktopShellSelectionActions";
+import { createSelectionActions } from "../src/hooks/selectionActions";
 import { createSelectionStore, useSelection } from "../src/hooks/selectionStore";
-import { createDesktopShellChatActions } from "../src/hooks/desktopShellChatActions";
+import { createChatActions } from "../src/hooks/chatActions";
 
 const initialDeployment = {
   agentDid: "agent",
@@ -61,10 +61,10 @@ function useHarness(
     })),
   ).current;
   const api = useRef({ sendChatMessage }).current as unknown as DesktopApiAdapter;
-  const [route] = useState(() => createDesktopShellSelectionActions({ stores }));
+  const [route] = useState(() => createSelectionActions({ stores }));
   const [actions] = useState(() => ({
     ...route,
-    ...createDesktopShellChatActions({
+    ...createChatActions({
       api,
       stores,
       project: () => admittingProjection("setup"),
@@ -169,7 +169,7 @@ describe("explicit session selection", () => {
     writeSession(stores.session, {
       sessionId: "first-setup",
     } as DesktopSessionSnapshot);
-    const route = createDesktopShellSelectionActions({ stores });
+    const route = createSelectionActions({ stores });
     route.selectAgent("agent");
     expect(store.getState().sessionId).toBe("first-setup");
     expect(readSession(stores.session)).not.toBeNull();
@@ -185,7 +185,7 @@ describe("explicit session selection", () => {
       client: { deployments: [initialDeployment] },
     } as unknown as DesktopClientSnapshot);
     stores.client.setState({ error: "Session not found" });
-    createDesktopShellSelectionActions({ stores }).startNewSession();
+    createSelectionActions({ stores }).startNewSession();
     expect(stores.client.getState().error).toBeNull();
   });
 

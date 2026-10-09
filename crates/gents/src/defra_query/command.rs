@@ -372,16 +372,18 @@ fn collect_plan_observations(plan: &Value, out: &mut Vec<String>) {
 
 pub fn render_result(value: Value) -> Result<String> {
     Ok(serde_json::to_string(
-        &crate::self_config::Ordered::reading_order(
+        &crate::tool_output::Ordered::reading_order(
             value,
             &[
                 "findings",
                 "plan",
-                "next_call",
-                "mode",
                 "results",
+                "field_page",
                 "total_count",
                 "fields",
+                "field_recovery",
+                "next_call",
+                "mode",
                 "returned_count",
                 "collection",
                 "ranking",
@@ -390,4 +392,22 @@ pub fn render_result(value: Value) -> Result<String> {
             ],
         ),
     )?)
+}
+
+#[cfg(test)]
+mod output_tests {
+    use super::*;
+
+    #[test]
+    fn query_results_precede_continuation_and_metadata() {
+        let value = json!({
+            "results": [{"title": "answer", "nullable": null}],
+            "next_call": {"tool":"query","args":{"argv":["find"]}},
+            "collection": "Example",
+        });
+        let rendered = render_result(value.clone()).unwrap();
+        assert!(rendered.starts_with("{\"results\":"));
+        assert!(rendered.find("\"next_call\"").unwrap() < rendered.find("\"collection\"").unwrap());
+        assert_eq!(serde_json::from_str::<Value>(&rendered).unwrap(), value);
+    }
 }

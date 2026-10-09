@@ -1,34 +1,17 @@
 import { describe, expect, it } from "vitest";
 
 import type { DesktopSessionSnapshot } from "@source-inc/gents-desktop-client";
-import {
-  applySessionLiveDelta,
-  desktopUpdateRefreshScope,
-  sessionLiveDeltaRequest,
-} from "../src/hooks/desktopShellRuntime";
+import { applySessionLiveDelta, sessionLiveDeltaRequest } from "../src/hooks/liveDelta";
 import {
   mergeOlderSessionTimelinePage,
   mergeSessionTipSnapshot,
-} from "../src/hooks/desktopTimelinePaging";
-
-describe("desktopUpdateRefreshScope", () => {
-  it("uses ordinary store wakes to probe the canonical live cursor", () => {
-    expect(desktopUpdateRefreshScope("health", "session-1", "request-1")).toBe(
-      "snapshot",
-    );
-    expect(desktopUpdateRefreshScope("store", "session-1", "request-1")).toBe(
-      "sessionDelta",
-    );
-    expect(desktopUpdateRefreshScope("store", "session-1", null)).toBe("full");
-    expect(desktopUpdateRefreshScope("config", null, null)).toBe("full");
-  });
-});
+} from "../src/hooks/timelinePaging";
 
 describe("live session deltas", () => {
   it("applies a verified suffix while preserving historical row identity", () => {
     const current = session(["k1"], null);
     const historical = current.timelineItems[0];
-    current.projectionRevision = { storeVersion: 7 };
+    current.projectionRevision = { storeVersion: 7, provenanceVersion: 1 };
     current.timelineItems.push({
       kind: "liveAssistant",
       itemKey: "live-assistant",
@@ -45,7 +28,7 @@ describe("live session deltas", () => {
     const next = applySessionLiveDelta(current, {
       outcome: "delta",
       liveCursor: "cursor",
-      revision: { storeVersion: 8 },
+      revision: { storeVersion: 8, provenanceVersion: 1 },
       requestId: "request-1",
       turnState: "running",
       status: null,
@@ -68,7 +51,7 @@ describe("live session deltas", () => {
 
   it("keeps timeline and live item identity for an unchanged delta", () => {
     const current = session(["k1"], null);
-    current.projectionRevision = { storeVersion: 7 };
+    current.projectionRevision = { storeVersion: 7, provenanceVersion: 1 };
     current.timelineItems.push({
       kind: "liveAssistant",
       itemKey: "live-assistant",
@@ -81,7 +64,7 @@ describe("live session deltas", () => {
     const next = applySessionLiveDelta(current, {
       outcome: "unchanged",
       liveCursor: "cursor",
-      revision: { storeVersion: 8 },
+      revision: { storeVersion: 8, provenanceVersion: 1 },
       requestId: "request-1",
       turnState: "running",
       status: null,
@@ -91,12 +74,12 @@ describe("live session deltas", () => {
 
     expect(next?.timelineItems).toBe(current.timelineItems);
     expect(next?.timelineItems.at(-1)).toBe(live);
-    expect(next?.projectionRevision).toEqual({ storeVersion: 8 });
+    expect(next?.projectionRevision).toEqual({ storeVersion: 8, provenanceVersion: 1 });
   });
 
   it("removes a reset live tail between tool-loop assistant turns", () => {
     const current = session(["k1"], null);
-    current.projectionRevision = { storeVersion: 7 };
+    current.projectionRevision = { storeVersion: 7, provenanceVersion: 1 };
     current.timelineItems.push({
       kind: "liveAssistant",
       itemKey: "live-assistant",
@@ -107,7 +90,7 @@ describe("live session deltas", () => {
     const next = applySessionLiveDelta(current, {
       outcome: "delta",
       liveCursor: "cursor",
-      revision: { storeVersion: 8 },
+      revision: { storeVersion: 8, provenanceVersion: 1 },
       requestId: "request-1",
       turnState: "running",
       status: null,
@@ -139,7 +122,7 @@ describe("live session deltas", () => {
       oldestItemKey: "k8",
       newestItemKey: "k8",
     });
-    current.projectionRevision = { storeVersion: 7 };
+    current.projectionRevision = { storeVersion: 7, provenanceVersion: 1 };
     current.timelineItems.push({
       kind: "liveAssistant",
       itemKey: "live-assistant",
@@ -160,7 +143,7 @@ describe("live session deltas", () => {
     const next = applySessionLiveDelta(withOlder, {
       outcome: "delta",
       liveCursor: "cursor",
-      revision: { storeVersion: 8 },
+      revision: { storeVersion: 8, provenanceVersion: 1 },
       requestId: "request-1",
       turnState: "running",
       status: null,
@@ -188,7 +171,7 @@ describe("live session deltas", () => {
 
   it("rejects a corrupt suffix", () => {
     const current = session([], null);
-    current.projectionRevision = { storeVersion: 4 };
+    current.projectionRevision = { storeVersion: 4, provenanceVersion: 1 };
     current.timelineItems = [
       {
         kind: "liveAssistant",
@@ -200,7 +183,7 @@ describe("live session deltas", () => {
     const base = {
       outcome: "delta",
       liveCursor: "cursor",
-      revision: { storeVersion: 5 },
+      revision: { storeVersion: 5, provenanceVersion: 1 },
       requestId: "request-1",
       turnState: "running",
       status: null,

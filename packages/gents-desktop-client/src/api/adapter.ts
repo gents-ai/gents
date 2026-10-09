@@ -24,6 +24,8 @@ import type {
 } from "../types.js";
 import type { DesktopOperationsSnapshot } from "../types/operations.js";
 import { createDesktopInvoker } from "./invoke.js";
+import { createHostAccessCommands } from "./hostAccess.js";
+import { createPackCommands } from "./packs.js";
 import { createProviderAccountCommands } from "./providerAccounts.js";
 import type { DesktopApiAdapter, ManagedServerStatus } from "./types.js";
 import type { ManagedServerResetResult } from "../generated/ManagedServerResetResult.js";
@@ -86,6 +88,8 @@ export function createDesktopApiAdapter(
         disableAutoStart,
       }),
     openDbExplorer: () => invokeDesktop<string>("desktop_open_db_explorer"),
+    openExternalUrl: (url) =>
+      invokeDesktop<void>("desktop_open_external_url", { url }),
     setManagedServerAutoStart: (enabled) =>
       invokeDesktop<ManagedServerStatus>("desktop_managed_server_set_auto_start", {
         enabled,
@@ -272,7 +276,12 @@ export function createDesktopApiAdapter(
         request: { agentDid, provider: provider ?? null, label: label ?? null },
       }),
     cancelClaudeLogin: () => invokeDesktop<void>("desktop_claude_login_cancel"),
+    watchProviderLoginUrl: (provider, onUrl) =>
+      transport.listenProviderLoginUrl?.(provider, onUrl) ??
+      Promise.resolve(() => {}),
     ...createProviderAccountCommands(invokeDesktop),
+    ...createPackCommands(invokeDesktop),
+    ...createHostAccessCommands(invokeDesktop),
     saveInferenceProfileConfig: (request) =>
       invokeDesktop<DesktopClientSnapshot>("desktop_inference_profile_save", {
         request,

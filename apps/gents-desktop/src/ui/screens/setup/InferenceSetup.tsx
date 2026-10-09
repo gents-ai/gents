@@ -5,21 +5,18 @@
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { KeyRound, Orbit, Server, Sparkles } from "lucide-react";
 import type { DesktopClientSnapshot } from "@source-inc/gents-desktop-client";
+import { newestWins } from "../../../lib/reads";
 import { Button } from "@gents/ui/components/button";
 import { Spinner } from "@gents/ui/components/spinner";
-import { type ManagedServerWait } from "../../../lib/managedServerStartup";
 import { ManagedServerWaitNotice } from "./SetupProgress";
 import { supportsLocalManagedServer } from "../../../lib/shellPlatform";
 import {
-  bridgeErrorCode,
   CREDENTIAL_NOT_SAVED,
-  setupErrorMessage,
-  watchProviderLoginUrl,
   PROVIDER_CREDENTIAL_KIND,
   type OauthProvider,
 } from "@/lib/providerLogin";
+import { bridgeErrorCode, setupErrorMessage } from "../../../lib/setupErrors";
 import { isLocalAgent } from "@/lib/firstRun";
-import { ensureManagedRuntimeServing } from "@/lib/managedRuntimeReadiness";
 import {
   currentInferenceDiscovery,
   inferenceDiscoveryKey,
@@ -83,10 +80,8 @@ export function InferenceSetup({
   provider?: ProviderId;
 }) {
   const bootstrap = useBootstrap();
-  const {
-    api,
-    actions: { changeConfig },
-  } = useApp();
+  const { stores, actions } = useApp();
+  const { changeConfig } = actions;
   const selectedNode = useSelectedNode();
   const allowLocal = supportsLocalManagedServer();
   const [form, dispatch] = useReducer(
@@ -94,7 +89,7 @@ export function InferenceSetup({
     fixedProvider,
     initialSetupForm,
   );
-  const [managedWait, setManagedWait] = useState<ManagedServerWait | null>(null);
+  const managedWait = stores.localServer.use.wait();
   const { catalog, error: catalogFailure, retry: retryCatalog } = useSetupCatalog();
   const busy = form.op !== null;
   const { error, runtimeGate, accountLabel } = form;
@@ -114,7 +109,7 @@ export function InferenceSetup({
   );
   /* reads that answer for another agent, or before a sign-in that changed
      what they would say, are dropped */
-  const accountRevision = useRef(0);
+  const [accountReads] = useState(newestWins);
   const setupAgentDid = agentDid ?? selectedNode?.agentDid;
   const setupAgentDidRef = useRef(setupAgentDid);
   setupAgentDidRef.current = setupAgentDid;
@@ -127,7 +122,7 @@ export function InferenceSetup({
   const requiresManagedRuntime = Boolean(
     checkRuntime &&
     allowLocal &&
-    api.managedServerStatus &&
+    actions.localServerOffers.status &&
     setupDeployment &&
     isLocalAgent(setupDeployment, bootstrap?.initAgentDid),
   );
@@ -135,9 +130,7 @@ export function InferenceSetup({
   const checkManagedRuntime = async () => {
     dispatch({ type: "runtimeGate", gate: "checking" });
     try {
-      await ensureManagedRuntimeServing(api, runtimeFallbackName, {
-        onWait: setManagedWait,
-      });
+      await actions.ensureLocalServerServing(runtimeFallbackName);
       dispatch({ type: "runtimeGate", gate: "ready" });
       /* Account lookup goes through the runtime, so repeat it once it serves. */
       if (setupAgentDidRef.current) void observeAccounts(setupAgentDidRef.current);
@@ -155,36 +148,25 @@ export function InferenceSetup({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [requiresManagedRuntime, runtimeGate]);
   const observeAccounts = (agentDid: string) => {
-    const revision = ++accountRevision.current;
+    const current = accountReads.begin();
     const seedSignedIn = purpose !== "add-backend";
-    if (!api.listProviderAccounts) {
-      dispatch({ type: "accountsRead", accounts: [], seedSignedIn: false });
-      return Promise.resolve();
-    }
-    return api
-      .listProviderAccounts(agentDid)
-      .then((accounts) => {
-        if (
-          accountRevision.current !== revision ||
-          setupAgentDidRef.current !== agentDid
-        )
-          return;
-        dispatch({ type: "accountsRead", accounts, seedSignedIn });
-      })
-      .catch(() => {
-        /* Sign-in remains available if account lookup fails, but only a
-           click starts it: an unknown account may already be connected. */
-      });
+    return actions.loadProviderAccounts(agentDid).then((accounts) => {
+      /* Sign-in remains available if account lookup fails, but only a
+         click starts it: an unknown account may already be connected. */
+      if (!accounts) return;
+      if (!current() || setupAgentDidRef.current !== agentDid) return;
+      dispatch({ type: "accountsRead", accounts, seedSignedIn });
+    });
   };
   useEffect(() => {
     dispatch({ type: "accountsCleared" });
     if (!setupAgentDid) {
-      accountRevision.current += 1;
+      accountReads.supersede();
       return;
     }
     void observeAccounts(setupAgentDid);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [api, setupAgentDid]);
+  }, [setupAgentDid]);
 
   const accountsOf = (oauthProvider: OauthProvider) =>
     storedAccounts.filter(
@@ -207,29 +189,17 @@ export function InferenceSetup({
       return;
     }
     dispatch({ type: "opStarted", op: "signIn" });
-    let unlisten = () => {};
     let agentDid: string | undefined;
     try {
-      unlisten = await watchProviderLoginUrl(oauthProvider, (url) =>
-        dispatch({ type: "authUrl", url }),
-      );
-      const snapshot = await api.fetchDesktopSnapshot();
+      const snapshot = await actions.readSnapshot();
       agentDid = setupAgentDid ?? snapshot.client?.deployments[0]?.agentDid;
       if (!agentDid) throw new Error("No agent to sign in");
-      const result =
-        oauthProvider === "openai"
-          ? await (label
-              ? api.codexLogin(agentDid, null, label)
-              : api.codexLogin(agentDid))
-          : oauthProvider === "anthropic"
-            ? await (label
-                ? api.claudeLogin(agentDid, null, label)
-                : api.claudeLogin(agentDid))
-            : await (label
-                ? api.grokLogin(agentDid, null, label)
-                : api.grokLogin(agentDid));
+      const result = await actions.signInToProvider(agentDid, oauthProvider, {
+        label: label || null,
+        onUrl: (url) => dispatch({ type: "authUrl", url }),
+      });
       if (setupAgentDidRef.current !== agentDid) return;
-      accountRevision.current += 1;
+      accountReads.supersede();
       dispatch({ type: "pendingSaveCleared", provider });
       dispatch({ type: "authUrl", url: null });
       const outcome = result.signIn;
@@ -241,7 +211,7 @@ export function InferenceSetup({
         purpose === "add-backend" &&
         (outcome.accountRef !== null || outcome.result === "refreshed")
       ) {
-        if (outcome.result === "added") onDone(await api.fetchDesktopSnapshot());
+        if (outcome.result === "added") onDone(await actions.readSnapshot());
         else dispatch({ type: "hint", hint: outcome.hint ?? notAdded(outcome.label) });
         return;
       }
@@ -254,7 +224,6 @@ export function InferenceSetup({
       }
       dispatch({ type: "failed", error: setupErrorMessage(cause) });
     } finally {
-      unlisten();
       dispatch({ type: "opEnded" });
     }
   };
@@ -262,7 +231,7 @@ export function InferenceSetup({
   const retrySaveSignIn = async () => {
     const agentDid = setupAgentDid;
     const oauthProvider = connection ? oauthProviderFor(connection.authMethod) : null;
-    if (!agentDid || !oauthProvider || !api.retrySaveProviderAccount) return;
+    if (!agentDid || !oauthProvider || !actions.canRetryProviderSave) return;
     const pendingProvider = provider;
     /* with a stored account, a store adds only under a new reference, so a
        retry returning no reference refreshed the original account */
@@ -270,17 +239,17 @@ export function InferenceSetup({
     dispatch({ type: "opStarted", op: "retrySave" });
     try {
       if (requiresManagedRuntime) {
-        await ensureManagedRuntimeServing(api, runtimeFallbackName);
+        await actions.ensureLocalServerServing(runtimeFallbackName);
         dispatch({ type: "runtimeGate", gate: "ready" });
       }
-      const account = await api.retrySaveProviderAccount(
+      const account = await actions.retrySaveProviderAccount(
         agentDid,
         PROVIDER_CREDENTIAL_KIND[oauthProvider],
       );
       if (setupAgentDidRef.current !== agentDid) return;
-      accountRevision.current += 1;
+      accountReads.supersede();
       if (purpose === "add-backend" && account.accountRef !== null) {
-        onDone(await api.fetchDesktopSnapshot());
+        onDone(await actions.readSnapshot());
         return;
       }
       dispatch({ type: "pendingSaveCleared", provider: pendingProvider });
@@ -304,9 +273,7 @@ export function InferenceSetup({
 
   const cancelSignIn = () => {
     const oauthProvider = connection ? oauthProviderFor(connection.authMethod) : null;
-    if (oauthProvider === "openai") void api.cancelCodexLogin();
-    else if (oauthProvider === "anthropic") void api.cancelClaudeLogin();
-    else if (oauthProvider === "grok") void api.cancelGrokLogin();
+    if (oauthProvider) void actions.cancelProviderSignIn(oauthProvider);
   };
 
   /* a discovery still out answers for a connection that no longer stands */
@@ -340,13 +307,13 @@ export function InferenceSetup({
     );
     currentDiscoveryKey.current = requestKey;
     try {
-      const snapshot = await api.fetchDesktopSnapshot();
+      const snapshot = await actions.readSnapshot();
       const agentDid = setupAgentDid ?? snapshot.client?.deployments[0]?.agentDid;
       if (!agentDid) {
         dispatch({ type: "failed", error: "No agent to configure" });
         return;
       }
-      const result = await api.discoverInferenceModels({
+      const result = await actions.discoverInferenceModels({
         requestKey,
         agentDid,
         provider,
@@ -369,7 +336,7 @@ export function InferenceSetup({
     if (!connection || !model.trim()) return;
     dispatch({ type: "opStarted", op: "describe" });
     try {
-      const recommendation = await api.getInferenceModelRecommendation({
+      const recommendation = await actions.getInferenceModelRecommendation({
         provider,
         authMethod: connection.authMethod,
         modelName: model.trim(),
@@ -391,7 +358,7 @@ export function InferenceSetup({
       throw new Error("Complete provider discovery and model selection first");
     const settingsError = validateInferenceSettings(selectedRecommendation, settings);
     if (settingsError) throw new Error(settingsError);
-    const snapshot = await api.fetchDesktopSnapshot();
+    const snapshot = await actions.readSnapshot();
     const deployment = snapshot.client?.deployments.find(
       (candidate) => candidate.agentDid === setupAgentDid,
     );
@@ -415,7 +382,7 @@ export function InferenceSetup({
     const publishKey = `${currentDiscoveryKey.current}:publish`;
     void Promise.resolve()
       .then(() =>
-        api.discoverInferenceModels({
+        actions.discoverInferenceModels({
           requestKey: publishKey,
           agentDid: deployment.agentDid,
           provider,
@@ -434,7 +401,7 @@ export function InferenceSetup({
   ) => {
     const deadline = Date.now() + SAVE_CONFIRMATION_TIMEOUT_MS;
     while (Date.now() < deadline) {
-      const snapshot = await api.fetchDesktopSnapshot();
+      const snapshot = await actions.readSnapshot();
       const deployment = snapshot.client?.deployments.find(
         (candidate) => candidate.agentDid === setupAgentDid,
       );
@@ -548,7 +515,11 @@ export function InferenceSetup({
             {managedWait ? (
               <ManagedServerWaitNotice
                 wait={managedWait}
-                onOpenLoginItems={api.openManagedServerLoginItems}
+                onOpenLoginItems={
+                  actions.localServerOffers.loginItems
+                    ? actions.openLocalServerLoginItems
+                    : undefined
+                }
               />
             ) : null}
           </div>
@@ -566,7 +537,7 @@ export function InferenceSetup({
         connection={connection}
         option={providerOption}
         purpose={purpose}
-        canRetrySave={Boolean(api.retrySaveProviderAccount)}
+        canRetrySave={actions.canRetryProviderSave}
         ops={{
           updateConnection,
           signIn: () => void signIn(),
