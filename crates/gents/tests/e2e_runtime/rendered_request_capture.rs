@@ -423,7 +423,7 @@ async fn manifest_captures_share_blocks_and_grow_linearly_across_turns() {
         let stored = row["request_json"].as_str().unwrap();
         let container: Value = serde_json::from_str(stored).unwrap();
         for payload in ["request_body", "provenance_payload"] {
-            let (record, _) = stored_payload_record(&container, payload);
+            let record = stored_payload_record(&container, payload);
             assert_eq!(record["kind"], "manifest", "payload {payload}");
             referenced_blocks += record["blocks"].as_array().unwrap().len();
         }
@@ -583,7 +583,7 @@ async fn stored_capture_request_json(node: &EmbeddedNode, capture_key: &str) -> 
 /// One stored container payload as its capture record, unwrapping the zlib
 /// envelope the writer selects when its size and savings thresholds hold.
 fn stored_payload_record(container: &Value, payload: &str) -> Value {
-    let mut record = container[payload].clone();
+    let record = container[payload].clone();
     if record["kind"] == "zlib" {
         use base64::Engine;
         use std::io::Read;
