@@ -1,3 +1,6 @@
+#[path = "inference.rs"]
+mod inference;
+
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -111,6 +114,7 @@ async fn seed_live_agent_documents(
     };
     use gents::document_config::PackConfig;
     use serde_json::json;
+    let inference = inference::LiveInferenceSettings::from_env()?;
     let agent_id = default_agent_id_for_node(node_did);
     let target_agent_id = format!("{node_did}:live-repo-audit");
     let backend_id = format!("{agent_name}-backend");
@@ -130,7 +134,7 @@ async fn seed_live_agent_documents(
     let compaction_id = format!("{agent_id}-compaction");
     let target_id = format!("{agent_id}-target");
     let target = target_backend.unwrap_or(backend);
-    let config = json!({
+    let mut config = json!({
         "node":{"node_did":node_did,"display_name":agent_name,"default_agent_id":agent_id},
         "agents":[
             {"agent_id":agent_id,"node_did":node_did,"display_name":"Live Repo Audit Default","context_id":context_id,"inference_profile_id":inference_profile_id},
@@ -150,13 +154,14 @@ async fn seed_live_agent_documents(
         ],
         "agent_targets":[{"node_did":node_did,"target_id":target_id,"target_node_did":node_did,"agent_id":target_agent_id,"name":"repo-audit","description":"Local repository audit agent for the desktop live fixture"}],
         "inference_profiles":[
-            {"node_did":node_did,"profile_id":inference_profile_id,"display_name":"Live Repo Audit Profile","backend_id":backend_id,"model_name":backend.model_name,"context_window":131072,"max_output_tokens":1024,"sampling_id":sampling_id,"execution_id":execution_id},
-            {"node_did":node_did,"profile_id":target_profile_id,"display_name":"Live Repo Audit Target Profile","backend_id":target_backend_id,"model_name":target.model_name,"context_window":131072,"max_output_tokens":1024,"sampling_id":sampling_id,"execution_id":execution_id}
+            {"node_did":node_did,"profile_id":inference_profile_id,"display_name":"Live Repo Audit Profile","backend_id":backend_id,"model_name":backend.model_name,"context_window":131072,"sampling_id":sampling_id,"execution_id":execution_id},
+            {"node_did":node_did,"profile_id":target_profile_id,"display_name":"Live Repo Audit Target Profile","backend_id":target_backend_id,"model_name":target.model_name,"context_window":131072,"sampling_id":sampling_id,"execution_id":execution_id}
         ],
-        "inference_sampling":[{"node_did":node_did,"sampling_id":sampling_id,"temperature":0.0}],
-        "inference_execution":[{"node_did":node_did,"execution_id":execution_id,"max_turns":20,"stream_batch_ms":250,"stream_liveness_timeout_secs":60,"deadline_duration_secs":300}],
+        "inference_sampling":[{"node_did":node_did,"sampling_id":sampling_id}],
+        "inference_execution":[{"node_did":node_did,"execution_id":execution_id,"stream_batch_ms":250,"stream_liveness_timeout_secs":60,"deadline_duration_secs":300}],
         "compactions":[{"node_did":node_did,"compaction_id":compaction_id,"strategy":"StripThenSummarize","threshold":0.95}]
     });
+    inference.apply(&mut config);
     ConfigAccess::transact_local(core.node(), None, "desktop.fixture.config", |txn| {
         let mut config = config.clone();
         let backend_id = &backend_id;
