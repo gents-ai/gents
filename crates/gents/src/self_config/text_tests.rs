@@ -2,7 +2,7 @@
 //! name their target, refused silent Tools drops, the validation gaps the
 //! factory-setup audit found, and help recipes that run as written.
 
-use super::tests::{node_identity, build_agent_node, call_config_tool, config};
+use super::tests::{build_agent_node, call_config_tool, config, node_identity};
 use super::*;
 
 type Tools = Vec<Box<dyn ToolDyn>>;
