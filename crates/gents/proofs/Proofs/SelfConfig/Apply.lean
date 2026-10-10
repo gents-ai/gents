@@ -125,7 +125,7 @@ nobody else can. A write that raises nothing is accepted whatever the invoker
 holds, so editing a sibling that already carries a grant is not a self-grant. Unlike
 `keepsControl` this guard always runs: the native owner calls it from the
 shared validate slot, not the opt-in no-lockout slot. The native graph tool
-flag is not a grant (`PeerRegistryDiscovery.PersonaRequest.graphToolPresented`):
+flag is not a grant (`SelfConfig.graphToolPresented`):
 it presents run tools whose authority stays with each graph's allowed callers.
 Operator writes (the desktop, `config apply`) do not pass through this guard. -/
 def keepsGrants (decode : Doc → Option Grants) (held : Grants) (stored candidate : Doc) :
@@ -142,10 +142,9 @@ which copies its source's whole Tools document, operator grants included) the
 newly selected Tools are bounded like a Tools write over a document with no
 grant (`Grants.bot`): each grant within its own bound with nothing stored, so
 pack installation needs the invoker to hold it. Selecting no Tools carries no
-grant. A clone is checked when its request is created and
-previewed; the reconciler publishes it later from the source as it is then,
-without the invoker's grants, so a grant an operator adds to the source in that
-window is copied. Operator writes are unguarded by design. -/
+grant. A direct clone is checked against the invoking agent's held grants in
+the same transaction that reads the source and publishes the candidate.
+Operator writes are unguarded by design. -/
 def reselectionKeepsGrants (decode : Doc → Option Grants) (held : Grants)
     (before after : Option Doc) : Bool :=
   match before, after with

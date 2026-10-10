@@ -17,7 +17,7 @@ structure CaseRow where
   held : Grants := Grants.bot
   /-- Tools documents by `tools_id`, for chain and clone rows. -/
   tools : List (FieldValue × List (FieldKey × FieldValue)) := []
-  /-- `context_id` to its `tools_id` (`none` selects no Tools), for Behavior rows. -/
+  /-- `context_id` to its `tools_id` (`none` selects no Tools), for Agent rows. -/
   contexts : List (FieldValue × Option FieldValue) := []
   /-- Backends a profile row can select: (`backend_id` JSON text, provider
   kind, auth JSON text). -/
@@ -124,9 +124,8 @@ def rowResolve (r : CaseRow) : Doc → Option Doc :=
 /-- The always-on operator-grant slice. It is not part of the guarded
 dispatch: the native owner runs it on every Tools write from the shared validate
 slot, on every Context or Agent write whose Tools selection changes
-(`guard_reselection_keeps_grants_in_txn`), and on a clone when its request is
-authored or previewed (`clone_keeps_grants_in_txn`), not on the Agent write
-that later publishes it. -/
+(`guard_reselection_keeps_grants_in_txn`), and on a direct clone in the same transaction that validates and publishes
+its candidate (`clone_keeps_grants_in_txn`). -/
 def grantGuard (r : CaseRow) (stored : Doc) : Doc → Bool :=
   match r.target with
   | .tools => keepsGrants decodeGrants r.held stored
@@ -437,40 +436,40 @@ def scenarios : List CaseRow := examplesToRows ++
     , doc := [("context_id", "ctx-new")]
     , patch := [("tools_id", some "granted")]
     , tools := [("granted", grantedTools)] }
-  , { name := "behavior_grant_reselect_without_held_rejected"
+  , { name := "agent_grant_reselect_without_held_rejected"
     , target := .agent, guarded := false, validates := true
-    , doc := [("behavior_id", "worker"), ("context_id", "ctx-plain")]
+    , doc := [("agent_id", "worker"), ("context_id", "ctx-plain")]
     , patch := [("context_id", some "ctx-granted")]
     , contexts := [("ctx-plain", some "plain"), ("ctx-granted", some "granted")]
     , tools := [("plain", plainTools), ("granted", grantedTools)] }
-  , { name := "behavior_reselect_away_from_granted_tools_accepted"
+  , { name := "agent_reselect_away_from_granted_tools_accepted"
     , target := .agent, guarded := false, validates := true
-    , doc := [("behavior_id", "worker"), ("context_id", "ctx-granted")]
+    , doc := [("agent_id", "worker"), ("context_id", "ctx-granted")]
     , patch := [("context_id", some "ctx-plain")]
     , contexts := [("ctx-plain", some "plain"), ("ctx-granted", some "granted")]
     , tools := [("plain", plainTools), ("granted", grantedTools)] }
   , { name := "clone_granted_source_without_held_rejected"
     , target := .agent, guarded := false, validates := true
-    , doc := [("behavior_id", "copy")]
+    , doc := [("agent_id", "copy")]
     , patch := [("context_id", some "ctx-granted")]
     , contexts := [("ctx-granted", some "granted")]
     , tools := [("granted", grantedTools)] }
   , { name := "clone_granted_source_with_held_accepted"
     , target := .agent, guarded := false, validates := true
     , held := { Grants.bot with packInstall := true }
-    , doc := [("behavior_id", "copy")]
+    , doc := [("agent_id", "copy")]
     , patch := [("context_id", some "ctx-granted")]
     , contexts := [("ctx-granted", some "granted")]
     , tools := [("granted", grantedTools)] }
   , { name := "clone_plain_source_without_held_accepted"
     , target := .agent, guarded := false, validates := true
-    , doc := [("behavior_id", "copy")]
+    , doc := [("agent_id", "copy")]
     , patch := [("context_id", some "ctx-plain")]
     , contexts := [("ctx-plain", some "plain")]
     , tools := [("plain", plainTools)] }
   , { name := "clone_source_without_tools_accepted"
     , target := .agent, guarded := false, validates := true
-    , doc := [("behavior_id", "copy")]
+    , doc := [("agent_id", "copy")]
     , patch := [("context_id", some "ctx-bare")]
     , contexts := [("ctx-bare", none)] }
   ]

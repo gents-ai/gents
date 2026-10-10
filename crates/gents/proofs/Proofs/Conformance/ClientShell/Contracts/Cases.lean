@@ -335,7 +335,7 @@ def clientShellCases : List ClientShellContractCase :=
   let noAgent := selectedShell none .idle none
   let staleBeforeSwitch :=
     { selectedShell (some sid1) (.awaiting sid1 reqOld) with
-      selection := { peer := some contractPeer, agent := some alternateAgent, session := some sid1 }
+      selection := { peer := some contractPeer, agent := some alternateNode, session := some sid1 }
     }
   let switchedStaleLocal :=
     { staleBeforeSwitch with selection := { staleBeforeSwitch.selection with session := some sid2 } }
@@ -346,7 +346,7 @@ def clientShellCases : List ClientShellContractCase :=
       "new_session_composer_clears_selection"
       "request_owned_session_creation"
       pre input storeNewCompleted .healthy ctxReady post post emptyStore
-  , let pre := selectedShell none (.submitting contractAgent none)
+  , let pre := selectedShell none (.submitting contractNode none)
     let input := ShellInput.mutation (.submitted sid1 reqNew)
     let post := step pre input emptyStore .healthy ctxReady
     clientShellCaseFromStep
@@ -401,7 +401,7 @@ def clientShellCases : List ClientShellContractCase :=
       "blocked_submit_agent_not_selected"
       "blocked_submit_gates"
       noAgent input emptyStore .healthy ctxReady noAgent noAgent emptyStore
-  , let pre := selectedShell (some sid1) (.submitting contractAgent (some sid1))
+  , let pre := selectedShell (some sid1) (.submitting contractNode (some sid1))
     let input := ShellInput.user .startSubmit
     clientShellCaseFromStep
       "blocked_submit_mutation_in_flight"
@@ -459,7 +459,7 @@ def clientShellCases : List ClientShellContractCase :=
         awaitingNew staleInput emptyStore .healthy ctxReady awaitingNew stalePost oldTerminalStore
     ]) ++ ([ClientTurnState.interrupted, .running].map fun turn =>
     let observed := storeWith [sessionObs sid1 (some reqNew) (some turn)]
-    let pre := selectedShell (some sid1) (.submitting contractAgent (some sid1))
+    let pre := selectedShell (some sid1) (.submitting contractNode (some sid1))
     let input := ShellInput.mutation (.submitted sid1 reqNew)
     let post := step pre input observed .healthy ctxReady
     clientShellCaseFromStep

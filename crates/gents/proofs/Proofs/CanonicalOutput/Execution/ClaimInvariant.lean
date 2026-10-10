@@ -240,7 +240,7 @@ private theorem evaluate_preserves_purpose_nodeDid
   case authored generation closing message =>
     have hauthored : ∀ published, publishAuthored before generation closing message =
         .ok published → published.purpose = before.purpose ∧
-          published.principal = before.principal := by
+          published.nodeDid = before.nodeDid := by
       intro published hp
       have hcore := checked_core_success _ _ _ hp
       simp only [publishAuthoredCore] at hcore
