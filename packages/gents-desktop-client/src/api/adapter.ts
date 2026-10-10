@@ -25,10 +25,10 @@ import type {
 import type { DesktopOperationsSnapshot } from "../types/operations.js";
 import { createDesktopInvoker } from "./invoke.js";
 import { createHostAccessCommands } from "./hostAccess.js";
+import { createManagedServerCommands } from "./managedServer.js";
 import { createPackCommands } from "./packs.js";
 import { createProviderAccountCommands } from "./providerAccounts.js";
-import type { DesktopApiAdapter, ManagedServerStatus } from "./types.js";
-import type { ManagedServerResetResult } from "../generated/ManagedServerResetResult.js";
+import type { DesktopApiAdapter } from "./types.js";
 import type { InferenceSetupCatalog } from "../generated/InferenceSetupCatalog.js";
 import type { InferenceDiscoveryResult } from "../generated/InferenceDiscoveryResult.js";
 import type { InferenceModelRecommendation } from "../generated/InferenceModelRecommendation.js";
@@ -53,56 +53,11 @@ export function createDesktopApiAdapter(
       invokeDesktop<DesktopClientSnapshot>("desktop_client_start"),
     shutdownDesktopClient: () =>
       invokeDesktop<DesktopClientSnapshot>("desktop_client_shutdown"),
-    managedServerStatus: () =>
-      invokeDesktop<ManagedServerStatus>("desktop_managed_server_status"),
-    startManagedServer: (nodeName, authority) =>
-      invokeDesktop<ManagedServerStatus>("desktop_managed_server_start", {
-        request: {
-          nodeName,
-          toolCeiling: authority?.toolCeiling ?? null,
-          toolRoot: authority?.toolRoot ?? null,
-        },
-      }),
-    restartManagedServer: (nodeName, authority) =>
-      invokeDesktop<ManagedServerStatus>("desktop_managed_server_restart", {
-        request: { nodeName, ...authority },
-      }),
-    resetManagedServer: (confirmation, disposition) =>
-      invokeDesktop<ManagedServerResetResult>("desktop_managed_server_reset", {
-        request: {
-          confirmation: confirmation ?? null,
-          disposition: disposition ?? null,
-        },
-      }),
+    ...createManagedServerCommands(invokeDesktop),
     quitDesktop: () => invokeDesktop<void>("desktop_app_quit"),
-    validateManagedServerRoot: (path) =>
-      invokeDesktop<{ canonicalPath: string }>(
-        "desktop_managed_server_validate_root",
-        { request: { path } },
-      ).then((result) => result.canonicalPath),
-    openManagedServerLoginItems: () =>
-      invokeDesktop<void>("desktop_managed_server_open_login_items"),
-    commitManagedServerAutoStart: (_nodeName) =>
-      invokeDesktop<ManagedServerStatus>(
-        "desktop_managed_server_set_auto_start",
-        {
-          enabled: true,
-        },
-      ),
-    stopManagedServer: (disableAutoStart) =>
-      invokeDesktop<ManagedServerStatus>("desktop_managed_server_stop", {
-        disableAutoStart,
-      }),
     openDbExplorer: () => invokeDesktop<string>("desktop_open_db_explorer"),
     openExternalUrl: (url) =>
       invokeDesktop<void>("desktop_open_external_url", { url }),
-    setManagedServerAutoStart: (enabled) =>
-      invokeDesktop<ManagedServerStatus>(
-        "desktop_managed_server_set_auto_start",
-        {
-          enabled,
-        },
-      ),
     setSelectedNode: (nodeDid) =>
       invokeDesktop<void>("desktop_set_selected_node", { nodeDid }),
     removePeer: (peerId) =>
