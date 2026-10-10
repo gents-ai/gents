@@ -7,7 +7,7 @@ import type { WorkspaceAuthority } from "./WorkspaceAuthority.js";
  * Operator-approved interface around a Task or an installed plugin.
  *
  * The model can select a capability revision, but cannot author the Task's
- * behavior, prompt, tools, model, or output permissions, nor the plugin that runs.
+ * agent, prompt, tools, model, or output permissions, nor the plugin that runs.
  */
 export type StageCapability = {
 /**
@@ -20,7 +20,7 @@ node_did: string, capability_id: string, revision: string, target: StageTarget, 
  */
 allowed_callers?: Array<string> | null,
 /**
- * Optional graph execution ceiling; does not select a different behavior
+ * Optional graph execution ceiling; does not select a different agent
  * or inference profile from the referenced task.
  */
 workspace_authority?: WorkspaceAuthority | null,
