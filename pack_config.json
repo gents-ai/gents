@@ -1,13 +1,13 @@
 {
-  "agent_behaviors": [
+  "agents": [
     {
-      "behavior_id": "chart-maker",
+      "agent_id": "chart-maker",
       "context_id": "chart-maker-context",
       "display_name": "Chart maker",
       "inference_profile_id": "gents:inference-slot:chart_maker"
     }
   ],
-  "agent_principal": {},
+  "node": {},
   "callback_bindings": [
     {
       "binding_id": "chart-render",

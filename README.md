@@ -33,14 +33,14 @@ first time (see Authority). The same agent runs from a terminal:
 
 ```sh
 gents pack install gents/charts --inference-slot chart_maker=<profile>
-gents chat --behavior-id chart-maker "Chart sales.csv: revenue by month, one line per region"
+gents chat --agent-id chart-maker "Chart sales.csv: revenue by month, one line per region"
 ```
 
 ## Use it as a model tool
 
-The `chart-maker` behavior's Tools document grants the plugin
+The `chart-maker` agent's Tools document grants the plugin
 (`integrations.plugins: [{"plugin": "gents/charts"}]`). To give the tool to
-another behavior, add the entry to that behavior's Tools:
+another agent, add the entry to that agent's Tools:
 
 ```json
 {"tools_id": "my-tools", "integrations": {"plugins": [{"plugin": "gents/charts"}]}}
@@ -130,7 +130,7 @@ ls reports   # revenue.svg  revenue.png  sales.csv
 
 ## Installation
 
-`gents pack install gents/charts` installs the Chart maker behavior, its Tools
+`gents pack install gents/charts` installs the Chart maker agent, its Tools
 document, the two graph nodes and the plugin, and binds the `chart_maker` inference slot to a
 profile (any capable one; a profile that accepts images also checks the
 picture). Nothing else needs configuring: there is no network, key or model

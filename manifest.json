@@ -24,7 +24,7 @@
   "description": "Draws line, area, bar, scatter, bubble, histogram, box, pie, donut, heatmap and combined charts from rows or CSV and JSON files as SVG and PNG images, as a Chart maker agent and a plugin.",
   "inference_slots": [
     {
-      "behaviors": [
+      "agents": [
         "chart-maker"
       ],
       "description": "Turns the user's data and request into a chart with the charts tool. Any capable profile; one that accepts images also checks the picture.",

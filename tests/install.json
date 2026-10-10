@@ -1,7 +1,7 @@
 {
   "install": {
     "documents": [
-      "AgentBehavior/chart-maker",
+      "Agent/chart-maker",
       "AgentContext/chart-maker-context",
       "Callback/chart-render",
       "Callback/chart-save",
