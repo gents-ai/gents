@@ -54,7 +54,7 @@ export type TurnState =
 
 export type ChatBlockedReason =
   | "clientOffline"
-  | "agentNotSelected"
+  | "nodeNotSelected"
   | "routeNotReady"
   | "agentUnavailable"
   | "composerEmpty"
@@ -204,10 +204,10 @@ function hintFor(reason: ChatBlockedReason) {
   switch (reason) {
     case "clientOffline":
       return "Secure client is not running";
-    case "agentNotSelected":
-      return "Select an agent before sending";
+    case "nodeNotSelected":
+      return "Select a node before sending";
     case "routeNotReady":
-      return "Secure route to the agent is not ready";
+      return "Secure route to the node is not ready";
     case "agentUnavailable":
       return "The selected agent is unavailable";
     case "composerEmpty":
@@ -259,7 +259,7 @@ function activityStatusFor(
     case "composerEmpty":
       return null;
     case "clientOffline":
-    case "agentNotSelected":
+    case "nodeNotSelected":
     case "routeNotReady":
     case "agentUnavailable":
       return admissionStatus ? chatActivity(admissionStatus) : null;
@@ -411,7 +411,7 @@ export function projectChatShell(input: ProjectionInput): ChatShellProjection {
     if (!input.clientAvailable) {
       workflow = blocked("clientOffline");
     } else if (!input.selectedNodeDid) {
-      workflow = blocked("agentNotSelected");
+      workflow = blocked("nodeNotSelected");
     } else if (input.selectedSessionId) {
       if (!input.session && !input.selectedSessionSummary) {
         workflow = blocked("sessionMissingFromSnapshot");
@@ -439,7 +439,7 @@ export function projectChatShell(input: ProjectionInput): ChatShellProjection {
         admissionStatus.layer === "client"
           ? "clientOffline"
           : admissionStatus.layer === "selection"
-            ? "agentNotSelected"
+            ? "nodeNotSelected"
             : admissionStatus.layer === "p2p" ||
                 admissionStatus.layer === "route"
               ? "routeNotReady"
