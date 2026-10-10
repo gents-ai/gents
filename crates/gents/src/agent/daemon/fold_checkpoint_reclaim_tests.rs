@@ -104,7 +104,6 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
         crate::session::ensure_session_with_agent_id_and_requester_did(
             node.as_ref(),
             &session_id,
-            &agent_config.agent_id,
             agent_config.node_did(),
             &agent_config.agent_id,
             Some(agent_config.node_did()),
@@ -438,7 +437,6 @@ async fn generated_retry_selection_cases_bind_to_the_daemon() {
         crate::session::ensure_session_with_agent_id_and_requester_did(
             node.as_ref(),
             &session_id,
-            &agent_config.agent_id,
             agent_config.node_did(),
             &agent_config.agent_id,
             Some(agent_config.node_did()),
