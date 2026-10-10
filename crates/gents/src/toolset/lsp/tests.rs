@@ -1270,6 +1270,54 @@ while True:
 }
 
 #[tokio::test]
+async fn rust_analyzer_readiness_waits_for_workspace_and_quiescence() {
+    if !python3_available() {
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("lib.rs"), "fn x() {}\n").unwrap();
+    let fixture = FIXTURE_PY
+        .replace("while True:\n    msg = read()", "status_polls = 0\nwhile True:\n    msg = read()")
+        .replace("    elif method == 'shutdown':", r#"    elif method == 'rust-analyzer/analyzerStatus':
+        status_polls += 1
+        write({"jsonrpc":"2.0","method":"experimental/serverStatus","params":{"quiescent":status_polls <= 14 or status_polls > 28}})
+        write({"jsonrpc":"2.0","id":mid,"result":"  " if status_polls <= 14 else "Workspace loaded"})
+    elif method == 'fixture/statusPolls':
+        write({"jsonrpc":"2.0","id":mid,"result":status_polls})
+    elif method == 'shutdown':"#);
+    let mut server = fixture_server(fixture);
+    server.name = "rust-analyzer".into();
+    server.workspace_ready_timings = Some(serde_json::json!({"initial": 30_000}));
+    let config = sample_config(
+        root.path().to_path_buf(),
+        FileToolMode::ReadOnly,
+        "s-readiness",
+        vec![server.clone()],
+    );
+    let key = PoolKey {
+        session_id: "s-readiness".into(),
+        agent_id: "b1".into(),
+        workspace_root: root.path().to_path_buf(),
+        server_name: server.name.clone(),
+        config_digest: config.digest.clone(),
+    };
+    let pool = LspPool::new();
+    let lease = pool.get_or_start(key, &server, &config).await.unwrap();
+    let polls = lease
+        .client()
+        .request("fixture/statusPolls", serde_json::json!({}))
+        .await
+        .unwrap()
+        .as_u64()
+        .unwrap();
+    lease.client().shutdown_exit().await;
+    assert!(
+        polls > 28,
+        "readiness returned before a nonempty workspace status and quiescence: {polls}"
+    );
+}
+
+#[tokio::test]
 async fn failed_initialize_wakes_waiters_and_backs_off() {
     if !python3_available() {
         return;
