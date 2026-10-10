@@ -53,7 +53,7 @@ pub(crate) struct LeanSelfConfigCase {
     pub(crate) guarded: bool,
     pub(crate) validates: bool,
     pub(crate) held_grants: LeanSelfConfigGrants,
-    /// The Tools document the row's Context or Behavior selects before and
+    /// The Tools document the row's Context or Agent selects before and
     /// after the patch (Lean `rowResolve`), or null when it selects none.
     #[serde(deserialize_with = "super::required_nullable")]
     pub(crate) selected_before: Option<Vec<LeanSelfConfigFieldValue>>,
