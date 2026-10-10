@@ -511,6 +511,20 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_plugin_call_access_cases_drive_bind_admission",
         },
         ConformanceConsumer::RustTest {
+            id: "plugin::tests::executor::generated_plugin_invocation_retry_revalidates_current_installation",
+            package: "gents",
+            source_path: "crates/gents/src/plugin/tests/executor.rs",
+            module_path: "plugin::tests::executor",
+            function: "generated_plugin_invocation_retry_revalidates_current_installation",
+        },
+        ConformanceConsumer::RustTest {
+            id: "tool_call_lifecycle::plugin_receipt::tests::generated_receipt_commit_cases",
+            package: "gents",
+            source_path: "crates/gents/src/tool_call_lifecycle/plugin_receipt.rs",
+            module_path: "tool_call_lifecycle::plugin_receipt::tests",
+            function: "generated_receipt_commit_cases",
+        },
+        ConformanceConsumer::RustTest {
             id: "pack::tests::generated_plugin_model_slots_require_optional_agent_free_declarations",
             package: "gents",
             source_path: "crates/gents/src/pack.rs",
