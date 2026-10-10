@@ -333,7 +333,8 @@ pub fn validate_signing_fields(request: &AgentRequestSigningFields<'_>) -> anyho
     Ok(())
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AgentRequestAdmissionRecord {
     pub kind: AgentRequestAdmissionKind,
     pub signer_did: String,
@@ -756,6 +757,24 @@ fn push_request_input(fields: &mut Vec<Vec<u8>>, input: &crate::request_input::R
                     .map(|version| version.to_string())
                     .as_deref(),
             );
+            if !queue.delivery.is_queue() || queue.position.is_some() {
+                push_text(fields, "queue-v2");
+                push_text(
+                    fields,
+                    match queue.delivery {
+                        crate::request_input::QueueDelivery::Queue => "queue",
+                        crate::request_input::QueueDelivery::Steer => "steer",
+                    },
+                );
+                match &queue.position {
+                    Some(position) => {
+                        push_text(fields, "some");
+                        push_text(fields, &position.slot_request_doc_id);
+                        push_text(fields, &position.replaces_request_doc_id);
+                    }
+                    None => push_text(fields, "none"),
+                }
+            }
         }
         None => push_text(fields, "none"),
     }
@@ -787,7 +806,8 @@ fn encode_length(length: usize, output: &mut Vec<u8>) {
 /// Sole production input for authoring a new request. It owns the canonical
 /// payload and GraphQL rendering so writers cannot sign one shape and persist
 /// another.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AgentRequestCreate {
     pub request_id: String,
     pub purpose: RequestPurpose,
@@ -1250,6 +1270,8 @@ mod tests {
             }));
         changed!("input.queue", |v: &mut AgentRequestCreate| v.input.queue =
             Some(crate::request_input::RequestQueue {
+                delivery: Default::default(),
+                position: None,
                 source: crate::request_input::QueueSource::Goal,
                 policy: crate::request_input::QueuePolicy::Coalesce,
                 key: Some("goal:one".into()),
@@ -1385,6 +1407,8 @@ mod tests {
             wrapup: false,
         });
         base.input.queue = Some(RequestQueue {
+            delivery: Default::default(),
+            position: None,
             source: QueueSource::Goal,
             policy: QueuePolicy::Coalesce,
             key: Some("goal:one".into()),
@@ -1433,6 +1457,17 @@ mod tests {
         changed!(
             |v: &mut AgentRequestCreate| v.input.queue.as_mut().unwrap().policy =
                 QueuePolicy::Append
+        );
+        changed!(
+            |v: &mut AgentRequestCreate| v.input.queue.as_mut().unwrap().delivery =
+                crate::request_input::QueueDelivery::Steer
+        );
+        changed!(
+            |v: &mut AgentRequestCreate| v.input.queue.as_mut().unwrap().position =
+                Some(crate::request_input::QueuePosition {
+                    slot_request_doc_id: "slot".into(),
+                    replaces_request_doc_id: "predecessor".into(),
+                })
         );
         changed!(|v: &mut AgentRequestCreate| v.input.queue.as_mut().unwrap().key = None);
         changed!(|v: &mut AgentRequestCreate| v
