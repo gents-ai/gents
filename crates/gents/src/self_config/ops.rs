@@ -987,24 +987,6 @@ async fn context_tools_in_txn(
     }
 }
 
-/// The Tools document a stored Behavior's chain selects, if any.
-pub(crate) async fn agent_tools_in_txn(
-    txn: &ConfigApplyTxn<'_>,
-    owner: &str,
-    agent_id: &str,
-) -> Result<Option<Map<String, Value>>> {
-    let Some((_, behavior)) = read_owned_doc(txn, SelfConfigTarget::Agent, owner, agent_id).await?
-    else {
-        return Ok(None);
-    };
-    match behavior.get("context_id").and_then(Value::as_str) {
-        Some(context_id) if !context_id.is_empty() => {
-            context_tools_in_txn(txn, owner, context_id).await
-        }
-        _ => Ok(None),
-    }
-}
-
 /// Lean `SelfConfig.authGuard`: the model may not introduce or change a raw
 /// API key, and a node-OAuth candidate keeps the stored account reference
 /// (none for a non-OAuth backend). A stored or candidate `auth` that does not

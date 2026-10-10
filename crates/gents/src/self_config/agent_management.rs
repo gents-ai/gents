@@ -63,6 +63,7 @@ fn replacement(
     })
 }
 
+#[cfg(test)]
 pub(super) async fn agent_preview(
     node: &Arc<EmbeddedNode>,
     owner: &str,
@@ -77,6 +78,7 @@ pub(super) async fn agent_preview(
     }
 }
 
+#[cfg(test)]
 pub(super) async fn agent_mutate(
     node: &Arc<EmbeddedNode>,
     owner: &str,
@@ -110,6 +112,7 @@ pub async fn configure_agent(
     agent_apply_access(access, owner, args, ceiling, args.action == "preview", None).await
 }
 
+#[cfg(test)]
 async fn agent_apply(
     node: &Arc<EmbeddedNode>,
     owner: &str,

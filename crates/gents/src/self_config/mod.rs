@@ -8,7 +8,9 @@
 pub mod agent;
 mod agent_management;
 pub use agent_management::configure_agent;
-use agent_management::{agent_mutate, agent_preview, load_agent_catalog};
+use agent_management::load_agent_catalog;
+#[cfg(test)]
+use agent_management::{agent_mutate, agent_preview};
 mod command;
 pub(crate) use command::{is_help_call, ConfigCommandParams};
 mod execution;
