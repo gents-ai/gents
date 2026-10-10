@@ -126,15 +126,12 @@ pub fn default_agent_id_for_node(node_did: &str) -> String {
     format!("{node_did}:default")
 }
 
-/// Ensure the runtime's principal exists without inventing executable configuration.
+/// Ensure the runtime's node exists without inventing executable configuration.
 /// Packs or explicit configuration select agents, contexts and inference.
 pub async fn ensure_node(node: &EmbeddedNode, node_did: &str) -> Result<Node> {
     use crate::collection::Collection;
     use crate::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
-    anyhow::ensure!(
-        !node_did.trim().is_empty(),
-        "principal DID must not be blank"
-    );
+    anyhow::ensure!(!node_did.trim().is_empty(), "node DID must not be blank");
     let owner = node_did.to_owned();
     let existing: Option<Node> =
         ConfigAccess::transact_local_readonly(node, None, "ensure_node.read", |txn| {

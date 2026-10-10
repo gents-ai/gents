@@ -41,7 +41,7 @@ pub(crate) async fn configured_output_budget(
                 agent_id,
                 tool_name,
                 error = %format!("{error:#}"),
-                "output budget uses the default: behavior tools did not resolve"
+                "output budget uses the default: agent tools did not resolve"
             );
             crate::toolset::DEFAULT_MAX_COMMAND_CHARS
         }

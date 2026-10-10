@@ -3144,7 +3144,7 @@ async fn await_background_completion(
                         < expected.min_completed_caused_requests
                 {
                     bail!(
-                        "background agents terminalized unsuccessfully: {:?}",
+                        "background requests terminalized unsuccessfully: {:?}",
                         evidence.failed_caused_request_ids
                     );
                 }
@@ -3309,7 +3309,7 @@ pub(crate) async fn seed(args: PackSeedArgs) -> Result<()> {
 
     let port = args.http_port;
     // The pack node refuses anonymous writes; the seed signs as the default
-    // home's principal (`GENTS_HOME` selects another home).
+    // home's node identity (`GENTS_HOME` selects another home).
     let graphql = crate::resolve_graphql_endpoint(
         Some(&format!("http://127.0.0.1:{port}/api/v0/graphql")),
         None,

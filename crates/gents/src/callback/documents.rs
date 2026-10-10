@@ -83,7 +83,7 @@ pub struct CallbackInvocationDoc {
     #[serde(deserialize_with = "deserialize_callback_input")]
     pub input: serde_json::Value,
     pub invocation_id: String,
-    /// Principal whose runtime owns execution and recovery.
+    /// Node whose runtime owns execution and recovery.
     pub owner_node_did: String,
     pub callback_id: String,
     pub origin: crate::document_config::CallbackInvocationOrigin,
@@ -155,7 +155,7 @@ pub struct CallbackResultDoc {
     /// one binding's results with a plain filter.
     #[serde(default)]
     pub binding_id: Option<String>,
-    /// Principal whose runtime owns execution and recovery.
+    /// Node whose runtime owns execution and recovery.
     pub owner_node_did: String,
     #[serde(default)]
     pub workspace_id: Option<String>,
@@ -425,7 +425,7 @@ pub async fn load_invocation(
         .with_context(|| format!("query CallbackInvocation {invocation_id}"))?;
     anyhow::ensure!(
         rows::<Value>(&response, "CallbackInvocation").map(|rows| rows.len())? <= 1,
-        "ambiguous principal-scoped callback/workspace document"
+        "ambiguous node-scoped callback/workspace document"
     );
     first_row(&response, "CallbackInvocation")
 }
@@ -450,7 +450,7 @@ pub async fn load_invocation_by_key(
             .await?;
     anyhow::ensure!(
         rows::<Value>(&response, "CallbackInvocation").map(|rows| rows.len())? <= 1,
-        "ambiguous principal-scoped callback/workspace document"
+        "ambiguous node-scoped callback/workspace document"
     );
     first_row(&response, "CallbackInvocation")
 }
@@ -627,7 +627,7 @@ pub async fn load_callback_result(
         .with_context(|| format!("query CallbackResult for {invocation_id}"))?;
     anyhow::ensure!(
         rows::<Value>(&response, "CallbackResult").map(|rows| rows.len())? <= 1,
-        "ambiguous principal-scoped callback/workspace document"
+        "ambiguous node-scoped callback/workspace document"
     );
     first_row(&response, "CallbackResult")
 }
@@ -889,7 +889,7 @@ pub(crate) async fn load_isolated_workspace(
         .with_context(|| format!("query IsolatedWorkspace {workspace_id}"))?;
     anyhow::ensure!(
         rows::<Value>(&response, "IsolatedWorkspace").map(|rows| rows.len())? <= 1,
-        "ambiguous principal-scoped callback/workspace document"
+        "ambiguous node-scoped callback/workspace document"
     );
     first_row(&response, "IsolatedWorkspace")
 }
@@ -914,7 +914,7 @@ pub(crate) async fn load_workspace_placement(
         .with_context(|| format!("query WorkspacePlacement {workspace_id}"))?;
     anyhow::ensure!(
         rows::<Value>(&response, "WorkspacePlacement").map(|rows| rows.len())? <= 1,
-        "ambiguous principal-scoped callback/workspace document"
+        "ambiguous node-scoped callback/workspace document"
     );
     first_row(&response, "WorkspacePlacement")
 }

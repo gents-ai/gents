@@ -308,18 +308,18 @@ mod tests {
     fn tray_does_not_claim_process_readiness_while_starting() {
         assert_eq!(
             managed_agent_tooltip(Some("starting")),
-            "Gents agent service — starting"
+            "Gents node service — starting"
         );
         assert_eq!(
             managed_agent_tooltip(Some("failed")),
-            "Gents agent service — status unavailable"
+            "Gents node service — status unavailable"
         );
     }
 }
 
 #[cfg(desktop)]
 struct TrayRuntimeState {
-    // The desktop is tray-resident independently of agent process state. This
+    // The desktop is tray-resident independently of node process state. This
     // stays true so closing the main window preserves the menu-bar frontend.
     active: Arc<AtomicBool>,
     // Native non-selected tabs can also report invisible. Only a deliberate
@@ -344,9 +344,9 @@ fn tray_icon<'a>(
 #[cfg(desktop)]
 fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let show = MenuItem::with_id(app, "show", "Open Gents", true, None::<&str>)?;
-    let start = MenuItem::with_id(app, "start", "Start Agent", true, None::<&str>)?;
-    let stop = MenuItem::with_id(app, "stop", "Stop Agent", true, None::<&str>)?;
-    let restart = MenuItem::with_id(app, "restart", "Restart Agent", true, None::<&str>)?;
+    let start = MenuItem::with_id(app, "start", "Start Node", true, None::<&str>)?;
+    let stop = MenuItem::with_id(app, "stop", "Stop Node", true, None::<&str>)?;
+    let restart = MenuItem::with_id(app, "restart", "Restart Node", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit Desktop", true, None::<&str>)?;
     let menu = if cfg!(any(target_os = "macos", target_os = "linux")) {
         Menu::with_items(app, &[&show, &start, &stop, &restart, &quit])?
@@ -359,7 +359,7 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     });
     let tray = TrayIconBuilder::with_id("gents-managed-server")
         .menu(&menu)
-        .tooltip("Gents agent service — independent of the desktop")
+        .tooltip("Gents node service — independent of the desktop")
         .icon(tray_icon(app)?)
         .icon_as_template(cfg!(target_os = "macos"))
         .on_menu_event(|app, event| match event.id.as_ref() {
@@ -400,12 +400,12 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(desktop)]
 fn managed_agent_tooltip(state: Option<&str>) -> &'static str {
     match state {
-        Some("running") => "Gents agent service — running",
-        Some("starting") => "Gents agent service — starting",
-        Some("stopped") | Some("disabled") => "Gents agent service — stopped",
-        Some("external") => "Gents agent — running outside the managed service",
-        Some("failed") | None => "Gents agent service — status unavailable",
-        Some(_) => "Gents agent service — status unavailable",
+        Some("running") => "Gents node service — running",
+        Some("starting") => "Gents node service — starting",
+        Some("stopped") | Some("disabled") => "Gents node service — stopped",
+        Some("external") => "Gents node — running outside the managed service",
+        Some("failed") | None => "Gents node service — status unavailable",
+        Some(_) => "Gents node service — status unavailable",
     }
 }
 

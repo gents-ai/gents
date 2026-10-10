@@ -329,8 +329,8 @@ pub async fn desktop_managed_server_start<R: Runtime>(
 type LifecycleGuard<'a> = tokio::sync::MutexGuard<'a, ()>;
 
 const START_CANCELLED: &str =
-    "Starting the local agent was cancelled because the agent was stopped, restarted, or reconfigured.";
-const START_SUPERSEDED: &str = "This start of the local agent was replaced by a newer start.";
+    "Starting the local Node was cancelled because the Node was stopped, restarted, or reconfigured.";
+const START_SUPERSEDED: &str = "This start of the local Node was replaced by a newer start.";
 
 /// A start or restart waiting outside the lifecycle lock, and why it was
 /// cancelled.
@@ -427,7 +427,7 @@ async fn ensure_no_start_waiting(state: &DesktopAppState) -> Result<(), BridgeEr
     if state.managed_server.lock().await.start_wait.is_some() {
         return Err(BridgeError::new(
             BridgeErrorCode::InvalidArgument,
-            "The local agent is still starting. Change start at login after it finishes.",
+            "The local Node is still starting. Change start at login after it finishes.",
         ));
     }
     Ok(())
@@ -2353,7 +2353,7 @@ impl ForeignRuntime {
         let port = self.port;
         let Some(did) = self.node_did.as_deref() else {
             return format!(
-                "Port {port} is in use by a program that does not advertise a Gents identity, and the local agent needs that port. Quit that program, then start the agent again."
+                "Port {port} is in use by a program that does not advertise a Gents identity, and the local Node needs that port. Quit that program, then start the Node again."
             );
         };
         let (located, home) = match self.home.as_deref() {
@@ -2361,14 +2361,14 @@ impl ForeignRuntime {
             None => (String::new(), "<its home>"),
         };
         format!(
-            "Port {port} is already served by a different Gents agent ({did}){located}, and the local agent needs that port. Stop the other agent with `gents service stop --home {home}` if it runs as a background service, or with Ctrl-C in the terminal running `gents server`. Or restart it on another port with `gents server --home {home} --http-port <port>`."
+            "Port {port} is already served by a different Gents Node ({did}){located}, and the local Node needs that port. Stop the other Node with `gents service stop --home {home}` if it runs as a background service, or with Ctrl-C in the terminal running `gents server`. Or restart it on another port with `gents server --home {home} --http-port <port>`."
         )
     }
 }
 
 fn occupied_port_message(port: u16) -> String {
     format!(
-        "Port {port} is in use by another program that is not a Gents agent, and the local agent needs that port. Quit that program, then start the agent again."
+        "Port {port} is in use by another program that is not a Gents Node, and the local Node needs that port. Quit that program, then start the Node again."
     )
 }
 
@@ -3337,7 +3337,7 @@ fn ensure_native_owns_running_endpoint(
     {
         return Err(BridgeError::new(
             BridgeErrorCode::InvalidArgument,
-            "The running local agent is not owned by the native Gents service. Stop it explicitly before using managed controls.",
+            "The running local Node is not owned by the native Gents service. Stop it explicitly before using managed controls.",
         ));
     }
     Ok(())
@@ -3667,7 +3667,7 @@ fn status_from(
             .as_ref()
             .map(ToString::to_string)
             .unwrap_or_else(|| {
-                "The background agent cannot open its home: it was created by an older Gents version.".to_string()
+                "The background Node cannot open its home: it was created by an older Gents version.".to_string()
             })
     });
     let crashed = refused_store.or_else(|| {
@@ -3675,7 +3675,7 @@ fn status_from(
             .filter(|_| settled)
             .map(|(exit, restarts)| {
                 format!(
-                    "The background agent keeps exiting before it becomes ready: it {} and was restarted {restarts} times in a row. Restart the agent, or check its log.",
+                    "The background Node keeps exiting before it becomes ready: it {} and was restarted {restarts} times in a row. Restart the Node, or check its log.",
                     exit.reason
                 )
             })
@@ -3688,7 +3688,7 @@ fn status_from(
                     })
                     .map(|exit| {
                         format!(
-                            "The background agent failed and will not be restarted: it {} after {} restarts. Start the agent again, or check its log.",
+                            "The background Node failed and will not be restarted: it {} after {} restarts. Start the Node again, or check its log.",
                             exit.reason, exit.restarts
                         )
                     })
@@ -3805,10 +3805,10 @@ async fn refuse_renaming_home(
         BridgeErrorCode::InvalidArgument,
         match initialized {
             Some(name) => format!(
-                "This computer already has a local agent named {name}, so {requested} was not created. Go back to continue with {name}."
+                "This computer already has a local Node named {name}, so {requested} was not created. Go back to continue with {name}."
             ),
             None => format!(
-                "The local node home at {} has no readable agent name; it was left unchanged.",
+                "The local node home at {} has no readable node name; it was left unchanged.",
                 node_home.display()
             ),
         },
@@ -4071,7 +4071,7 @@ mod tests {
     fn start_naming_another_agent_leaves_the_home_untouched() {
         let (_temp, _, error) = invoke_on_forge_home("desktop_managed_server_start");
         assert!(
-            error.contains("already has a local agent named Forge"),
+            error.contains("already has a local Node named Forge"),
             "{error}"
         );
     }
@@ -4080,7 +4080,7 @@ mod tests {
     fn restart_naming_another_agent_leaves_the_home_untouched() {
         let (_temp, _, error) = invoke_on_forge_home("desktop_managed_server_restart");
         assert!(
-            error.contains("already has a local agent named Forge"),
+            error.contains("already has a local Node named Forge"),
             "{error}"
         );
     }
@@ -7673,7 +7673,7 @@ mod tests {
         let error = error.to_string();
         assert!(error.contains("exited with code 78"), "{error}");
         assert!(
-            error.contains("another program that is not a Gents agent"),
+            error.contains("another program that is not a Gents Node"),
             "{error}"
         );
     }

@@ -2265,7 +2265,7 @@ fn cancel_graph_run_definition() -> ToolDefinition {
 }
 
 /// Build the gated self-config tool family for one agent. Fails closed:
-/// with an empty agent DID (bare oneshot contexts) no tools are registered.
+/// with an empty node DID (bare oneshot contexts) no tools are registered.
 pub fn build_self_config_tools(
     node: Arc<EmbeddedNode>,
     node_did: String,

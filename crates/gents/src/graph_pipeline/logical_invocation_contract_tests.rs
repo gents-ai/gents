@@ -1283,9 +1283,7 @@ async fn generic_graph_foreign_roots_remain_ignored_after_reassignment_or_missin
             .await
             .unwrap_err();
         assert!(
-            denial
-                .to_string()
-                .contains("principal is not its pinned owner"),
+            denial.to_string().contains("node is not its pinned owner"),
             "{denial:#}"
         );
         txn.discard().await.unwrap();

@@ -79,7 +79,7 @@ async fn load_eth_tool(
             .execute(&eth_tool_by_id_query(node_did, tool_id)?)
             .await?,
     )?;
-    anyhow::ensure!(rows.len() <= 1, "duplicate Ethereum tool within principal");
+    anyhow::ensure!(rows.len() <= 1, "duplicate Ethereum tool within node scope");
     anyhow::ensure!(
         rows.iter()
             .all(|row| row.node_did == node_did && row.tool_id == tool_id),

@@ -1,6 +1,6 @@
 //! The "Allowed folders" setting and the plugin access questions: the same
 //! list `gents plugin dirs` edits and the same questions `gents chat` answers,
-//! through `gents::plugin::{allowed, approval}`, in the managed local agent's
+//! through `gents::plugin::{allowed, approval}`, in the managed local Node's
 //! home.
 
 use gents::pack::BindAccess;
@@ -15,7 +15,7 @@ fn home(state: &DesktopAppState) -> Result<std::path::PathBuf, BridgeError> {
     state.policy.node_home.clone().ok_or_else(|| {
         BridgeError::new(
             BridgeErrorCode::Unsupported,
-            "allowed folders belong to a local agent; start one first",
+            "allowed folders belong to a local Node; start one first",
         )
     })
 }

@@ -33,7 +33,7 @@ pub(crate) fn ensure_local_request_signer(
     })?;
     anyhow::ensure!(
         config.node_did.trim() == target_node_did.trim(),
-        "local-self request target {} does not match initialized home principal {}",
+        "local-self request target {} does not match initialized home node {}",
         target_node_did,
         config.node_did
     );
@@ -225,7 +225,7 @@ pub(crate) fn request_output_envelope(
         node_did: request
             .node_did
             .clone()
-            .context("request output omitted principal")?,
+            .context("request output omitted node_did")?,
         requester_did: request.requester_did.clone(),
         agent_id: request.agent_id.clone(),
         session_id: request
@@ -517,7 +517,7 @@ fn submitted_from_receipt(row: AgentRequestRow) -> Result<SubmittedRequest> {
             .context("receipt has no physical identity")?,
         request_id: row.request_id,
         session_id: row.session_id.context("receipt has no session")?,
-        node_did: row.node_did.context("receipt has no principal")?,
+        node_did: row.node_did.context("receipt has no node_did")?,
         requester_did: row.requester_did,
         agent_id: row.agent_id,
         input: row.input,
@@ -614,12 +614,12 @@ async fn resolve_request_agent_id(
         .context("Node query returned no row array")?;
     anyhow::ensure!(
         nodes.len() == 1,
-        "request target principal must resolve to exactly one row"
+        "request target node must resolve to exactly one row"
     );
     let principal = &nodes[0];
     anyhow::ensure!(
         principal.get("enabled").and_then(Value::as_bool) == Some(true),
-        "request target principal is disabled"
+        "request target node is disabled"
     );
     let agent_id = match requested.map(str::trim).filter(|value| !value.is_empty()) {
         Some(agent_id) => agent_id.to_string(),
@@ -629,7 +629,7 @@ async fn resolve_request_agent_id(
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned)
-            .context("request target principal has no canonical default agent")?,
+            .context("request target node has no canonical default agent")?,
     };
     let agents = response
         .pointer("/data/Agent")
@@ -641,7 +641,7 @@ async fn resolve_request_agent_id(
         .collect::<Vec<_>>();
     anyhow::ensure!(
         matching.len() == 1,
-        "request agent must resolve to exactly one row owned by the target principal"
+        "request agent must resolve to exactly one row owned by the target node"
     );
     anyhow::ensure!(
         matching[0].get("enabled").and_then(Value::as_bool) == Some(true),

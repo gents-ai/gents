@@ -134,7 +134,7 @@ async fn load_verified_graph_context(
     let owner = required_string(&run, "owner_did")?;
     anyhow::ensure!(
         target_did == owner,
-        "graph request principal is not its pinned owner"
+        "graph request node is not its pinned owner"
     );
     let plan = load_plan(executor, &digest, owner).await?;
     anyhow::ensure!(

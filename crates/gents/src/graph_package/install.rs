@@ -98,10 +98,10 @@ async fn validate_owner(access: &ConfigAccess, owner: &str) -> Result<()> {
                     owner,
                 )
                 .await?
-                .context("package owner principal is missing")?;
+                .context("package owner node is missing")?;
                 anyhow::ensure!(
                     principal["enabled"].as_bool() == Some(true),
-                    "package owner principal is disabled"
+                    "package owner node is disabled"
                 );
                 Ok(())
             })
@@ -109,7 +109,7 @@ async fn validate_owner(access: &ConfigAccess, owner: &str) -> Result<()> {
         .await
 }
 
-/// Select an existing principal without inventing host, model, or role
+/// Select an existing node without inventing host, model, or role
 /// defaults, for a package already resolved from any source (a directory, a
 /// `.pack`, the home's store, or the registry).
 pub async fn default_graph_package_install_bindings(
@@ -133,7 +133,7 @@ pub async fn default_graph_package_install_bindings(
 }
 
 /// Select installed package state without re-reading installation environment.
-/// The runtime plan reader retains principal, revision and digest verification.
+/// The runtime plan reader retains node ownership, revision and digest verification.
 pub async fn load_installed_package_plan(
     access: &ConfigAccess,
     package_name: &str,
@@ -371,7 +371,7 @@ async fn prepare_package(
         intent.node_did == options.node_did,
         "graph owner differs from installation scope"
     );
-    // The existing principal is shared identity, never graph-owned replacement
+    // The existing node is shared identity, never graph-owned replacement
     // configuration. Every other authored document uses the ordinary apply owner.
     let bundle = DesiredStateApplyPlan::from_pack_config(&config)?;
     let desired_state = DesiredStateApplyPlan::new(

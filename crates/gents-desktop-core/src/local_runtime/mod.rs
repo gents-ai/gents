@@ -131,7 +131,7 @@ fn hosted_runtime_home(record: &crate::client::PeerRecord) -> Result<&Path> {
         .as_deref()
         .map(str::trim)
         .filter(|home| !home.is_empty())
-        .context("runtime record has no local agent home")?;
+        .context("runtime record has no local Node home")?;
     let home = Path::new(home);
     let runtime = read_json::<StoredRuntimeState>(&home.join(RUNTIME_STATE_FILE_NAME))
         .context("reading the co-hosted runtime's state")?;

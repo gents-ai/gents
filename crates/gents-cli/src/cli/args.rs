@@ -65,10 +65,13 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: ServiceCommand,
     },
-    #[command(about = "Chat with the local agent in the terminal", after_help = CHAT_AFTER_HELP)]
+    #[command(
+        about = "Chat with the selected or default agent in the terminal",
+        after_help = CHAT_AFTER_HELP
+    )]
     Chat(ChatArgs),
     #[command(
-        about = "Open the Codex terminal UI against the local agent",
+        about = "Open the Codex terminal UI against the local Node runtime",
         after_help = CODEX_AFTER_HELP
     )]
     Codex(CodexArgs),
@@ -198,7 +201,7 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: ResponseCommand,
     },
-    #[command(about = "Manage and fork agent sessions", after_help = SESSION_AFTER_HELP)]
+    #[command(about = "Manage and fork sessions", after_help = SESSION_AFTER_HELP)]
     Session {
         #[command(subcommand)]
         command: SessionCommand,
@@ -259,7 +262,7 @@ pub(crate) enum ServiceCommand {
 
 #[derive(clap::Args)]
 pub(crate) struct ServiceTargetArgs {
-    #[arg(long, help = "Agent home directory. Defaults to ~/.gents")]
+    #[arg(long, help = "Node home directory. Defaults to ~/.gents")]
     pub(crate) home: Option<PathBuf>,
     #[arg(long, help = "Absolute path to the gents runtime executable")]
     pub(crate) executable: Option<PathBuf>,
@@ -1330,7 +1333,7 @@ pub(crate) struct NativeFsRunnerArgs {
 
 #[derive(clap::Args)]
 pub(crate) struct CodexAuthProbeArgs {
-    #[arg(long, help = "Agent home directory. Defaults to ~/.gents")]
+    #[arg(long, help = "Node home directory. Defaults to ~/.gents")]
     pub(crate) home: Option<PathBuf>,
     #[arg(long, help = "GraphQL endpoint for the target gents node")]
     pub(crate) graphql: Option<String>,
@@ -1348,7 +1351,7 @@ pub(crate) struct CodexAuthProbeArgs {
 
 #[derive(clap::Args)]
 pub(crate) struct AccountsTargetArgs {
-    #[arg(long, help = "Agent home directory. Defaults to ~/.gents")]
+    #[arg(long, help = "Node home directory. Defaults to ~/.gents")]
     pub(crate) home: Option<PathBuf>,
     #[arg(long, help = "GraphQL endpoint for the target gents node")]
     pub(crate) graphql: Option<String>,
@@ -1412,7 +1415,7 @@ const LOGIN_LABEL_HELP: &str = "Name for the account signed in to: names a new a
 
 #[derive(clap::Args)]
 pub(crate) struct CodexLoginArgs {
-    #[arg(long, help = "Agent home directory. Defaults to ~/.gents")]
+    #[arg(long, help = "Node home directory. Defaults to ~/.gents")]
     pub(crate) home: Option<PathBuf>,
     #[arg(long, help = "GraphQL endpoint for the target gents node")]
     pub(crate) graphql: Option<String>,
@@ -1432,7 +1435,7 @@ pub(crate) struct CodexLoginArgs {
 
 #[derive(clap::Args)]
 pub(crate) struct GrokAuthProbeArgs {
-    #[arg(long, help = "Agent home directory. Defaults to ~/.gents")]
+    #[arg(long, help = "Node home directory. Defaults to ~/.gents")]
     pub(crate) home: Option<PathBuf>,
     #[arg(long, help = "GraphQL endpoint for the target gents node")]
     pub(crate) graphql: Option<String>,
@@ -1450,7 +1453,7 @@ pub(crate) struct GrokAuthProbeArgs {
 
 #[derive(clap::Args)]
 pub(crate) struct GrokLoginArgs {
-    #[arg(long, help = "Agent home directory. Defaults to ~/.gents")]
+    #[arg(long, help = "Node home directory. Defaults to ~/.gents")]
     pub(crate) home: Option<PathBuf>,
     #[arg(long, help = "GraphQL endpoint for the target gents node")]
     pub(crate) graphql: Option<String>,
@@ -1464,7 +1467,7 @@ pub(crate) struct GrokLoginArgs {
 
 #[derive(clap::Args)]
 pub(crate) struct ClaudeLoginArgs {
-    #[arg(long, help = "Agent home directory. Defaults to ~/.gents")]
+    #[arg(long, help = "Node home directory. Defaults to ~/.gents")]
     pub(crate) home: Option<PathBuf>,
     #[arg(long, help = "GraphQL endpoint for the target gents node")]
     pub(crate) graphql: Option<String>,
@@ -1511,7 +1514,7 @@ pub(crate) struct CloudLoginArgs {
         help = "gents cloud host to sign in to, for example app.dev.gents.xyz"
     )]
     pub(crate) cloud: String,
-    #[arg(long, help = "Agent home directory. Defaults to ~/.gents")]
+    #[arg(long, help = "Node home directory. Defaults to ~/.gents")]
     pub(crate) home: Option<PathBuf>,
     #[arg(long, help = "GraphQL endpoint for the target gents node")]
     pub(crate) graphql: Option<String>,
@@ -1523,7 +1526,7 @@ pub(crate) struct CloudLoginArgs {
 
 #[derive(clap::Args)]
 pub(crate) struct ProvisionArgs {
-    #[arg(long, help = "Agent home directory. Defaults to ~/.gents")]
+    #[arg(long, help = "Node home directory. Defaults to ~/.gents")]
     pub(crate) home: Option<PathBuf>,
     #[arg(
         long,
@@ -1598,7 +1601,7 @@ pub(crate) fn store_key_custody(
 
 #[derive(clap::Args)]
 pub(crate) struct InitArgs {
-    #[arg(long, help = "Agent home directory. Defaults to ~/.gents")]
+    #[arg(long, help = "Node home directory. Defaults to ~/.gents")]
     pub(crate) home: Option<PathBuf>,
     #[arg(long, hide = true)]
     pub(crate) data_dir: Option<PathBuf>,
@@ -1762,13 +1765,13 @@ impl InitArgs {
 
 #[derive(clap::Args)]
 pub(crate) struct ResetArgs {
-    #[arg(long, help = "Agent home directory. Defaults to ~/.gents")]
+    #[arg(long, help = "Node home directory. Defaults to ~/.gents")]
     pub(crate) home: Option<PathBuf>,
 }
 
 #[derive(clap::Args)]
 pub(crate) struct ServeArgs {
-    #[arg(long, help = "Agent home directory. Defaults to ~/.gents")]
+    #[arg(long, help = "Node home directory. Defaults to ~/.gents")]
     pub(crate) home: Option<PathBuf>,
     #[arg(long, hide = true)]
     pub(crate) data_dir: Option<PathBuf>,
@@ -1978,7 +1981,7 @@ pub(crate) struct CodexArgs {
 
 #[derive(clap::Args)]
 pub(crate) struct ChatArgs {
-    #[arg(long, help = "Agent home directory. Defaults to ~/.gents")]
+    #[arg(long, help = "Node home directory. Defaults to ~/.gents")]
     pub(crate) home: Option<PathBuf>,
     #[arg(long)]
     pub(crate) graphql: Option<String>,
@@ -2055,7 +2058,7 @@ pub(crate) enum McpCommand {
 
 #[derive(clap::Args)]
 pub(crate) struct McpRegisterArgs {
-    #[arg(long, help = "Agent home directory. Defaults to ~/.gents")]
+    #[arg(long, help = "Node home directory. Defaults to ~/.gents")]
     pub(crate) home: Option<PathBuf>,
     #[arg(long, help = "GraphQL endpoint to update instead of local home state")]
     pub(crate) graphql: Option<String>,
@@ -2075,7 +2078,7 @@ pub(crate) struct McpRegisterArgs {
 
 #[derive(clap::Args)]
 pub(crate) struct McpProbeArgs {
-    #[arg(long, help = "Agent home directory. Defaults to ~/.gents")]
+    #[arg(long, help = "Node home directory. Defaults to ~/.gents")]
     pub(crate) home: Option<PathBuf>,
     #[arg(
         long,
@@ -2104,7 +2107,7 @@ pub(crate) enum FleetCommand {
 
 #[derive(clap::Args)]
 pub(crate) struct BackgroundListArgs {
-    #[arg(long, help = "Agent home directory. Defaults to ~/.gents")]
+    #[arg(long, help = "Node home directory. Defaults to ~/.gents")]
     pub(crate) home: Option<PathBuf>,
     #[arg(long, help = "GraphQL endpoint to read instead of local home state")]
     pub(crate) graphql: Option<String>,
@@ -2132,7 +2135,7 @@ pub(crate) struct BackgroundListArgs {
 
 #[derive(clap::Args)]
 pub(crate) struct FleetSlotsArgs {
-    #[arg(long, help = "Agent home directory. Defaults to ~/.gents")]
+    #[arg(long, help = "Node home directory. Defaults to ~/.gents")]
     pub(crate) home: Option<PathBuf>,
     #[arg(long, help = "GraphQL endpoint for the live runtime")]
     pub(crate) graphql: Option<String>,
@@ -2457,7 +2460,7 @@ pub(crate) enum TraceCommand {
 
 #[derive(clap::Args)]
 pub(crate) struct TraceCaptureArgs {
-    #[arg(long, help = "Agent home directory. Defaults to ~/.gents")]
+    #[arg(long, help = "Node home directory. Defaults to ~/.gents")]
     pub(crate) home: Option<PathBuf>,
     #[arg(long, help = "GraphQL endpoint to read instead of local home state")]
     pub(crate) graphql: Option<String>,
@@ -2495,7 +2498,7 @@ pub(crate) struct TraceCaptureArgs {
 
 #[derive(clap::Args)]
 pub(crate) struct TraceExportArgs {
-    #[arg(long, help = "Agent home directory. Defaults to ~/.gents")]
+    #[arg(long, help = "Node home directory. Defaults to ~/.gents")]
     pub(crate) home: Option<PathBuf>,
     #[arg(long, help = "GraphQL endpoint to read instead of local home state")]
     pub(crate) graphql: Option<String>,
@@ -2519,7 +2522,7 @@ pub(crate) struct TraceExportArgs {
 
 #[derive(clap::Args)]
 pub(crate) struct TraceTimelineArgs {
-    #[arg(long, help = "Agent home directory. Defaults to ~/.gents")]
+    #[arg(long, help = "Node home directory. Defaults to ~/.gents")]
     pub(crate) home: Option<PathBuf>,
     #[arg(long, help = "GraphQL endpoint to read instead of local home state")]
     pub(crate) graphql: Option<String>,
@@ -2531,7 +2534,7 @@ pub(crate) struct TraceTimelineArgs {
 
 #[derive(clap::Args)]
 pub(crate) struct TraceProjectArgs {
-    #[arg(long, help = "Agent home directory. Defaults to ~/.gents")]
+    #[arg(long, help = "Node home directory. Defaults to ~/.gents")]
     pub(crate) home: Option<PathBuf>,
     #[arg(long, help = "GraphQL endpoint to read instead of local home state")]
     pub(crate) graphql: Option<String>,
@@ -2822,7 +2825,7 @@ pub(crate) enum ToolsCommand {
 
 #[derive(clap::Args)]
 pub(crate) struct ToolExplainArgs {
-    #[arg(long, help = "Agent home directory. Defaults to ~/.gents")]
+    #[arg(long, help = "Node home directory. Defaults to ~/.gents")]
     pub(crate) home: Option<PathBuf>,
     #[arg(long, help = "GraphQL endpoint to read instead of local home state")]
     pub(crate) graphql: Option<String>,
@@ -3376,7 +3379,7 @@ pub(crate) enum SchemaCommand {
 
 #[derive(clap::Args)]
 pub(crate) struct SchemaApplyArgs {
-    #[arg(long, help = "Agent home directory. Defaults to ~/.gents")]
+    #[arg(long, help = "Node home directory. Defaults to ~/.gents")]
     pub(crate) home: Option<PathBuf>,
     #[arg(
         long,

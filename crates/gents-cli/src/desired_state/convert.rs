@@ -8,7 +8,7 @@ pub(crate) fn manifest_from_export_bundle(
 ) -> Result<DesiredStateManifest> {
     anyhow::ensure!(
         bundle.node_did == bundle.config.node.node_did,
-        "export envelope and principal owners differ"
+        "export envelope and node owners differ"
     );
     let encoded = serde_json::to_value(&bundle.config)?;
     for (name, value) in encoded

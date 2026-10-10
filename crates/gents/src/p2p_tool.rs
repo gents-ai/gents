@@ -78,7 +78,7 @@ impl P2pTool {
         if let Some(context) = crate::tool_call_lifecycle::runtime::current_tool_runtime_context() {
             ensure!(
                 context.node_did.as_deref() == Some(identity.did()),
-                "P2P tool principal differs from the running request"
+                "P2P tool node DID differs from the running request"
             );
         }
         Ok(identity)

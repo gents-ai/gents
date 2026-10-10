@@ -391,7 +391,7 @@ impl ToolSurface {
                 .context("datastore tools require the node identity")?;
             anyhow::ensure!(
                 identity.did() == runtime.node_did,
-                "datastore identity differs from principal DID"
+                "datastore identity differs from node DID"
             );
             Some(identity::Did::new(identity.did().to_owned())?)
         } else {

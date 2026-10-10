@@ -55,7 +55,7 @@ pub enum GraphArtifactIdentityScope {
 pub struct ProspectiveGraphArtifactIdentity {
     pub collection: String,
     pub identity_scope: GraphArtifactIdentityScope,
-    /// Present only for principal-scoped identities.
+    /// Present only for node-scoped identities.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub node_did: Option<String>,
     /// Unique-key fields used by the existing materializer. GraphRevision has
@@ -380,7 +380,7 @@ async fn load_visible_package_artifact_ids_for_revision(
     }
     let revision = &revisions[0];
     if revision.get("owner_did").and_then(Value::as_str) != Some(node_did) {
-        anyhow::bail!("visible GraphRevision {digest:?} is owned by another principal");
+        anyhow::bail!("visible GraphRevision {digest:?} is owned by another node");
     }
     let status = revision
         .get("status")
@@ -609,8 +609,8 @@ fn materialization_receipt(plan: &GraphPlan) -> Result<MaterializedRevision> {
 }
 
 /// Return prospective artifact identities without reading or writing storage.
-/// `GraphPlan` is intentionally principal-neutral; `owner_did` scopes only
-/// the artifacts whose canonical keys are principal-scoped. Approved
+/// `GraphPlan` is intentionally node-neutral; `owner_did` scopes only
+/// the artifacts whose canonical keys are node-scoped. Approved
 /// publication owns lookup and the resulting create/reuse/conflict decision.
 pub fn prospective_graph_artifact_identities(
     owner_did: &str,
@@ -861,7 +861,7 @@ async fn materialize_in_txn(
     match query_graph_definition(txn, owner_did, &plan.graph_id).await? {
         Some(definition) => {
             if definition.get("node_did").and_then(Value::as_str) != Some(owner_did) {
-                anyhow::bail!("graph {:?} belongs to a different principal", plan.graph_id);
+                anyhow::bail!("graph {:?} belongs to a different node", plan.graph_id);
             }
         }
         None => {
@@ -1161,7 +1161,7 @@ async fn activate_in_txn(
         .await?
         .context("graph must be materialized before activation")?;
     if definition.get("node_did").and_then(Value::as_str) != Some(owner_did) {
-        anyhow::bail!("graph {graph_id:?} belongs to a different principal");
+        anyhow::bail!("graph {graph_id:?} belongs to a different node");
     }
     let current = definition
         .get("active_revision_digest")
@@ -1286,7 +1286,7 @@ pub(crate) async fn load_active_graph_plan_in_txn(
         .await?
         .context("graph does not exist")?;
     if definition.get("node_did").and_then(Value::as_str) != Some(owner_did) {
-        anyhow::bail!("graph {graph_id:?} belongs to a different principal");
+        anyhow::bail!("graph {graph_id:?} belongs to a different node");
     }
     let Some(digest) = definition
         .get("active_revision_digest")
@@ -1328,7 +1328,7 @@ async fn set_graph_enabled_in_txn(
         .await?
         .context("graph does not exist")?;
     if definition.get("node_did").and_then(Value::as_str) != Some(owner_did) {
-        anyhow::bail!("graph {graph_id:?} belongs to a different principal");
+        anyhow::bail!("graph {graph_id:?} belongs to a different node");
     }
     if enabled {
         let digest = definition

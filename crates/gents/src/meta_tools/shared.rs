@@ -331,7 +331,7 @@ pub(super) async fn lookup_service(
         .into_iter()
         .find(|service| service.service_id == service_id && service.enabled)
         .ok_or_else(|| {
-            anyhow!("service '{service_id}' is not configured or enabled for this principal")
+            anyhow!("service '{service_id}' is not configured or enabled for this node")
         })?;
     resolve_service(&entry, &ctx.local_hostname, ctx.local_subnet.as_deref())
 }

@@ -347,7 +347,7 @@ impl Tool for ListProcessesTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "List background processes manageable by this session principal, including processes started on earlier turns.".to_string(),
+            description: "List background processes manageable by the current requester in this session, including processes started on earlier turns.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {

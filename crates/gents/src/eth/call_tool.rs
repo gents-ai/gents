@@ -529,7 +529,7 @@ async fn execute_write(
         (Some(destination.to_string()), Vec::new(), value)
     };
     let runtime = crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
-        .expect("runtime principal was checked before signing");
+        .expect("runtime node identity was checked before signing");
     let request_id = runtime
         .request_id
         .filter(|value| !value.trim().is_empty())
@@ -626,7 +626,7 @@ fn require_runtime_principal(resolved: &ResolvedEthCall) -> Result<(), ToolError
     if runtime.node_did.as_deref() != Some(resolved.principal_did.as_str()) {
         return Err(reported(
             FailureClass::PolicyDenied,
-            "Ethereum signing runtime principal does not own its key binding".to_string(),
+            "Ethereum signing runtime node does not own its key binding".to_string(),
         ));
     }
     Ok(())
@@ -682,10 +682,7 @@ async fn load_signing_key_with_store(
         bail!("EthTool {:?} is disabled", resolved.eth_tool_id);
     }
     if tool.node_did != resolved.principal_did {
-        bail!(
-            "EthTool {:?} belongs to another principal",
-            resolved.eth_tool_id
-        );
+        bail!("EthTool {:?} belongs to another node", resolved.eth_tool_id);
     }
     if tool.chain_id != i64::try_from(resolved.chain_id).ok() {
         bail!("EthTool {:?} changed chain_id", resolved.eth_tool_id);
@@ -697,7 +694,7 @@ async fn load_signing_key_with_store(
         );
     }
     if binding.node_did != resolved.principal_did {
-        bail!("chain key binding {binding_id:?} belongs to another principal");
+        bail!("chain key binding {binding_id:?} belongs to another node");
     }
     if binding
         .revoked_at
