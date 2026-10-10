@@ -2815,7 +2815,7 @@ impl McpGraphHome {
         let home_arg = home.to_str().context("home path is not UTF-8")?.to_owned();
         let init = run_init_json(
             tempdir.path(),
-            &["--agent-name", label, "--home", home_arg.as_str()],
+            &["--node-name", label, "--home", home_arg.as_str()],
         )?;
         let owner_did = node_did_from_init(&init)?;
         let owner = identity_from_init(&init)?;

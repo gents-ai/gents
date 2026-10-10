@@ -857,7 +857,7 @@ fn graph_run_by_graph_id_is_pinned_to_the_active_digest() -> Result<()> {
     let home_arg = home.to_str().context("path")?;
     let initialized = run_init_json(
         tempdir.path(),
-        &["--agent-name", "graph-id-runner", "--home", home_arg],
+        &["--node-name", "graph-id-runner", "--home", home_arg],
     )?;
     let owner_did = node_did_from_init(&initialized)?;
     let port = allocate_port()?;
