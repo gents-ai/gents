@@ -3358,7 +3358,6 @@ async fn agent_only_grant_cannot_acquire_node_authority_and_writes_require_exact
         foreign_identity.as_ref(),
         &params,
         &Default::default(),
-        &OperatorGrants::default(),
     )
     .await
     .expect_err("foreign signer must fail before publishing configuration");
@@ -5419,7 +5418,6 @@ async fn agent_management_profile_pick_cannot_switch_account() {
             identity.as_ref(),
             &refused,
             &Default::default(),
-            &OperatorGrants::default(),
         )
         .await
         .expect_err("switching to another account must be refused");
@@ -5441,7 +5439,6 @@ async fn agent_management_profile_pick_cannot_switch_account() {
             identity.as_ref(),
             &accepted,
             &Default::default(),
-            &OperatorGrants::default(),
         )
         .await
         .unwrap();
@@ -5548,7 +5545,6 @@ async fn agent_clone_inherited_compaction_cannot_switch_account() {
                 &owner,
                 &clone("preview", source, profile),
                 &Default::default(),
-                &OperatorGrants::default(),
             )
             .await
             .unwrap(),
@@ -5561,7 +5557,6 @@ async fn agent_clone_inherited_compaction_cannot_switch_account() {
             identity.as_ref(),
             &clone("clone", source, profile),
             &Default::default(),
-            &OperatorGrants::default(),
         )
         .await
         .expect_err("inheriting another account's compaction must be refused");
@@ -5578,7 +5573,6 @@ async fn agent_clone_inherited_compaction_cannot_switch_account() {
             identity.as_ref(),
             &clone("clone", "src-original", profile),
             &Default::default(),
-            &OperatorGrants::default(),
         )
         .await
         .unwrap();

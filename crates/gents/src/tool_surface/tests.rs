@@ -1281,7 +1281,7 @@ async fn plugin_only_bindings_are_captured_for_trigger_execution() {
 
     let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    let selected = BehaviorToolConfig::from_selection(
+    let selected = AgentToolConfig::from_selection(
         "evidence",
         ResolvedToolSelection {
             plugin_tools: vec![PluginToolRef {
