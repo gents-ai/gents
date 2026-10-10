@@ -395,7 +395,7 @@ def scenarios : List CaseRow := examplesToRows ++
   , { name := "tools_grant_unrelated_edit_on_granted_tools_accepted"
     , target := .tools, guarded := false, validates := true
     , doc := [("self_config", "{\"enable_self_config\":true,\"enable_pack_install\":true}")]
-    , patch := [("subagents", some "{\"enabled\":true}")] }
+    , patch := [("agents", some "{\"enabled\":true}")] }
   , { name := "tools_grant_narrowing_accepted"
     , target := .tools, guarded := false, validates := true
     , doc := [("self_config", "{\"enable_self_config\":true,\"enable_pack_install\":true}")]
