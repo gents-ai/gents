@@ -1,4 +1,7 @@
-import { formatPeerConnectionError } from "@source-inc/gents-desktop-fleet";
+import {
+  formatPeerConnectionError,
+  DEFAULT_NODE_NAME,
+} from "@source-inc/gents-desktop-fleet";
 import type {
   DesktopApiAdapter,
   DesktopClientSnapshot,
@@ -40,7 +43,7 @@ export function createPeerActions({
         await mutateSnapshot(() => api.shutdownDesktopClient());
       }
       const summary = await api.initLocalStandardRuntime({
-        label: label?.trim() || "Local Node",
+        label: label?.trim() || DEFAULT_NODE_NAME,
         dangerouslyOverwrite: false,
         reset: false,
       });

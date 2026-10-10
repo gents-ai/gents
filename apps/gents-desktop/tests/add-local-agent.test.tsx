@@ -12,6 +12,7 @@ import type {
   ManagedServerAuthorityInput,
   ManagedServerStatus,
 } from "@source-inc/gents-desktop-client";
+import { DEFAULT_NODE_NAME } from "@source-inc/gents-desktop-fleet";
 import { AgentsScreen } from "../src/ui/screens/AgentsScreen";
 import { SetupScreen } from "../src/ui/screens/setup/SetupScreen";
 import { bootstrap, deployment } from "./config-panel-wiring/fixtures";
@@ -269,6 +270,7 @@ describe("first-run local agent name", () => {
   it("persists the entered name for a new home", async () => {
     const { api } = setup({ existingHome: false, runtimeName: "Scout" });
     const name = screen.getByLabelText("Node name");
+    expect(name).toHaveValue(DEFAULT_NODE_NAME);
     await userEvent.clear(name);
     await userEvent.type(name, "Scout");
     const next = screen.getByTestId("setup-next");

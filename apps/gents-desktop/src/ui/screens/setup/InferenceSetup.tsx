@@ -5,6 +5,7 @@
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { KeyRound, Orbit, Server, Sparkles } from "lucide-react";
 import type { DesktopClientSnapshot } from "@source-inc/gents-desktop-client";
+import { DEFAULT_NODE_NAME } from "@source-inc/gents-desktop-fleet";
 import { newestWins } from "../../../lib/reads";
 import { Button } from "@gents/ui/components/button";
 import { Spinner } from "@gents/ui/components/spinner";
@@ -126,7 +127,7 @@ export function InferenceSetup({
     setupDeployment &&
     isLocalNode(setupDeployment, bootstrap?.initNodeDid),
   );
-  const runtimeFallbackName = bootstrap?.initNodeName?.trim() || "Local Node";
+  const runtimeFallbackName = bootstrap?.initNodeName?.trim() || DEFAULT_NODE_NAME;
   const checkManagedRuntime = async () => {
     dispatch({ type: "runtimeGate", gate: "checking" });
     try {

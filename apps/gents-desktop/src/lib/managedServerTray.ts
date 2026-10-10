@@ -8,6 +8,7 @@ import {
   unsettledManagedServerError,
   type ManagedServerWait,
 } from "./managedServerStartup";
+import { DEFAULT_NODE_NAME } from "@source-inc/gents-desktop-fleet";
 
 type Unlisten = () => void;
 type Listen = (event: string, handler: () => void) => Promise<Unlisten>;
@@ -78,7 +79,7 @@ export function installManagedServerTrayListeners(
     }
     if (!server.offers.start)
       throw new Error("Start Node is unavailable in this build.");
-    await server.start(current.nodeName?.trim() || "Local Node");
+    await server.start(current.nodeName?.trim() || DEFAULT_NODE_NAME);
   });
   register(MANAGED_SERVER_TRAY_STOP_EVENT, async () => {
     const current = await server.readStatus();
@@ -113,7 +114,7 @@ export function installManagedServerTrayListeners(
     if (!server.offers.restart) {
       throw new Error("Restart Node is unavailable in this build.");
     }
-    await server.restart(current.nodeName?.trim() || "Local Node", {
+    await server.restart(current.nodeName?.trim() || DEFAULT_NODE_NAME, {
       toolCeiling: current.effectiveToolCeiling,
       toolRoot: current.effectiveToolRoot,
     });

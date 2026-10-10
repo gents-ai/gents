@@ -78,7 +78,7 @@ describe("sessions started by another session", () => {
       wrapper: withApp(app),
     });
     expect(screen.queryByTestId("session-child")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: /1 more worker/ }));
+    fireEvent.click(screen.getByRole("button", { name: /1 more started session/ }));
     expect(screen.getByTestId("session-child")).toHaveClass("pl-9");
     const advanced = [
       child,
@@ -90,7 +90,7 @@ describe("sessions started by another session", () => {
     act(() => publish(app, [deploymentWith(advanced)]));
     rerender(<SessionsScreen />);
     expect(screen.getByTestId("session-child")).toHaveClass("pl-9");
-    expect(screen.getByRole("button", { name: /1 worker/ })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: /1 started session/ })).toHaveAttribute(
       "aria-expanded",
       "true",
     );

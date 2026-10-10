@@ -6,6 +6,7 @@ export * from "./components/FleetIcons.js";
 export * from "./components/FleetRow.js";
 export {
   DEFAULT_CLI_BINARY_NAME,
+  DEFAULT_NODE_NAME,
   DEFAULT_RUNTIME_PRODUCT_NAME,
   type FleetCopy,
 } from "./copy.js";
