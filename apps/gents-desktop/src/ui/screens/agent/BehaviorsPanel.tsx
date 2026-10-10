@@ -25,7 +25,7 @@ import { agentOf } from "@/lib/agents";
 import { useApp } from "@/app/AppContext";
 import type { ShellActions } from "@/../hooks/shellActions";
 import { listNames, newAgentView } from "./behaviorDraft";
-import { BehaviorEditor } from "./BehaviorEditor";
+import { AgentEditor } from "./BehaviorEditor";
 
 /* one-click changes that a agent's row and its header share */
 
@@ -213,7 +213,7 @@ export function AgentsPanel({
             <ArrowLeft className="size-3.5" /> Agents
           </button>
         </div>
-        <BehaviorEditor
+        <AgentEditor
           key={draft.agentId}
           deployment={deployment}
           agent={draft}
@@ -260,7 +260,7 @@ export function AgentsPanel({
         detail={(id) => {
           const agent = agentOf(deployment, id)!;
           return (
-            <BehaviorEditor key={agent.agentId} deployment={deployment} agent={agent} />
+            <AgentEditor key={agent.agentId} deployment={deployment} agent={agent} />
           );
         }}
       />

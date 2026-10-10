@@ -7,7 +7,7 @@ import { publishSnapshot, renderIn, testApp, withApp } from "./app-fixture";
 
 import type { DesktopClientSnapshot } from "@source-inc/gents-desktop-client";
 import { AgentPanel } from "../src/ui/screens/agent/AgentPanel";
-import { BehaviorEditor } from "../src/ui/screens/agent/BehaviorEditor";
+import { AgentEditor } from "../src/ui/screens/agent/BehaviorEditor";
 import { AgentsPanel } from "../src/ui/screens/agent/BehaviorsPanel";
 import { newAgentView } from "../src/ui/screens/agent/behaviorDraft";
 import { ContextsPanel } from "../src/ui/screens/agent/ContextsPanel";
@@ -1357,7 +1357,7 @@ describe("configuration panels", () => {
     const onSaved = vi.fn();
     renderIn(
       app,
-      <BehaviorEditor
+      <AgentEditor
         deployment={deployment}
         agent={newAgentView(deployment)}
         draft={{ onSaved, onCancel: vi.fn() }}

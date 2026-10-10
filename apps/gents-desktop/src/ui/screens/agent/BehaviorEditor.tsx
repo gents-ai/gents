@@ -69,7 +69,7 @@ import {
 import { ContextPicker } from "./ContextPicker";
 import { contextOutcome, writeAgentDraft } from "./behaviorSave";
 
-export function BehaviorEditor({
+export function AgentEditor({
   deployment,
   agent,
   draft: draftMode,

@@ -1,7 +1,7 @@
 /* A new agent drafted beside another page: nothing is saved until Save,
    and the page it came from gets the id. */
 import type { NodeView } from "../../../hooks/fleetStore";
-import { BehaviorEditor } from "./BehaviorEditor";
+import { AgentEditor } from "./BehaviorEditor";
 import { newAgentView } from "./behaviorDraft";
 import { EditorSheet } from "./EditorSheet";
 import { useState } from "react";
@@ -33,7 +33,7 @@ export function AgentSheet({
       description="What it is told, what it may use, and what runs it. Nothing is saved until you save."
     >
       {open && (
-        <BehaviorEditor
+        <AgentEditor
           key={draft.agentId}
           deployment={deployment}
           agent={draft}
