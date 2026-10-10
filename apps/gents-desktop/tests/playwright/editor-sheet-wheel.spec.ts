@@ -21,7 +21,7 @@ function openFor(scope: Locator, label: string) {
     .first();
 }
 
-/* a agent's profile in one sheet, and that profile's backend in a second */
+/* an agent's profile in one sheet, and that profile's backend in a second */
 async function stackTwoSheets(page: Page) {
   await page.setViewportSize({ width: 1280, height: 520 });
   await gotoHarness(page);
