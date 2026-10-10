@@ -10,7 +10,7 @@
 //! rust-analyzer --version
 //! GENTS_LIVE_LSP=1 GENTS_EVAL_TARGET=workstation-1 \
 //!   GENTS_LSP_RUST_PACK_DIR=<packs checkout>/packs/gents/lsp_rust \
-//!   cargo test -p gents --test e2e_live \
+//!   cargo test -p gents --features live-e2e --test e2e_live \
 //!   lsp_live_model_uses_rust_analyzer \
 //!   -- --ignored --test-threads=1 --nocapture
 //! ```
@@ -169,7 +169,8 @@ fn lsp_pack_prompt_follows_agent_context_sidecar_reference() {
             "manifest_version":1,"name":"lsp-test","version":"1",
             "description":"Fixture","kind":"documents","authors":["Test"],
             "assets":["pack_config.json","custom-assets/prompt.md"],
-            "config":"pack_config.json"
+            "config":"pack_config.json",
+            "inference_slots":[{"name":"coder","description":"Fixture coder","agents":["lsp-coder"]}]
         }))
         .unwrap(),
     )
@@ -178,7 +179,7 @@ fn lsp_pack_prompt_follows_agent_context_sidecar_reference() {
         root.path().join("pack_config.json"),
         serde_json::to_vec(&serde_json::json!({
             "node":{},
-            "agents":[{"agent_id":"lsp-coder","context_id":"distinct-context"}],
+            "agents":[{"agent_id":"lsp-coder","context_id":"distinct-context","inference_profile_id":"gents:inference-slot:coder"}],
             "contexts":[{"context_id":"distinct-context","system_prompt":"./custom-assets/prompt.md"}]
         })).unwrap(),
     ).unwrap();
