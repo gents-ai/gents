@@ -31,6 +31,7 @@ pub struct PluginTool {
     /// of a session that has no workspace folder of its own.
     root: Option<PathBuf>,
     input_fields: Vec<WriteToolField>,
+    tool_calls: bool,
 }
 
 impl PluginTool {
@@ -42,12 +43,16 @@ impl PluginTool {
         root: Option<PathBuf>,
     ) -> Result<Self> {
         let record = executor.resolve(&plugin.plugin, plugin.digest.as_deref())?;
+        let mut description = record
+            .instructions
+            .clone()
+            .unwrap_or_else(|| record.declaration.description.clone());
+        if plugin.tool_calls {
+            description.push_str("\nTool composition is sequential, up to 64 granted-tool calls per invocation. Call agent_new, agent_message, spawn_process, wait_process, and update_goal directly outside this plugin.");
+        }
         let definition = ToolDefinition {
             name: plugin.tool_name().to_string(),
-            description: record
-                .instructions
-                .clone()
-                .unwrap_or_else(|| record.declaration.description.clone()),
+            description,
             parameters: bound_schema(&record.declaration.input_schema, &plugin.input_fields)?,
         };
         Ok(Self {
@@ -56,6 +61,7 @@ impl PluginTool {
             definition,
             root,
             input_fields: plugin.input_fields.clone(),
+            tool_calls: plugin.tool_calls,
         })
     }
 }
@@ -81,7 +87,7 @@ impl ToolDyn for PluginTool {
                     return ToolDispatchResult {
                         result: Err(error),
                         plugin_receipt: None,
-                    }
+                    };
                 }
             };
             if let Err(error) = fill_inputs(&mut input, &self.input_fields) {
@@ -92,7 +98,12 @@ impl ToolDyn for PluginTool {
             }
             let (call, receipt) = self
                 .executor
-                .call_data_bound_with_receipt(&self.record, input, self.root.as_deref())
+                .call_data_bound_with_receipt(
+                    &self.record,
+                    input,
+                    self.root.as_deref(),
+                    self.tool_calls,
+                )
                 .await;
             let result =
                 call.map_err(|error| tool_error(format!("{error:#}")))

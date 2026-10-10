@@ -192,6 +192,7 @@ mod request_scope_conformance;
 #[cfg(test)]
 mod session_activity_conformance;
 
+mod plugin_effect;
 pub(crate) use crate::streaming::AcceptedToolCall;
 pub use recovery::{
     deadline_at_is_expired, deadline_is_expired, BackgroundCompletionSideEffectReport,
@@ -203,6 +204,7 @@ pub use transition::IllegalToolCallTransition;
 /// State machine struct for an individual tool call. Mirrors `RequestLifecycle`
 /// from `lifecycle.rs:189-204`. Owns every persistence write for a single
 /// AgentToolCall row.
+#[derive(Clone)]
 pub struct ToolCallLifecycle {
     node: Arc<EmbeddedNode>,
     request_id: String,
@@ -231,6 +233,7 @@ pub struct ToolCallLifecycle {
     /// its own: this is the immutable physical provenance used for dispatch,
     /// recovery and completion notification routing.
     spawned_by_tool_call_doc_id: Option<String>,
+    plugin_effect: Option<PluginEffectBinding>,
     doc_id: Option<String>,
     deadline_at: chrono::DateTime<chrono::Utc>,
     state: ToolCallState,
@@ -239,6 +242,12 @@ pub struct ToolCallLifecycle {
     cancel_cause: Option<CancelCause>,
     selected_tool_identity: Option<SelectedToolIdentity>,
     pub(crate) await_mode: AwaitMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PluginEffectBinding {
+    parent_tool_call_doc_id: String,
+    ordinal: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -297,6 +306,7 @@ impl ToolCallLifecycle {
             execution_generation: Some(accepted.execution_generation),
             plugin_receipt: None,
             spawned_by_tool_call_doc_id: None,
+            plugin_effect: None,
             doc_id: Some(accepted.tool_call_doc_id),
             deadline_at,
             state: ToolCallState::Pending,
@@ -360,6 +370,7 @@ impl ToolCallLifecycle {
             execution_generation: None,
             plugin_receipt: None,
             spawned_by_tool_call_doc_id: None,
+            plugin_effect: None,
             doc_id: None,
             deadline_at,
             state: ToolCallState::Pending,
@@ -432,6 +443,7 @@ impl ToolCallLifecycle {
             execution_generation: None,
             plugin_receipt: None,
             spawned_by_tool_call_doc_id: None,
+            plugin_effect: None,
             doc_id: None,
             deadline_at,
             state: ToolCallState::Pending,
@@ -474,7 +486,9 @@ impl ToolCallLifecycle {
     }
 
     pub(crate) fn is_background_tool_bridge(&self) -> bool {
-        self.await_mode == AwaitMode::Background && self.spawned_by_tool_call_doc_id.is_none()
+        self.await_mode == AwaitMode::Background
+            && self.spawned_by_tool_call_doc_id.is_none()
+            && self.plugin_effect.is_none()
     }
 
     pub(crate) fn is_spawned_background(&self) -> bool {

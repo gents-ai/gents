@@ -1017,6 +1017,7 @@ pub mod model_calls;
 mod rounds;
 pub mod store;
 pub mod tool;
+pub(crate) mod tool_calls;
 
 /// A plugin's authority: files, network, environment and the rest.
 pub use afterburner_core::manifold::Manifold;

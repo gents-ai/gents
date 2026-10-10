@@ -112,7 +112,7 @@ theorem handoffRunningWorld_lifecycle (world : World) (document : DocId)
             Transcript.TranscriptState.releaseParentInFlight, handoffRunningTool, toolHandedOff]
         · simpa [hp, hr, handoffRunningEdit, handoffRunningWorld,
             Transcript.TranscriptState.releaseParentInFlight, selected] using ht.2
-    | spawnedBackground parent =>
+    | spawnedBackground parent | pluginEffect parent _ =>
       by_cases selected : tool.document = document <;>
         simp_all [hp, handoffRunningEdit, handoffRunningWorld,
           Transcript.TranscriptState.releaseParentInFlight]

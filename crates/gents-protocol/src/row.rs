@@ -328,6 +328,12 @@ pub struct AgentToolCallRow {
     #[serde(default)]
     pub spawned_by_tool_call_doc_id: Option<String>,
     #[serde(default)]
+    pub plugin_parent_tool_call_doc_id: Option<String>,
+    #[serde(default)]
+    pub plugin_effect_ordinal: Option<u32>,
+    #[serde(default)]
+    pub terminal_output: Option<crate::output::PresentedPayload>,
+    #[serde(default)]
     pub await_mode: Option<String>,
     #[serde(default)]
     pub started_at: Option<String>,

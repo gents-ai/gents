@@ -323,6 +323,25 @@ pub(crate) async fn load_canonical_payload_from_node(
     .await
 }
 
+pub(crate) async fn load_canonical_payload_with_access(
+    access: &ConfigAccess,
+    request_doc_id: &str,
+    node_did: &str,
+    requester_did: Option<&str>,
+    reference: &PayloadRef,
+    expected_source: &OutputSource,
+) -> Result<gents_protocol::output::reconstruction::ReconstructedStream> {
+    load_canonical_payload(
+        ReadAccess::Config(access),
+        request_doc_id,
+        node_did,
+        requester_did,
+        reference,
+        Some(expected_source),
+    )
+    .await
+}
+
 pub(crate) async fn load_canonical_payload_in_txn(
     txn: &ConfigApplyTxn<'_>,
     request_doc_id: &str,

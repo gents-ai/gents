@@ -98,6 +98,7 @@ def sourceJson : CanonicalOutput.Source → String
           | .title => "title") ++
         ",\"scope\":" ++ toString scope ++
         ",\"turn\":" ++ toString turn ++ ",\"attempt\":" ++ toString attempt ++ "}"
+  | .toolEffectArguments call => "{\"kind\":\"tool_effect_arguments\",\"owner\":" ++ toString call ++ "}"
   | .tool call => "{\"kind\":\"tool\",\"owner\":" ++ toString call ++ "}"
   | .authored key => "{\"kind\":\"authored\",\"owner\":" ++ toString key ++ "}"
 

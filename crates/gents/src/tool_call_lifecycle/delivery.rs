@@ -344,6 +344,7 @@ impl ToolCallLifecycle {
                 self.state,
                 ToolCallState::Running | ToolCallState::Completed
             ) && !self.is_spawned_background()
+                && self.plugin_effect.is_none()
                 && self.tool_name == crate::toolset::SPAWN_PROCESS_TOOL_NAME,
             "spawned background admission requires the accepted spawn_process owner"
         );
@@ -884,6 +885,7 @@ impl ToolCallLifecycle {
         let plugin_receipt = self.plugin_receipt.clone();
         let execution_generation = self.execution_generation.clone();
         let spawned_by_tool_call_doc_id = self.spawned_by_tool_call_doc_id.clone();
+        let plugin_effect = self.plugin_effect_terminal()?;
 
         let published = ConfigAccess::transact_local_idempotent(
             &self.node,
@@ -905,6 +907,7 @@ impl ToolCallLifecycle {
                 let plugin_receipt = plugin_receipt.clone();
                 let execution_generation = execution_generation.clone();
                 let spawned_by_tool_call_doc_id = spawned_by_tool_call_doc_id.clone();
+                let plugin_effect = plugin_effect.clone();
                 let presentation = presentation.clone();
                 Box::pin(async move {
                     let now = fixture_now.unwrap_or_else(Utc::now);
@@ -921,6 +924,7 @@ impl ToolCallLifecycle {
                         message_sequence,
                         arguments.as_ref(),
                         spawned_by_tool_call_doc_id.as_deref(),
+                        plugin_effect.as_ref(),
                         &tool_name,
                         deadline_at,
                         started_at,
@@ -965,6 +969,7 @@ async fn terminalize_transaction(
     message_sequence: u32,
     arguments: Option<&gents_protocol::output::PayloadRef>,
     spawned_by_tool_call_doc_id: Option<&str>,
+    plugin_effect: Option<&super::plugin_effect::PluginEffectTerminal>,
     tool_name: &str,
     deadline_at: DateTime<Utc>,
     started_at: Option<DateTime<Utc>>,
@@ -1011,7 +1016,7 @@ async fn terminalize_transaction(
             session_id: {{ _eq: "{session}" }}, node_did: {{ _eq: "{agent}" }},
             tool_call_id: {{ _eq: "{tool_id}" }}, tool_name: {{ _eq: "{name}" }},
             message_sequence: {{ _eq: {message_sequence} }}{requester_filter}
-        }}, limit: 2) {{ lifecycle_state status tool_failure_class cancel_cause }} }}"#
+        }}, limit: 2) {{ lifecycle_state status tool_failure_class cancel_cause terminal_output }} }}"#
             ))
             .await?;
         let lifecycle_rows = lifecycle["data"]["AgentToolCall"]
@@ -1063,7 +1068,42 @@ async fn terminalize_transaction(
         requester_did,
     )
     .await?;
-    if let Some(parent_doc_id) = spawned_by_tool_call_doc_id {
+    if let Some(effect) = plugin_effect {
+        anyhow::ensure!(
+            spawned_by_tool_call_doc_id.is_none()
+                && call_id.is_none()
+                && (1..=64).contains(&effect.effect.ordinal)
+                && tool_call_id
+                    == format!(
+                        "plugin-effect:{}:{}",
+                        effect.parent.tool_call_doc_id, effect.effect.ordinal
+                    ),
+            "invalid plugin effect terminal identity"
+        );
+        super::plugin_effect::validate_parent(
+            txn,
+            &effect.parent,
+            accepted_header_doc_id,
+            &effect.generation,
+            message_sequence,
+            deadline_at,
+            false,
+        )
+        .await?;
+        let (reference, _) = super::plugin_effect::arguments_in_txn(
+            txn,
+            &effect.parent,
+            tool_doc_id,
+            &effect.generation,
+            tool_call_id,
+            tool_name,
+        )
+        .await?;
+        anyhow::ensure!(
+            arguments == Some(&reference),
+            "plugin effect terminal arguments changed"
+        );
+    } else if let Some(parent_doc_id) = spawned_by_tool_call_doc_id {
         let parent = escape_graphql_string(parent_doc_id);
         let parent_rows = txn
             .execute(&format!(
@@ -1202,9 +1242,10 @@ async fn terminalize_transaction(
         .as_array()
         .context("background receipt lookup omitted messages")?;
     anyhow::ensure!(receipt_rows.len() <= 1, "background receipt is ambiguous");
-    let publish_native_result = publish_native_result && receipt_rows.is_empty();
+    let publish_native_result =
+        publish_native_result && receipt_rows.is_empty() && plugin_effect.is_none();
 
-    if !publish_native_result && spawned_by_tool_call_doc_id.is_none() {
+    if !publish_native_result && spawned_by_tool_call_doc_id.is_none() && plugin_effect.is_none() {
         ensure_background_receipt_before_bridge_close(
             txn,
             tool_doc_id,
@@ -1254,7 +1295,7 @@ async fn terminalize_transaction(
             session_id: {{ _eq: "{session}" }}, node_did: {{ _eq: "{agent}" }},
             tool_call_id: {{ _eq: "{tool_id}" }}, tool_name: {{ _eq: "{name}" }},
             message_sequence: {{ _eq: {message_sequence} }}{requester_filter}
-        }}, limit: 2) {{ lifecycle_state status tool_failure_class cancel_cause }} }}"#
+        }}, limit: 2) {{ lifecycle_state status tool_failure_class cancel_cause terminal_output }} }}"#
                 ))
                 .await?;
             let lifecycle_rows = lifecycle["data"]["AgentToolCall"]
@@ -1393,7 +1434,7 @@ async fn terminalize_transaction(
         // agree with this candidate. A twin closure or changed payload is
         // still a hard error.
         anyhow::ensure!(
-            adopt_competing_terminal,
+            adopt_competing_terminal || plugin_effect.is_some(),
             "tool terminal source already has a closure"
         );
         let lifecycle = txn
@@ -1403,7 +1444,7 @@ async fn terminalize_transaction(
             session_id: {{ _eq: "{session}" }}, node_did: {{ _eq: "{agent}" }},
             tool_call_id: {{ _eq: "{tool_id}" }}, tool_name: {{ _eq: "{name}" }},
             message_sequence: {{ _eq: {message_sequence} }}{requester_filter}
-        }}, limit: 2) {{ lifecycle_state status tool_failure_class cancel_cause }} }}"#
+        }}, limit: 2) {{ lifecycle_state status tool_failure_class cancel_cause terminal_output }} }}"#
             ))
             .await?;
         let lifecycle_rows = lifecycle["data"]["AgentToolCall"]
@@ -1476,7 +1517,40 @@ async fn terminalize_transaction(
             reconstructed.text == plan.raw,
             "closed tool source differs from terminal plan"
         );
+        if plugin_effect.is_some() {
+            let stored: PresentedPayload =
+                serde_json::from_value(lifecycle_rows[0]["terminal_output"].clone())
+                    .context("plugin terminal is missing its canonical presentation")?;
+            anyhow::ensure!(
+                stored.output.close_doc_id == close.doc_id && stored.output.stream == 0,
+                "plugin terminal presentation names a foreign source closure"
+            );
+            anyhow::ensure!(
+                if plan.diagnostic {
+                    diagnostic_replay_matches(&reconstructed.text, text, &stored.presentation)?
+                } else {
+                    stored.presentation == plan.presentation
+                        && render_presentation(&reconstructed.text, &stored.presentation)?
+                            == plan.rendered
+                },
+                "plugin terminal replay changed its presentation"
+            );
+        }
         return Ok(false);
+    }
+    if plugin_effect.is_some() {
+        let stored = txn
+            .execute(&format!(
+                r#"{{ AgentToolCall(docID: "{tool}") {{ terminal_output }} }}"#
+            ))
+            .await?;
+        let rows = stored["data"]["AgentToolCall"]
+            .as_array()
+            .context("plugin terminal presentation lookup omitted rows")?;
+        anyhow::ensure!(
+            rows.len() == 1 && rows[0]["terminal_output"].is_null(),
+            "open plugin effect already carries terminal output"
+        );
     }
     let observed = source_rows
         .iter()
@@ -1585,6 +1659,17 @@ async fn terminalize_transaction(
             )
         })
         .unwrap_or_else(|| ", spawned_by_tool_call_doc_id: { _eq: null }".to_owned());
+    let effect_filter = match plugin_effect {
+        Some(effect) => format!(
+            r#", plugin_parent_tool_call_doc_id: {{ _eq: "{}" }}, plugin_effect_ordinal: {{ _eq: {} }}"#,
+            escape_graphql_string(&effect.parent.tool_call_doc_id),
+            effect.effect.ordinal
+        ),
+        None => {
+            ", plugin_parent_tool_call_doc_id: { _eq: null }, plugin_effect_ordinal: { _eq: null }"
+                .to_owned()
+        }
+    };
     let receipt_variable = if plugin_receipt.is_some() {
         "($plugin_receipt: JSON)"
     } else {
@@ -1599,7 +1684,7 @@ async fn terminalize_transaction(
         session_id: {{ _eq: "{session}" }}, node_did: {{ _eq: "{agent}" }},
         tool_call_id: {{ _eq: "{tool_id}" }}, tool_name: {{ _eq: "{name}" }},
         message_sequence: {{ _eq: {message_sequence} }},
-        lifecycle_state: {{ _eq: "{expected}" }}{requester_filter}{spawned_filter} }}, input: {{
+        lifecycle_state: {{ _eq: "{expected}" }}{requester_filter}{spawned_filter}{effect_filter} }}, input: {{
         status: "{}", lifecycle_state: "{state}", started_at: {started_at},
         deadline_at: "{deadline_at}", completed_at: "{completed_at}", latency_ms: {latency_ms}{failure}{cancel}{plugin_receipt_field}
     }}) {{ _docID request_id }} }}"#, escape_graphql_string(terminal_status)), &variables).await?;
@@ -1633,6 +1718,28 @@ async fn terminalize_transaction(
         )
         .await?;
     let close_doc_id = created_doc_id(&segment_response, "AgentOutputSegment")?;
+
+    if plugin_effect.is_some() {
+        let terminal_output = PresentedPayload {
+            output: gents_protocol::output::PayloadRef {
+                close_doc_id: close_doc_id.clone(),
+                stream: 0,
+            },
+            presentation: delivered_presentation.clone(),
+        };
+        let updated = txn.execute_with_variables(&format!(
+            r#"mutation($terminal_output: JSON) {{ update_AgentToolCall(docID: "{tool}", filter: {{
+                request_doc_id: {{ _eq: "{request}" }}, session_id: {{ _eq: "{session}" }},
+                node_did: {{ _eq: "{agent}" }}, lifecycle_state: {{ _eq: "{state}" }}{requester_filter}
+            }}, input: {{ terminal_output: $terminal_output }}) {{ _docID }} }}"#
+        ), &serde_json::json!({"terminal_output": terminal_output})).await?;
+        anyhow::ensure!(
+            updated["data"]["update_AgentToolCall"]
+                .as_array()
+                .is_some_and(|rows| rows.len() == 1),
+            "plugin terminal presentation lost its physical lifecycle binding"
+        );
+    }
 
     // A spawned process is not a provider invocation.  Its terminal output
     // is closed above under its own physical source, while its later

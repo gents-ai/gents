@@ -69,9 +69,21 @@ mod persistence_tests {
     #[tokio::test]
     async fn plugin_receipt_commits_with_terminal_and_rejects_conflicting_replay() {
         for terminal in ["complete", "fail", "timeout", "cancel"] {
-            let (node, path, mut tool) =
-                admission_fixture::published_spawn_parent(&format!("plugin-receipt-{terminal}"))
-                    .await;
+            let (fixture, request_owner) =
+                crate::tool_call_lifecycle::admission_fixture::published_admission_with_owner(
+                    crate::tool_call_lifecycle::admission_fixture::PublishedAdmissionOptions {
+                        name: format!("plugin-receipt-{terminal}"),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap();
+            let crate::tool_call_lifecycle::admission_fixture::PublishedAdmission {
+                node,
+                path,
+                mut tool,
+                ..
+            } = fixture;
             let doc_id = tool.doc_id().unwrap().to_owned();
             let mut replay = ToolCallLifecycle::load_by_doc_id(
                 node.clone(),
@@ -141,15 +153,93 @@ mod persistence_tests {
                 conflict.stage_plugin_receipt(Some(changed)).unwrap();
                 assert!(conflict.complete("model output").await.is_err());
             }
+            drop(request_owner);
             node.shutdown().await;
             let _ = std::fs::remove_dir_all(path);
         }
     }
 
     #[tokio::test]
+    async fn plugin_child_receipt_commits_with_its_own_terminal_presentation() {
+        let (fixture, request_owner) =
+            crate::tool_call_lifecycle::admission_fixture::published_admission_with_owner(
+                crate::tool_call_lifecycle::admission_fixture::PublishedAdmissionOptions {
+                    name: "plugin-child-receipt".to_owned(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let crate::tool_call_lifecycle::admission_fixture::PublishedAdmission {
+            node,
+            path,
+            tool: parent,
+            ..
+        } = fixture;
+        let mut child = parent
+            .admit_plugin_effect(1, "nested_plugin", "{}")
+            .await
+            .unwrap();
+        child.start_running().await.unwrap();
+        let evidence = receipt();
+        child.stage_plugin_receipt(Some(evidence.clone())).unwrap();
+        child.complete("child output").await.unwrap();
+        let access = ConfigAccess::Local(node.clone());
+        let rows = access.execute(&format!(
+            r#"{{ AgentToolCall(docID: "{}") {{ plugin_execution_receipt terminal_output lifecycle_state }} }}"#,
+            escape_graphql_string(child.doc_id().unwrap()),
+        )).await.unwrap();
+        let row = &rows["data"]["AgentToolCall"][0];
+        assert_eq!(row["lifecycle_state"], "completed");
+        assert_eq!(
+            serde_json::from_value::<PluginExecutionReceipt>(
+                row["plugin_execution_receipt"].clone()
+            )
+            .unwrap(),
+            evidence
+        );
+        assert!(row["terminal_output"].is_object());
+        let presentation = load_tool_call_presentation(
+            &access,
+            child.doc_id().unwrap(),
+            child.node_did(),
+            child.session_id(),
+            child.requester_did(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(presentation.result.as_deref(), Some("child output"));
+        let parent_row = access.execute(&format!(
+            r#"{{ AgentToolCall(docID: "{}") {{ plugin_execution_receipt lifecycle_state }} }}"#,
+            escape_graphql_string(parent.doc_id().unwrap()),
+        )).await.unwrap();
+        assert!(parent_row["data"]["AgentToolCall"][0]["plugin_execution_receipt"].is_null());
+        assert_eq!(
+            parent_row["data"]["AgentToolCall"][0]["lifecycle_state"],
+            "running"
+        );
+        drop(request_owner);
+        node.shutdown().await;
+        let _ = std::fs::remove_dir_all(path);
+    }
+
+    #[tokio::test]
     async fn stale_generation_cannot_publish_plugin_receipt_or_output() {
-        let (node, path, mut tool) =
-            admission_fixture::published_spawn_parent("plugin-receipt-stale").await;
+        let (fixture, request_owner) =
+            crate::tool_call_lifecycle::admission_fixture::published_admission_with_owner(
+                crate::tool_call_lifecycle::admission_fixture::PublishedAdmissionOptions {
+                    name: "plugin-receipt-stale".to_owned(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let crate::tool_call_lifecycle::admission_fixture::PublishedAdmission {
+            node,
+            path,
+            mut tool,
+            ..
+        } = fixture;
         tool.stage_plugin_receipt(Some(receipt())).unwrap();
         ConfigAccess::write_local(&node, "test.stale_plugin_generation", &format!(
             r#"mutation {{ update_AgentRequest(docID: "{}", input: {{ execution_generation: "replacement" }}) {{ _docID }} }}"#,
@@ -165,13 +255,27 @@ mod persistence_tests {
             "running"
         );
         assert!(row["data"]["AgentToolCall"][0]["plugin_execution_receipt"].is_null());
+        drop(request_owner);
         node.shutdown().await;
         let _ = std::fs::remove_dir_all(path);
     }
     #[tokio::test]
     async fn competing_terminal_without_receipt_is_never_backfilled() {
-        let (node, path, mut winner) =
-            admission_fixture::published_spawn_parent("plugin-late-receipt").await;
+        let (fixture, request_owner) =
+            crate::tool_call_lifecycle::admission_fixture::published_admission_with_owner(
+                crate::tool_call_lifecycle::admission_fixture::PublishedAdmissionOptions {
+                    name: "plugin-late-receipt".to_owned(),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let crate::tool_call_lifecycle::admission_fixture::PublishedAdmission {
+            node,
+            path,
+            tool: mut winner,
+            ..
+        } = fixture;
         let doc_id = winner.doc_id().unwrap().to_owned();
         let mut loser = ToolCallLifecycle::load_by_doc_id(
             node.clone(),
@@ -199,6 +303,7 @@ mod persistence_tests {
             "cancelled"
         );
         assert!(row["data"]["AgentToolCall"][0]["plugin_execution_receipt"].is_null());
+        drop(request_owner);
         node.shutdown().await;
         let _ = std::fs::remove_dir_all(path);
     }

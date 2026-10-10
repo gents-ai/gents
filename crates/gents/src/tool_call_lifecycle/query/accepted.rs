@@ -49,7 +49,7 @@ impl ToolCallLifecycle {
                             r#"{{ AgentToolCall(filter: {{
                     {scope}, _docID: {{ _eq: "{tool_id}" }}
                 }}, limit: 2) {{ _docID request_doc_id tool_call_id tool_name
-                    message_sequence lifecycle_state await_mode spawned_by_tool_call_doc_id }} }}"#
+                    message_sequence lifecycle_state await_mode spawned_by_tool_call_doc_id plugin_parent_tool_call_doc_id plugin_effect_ordinal }} }}"#
                         ))
                         .await?;
                     let rows = response["data"]["AgentToolCall"]
@@ -61,7 +61,7 @@ impl ToolCallLifecycle {
                     );
                     let tool = &rows[0];
                     anyhow::ensure!(
-                        tool["spawned_by_tool_call_doc_id"].is_null(),
+                        tool["spawned_by_tool_call_doc_id"].is_null() && tool["plugin_parent_tool_call_doc_id"].is_null() && tool["plugin_effect_ordinal"].is_null(),
                         "spawned process admission belongs to its accepted meta-call owner"
                     );
                     let request_doc_id = tool["request_doc_id"]

@@ -1812,12 +1812,21 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
     for (family, domain) in [
         ("invocation", "PluginInvocationCases"),
         ("receipt", "PluginReceiptCases"),
+        ("tool_effects", "PluginEffectCases"),
+        ("tool_effect_terminals", "PluginEffectTerminalCases"),
+        ("tool_effect_accounting", "PluginEffectAccountingCases"),
     ] {
         assert!(snapshot.plugin_resource_cases[family]
             .as_array()
             .is_some_and(|rows| !rows.is_empty()));
         emitted.insert(("plugin_resource_cases".into(), domain.into()));
     }
+    for family in ["supported", "availability", "reservation", "result_bytes"] {
+        assert!(snapshot.plugin_resource_cases["tool_calls"][family]
+            .as_array()
+            .is_some_and(|rows| !rows.is_empty()));
+    }
+    emitted.insert(("plugin_resource_cases".into(), "PluginToolCallCases".into()));
     assert!(snapshot.configuration_scope_cases["cases"]
         .as_array()
         .is_some_and(|rows| !rows.is_empty()));

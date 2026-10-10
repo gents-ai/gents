@@ -125,6 +125,7 @@ pub(crate) fn asking_plugin_wat(
 
 fn tool_ref(digest: Option<&str>) -> PluginToolRef {
     PluginToolRef {
+        tool_calls: false,
         plugin: "team/plugin".into(),
         digest: digest.map(str::to_owned),
         input_fields: Vec::new(),
@@ -663,12 +664,12 @@ mod bound {
         let input = serde_json::json!({ "path": fx.root.join("work/in.json") });
         let work = fx.root.join("work");
         let call = executor
-            .call_data_bound(&fx.record, input.clone(), Some(&work))
+            .call_data_bound(&fx.record, input.clone(), Some(&work), false)
             .await
             .unwrap();
         assert_eq!(call.outcome.output, serde_json::json!({ "read": true }));
         let error = executor
-            .call_data_bound(&fx.record, input, None)
+            .call_data_bound(&fx.record, input, None, false)
             .await
             .unwrap_err();
         assert!(
@@ -720,7 +721,7 @@ mod bound {
             "path_original": "/spoofed",
         });
         let call = executor
-            .call_data_bound(&record, input, Some(&root))
+            .call_data_bound(&record, input, Some(&root), false)
             .await
             .unwrap();
         let seen = &call.outcome.output;
@@ -733,7 +734,7 @@ mod bound {
 
         let folder = serde_json::json!({ "path": root });
         let call = executor
-            .call_data_bound(&record, folder, Some(&root))
+            .call_data_bound(&record, folder, Some(&root), false)
             .await
             .unwrap();
         assert_eq!(
@@ -812,7 +813,7 @@ async fn execution_receipt_hashes_canonical_values_and_keeps_tool_output_native(
     let executor = Arc::new(PluginExecutor::new(Some(home.path().to_owned())));
     let input = serde_json::json!({"z":2,"a":1});
     let (call, receipt) = executor
-        .call_data_bound_with_receipt(&record, input.clone(), None)
+        .call_data_bound_with_receipt(&record, input.clone(), None, false)
         .await;
     assert_eq!(call.unwrap().outcome.output, input);
     let digest = format!("sha256:{:x}", Sha256::digest(br#"{"a":1,"z":2}"#));
@@ -824,6 +825,7 @@ async fn execution_receipt_hashes_canonical_values_and_keeps_tool_output_native(
     assert_eq!(authority.filesystem, PluginFilesystemGrant::None);
     assert_eq!(authority.host_http, None);
     assert!(!authority.host_model);
+    assert!(!authority.host_tools);
     assert!(receipt.limits.unwrap().memory_bytes > 0);
 
     let tool = PluginTool::resolve(executor, &tool_ref(None), None).unwrap();
@@ -854,7 +856,7 @@ async fn execution_receipts_distinguish_refusal_bad_output_and_trap() {
         let (home, record) = installed_plugin(&wat, None);
         let executor = PluginExecutor::new(Some(home.path().to_owned()));
         let (_, receipt) = executor
-            .call_data_bound_with_receipt(&record, serde_json::json!({}), None)
+            .call_data_bound_with_receipt(&record, serde_json::json!({}), None, false)
             .await;
         assert_eq!(receipt.verdict, verdict);
         assert!(receipt.authority.is_some());
@@ -862,7 +864,7 @@ async fn execution_receipts_distinguish_refusal_bad_output_and_trap() {
         assert_eq!(receipt.output_digest, None);
         store::remove_record(home.path(), &record.namespace, &record.name).unwrap();
         let (result, receipt) = executor
-            .call_data_bound_with_receipt(&record, serde_json::json!({}), None)
+            .call_data_bound_with_receipt(&record, serde_json::json!({}), None, false)
             .await;
         assert!(result.is_err());
         assert_eq!(receipt.verdict, PluginExecutionVerdict::AdmissionRefused);

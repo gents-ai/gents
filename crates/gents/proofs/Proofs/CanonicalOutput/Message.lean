@@ -393,6 +393,13 @@ theorem auxiliary_never_publication_source (header : Header) (closing : Segment)
   cases hpub : header.publication <;>
     simp [publicationAllowsSource, hpub, hsource, Source.isAuxiliary]
 
+theorem tool_effect_arguments_never_publication_source (header : Header) (closing : Segment)
+    (call : DocId)
+    (hsource : closing.coordinate.source = .toolEffectArguments call) :
+    publicationAllowsSource header closing = false := by
+  cases hpub : header.publication <;>
+    simp [publicationAllowsSource, hpub, hsource, Source.isAuxiliary]
+
 def validateReferenceSource (records : List Segment) (denied : List DocId)
     (header : Header) (reference : PayloadRef) : Except MessageError Unit := do
   let closing ← (resolveClose records denied reference).mapError
