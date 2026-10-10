@@ -1021,7 +1021,7 @@ mod tests {
             projection_started: None,
             session: None,
             latest_request: None,
-            subagent: None,
+            caused: None,
         };
         let queued =
             json!({"queue":{"source":"user","policy":"append","queued_after_request_id":"root"}});
