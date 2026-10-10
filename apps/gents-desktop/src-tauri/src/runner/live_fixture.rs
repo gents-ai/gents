@@ -569,7 +569,7 @@ mod tests {
     #[test]
     fn live_fixture_desktop_chat_slash_skill_loads_on_node() -> Result<()> {
         let _guard = live_fixture_test_lock();
-        let mock = MockChatEndpoint::start(MODEL_NAME, "skill loaded")?;
+        let mock = MockChatEndpoint::start_with_held_prompt(MODEL_NAME, "skill loaded")?;
         let fixture = LiveBridgeFixture::start(Some(mock.backend_override(MODEL_NAME)), None)?;
 
         let result = fixture
@@ -639,12 +639,48 @@ mod tests {
         .await
         .context("node runtime did not reconcile the skill binding before chat submit")?;
 
-        let submitted = send_chat_message(
+        let release = HeldResponseRelease(mock.held_response.clone());
+        let initial = send_chat_message(
             fixture.desktop_core().as_ref(),
             ChatSendRequest {
                 node_did: node_did.clone(),
                 agent_id: Some(agent_id.clone()),
                 session_id: None,
+                content: HELD_PROMPT.to_string(),
+                caused_by_source_doc_id: None,
+                answer: None,
+                cwd: None,
+            },
+        )
+        .await?;
+        wait_for_captured_chat_request(mock, HELD_PROMPT).await?;
+        wait_for_condition(
+            "active initial desktop request",
+            Duration::from_secs(60),
+            || async {
+                fixture.desktop_core().refresh_store().await?;
+                let store = fixture.desktop_core().store().snapshot();
+                Ok(store.requests.iter().any(|row| {
+                    row.request_id == initial.request_id
+                        && row.node_did.as_deref() == Some(node_did.as_str())
+                        && row.session_id.as_deref() == Some(initial.session_id.as_str())
+                }) && store
+                    .derive_turn_for_node(&initial.session_id, &node_did)
+                    .is_some_and(|turn| !turn.is_terminal())
+                    && store
+                        .latest_request_id_for_session_for_node(&initial.session_id, &node_did)
+                        .as_deref()
+                        == Some(initial.request_id.as_str()))
+            },
+        )
+        .await?;
+
+        let submitted = send_chat_message(
+            fixture.desktop_core().as_ref(),
+            ChatSendRequest {
+                node_did: node_did.clone(),
+                agent_id: Some(agent_id.clone()),
+                session_id: Some(initial.session_id.clone()),
                 content: format!("/{skill_id}\n{task}"),
                 caused_by_source_doc_id: None,
                 answer: None,
@@ -653,13 +689,26 @@ mod tests {
         )
         .await?;
 
-        let requester_scope = fixture
-            .requester_scope(
-                Some(&node_did),
-                &submitted.session_id,
-                Some(&submitted.request_id),
-            )
-            .context("live fixture did not resolve its desktop requester scope")?;
+        let requester_scope = wait_for_row(
+            "desktop submitted request scope",
+            Duration::from_secs(60),
+            || async {
+                fixture.desktop_core().refresh_store().await?;
+                Ok(fixture
+                    .desktop_core()
+                    .store()
+                    .snapshot()
+                    .requests
+                    .iter()
+                    .find(|row| {
+                        row.request_id == submitted.request_id
+                            && row.node_did.as_deref() == Some(node_did.as_str())
+                            && row.session_id.as_deref() == Some(submitted.session_id.as_str())
+                    })
+                    .and_then(|row| row.requester_did.clone()))
+            },
+        )
+        .await?;
         let transcript_page = gents_desktop_core::client::load_session_transcript_page(
             fixture.desktop_core().node(),
             &submitted.session_id,
@@ -690,11 +739,18 @@ mod tests {
         )
         .await
         .context("desktop session snapshot missing after skill chat submit")?;
-        let pending_turn = session
-            .pending_turn
-            .context("desktop session snapshot did not expose the opening turn")?;
-        assert_eq!(pending_turn.content, task);
-        assert_eq!(pending_turn.selected_skill_ids, vec![skill_id.to_string()]);
+        assert_eq!(
+            session.latest_request_id.as_deref(),
+            Some(initial.request_id.as_str())
+        );
+        let queued_turn = session
+            .queued_turns
+            .iter()
+            .find(|turn| turn.request_id == submitted.request_id)
+            .context("desktop session snapshot did not expose the queued turn")?;
+        assert_eq!(queued_turn.content, task);
+        assert_eq!(queued_turn.selected_skill_ids, vec![skill_id.to_string()]);
+        drop(release);
 
         let request =
             wait_for_remote_request(fixture.remote_core().as_ref(), &submitted.request_id).await?;
@@ -708,8 +764,39 @@ mod tests {
             .as_ref()
             .context("replicated request is missing canonical input")?;
         assert_eq!(input.selected_skill_ids, vec![skill_id.to_string()]);
+        assert_eq!(
+            input
+                .queue
+                .as_ref()
+                .and_then(|queue| queue.queued_after_request_id.as_deref()),
+            Some(initial.request_id.as_str())
+        );
 
-        let captured = wait_for_captured_chat_request(mock, skill_body).await?;
+        let captured = wait_for_row(
+            "queued skill provider request",
+            Duration::from_secs(120),
+            || async {
+                Ok(mock.captured_chat_requests().into_iter().find(|request| {
+                    request.to_string().contains(skill_body)
+                        && request["messages"].as_array().is_some_and(|messages| {
+                            messages.iter().any(|message| {
+                                message["role"] == "user"
+                                    && message["content"].to_string().contains(task)
+                            })
+                        })
+                }))
+            },
+        )
+        .await?;
+        assert!(
+            captured["messages"]
+                .as_array()
+                .is_some_and(
+                    |messages| messages.iter().any(|message| message["role"] == "user"
+                        && message["content"].to_string().contains(task))
+                ),
+            "mock model request did not include the queued task: {captured}"
+        );
         assert!(
             captured.to_string().contains(skill_body),
             "mock model request did not include selected skill body: {captured}"
@@ -1001,15 +1088,30 @@ mod tests {
         }
     }
 
+    const HELD_PROMPT: &str = "HOLD_FIRST_SLASH_SKILL_FIXTURE_TURN";
+
+    /// Unblock the provider on early return before fixture shutdown drains requests.
+    struct HeldResponseRelease(Option<Arc<tokio::sync::Semaphore>>);
+
+    impl Drop for HeldResponseRelease {
+        fn drop(&mut self) {
+            if let Some(gate) = self.0.take() {
+                gate.add_permits(1);
+            }
+        }
+    }
+
     #[derive(Clone)]
     struct MockState {
         model_name: String,
         final_text: String,
+        held_response: Option<Arc<tokio::sync::Semaphore>>,
         captured: Arc<Mutex<Vec<Value>>>,
     }
 
     struct MockChatEndpoint {
         endpoint: String,
+        held_response: Option<Arc<tokio::sync::Semaphore>>,
         captured: Arc<Mutex<Vec<Value>>>,
         shutdown: Option<oneshot::Sender<()>>,
         join: Option<std::thread::JoinHandle<()>>,
@@ -1017,10 +1119,27 @@ mod tests {
 
     impl MockChatEndpoint {
         fn start(model_name: &str, final_text: &str) -> Result<Self> {
+            Self::start_inner(model_name, final_text, None)
+        }
+
+        fn start_with_held_prompt(model_name: &str, final_text: &str) -> Result<Self> {
+            Self::start_inner(
+                model_name,
+                final_text,
+                Some(Arc::new(tokio::sync::Semaphore::new(0))),
+            )
+        }
+
+        fn start_inner(
+            model_name: &str,
+            final_text: &str,
+            held_response: Option<Arc<tokio::sync::Semaphore>>,
+        ) -> Result<Self> {
             let captured = Arc::new(Mutex::new(Vec::new()));
             let state = Arc::new(MockState {
                 model_name: model_name.to_string(),
                 final_text: final_text.to_string(),
+                held_response: held_response.clone(),
                 captured: Arc::clone(&captured),
             });
             let (port_tx, port_rx) = std::sync::mpsc::channel::<u16>();
@@ -1058,6 +1177,7 @@ mod tests {
                 .context("mock chat endpoint failed to bind a port")?;
             Ok(Self {
                 endpoint: format!("http://127.0.0.1:{port}/v1"),
+                held_response,
                 captured,
                 shutdown: Some(shutdown_tx),
                 join: Some(join),
@@ -1118,11 +1238,20 @@ mod tests {
                     .into_response()
             }
         };
+        let held = request_json.to_string().contains(HELD_PROMPT);
         state
             .captured
             .lock()
             .expect("captured mock request mutex poisoned")
             .push(request_json);
+        if held {
+            if let Some(gate) = &state.held_response {
+                let _permit = gate
+                    .acquire()
+                    .await
+                    .expect("fixture response gate remains open");
+            }
+        }
         (
             StatusCode::OK,
             [(header::CONTENT_TYPE, "text/event-stream")],
