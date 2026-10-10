@@ -45,19 +45,19 @@ pub(super) struct CodexThreadRecord {
     pub(super) projection_started: Option<String>,
     pub(super) session: Option<gents_protocol::session::AgentSession>,
     pub(super) latest_request: Option<gents_protocol::graphql::GraphqlTurnState>,
-    pub(super) subagent: Option<CausedThread>,
+    pub(super) caused: Option<CausedThread>,
 }
 
 impl CodexThreadRecord {
-    pub(super) fn is_subagent(&self) -> bool {
-        self.subagent.is_some()
+    pub(super) fn is_caused(&self) -> bool {
+        self.caused.is_some()
     }
 
-    pub(super) fn projection_behavior_id<'a>(&'a self, root_behavior_id: &'a str) -> &'a str {
-        self.subagent
+    pub(super) fn projection_agent_id<'a>(&'a self, root_agent_id: &'a str) -> &'a str {
+        self.caused
             .as_ref()
-            .map(|link| link.behavior_id.as_str())
-            .unwrap_or(root_behavior_id)
+            .map(|link| link.agent_id.as_str())
+            .unwrap_or(root_agent_id)
     }
 }
 
@@ -118,7 +118,7 @@ pub(super) async fn load_codex_thread(
     let Some(link) = load_caused_thread(state, thread_id).await? else {
         return Ok(None);
     };
-    Ok(Some(assemble_subagent_record(state, link).await?))
+    Ok(Some(assemble_caused_record(state, link).await?))
 }
 
 /// The Codex root thread IDs of this shim: its scoped sessions and the
@@ -191,10 +191,10 @@ pub(super) async fn list_codex_threads_for_sources(
     state: &ShimState,
     archived: bool,
     include_cli: bool,
-    include_subagents: bool,
+    include_caused: bool,
 ) -> Result<Vec<CodexThreadRecord>> {
     let mut git_info_cache = ThreadGitInfoCache::default();
-    if archived || !include_subagents {
+    if archived || !include_caused {
         return if include_cli {
             list_codex_threads_by_archived_with_git_cache(state, archived, &mut git_info_cache)
                 .await
@@ -218,7 +218,7 @@ pub(super) async fn list_codex_threads_for_sources(
     for link in &links {
         if root_workspaces.contains_key(&link.session_id) {
             anyhow::ensure!(
-                link.agent_did == state.agent_did.as_ref()
+                link.node_did == state.node_did.as_ref()
                     && link.requester_did.as_deref() == Some(state.local_requester_did()),
                 "ambiguous Codex root/child thread label across canonical scopes: {}",
                 link.session_id
@@ -239,11 +239,11 @@ pub(super) async fn list_codex_threads_for_sources(
                 tracing::warn!(
                     thread_id = %link.session_id,
                     root_session_id = %link.root_session_id,
-                    "skipping authorized subagent thread whose Codex root workspace is unavailable"
+                    "skipping authorized caused thread whose Codex root workspace is unavailable"
                 );
                 continue;
             };
-            records.push(assemble_subagent_record_with_workspace(state, link, workspace).await?);
+            records.push(assemble_caused_record_with_workspace(state, link, workspace).await?);
         }
     }
     Ok(records)
@@ -310,25 +310,25 @@ async fn assemble_record_with_git_cache(
         projection_started: state.thread_created_at(session_id).await,
         session,
         latest_request,
-        subagent: None,
+        caused: None,
     })
 }
 
-async fn assemble_subagent_record(
+async fn assemble_caused_record(
     state: &ShimState,
     link: CausedThread,
 ) -> Result<CodexThreadRecord> {
     let cwd = storage::derive_thread_cwd(state, &link.root_session_id).await?;
     let git_info = thread_git_info(&cwd).await;
-    assemble_subagent_record_parts(state, link, cwd, git_info).await
+    assemble_caused_record_parts(state, link, cwd, git_info).await
 }
 
-async fn assemble_subagent_record_with_workspace(
+async fn assemble_caused_record_with_workspace(
     state: &ShimState,
     link: CausedThread,
     workspace: &RootThreadWorkspace,
 ) -> Result<CodexThreadRecord> {
-    assemble_subagent_record_parts(
+    assemble_caused_record_parts(
         state,
         link,
         workspace.cwd.clone(),
@@ -337,7 +337,7 @@ async fn assemble_subagent_record_with_workspace(
     .await
 }
 
-async fn assemble_subagent_record_parts(
+async fn assemble_caused_record_parts(
     state: &ShimState,
     link: CausedThread,
     cwd: PathBuf,
@@ -346,9 +346,9 @@ async fn assemble_subagent_record_parts(
     let session = gents::config_client::ConfigAccess::transact_local(
         &state.node,
         None,
-        "codex.subagent.session",
+        "codex.caused.session",
         |txn| {
-            let owner = &link.agent_did;
+            let owner = &link.node_did;
             let id = &link.session_id;
             let requester = link.requester_did.as_deref();
             Box::pin(async move {
@@ -363,7 +363,7 @@ async fn assemble_subagent_record_parts(
     .await?;
     if let Some(session) = &session {
         anyhow::ensure!(
-            session.behavior_id == link.behavior_id,
+            session.agent_id == link.agent_id,
             "child session binding differs from its authorized request"
         );
     } else {
@@ -393,7 +393,7 @@ async fn assemble_subagent_record_parts(
         projection_started: link.created_at.clone(),
         session,
         latest_request: None,
-        subagent: Some(link),
+        caused: Some(link),
     })
 }
 
@@ -492,7 +492,7 @@ mod tests {
     }
 
     #[test]
-    fn subagent_fanout_reuses_the_authorized_root_workspace_projection() {
+    fn caused_fanout_reuses_the_authorized_root_workspace_projection() {
         let root = CodexThreadRecord {
             session_id: "root-session".to_string(),
             cwd: PathBuf::from("/workspace/root"),
@@ -505,7 +505,7 @@ mod tests {
             projection_started: None,
             session: None,
             latest_request: None,
-            subagent: None,
+            caused: None,
         };
         let workspaces = index_root_workspaces([&root]);
         let expected = workspaces.get("root-session").expect("root workspace");
@@ -521,8 +521,8 @@ mod tests {
                 parent_session_id: "root-session".to_string(),
                 root_session_id: "root-session".to_string(),
                 depth: 1,
-                agent_did: "did:test:child".to_string(),
-                behavior_id: "child-behavior".to_string(),
+                node_did: "did:test:child".to_string(),
+                agent_id: "child-agent".to_string(),
                 model: None,
                 nickname: format!("child-{index}"),
                 client_projection: gents_protocol::client_protocol::project_persisted_attempt(
@@ -539,7 +539,7 @@ mod tests {
         assert_eq!(workspaces.len(), 1);
     }
     #[test]
-    fn projection_behavior_id_preserves_exact_child_binding() {
+    fn projection_agent_id_preserves_exact_child_binding() {
         let mut record = CodexThreadRecord {
             session_id: "root-session".to_string(),
             cwd: PathBuf::from("/workspace/root"),
@@ -552,12 +552,9 @@ mod tests {
             projection_started: None,
             session: None,
             latest_request: None,
-            subagent: None,
+            caused: None,
         };
-        assert_eq!(
-            record.projection_behavior_id("root-behavior"),
-            "root-behavior"
-        );
+        assert_eq!(record.projection_agent_id("root-agent"), "root-agent");
         let link = CausedThread {
             latest_request_doc_id: "test-request-doc".into(),
             requester_did: Some("did:parent".into()),
@@ -568,8 +565,8 @@ mod tests {
             parent_session_id: "root-session".to_string(),
             root_session_id: "root-session".to_string(),
             depth: 1,
-            agent_did: "did:test:child".to_string(),
-            behavior_id: "child-behavior".to_string(),
+            node_did: "did:test:child".to_string(),
+            agent_id: "child-agent".to_string(),
             model: None,
             nickname: "child-0".to_string(),
             client_projection: gents_protocol::client_protocol::project_persisted_attempt(
@@ -579,12 +576,9 @@ mod tests {
             failure_reason: None,
             created_at: None,
         };
-        record.subagent = Some(link);
-        assert_eq!(
-            record.projection_behavior_id("root-behavior"),
-            "child-behavior"
-        );
-        record.subagent.as_mut().unwrap().behavior_id = "  ".to_string();
-        assert_eq!(record.projection_behavior_id("root-behavior"), "  ");
+        record.caused = Some(link);
+        assert_eq!(record.projection_agent_id("root-agent"), "child-agent");
+        record.caused.as_mut().unwrap().agent_id = "  ".to_string();
+        assert_eq!(record.projection_agent_id("root-agent"), "  ");
     }
 }

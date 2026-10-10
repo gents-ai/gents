@@ -19,9 +19,9 @@ use crate::{post_graphql, require_non_empty};
 
 pub(crate) fn ensure_local_request_signer(
     home: Option<&Path>,
-    target_agent_did: &str,
+    target_node_did: &str,
 ) -> Result<()> {
-    if gents::identity::RegisteredIdentity::from_registered_did(target_agent_did, None).is_ok() {
+    if gents::identity::RegisteredIdentity::from_registered_did(target_node_did, None).is_ok() {
         return Ok(());
     }
     let home = crate::resolve_home_dir(home);
@@ -32,10 +32,10 @@ pub(crate) fn ensure_local_request_signer(
         )
     })?;
     anyhow::ensure!(
-        config.agent_did.trim() == target_agent_did.trim(),
+        config.node_did.trim() == target_node_did.trim(),
         "local-self request target {} does not match initialized home principal {}",
-        target_agent_did,
-        config.agent_did
+        target_node_did,
+        config.node_did
     );
     crate::load_initialized_home_identity(&home, &config)?;
     Ok(())
@@ -45,8 +45,8 @@ pub(crate) fn ensure_local_request_signer(
 pub(crate) struct SubmittedRequest {
     pub(crate) request_id: String,
     pub(crate) session_id: String,
-    pub(crate) agent_did: String,
-    pub(crate) behavior_id: Option<String>,
+    pub(crate) node_did: String,
+    pub(crate) agent_id: Option<String>,
     pub(crate) request_doc_id: String,
     pub(crate) requester_did: Option<String>,
     pub(crate) input: Option<RequestInput>,
@@ -75,7 +75,7 @@ pub(crate) async fn load_canonical_tool_presentation(
     let presentation = gents::session::load_tool_call_presentation(
         &access,
         tool_call_doc_id,
-        &submitted.agent_did,
+        &submitted.node_did,
         &submitted.session_id,
         submitted.requester_did.as_deref(),
     )
@@ -123,7 +123,7 @@ pub(crate) fn request_terminal_query(request_id: &str, physical: Option<&str>) -
                 {order}
                 limit: 2
             ) {{
-                _docID agent_did requester_did behavior_id session_id
+                _docID node_did requester_did agent_id session_id
                 request_id
                 lifecycle_state
                 failure_reason
@@ -154,9 +154,9 @@ pub(crate) async fn observe_canonical_request_output(
 pub(crate) struct CliRequestMetadata {
     pub(crate) request_doc_id: String,
     pub(crate) request_id: String,
-    pub(crate) agent_did: String,
+    pub(crate) node_did: String,
     pub(crate) requester_did: Option<String>,
-    pub(crate) behavior_id: Option<String>,
+    pub(crate) agent_id: Option<String>,
     pub(crate) session_id: String,
     pub(crate) lifecycle_state: RequestLifecycleState,
     pub(crate) failure_reason: Option<String>,
@@ -222,12 +222,12 @@ pub(crate) fn request_output_envelope(
             .clone()
             .context("request output omitted physical request identity")?,
         request_id: request.request_id.clone(),
-        agent_did: request
-            .agent_did
+        node_did: request
+            .node_did
             .clone()
             .context("request output omitted principal")?,
         requester_did: request.requester_did.clone(),
-        behavior_id: request.behavior_id.clone(),
+        agent_id: request.agent_id.clone(),
         session_id: request
             .session_id
             .clone()
@@ -281,20 +281,14 @@ pub(crate) fn request_output_envelope(
 
 pub(crate) async fn create_agent_request(
     graphql: &GraphqlEndpoint,
-    agent_did: &str,
+    node_did: &str,
     content: &str,
     session_id: Option<&str>,
-    behavior_id: Option<&str>,
+    agent_id: Option<&str>,
     options: RequestSubmitOptions,
 ) -> Result<SubmittedRequest> {
     let prepared = prepare_agent_request(
-        graphql,
-        agent_did,
-        content,
-        session_id,
-        behavior_id,
-        None,
-        options,
+        graphql, node_did, content, session_id, agent_id, None, options,
     )
     .await?;
     submit_prepared_agent_request_committed(graphql, &prepared).await
@@ -307,17 +301,17 @@ pub(crate) struct PreparedAgentRequest {
 
 pub(crate) async fn prepare_agent_request(
     graphql: &GraphqlEndpoint,
-    agent_did: &str,
+    node_did: &str,
     content: &str,
     session_id: Option<&str>,
-    behavior_id: Option<&str>,
+    agent_id: Option<&str>,
     request_id: Option<String>,
     options: RequestSubmitOptions,
 ) -> Result<PreparedAgentRequest> {
     let (request_content, request_input) =
         content_and_input_with_prompt_selected_skill_ids(options.input, content);
     let request_id = request_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-    let behavior_id = resolve_request_behavior_id(graphql, agent_did, behavior_id).await?;
+    let agent_id = resolve_request_agent_id(graphql, node_did, agent_id).await?;
     let session_id = session_id
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
@@ -336,7 +330,7 @@ pub(crate) async fn prepare_agent_request(
             }
         });
     let admission =
-        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(agent_did);
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(node_did);
     let create = gents::build_signed_request(
         gents::RequestSpec {
             trigger_lineage: gents::lifecycle::TriggerLineage {
@@ -360,9 +354,9 @@ pub(crate) async fn prepare_agent_request(
                 gents_protocol::request_admission::RequestPurpose::Normal,
                 gents::RequestIdentity {
                     request_id: request_id.clone(),
-                    agent_did: agent_did.to_string(),
+                    node_did: node_did.to_string(),
                     requester_did: None,
-                    behavior_id: behavior_id.clone(),
+                    agent_id: agent_id.clone(),
                     session_id: session_id.clone(),
                     content: request_content,
                     execution_origin: gents::lifecycle::ExecutionOrigin::Interactive,
@@ -383,10 +377,10 @@ pub(crate) async fn prepare_agent_request(
 /// document.
 pub(crate) async fn create_goal_backed_agent_request(
     graphql: &GraphqlEndpoint,
-    agent_did: &str,
+    node_did: &str,
     content: &str,
     session_id: &str,
-    behavior_id: Option<&str>,
+    agent_id: Option<&str>,
     objective: &str,
     token_budget: Option<i64>,
 ) -> Result<SubmittedRequest> {
@@ -398,7 +392,7 @@ pub(crate) async fn create_goal_backed_agent_request(
         "goal-token-budget must be positive"
     );
     let digest = Sha256::digest(
-        format!("{agent_did}\0{session_id}\0{objective}\0{token_budget:?}\0{content}").as_bytes(),
+        format!("{node_did}\0{session_id}\0{objective}\0{token_budget:?}\0{content}").as_bytes(),
     );
     let request_id = format!(
         "goal-submit-{}",
@@ -409,14 +403,14 @@ pub(crate) async fn create_goal_backed_agent_request(
     );
     let retry_key = format!(
         "goal-submit:{}",
-        gents::goal::deterministic_goal_creation_key(agent_did, session_id)
+        gents::goal::deterministic_goal_creation_key(node_did, session_id)
     );
     let prepared = prepare_agent_request(
         graphql,
-        agent_did,
+        node_did,
         content,
         Some(session_id),
-        behavior_id,
+        agent_id,
         Some(request_id),
         RequestSubmitOptions {
             retry_key: Some(retry_key.clone()),
@@ -428,7 +422,7 @@ pub(crate) async fn create_goal_backed_agent_request(
     let access = gents::ConfigAccess::Graphql(graphql.clone());
     gents::goal::submit_goal_backed_request(
         &access,
-        agent_did,
+        node_did,
         session_id,
         objective,
         token_budget,
@@ -445,21 +439,21 @@ pub(crate) async fn create_goal_backed_agent_request_local(
     node: &defra_node::EmbeddedNode,
     actor: identity::Did,
     graphql: &GraphqlEndpoint,
-    agent_did: &str,
+    node_did: &str,
     objective: &str,
     token_budget: Option<i64>,
     session_id: &str,
-    behavior_id: &str,
+    agent_id: &str,
     request_id: String,
     mut options: RequestSubmitOptions,
 ) -> Result<SubmittedRequest> {
     options.retry_key = Some(format!("goal-request:{request_id}"));
     let prepared = prepare_agent_request(
         graphql,
-        agent_did,
+        node_did,
         objective,
         Some(session_id),
-        Some(behavior_id),
+        Some(agent_id),
         Some(request_id),
         options,
     )
@@ -467,7 +461,7 @@ pub(crate) async fn create_goal_backed_agent_request_local(
     gents::goal::submit_goal_backed_request_local(
         node,
         actor,
-        agent_did,
+        node_did,
         session_id,
         objective,
         token_budget,
@@ -523,9 +517,9 @@ fn submitted_from_receipt(row: AgentRequestRow) -> Result<SubmittedRequest> {
             .context("receipt has no physical identity")?,
         request_id: row.request_id,
         session_id: row.session_id.context("receipt has no session")?,
-        agent_did: row.agent_did.context("receipt has no principal")?,
+        node_did: row.node_did.context("receipt has no principal")?,
         requester_did: row.requester_did,
-        behavior_id: row.behavior_id,
+        agent_id: row.agent_id,
         input: row.input,
         created_at: row.created_at,
     })
@@ -552,7 +546,7 @@ async fn read_submitted_receipt(
     create: &AgentRequestCreate,
 ) -> Result<Option<AgentRequestRow>> {
     let scope = gents::session::session_scope_filter(
-        &create.agent_did,
+        &create.node_did,
         &create.session_id,
         (!create.requester_did.is_empty()).then_some(create.requester_did.as_str()),
     );
@@ -582,7 +576,7 @@ async fn read_submitted_receipt(
     let row: AgentRequestRow = serde_json::from_value(value.clone())?;
     anyhow::ensure!(
         row.request_id == create.request_id
-            && row.agent_did.as_deref() == Some(create.agent_did.as_str())
+            && row.node_did.as_deref() == Some(create.node_did.as_str())
             && row.session_id.as_deref() == Some(create.session_id.as_str())
             && row.requester_did.as_deref()
                 == (!create.requester_did.is_empty()).then_some(create.requester_did.as_str()),
@@ -592,68 +586,68 @@ async fn read_submitted_receipt(
     Ok(Some(row))
 }
 
-async fn resolve_request_behavior_id(
+async fn resolve_request_agent_id(
     graphql: &GraphqlEndpoint,
-    agent_did: &str,
+    node_did: &str,
     requested: Option<&str>,
 ) -> Result<String> {
-    let escaped_agent_did = gents::graphql::escape_graphql_string(agent_did);
+    let escaped_node_did = gents::graphql::escape_graphql_string(node_did);
     let response = post_graphql(
         graphql,
         &format!(
             r#"{{
-                AgentPrincipal(
-                    filter: {{ agent_did: {{ _eq: "{escaped_agent_did}" }} }},
+                Node(
+                    filter: {{ node_did: {{ _eq: "{escaped_node_did}" }} }},
                     limit: 2
-                ) {{ agent_did default_behavior_id enabled }}
-                AgentBehavior(
-                    filter: {{ agent_did: {{ _eq: "{escaped_agent_did}" }} }}
-                ) {{ behavior_id agent_did enabled }}
+                ) {{ node_did default_agent_id enabled }}
+                Agent(
+                    filter: {{ node_did: {{ _eq: "{escaped_node_did}" }} }}
+                ) {{ agent_id node_did enabled }}
             }}"#,
         ),
     )
     .await
-    .context("loading authoritative request behavior")?;
-    let principals = response
-        .pointer("/data/AgentPrincipal")
+    .context("loading authoritative request agent")?;
+    let nodes = response
+        .pointer("/data/Node")
         .and_then(Value::as_array)
-        .context("AgentPrincipal query returned no row array")?;
+        .context("Node query returned no row array")?;
     anyhow::ensure!(
-        principals.len() == 1,
+        nodes.len() == 1,
         "request target principal must resolve to exactly one row"
     );
-    let principal = &principals[0];
+    let principal = &nodes[0];
     anyhow::ensure!(
         principal.get("enabled").and_then(Value::as_bool) == Some(true),
         "request target principal is disabled"
     );
-    let behavior_id = match requested.map(str::trim).filter(|value| !value.is_empty()) {
-        Some(behavior_id) => behavior_id.to_string(),
+    let agent_id = match requested.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(agent_id) => agent_id.to_string(),
         None => principal
-            .get("default_behavior_id")
+            .get("default_agent_id")
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned)
-            .context("request target principal has no canonical default behavior")?,
+            .context("request target principal has no canonical default agent")?,
     };
-    let behaviors = response
-        .pointer("/data/AgentBehavior")
+    let agents = response
+        .pointer("/data/Agent")
         .and_then(Value::as_array)
-        .context("AgentBehavior query returned no row array")?;
-    let matching = behaviors
+        .context("Agent query returned no row array")?;
+    let matching = agents
         .iter()
-        .filter(|row| row.get("behavior_id").and_then(Value::as_str) == Some(&behavior_id))
+        .filter(|row| row.get("agent_id").and_then(Value::as_str) == Some(&agent_id))
         .collect::<Vec<_>>();
     anyhow::ensure!(
         matching.len() == 1,
-        "request behavior must resolve to exactly one row owned by the target principal"
+        "request agent must resolve to exactly one row owned by the target principal"
     );
     anyhow::ensure!(
         matching[0].get("enabled").and_then(Value::as_bool) == Some(true),
-        "request behavior is disabled"
+        "request agent is disabled"
     );
-    Ok(behavior_id)
+    Ok(agent_id)
 }
 
 pub(crate) fn content_and_input_with_prompt_selected_skill_ids(
@@ -770,7 +764,7 @@ pub(crate) async fn wait_for_terminal_response(
             );
             if let Some(original) = pinned.as_ref() {
                 anyhow::ensure!(
-                    request.agent_did == original.agent_did
+                    request.node_did == original.node_did
                         && request.requester_did == original.requester_did
                         && request.session_id == original.session_id
                         && request.request_id == original.request_id,
@@ -1067,8 +1061,8 @@ pub(crate) async fn fetch_request_view(
             ) {{
                 _docID
                 request_id
-                agent_did
-                behavior_id
+                node_did
+                agent_id
                 content
                 lifecycle_state
                 failure_reason
@@ -1131,7 +1125,7 @@ mod tests {
         use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
 
         let segment = OutputSegment {
-            agent_did: "did:test:owner".into(),
+            node_did: "did:test:owner".into(),
             requester_did: None,
             session_id: "session".into(),
             request_doc_id: "physical".into(),
@@ -1175,7 +1169,7 @@ mod tests {
         row["_docID"] = json!("segment-0");
         let owner = json!({
             "_docID": "physical", "request_id": "request",
-            "agent_did": "did:test:owner", "requester_did": null,
+            "node_did": "did:test:owner", "requester_did": null,
             "session_id": "session", "lifecycle_state": "processing",
             "execution_generation": "generation",
             "execution_lease_secs": 30,
@@ -1202,7 +1196,7 @@ mod tests {
         let request = json!({
             "_docID": "physical",
             "request_id": "request",
-            "agent_did": "did:test:owner",
+            "node_did": "did:test:owner",
             "requester_did": null,
             "session_id": "session",
             "lifecycle_state": "processing",
@@ -1276,7 +1270,7 @@ mod tests {
     }
 
     async fn stable_test_prepared_request() -> (PreparedAgentRequest, Value) {
-        use gents::AgentIdentity;
+        use gents::NodeIdentity;
         let dir = tempfile::tempdir().unwrap();
         let identity =
             gents::KeyIdentity::load_or_create(dir.path().join("agent.key"), None).unwrap();
@@ -1286,9 +1280,9 @@ mod tests {
                 gents_protocol::request_admission::RequestPurpose::Normal,
                 gents::RequestIdentity {
                     request_id: "stable-request-id".into(),
-                    agent_did: did.clone(),
+                    node_did: did.clone(),
                     requester_did: None,
-                    behavior_id: "behavior".into(),
+                    agent_id: "agent".into(),
                     session_id: "session".into(),
                     content: "hello".into(),
                     execution_origin: gents::lifecycle::ExecutionOrigin::Interactive,
@@ -1301,12 +1295,12 @@ mod tests {
         .await
         .unwrap();
         let receipt = json!({
-            "_docID":"physical-receipt", "request_id":create.request_id, "purpose":"normal", "agent_did":create.agent_did,
-            "requester_did":create.requester_did, "behavior_id":create.behavior_id, "session_id":create.session_id,
+            "_docID":"physical-receipt", "request_id":create.request_id, "purpose":"normal", "node_did":create.node_did,
+            "requester_did":create.requester_did, "agent_id":create.agent_id, "session_id":create.session_id,
             "content":create.content, "input":create.input, "execution_origin":create.execution_origin,
             "created_at":create.created_at, "retry_parent_request":create.retry_parent_request,
             "retry_root_request":create.retry_root_request, "retry_count":create.retry_count,
-            "max_retries":create.max_retries, "subagent_depth":create.subagent_depth,
+            "max_retries":create.max_retries, "request_hop":create.request_hop,
             "admission_kind":"local-self", "admission_signer_did":create.admission.signer_did,
             "admission_signature":bs58::encode(&create.admission.signature).into_string()
         });
@@ -1431,13 +1425,13 @@ mod tests {
 
     #[tokio::test]
     async fn prepared_request_signs_complete_client_semantics_once() -> anyhow::Result<()> {
-        use gents::AgentIdentity;
+        use gents::NodeIdentity;
         let dir = tempfile::tempdir()?;
         let identity = gents::KeyIdentity::load_or_create(dir.path().join("agent.key"), None)?;
         let did = identity.did().to_string();
         let data = serde_json::json!({"data": {
-            "AgentPrincipal": [{"agent_did": did, "default_behavior_id": "default", "enabled": true}],
-            "AgentBehavior": [{"agent_did": did, "behavior_id": "default", "enabled": true}]
+            "Node": [{"node_did": did, "default_agent_id": "default", "enabled": true}],
+            "Agent": [{"node_did": did, "agent_id": "default", "enabled": true}]
         }});
         let app = axum::Router::new().route(
             "/graphql",
@@ -1478,7 +1472,7 @@ mod tests {
         );
         assert_eq!(create.request_id, "stable-request");
         assert_eq!(create.requester_did, did);
-        assert_eq!(create.behavior_id, "default");
+        assert_eq!(create.agent_id, "default");
         assert_eq!(create.valid_until.as_deref(), Some("2030-01-01T00:00:00Z"));
         assert_eq!(create.retry_parent_request.as_deref(), Some("parent"));
         assert_eq!(

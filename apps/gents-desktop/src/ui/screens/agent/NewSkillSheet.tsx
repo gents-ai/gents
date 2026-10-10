@@ -1,5 +1,5 @@
 /* A skill is content: a name and instructions you write, not settings you
-   pick. So it opens as a sheet beside the behavior, with room to write,
+   pick. So it opens as a sheet beside the agent, with room to write,
    and resolves with the new skill's id once saved. */
 import type { NodeView } from "../../../hooks/fleetStore";
 import { useState } from "react";
@@ -67,7 +67,7 @@ export function NewSkillSheet({
       await changeConfig("saveSkillConfig", {
         document: {
           skill_id: skillId,
-          agent_did: deployment.agentDid,
+          node_did: deployment.nodeDid,
           name: slug(name) || skillId,
           description: description.trim() || null,
           instructions: instructions.trim(),
@@ -101,7 +101,7 @@ export function NewSkillSheet({
         <SheetHeader>
           <SheetTitle>New skill</SheetTitle>
           <SheetDescription>
-            A named set of instructions the behavior can follow. Tool references and the
+            A named set of instructions the agent can follow. Tool references and the
             interface can be set on the skill afterwards.
           </SheetDescription>
         </SheetHeader>

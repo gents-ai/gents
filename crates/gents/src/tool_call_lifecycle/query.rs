@@ -52,7 +52,7 @@ struct ToolCallRow {
     #[serde(default)]
     request_doc_id: Option<String>,
     #[serde(default)]
-    agent_did: Option<String>,
+    node_did: Option<String>,
     #[serde(default)]
     requester_did: Option<String>,
     message_sequence: u32,
@@ -87,12 +87,12 @@ impl ToolCallLifecycle {
     pub async fn load_by_doc_id(
         node: Arc<EmbeddedNode>,
         doc_id: &str,
-        agent_did: &str,
+        node_did: &str,
         session_id: &str,
         requester_did: Option<&str>,
     ) -> Result<Option<Self>> {
         let physical = escape_graphql_string(doc_id);
-        let scope = crate::session::session_scope_filter(agent_did, session_id, requester_did);
+        let scope = crate::session::session_scope_filter(node_did, session_id, requester_did);
         Self::load_filtered(node, format!("{scope},_docID:{{_eq:\"{physical}\"}}")).await
     }
 
@@ -104,7 +104,7 @@ impl ToolCallLifecycle {
                     tool_call_id
                     request_id
                     request_doc_id
-                    agent_did
+                    node_did
                     requester_did
                     message_sequence
                     tool_name
@@ -142,10 +142,10 @@ impl ToolCallLifecycle {
         };
 
         let owner = row
-            .agent_did
+            .node_did
             .as_deref()
             .filter(|value| !value.trim().is_empty())
-            .ok_or_else(|| anyhow!("AgentToolCall is missing agent_did"))?;
+            .ok_or_else(|| anyhow!("AgentToolCall is missing node_did"))?;
         let spawned_by_tool_call_doc_id = row
             .spawned_by_tool_call_doc_id
             .as_deref()
@@ -261,17 +261,17 @@ impl ToolCallLifecycle {
             row.request_id.as_deref().is_none_or(|id| id == request_id),
             "tool logical request ID conflicts with physical owner"
         );
-        let agent_did = row
-            .agent_did
+        let node_did = row
+            .node_did
             .filter(|value| !value.trim().is_empty())
-            .ok_or_else(|| anyhow!("AgentToolCall is missing agent_did"))?;
+            .ok_or_else(|| anyhow!("AgentToolCall is missing node_did"))?;
 
         Ok(Some(Self {
             node,
             request_id,
             request_doc_id: row.request_doc_id.filter(|value| !value.trim().is_empty()),
             session_id: row.session_id,
-            agent_did,
+            node_did,
             // Current recovery paths only update the existing immutable row,
             // but preserve its route key so a future create transition cannot
             // silently rehydrate the lifecycle as unrouted.
@@ -344,15 +344,15 @@ mod tests {
         node: &Arc<EmbeddedNode>,
         request_id: &str,
         session_id: &str,
-        agent_did: &str,
+        node_did: &str,
         requester_did: Option<&str>,
     ) -> RequestLifecycle {
         let now = crate::graphql::escape_graphql_string(&chrono::Utc::now().to_rfc3339());
         let request_id = crate::graphql::escape_graphql_string(request_id);
         let session_id = crate::graphql::escape_graphql_string(session_id);
-        let agent_did = crate::graphql::escape_graphql_string(agent_did);
+        let node_did = crate::graphql::escape_graphql_string(node_did);
         let requester_did_field = crate::session::requester_did_create_field(requester_did);
-        let created = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", purpose: "normal", agent_did: "{agent_did}", behavior_id: "general", session_id: "{session_id}", retry_parent_request: "", retry_root_request: "{request_id}", superseded_by_request: "", content: "query fixture", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "{now}", retry_count: 0, max_retries: 3, subagent_depth: 0, {requester_did_field} }}) {{ _docID }} }}"#)).await;
+        let created = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", purpose: "normal", node_did: "{node_did}", agent_id: "general", session_id: "{session_id}", retry_parent_request: "", retry_root_request: "{request_id}", superseded_by_request: "", content: "query fixture", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "{now}", retry_count: 0, max_retries: 3, request_hop: 0, {requester_did_field} }}) {{ _docID }} }}"#)).await;
         assert!(!created.has_errors(), "{:#?}", created.errors);
         let row = node.execute(&format!(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ {} }} }}"#,
@@ -362,10 +362,10 @@ mod tests {
             crate::graphql::first_row(&row, "AgentRequest")
                 .unwrap()
                 .unwrap();
-        let mut lifecycle = RequestLifecycle::new_with_agent_did(
+        let mut lifecycle = RequestLifecycle::new_with_node_did(
             node.clone(),
             "general",
-            &agent_did,
+            &node_did,
             row.try_into().unwrap(),
             60,
         );
@@ -390,16 +390,16 @@ mod tests {
             .await
             .expect("runtime schemas");
 
-        let agent_did = "did:test:host";
+        let node_did = "did:test:host";
         let mut request = claimed_request(
             &node,
             "request-routed",
             "session-routed",
-            agent_did,
+            node_did,
             Some("did:test:coordinator"),
         )
         .await;
-        let writer = DefraStreamWriter::new(node.clone(), agent_did, Duration::from_millis(1));
+        let writer = DefraStreamWriter::new(node.clone(), node_did, Duration::from_millis(1));
         request
             .begin_owned_execution(&writer)
             .await
@@ -445,7 +445,7 @@ mod tests {
         .expect("call_tool carries a selected tool identity");
         let mut lifecycle = ToolCallLifecycle::from_accepted(
             node.clone(),
-            agent_did.to_string(),
+            node_did.to_string(),
             Some("did:test:coordinator".to_string()),
             accepted,
             deadline,

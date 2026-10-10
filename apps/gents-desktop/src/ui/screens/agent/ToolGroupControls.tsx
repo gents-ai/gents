@@ -90,7 +90,7 @@ export function parseToolGroups(value: string): Partial<Tools> | null {
     for (const key of [
       "host",
       "remote",
-      "subagents",
+      "agents",
       "built_ins",
       "datastore",
       "integrations",
@@ -101,7 +101,7 @@ export function parseToolGroups(value: string): Partial<Tools> | null {
         return null;
     }
     for (const list of [
-      document.subagents?.target_ids,
+      document.agents?.target_ids,
       document.datastore?.datastore_tool_surface_ids,
     ]) {
       if (
@@ -141,7 +141,7 @@ export function ToolGroupControls({
   value: string;
   onChange: (value: string) => void;
   deployment: NodeView;
-  onCreateTarget: (behaviorId: string) => void;
+  onCreateTarget: (agentId: string) => void;
   onInvalid: (id: string, label: string | null) => void;
 }) {
   const {
@@ -165,7 +165,7 @@ export function ToolGroupControls({
         2,
       ),
     );
-  const flags = <K extends "built_ins" | "self_config" | "subagents" | "datastore">(
+  const flags = <K extends "built_ins" | "self_config" | "agents" | "datastore">(
     key: K,
     entries: [keyof NonNullable<Tools[K]>, string, boolean?][],
   ) =>
@@ -312,20 +312,18 @@ export function ToolGroupControls({
           Permissions are independent opt-ins. Process authority remains the ceiling.
         </Note>
       </Group>
-      <Group title="Subagents">
-        {flags("subagents", [["enabled", "Start and message subagent sessions"]])}
+      <Group title="Agent sessions">
+        {flags("agents", [["enabled", "Start and message agent sessions"]])}
         <DocumentSelection
-          label="Subagent targets"
-          description="The agents this one may start with agent_new. Once subagents are enabled it can message and list sessions on this node without a target."
-          options={(deployment.subagentTargets ?? []).map((target) => ({
+          label="Agent targets"
+          description="The agents this one may start with agent_new. Once agent sessions are enabled it can message and list sessions on this node without a target."
+          options={(deployment.agentTargets ?? []).map((target) => ({
             value: target.target_id,
             label: target.name,
-            description: `${target.behavior_id}${target.target_agent_did !== deployment.agentDid ? ` · ${target.target_agent_did}` : ""}`,
+            description: `${target.agent_id}${target.target_node_did !== deployment.nodeDid ? ` · ${target.target_node_did}` : ""}`,
           }))}
-          selected={groups.subagents?.target_ids ?? []}
-          onChange={(ids) =>
-            update("subagents", { target_ids: ids.length ? ids : null })
-          }
+          selected={groups.agents?.target_ids ?? []}
+          onChange={(ids) => update("agents", { target_ids: ids.length ? ids : null })}
         />
         <ChoiceRow
           id="tools-create-target"
@@ -333,19 +331,19 @@ export function ToolGroupControls({
           description="Created with Save; select it above to grant access."
           value=""
           items={[
-            { value: "", label: "Choose a behavior…" },
-            ...deployment.behaviorConfigs
+            { value: "", label: "Choose an agent…" },
+            ...deployment.agentConfigs
               .filter(
-                (behavior) =>
-                  !deployment.subagentTargets.some(
+                (agent) =>
+                  !deployment.agentTargets.some(
                     (target) =>
-                      target.target_agent_did === deployment.agentDid &&
-                      target.behavior_id === behavior.behavior_id,
+                      target.target_node_did === deployment.nodeDid &&
+                      target.agent_id === agent.agent_id,
                   ),
               )
-              .map((behavior) => ({
-                value: behavior.behavior_id,
-                label: behavior.display_name ?? behavior.behavior_id,
+              .map((agent) => ({
+                value: agent.agent_id,
+                label: agent.display_name ?? agent.agent_id,
               })),
           ]}
           onChange={(id) => {

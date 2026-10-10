@@ -25,8 +25,8 @@ function managedStatus(
   return {
     state: "disabled",
     autoStart: false,
-    agentName: null,
-    agentDid: null,
+    nodeName: null,
+    nodeDid: null,
     graphql: null,
     effectiveToolCeiling: null,
     effectiveToolRoot: null,
@@ -92,7 +92,7 @@ function snapshot(configured: boolean): DesktopClientSnapshot {
             {
               peerId: deployment.peerId,
               label: deployment.label,
-              agentDid: deployment.agentDid,
+              nodeDid: deployment.nodeDid,
               addr: deployment.addr,
               source: deployment.source,
               graphql: deployment.graphql,
@@ -122,7 +122,7 @@ function harness(api: Partial<DesktopApiAdapter>) {
   const full = {
     fetchDesktopSnapshot: vi.fn(async () => snapshot(false)),
     fetchSessionSnapshot: vi.fn(async () => null),
-    setSelectedAgent: vi.fn(async () => undefined),
+    setSelectedNode: vi.fn(async () => undefined),
     startDesktopClient: vi.fn(async () => snapshot(false)),
     shutdownDesktopClient: vi.fn(async () => snapshot(false)),
     startManagedServer: vi.fn(),
@@ -213,7 +213,7 @@ describe("a home this version cannot open", () => {
     expect(run.resetManagedServer).toHaveBeenCalledTimes(1);
     expect(
       screen.getByTestId("incompatible-home-delete-client-note"),
-    ).toHaveTextContent("pairings with remote agents");
+    ).toHaveTextContent("pairings with remote nodes");
     expect(screen.getByTestId("incompatible-home-delete-paths")).toHaveTextContent(
       `${HOME}/keys/local.key`,
     );
@@ -258,10 +258,10 @@ describe("a home this version cannot open", () => {
       managedServerStatus: vi.fn(async () =>
         managedStatus({
           state: "failed",
-          agentName: "Forge",
+          nodeName: "Forge",
           effectiveToolCeiling: "readwrite",
           effectiveToolRoot: "/Users/test",
-          error: "The background agent keeps exiting before it becomes ready.",
+          error: "The background node keeps exiting before it becomes ready.",
         }),
       ),
       restartManagedServer,
@@ -397,7 +397,7 @@ describe("setup start on a home this version cannot open", () => {
     };
     const app = testApp({
       api,
-      snapshot: { bootstrap: { ...bootstrap, initAgentName: "Forge" } },
+      snapshot: { bootstrap: { ...bootstrap, initNodeName: "Forge" } },
     });
     renderIn(app, <SetupScreen onDone={vi.fn()} />);
     const next = screen.getByTestId("setup-next");

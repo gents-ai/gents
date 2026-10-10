@@ -9,13 +9,13 @@ use defra_node::EmbeddedNode;
 /// This also handles deletes and ownership moves without retaining a stale row.
 pub(crate) async fn apply_control_update(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     collection_name: &str,
     _doc_id: &str,
     view: &mut DocumentRuntimeView,
 ) -> Result<ControlUpdateOutcome> {
     anyhow::ensure!(
-        view.principal.value.agent_did == agent_did,
+        view.node.value.node_did == node_did,
         "runtime view owner mismatch"
     );
     if Collection::ALL

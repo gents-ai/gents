@@ -13,7 +13,7 @@ function hydration(
 ): SessionHydrationView {
   return {
     sessionId: "session-1",
-    agentDid: "did:test:agent",
+    nodeDid: "did:test:agent",
     phase: "serving",
     mergedCount: 4,
     coveredCount: 4,
@@ -60,7 +60,7 @@ describe("visibleSessionHydration", () => {
     expect(visibleSessionHydration(hydration(), "session-1", "did:other")).toBeNull();
     expect(
       visibleSessionHydration(
-        hydration({ agentDid: "" }),
+        hydration({ nodeDid: "" }),
         "session-1",
         "did:test:agent",
       ),

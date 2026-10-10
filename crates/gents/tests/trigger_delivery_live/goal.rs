@@ -10,12 +10,12 @@ async fn evidence(access: &ConfigAccess, owner: &str) -> Result<Value> {
     let owner = escape_graphql_string(owner);
     let query = format!(
         r#"{{
-        AgentRequest(filter:{{agent_did:{{_eq:"{owner}"}}}}){{_docID request_id session_id lifecycle_state caused_by_trigger_kind failure_reason}}
-        Trigger(filter:{{agent_did:{{_eq:"{owner}"}}}}){{trigger_id last_status last_error}}
+        AgentRequest(filter:{{node_did:{{_eq:"{owner}"}}}}){{_docID request_id session_id lifecycle_state caused_by_trigger_kind failure_reason}}
+        Trigger(filter:{{node_did:{{_eq:"{owner}"}}}}){{trigger_id last_status last_error}}
         TriggerFire(filter:{{owner_did:{{_eq:"{owner}"}}}}){{fire_key trigger_id request_id session_id goal_id goal_assignment_applied}}
         FireOutcome(filter:{{owner_did:{{_eq:"{owner}"}}}}){{fire_key trigger_id request_id session_id goal_id terminal_state created_at}}
-        Goal(filter:{{agent_did:{{_eq:"{owner}"}}}}){{goal_id session_id objective status assignment_root_request_doc_id}}
-        InferenceCall(filter:{{agent_did:{{_eq:"{owner}"}}}}){{request_id call_kind call_state started_at ended_at}}
+        Goal(filter:{{node_did:{{_eq:"{owner}"}}}}){{goal_id session_id objective status assignment_root_request_doc_id}}
+        InferenceCall(filter:{{node_did:{{_eq:"{owner}"}}}}){{request_id call_kind call_state started_at ended_at}}
         AgentToolCall(filter:{{session_id:{{_eq:"{SESSION}"}}}}){{request_id tool_name lifecycle_state}}
     }}"#
     );
@@ -89,7 +89,7 @@ async fn goal_task_waits_for_claim_and_emits_only_after_model_completion() -> Re
         gents::eval::runner::embedded::EmbeddedHome::create_retained(&artifacts.join("home"))
             .await?;
     let db = support::test_db_from_home(home);
-    let identity: Arc<dyn AgentIdentity> = db.node_identity.clone();
+    let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
     let owner = identity.did().to_owned();
     let access = ConfigAccess::Local(db.node.clone());
     access.add_schema(SCHEMA).await?;
@@ -99,11 +99,11 @@ async fn goal_task_waits_for_claim_and_emits_only_after_model_completion() -> Re
         )
         .await?;
     configure(&access, &db.node, &owner, &endpoints).await?;
-    support::fixtures::configure_behavior_tools(
+    support::fixtures::configure_agent_tools(
         &db.node, &owner, "delivery-lead",
         Some("Follow the current request and Goal objective. Initial Task deliveries and inbox replies must not call update_goal. On an explicit durable Goal controller continuation, perform the objective and call update_goal complete when instructed. Do not create another Goal or use unrelated tools.".into()),
         gents::document_config::Tools {
-            tools_id: "delivery-lead:tools".into(), agent_did: owner.clone(),
+            tools_id: "delivery-lead:tools".into(), node_did: owner.clone(),
             built_ins: Some(gents::document_config::BuiltInTools {
                 enable_goal_tools: Some(true), ..Default::default()
             }),
@@ -117,7 +117,7 @@ async fn goal_task_waits_for_claim_and_emits_only_after_model_completion() -> Re
     ] {
         let id = format!("delivery-goal-{kind}");
         documents.extend([
-            (Collection::Task, json!({"task_id":id,"behavior_id":"delivery-lead", "emit_outcome":emit,
+            (Collection::Task, json!({"task_id":id,"agent_id":"delivery-lead", "emit_outcome":emit,
                 "goal_objective_template":objective,"prompt_template":prompt})),
             (Collection::EventSource, json!({"event_source_id":id,"source_collection":"DeliveryGoalWork",
                 "event_kind":"created","filter":format!("{{kind:{{_eq:\"{kind}\"}}}}")})),

@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::backend_provider::BackendProviderOauthExt;
-use crate::config::ResolvedBehavior;
+use crate::config::ResolvedAgent;
 use crate::config_client::ConfigAccess;
 use crate::document_config::{BackendAuth, InferenceBackend};
 use crate::graphql::escape_graphql_string;
@@ -37,12 +37,12 @@ use crate::oauth_credential::{
 pub enum UsageAccount {
     Credential {
         doc_id: Option<String>,
-        agent_did: String,
+        node_did: String,
         provider: String,
         account_ref: Option<String>,
     },
     Backend {
-        agent_did: String,
+        node_did: String,
         provider: String,
         backend_id: String,
     },
@@ -52,33 +52,33 @@ impl UsageAccount {
     pub fn for_credential(row: &OAuthCredential) -> Self {
         Self::Credential {
             doc_id: row.doc_id.clone(),
-            agent_did: row.agent_did.clone(),
+            node_did: row.node_did.clone(),
             provider: row.provider.clone(),
             account_ref: row.account_ref.clone(),
         }
     }
 
     /// An API-key backend's account; `None` without a backend id.
-    pub fn for_behavior(behavior: &ResolvedBehavior) -> Option<Self> {
+    pub fn for_agent(agent: &ResolvedAgent) -> Option<Self> {
         Some(Self::Backend {
-            agent_did: behavior.agent_did().to_string(),
-            provider: behavior.backend_provider_kind.as_str().to_string(),
-            backend_id: behavior.backend_id.clone()?,
+            node_did: agent.node_did().to_string(),
+            provider: agent.backend_provider_kind.as_str().to_string(),
+            backend_id: agent.backend_id.clone()?,
         })
     }
 
-    /// The account `backend` names for `agent_did` (account = backend): a
-    /// sign-in only for principal OAuth, as [`crate::oauth_credential::backend_account`].
-    fn for_backend(agent_did: &str, backend: &InferenceBackend) -> Self {
+    /// The account `backend` names for `node_did` (account = backend): a
+    /// sign-in only for node OAuth, as [`crate::oauth_credential::backend_account`].
+    fn for_backend(node_did: &str, backend: &InferenceBackend) -> Self {
         match (backend.provider_kind.oauth_provider(), &backend.auth) {
-            (Some(provider), BackendAuth::PrincipalOAuth { account_ref }) => Self::Credential {
+            (Some(provider), BackendAuth::NodeOAuth { account_ref }) => Self::Credential {
                 doc_id: None,
-                agent_did: agent_did.to_string(),
+                node_did: node_did.to_string(),
                 provider: provider.to_string(),
                 account_ref: account_ref.clone(),
             },
             _ => Self::Backend {
-                agent_did: agent_did.to_string(),
+                node_did: node_did.to_string(),
                 provider: backend.provider_kind.as_str().to_string(),
                 backend_id: backend.backend_id.clone(),
             },
@@ -184,7 +184,7 @@ pub fn usage_view(
 /// Where an account's usage is stored.
 struct Target {
     credential_doc_id: Option<String>,
-    agent_did: String,
+    node_did: String,
     provider: String,
     /// Written here: the provider account key, else `reference`.
     key: String,
@@ -202,12 +202,12 @@ struct Target {
 async fn target(access: &ConfigAccess, account: &UsageAccount) -> Result<Option<Target>> {
     match account {
         UsageAccount::Backend {
-            agent_did,
+            node_did,
             provider,
             backend_id,
         } => Ok(Some(Target {
             credential_doc_id: None,
-            agent_did: agent_did.clone(),
+            node_did: node_did.clone(),
             provider: provider.clone(),
             key: backend_id.clone(),
             reference: None,
@@ -215,17 +215,17 @@ async fn target(access: &ConfigAccess, account: &UsageAccount) -> Result<Option<
         })),
         UsageAccount::Credential {
             doc_id,
-            agent_did,
+            node_did,
             provider,
             account_ref,
         } => {
             let pick = AccountPick::Reference(account_ref.as_deref());
-            let Some(row) = resolve_oauth_credential(access, agent_did, provider, pick).await?
+            let Some(row) = resolve_oauth_credential(access, node_did, provider, pick).await?
             else {
                 return Ok(None);
             };
             credential_target(
-                agent_did,
+                node_did,
                 provider,
                 account_ref.as_deref(),
                 doc_id.as_deref(),
@@ -236,7 +236,7 @@ async fn target(access: &ConfigAccess, account: &UsageAccount) -> Result<Option<
 }
 
 fn credential_target(
-    agent_did: &str,
+    node_did: &str,
     provider: &str,
     account_ref: Option<&str>,
     doc_id: Option<&str>,
@@ -251,7 +251,7 @@ fn credential_target(
     );
     Ok(Some(Target {
         credential_doc_id: row.doc_id.clone(),
-        agent_did: agent_did.to_string(),
+        node_did: node_did.to_string(),
         provider: provider.to_string(),
         key: row
             .provider_account_key
@@ -270,7 +270,7 @@ pub(crate) fn fallback_key(account_ref: Option<&str>, doc_id: &str) -> String {
     format!("ref:{}:{doc_id}", account_ref.unwrap_or("original"))
 }
 
-/// Deletes `agent_did`'s `provider` usage rows under `keys` in the caller's
+/// Deletes `node_did`'s `provider` usage rows under `keys` in the caller's
 /// transaction, for an account's remove. This is the one usage write
 /// outside the runtime (with a runtime up the CLI writes over HTTP). It is
 /// safe because a delete creates nothing, so it cannot race the unique
@@ -280,14 +280,14 @@ pub(crate) fn fallback_key(account_ref: Option<&str>, doc_id: &str) -> String {
 // unreachable and token-free; sweep by key prefix if row counts show.
 pub(crate) async fn delete_usage_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
-    agent_did: &str,
+    node_did: &str,
     provider: &str,
     keys: &[String],
 ) -> Result<()> {
     let response = txn
         .execute(&format!(
-            r#"mutation {{ delete_{COLLECTION}(filter: {{ agent_did: {{ _eq: "{}" }}, provider: {{ _eq: "{}" }}, usage_key: {{ _in: {} }} }}) {{ _docID }} }}"#,
-            escape_graphql_string(agent_did),
+            r#"mutation {{ delete_{COLLECTION}(filter: {{ node_did: {{ _eq: "{}" }}, provider: {{ _eq: "{}" }}, usage_key: {{ _in: {} }} }}) {{ _docID }} }}"#,
+            escape_graphql_string(node_did),
             escape_graphql_string(provider),
             crate::graphql::graphql_string_list_literal(keys.iter().map(String::as_str)),
         ))
@@ -302,8 +302,8 @@ pub(crate) async fn delete_usage_in_txn(
 
 fn row_query(target: &Target, key: &str) -> String {
     format!(
-        r#"{{ {COLLECTION}(filter: {{ agent_did: {{ _eq: "{}" }}, provider: {{ _eq: "{}" }}, usage_key: {{ _eq: "{}" }} }}, limit: 1) {{ _docID report read_at read_error }} }}"#,
-        escape_graphql_string(&target.agent_did),
+        r#"{{ {COLLECTION}(filter: {{ node_did: {{ _eq: "{}" }}, provider: {{ _eq: "{}" }}, usage_key: {{ _eq: "{}" }} }}, limit: 1) {{ _docID report read_at read_error }} }}"#,
+        escape_graphql_string(&target.node_did),
         escape_graphql_string(&target.provider),
         escape_graphql_string(key),
     )
@@ -391,11 +391,11 @@ async fn write(
             let (report, read, access) = (report.clone(), read.clone(), &access);
             Box::pin(async move {
                 let target = match account {
-                    UsageAccount::Credential { doc_id, agent_did, provider, account_ref } => {
+                    UsageAccount::Credential { doc_id, node_did, provider, account_ref } => {
                         let Some(row) = crate::oauth_credential::resolve_oauth_credential_in_txn(
-                            txn, agent_did, provider, AccountPick::Reference(account_ref.as_deref()),
+                            txn, node_did, provider, AccountPick::Reference(account_ref.as_deref()),
                         ).await? else { return Ok(()); };
-                        credential_target(agent_did, provider, account_ref.as_deref(), doc_id.as_deref(), row)?
+                        credential_target(node_did, provider, account_ref.as_deref(), doc_id.as_deref(), row)?
                     }
                     UsageAccount::Backend { .. } => target(access, account).await?,
                 };
@@ -435,7 +435,7 @@ async fn write(
                         .await?
                     }
                     None => {
-                        input["agent_did"] = json!(target.agent_did);
+                        input["node_did"] = json!(target.node_did);
                         input["provider"] = json!(target.provider);
                         input["usage_key"] = json!(target.key);
                         txn.execute_with_variables(
@@ -552,7 +552,7 @@ type UsageParser = fn(&Value, DateTime<Utc>) -> Option<UsageReport>;
 // account can both read upstream; add a per-account in-flight guard if it shows.
 pub async fn read_account_usage(
     node: Arc<EmbeddedNode>,
-    agent_did: &str,
+    node_did: &str,
     backend: &InferenceBackend,
     _trigger: UsageTrigger,
     endpoints: &UsageEndpoints,
@@ -574,7 +574,7 @@ pub async fn read_account_usage(
         _ => None,
     };
     let access = ConfigAccess::Local(node.clone());
-    let mut account = UsageAccount::for_backend(agent_did, backend);
+    let mut account = UsageAccount::for_backend(node_did, backend);
     let Some(target) = target(&access, &account).await? else {
         return Ok(unavailable("no enabled account"));
     };
@@ -599,7 +599,7 @@ pub async fn read_account_usage(
             let provider = kind.oauth_provider().context("backend has no usage read")?;
             let bootstrap = crate::oauth_http::bootstrap_oauth_client(
                 node.clone(),
-                agent_did,
+                node_did,
                 provider,
                 crate::backend_health::oauth_refresh_kind(kind),
                 crate::backend_health::oauth_product(kind),
@@ -684,24 +684,24 @@ pub struct AccountUsageRead {
     pub outcome: UsageRead,
 }
 
-/// Reads the usage of each of `agent_did`'s accounts and account-free
+/// Reads the usage of each of `node_did`'s accounts and account-free
 /// backends once, concurrently: `provider` keeps only that provider's
 /// accounts. A disabled account gets no read; an account not on this node
 /// is left out. One account's store error never hides the others.
-pub async fn read_principal_usage(
+pub async fn read_node_usage(
     node: Arc<EmbeddedNode>,
-    agent_did: &str,
+    node_did: &str,
     trigger: UsageTrigger,
     provider: Option<&str>,
     endpoints: &UsageEndpoints,
     now: DateTime<Utc>,
 ) -> Result<Vec<AccountUsageRead>> {
     let access = ConfigAccess::Local(node.clone());
-    let accounts = crate::oauth_credential::list_accounts(&access, agent_did).await?;
+    let accounts = crate::oauth_credential::list_accounts(&access, node_did).await?;
     let backends = access
-        .transact_readonly("usage_observation.read_principal", |txn| {
+        .transact_readonly("usage_observation.read_node", |txn| {
             Box::pin(async move {
-                crate::config_client::list_inference_backends_in_txn(txn, agent_did).await
+                crate::config_client::list_inference_backends_in_txn(txn, node_did).await
             })
         })
         .await?;
@@ -742,7 +742,7 @@ pub async fn read_principal_usage(
             continue;
         }
         let backend = crate::oauth_credential::preset_account_backend(
-            agent_did,
+            node_did,
             &account.provider,
             account.account_ref.as_deref(),
             account.label.clone(),
@@ -755,7 +755,7 @@ pub async fn read_principal_usage(
             if !account_enabled {
                 return entry;
             }
-            let outcome = read_account_usage(node, agent_did, &backend, trigger, endpoints, now)
+            let outcome = read_account_usage(node, node_did, &backend, trigger, endpoints, now)
                 .await
                 .unwrap_or_else(|_| unavailable("store error"));
             AccountUsageRead { outcome, ..entry }
@@ -787,14 +787,14 @@ fn codex_usage_url(endpoint: &str) -> String {
     )
 }
 
-/// Stored usage of the account `backend` names for `agent_did`, with the
+/// Stored usage of the account `backend` names for `node_did`, with the
 /// sign-in's plan when the report has none.
 pub async fn usage_for_backend(
     access: &ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
     backend: &InferenceBackend,
 ) -> Result<Option<StoredUsage>> {
-    let account = UsageAccount::for_backend(agent_did, backend);
+    let account = UsageAccount::for_backend(node_did, backend);
     let Some(target) = target(access, &account).await? else {
         return Ok(None);
     };

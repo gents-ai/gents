@@ -36,9 +36,9 @@ def step
       { s with
           selection := { s.selection with session := none },
           workflow  := .idle }
-  | .user (.selectPrincipalRoute p a) =>
+  | .user (.selectNodeRoute p a) =>
       { s with
-          selection := { s.selection with peer := some p, agent := some a, session := none },
+          selection := { s.selection with peer := some p, node := some a, session := none },
           workflow  := .idle }
   | .user (.selectSession sid) =>
       let cleared := workflowAfterSelectSession sid s.workflow
@@ -47,7 +47,7 @@ def step
           workflow  := cleared }
   | .user .startSubmit =>
       if canSubmit s store ctx then
-        match s.selection.agent with
+        match s.selection.node with
         | none   => s
         | some a => { s with workflow := .submitting a s.selection.session }
       else s

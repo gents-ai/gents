@@ -5,22 +5,22 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use gents::graphql::escape_graphql_string;
 use gents_protocol::row::{
-    decode_behavior_readiness_snapshot, project_behavior_readiness_summary,
-    AgentBehaviorReadinessRow, ProjectedBehaviorReadinessSummary,
+    decode_node_readiness_snapshot, project_node_readiness_summary, NodeReadinessRow,
+    ProjectedNodeReadinessSummary,
 };
 use serde_json::{json, Value};
 
 use crate::cli::args::StatusArgs;
 use crate::config_writes::ConfigAccess;
 use crate::{
-    post_graphql, print_json, read_runtime_state, resolve_agent_did, resolve_graphql_endpoint,
-    resolve_home_dir,
+    post_graphql, print_json, read_runtime_state, resolve_graphql_endpoint, resolve_home_dir,
+    resolve_node_did,
 };
 
 pub(crate) async fn status(args: StatusArgs) -> Result<()> {
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
-    let agent_did = resolve_agent_did(args.home.as_deref(), args.agent_did.as_deref())?;
-    let output = load_runtime_status_output(args.home.as_deref(), &graphql, &agent_did).await?;
+    let node_did = resolve_node_did(args.home.as_deref(), args.node_did.as_deref())?;
+    let output = load_runtime_status_output(args.home.as_deref(), &graphql, &node_did).await?;
     print_json(&output)?;
     Ok(())
 }
@@ -28,24 +28,20 @@ pub(crate) async fn status(args: StatusArgs) -> Result<()> {
 pub(crate) async fn load_runtime_status_output(
     home: Option<&Path>,
     graphql: &GraphqlEndpoint,
-    agent_did: &str,
+    node_did: &str,
 ) -> Result<Value> {
-    let behavior_readiness_row = load_live_behavior_readiness(graphql, agent_did).await?;
-    let lifecycle = behavior_readiness_row
+    let node_readiness_row = load_live_node_readiness(graphql, node_did).await?;
+    let lifecycle = node_readiness_row
         .as_ref()
-        .and_then(|row| decode_behavior_readiness_snapshot(row, agent_did).ok());
-    let (behavior_readiness, readiness_status, runnable_behavior_count, unavailable_behaviors) =
-        match project_behavior_readiness_summary(
-            behavior_readiness_row.as_ref(),
-            agent_did,
-            chrono::Utc::now(),
-        ) {
-            ProjectedBehaviorReadinessSummary::Observed(summary) => {
+        .and_then(|row| decode_node_readiness_snapshot(row, node_did).ok());
+    let (node_readiness, readiness_status, runnable_agent_count, unavailable_agents) =
+        match project_node_readiness_summary(node_readiness_row.as_ref(), node_did) {
+            ProjectedNodeReadinessSummary::Observed(summary) => {
                 let unavailable = summary
-                    .unavailable_behaviors
+                    .unavailable_agents
                     .iter()
-                    .map(|(behavior_id, reason)| {
-                        (behavior_id.clone(), reason.public_message().to_string())
+                    .map(|(agent_id, reason)| {
+                        (agent_id.clone(), reason.public_message().to_string())
                     })
                     .collect::<BTreeMap<_, _>>();
                 let status = if unavailable.is_empty() {
@@ -60,7 +56,7 @@ pub(crate) async fn load_runtime_status_output(
                     unavailable,
                 )
             }
-            ProjectedBehaviorReadinessSummary::Unknown(reason) => (
+            ProjectedNodeReadinessSummary::Unknown(reason) => (
                 json!({ "state": "unknown", "reason": reason }),
                 "unknown",
                 0,
@@ -69,37 +65,37 @@ pub(crate) async fn load_runtime_status_output(
         };
     let query = format!(
         r#"{{
-            AgentRuntime(
-                filter: {{ agent_did: {{ _eq: "{agent_did}" }} }},
+            NodeRuntime(
+                filter: {{ node_did: {{ _eq: "{node_did}" }} }},
                 limit: 1
             ) {{
-                agent_did
+                node_did
                 reconcile_phase
-                behavior_executor_capacity
-                behavior_executor_queue_depth
-                behavior_executor_status_json
+                agent_executor_capacity
+                agent_executor_queue_depth
+                agent_executor_status_json
                 last_reconcile_result
                 last_reconcile_error
                 last_reconcile_completed_at
                 updated_at
             }}
         }}"#,
-        agent_did = escape_graphql_string(agent_did),
+        node_did = escape_graphql_string(node_did),
     );
     let response = post_graphql(graphql, &query).await?;
     let runtime_row = response
-        .pointer("/data/AgentRuntime")
+        .pointer("/data/NodeRuntime")
         .and_then(Value::as_array)
         .and_then(|rows| rows.first())
         .cloned()
         .unwrap_or(Value::Null);
-    let liveness_value = crate::commands::status::load_liveness_value(graphql, agent_did).await;
+    let liveness_value = crate::commands::status::load_liveness_value(graphql, node_did).await;
     let home_dir = resolve_home_dir(home);
     let runtime_state = read_runtime_state(&home_dir)?;
     let p2p_status = crate::commands::p2p::load_live_http_p2p_status(home, graphql).await;
     let background_completion = match gents::load_background_completion_diagnostics(
         &ConfigAccess::Graphql(graphql.clone()),
-        agent_did,
+        node_did,
     )
     .await
     {
@@ -112,23 +108,23 @@ pub(crate) async fn load_runtime_status_output(
     let mut output = json!({
         "home": home_dir,
         "graphql": graphql,
-        "agent_did": agent_did,
+        "node_did": node_did,
         "runtime_state": runtime_state,
         "runtime": runtime_row,
         "liveness": liveness_value,
         "p2p": p2p_status,
         "background_completion": background_completion,
-        "behavior_readiness": behavior_readiness,
+        "node_readiness": node_readiness,
         "readiness_status": readiness_status,
-        "runnable_behavior_count": runnable_behavior_count,
-        "unavailable_behavior_count": unavailable_behaviors.len(),
-        "unavailable_behaviors": unavailable_behaviors,
+        "runnable_agent_count": runnable_agent_count,
+        "unavailable_agent_count": unavailable_agents.len(),
+        "unavailable_agents": unavailable_agents,
     });
     if let Some(map) = output.as_object_mut() {
         for field in [
             "reconcile_phase",
-            "behavior_executor_capacity",
-            "behavior_executor_queue_depth",
+            "agent_executor_capacity",
+            "agent_executor_queue_depth",
             "last_reconcile_result",
             "last_reconcile_error",
             "last_reconcile_completed_at",
@@ -161,32 +157,32 @@ pub(crate) async fn load_runtime_status_output(
                     .unwrap_or(Value::Null),
             ),
             (
-                "default_behavior_id",
+                "default_agent_id",
                 lifecycle
                     .as_ref()
-                    .map(|snapshot| json!(snapshot.default_behavior_id))
+                    .map(|snapshot| json!(snapshot.default_agent_id))
                     .unwrap_or(Value::Null),
             ),
         ] {
             map.insert(field.to_string(), value);
         }
-        let behavior_executors = runtime_row
-            .get("behavior_executor_status_json")
+        let agent_executors = runtime_row
+            .get("agent_executor_status_json")
             .and_then(Value::as_str)
             .and_then(|json| serde_json::from_str::<Value>(json).ok())
             .unwrap_or(Value::Null);
-        map.insert("behavior_executors".to_string(), behavior_executors);
+        map.insert("agent_executors".to_string(), agent_executors);
         let p2p_value = map.get("p2p").cloned().unwrap_or(Value::Null);
         crate::commands::p2p::flatten_p2p_fields(map, &p2p_value);
     }
     Ok(output)
 }
 
-pub(crate) async fn load_liveness_value(graphql: &GraphqlEndpoint, agent_did: &str) -> Value {
+pub(crate) async fn load_liveness_value(graphql: &GraphqlEndpoint, node_did: &str) -> Value {
     if let Some(liveness) = load_live_http_liveness_value(graphql).await {
         return liveness;
     }
-    match crate::http::prometheus::load_metrics_query_data(graphql, agent_did).await {
+    match crate::http::prometheus::load_metrics_query_data(graphql, node_did).await {
         Ok(data) => serde_json::to_value(&data.liveness).unwrap_or(Value::Null),
         Err(_) => Value::Null,
     }
@@ -214,35 +210,35 @@ fn runtime_status_url(graphql: &GraphqlEndpoint) -> Result<String> {
     Ok(url.to_string())
 }
 
-pub(crate) async fn load_live_behavior_readiness(
+pub(crate) async fn load_live_node_readiness(
     graphql: &GraphqlEndpoint,
-    agent_did: &str,
-) -> Result<Option<AgentBehaviorReadinessRow>> {
-    load_behavior_readiness(&ConfigAccess::Graphql(graphql.clone()), agent_did).await
+    node_did: &str,
+) -> Result<Option<NodeReadinessRow>> {
+    load_node_readiness(&ConfigAccess::Graphql(graphql.clone()), node_did).await
 }
 
-pub(crate) async fn load_behavior_readiness(
+pub(crate) async fn load_node_readiness(
     access: &ConfigAccess,
-    agent_did: &str,
-) -> Result<Option<AgentBehaviorReadinessRow>> {
+    node_did: &str,
+) -> Result<Option<NodeReadinessRow>> {
     let query = format!(
         r#"{{
-            AgentBehaviorReadiness(
-                filter: {{ agent_did: {{ _eq: "{agent_did}" }} }},
+            NodeReadiness(
+                filter: {{ node_did: {{ _eq: "{node_did}" }} }},
                 limit: 1
             ) {{
-                agent_did
+                node_did
                 snapshot_json
                 updated_at
             }}
         }}"#,
-        agent_did = escape_graphql_string(agent_did),
+        node_did = escape_graphql_string(node_did),
     );
-    crate::graphql_rows(access, "AgentBehaviorReadiness", &query)
+    crate::graphql_rows(access, "NodeReadiness", &query)
         .await?
         .into_iter()
         .next()
-        .map(|row| serde_json::from_value(row).context("decoding behavior readiness row"))
+        .map(|row| serde_json::from_value(row).context("decoding agent readiness row"))
         .transpose()
 }
 

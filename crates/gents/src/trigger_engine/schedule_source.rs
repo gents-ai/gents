@@ -66,12 +66,12 @@ impl TriggerSource for ScheduleSource {
                 let now = Utc::now();
 
                 for (trigger_id, resolved) in snapshot.active_schedules() {
-                    let Some(behavior) = snapshot.behavior(&resolved.task.behavior_id) else {
+                    let Some(behavior) = snapshot.agent(&resolved.task.agent_id) else {
                         continue;
                     };
-                    let agent_did = behavior.agent_did();
+                    let node_did = behavior.node_did();
                     let next_run_at = match load_trigger_next_run_at(
-                        &self.node, agent_did, trigger_id,
+                        &self.node, node_did, trigger_id,
                     )
                     .await
                     {
@@ -94,7 +94,7 @@ impl TriggerSource for ScheduleSource {
                             let seeded = seeded_dt.to_rfc3339_opts(SecondsFormat::Secs, true);
                             if let Err(e) = update_trigger_runtime_fields(
                                 &self.node,
-                                agent_did,
+                                node_did,
                                 trigger_id,
                                 TriggerRuntimeUpdate {
                                     last_fired_source_doc_id: None,
@@ -173,7 +173,7 @@ impl TriggerSource for ScheduleSource {
 
                     let node_for_callback = self.node.clone();
                     let trigger_id_for_callback = trigger_id.clone();
-                    let owner_for_callback = agent_did.to_owned();
+                    let owner_for_callback = node_did.to_owned();
 
                     return Some(FireIntent {
                         trigger_id: Some(trigger_id.clone()),

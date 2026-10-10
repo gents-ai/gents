@@ -1,6 +1,6 @@
 async fn create_user_message(
     node: &defra_node::EmbeddedNode,
-    behavior: &ResolvedBehavior,
+    agent_config: &ResolvedAgent,
     session_id: &str,
     content: &str,
     queued_after: Option<&str>,
@@ -9,15 +9,15 @@ async fn create_user_message(
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         uuid::Uuid::new_v4().to_string(),
-        behavior.agent_did(),
-        behavior.agent_did(),
-        &behavior.behavior_id,
+        agent_config.node_did(),
+        agent_config.node_did(),
+        &agent_config.agent_id,
         session_id,
         content,
         "interactive",
         created_at,
         gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
-            behavior.agent_did(),
+            agent_config.node_did(),
         ),
     );
     create.input.queue = queued_after.map(|active| gents_protocol::request_input::RequestQueue {
@@ -28,7 +28,7 @@ async fn create_user_message(
         interrupted_request_id: None,
         background_completion_wake_version: None,
     });
-    crate::sign_agent_request_create(behavior.principal_identity().as_ref(), &mut create)
+    crate::sign_agent_request_create(agent_config.node_identity().as_ref(), &mut create)
         .await
         .unwrap();
     let response = node.execute(&create.graphql_mutation().unwrap()).await;
@@ -59,7 +59,7 @@ async fn authored_user_entries(
         let (_, message) = crate::session::load_canonical_message_from_node(
             node,
             row["_docID"].as_str().unwrap(),
-            &request.agent_did,
+            &request.node_did,
             request.requester_did.as_deref(),
         )
         .await
@@ -90,32 +90,31 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
                 .unwrap(),
         );
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-        let identity: Arc<dyn AgentIdentity> = Arc::new(
-            KeyIdentity::load_or_create(data_path.join("agent.key"), None).unwrap(),
+        let identity: Arc<dyn NodeIdentity> = Arc::new(
+            KeyIdentity::load_or_create(data_path.join("node.key"), None).unwrap(),
         );
-        let behavior = test_behavior_with_identity(identity);
-        crate::test_support::install_test_behavior(
+        let agent_config = test_agent_with_identity(identity);
+        crate::test_support::install_test_agent(
             node.as_ref(),
-            behavior.agent_did(),
-            &behavior.behavior_id,
+            agent_config.node_did(),
+            &agent_config.agent_id,
         )
         .await;
         let session_id = uuid::Uuid::new_v4().to_string();
-        crate::session::ensure_session_with_behavior_id_and_requester_did(
+        crate::session::ensure_session_with_agent_id_and_requester_did(
             node.as_ref(),
             &session_id,
-            &behavior.behavior_id,
-            behavior.agent_did(),
-            &behavior.behavior_id,
-            Some(behavior.agent_did()),
+            agent_config.node_did(),
+            &agent_config.agent_id,
+            Some(agent_config.node_did()),
         )
         .await
         .unwrap();
-        let head = create_user_message(&node, &behavior, &session_id, "how are we looking", None)
+        let head = create_user_message(&node, &agent_config, &session_id, "how are we looking", None)
             .await;
         let folded = create_user_message(
             &node,
-            &behavior,
+            &agent_config,
             &session_id,
             "we should move faster",
             Some(&head.request_id),
@@ -127,13 +126,13 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
         // input, maybe persist the reduction checkpoint, then crash.
         let writer = crate::streaming::DefraStreamWriter::new(
             node.clone(),
-            behavior.agent_did(),
+            agent_config.node_did(),
             Duration::ZERO,
         );
-        let mut first = crate::lifecycle::RequestLifecycle::new_with_agent_did(
+        let mut first = crate::lifecycle::RequestLifecycle::new_with_node_did(
             node.clone(),
-            &behavior.behavior_id,
-            behavior.agent_did(),
+            &agent_config.agent_id,
+            agent_config.node_did(),
             head.clone(),
             30,
         );
@@ -158,8 +157,8 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
             let boundary = crate::provider_context_reduction::capture_source_boundary(
                 node.as_ref(),
                 &session_id,
-                behavior.agent_did(),
-                Some(behavior.agent_did()),
+                agent_config.node_did(),
+                Some(agent_config.node_did()),
                 &head.doc_id,
                 &commit_cid,
             )
@@ -178,8 +177,8 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
             crate::provider_context_reduction::persist(
                 node.as_ref(),
                 crate::provider_context_reduction::NewProviderContextReduction {
-                    agent_did: behavior.agent_did(),
-                    requester_did: Some(behavior.agent_did()),
+                    node_did: agent_config.node_did(),
+                    requester_did: Some(agent_config.node_did()),
                     session_id: &session_id,
                     request_id: &head.request_id,
                     request_doc_id: &head.doc_id,
@@ -230,19 +229,19 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
         .await
         .unwrap();
 
-        let prompt_builder = LayeredPromptBuilder::for_behavior(
-            &behavior.system_prompt,
-            &behavior.behavior_id,
+        let prompt_builder = LayeredPromptBuilder::for_agent(
+            &agent_config.system_prompt,
+            &agent_config.agent_id,
             &[],
             false,
             &[],
         );
         let preamble = prompt_builder.preamble().to_string();
         let provider_inputs = Arc::new(std::sync::Mutex::new(Vec::new()));
-        let request_identity = behavior.principal_identity().clone();
-        let mut daemon = BehaviorDaemon::new(
+        let request_identity = agent_config.node_identity().clone();
+        let mut daemon = AgentDaemon::new(
             node.clone(),
-            behavior.clone(),
+            agent_config.clone(),
             None,
             Arc::new(WakeInputModel {
                 provider_inputs: provider_inputs.clone(),
@@ -259,7 +258,7 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
             Arc::new(StartupBarrier::ready_for_test()),
             crate::runtime_status::RuntimeStatusHandle::new(
                 node.clone(),
-                behavior.agent_did().to_string(),
+                agent_config.node_did().to_string(),
             ),
             1,
             crate::request_admission::AgentRequestAdmissionVerifier::new(
@@ -319,29 +318,29 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
 
 async fn create_retry(
     node: &defra_node::EmbeddedNode,
-    behavior: &ResolvedBehavior,
+    agent_config: &ResolvedAgent,
     parent: &AgentRequest,
 ) -> AgentRequest {
     let created_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         uuid::Uuid::new_v4().to_string(),
-        behavior.agent_did(),
-        behavior.agent_did(),
-        &behavior.behavior_id,
+        agent_config.node_did(),
+        agent_config.node_did(),
+        &agent_config.agent_id,
         &parent.session_id,
         &parent.content,
         "interactive",
         created_at,
         gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
-            behavior.agent_did(),
+            agent_config.node_did(),
         ),
     );
     create.retry_parent_request = Some(parent.request_id.clone());
     create.retry_parent_request_doc_id = Some(parent.doc_id.clone());
     create.retry_root_request = Some(parent.request_id.clone());
     create.retry_count = 1;
-    crate::sign_agent_request_create(behavior.principal_identity().as_ref(), &mut create)
+    crate::sign_agent_request_create(agent_config.node_identity().as_ref(), &mut create)
         .await
         .unwrap();
     let response = node.execute(&create.graphql_mutation().unwrap()).await;
@@ -359,20 +358,20 @@ async fn create_retry(
 
 async fn scripted_daemon(
     node: &Arc<defra_node::EmbeddedNode>,
-    behavior: &Arc<ResolvedBehavior>,
+    agent_config: &Arc<ResolvedAgent>,
     provider_inputs: &Arc<std::sync::Mutex<Vec<String>>>,
-) -> BehaviorDaemon<WakeInputModel> {
-    let prompt_builder = LayeredPromptBuilder::for_behavior(
-        &behavior.system_prompt,
-        &behavior.behavior_id,
+) -> AgentDaemon<WakeInputModel> {
+    let prompt_builder = LayeredPromptBuilder::for_agent(
+        &agent_config.system_prompt,
+        &agent_config.agent_id,
         &[],
         false,
         &[],
     );
     let preamble = prompt_builder.preamble().to_string();
-    BehaviorDaemon::new(
+    AgentDaemon::new(
         node.clone(),
-        behavior.clone(),
+        agent_config.clone(),
         None,
         Arc::new(WakeInputModel {
             provider_inputs: provider_inputs.clone(),
@@ -389,12 +388,12 @@ async fn scripted_daemon(
         Arc::new(StartupBarrier::ready_for_test()),
         crate::runtime_status::RuntimeStatusHandle::new(
             node.clone(),
-            behavior.agent_did().to_string(),
+            agent_config.node_did().to_string(),
         ),
         1,
         crate::request_admission::AgentRequestAdmissionVerifier::new(
             node.clone(),
-            behavior.principal_identity().clone(),
+            agent_config.node_identity().clone(),
             crate::agent::p2p_reconcile::enrollment_authority_channel().1,
         ),
     )
@@ -424,38 +423,37 @@ async fn generated_retry_selection_cases_bind_to_the_daemon() {
                 .unwrap(),
         );
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-        let identity: Arc<dyn AgentIdentity> = Arc::new(
-            KeyIdentity::load_or_create(data_path.join("agent.key"), None).unwrap(),
+        let identity: Arc<dyn NodeIdentity> = Arc::new(
+            KeyIdentity::load_or_create(data_path.join("node.key"), None).unwrap(),
         );
-        let behavior = test_behavior_with_identity(identity);
-        crate::test_support::install_test_behavior(
+        let agent_config = test_agent_with_identity(identity);
+        crate::test_support::install_test_agent(
             node.as_ref(),
-            behavior.agent_did(),
-            &behavior.behavior_id,
+            agent_config.node_did(),
+            &agent_config.agent_id,
         )
         .await;
         let session_id = uuid::Uuid::new_v4().to_string();
-        crate::session::ensure_session_with_behavior_id_and_requester_did(
+        crate::session::ensure_session_with_agent_id_and_requester_did(
             node.as_ref(),
             &session_id,
-            &behavior.behavior_id,
-            behavior.agent_did(),
-            &behavior.behavior_id,
-            Some(behavior.agent_did()),
+            agent_config.node_did(),
+            &agent_config.agent_id,
+            Some(agent_config.node_did()),
         )
         .await
         .unwrap();
         let parent =
-            create_user_message(&node, &behavior, &session_id, "how are we looking", None).await;
+            create_user_message(&node, &agent_config, &session_id, "how are we looking", None).await;
         let writer = crate::streaming::DefraStreamWriter::new(
             node.clone(),
-            behavior.agent_did(),
+            agent_config.node_did(),
             Duration::ZERO,
         );
-        let mut failed = crate::lifecycle::RequestLifecycle::new_with_agent_did(
+        let mut failed = crate::lifecycle::RequestLifecycle::new_with_node_did(
             node.clone(),
-            &behavior.behavior_id,
-            behavior.agent_did(),
+            &agent_config.agent_id,
+            agent_config.node_did(),
             parent.clone(),
             30,
         );
@@ -484,10 +482,10 @@ async fn generated_retry_selection_cases_bind_to_the_daemon() {
             .unwrap();
         drop(failed);
 
-        let retry = create_retry(&node, &behavior, &parent).await;
+        let retry = create_retry(&node, &agent_config, &parent).await;
         let queued = create_user_message(
             &node,
-            &behavior,
+            &agent_config,
             &session_id,
             "and ship it today",
             Some(&retry.request_id),
@@ -495,7 +493,7 @@ async fn generated_retry_selection_cases_bind_to_the_daemon() {
         .await;
         let queued_key = crate::lifecycle::queue::folded_input_key(&queued.doc_id);
         let provider_inputs = Arc::new(std::sync::Mutex::new(Vec::new()));
-        let mut daemon = scripted_daemon(&node, &behavior, &provider_inputs).await;
+        let mut daemon = scripted_daemon(&node, &agent_config, &provider_inputs).await;
         let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
         daemon
             .process_request(retry.clone(), shutdown_rx.clone())

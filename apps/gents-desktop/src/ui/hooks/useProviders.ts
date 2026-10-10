@@ -16,41 +16,38 @@ const NO_ACCOUNTS: readonly ProviderAccountView[] = [];
 const NO_USAGE: readonly BackendUsageView[] = [];
 const NO_PROVIDERS: readonly InferenceProviderOption[] = [];
 
-/** An agent's provider accounts: read while shown, and again whenever the
+/** A node's provider accounts: read while shown, and again whenever the
     client changes. `reload` resolves once the read it asked for has landed. */
-export function useAccounts(agentDid: string) {
+export function useAccounts(nodeDid: string) {
   const { stores, actions } = useApp();
   const { watchProviderAccounts, loadProviderAccounts } = actions;
   const accounts = useStore(
     stores.providers,
-    (state) => state.accounts[agentDid] ?? NO_ACCOUNTS,
+    (state) => state.accounts[nodeDid] ?? NO_ACCOUNTS,
   );
-  useEffect(() => watchProviderAccounts(agentDid), [watchProviderAccounts, agentDid]);
+  useEffect(() => watchProviderAccounts(nodeDid), [watchProviderAccounts, nodeDid]);
   const reload = useCallback(
-    () => loadProviderAccounts(agentDid),
-    [loadProviderAccounts, agentDid],
+    () => loadProviderAccounts(nodeDid),
+    [loadProviderAccounts, nodeDid],
   );
   return { accounts, reload };
 }
 
-/** An agent's usage: read when shown and on Refresh (both skip accounts
+/** A node's usage: read when shown and on Refresh (both skip accounts
     read in the last five minutes); nothing polls, and a snapshot change
     does not read again. */
-export function useProviderUsage(agentDid: string) {
+export function useProviderUsage(nodeDid: string) {
   const { stores, actions } = useApp();
   const { loadProviderUsage, refreshProviderUsage } = actions;
-  const usage = useStore(
-    stores.providers,
-    (state) => state.usage[agentDid] ?? NO_USAGE,
-  );
+  const usage = useStore(stores.providers, (state) => state.usage[nodeDid] ?? NO_USAGE);
   useEffect(() => {
-    void loadProviderUsage(agentDid);
-  }, [loadProviderUsage, agentDid]);
+    void loadProviderUsage(nodeDid);
+  }, [loadProviderUsage, nodeDid]);
   const refresh = useCallback(
     async (provider: string | null) => {
-      await refreshProviderUsage(agentDid, provider);
+      await refreshProviderUsage(nodeDid, provider);
     },
-    [refreshProviderUsage, agentDid],
+    [refreshProviderUsage, nodeDid],
   );
   return { usage, refresh };
 }

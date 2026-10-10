@@ -129,16 +129,15 @@ async fn load_facts(
         .doc_id
         .as_deref()
         .context("request output observation omitted physical request identity")?;
-    let agent_did = request
-        .agent_did
+    let node_did = request
+        .node_did
         .as_deref()
-        .context("request output observation omitted principal")?;
+        .context("request output observation omitted node")?;
     let session_id = request
         .session_id
         .as_deref()
         .context("request output observation omitted session")?;
-    let scope =
-        super::session_scope_filter(agent_did, session_id, request.requester_did.as_deref());
+    let scope = super::session_scope_filter(node_did, session_id, request.requester_did.as_deref());
     let physical = crate::graphql::escape_graphql_string(request_doc_id);
     let response = access
         .execute(&format!(
@@ -193,9 +192,9 @@ pub async fn observe_request_output(
             Some(TerminalOutput::NoMessage) => Ok(CanonicalRequestOutput::TerminalNoMessage),
             Some(TerminalOutput::Message { message_doc_id }) => {
                 let owner = request
-                    .agent_did
+                    .node_did
                     .as_deref()
-                    .context("terminal request output omitted principal")?;
+                    .context("terminal request output omitted node")?;
                 match super::load_canonical_message(
                     access,
                     message_doc_id,
@@ -287,8 +286,8 @@ pub async fn observe_request_output(
             message_id: message_id.as_deref(),
         },
         messages: &messages,
-        agent_did: request
-            .agent_did
+        node_did: request
+            .node_did
             .as_deref()
             .expect("validated by load_facts"),
         requester_did: request.requester_did.as_deref(),

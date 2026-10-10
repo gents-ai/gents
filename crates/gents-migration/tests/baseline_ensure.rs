@@ -83,18 +83,18 @@ fn default_baseline_covers_every_protocol_collection_once() {
 }
 
 #[tokio::test]
-async fn fresh_agent_runtime_baseline_is_diagnostics_only() {
+async fn fresh_node_runtime_baseline_is_diagnostics_only() {
     let node = fresh_node().await;
     ensure_migrations(node.as_ref())
         .await
         .expect("ensure migrations");
     let runtime = node
-        .get_collection(gents_protocol::schemas::AGENT_RUNTIME_NAME)
-        .expect("get AgentRuntime")
-        .expect("AgentRuntime installed");
+        .get_collection(gents_protocol::schemas::NODE_RUNTIME_NAME)
+        .expect("get NodeRuntime")
+        .expect("NodeRuntime installed");
     assert_eq!(
         runtime.version_id,
-        "bafyreidb7aoppwicwdsujra6iqgejtxeohiyyx4ylif6bsyllvt2sukrpe"
+        "bafyreif7je44mc6mdxtpp6wpakbdhuzsjibgtifxlo6pzgfhf2sqlcdrgq"
     );
     let field_names = runtime
         .fields
@@ -106,7 +106,7 @@ async fn fresh_agent_runtime_baseline_is_diagnostics_only() {
     assert!(!field_names.contains("process_state"));
     assert!(!field_names.contains("active_generation"));
     assert!(!field_names.contains("router_generation"));
-    assert!(!field_names.contains("default_behavior_id"));
+    assert!(!field_names.contains("default_agent_id"));
     assert!(field_names.contains("reconcile_phase"));
     assert!(field_names.contains("updated_at"));
     node.shutdown().await;
@@ -184,7 +184,7 @@ async fn agent_request_baseline_is_chain_free_and_migrations_are_idempotent() {
     let create = r#"mutation {
         create_AgentRequest(input: {
             request_id: "existing-request"
-            agent_did: "did:key:existing"
+            node_did: "did:key:existing"
             session_id: "existing-session"
             content: "hello"
         }) { request_id content }
@@ -264,7 +264,7 @@ async fn goal_creation_claim_baseline_enforces_uniqueness() {
                 creation_key: "goal-create:key"
                 goal_id: "keyed-1"
                 session_id: "session-1"
-                agent_did: "did:key:existing"
+                node_did: "did:key:existing"
                 objective: "objective"
                 token_budget: 100
                 created_at: "2026-09-02T00:00:00Z"
@@ -278,7 +278,7 @@ async fn goal_creation_claim_baseline_enforces_uniqueness() {
                 creation_key: "goal-create:key"
                 goal_id: "keyed-2"
                 session_id: "session-1"
-                agent_did: "did:key:existing"
+                node_did: "did:key:existing"
                 objective: "different"
                 token_budget: 200
                 created_at: "2026-09-02T00:00:01Z"
@@ -363,9 +363,9 @@ async fn rendered_request_reaches_a_pre_existing_store_through_the_baseline() {
             request_doc_id: "bae-req-1"
             request_id: "req-1"
             session_id: "pre-upgrade-session"
-            agent_did: "did:key:agent"
+            node_did: "did:key:agent"
             requester_did: "did:key:requester"
-            behavior_id: "behavior-1"
+            agent_id: "behavior-1"
             turn_index: 0
             attempt: 0
             capture_version: 1

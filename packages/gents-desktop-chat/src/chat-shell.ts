@@ -54,9 +54,9 @@ export type TurnState =
 
 export type ChatBlockedReason =
   | "clientOffline"
-  | "agentNotSelected"
+  | "nodeNotSelected"
   | "routeNotReady"
-  | "behaviorUnavailable"
+  | "agentUnavailable"
   | "composerEmpty"
   | "submittingRequest"
   | "waitingForRequestObservation"
@@ -65,16 +65,16 @@ export type ChatBlockedReason =
 
 export type ChatWorkflowState =
   | { kind: "ready" }
-  | { kind: "submittingRequest"; agentDid: string; sessionId?: string | null }
+  | { kind: "submittingRequest"; nodeDid: string; sessionId?: string | null }
   | {
       kind: "awaitingObservation";
-      agentDid: string;
+      nodeDid: string;
       sessionId: string;
       requestId: string;
     }
   | {
       kind: "turnInProgress";
-      agentDid: string;
+      nodeDid: string;
       sessionId: string;
       requestId?: string | null;
       turnState: TurnState;
@@ -101,14 +101,14 @@ export type ChatActivityStatus = {
 
 type ProjectionInput = {
   clientAvailable: boolean;
-  selectedAgentDid: string | null;
+  selectedNodeDid: string | null;
   selectedSessionId: string | null;
   sending: boolean;
   /** The workflow reads these alone; transcript content never decides it. */
   session: Pick<
     DesktopSessionSnapshot,
     | "sessionId"
-    | "agentDid"
+    | "nodeDid"
     | "turnState"
     | "latestRequestId"
     | "pendingTurn"
@@ -156,7 +156,7 @@ export function reconcileProjectedWorkflow(
   if (
     localWorkflow.kind === "awaitingObservation" &&
     projectedWorkflow.kind === "turnInProgress" &&
-    localWorkflow.agentDid === projectedWorkflow.agentDid &&
+    localWorkflow.nodeDid === projectedWorkflow.nodeDid &&
     localWorkflow.sessionId === projectedWorkflow.sessionId
   ) {
     return projectedWorkflow;
@@ -165,7 +165,7 @@ export function reconcileProjectedWorkflow(
   if (
     localWorkflow.kind === "turnInProgress" &&
     projectedWorkflow.kind === "turnInProgress" &&
-    localWorkflow.agentDid === projectedWorkflow.agentDid &&
+    localWorkflow.nodeDid === projectedWorkflow.nodeDid &&
     localWorkflow.sessionId === projectedWorkflow.sessionId &&
     localWorkflow.requestId === projectedWorkflow.requestId &&
     localWorkflow.turnState !== projectedWorkflow.turnState
@@ -204,12 +204,12 @@ function hintFor(reason: ChatBlockedReason) {
   switch (reason) {
     case "clientOffline":
       return "Secure client is not running";
-    case "agentNotSelected":
-      return "Select an agent before sending";
+    case "nodeNotSelected":
+      return "Select a node before sending";
     case "routeNotReady":
-      return "Secure route to the agent is not ready";
-    case "behaviorUnavailable":
-      return "The selected behavior is unavailable";
+      return "Secure route to the node is not ready";
+    case "agentUnavailable":
+      return "The selected agent is unavailable";
     case "composerEmpty":
       return "Type a message to send";
     case "submittingRequest":
@@ -259,9 +259,9 @@ function activityStatusFor(
     case "composerEmpty":
       return null;
     case "clientOffline":
-    case "agentNotSelected":
+    case "nodeNotSelected":
     case "routeNotReady":
-    case "behaviorUnavailable":
+    case "agentUnavailable":
       return admissionStatus ? chatActivity(admissionStatus) : null;
     case "submittingRequest":
       return {
@@ -299,9 +299,9 @@ function activityStatusFor(
 export function projectChatShell(input: ProjectionInput): ChatShellProjection {
   const clientStatus = projectClientOperationalStatus(
     input.clientAvailable,
-    Boolean(input.selectedAgentDid),
+    Boolean(input.selectedNodeDid),
   );
-  const deploymentStatus = input.selectedAgentDid
+  const deploymentStatus = input.selectedNodeDid
     ? (input.operationalState?.admissionBlocker ??
       (input.operationalState ? null : projectRouteOperationalStatus(false)))
     : null;
@@ -323,7 +323,7 @@ export function projectChatShell(input: ProjectionInput): ChatShellProjection {
   const trackedRequestId =
     (input.localWorkflow.kind === "awaitingObservation" ||
       input.localWorkflow.kind === "turnInProgress") &&
-    input.localWorkflow.agentDid === input.selectedAgentDid &&
+    input.localWorkflow.nodeDid === input.selectedNodeDid &&
     (input.selectedSessionId === input.localWorkflow.sessionId ||
       input.session?.sessionId === input.localWorkflow.sessionId) &&
     !(
@@ -346,10 +346,10 @@ export function projectChatShell(input: ProjectionInput): ChatShellProjection {
 
   if (input.localWorkflow.kind === "awaitingObservation") {
     const selectedMatches =
-      input.localWorkflow.agentDid === input.selectedAgentDid &&
+      input.localWorkflow.nodeDid === input.selectedNodeDid &&
       (input.selectedSessionId === input.localWorkflow.sessionId ||
         (input.session?.sessionId === input.localWorkflow.sessionId &&
-          input.session.agentDid === input.localWorkflow.agentDid));
+          input.session.nodeDid === input.localWorkflow.nodeDid));
     const observedAsQueued =
       queuedRequestIds.has(input.localWorkflow.requestId) ||
       foldedRequestIds.has(input.localWorkflow.requestId);
@@ -364,7 +364,7 @@ export function projectChatShell(input: ProjectionInput): ChatShellProjection {
       } else if (observedTurnState && !isTerminalTurnState(observedTurnState)) {
         workflow = {
           kind: "turnInProgress",
-          agentDid: input.localWorkflow.agentDid,
+          nodeDid: input.localWorkflow.nodeDid,
           sessionId: input.localWorkflow.sessionId,
           requestId: observedAsQueued
             ? activeRequestId
@@ -381,10 +381,10 @@ export function projectChatShell(input: ProjectionInput): ChatShellProjection {
     }
   } else if (input.localWorkflow.kind === "turnInProgress") {
     const selectedMatches =
-      input.localWorkflow.agentDid === input.selectedAgentDid &&
+      input.localWorkflow.nodeDid === input.selectedNodeDid &&
       (input.selectedSessionId === input.localWorkflow.sessionId ||
         (input.session?.sessionId === input.localWorkflow.sessionId &&
-          input.session.agentDid === input.localWorkflow.agentDid));
+          input.session.nodeDid === input.localWorkflow.nodeDid));
 
     if (!selectedMatches) {
       workflow = { kind: "ready" };
@@ -396,7 +396,7 @@ export function projectChatShell(input: ProjectionInput): ChatShellProjection {
         ? { kind: "ready" }
         : {
             kind: "turnInProgress",
-            agentDid: input.localWorkflow.agentDid,
+            nodeDid: input.localWorkflow.nodeDid,
             sessionId: input.localWorkflow.sessionId,
             requestId: input.localWorkflow.requestId,
             turnState: observedTurnState,
@@ -410,15 +410,15 @@ export function projectChatShell(input: ProjectionInput): ChatShellProjection {
   } else if (input.localWorkflow.kind !== "submittingRequest") {
     if (!input.clientAvailable) {
       workflow = blocked("clientOffline");
-    } else if (!input.selectedAgentDid) {
-      workflow = blocked("agentNotSelected");
+    } else if (!input.selectedNodeDid) {
+      workflow = blocked("nodeNotSelected");
     } else if (input.selectedSessionId) {
       if (!input.session && !input.selectedSessionSummary) {
         workflow = blocked("sessionMissingFromSnapshot");
       } else if (observedTurnState && !isTerminalTurnState(observedTurnState)) {
         workflow = {
           kind: "turnInProgress",
-          agentDid: input.selectedAgentDid,
+          nodeDid: input.selectedNodeDid,
           sessionId: input.selectedSessionId,
           requestId: activeRequestId,
           turnState: observedTurnState,
@@ -439,11 +439,11 @@ export function projectChatShell(input: ProjectionInput): ChatShellProjection {
         admissionStatus.layer === "client"
           ? "clientOffline"
           : admissionStatus.layer === "selection"
-            ? "agentNotSelected"
+            ? "nodeNotSelected"
             : admissionStatus.layer === "p2p" ||
                 admissionStatus.layer === "route"
               ? "routeNotReady"
-              : "behaviorUnavailable";
+              : "agentUnavailable";
       return {
         kind: "disabled",
         reason,

@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 const INIT_CONFIG_FILE_NAME: &str = "init.json";
 
-/// A gents home's persisted `init.json`: home path, agent name, agent DID,
+/// A gents home's persisted `init.json`: home path, node name, node DID,
 /// key path, identity backend, and tool policy. Written once at `gents
 /// init` (or, for a gents-cloud cell, at cell provisioning) and read back
 /// by every entry point that opens the home afterward.
@@ -26,8 +26,8 @@ const INIT_CONFIG_FILE_NAME: &str = "init.json";
 #[serde(bound(deserialize = "ToolPackage: Deserialize<'de>, ToolCeiling: Deserialize<'de>"))]
 pub struct StoredInitConfig<ToolPackage = String, ToolCeiling = String> {
     pub home: String,
-    pub agent_name: String,
-    pub agent_did: String,
+    pub node_name: String,
+    pub node_did: String,
     pub key_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub identity_backend: Option<String>,
@@ -245,8 +245,8 @@ fn lock_path(home_dir: &Path, path: PathBuf) -> Result<StoreLock> {
 }
 
 /// The default identity key path under a gents home, for the named agent.
-pub fn default_key_path(home_dir: &Path, agent_name: &str) -> PathBuf {
-    keys_dir(home_dir).join(format!("{agent_name}.key"))
+pub fn default_key_path(home_dir: &Path, node_name: &str) -> PathBuf {
+    keys_dir(home_dir).join(format!("{node_name}.key"))
 }
 
 /// The directory a gents home keeps its file keys in.
@@ -302,7 +302,7 @@ pub fn read_init_config<ToolPackage: DeserializeOwned, ToolCeiling: DeserializeO
 /// Identity backend whose key never leaves the Secure Enclave.
 pub const SECURE_ENCLAVE_IDENTITY_BACKEND: &str = "macos-secure-enclave";
 
-/// Refuse to serve a home whose principal cannot own DefraDB node access
+/// Refuse to serve a home whose node cannot own DefraDB node access
 /// control.
 ///
 /// Node access control needs the node DID's private key bytes, which a
@@ -605,8 +605,8 @@ mod tests {
                 super::init_config_path(home.path()),
                 serde_json::json!({
                     "home": home.path(),
-                    "agent_name": "a",
-                    "agent_did": "did:key:z6Mk",
+                    "node_name": "a",
+                    "node_did": "did:key:z6Mk",
                     "key_path": null,
                     "identity_backend": backend,
                     "tool_ceiling": "readonly",
@@ -1044,8 +1044,8 @@ mod tests {
     fn sample() -> StoredInitConfig<String, String> {
         StoredInitConfig {
             home: "/home/user/.gents".to_string(),
-            agent_name: "default".to_string(),
-            agent_did: "did:key:z6Mk...".to_string(),
+            node_name: "default".to_string(),
+            node_did: "did:key:z6Mk...".to_string(),
             key_path: Some("/home/user/.gents/keys/default.key".to_string()),
             identity_backend: None,
             keychain_label: None,
@@ -1066,7 +1066,7 @@ mod tests {
     }
 
     #[test]
-    fn default_key_path_nests_under_keys_by_agent_name() {
+    fn default_key_path_nests_under_keys_by_node_name() {
         assert_eq!(
             default_key_path(Path::new("/home/user/.gents"), "default"),
             PathBuf::from("/home/user/.gents/keys/default.key")

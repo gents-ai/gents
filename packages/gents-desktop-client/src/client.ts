@@ -24,7 +24,7 @@ export type DesktopClient = {
   chatSend(request: ChatSendRequest): Promise<ChatSendResult>;
   sessionSnapshot(args: {
     sessionId: string;
-    agentDid?: string | null;
+    nodeDid?: string | null;
     requestId?: string | null;
   }): Promise<DesktopSessionSnapshot | null>;
 };
@@ -62,7 +62,7 @@ export function createDesktopClient(
     sessionSnapshot: (args) =>
       invoke("desktop_session_snapshot", {
         sessionId: args.sessionId,
-        agentDid: args.agentDid ?? null,
+        nodeDid: args.nodeDid ?? null,
         requestId: args.requestId ?? null,
       }),
   };

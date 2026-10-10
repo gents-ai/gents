@@ -2,11 +2,11 @@ use super::*;
 
 pub(super) async fn load_timeline_session(
     access: &ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
 ) -> Result<Option<TimelineSessionRow>> {
-    let scope = crate::session::session_scope_filter(agent_did, session_id, requester_did);
+    let scope = crate::session::session_scope_filter(node_did, session_id, requester_did);
     let fields = crate::session::AGENT_SESSION_FIELDS;
     let query = format!("{{ AgentSession(filter: {{ {scope} }}, limit: 2) {{ {fields} }} }}");
     let rows = load_rows::<serde_json::Value>(access, "AgentSession", &query).await?;
@@ -18,7 +18,7 @@ pub(super) async fn load_timeline_session(
         .map(|row| {
             let row = crate::session::decode_session_row(row)?;
             anyhow::ensure!(
-                row.session.agent_did == agent_did
+                row.session.node_did == node_did
                     && row.session.session_id == session_id
                     && row.session.requester_did.as_deref() == requester_did,
                 "timeline session is outside authoritative request scope"
@@ -47,8 +47,8 @@ mod tests {
         ] {
             let query = format!(
                 r#"mutation {{ create_AgentSession(input: {{
-                session_id: "shared-label", agent_did: "{owner}", requester_did: {requester},
-                behavior_id: "{behavior}", created_at: "2026-01-01T00:00:00Z",
+                session_id: "shared-label", node_did: "{owner}", requester_did: {requester},
+                agent_id: "{behavior}", created_at: "2026-01-01T00:00:00Z",
                 title: {{text: "A title", source: "user"}},
                 provenance: {{task_id: "task"}},
                 observation: {{last_activity_at: "2026-01-02T00:00:00Z", preview: "A preview"}}
@@ -62,7 +62,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(owner_a.session.behavior_id, "behavior-a");
+        assert_eq!(owner_a.session.agent_id, "behavior-a");
         assert!(owner_a.doc_id.is_some());
         assert_eq!(owner_a.session.title.as_ref().unwrap().text, "A title");
         assert_eq!(
@@ -92,7 +92,7 @@ mod tests {
                 .await
                 .unwrap()
                 .unwrap();
-        assert_eq!(owner_b.session.behavior_id, "behavior-b");
+        assert_eq!(owner_b.session.agent_id, "behavior-b");
         assert_ne!(owner_a.doc_id, owner_b.doc_id);
         assert!(
             load_timeline_session(&access, "absent", "shared-label", None)

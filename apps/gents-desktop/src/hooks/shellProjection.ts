@@ -5,7 +5,7 @@ import {
 import {
   isTerminalTurnState,
   projectDeploymentOperationalState,
-  selectedBehaviorReadinessDecision,
+  selectedNodeReadinessDecision,
   type SessionSummary,
   type SyncHealthView,
 } from "@source-inc/gents-desktop-client";
@@ -61,24 +61,24 @@ export type ProjectionInputs = {
 
 /**
  * What the shell decides with: the node's operational state, the selected
- * behavior's readiness, the chat shell projection for a new message and for
- * a retry under the session's own behavior, and the request being tracked.
+ * agent's readiness, the chat shell projection for a new message and for
+ * a retry under the session's own agent, and the request being tracked.
  * Pure, so it is the same whether a screen renders it or an action asks.
  */
 export function projectShell(inputs: ProjectionInputs) {
   const { node, selection, session, syncHealth } = inputs;
   const operationalState = node
-    ? projectDeploymentOperationalState(node, selection.behaviorId, syncHealth)
+    ? projectDeploymentOperationalState(node, selection.agentId, syncHealth)
     : null;
-  const behaviorReadiness =
-    operationalState?.behaviorReadiness ??
-    selectedBehaviorReadinessDecision(null, selection.behaviorId);
+  const agentReadiness =
+    operationalState?.nodeReadiness ??
+    selectedNodeReadinessDecision(null, selection.agentId);
   const retryOperationalState = node
-    ? projectDeploymentOperationalState(node, session?.behaviorId ?? null, syncHealth)
+    ? projectDeploymentOperationalState(node, session?.agentId ?? null, syncHealth)
     : null;
   const base = {
     clientAvailable: inputs.clientAvailable,
-    selectedAgentDid: selection.agentDid,
+    selectedNodeDid: selection.nodeDid,
     selectedSessionId: selection.sessionId,
     sending: inputs.sending,
     session,
@@ -97,7 +97,7 @@ export function projectShell(inputs: ProjectionInputs) {
       : null);
   return {
     operationalState,
-    behaviorReadiness,
+    agentReadiness,
     shellProjection,
     retryShellProjection,
     trackedRequestId,
@@ -113,14 +113,14 @@ export function projectionInputsOf(stores: ShellStores): ProjectionInputs {
   const client = stores.client.getState();
   const chat = stores.chat.getState();
   const held = stores.session.getState().session;
-  const agentDid = selection.agentDid;
+  const nodeDid = selection.nodeDid;
   return {
     clientAvailable: clientRunning(client),
     syncHealth: syncHealthOf(client),
     selection,
-    node: nodeOf(fleet, agentDid),
-    sessionSummary: listedSession(fleet, agentDid, selection.sessionId),
-    session: headerOf(heldFor(held, selection.sessionId, agentDid)),
+    node: nodeOf(fleet, nodeDid),
+    sessionSummary: listedSession(fleet, nodeDid, selection.sessionId),
+    session: headerOf(heldFor(held, selection.sessionId, nodeDid)),
     localWorkflow: chat.localWorkflow,
     sending: chat.sending,
   };

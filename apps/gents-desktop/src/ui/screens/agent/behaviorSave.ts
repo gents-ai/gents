@@ -1,6 +1,6 @@
-/* What saving a behavior draft writes, and what it then says about the
+/* What saving an agent draft writes, and what it then says about the
    contexts: kept apart from the editor that shows the draft. */
-import type { AgentContext, BehaviorView } from "@source-inc/gents-desktop-client";
+import type { AgentContext, AgentView } from "@source-inc/gents-desktop-client";
 
 import type { NodeView } from "../../../hooks/fleetStore";
 import type { ShellActions } from "@/../hooks/shellActions";
@@ -15,8 +15,8 @@ import {
   type DraftMode,
 } from "./behaviorDraft";
 
-export type WrittenBehavior = {
-  /** a new context was created for the behavior */
+export type WrittenAgent = {
+  /** a new context was created for the agent */
   creating: boolean;
   contextId: string;
   /** the new context's name, when one was created */
@@ -24,16 +24,16 @@ export type WrittenBehavior = {
 };
 
 /**
- * Writes a behavior draft: a new context (a copy, an empty one, or a
- * duplicate) lands with the behavior in one apply; an edit to an existing
- * behavior and its existing context is one patch of the changed fields; a
- * new behavior on an edited existing context patches the context and saves
- * the behavior; anything else saves the behavior alone.
+ * Writes an agent draft: a new context (a copy, an empty one, or a
+ * duplicate) lands with the agent in one apply; an edit to an existing
+ * agent and its existing context is one patch of the changed fields; a
+ * new agent on an edited existing context patches the context and saves
+ * the agent; anything else saves the agent alone.
  */
-export async function writeBehaviorDraft({
+export async function writeAgentDraft({
   changeConfig,
   deployment,
-  behavior,
+  agent,
   next,
   asCopy,
   draftMode,
@@ -41,14 +41,14 @@ export async function writeBehaviorDraft({
 }: {
   changeConfig: ShellActions["changeConfig"];
   deployment: NodeView;
-  behavior: BehaviorView;
+  agent: AgentView;
   next: Draft;
   /** save the context as a new copy rather than editing the one chosen */
   asCopy: boolean;
   draftMode: DraftMode | undefined;
   /** the id a new context takes; the same one again on a retry */
   newContextId: () => string;
-}): Promise<WrittenBehavior> {
+}): Promise<WrittenAgent> {
   const creating = isNew(next.contextChoice) || asCopy;
   const newName =
     next.contextName.trim() ||
@@ -72,16 +72,16 @@ export async function writeBehaviorDraft({
         compactionId: next.compactionId,
         skillIds: next.skillIds,
       });
-  const behaviorDocument = {
-    behavior_id: behavior.behaviorId,
-    agent_did: deployment.agentDid,
+  const agentDocument = {
+    agent_id: agent.agentId,
+    node_did: deployment.nodeDid,
     display_name: next.displayName.trim(),
     description: next.description.trim() || null,
     context_id: contextId || null,
     inference_profile_id: next.inferenceProfileId,
-    enabled: draftMode ? Boolean(draftMode.enabled) : behavior.enabled,
+    enabled: draftMode ? Boolean(draftMode.enabled) : agent.enabled,
     tags: next.tags.length ? next.tags : null,
-    created_at: behavior.createdAt,
+    created_at: agent.createdAt,
   };
   /* only the context fields this edit changed, so a concurrent edit to
      another field of a shared context is not overwritten */
@@ -96,30 +96,30 @@ export async function writeBehaviorDraft({
     if (JSON.stringify(before.skillIds) !== JSON.stringify(next.skillIds))
       changedFields.skill_ids = fields.skill_ids;
   }
-  /* a new context and the behavior that points at it land together or
+  /* a new context and the agent that points at it land together or
      not at all: one component apply is one transaction */
   if (creating)
     await changeConfig("applyConfigComponents", {
       document: {
-        agent_principal: { agent_did: deployment.agentDid },
+        node: { node_did: deployment.nodeDid },
         contexts: [
           {
             context_id: contextId,
-            agent_did: deployment.agentDid,
+            node_did: deployment.nodeDid,
             display_name: newName,
             description: null,
             ...fields,
             tags: null,
           },
         ],
-        agent_behaviors: [behaviorDocument],
+        agents: [agentDocument],
       },
     });
   else if (target && edited && !draftMode)
-    /* an existing behavior and its existing context: one patch call, one
+    /* an existing agent and its existing context: one patch call, one
        transaction, changed fields only */
     await changeConfig("patchConfigComponents", {
-      agentDid: deployment.agentDid,
+      nodeDid: deployment.nodeDid,
       patches: [
         {
           collection: "AgentContext",
@@ -127,23 +127,23 @@ export async function writeBehaviorDraft({
           changes: changedFields,
         },
         {
-          collection: "AgentBehavior",
-          id: behavior.behaviorId,
+          collection: "Agent",
+          id: agent.agentId,
           changes: {
-            display_name: behaviorDocument.display_name,
-            description: behaviorDocument.description,
-            context_id: behaviorDocument.context_id,
-            inference_profile_id: behaviorDocument.inference_profile_id,
-            tags: behaviorDocument.tags,
+            display_name: agentDocument.display_name,
+            description: agentDocument.description,
+            context_id: agentDocument.context_id,
+            inference_profile_id: agentDocument.inference_profile_id,
+            tags: agentDocument.tags,
           },
         },
       ],
     });
   else if (target && edited) {
-    /* a new behavior on an edited existing context: the behavior has no
+    /* a new agent on an edited existing context: the agent has no
        document to patch yet, so the context is patched with it applied */
     await changeConfig("patchConfigComponents", {
-      agentDid: deployment.agentDid,
+      nodeDid: deployment.nodeDid,
       patches: [
         {
           collection: "AgentContext",
@@ -152,28 +152,28 @@ export async function writeBehaviorDraft({
         },
       ],
     });
-    await changeConfig("saveBehaviorConfig", { document: behaviorDocument });
-  } else await changeConfig("saveBehaviorConfig", { document: behaviorDocument });
+    await changeConfig("saveAgentConfig", { document: agentDocument });
+  } else await changeConfig("saveAgentConfig", { document: agentDocument });
   return { creating, contextId, newName };
 }
 
 /**
  * What a save did to the contexts, said after it: a context created, and
- * whether the one the behavior left is still used by others; one left
+ * whether the one the agent left is still used by others; one left
  * unused is offered for deletion.
  */
 export function contextOutcome(
   deployment: NodeView,
-  behavior: BehaviorView,
+  agent: AgentView,
   previous: AgentContext | null,
-  { creating, contextId, newName }: WrittenBehavior,
+  { creating, contextId, newName }: WrittenAgent,
 ): { said: string[]; unused: AgentContext | null } {
   const said: string[] = [];
   if (creating) said.push(`Created ${newName}.`);
   const left =
     previous && previous.context_id !== contextId
       ? usersOf(deployment, previous.context_id).filter(
-          (b) => b.behaviorId !== behavior.behaviorId,
+          (b) => b.agentId !== agent.agentId,
         )
       : null;
   if (previous && left) {

@@ -23,7 +23,7 @@ use serde_json::{json, Value};
 use tokio::sync::Mutex;
 use tokio::time::timeout;
 
-use crate::identity::AgentIdentity;
+use crate::identity::NodeIdentity;
 
 use super::enrollment::{
     AuthorizationRevision, AuthorizationRevisionKind, DurableEnrollmentDocuments,
@@ -33,7 +33,7 @@ use super::enrollment::{
 use super::graphql_helpers::rows;
 
 const ENROLLMENT_DOCUMENT_QUERY: &str = r#"{
-  AgentNetwork { network_id admin_did display_name default_template created_at admin_sig }
+  Network { network_id admin_did display_name default_template created_at admin_sig }
   NetworkEnrollmentRequest {
     _docID protocol_version request_id request_digest offer_id offer_token challenge
     network_id admin_did server_peer candidate_did candidate_peer candidate_ticket
@@ -135,7 +135,7 @@ impl EnrollmentProjection {
 #[derive(Clone)]
 pub struct GraphqlEnrollmentStore {
     node: Arc<EmbeddedNode>,
-    identity: Arc<dyn AgentIdentity>,
+    identity: Arc<dyn NodeIdentity>,
     decision_lock: Arc<Mutex<()>>,
     fail_closed: Arc<FailClosedLog>,
 }
@@ -143,7 +143,7 @@ pub struct GraphqlEnrollmentStore {
 /// Why the last projection failed closed, if it did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum FailClosed {
-    /// A standalone node has no AgentNetwork; that is its normal state.
+    /// A standalone node has no Network; that is its normal state.
     NoNetwork,
     RootRows(String),
     Authority(String),
@@ -167,7 +167,7 @@ impl FailClosedLog {
         match &state {
             None => tracing::info!("enrollment authority projection recovered"),
             Some(FailClosed::NoNetwork) => {
-                tracing::debug!("enrollment authority fail closed: no AgentNetwork configured")
+                tracing::debug!("enrollment authority fail closed: no Network configured")
             }
             Some(FailClosed::RootRows(error)) => {
                 tracing::warn!(error = %error, "enrollment root authority projected fail closed")
@@ -197,7 +197,7 @@ fn enrollment_decision_gate(node: &EmbeddedNode) -> Arc<Mutex<()>> {
 }
 
 impl GraphqlEnrollmentStore {
-    pub fn new(node: Arc<EmbeddedNode>, identity: Arc<dyn AgentIdentity>) -> Self {
+    pub fn new(node: Arc<EmbeddedNode>, identity: Arc<dyn NodeIdentity>) -> Self {
         let decision_lock = enrollment_decision_gate(node.as_ref());
         Self {
             node,
@@ -782,7 +782,7 @@ impl GraphqlEnrollmentStore {
         )
         .await?;
         let now = Utc::now();
-        let raw_network_rows = rows::<Value>(&response, "AgentNetwork")?;
+        let raw_network_rows = rows::<Value>(&response, "Network")?;
         let network_id = raw_network_rows
             .first()
             .and_then(|row| row.get("network_id"))
@@ -790,7 +790,7 @@ impl GraphqlEnrollmentStore {
             .map(str::to_string);
         let network_rows = raw_network_rows
             .into_iter()
-            .map(serde_json::from_value::<AgentNetworkRow>)
+            .map(serde_json::from_value::<NetworkRow>)
             .collect::<std::result::Result<Vec<_>, _>>();
         let network_rows = match network_rows {
             Ok(rows) => rows,
@@ -819,25 +819,22 @@ impl GraphqlEnrollmentStore {
     async fn project_response(
         &self,
         response: &query::QueryResponse,
-        network_rows: &[AgentNetworkRow],
+        network_rows: &[NetworkRow],
         now: DateTime<Utc>,
     ) -> Result<EnrollmentProjection> {
         let [network_row] = network_rows else {
-            anyhow::bail!(
-                "expected exactly one AgentNetwork, found {}",
-                network_rows.len()
-            );
+            anyhow::bail!("expected exactly one Network, found {}", network_rows.len());
         };
         let network = network_row.to_record()?;
         anyhow::ensure!(
             network.admin_did == self.identity.did(),
-            "AgentNetwork admin does not match the local runtime identity"
+            "Network admin does not match the local runtime identity"
         );
         anyhow::ensure!(
             self.identity
                 .verify(&network.admin_did, &network.signing_payload(), &network.sig)
                 .await?,
-            "AgentNetwork signature is invalid"
+            "Network signature is invalid"
         );
 
         let mut scoped_conflicts = BTreeMap::<(String, String), Vec<String>>::new();
@@ -1547,7 +1544,7 @@ impl GraphqlEnrollmentStore {
                 server_peer: offer.server_peer.clone(),
                 server_ticket_peer: server_ticket_peer.to_string(),
                 resolved_server_did: offer.admin_did,
-                owner_agent: offer.owner_agent,
+                owner_node: offer.owner_agent,
                 profile: offer.profile,
                 schema_compatible: offer.schema_fingerprint == enrollment_schema_fingerprint(),
                 admin_signed: offer_signed,
@@ -1587,7 +1584,7 @@ fn attribute_candidate_request(raw: &Value, local_network: &str) -> CandidateReq
     if network_id.is_some_and(|network_id| network_id != local_network) {
         return CandidateRequestAttribution::ForeignOrUnattributable;
     }
-    // This store has one cryptographically verified local AgentNetwork root.
+    // This store has one cryptographically verified local Network root.
     // A row missing only its network field remains attributable to that root
     // by request/member identity and must quarantine that narrow scope.
     let network_id = network_id.unwrap_or(local_network);
@@ -1788,7 +1785,7 @@ impl VerifiedRequest {
                 .then(|| self.record.candidate_did.clone())
                 .unwrap_or_default(),
             candidate_ticket_peer: self.record.candidate_peer.clone(),
-            owner_agent: self.record.owner_agent.clone(),
+            owner_node: self.record.owner_agent.clone(),
             profile: self.record.profile.clone(),
             client_nonce: self.record.client_nonce.clone(),
             issued_at: self.record.issued_at.clone(),
@@ -1819,7 +1816,7 @@ impl VerifiedDecision {
             admin_did: self.record.admin_did.clone(),
             candidate_did: self.record.candidate_did.clone(),
             candidate_peer: self.record.candidate_peer.clone(),
-            owner_agent: self.record.owner_agent.clone(),
+            owner_node: self.record.owner_agent.clone(),
             kind: match self.record.decision {
                 WireDecisionKind::Approved => EnrollmentDecisionKind::Approved,
                 WireDecisionKind::Denied => EnrollmentDecisionKind::Denied,
@@ -1856,7 +1853,7 @@ impl VerifiedRouteReceipt {
             member_did: self.record.member_did.clone(),
             member_peer: self.record.member_peer.clone(),
             server_peer: self.record.server_peer.clone(),
-            owner_agent: self.record.owner_agent.clone(),
+            owner_node: self.record.owner_agent.clone(),
             authorization_sequence: self.record.authorization_sequence as usize,
             authorization_expires_at: self.record.authorization_expires_at.clone(),
             direction: EnrollmentRouteDirection::ClientToServer,
@@ -1876,7 +1873,7 @@ impl VerifiedRevision {
             admin_did: self.record.admin_did.clone(),
             member_did: self.record.member_did.clone(),
             member_peer: self.record.member_peer.clone(),
-            owner_agent: self.record.owner_agent.clone(),
+            owner_node: self.record.owner_agent.clone(),
             sequence: self.record.sequence as usize,
             authorization_expires_at: self.record.authorization_expires_at.clone(),
             kind: match self.record.kind {
@@ -2055,7 +2052,7 @@ fn route_receipt_mutation(receipt: &EnrollmentRouteReceiptRecord) -> String {
 }
 
 #[derive(Debug, Deserialize)]
-struct AgentNetworkRow {
+struct NetworkRow {
     network_id: String,
     admin_did: String,
     display_name: String,
@@ -2064,7 +2061,7 @@ struct AgentNetworkRow {
     admin_sig: String,
 }
 
-impl AgentNetworkRow {
+impl NetworkRow {
     fn to_record(&self) -> Result<NetworkRecord> {
         Ok(NetworkRecord {
             network_id: self.network_id.clone(),
@@ -2072,7 +2069,7 @@ impl AgentNetworkRow {
             display_name: self.display_name.clone(),
             default_template: self.default_template.clone(),
             created_at: self.created_at.clone(),
-            sig: decode_signature("AgentNetwork.admin_sig", &self.admin_sig)?,
+            sig: decode_signature("Network.admin_sig", &self.admin_sig)?,
         })
     }
 }
@@ -2338,11 +2335,7 @@ mod tests {
 
     #[test]
     fn a_steady_fail_closed_state_is_logged_once_per_transition() {
-        let conflict = || {
-            Some(FailClosed::Authority(
-                "AgentNetwork signature is invalid".into(),
-            ))
-        };
+        let conflict = || Some(FailClosed::Authority("Network signature is invalid".into()));
         let mut states = vec![None; 3];
         states.extend(std::iter::repeat_with(|| Some(FailClosed::NoNetwork)).take(1_000));
         states.extend(std::iter::repeat_with(conflict).take(1_000));
@@ -2350,7 +2343,7 @@ mod tests {
         let lines = logged_lines(states);
         assert_eq!(lines.len(), 3, "{lines:#?}");
         assert!(
-            lines[0].contains("DEBUG") && lines[0].contains("no AgentNetwork configured"),
+            lines[0].contains("DEBUG") && lines[0].contains("no Network configured"),
             "{lines:#?}"
         );
         assert!(

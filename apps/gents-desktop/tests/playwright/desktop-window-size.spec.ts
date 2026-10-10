@@ -80,7 +80,7 @@ test.describe("half-screen window", () => {
       const header = page.locator(".app-titlebar");
       await expectInsideViewport(page, page.getByRole("button", { name: "Menu" }));
       await expectApart(
-        header.getByRole("link", { name: "Agents" }).first(),
+        header.getByRole("link", { name: "Nodes" }).first(),
         header.getByRole("button", { name: /Sync healthy/ }),
       );
       await expectInsideViewport(
@@ -95,15 +95,15 @@ test.describe("half-screen window", () => {
       await expectNoPageHorizontalOverflow(page);
 
       /* agents */
-      await page.getByRole("link", { name: "Agents" }).first().click();
+      await page.getByRole("link", { name: "Nodes" }).first().click();
       await expect(page.getByTestId("agents-screen")).toBeVisible();
-      await expectInsideViewport(page, page.getByRole("button", { name: "Add agent" }));
+      await expectInsideViewport(page, page.getByRole("button", { name: "Add node" }));
       await expectNoPageHorizontalOverflow(page);
 
       /* configuration: the section list becomes a picker and editors stack */
       await openConfig(page);
       await expect(page.getByRole("combobox", { name: "Section" })).toBeVisible();
-      await openConfigSection(page, /^Behaviors\b/);
+      await openConfigSection(page, /^Agents\b/);
       await page
         .getByRole("link", { name: /^Ops\b/ })
         .first()
@@ -165,9 +165,9 @@ test.describe("half-screen window", () => {
       await expectInsideViewport(page, composer(page));
       await expectNoPageHorizontalOverflow(page);
 
-      await page.getByRole("link", { name: "Agents" }).first().click();
+      await page.getByRole("link", { name: "Nodes" }).first().click();
       await expect(page.getByTestId("agents-screen")).toBeVisible();
-      await expectInsideViewport(page, page.getByRole("button", { name: "Add agent" }));
+      await expectInsideViewport(page, page.getByRole("button", { name: "Add node" }));
       await expectNoPageHorizontalOverflow(page);
     });
   }

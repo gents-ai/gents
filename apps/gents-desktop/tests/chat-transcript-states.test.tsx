@@ -24,7 +24,7 @@ function makeSession(
 ): DesktopSessionSnapshot {
   return sessionSnapshot({
     sessionId: "s1",
-    agentDid: "did:test:operator",
+    nodeDid: "did:test:operator",
     turnState: "running",
     ...overrides,
   });
@@ -67,7 +67,7 @@ describe("session context visibility", () => {
   it("shows current provider-view pressure and closes its details", () => {
     render(
       <ChatHeader
-        behaviorLabel="mobile"
+        agentLabel="mobile"
         context={{
           estimatedDurableTokens: 340_319,
           estimatedConversationTokens: 142_031,
@@ -149,7 +149,7 @@ describe("legacy chat header context window", () => {
   it("reports a window the runtime rejects instead of presenting it as in use", () => {
     render(
       <ChatHeader
-        behaviorLabel="mobile"
+        agentLabel="mobile"
         context={{
           estimatedDurableTokens: 1_000,
           estimatedConversationTokens: 1_000,

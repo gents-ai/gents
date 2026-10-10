@@ -27,7 +27,7 @@ pub(super) async fn config_apply(args: ConfigApplyArgs) -> Result<()> {
         root: &args.root,
         home: args.home.as_deref(),
         graphql: args.graphql.as_deref(),
-        bind_agent_did: args.bind_agent_did,
+        bind_node_did: args.bind_node_did,
         force_rebind_concrete_did: args.force_rebind_concrete_did,
         access: Some(&access),
     })
@@ -77,13 +77,12 @@ pub(crate) async fn apply_bound_desired_manifest(
         desired_state::export_bundle_from_manifest(desired_manifest, access.mode())?;
 
     let live_bundle = build_desired_state_live_bundle(&access, desired_manifest).await?;
-    let (live_principal, live_manifest) =
-        live_manifest_from_bundle(desired_manifest, &live_bundle)?;
+    let (live_node, live_manifest) = live_manifest_from_bundle(desired_manifest, &live_bundle)?;
     let planned = desired_state::diff_manifests(
         root,
         access.mode(),
         desired_manifest,
-        live_principal.as_ref(),
+        live_node.as_ref(),
         &live_manifest,
         prune,
     );
@@ -107,13 +106,13 @@ pub(crate) async fn apply_bound_desired_manifest(
         .context("config apply transaction")?;
 
     let remaining_bundle = build_desired_state_live_bundle(&access, desired_manifest).await?;
-    let (remaining_principal, remaining_manifest) =
+    let (remaining_node, remaining_manifest) =
         live_manifest_from_bundle(desired_manifest, &remaining_bundle)?;
     let remaining = desired_state::diff_manifests(
         root,
         access.mode(),
         desired_manifest,
-        remaining_principal.as_ref(),
+        remaining_node.as_ref(),
         &remaining_manifest,
         false,
     );
@@ -126,7 +125,7 @@ pub(crate) async fn apply_bound_desired_manifest(
         changed,
         root: root.display().to_string(),
         access_mode: access.mode().to_string(),
-        agent_did: bound.context.target_agent_did.clone(),
+        node_did: bound.context.target_node_did.clone(),
         schemas: None,
         planned: planned.counts.clone(),
         applied,

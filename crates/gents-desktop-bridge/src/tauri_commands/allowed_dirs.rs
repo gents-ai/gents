@@ -12,7 +12,7 @@ use crate::error::{BridgeError, BridgeErrorCode};
 use crate::state::DesktopAppState;
 
 fn home(state: &DesktopAppState) -> Result<std::path::PathBuf, BridgeError> {
-    state.policy.agent_home.clone().ok_or_else(|| {
+    state.policy.node_home.clone().ok_or_else(|| {
         BridgeError::new(
             BridgeErrorCode::Unsupported,
             "allowed folders belong to a local agent; start one first",

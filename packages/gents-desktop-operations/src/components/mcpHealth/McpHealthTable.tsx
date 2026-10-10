@@ -14,7 +14,7 @@ import {
 export function McpHealthTable({
   services,
   expandedId,
-  probingServiceId,
+  probingServiceIds,
   probeOutcomes,
   onToggle,
   onRowKeyDown,
@@ -22,7 +22,7 @@ export function McpHealthTable({
 }: {
   services: MCPServiceHealthView[];
   expandedId: string | null;
-  probingServiceId: string | null;
+  probingServiceIds: readonly string[];
   probeOutcomes?: Record<string, McpProbeOutcome>;
   onToggle: (serviceId: string) => void;
   onRowKeyDown: (
@@ -46,22 +46,27 @@ export function McpHealthTable({
         </thead>
         <tbody>
           {services.map((service) => {
+            const identity = JSON.stringify([
+              service.nodeDid,
+              service.serviceId,
+            ]);
             const visual = visualState(service);
-            const expanded = expandedId === service.serviceId;
-            const busy = probingServiceId === service.serviceId;
+            const expanded = expandedId === identity;
+            const busy = probingServiceIds.includes(identity);
             const backoff = backoffRemaining(service.backoffUntil);
             return (
               <ServiceRows
-                key={service.serviceId}
+                key={identity}
+                identity={identity}
                 service={service}
                 visual={visual}
                 expanded={expanded}
                 busy={busy}
                 backoff={backoff}
-                probeOutcome={probeOutcomes?.[service.serviceId] ?? null}
-                onToggle={() => onToggle(service.serviceId)}
-                onKeyDown={(event) => onRowKeyDown(event, service.serviceId)}
-                onProbe={() => onProbe(service.serviceId)}
+                probeOutcome={probeOutcomes?.[identity] ?? null}
+                onToggle={() => onToggle(identity)}
+                onKeyDown={(event) => onRowKeyDown(event, identity)}
+                onProbe={() => onProbe(identity)}
               />
             );
           })}
@@ -72,6 +77,7 @@ export function McpHealthTable({
 }
 
 function ServiceRows({
+  identity,
   service,
   visual,
   expanded,
@@ -82,6 +88,7 @@ function ServiceRows({
   onKeyDown,
   onProbe,
 }: {
+  identity: string;
   service: MCPServiceHealthView;
   visual: VisualState;
   expanded: boolean;
@@ -118,7 +125,7 @@ function ServiceRows({
         role="button"
         tabIndex={0}
         aria-expanded={expanded}
-        aria-controls={`mcp-health-detail-${service.serviceId}`}
+        aria-controls={`mcp-health-detail-${encodeURIComponent(identity)}`}
         className={
           expanded ? "mcp-health-row mcp-health-row-expanded" : "mcp-health-row"
         }
@@ -206,6 +213,7 @@ function ServiceRows({
               onProbe();
             }}
             aria-busy={busy}
+            disabled={busy}
             aria-label={`Probe ${service.serviceId}`}
             data-testid={`mcp-health-probe-${service.serviceId}`}
           >
@@ -215,7 +223,10 @@ function ServiceRows({
       </tr>
       {expanded ? (
         <tr className="mcp-health-detail-row">
-          <td colSpan={6} id={`mcp-health-detail-${service.serviceId}`}>
+          <td
+            colSpan={6}
+            id={`mcp-health-detail-${encodeURIComponent(identity)}`}
+          >
             <div className="mcp-health-detail">
               <DetailKv
                 rows={[
@@ -232,7 +243,7 @@ function ServiceRows({
                   ["last_seen", service.lastSeen ?? "—"],
                   ["last_error_class", service.lastErrorClass ?? "—"],
                   ["last_error_message", service.lastErrorMessage ?? "—"],
-                  ["agent_did", service.agentDid ?? "—"],
+                  ["node_did", service.nodeDid ?? "—"],
                   ["updated_at", service.updatedAt ?? "—"],
                 ]}
               />

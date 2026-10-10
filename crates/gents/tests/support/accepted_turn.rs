@@ -1,14 +1,14 @@
-use gents::{AgentIdentity, DocumentRuntimeOptions, Gents};
+use gents::{DocumentRuntimeOptions, Gents, NodeIdentity};
 
-use super::fixtures::bind_behavior_backend;
+use super::fixtures::bind_agent_backend;
 use super::interrupt::{wait_for_runtime_ready, BootedAgent};
 use super::streaming_backend::{MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse};
 
 pub struct AcceptedTurnSpec<'a> {
     pub backend_id: &'a str,
     pub model: &'a str,
-    pub parent_behavior_id: &'a str,
-    pub configured_behavior_ids: &'a [&'a str],
+    pub parent_agent_id: &'a str,
+    pub configured_agent_ids: &'a [&'a str],
     pub request_id: &'a str,
     pub session_id: &'a str,
     pub prompt: &'a str,
@@ -18,7 +18,7 @@ pub struct AcceptedTurnSpec<'a> {
     /// Additional exact backend plans, normally paused or completing children.
     pub child_plans: Vec<StreamPlan>,
     pub valid_until: Option<&'a str>,
-    pub subagent_depth: Option<u32>,
+    pub request_hop: Option<u32>,
     /// Optional caller-owned admission fields (for example a workspace seal).
     /// This runs before the canonical request is signed.
     pub request_setup:
@@ -39,20 +39,19 @@ pub struct AcceptedTurnRuntime {
 /// request admission document; provider acceptance remains runtime-owned.
 pub async fn enqueue_local_accepted_request(
     db: &super::TestDb,
-    behavior_id: &str,
+    agent_id: &str,
     request_id: &str,
     session_id: &str,
     prompt: &str,
 ) {
-    enqueue_local_accepted_request_until(db, behavior_id, request_id, session_id, prompt, None)
-        .await;
+    enqueue_local_accepted_request_until(db, agent_id, request_id, session_id, prompt, None).await;
 }
 
 /// Enqueue a canonically signed local-self request with an optional admission
 /// deadline. The runtime remains the sole owner of accepting and executing it.
 pub async fn enqueue_local_accepted_request_until(
     db: &super::TestDb,
-    behavior_id: &str,
+    agent_id: &str,
     request_id: &str,
     session_id: &str,
     prompt: &str,
@@ -64,7 +63,7 @@ pub async fn enqueue_local_accepted_request_until(
         request_id,
         db.node_identity.did(),
         db.node_identity.did(),
-        behavior_id,
+        agent_id,
         session_id,
         prompt,
         "interactive",
@@ -109,7 +108,7 @@ pub async fn prepare_accepted_turn(
 /// the fixture node. All durable scope and signatures derive from `identity`.
 pub async fn prepare_accepted_turn_as(
     db: &super::TestDb,
-    identity: &dyn AgentIdentity,
+    identity: &dyn NodeIdentity,
     mut spec: AcceptedTurnSpec<'_>,
 ) -> PreparedAcceptedTurn {
     let mut plans = vec![StreamPlan::current_authored_user(
@@ -126,11 +125,11 @@ pub async fn prepare_accepted_turn_as(
     );
     let backend = MockStreamingBackend::start_with_plans(spec.model, plans)
         .expect("start accepted-turn backend");
-    for behavior_id in spec.configured_behavior_ids {
-        bind_behavior_backend(
+    for agent_id in spec.configured_agent_ids {
+        bind_agent_backend(
             db.node.as_ref(),
             identity.did(),
-            behavior_id,
+            agent_id,
             spec.backend_id,
             backend.endpoint(),
             spec.model,
@@ -142,8 +141,8 @@ pub async fn prepare_accepted_turn_as(
         super::snapshots::fetch_session_snapshot(db.node.as_ref(), spec.session_id).await;
     if existing_session.is_none() {
         let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-        let mut session = super::session_document(spec.session_id, spec.parent_behavior_id, &now);
-        session.agent_did = identity.did().to_string();
+        let mut session = super::session_document(spec.session_id, spec.parent_agent_id, &now);
+        session.node_did = identity.did().to_string();
         session.requester_did = Some(identity.did().to_string());
         session.title = Some(gents_protocol::session::SessionTitle {
             text: "generated-title".into(),
@@ -176,7 +175,7 @@ pub async fn prepare_accepted_turn_as(
         spec.request_id,
         identity.did(),
         identity.did(),
-        spec.parent_behavior_id,
+        spec.parent_agent_id,
         spec.session_id,
         spec.prompt,
         "interactive",
@@ -184,7 +183,7 @@ pub async fn prepare_accepted_turn_as(
         gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(identity.did()),
     );
     request.valid_until = spec.valid_until.map(str::to_owned);
-    request.subagent_depth = spec.subagent_depth.unwrap_or(0);
+    request.request_hop = spec.request_hop.unwrap_or(0);
     if let Some(setup) = spec.request_setup.take() {
         setup(&mut request);
     }
@@ -209,12 +208,12 @@ pub async fn boot_prepared_accepted_turn(
     prepared: PreparedAcceptedTurn,
     agent: Gents,
 ) -> AcceptedTurnRuntime {
-    let agent_did = agent.agent_did().to_string();
+    let node_did = agent.node_did().to_string();
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
-    wait_for_runtime_ready(db.node.as_ref(), &agent_did).await;
+    wait_for_runtime_ready(db.node.as_ref(), &node_did).await;
     AcceptedTurnRuntime {
-        runtime: BootedAgent::new(shutdown_tx, handle, agent_did),
+        runtime: BootedAgent::new(shutdown_tx, handle, node_did),
         backend: prepared.backend,
     }
 }
@@ -226,8 +225,8 @@ pub async fn boot_accepted_turn(
     runtime_options: DocumentRuntimeOptions,
 ) -> AcceptedTurnRuntime {
     let prepared = prepare_accepted_turn(db, spec).await;
-    let identity: std::sync::Arc<dyn AgentIdentity> = db.node_identity.clone();
-    let agent = Gents::from_default_behavior_documents(db.node.clone(), identity, runtime_options)
+    let identity: std::sync::Arc<dyn NodeIdentity> = db.node_identity.clone();
+    let agent = Gents::from_default_agent_documents(db.node.clone(), identity, runtime_options)
         .await
         .expect("build accepted-turn runtime");
     boot_prepared_accepted_turn(db, prepared, agent).await
@@ -311,8 +310,8 @@ async fn boot_accepted_turn_with_backend_capacity_inner(
     )
     .await
     .expect("configure accepted-turn backend worker capacity");
-    let identity: std::sync::Arc<dyn AgentIdentity> = db.node_identity.clone();
-    let agent = Gents::from_default_behavior_documents(db.node.clone(), identity, runtime_options)
+    let identity: std::sync::Arc<dyn NodeIdentity> = db.node_identity.clone();
+    let agent = Gents::from_default_agent_documents(db.node.clone(), identity, runtime_options)
         .await
         .expect("build accepted-turn runtime");
     boot_prepared_accepted_turn(db, prepared, agent).await

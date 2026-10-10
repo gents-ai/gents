@@ -1,5 +1,5 @@
 {
-  "agent_principal": {},
+  "node": {},
   "inference_backends": [
     {
       "backend_id": "workstation-2",

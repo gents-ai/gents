@@ -67,7 +67,7 @@ impl PackEdit {
             });
             self.manifest["config"] = json!(CONFIG);
             self.add_asset(CONFIG);
-            self.config = Some(json!({ "agent_principal": {} }));
+            self.config = Some(json!({ "node": {} }));
         }
         self.config
             .as_mut()
@@ -206,20 +206,20 @@ pub(crate) fn add(args: PackAddArgs) -> Result<()> {
 
 pub(super) fn apply_add(pack: &mut PackEdit, command: PackAddCommand) -> Result<()> {
     match command {
-        PackAddCommand::Behavior { id, slot } => add_behavior(pack, &id, slot.as_deref()),
-        PackAddCommand::Task { id, behavior } => {
+        PackAddCommand::Agent { id, slot } => add_agent(pack, &id, slot.as_deref()),
+        PackAddCommand::Task { id, agent } => {
             check_id(&id)?;
             pack.require_new("tasks", "task_id", &id)?;
             anyhow::ensure!(
-                pack.has("agent_behaviors", "behavior_id", &behavior),
-                "the pack has no behavior {behavior:?}; add it first"
+                pack.has("agents", "agent_id", &agent),
+                "the pack has no agent {agent:?}; add it first"
             );
             let prompt = format!("tasks/{}/prompt.md", snake(&id));
             pack.create_file(&prompt, "Describe what this task does.\n")?;
             pack.list("tasks")?.push(json!({
                 "task_id": id,
                 "display_name": title(&id),
-                "behavior_id": behavior,
+                "agent_id": agent,
                 "prompt_template": format!("./{prompt}"),
             }));
             Ok(())
@@ -358,14 +358,14 @@ fn super_snake(name: &str) -> String {
     out
 }
 
-fn add_behavior(pack: &mut PackEdit, id: &str, slot: Option<&str>) -> Result<()> {
+fn add_agent(pack: &mut PackEdit, id: &str, slot: Option<&str>) -> Result<()> {
     check_id(id)?;
-    pack.require_new("agent_behaviors", "behavior_id", id)?;
+    pack.require_new("agents", "agent_id", id)?;
     let slot = slot.map(str::to_owned).unwrap_or_else(|| snake(id));
-    let prompt = format!("agent_behaviors/{}/system_prompt.md", snake(id));
+    let prompt = format!("agents/{}/system_prompt.md", snake(id));
     pack.create_file(&prompt, &format!("You are the {} agent.\n", title(id)))?;
-    pack.list("agent_behaviors")?.push(json!({
-        "behavior_id": id,
+    pack.list("agents")?.push(json!({
+        "agent_id": id,
         "display_name": title(id),
         "context_id": format!("{id}-context"),
         "inference_profile_id": format!("gents:inference-slot:{slot}"),
@@ -386,13 +386,13 @@ fn add_behavior(pack: &mut PackEdit, id: &str, slot: Option<&str>) -> Result<()>
             entry
                 .as_object_mut()
                 .context("an inference slot is not an object")?,
-            "behaviors",
+            "agents",
         )?
         .push(json!(id)),
         None => slots.push(json!({
             "name": slot,
-            "description": format!("The profile the {} behavior runs on.", title(id)),
-            "behaviors": [id],
+            "description": format!("The profile the {} agent runs on.", title(id)),
+            "agents": [id],
         })),
     }
     Ok(())
@@ -471,7 +471,7 @@ fn add_stage(
     pack.require_new("graph_capabilities", "capability_id", &capability)?;
     pack.list("graph_capabilities")?.push(json!({
         "capability_id": capability,
-        "allowed_callers": ["${GENTS_PACK_AGENT_DID}"],
+        "allowed_callers": ["${GENTS_PACK_NODE_DID}"],
         "revision": "v1",
         "target": target,
         "input_ports": [{
@@ -541,15 +541,15 @@ pub(crate) fn remove_part(args: PackRemovePartArgs) -> Result<()> {
     let mut pack = PackEdit::load(&dir)?;
     let id = args.id.as_str();
     match args.part {
-        PackPart::Behavior => {
-            let behavior = pack.remove_row("agent_behaviors", "behavior_id", id)?;
+        PackPart::Agent => {
+            let agent = pack.remove_row("agents", "agent_id", id)?;
             anyhow::ensure!(
                 !pack.config.as_ref().is_some_and(|config| config["tasks"]
                     .as_array()
-                    .is_some_and(|tasks| tasks.iter().any(|task| task["behavior_id"] == id))),
-                "a task still runs behavior {id:?}; remove it first"
+                    .is_some_and(|tasks| tasks.iter().any(|task| task["agent_id"] == id))),
+                "a task still runs agent {id:?}; remove it first"
             );
-            if let Some(context_id) = behavior["context_id"].as_str() {
+            if let Some(context_id) = agent["context_id"].as_str() {
                 let context = pack.remove_row("contexts", "context_id", context_id)?;
                 if let Some(tools_id) = context["tools_id"].as_str() {
                     let _ = pack.remove_row("tools", "tools_id", tools_id);
@@ -559,13 +559,12 @@ pub(crate) fn remove_part(args: PackRemovePartArgs) -> Result<()> {
                 }
             }
             for slot in pack.manifest_list("inference_slots")? {
-                if let Some(behaviors) = slot["behaviors"].as_array_mut() {
-                    behaviors.retain(|behavior| behavior != id);
+                if let Some(agents) = slot["agents"].as_array_mut() {
+                    agents.retain(|agent| agent != id);
                 }
             }
             pack.manifest_list("inference_slots")?.retain(|slot| {
-                slot["optional"] == true
-                    || slot["behaviors"].as_array().is_some_and(|b| !b.is_empty())
+                slot["optional"] == true || slot["agents"].as_array().is_some_and(|b| !b.is_empty())
             });
         }
         PackPart::Task => {
@@ -688,7 +687,7 @@ mod tests {
         let (_root, dir) = scaffolded(PackTemplate::Assets);
         add(
             &dir,
-            PackAddCommand::Behavior {
+            PackAddCommand::Agent {
                 id: "reviewer".into(),
                 slot: None,
             },
@@ -697,7 +696,7 @@ mod tests {
             &dir,
             PackAddCommand::Task {
                 id: "review".into(),
-                behavior: "reviewer".into(),
+                agent: "reviewer".into(),
             },
         );
         add(
@@ -727,7 +726,7 @@ mod tests {
         remove(&dir, PackPart::Trigger, "on-job");
         remove(&dir, PackPart::Skill, "triage");
         remove(&dir, PackPart::Task, "review");
-        remove(&dir, PackPart::Behavior, "reviewer");
+        remove(&dir, PackPart::Agent, "reviewer");
         remove(&dir, PackPart::Schema, "ReviewJob");
         let problems = check(&dir).await;
         assert!(problems.is_empty(), "{problems:#?}");
@@ -802,7 +801,7 @@ mod tests {
         let mut pack = PackEdit::load(&dir).unwrap();
         let duplicate = apply_add(
             &mut pack,
-            PackAddCommand::Behavior {
+            PackAddCommand::Agent {
                 id: "review-toolkit-worker".into(),
                 slot: None,
             },
@@ -816,14 +815,11 @@ mod tests {
             &mut pack,
             PackAddCommand::Task {
                 id: "orphan".into(),
-                behavior: "nobody".into(),
+                agent: "nobody".into(),
             },
         )
         .unwrap_err();
-        assert!(
-            format!("{dangling:#}").contains("no behavior"),
-            "{dangling:#}"
-        );
+        assert!(format!("{dangling:#}").contains("no agent"), "{dangling:#}");
     }
 
     #[test]

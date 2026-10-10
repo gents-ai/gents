@@ -66,7 +66,7 @@ struct ChatToolProgressMarker {
 pub(super) fn chat_progress_query(request: &SubmittedRequest) -> String {
     let request_doc_id = &request.request_doc_id;
     let scope = gents::session::session_scope_filter(
-        &request.agent_did,
+        &request.node_did,
         &request.session_id,
         request.requester_did.as_deref(),
     );
@@ -76,8 +76,8 @@ pub(super) fn chat_progress_query(request: &SubmittedRequest) -> String {
                 filter: {{ {scope}, _docID: {{ _eq: "{request_doc_id}" }} }},
                 limit: 2
             ) {{
-                _docID agent_did requester_did session_id
-                request_id behavior_id
+                _docID node_did requester_did session_id
+                request_id agent_id
                 lifecycle_state
                 failure_reason
                 execution_generation
@@ -293,7 +293,7 @@ pub(crate) async fn stream_turn_progress(
 
         if let Some(request) = request.as_ref() {
             anyhow::ensure!(
-                request.agent_did.as_deref() == Some(submitted.agent_did.as_str())
+                request.node_did.as_deref() == Some(submitted.node_did.as_str())
                     && request.requester_did == submitted.requester_did
                     && request.session_id.as_deref() == Some(submitted.session_id.as_str()),
                 "chat request scope differs from committed receipt"
@@ -415,7 +415,10 @@ pub(crate) async fn stream_turn_progress(
                     continue;
                 }
                 gents::session::CanonicalRequestOutput::Denied => {
-                    anyhow::bail!("canonical terminal output for request {} is denied", submitted.request_id)
+                    anyhow::bail!(
+                        "canonical terminal output for request {} is denied",
+                        submitted.request_id
+                    )
                 }
                 gents::session::CanonicalRequestOutput::Conflicted => anyhow::bail!(
                     "canonical terminal output for request {} is conflicted",
@@ -456,9 +459,9 @@ pub(crate) async fn stream_turn_progress(
                     let error_message = failure_reason.trim();
                     if !error_message.is_empty() {
                         println!("[agent error] {error_message}");
-                        let behavior_id = request.behavior_id.as_deref();
+                        let agent_id = request.agent_id.as_deref();
                         for line in
-                            account_problems(graphql, submitted, behavior_id, error_message).await
+                            account_problems(graphql, submitted, agent_id, error_message).await
                         {
                             println!("[account] {line}");
                         }
@@ -905,14 +908,13 @@ fn text_fingerprint(value: &str) -> (usize, u64) {
 
 /// One line per profile of a refused turn whose account cannot serve it,
 /// naming the account, its state and the move; none unless `failure_reason`
-/// is a behavior-unavailable rejection.
+/// is an agent-unavailable rejection.
 fn account_problem_lines(
     failure_reason: &str,
     accounts: &[(String, gents::oauth_credential::ServingAccount)],
     all: &[gents::oauth_credential::AccountSummary],
 ) -> Vec<String> {
-    if !gents_protocol::behavior_readiness::is_behavior_unavailable_rejection(failure_reason.trim())
-    {
+    if !gents_protocol::node_readiness::is_behavior_unavailable_rejection(failure_reason.trim()) {
         return Vec::new();
     }
     accounts
@@ -931,27 +933,25 @@ fn account_problem_lines(
         .collect()
 }
 
-/// [`account_problem_lines`] for `submitted`'s behavior, read now; a read
+/// [`account_problem_lines`] for `submitted`'s agent, read now; a read
 /// failure gives none, since the turn's own error is already printed.
 async fn account_problems(
     graphql: &GraphqlEndpoint,
     submitted: &SubmittedRequest,
-    behavior_id: Option<&str>,
+    agent_id: Option<&str>,
     failure_reason: &str,
 ) -> Vec<String> {
-    let (Some(behavior_id), true) = (
-        behavior_id,
-        gents_protocol::behavior_readiness::is_behavior_unavailable_rejection(
-            failure_reason.trim(),
-        ),
+    let (Some(agent_id), true) = (
+        agent_id,
+        gents_protocol::node_readiness::is_behavior_unavailable_rejection(failure_reason.trim()),
     ) else {
         return Vec::new();
     };
     let read = async {
         let access = gents::config_client::ConfigAccess::Graphql(graphql.clone());
-        let did = submitted.agent_did.as_str();
+        let did = submitted.node_did.as_str();
         anyhow::Ok((
-            gents::config_client::behavior_accounts(&access, did, behavior_id).await?,
+            gents::config_client::agent_accounts(&access, did, agent_id).await?,
             gents::oauth_credential::list_accounts(&access, did).await?,
         ))
     };
@@ -973,8 +973,8 @@ mod tests {
         let submitted = SubmittedRequest {
             request_id: "request-one".to_string(),
             session_id: "session-one".to_string(),
-            agent_did: "did:key:agent".to_string(),
-            behavior_id: None,
+            node_did: "did:key:agent".to_string(),
+            agent_id: None,
             request_doc_id: "doc-one".to_string(),
             requester_did: Some("did:key:requester".to_string()),
             input: None,
@@ -1414,7 +1414,7 @@ mod tests {
     mod account_problem {
         use super::*;
         use gents::oauth_credential::{AccountState, AccountSummary, ServingAccount};
-        use gents_protocol::row::BehaviorReadinessUnavailableReason as Reason;
+        use gents_protocol::row::AgentReadinessUnavailableReason as Reason;
 
         const CLAUDE: &str = "claude-subscription";
 

@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use tauri::State;
 
-use crate::state::{current_core, require_agent_home, DesktopAppState};
+use crate::state::{current_core, require_node_home, DesktopAppState};
 
 const MAX_ENTRIES: usize = 500;
 
@@ -93,8 +93,8 @@ fn workspace_root(state: &State<'_, DesktopAppState>) -> Result<PathBuf, BridgeE
         tool_root: Option<String>,
     }
 
-    let agent_home = require_agent_home(state)?;
-    let root = std::fs::read(agent_home.join("init.json"))
+    let node_home = require_node_home(state)?;
+    let root = std::fs::read(node_home.join("init.json"))
         .ok()
         .and_then(|bytes| serde_json::from_slice::<InitRootView>(&bytes).ok())
         .and_then(|config| config.tool_root)

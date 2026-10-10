@@ -1,7 +1,7 @@
 //! Callback engine: first-seen source creates → journaled host actions.
 //!
 //! Bindings select shared EventSource configuration (first-arrival create semantics).
-//! Invocations are claimable only on `owner_agent_did`. `CallbackResult`
+//! Invocations are claimable only on `owner_node_did`. `CallbackResult`
 //! is created only after IsolatedWorkspace + WorkspacePlacement are durable.
 
 use std::collections::{HashMap, HashSet};
@@ -42,7 +42,7 @@ pub(crate) const LIFECYCLE_DENIED: &str = "denied";
 
 pub(super) struct CallbackEngine {
     node: Arc<EmbeddedNode>,
-    agent_did: String,
+    node_did: String,
     ceiling: Option<PathBuf>,
     plugins: Arc<crate::plugin::executor::PluginExecutor>,
     subscription_source: Arc<dyn UpdateSubscriptionSource>,
@@ -63,17 +63,17 @@ pub(super) struct CallbackEngine {
 
 pub async fn run_callback_engine(
     node: Arc<EmbeddedNode>,
-    agent_did: String,
+    node_did: String,
     ceiling: Option<PathBuf>,
     plugins: Arc<crate::plugin::executor::PluginExecutor>,
     cancel: CancellationToken,
 ) -> Result<()> {
-    let mut engine = CallbackEngine::new(node, agent_did.clone(), ceiling.clone(), cancel.clone());
+    let mut engine = CallbackEngine::new(node, node_did.clone(), ceiling.clone(), cancel.clone());
     engine.plugins = plugins;
     engine.reconcile_bindings().await;
     if let Err(error) = recover_local_invocations(
         engine.node.as_ref(),
-        &agent_did,
+        &node_did,
         ceiling.as_deref(),
         &engine.plugins,
     )
@@ -99,7 +99,7 @@ pub async fn run_callback_engine(
                     engine.rescan_created_docs().await;
                     if let Err(error) = recover_local_invocations(
                         engine.node.as_ref(),
-                        &engine.agent_did,
+                        &engine.node_did,
                         engine.ceiling.as_deref(),
                         &engine.plugins,
                     )
@@ -133,7 +133,7 @@ pub async fn run_callback_engine(
             engine.rescan_created_docs().await;
             if let Err(error) = recover_local_invocations(
                 engine.node.as_ref(),
-                &engine.agent_did,
+                &engine.node_did,
                 engine.ceiling.as_deref(),
                 &engine.plugins,
             )
@@ -158,10 +158,10 @@ pub async fn run_callback_engine(
 #[cfg(test)]
 pub(crate) async fn scan_callbacks(
     node: Arc<EmbeddedNode>,
-    agent_did: String,
+    node_did: String,
     plugins: Arc<crate::plugin::executor::PluginExecutor>,
 ) {
-    let mut engine = CallbackEngine::new(node, agent_did, None, CancellationToken::new());
+    let mut engine = CallbackEngine::new(node, node_did, None, CancellationToken::new());
     engine.plugins = plugins;
     engine.reconcile_bindings().await;
     engine.rescan_created_docs().await;

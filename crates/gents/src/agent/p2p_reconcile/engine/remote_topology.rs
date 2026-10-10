@@ -239,12 +239,12 @@ pub(super) async fn apply_op(
                 .add_replicator(&addresses, &collections, &desired.replicator_filter)
                 .await
                 .with_context(|| format!("install P2P replicator {address}"))?;
-            if desired.uses_subagent_template() {
+            if desired.uses_agent_target_template() {
                 tracing::debug!(
                     target: "gents::agent::p2p_reconcile::engine",
                     address = %address,
                     templates = ?desired.template_ids,
-                    "subagent pairing replicator installed with initial full replay"
+                    "agent-target pairing replicator installed with initial full replay"
                 );
             }
             Ok(())

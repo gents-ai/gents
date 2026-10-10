@@ -73,6 +73,7 @@ import Proofs.Conformance.CoverageLedger
 import Proofs.Conformance.Contracts
 import Proofs.ApplyReconcile
 import Proofs.SelfConfig
+import Proofs.SelfConfig.Selection
 import Proofs.ReversePairingHandlers
 import Proofs.Identity
 import Proofs.Skills
@@ -87,7 +88,6 @@ import Proofs.GraphPipeline.LogicalInvocation
 import Proofs.EthSubmission
 import Proofs.PeerRegistryDiscovery.DirectoryProjection
 import Proofs.PeerRegistryDiscovery.RootAdmission
-import Proofs.PeerRegistryDiscovery.PersonaRequest
 
 import Proofs.Conformance.InvalidToolProgress
 import Proofs.Conformance.RepeatedToolFailure

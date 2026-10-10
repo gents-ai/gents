@@ -1,14 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::defra_query::CollectionScope;
-use crate::document_config::{
-    QueryToolDecl, SubagentTargetDocument, WriteToolDecl, WriteToolField,
-};
+use crate::document_config::{AgentTargetDocument, QueryToolDecl, WriteToolDecl, WriteToolField};
 use crate::eth::ResolvedEthQuery;
 use crate::toolset::{CommandExecutionMode, CommandNetworkMode};
 
 use super::modes::{BashMode, FileToolMode};
-use super::selection::{ResolvedToolSelection, SubagentToolConfig};
+use super::selection::{AgentToolConfig, ResolvedToolSelection};
 
 pub const TOOL_POLICY_V1: &str = "tool-policy/v1";
 
@@ -221,7 +219,7 @@ pub struct ToolPolicySurface {
     pub defra_collections: EndpointScope<String, ()>,
     pub p2p_collections: EndpointScope<String, ()>,
     pub self_config_categories: EndpointScope<String, ()>,
-    pub subagent_targets: EndpointScope<(String, String), ()>,
+    pub agent_targets: EndpointScope<(String, String), ()>,
     pub background_tools: EndpointScope<String, ()>,
     pub write_tools: EndpointScope<(String, String), BTreeSet<String>>,
     pub query_tools: EndpointScope<(String, String), BTreeSet<String>>,
@@ -262,7 +260,7 @@ impl ToolPolicySurface {
             defra_collections: EndpointScope::none(),
             p2p_collections: EndpointScope::none(),
             self_config_categories: EndpointScope::none(),
-            subagent_targets: EndpointScope::none(),
+            agent_targets: EndpointScope::none(),
             background_tools: EndpointScope::none(),
             write_tools: EndpointScope::none(),
             query_tools: EndpointScope::none(),
@@ -307,7 +305,7 @@ impl ToolPolicySurface {
             defra_collections: EndpointScope::all(),
             p2p_collections: EndpointScope::all(),
             self_config_categories: EndpointScope::all(),
-            subagent_targets: EndpointScope::all(),
+            agent_targets: EndpointScope::all(),
             background_tools: EndpointScope::all(),
             write_tools: EndpointScope::all(),
             query_tools: EndpointScope::all(),
@@ -319,7 +317,7 @@ impl ToolPolicySurface {
 
     pub(crate) fn from_selection(
         selection: &ResolvedToolSelection,
-        subagent_tools: &SubagentToolConfig,
+        agent_tools: &AgentToolConfig,
     ) -> Self {
         let command_policy = selection.command_policy.as_ref();
         let allowed_argv_prefixes = command_policy
@@ -424,7 +422,7 @@ impl ToolPolicySurface {
             p2p_mutate: selection.enable_p2p_mutations,
             session_history: selection.enable_session_history_tool,
             context_budget: selection.enable_context_budget,
-            session_messages: subagent_tools.enabled,
+            session_messages: agent_tools.enabled,
             skills: true,
             lsp: selection.enable_lsp && !matches!(selection.file_tools, FileToolMode::Off),
             cli_tools: EndpointScope::only_map(cli_tools),
@@ -434,8 +432,8 @@ impl ToolPolicySurface {
                 selection.p2p_collections.iter().cloned(),
             ),
             self_config_categories,
-            subagent_targets: EndpointScope::<(String, String), ()>::only_units(
-                subagent_tools.targets.iter().map(subagent_target_key),
+            agent_targets: EndpointScope::<(String, String), ()>::only_units(
+                agent_tools.targets.iter().map(agent_target_key),
             ),
             background_tools: EndpointScope::<String, ()>::only_units(
                 selection
@@ -493,9 +491,9 @@ impl ToolPolicySurface {
             self_config_categories: self
                 .self_config_categories
                 .meet_with(&other.self_config_categories, |(), ()| ()),
-            subagent_targets: self
-                .subagent_targets
-                .meet_with(&other.subagent_targets, |(), ()| ()),
+            agent_targets: self
+                .agent_targets
+                .meet_with(&other.agent_targets, |(), ()| ()),
             background_tools: self
                 .background_tools
                 .meet_with(&other.background_tools, |(), ()| ()),
@@ -814,10 +812,10 @@ fn query_scope_from_decls(
     EndpointScope::Only(grants)
 }
 
-fn subagent_target_key(target: &SubagentTargetDocument) -> (String, String) {
+fn agent_target_key(target: &AgentTargetDocument) -> (String, String) {
     (
-        target.target_agent_did.trim().to_string(),
-        target.behavior_id.trim().to_string(),
+        target.target_node_did.trim().to_string(),
+        target.agent_id.trim().to_string(),
     )
 }
 

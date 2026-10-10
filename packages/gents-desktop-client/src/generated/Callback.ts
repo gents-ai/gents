@@ -6,7 +6,7 @@ import type { CallbackHandler } from "./CallbackHandler.js";
  * and journals remain supported. General task command hooks do not require this
  * workspace-oriented planner; their integration with workspace callbacks is TODO.
  */
-export type Callback = { callback_id: string, agent_did: string, display_name?: string | null, description?: string | null, handler: CallbackHandler,
+export type Callback = { callback_id: string, node_did: string, display_name?: string | null, description?: string | null, handler: CallbackHandler,
 /**
  * Empty grants no host-action capabilities.
  */

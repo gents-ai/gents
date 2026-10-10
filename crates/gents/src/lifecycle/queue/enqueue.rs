@@ -44,11 +44,11 @@ pub(crate) async fn enqueue_steering_request(
         queue.background_completion_wake_version.is_none(),
         "steering enqueue must not carry the background wake marker"
     );
-    let behavior_id = parent_behavior_id(parent)?;
+    let agent_id = parent_agent_id(parent)?;
     let request_id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let (behavior_id, content, input, request_id, now) =
-        (&behavior_id, content, &input, &request_id, &now);
+    let (agent_id, content, input, request_id, now) =
+        (&agent_id, content, &input, &request_id, &now);
     crate::config_client::ConfigAccess::transact_local(
         node,
         None,
@@ -60,14 +60,14 @@ pub(crate) async fn enqueue_steering_request(
                 // so a higher append committed first is never missed.
                 let hop = crate::session::load_session_current_hop_in_txn(
                     txn,
-                    &parent.agent_did,
+                    &parent.node_did,
                     &parent.session_id,
                 )
                 .await?;
                 let mutation = session_request_create_mutation_at_hop(
                     parent,
                     hop,
-                    behavior_id,
+                    agent_id,
                     content,
                     ExecutionOrigin::Interactive,
                     input.clone(),

@@ -18,7 +18,7 @@ fn project_message_with_dependencies(
         observed_messages,
         denied_headers,
         &row.doc_id,
-        &row.message.agent_did,
+        &row.message.node_did,
         row.message.requester_did.as_deref(),
     );
     match origin {
@@ -91,9 +91,9 @@ fn canonical_tool_payload(
             denied_dependency_doc_id: None,
         },
     };
-    let (Some(tool_doc_id), Some(agent_did), Some(request_doc_id)) = (
+    let (Some(tool_doc_id), Some(node_did), Some(request_doc_id)) = (
         tool.doc_id.as_deref(),
-        tool.agent_did.as_deref(),
+        tool.node_did.as_deref(),
         tool.request_doc_id.as_deref(),
     ) else {
         return (
@@ -115,7 +115,7 @@ fn canonical_tool_payload(
     let mut result = None;
     let mut found_call = false;
     for header in messages {
-        if header.message.agent_did != agent_did
+        if header.message.node_did != node_did
             || header.message.requester_did != tool.requester_did
             || tool.session_id.as_deref() != Some(header.message.session_id.as_str())
             || header.message.request_doc_id.as_deref() != Some(request_doc_id)
@@ -227,10 +227,10 @@ fn canonical_live_tool_output(
     use gents_protocol::output::live::{LiveView, OwnerLiveness};
     use gents_protocol::output::{OutputSource, OutputWriter, StreamPayload};
 
-    let (Some(tool_doc_id), Some(request_doc_id), Some(agent_did), Some(session_id)) = (
+    let (Some(tool_doc_id), Some(request_doc_id), Some(node_did), Some(session_id)) = (
         tool.doc_id.as_deref(),
         tool.request_doc_id.as_deref(),
-        tool.agent_did.as_deref(),
+        tool.node_did.as_deref(),
         tool.session_id.as_deref(),
     ) else {
         return None;
@@ -255,7 +255,7 @@ fn canonical_live_tool_output(
         &source,
         &writer,
         None,
-        agent_did,
+        node_did,
         tool.requester_did.as_deref(),
         &headers,
         output_segments,
@@ -286,7 +286,7 @@ fn canonical_live_tool_output(
     (!text.is_empty()).then_some(text)
 }
 
-pub(super) fn build_session_snapshot_from_store_for_agent_with_transcript(
+pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
     store: &ClientStore,
     transcript_store: &ClientStore,
     context_store: &ClientStore,
@@ -296,7 +296,7 @@ pub(super) fn build_session_snapshot_from_store_for_agent_with_transcript(
     context_totals_exact: bool,
     pending_owner_known: bool,
     include_live_tail: bool,
-    agent_did: Option<&str>,
+    node_did: Option<&str>,
     session_id: &str,
     preferred_request_id: Option<&str>,
 ) -> Option<DesktopSessionSnapshot> {
@@ -306,27 +306,26 @@ pub(super) fn build_session_snapshot_from_store_for_agent_with_transcript(
         .enumerate()
         .find(|(index, row)| {
             row.session_id == session_id
-                && agent_did.is_none_or(|agent_did| {
-                    row.agent_did == agent_did
-                        && source_matches_agent(
-                            &store.session_source_agent_dids,
+                && node_did.is_none_or(|node_did| {
+                    row.node_did == node_did
+                        && source_matches_node(
+                            &store.session_source_node_dids,
                             *index,
-                            agent_did,
+                            node_did,
                             false,
                         )
                 })
         })
         .map(|(_index, row)| row);
-    let requests = agent_did.map_or_else(
+    let requests = node_did.map_or_else(
         || store.requests_for_session(session_id),
-        |agent_did| store.requests_for_session_for_agent(session_id, agent_did),
+        |node_did| store.requests_for_session_for_node(session_id, node_did),
     );
     let goal = store
         .goals
         .iter()
         .filter(|row| {
-            row.session_id == session_id
-                && agent_did.is_none_or(|agent_did| row.agent_did == agent_did)
+            row.session_id == session_id && node_did.is_none_or(|node_did| row.node_did == node_did)
         })
         .min_by(|left, right| {
             left.created_at
@@ -356,9 +355,9 @@ pub(super) fn build_session_snapshot_from_store_for_agent_with_transcript(
     let mut transcript = if transcript_is_bounded {
         transcript_store.transcript(session_id)
     } else {
-        agent_did.map_or_else(
+        node_did.map_or_else(
             || transcript_store.transcript(session_id),
-            |agent_did| transcript_store.transcript_for_agent(session_id, agent_did),
+            |node_did| transcript_store.transcript_for_node(session_id, node_did),
         )
     };
     if let Some(session) = session_row {
@@ -380,9 +379,9 @@ pub(super) fn build_session_snapshot_from_store_for_agent_with_transcript(
         })
         .map(str::to_owned)
         .or_else(|| {
-            agent_did.map_or_else(
+            node_did.map_or_else(
                 || store.latest_request_id_for_session(session_id),
-                |agent_did| store.latest_request_id_for_session_for_agent(session_id, agent_did),
+                |node_did| store.latest_request_id_for_session_for_node(session_id, node_did),
             )
         })
         .map(|request_id| {
@@ -434,13 +433,13 @@ pub(super) fn build_session_snapshot_from_store_for_agent_with_transcript(
     let request_turn_state = latest_request_id
         .as_deref()
         .and_then(|request_id| {
-            agent_did.map_or_else(
+            node_did.map_or_else(
                 || store.derive_turn_for_request(request_id),
-                |agent_did| store.derive_turn_for_request_for_agent(request_id, agent_did),
+                |node| store.derive_turn_for_request_for_node(request_id, node),
             )
         })
         .or_else(|| {
-            if agent_did.is_none() {
+            if node_did.is_none() {
                 store.derive_turn(session_id)
             } else {
                 None
@@ -473,7 +472,7 @@ pub(super) fn build_session_snapshot_from_store_for_agent_with_transcript(
             .as_ref()
             .and_then(|doc| prompt_ownership?.by_request_doc_id.get(doc))
             .filter(|fact| {
-                request.agent_did.as_deref() == Some(fact.agent_did.as_str())
+                request.node_did.as_deref() == Some(fact.node_did.as_str())
                     && request.session_id.as_deref() == Some(fact.session_id.as_str())
                     && request.requester_did == fact.requester_did
             })
@@ -486,19 +485,19 @@ pub(super) fn build_session_snapshot_from_store_for_agent_with_transcript(
         .flatten()
         .as_deref()
         .and_then(|request_id| {
-            build_pending_turn(store, context_store, agent_did, session_id, request_id)
+            build_pending_turn(store, context_store, node_did, session_id, request_id)
         });
-    let resolved_agent_did = session_row
-        .map(|row| row.agent_did.clone())
-        .or_else(|| latest_request.and_then(|row| normalize_optional(row.agent_did.as_deref())));
-    let resolved_behavior_id = session_row
-        .and_then(|row| normalize_optional(Some(row.behavior_id.as_str())))
-        .or_else(|| latest_request.and_then(|row| normalize_optional(row.behavior_id.as_deref())));
+    let resolved_node_did = session_row
+        .map(|row| row.node_did.clone())
+        .or_else(|| latest_request.and_then(|row| normalize_optional(row.node_did.as_deref())));
+    let resolved_agent_id = session_row
+        .and_then(|row| normalize_optional(Some(row.agent_id.as_str())))
+        .or_else(|| latest_request.and_then(|row| normalize_optional(row.agent_id.as_deref())));
     let context = build_session_context_from_stores(
         store,
         context_store,
-        resolved_agent_did.as_deref(),
-        resolved_behavior_id.as_deref(),
+        resolved_node_did.as_deref(),
+        resolved_agent_id.as_deref(),
         session_id,
         context_totals_exact,
     );
@@ -745,9 +744,9 @@ pub(super) fn build_session_snapshot_from_store_for_agent_with_transcript(
         })
         .collect::<Vec<_>>();
 
-    let full_transcript = agent_did.map_or_else(
+    let full_transcript = node_did.map_or_else(
         || context_store.transcript(session_id),
-        |did| context_store.transcript_for_agent(session_id, did),
+        |did| context_store.transcript_for_node(session_id, did),
     );
     let same_requester = |request: &AgentRequestRow| {
         session_row.is_none_or(|session| request.requester_did == session.requester_did)
@@ -762,7 +761,7 @@ pub(super) fn build_session_snapshot_from_store_for_agent_with_transcript(
             build_pending_turn(
                 store,
                 context_store,
-                agent_did,
+                node_did,
                 session_id,
                 &request.request_id,
             )
@@ -797,7 +796,7 @@ pub(super) fn build_session_snapshot_from_store_for_agent_with_transcript(
             let turn = build_pending_turn(
                 store,
                 context_store,
-                agent_did,
+                node_did,
                 session_id,
                 &request.request_id,
             )?;
@@ -854,7 +853,7 @@ pub(super) fn build_session_snapshot_from_store_for_agent_with_transcript(
                 store,
                 context_store,
                 session_id,
-                agent_did,
+                node_did,
                 request_id,
             ) {
                 let content = normalize_optional(Some(&live.content));
@@ -874,8 +873,8 @@ pub(super) fn build_session_snapshot_from_store_for_agent_with_transcript(
     Some(DesktopSessionSnapshot {
         live_cursor,
         session_id: session_id.to_string(),
-        agent_did: resolved_agent_did,
-        behavior_id: resolved_behavior_id,
+        node_did: resolved_node_did,
+        agent_id: resolved_agent_id,
         title: session_row.and_then(|row| {
             row.title
                 .as_ref()
@@ -925,13 +924,13 @@ mod canonical_projection_tests {
     fn running_tool_keeps_canonical_live_output_after_parent_terminal() {
         let tool: AgentToolCallRow = serde_json::from_value(json!({
             "_docID": "tool-physical", "tool_call_key": "tool-key",
-            "agent_did": "did:test:agent", "request_doc_id": "request",
+            "node_did": "did:test:node", "request_doc_id": "request",
             "session_id": "session", "lifecycle_state": "running"
         }))
         .expect("tool row");
         let request: AgentRequestRow = serde_json::from_value(json!({
             "_docID": "request", "request_id": "request-id",
-            "agent_did": "did:test:agent", "session_id": "session",
+            "node_did": "did:test:node", "session_id": "session",
             "lifecycle_state": "completed",
             "terminal_output": TerminalOutput::NoMessage,
         }))
@@ -939,7 +938,7 @@ mod canonical_projection_tests {
         let row = OutputSegmentRow {
             doc_id: "flush-0".to_string(),
             segment: OutputSegment {
-                agent_did: "did:test:agent".to_string(),
+                node_did: "did:test:node".to_string(),
                 requester_did: None,
                 session_id: "session".to_string(),
                 request_doc_id: "request".to_string(),
@@ -974,7 +973,7 @@ mod canonical_projection_tests {
     fn spawned_background_row_has_no_direct_call_header() {
         let tool: AgentToolCallRow = serde_json::from_value(json!({
             "_docID": "child-physical", "tool_call_key": "child-key",
-            "agent_did": "did:test:agent", "request_doc_id": "request",
+            "node_did": "did:test:node", "request_doc_id": "request",
             "session_id": "session", "lifecycle_state": "running",
             "spawned_by_tool_call_doc_id": "spawn-physical"
         }))
@@ -996,7 +995,7 @@ mod canonical_projection_tests {
 
         let tool: AgentToolCallRow = serde_json::from_value(json!({
             "_docID": "tool-physical", "tool_call_key": "tool-key",
-            "agent_did": "did:test:agent", "request_doc_id": "request",
+            "node_did": "did:test:node", "request_doc_id": "request",
             "session_id": "session", "lifecycle_state": "completed"
         }))
         .expect("direct tool row");
@@ -1018,7 +1017,7 @@ mod canonical_projection_tests {
         let args = OutputSegmentRow {
             doc_id: "args-close".to_string(),
             segment: OutputSegment {
-                agent_did: "did:test:agent".to_string(),
+                node_did: "did:test:node".to_string(),
                 requester_did: None,
                 session_id: "session".to_string(),
                 request_doc_id: "request".to_string(),
@@ -1107,7 +1106,7 @@ mod canonical_projection_tests {
         let result_segment = OutputSegmentRow {
             doc_id: "result-close".to_string(),
             segment: OutputSegment {
-                agent_did: "did:test:agent".to_string(),
+                node_did: "did:test:node".to_string(),
                 requester_did: None,
                 session_id: "session".to_string(),
                 request_doc_id: "request".to_string(),
@@ -1196,7 +1195,7 @@ mod canonical_projection_tests {
             message: TranscriptMessage {
                 message_key: format!("{session_id}:message"),
                 session_id: session_id.to_string(),
-                agent_did: "did:test:agent".to_string(),
+                node_did: "did:test:node".to_string(),
                 requester_did: Some("did:test:requester".to_string()),
                 request_doc_id: Some("request".to_string()),
                 publication: MessagePublication::RequestExecution {
@@ -1296,7 +1295,7 @@ mod tests {
             doc_id: Some(format!("doc-{id}")),
             request_id: id.into(),
             session_id: Some("session-1".into()),
-            agent_did: Some("did:test:amy".into()),
+            node_did: Some("did:test:amy".into()),
             content: Some(format!("{id} text")),
             lifecycle_state: Some(state),
             created_at: Some(format!("2026-04-21T12:00:{second:02}Z")),
@@ -1362,7 +1361,7 @@ mod tests {
             ownership.by_request_doc_id.insert(
                 doc.into(),
                 gents_desktop_core::client::RequestPromptFact {
-                    agent_did: "did:test:amy".into(),
+                    node_did: "did:test:amy".into(),
                     session_id: "session-1".into(),
                     requester_did: None,
                     materialized: true,
@@ -1378,7 +1377,7 @@ mod tests {
             ClientStore::from_rows(page_rows)
         };
         let snapshot_of = |page: &ClientStore, tip: bool| {
-            build_session_snapshot_from_store_for_agent_with_transcript(
+            build_session_snapshot_from_store_for_node_with_transcript(
                 &full,
                 page,
                 page,
@@ -1431,7 +1430,7 @@ mod tests {
             doc_id: Some(id.into()),
             request_id: id.into(),
             session_id: Some(session.into()),
-            agent_did: Some("did:test:amy".into()),
+            node_did: Some("did:test:amy".into()),
             content: Some("input".into()),
             lifecycle_state: Some(state),
             created_at: Some("2026-04-21T12:00:00Z".into()),
@@ -1480,7 +1479,7 @@ mod tests {
             ownership.by_request_doc_id.insert(
                 id.into(),
                 gents_desktop_core::client::RequestPromptFact {
-                    agent_did: "did:test:amy".into(),
+                    node_did: "did:test:amy".into(),
                     session_id: "session-1".into(),
                     requester_did: None,
                     materialized,
@@ -1495,7 +1494,7 @@ mod tests {
                 .retain(|row| row.message.sequence == sequence);
             let page = ClientStore::from_rows(page_rows);
             let context = page.merge_snapshot(tip.clone());
-            let snapshot = build_session_snapshot_from_store_for_agent_with_transcript(
+            let snapshot = build_session_snapshot_from_store_for_node_with_transcript(
                 &full,
                 &page,
                 &context,
@@ -1539,7 +1538,7 @@ mod tests {
         ownership.by_request_doc_id.insert(
             "control".into(),
             gents_desktop_core::client::RequestPromptFact {
-                agent_did: "did:test:amy".into(),
+                node_did: "did:test:amy".into(),
                 session_id: "session-1".into(),
                 requester_did: None,
                 materialized: true,
@@ -1551,7 +1550,7 @@ mod tests {
             .retain(|row| row.message.sequence == 1);
         let control_page = ClientStore::from_rows(control_rows);
         let control_context = control_page.merge_snapshot(tip.clone());
-        let snapshot = build_session_snapshot_from_store_for_agent_with_transcript(
+        let snapshot = build_session_snapshot_from_store_for_node_with_transcript(
             &control_store,
             &control_page,
             &control_context,
@@ -1581,7 +1580,7 @@ mod tests {
         rows.transcript_messages
             .retain(|row| row.message.sequence == 2);
         let page = ClientStore::from_rows(rows);
-        let snapshot = build_session_snapshot_from_store_for_agent_with_transcript(
+        let snapshot = build_session_snapshot_from_store_for_node_with_transcript(
             &full,
             &page,
             &full,

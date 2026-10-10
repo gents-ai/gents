@@ -1,18 +1,18 @@
 use super::*;
 
-pub(super) fn row_agent_matches(row_agent_did: Option<&str>, agent_did: &str) -> bool {
-    row_agent_did.map_or(true, |row_agent_did| row_agent_did == agent_did)
+pub(super) fn row_node_matches(row_node_did: Option<&str>, node_did: &str) -> bool {
+    row_node_did.map_or(true, |row_node_did| row_node_did == node_did)
 }
 
-pub(super) fn source_agent_matches(
+pub(super) fn source_node_matches(
     sources: &[Option<String>],
     row_index: usize,
-    agent_did: &str,
+    node_did: &str,
 ) -> bool {
     sources
         .get(row_index)
         .and_then(|source| source.as_deref())
-        .map_or(true, |source_agent_did| source_agent_did == agent_did)
+        .map_or(true, |source_node_did| source_node_did == node_did)
 }
 
 pub(super) fn upsert_rows_by_key<T>(
@@ -123,14 +123,14 @@ pub(super) fn normalize_sources(sources: &mut Vec<Option<String>>, row_count: us
     sources.resize_with(row_count, || None);
 }
 
-pub(super) fn behavior_merge_key(row: &AgentBehavior) -> String {
-    format!("{}\0{}", row.agent_did, row.behavior_id)
+pub(super) fn agent_merge_key(row: &Agent) -> String {
+    format!("{}\0{}", row.node_did, row.agent_id)
 }
 
 pub(super) fn request_merge_key(row: &AgentRequestRow) -> String {
     format!(
         "{}\0{}",
-        row.agent_did.as_deref().unwrap_or_default(),
+        row.node_did.as_deref().unwrap_or_default(),
         row.request_id
     )
 }
@@ -155,156 +155,153 @@ pub(super) fn union_immutable_rows<T: std::fmt::Debug>(
     }
 }
 
-pub(super) fn session_merge_key(row: &AgentSession, _source_agent_did: Option<&str>) -> String {
-    format!("{}\0{}", row.agent_did, row.session_id)
+pub(super) fn session_merge_key(row: &AgentSession, _source_node_did: Option<&str>) -> String {
+    format!("{}\0{}", row.node_did, row.session_id)
 }
 
 pub(super) fn goal_merge_key(row: &GoalRow) -> String {
-    format!("{}\0{}", row.agent_did, row.session_id)
+    format!("{}\0{}", row.node_did, row.session_id)
 }
 
-pub(super) fn tool_call_merge_key(
-    row: &AgentToolCallRow,
-    source_agent_did: Option<&str>,
-) -> String {
+pub(super) fn tool_call_merge_key(row: &AgentToolCallRow, source_node_did: Option<&str>) -> String {
     format!(
         "{}\0{}",
-        source_agent_did.unwrap_or_default(),
+        source_node_did.unwrap_or_default(),
         row.tool_call_key
     )
 }
 
 pub(super) fn compaction_entry_merge_key(
     row: &CompactionEntryRow,
-    source_agent_did: Option<&str>,
+    source_node_did: Option<&str>,
 ) -> String {
     format!(
         "{}\0{}",
-        source_agent_did.unwrap_or_default(),
+        source_node_did.unwrap_or_default(),
         row.compaction_key
     )
 }
 
-pub(super) fn task_merge_key(row: &Task, _source_agent_did: Option<&str>) -> String {
-    format!("{}\0{}", row.agent_did, row.task_id)
+pub(super) fn task_merge_key(row: &Task, _source_node_did: Option<&str>) -> String {
+    format!("{}\0{}", row.node_did, row.task_id)
 }
 
-pub(super) fn schedule_merge_key(row: &Schedule, _source_agent_did: Option<&str>) -> String {
-    format!("{}\0{}", row.agent_did, row.schedule_id)
+pub(super) fn schedule_merge_key(row: &Schedule, _source_node_did: Option<&str>) -> String {
+    format!("{}\0{}", row.node_did, row.schedule_id)
 }
 
 pub(super) fn schedule_observation_merge_key(
     row: &ScheduleObservation,
-    source_agent_did: Option<&str>,
+    source_node_did: Option<&str>,
 ) -> String {
     format!(
         "{}\0{}",
-        source_agent_did.unwrap_or_default(),
+        source_node_did.unwrap_or_default(),
         row.trigger_id
     )
 }
 
-pub(super) fn trigger_merge_key(row: &Trigger, _source_agent_did: Option<&str>) -> String {
-    format!("{}\0{}", row.agent_did, row.trigger_id)
+pub(super) fn trigger_merge_key(row: &Trigger, _source_node_did: Option<&str>) -> String {
+    format!("{}\0{}", row.node_did, row.trigger_id)
 }
 
 pub(super) fn trigger_observation_merge_key(
     row: &TriggerObservation,
-    source_agent_did: Option<&str>,
+    source_node_did: Option<&str>,
 ) -> String {
     format!(
         "{}\0{}",
-        source_agent_did.unwrap_or_default(),
+        source_node_did.unwrap_or_default(),
         row.trigger_id
     )
 }
 
-pub(super) fn skill_merge_key(row: &SkillDocument, _source_agent_did: Option<&str>) -> String {
-    format!("{}\0{}", row.agent_did, row.skill_id)
+pub(super) fn skill_merge_key(row: &SkillDocument, _source_node_did: Option<&str>) -> String {
+    format!("{}\0{}", row.node_did, row.skill_id)
 }
 
 pub(super) fn tools_merge_key(row: &Tools) -> String {
-    format!("{}\0{}", row.agent_did, row.tools_id)
+    format!("{}\0{}", row.node_did, row.tools_id)
 }
 
 pub(super) fn inference_backend_merge_key(
     row: &InferenceBackend,
-    _source_agent_did: Option<&str>,
+    _source_node_did: Option<&str>,
 ) -> String {
-    format!("{}\0{}", row.agent_did, row.backend_id)
+    format!("{}\0{}", row.node_did, row.backend_id)
 }
 
 pub(super) fn backend_observation_merge_key(
     row: &InferenceBackendObservation,
-    source_agent_did: Option<&str>,
+    source_node_did: Option<&str>,
 ) -> String {
     format!(
         "{}\0{}",
-        source_agent_did.unwrap_or_default(),
+        source_node_did.unwrap_or_default(),
         row.backend_id
     )
 }
 
 pub(super) fn inference_profile_merge_key(
     row: &InferenceProfile,
-    _source_agent_did: Option<&str>,
+    _source_node_did: Option<&str>,
 ) -> String {
-    format!("{}\0{}", row.agent_did, row.profile_id)
+    format!("{}\0{}", row.node_did, row.profile_id)
 }
 
 pub(super) fn tool_service_registry_merge_key(
     row: &ToolServiceRegistry,
-    _source_agent_did: Option<&str>,
+    _source_node_did: Option<&str>,
 ) -> String {
-    format!("{}\0{}", row.agent_did, row.service_id)
+    format!("{}\0{}", row.node_did, row.service_id)
 }
 
-pub(super) fn context_merge_key(row: &AgentContext, _source_agent_did: Option<&str>) -> String {
-    format!("{}\0{}", row.agent_did, row.context_id)
+pub(super) fn context_merge_key(row: &AgentContext, _source_node_did: Option<&str>) -> String {
+    format!("{}\0{}", row.node_did, row.context_id)
 }
 
 pub(super) fn compaction_merge_key(
     row: &CompactionConfig,
-    _source_agent_did: Option<&str>,
+    _source_node_did: Option<&str>,
 ) -> String {
-    format!("{}\0{}", row.agent_did, row.compaction_id)
+    format!("{}\0{}", row.node_did, row.compaction_id)
 }
 
 pub(super) fn inference_sampling_merge_key(
     row: &InferenceSampling,
-    _source_agent_did: Option<&str>,
+    _source_node_did: Option<&str>,
 ) -> String {
-    format!("{}\0{}", row.agent_did, row.sampling_id)
+    format!("{}\0{}", row.node_did, row.sampling_id)
 }
 
 pub(super) fn inference_execution_merge_key(
     row: &InferenceExecution,
-    _source_agent_did: Option<&str>,
+    _source_node_did: Option<&str>,
 ) -> String {
-    format!("{}\0{}", row.agent_did, row.execution_id)
+    format!("{}\0{}", row.node_did, row.execution_id)
 }
 
-pub(super) fn event_source_merge_key(row: &EventSource, _source_agent_did: Option<&str>) -> String {
-    format!("{}\0{}", row.agent_did, row.event_source_id)
+pub(super) fn event_source_merge_key(row: &EventSource, _source_node_did: Option<&str>) -> String {
+    format!("{}\0{}", row.node_did, row.event_source_id)
 }
 
-pub(super) fn subagent_target_merge_key(
-    row: &SubagentTargetDocument,
-    _source_agent_did: Option<&str>,
+pub(super) fn agent_target_merge_key(
+    row: &AgentTargetDocument,
+    _source_node_did: Option<&str>,
 ) -> String {
-    format!("{}\0{}", row.agent_did, row.target_id)
+    format!("{}\0{}", row.node_did, row.target_id)
 }
 
 pub(super) fn datastore_tool_surface_merge_key(
     row: &DatastoreToolSurfaceDocument,
-    _source_agent_did: Option<&str>,
+    _source_node_did: Option<&str>,
 ) -> String {
-    format!("{}\0{}", row.agent_did, row.surface_id)
+    format!("{}\0{}", row.node_did, row.surface_id)
 }
 
 pub(super) fn chain_key_binding_merge_key(
     row: &ChainKeyBindingDocument,
-    _source_agent_did: Option<&str>,
+    _source_node_did: Option<&str>,
 ) -> String {
-    format!("{}\0{}", row.agent_did, row.binding_id)
+    format!("{}\0{}", row.node_did, row.binding_id)
 }

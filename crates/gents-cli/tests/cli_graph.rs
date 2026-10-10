@@ -11,8 +11,8 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 
 use support::{
-    agent_did_from_init, allocate_port, copy_dir_all, first_graphql_row, fixture_pack_dir,
-    graphql_query, run_cli_failure_stderr, run_cli_json, run_cli_text, run_init_json,
+    allocate_port, copy_dir_all, first_graphql_row, fixture_pack_dir, graphql_query,
+    node_did_from_init, run_cli_failure_stderr, run_cli_json, run_cli_text, run_init_json,
     spawn_server_with_ready_json,
 };
 
@@ -69,7 +69,7 @@ fn document_pack_installs_without_seeding_and_is_idempotent() -> Result<()> {
     let home_arg = home.to_str().context("path")?;
     run_init_json(
         temp.path(),
-        &["--agent-name", "pack-installer", "--home", home_arg],
+        &["--node-name", "pack-installer", "--home", home_arg],
     )?;
     let pack = fixture_pack_dir("documents_fixture");
     let args = [
@@ -81,7 +81,7 @@ fn document_pack_installs_without_seeding_and_is_idempotent() -> Result<()> {
         "--force-rebind-concrete-did",
     ];
     let first = run_cli_json(temp.path(), &args)?;
-    anyhow::ensure!(first["apply"]["counts"]["AgentBehavior"] == 1, "{first}");
+    anyhow::ensure!(first["apply"]["counts"]["Agent"] == 1, "{first}");
     let before_root = temp.path().join("before");
     run_cli_text(
         temp.path(),
@@ -132,7 +132,7 @@ fn a_document_pack_with_a_plugin_installs_and_removes_completely() -> Result<()>
     let home_arg = home.to_str().context("path")?;
     run_init_json(
         temp.path(),
-        &["--agent-name", "pack-remover", "--home", home_arg],
+        &["--node-name", "pack-remover", "--home", home_arg],
     )?;
 
     let gents = |args: &[&str]| -> Result<std::process::Output> {
@@ -236,9 +236,9 @@ fn clean_binary_install_is_idempotent_activates_and_is_owner_fenced() -> Result<
     let home_arg = home.to_str().context("graph home path is not UTF-8")?;
     let initialized = run_init_json(
         tempdir.path(),
-        &["--agent-name", "graph-reviewer", "--home", home_arg],
+        &["--node-name", "graph-reviewer", "--home", home_arg],
     )?;
-    let owner_did = agent_did_from_init(&initialized)?;
+    let owner_did = node_did_from_init(&initialized)?;
     let port = allocate_port()?;
     let (_server, readiness) =
         spawn_server_with_ready_json(&home, port, &["--home", home_arg], &[])?;
@@ -288,7 +288,7 @@ fn clean_binary_install_is_idempotent_activates_and_is_owner_fenced() -> Result<
             dir_arg(&pack),
             "--home",
             home_arg,
-            "--agent-did",
+            "--node-did",
             wrong_actor,
         ],
     )?;
@@ -305,7 +305,7 @@ fn clean_binary_install_is_idempotent_activates_and_is_owner_fenced() -> Result<
             "fixture/review_graph",
             "--home",
             home_arg,
-            "--agent-did",
+            "--node-did",
             &owner_did,
         ],
     )?;
@@ -318,7 +318,7 @@ fn clean_binary_install_is_idempotent_activates_and_is_owner_fenced() -> Result<
             "fixture/review_graph",
             "--home",
             home_arg,
-            "--agent-did",
+            "--node-did",
             &owner_did,
         ],
     )?;
@@ -337,9 +337,9 @@ fn offline_pack_install_with_a_graph_dependency_holds_one_store_claim() -> Resul
     let home_arg = home.to_str().context("pack home path is not UTF-8")?;
     let initialized = run_init_json(
         tempdir.path(),
-        &["--agent-name", "port-installer", "--home", home_arg],
+        &["--node-name", "port-installer", "--home", home_arg],
     )?;
-    let owner_did = agent_did_from_init(&initialized)?;
+    let owner_did = node_did_from_init(&initialized)?;
 
     let review_graph = fixture_pack_dir("review_graph");
     run_cli_json(
@@ -388,7 +388,7 @@ fn offline_pack_install_with_a_graph_dependency_holds_one_store_claim() -> Resul
             "fixture/review_graph",
             "--home",
             home_arg,
-            "--agent-did",
+            "--node-did",
             &owner_did,
         ],
     )?;
@@ -478,9 +478,9 @@ fn a_graph_pack_removes_completely_and_reinstalls() -> Result<()> {
     let home_arg = home.to_str().context("path")?;
     let initialized = run_init_json(
         tempdir.path(),
-        &["--agent-name", "graph-remover", "--home", home_arg],
+        &["--node-name", "graph-remover", "--home", home_arg],
     )?;
-    let owner_did = agent_did_from_init(&initialized)?;
+    let owner_did = node_did_from_init(&initialized)?;
     let profile = format!("{owner_did}:default-profile");
     let pack = fixture_pack_dir("review_graph");
     let install_args = [
@@ -521,7 +521,7 @@ fn a_graph_pack_removes_completely_and_reinstalls() -> Result<()> {
             "fixture/review_graph",
             "--home",
             home_arg,
-            "--agent-did",
+            "--node-did",
             &owner_did,
         ],
     )?;
@@ -545,9 +545,9 @@ fn a_graph_dependency_is_released_with_its_dependent() -> Result<()> {
     let home_arg = home.to_str().context("path")?;
     let initialized = run_init_json(
         tempdir.path(),
-        &["--agent-name", "dep-remover", "--home", home_arg],
+        &["--node-name", "dep-remover", "--home", home_arg],
     )?;
-    let owner_did = agent_did_from_init(&initialized)?;
+    let owner_did = node_did_from_init(&initialized)?;
     let profile = format!("{owner_did}:default-profile");
     let slots: Vec<String> = ["coordinator", "worker", "verifier"]
         .iter()
@@ -613,7 +613,7 @@ fn a_graph_dependency_is_released_with_its_dependent() -> Result<()> {
             "fixture/review_graph",
             "--home",
             home_arg,
-            "--agent-did",
+            "--node-did",
             &owner_did,
         ],
     )?;
@@ -657,7 +657,7 @@ fn a_graph_dependency_is_released_with_its_dependent() -> Result<()> {
             "fixture/review_graph",
             "--home",
             home_arg,
-            "--agent-did",
+            "--node-did",
             &owner_did,
         ],
     )?;
@@ -681,9 +681,9 @@ fn graph_run_refuses_a_revision_that_is_not_the_installed_record() -> Result<()>
     let home_arg = home.to_str().context("path")?;
     let initialized = run_init_json(
         tempdir.path(),
-        &["--agent-name", "graph-runner", "--home", home_arg],
+        &["--node-name", "graph-runner", "--home", home_arg],
     )?;
-    let owner_did = agent_did_from_init(&initialized)?;
+    let owner_did = node_did_from_init(&initialized)?;
     let port = allocate_port()?;
     let (_server, readiness) =
         spawn_server_with_ready_json(&home, port, &["--home", home_arg], &[])?;
@@ -704,7 +704,7 @@ fn graph_run_refuses_a_revision_that_is_not_the_installed_record() -> Result<()>
             home_arg,
             "--graphql",
             &graphql,
-            "--agent-did",
+            "--node-did",
             &owner_did,
             "--inference-slot",
             &format!("coordinator={profile}"),
@@ -730,7 +730,7 @@ fn graph_run_refuses_a_revision_that_is_not_the_installed_record() -> Result<()>
             home_arg,
             "--graphql",
             &graphql,
-            "--agent-did",
+            "--node-did",
             &owner_did,
         ],
     )?;
@@ -757,7 +757,7 @@ fn graph_run_refuses_a_revision_that_is_not_the_installed_record() -> Result<()>
             home_arg,
             "--graphql",
             &graphql,
-            "--agent-did",
+            "--node-did",
             &owner_did,
         ],
     )?;
@@ -774,9 +774,9 @@ fn graph_run_validates_input_against_the_entry_schema() -> Result<()> {
     let home_arg = home.to_str().context("path")?;
     let initialized = run_init_json(
         tempdir.path(),
-        &["--agent-name", "schema-runner", "--home", home_arg],
+        &["--node-name", "schema-runner", "--home", home_arg],
     )?;
-    let owner_did = agent_did_from_init(&initialized)?;
+    let owner_did = node_did_from_init(&initialized)?;
     let port = allocate_port()?;
     let (_server, readiness) =
         spawn_server_with_ready_json(&home, port, &["--home", home_arg], &[])?;
@@ -813,7 +813,7 @@ fn graph_run_validates_input_against_the_entry_schema() -> Result<()> {
             home_arg,
             "--graphql",
             &graphql,
-            "--agent-did",
+            "--node-did",
             &owner_did,
             "--inference-slot",
             &format!("coordinator={profile}"),
@@ -834,7 +834,7 @@ fn graph_run_validates_input_against_the_entry_schema() -> Result<()> {
             home_arg,
             "--graphql",
             &graphql,
-            "--agent-did",
+            "--node-did",
             &owner_did,
             "--field",
             "repository=NOT VALID",
@@ -857,9 +857,9 @@ fn graph_run_by_graph_id_is_pinned_to_the_active_digest() -> Result<()> {
     let home_arg = home.to_str().context("path")?;
     let initialized = run_init_json(
         tempdir.path(),
-        &["--agent-name", "graph-id-runner", "--home", home_arg],
+        &["--node-name", "graph-id-runner", "--home", home_arg],
     )?;
-    let owner_did = agent_did_from_init(&initialized)?;
+    let owner_did = node_did_from_init(&initialized)?;
     let port = allocate_port()?;
     let (_server, readiness) =
         spawn_server_with_ready_json(&home, port, &["--home", home_arg], &[])?;
@@ -880,7 +880,7 @@ fn graph_run_by_graph_id_is_pinned_to_the_active_digest() -> Result<()> {
             home_arg,
             "--graphql",
             &graphql,
-            "--agent-did",
+            "--node-did",
             &owner_did,
             "--output",
             "json",
@@ -899,7 +899,7 @@ fn graph_run_by_graph_id_is_pinned_to_the_active_digest() -> Result<()> {
         home_arg,
         "--graphql",
         graphql.as_str(),
-        "--agent-did",
+        "--node-did",
         owner_did.as_str(),
     ];
 
@@ -964,9 +964,9 @@ async fn graph_run_prepares_git_diff_evidence_through_the_pack_plugin() -> Resul
     let home_arg = home.to_str().context("path")?;
     let initialized = run_init_json(
         tempdir.path(),
-        &["--agent-name", "prepare-runner", "--home", home_arg],
+        &["--node-name", "prepare-runner", "--home", home_arg],
     )?;
-    let owner_did = agent_did_from_init(&initialized)?;
+    let owner_did = node_did_from_init(&initialized)?;
     let port = allocate_port()?;
     let (_server, readiness) =
         spawn_server_with_ready_json(&home, port, &["--home", home_arg], &[])?;
@@ -999,7 +999,7 @@ async fn graph_run_prepares_git_diff_evidence_through_the_pack_plugin() -> Resul
             "--home",
             home_arg,
             "--grant-authority",
-            "--agent-did",
+            "--node-did",
             &owner_did,
             "--inference-slot",
             &format!("worker={profile}"),
@@ -1048,7 +1048,7 @@ async fn graph_run_prepares_git_diff_evidence_through_the_pack_plugin() -> Resul
             home_arg,
             "--graphql",
             &graphql,
-            "--agent-did",
+            "--node-did",
             &owner_did,
             "--field",
             &format!("repository={}", dir_arg(&repo)),
@@ -1073,7 +1073,7 @@ async fn graph_run_prepares_git_diff_evidence_through_the_pack_plugin() -> Resul
             home_arg,
             "--graphql",
             &graphql,
-            "--agent-did",
+            "--node-did",
             &owner_did,
             "--field",
             &format!("repository={}", dir_arg(&repo)),

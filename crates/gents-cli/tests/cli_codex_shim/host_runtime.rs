@@ -12,12 +12,12 @@ async fn codex_shim_fs_routes_are_unsupported() -> Result<()> {
 
     let server_port = allocate_port()?;
     let graphql = graphql_url(server_port);
-    let agent_name = format!("cli-codex-shim-fs-{}", Uuid::new_v4().simple());
+    let node_name = format!("cli-codex-shim-fs-{}", Uuid::new_v4().simple());
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
-            &agent_name,
+            "--node-name",
+            &node_name,
             "--model-name",
             &model_name,
             "--write",
@@ -25,7 +25,7 @@ async fn codex_shim_fs_routes_are_unsupported() -> Result<()> {
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();
     let mut serve = spawn_server_with_env(
@@ -46,7 +46,7 @@ async fn codex_shim_fs_routes_are_unsupported() -> Result<()> {
     serve
         .capturing(wait_for_runtime_ready(
             &graphql,
-            &agent_did,
+            &node_did,
             Duration::from_secs(30),
         ))
         .await?;
@@ -152,12 +152,12 @@ async fn codex_shim_host_runtime_routes_cover_low_risk_paths() -> Result<()> {
 
     let server_port = allocate_port()?;
     let graphql = graphql_url(server_port);
-    let agent_name = format!("cli-codex-shim-host-{}", Uuid::new_v4().simple());
+    let node_name = format!("cli-codex-shim-host-{}", Uuid::new_v4().simple());
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
-            &agent_name,
+            "--node-name",
+            &node_name,
             "--model-name",
             &model_name,
             "--write",
@@ -165,7 +165,7 @@ async fn codex_shim_host_runtime_routes_cover_low_risk_paths() -> Result<()> {
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();
     let mut serve = spawn_server_with_env(
@@ -186,7 +186,7 @@ async fn codex_shim_host_runtime_routes_cover_low_risk_paths() -> Result<()> {
     serve
         .capturing(wait_for_runtime_ready(
             &graphql,
-            &agent_did,
+            &node_did,
             Duration::from_secs(30),
         ))
         .await?;

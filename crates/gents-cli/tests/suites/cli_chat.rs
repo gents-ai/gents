@@ -26,7 +26,7 @@ async fn chat_uses_runtime_state_for_interactive_turns() -> Result<()> {
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
+            "--node-name",
             &agent_name,
             "--model-name",
             &model_name,
@@ -34,10 +34,10 @@ async fn chat_uses_runtime_state_for_interactive_turns() -> Result<()> {
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
     wait_for_runtime_state_graphql(&home_dir, &graphql, Duration::from_secs(30)).await?;
 
     let mut child = Command::new(cli_bin())
@@ -121,7 +121,7 @@ async fn chat_continues_existing_session_when_session_id_is_provided() -> Result
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
+            "--node-name",
             &agent_name,
             "--model-name",
             &model_name,
@@ -129,10 +129,10 @@ async fn chat_continues_existing_session_when_session_id_is_provided() -> Result
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
     wait_for_runtime_state_graphql(&home_dir, &graphql, Duration::from_secs(30)).await?;
 
     let first_stdout = run_cli_text(&home_dir, &["chat", &first_prompt])?;
@@ -141,8 +141,8 @@ async fn chat_continues_existing_session_when_session_id_is_provided() -> Result
         "expected first chat turn to contain {expected_reply}, got:\n{first_stdout}"
     );
 
-    let (_request_id, session_id, _behavior_id) =
-        wait_for_request(&graphql, &agent_did, &first_prompt).await?;
+    let (_request_id, session_id, _agent_id) =
+        wait_for_request(&graphql, &node_did, &first_prompt).await?;
 
     let second_stdout = run_cli_text(
         &home_dir,
@@ -198,7 +198,7 @@ async fn chat_supports_message_file_json_output_and_output_file() -> Result<()> 
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
+            "--node-name",
             &agent_name,
             "--model-name",
             &model_name,
@@ -206,10 +206,10 @@ async fn chat_supports_message_file_json_output_and_output_file() -> Result<()> 
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
     wait_for_runtime_state_graphql(&home_dir, &graphql, Duration::from_secs(30)).await?;
 
     let output = run_cli_json(
@@ -281,7 +281,7 @@ async fn chat_buffers_final_response_and_shows_tool_progress() -> Result<()> {
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
+            "--node-name",
             &agent_name,
             "--model-name",
             &model_name,
@@ -289,12 +289,12 @@ async fn chat_buffers_final_response_and_shows_tool_progress() -> Result<()> {
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
     // Bound, not dropped: the server must outlive the chat child below.
     let (_serve, port, _readiness) =
         spawn_server_with_ready_json_recovering(&home_dir, port, &[], &[])?;
     let graphql = graphql_url(port);
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
     wait_for_runtime_state_graphql(&home_dir, &graphql, Duration::from_secs(30)).await?;
 
     let mut child = Command::new(cli_bin())
@@ -368,7 +368,7 @@ async fn chat_verbose_flag_prints_raw_tool_json() -> Result<()> {
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
+            "--node-name",
             &agent_name,
             "--model-name",
             &model_name,
@@ -376,10 +376,10 @@ async fn chat_verbose_flag_prints_raw_tool_json() -> Result<()> {
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
     wait_for_runtime_state_graphql(&home_dir, &graphql, Duration::from_secs(30)).await?;
 
     let mut child = Command::new(cli_bin())

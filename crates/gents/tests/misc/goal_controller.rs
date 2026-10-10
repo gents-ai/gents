@@ -44,7 +44,7 @@ async fn publish_canonical_terminal_activity(db: &TestDb, request_doc_id: &str, 
 
     let escaped = gents::graphql::escape_graphql_string(request_doc_id);
     let response = db.node.execute(&format!(
-        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, limit: 1) {{ agent_did requester_did session_id execution_generation }} }}"#
+        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, limit: 1) {{ node_did requester_did session_id execution_generation }} }}"#
     )).await;
     let row = response
         .data
@@ -52,7 +52,7 @@ async fn publish_canonical_terminal_activity(db: &TestDb, request_doc_id: &str, 
         .and_then(|data| data["AgentRequest"].as_array())
         .and_then(|rows| rows.first())
         .expect("canonical request row");
-    let agent_did = row["agent_did"].as_str().expect("request agent");
+    let node_did = row["node_did"].as_str().expect("request agent");
     let requester_did = row["requester_did"].as_str();
     let session_id = row["session_id"].as_str().expect("request session");
     let generation = match row["execution_generation"].as_str() {
@@ -70,8 +70,8 @@ async fn publish_canonical_terminal_activity(db: &TestDb, request_doc_id: &str, 
         }
     };
     let sequence_response = db.node.execute(&format!(
-        r#"{{ AgentMessage(filter: {{ session_id: {{ _eq: "{}" }}, agent_did: {{ _eq: "{}" }} }}, order: {{ sequence: DESC }}, limit: 1) {{ sequence }} }}"#,
-        gents::graphql::escape_graphql_string(session_id), gents::graphql::escape_graphql_string(agent_did)
+        r#"{{ AgentMessage(filter: {{ session_id: {{ _eq: "{}" }}, node_did: {{ _eq: "{}" }} }}, order: {{ sequence: DESC }}, limit: 1) {{ sequence }} }}"#,
+        gents::graphql::escape_graphql_string(session_id), gents::graphql::escape_graphql_string(node_did)
     )).await;
     let sequence = sequence_response
         .data
@@ -90,7 +90,7 @@ async fn publish_canonical_terminal_activity(db: &TestDb, request_doc_id: &str, 
         attempt: 0,
     };
     let segment = OutputSegment {
-        agent_did: agent_did.into(),
+        node_did: node_did.into(),
         requester_did: requester_did.map(Into::into),
         session_id: session_id.into(),
         request_doc_id: request_doc_id.into(),
@@ -138,13 +138,13 @@ async fn publish_canonical_terminal_activity(db: &TestDb, request_doc_id: &str, 
             .to_owned();
     let message = TranscriptMessage {
         message_key: gents::session::sequence_message_key(
-            agent_did,
+            node_did,
             session_id,
             requester_did,
             sequence,
         ),
         session_id: session_id.into(),
-        agent_did: agent_did.into(),
+        node_did: node_did.into(),
         requester_did: requester_did.map(Into::into),
         request_doc_id: Some(request_doc_id.into()),
         publication: MessagePublication::RequestExecution {
@@ -213,47 +213,47 @@ async fn select_no_terminal_message(db: &TestDb, request_doc_id: &str) {
 fn snapshot(local_did: &str) -> Arc<ActiveRuntimeSnapshot> {
     Arc::new(ActiveRuntimeSnapshot {
         generation: 1,
-        principal: None,
+        node: None,
         local_did: local_did.to_string(),
-        default_behavior_id: crate::support::AGENT_NAME.to_string(),
-        behaviors: HashMap::new(),
+        default_agent_id: crate::support::AGENT_NAME.to_string(),
+        agents: HashMap::new(),
         tool_surfaces: HashMap::new(),
         backend_admission_configs: HashMap::new(),
-        unavailable_behaviors: HashMap::new(),
+        unavailable_agents: HashMap::new(),
         active_schedules: HashMap::new(),
         unavailable_schedules: HashSet::new(),
         active_event_triggers: HashMap::new(),
         unavailable_event_triggers: HashSet::new(),
         active_tasks: HashMap::new(),
         dispatchers: HashMap::new(),
-        behavior_executor_capacities: HashMap::new(),
-        behavior_executor_queue_capacities: HashMap::new(),
+        agent_executor_capacities: HashMap::new(),
+        agent_executor_queue_capacities: HashMap::new(),
     })
 }
 
 /// Publish the runtime-authored readiness row GoalSource consumes, with the
 /// router aligned on `generation`.
-async fn publish_behavior_readiness(
+async fn publish_node_readiness(
     db: &TestDb,
-    process_state: gents_protocol::row::BehaviorReadinessProcessState,
-    behavior: Option<gents_protocol::row::BehaviorReadinessUnavailableReason>,
+    process_state: gents_protocol::row::NodeReadinessProcessState,
+    behavior: Option<gents_protocol::row::AgentReadinessUnavailableReason>,
 ) {
     use gents_protocol::row::{
-        BehaviorReadinessEntry, BehaviorReadinessSnapshot, BehaviorReadinessState,
-        BEHAVIOR_READINESS_FORMAT_VERSION,
+        AgentReadinessEntry, AgentReadinessState, NodeReadinessSnapshot,
+        NODE_READINESS_FORMAT_VERSION,
     };
-    let snapshot = BehaviorReadinessSnapshot {
-        format_version: BEHAVIOR_READINESS_FORMAT_VERSION,
+    let snapshot = NodeReadinessSnapshot {
+        format_version: NODE_READINESS_FORMAT_VERSION,
         process_state,
         active_generation: 1,
         router_generation: 1,
-        default_behavior_id: crate::support::AGENT_NAME.to_string(),
-        behaviors: vec![BehaviorReadinessEntry {
-            behavior_id: crate::support::AGENT_NAME.to_string(),
+        default_agent_id: crate::support::AGENT_NAME.to_string(),
+        agents: vec![AgentReadinessEntry {
+            agent_id: crate::support::AGENT_NAME.to_string(),
             state: if behavior.is_some() {
-                BehaviorReadinessState::Unavailable
+                AgentReadinessState::Unavailable
             } else {
-                BehaviorReadinessState::Ready
+                AgentReadinessState::Ready
             },
             reason: behavior,
         }],
@@ -265,9 +265,9 @@ async fn publish_behavior_readiness(
     let response = db
         .node
         .execute(&format!(
-            r#"mutation {{ upsert_AgentBehaviorReadiness(
-                filter: {{ agent_did: {{ _eq: "{did}" }} }},
-                add: {{ agent_did: "{did}", snapshot_json: "{snapshot_json}", updated_at: "{updated_at}" }},
+            r#"mutation {{ upsert_NodeReadiness(
+                filter: {{ node_did: {{ _eq: "{did}" }} }},
+                add: {{ node_did: "{did}", snapshot_json: "{snapshot_json}", updated_at: "{updated_at}" }},
                 update: {{ snapshot_json: "{snapshot_json}", updated_at: "{updated_at}" }}
             ) {{ _docID }} }}"#
         ))
@@ -284,9 +284,9 @@ async fn publish_reconcile_phase(db: &TestDb, phase: &str) {
     let response = db
         .node
         .execute(&format!(
-            r#"mutation {{ upsert_AgentRuntime(
-                filter: {{ agent_did: {{ _eq: "{did}" }} }},
-                add: {{ agent_did: "{did}", reconcile_phase: "{phase}", last_reconcile_result: "applied" }},
+            r#"mutation {{ upsert_NodeRuntime(
+                filter: {{ node_did: {{ _eq: "{did}" }} }},
+                add: {{ node_did: "{did}", reconcile_phase: "{phase}", last_reconcile_result: "applied" }},
                 update: {{ reconcile_phase: "{phase}", last_reconcile_result: "applied" }}
             ) {{ _docID }} }}"#
         ))
@@ -299,9 +299,9 @@ async fn publish_reconcile_phase(db: &TestDb, phase: &str) {
 }
 
 async fn source(db: &TestDb) -> (GoalSource, watch::Sender<Arc<ActiveRuntimeSnapshot>>) {
-    publish_behavior_readiness(
+    publish_node_readiness(
         db,
-        gents_protocol::row::BehaviorReadinessProcessState::Ready,
+        gents_protocol::row::NodeReadinessProcessState::Ready,
         None,
     )
     .await;
@@ -380,8 +380,8 @@ async fn boot_goal_background_handoff_with_plans(
         crate::support::accepted_turn::AcceptedTurnSpec {
             backend_id: "goal-background-backend",
             model: "test-model",
-            parent_behavior_id: behavior,
-            configured_behavior_ids: &[behavior],
+            parent_agent_id: behavior,
+            configured_agent_ids: &[behavior],
             request_id,
             session_id: SESSION,
             prompt,
@@ -405,20 +405,20 @@ async fn boot_goal_background_handoff_with_plans(
             )],
             child_plans,
             valid_until: None,
-            subagent_depth: None,
+            request_hop: None,
             request_setup: None,
         },
     )
     .await;
     prepared.backend.enable_dynamic_followups(prompt);
-    crate::support::fixtures::configure_behavior_tools(
+    crate::support::fixtures::configure_agent_tools(
         db.node.as_ref(),
         did,
         behavior,
         None,
         gents::document_config::Tools {
             tools_id: format!("{behavior}:tools"),
-            agent_did: did.to_string(),
+            node_did: did.to_string(),
             host: Some(gents::document_config::HostTools {
                 bash: Some(gents::document_config::BashTools {
                     mode: gents::BashMode::ReadOnly,
@@ -433,8 +433,8 @@ async fn boot_goal_background_handoff_with_plans(
         Vec::new(),
     )
     .await;
-    let identity: Arc<dyn gents::AgentIdentity> = db.node_identity.clone();
-    let agent = gents::Gents::from_default_behavior_documents(
+    let identity: Arc<dyn gents::NodeIdentity> = db.node_identity.clone();
+    let agent = gents::Gents::from_default_agent_documents(
         db.node.clone(),
         identity,
         gents::DocumentRuntimeOptions {
@@ -683,7 +683,7 @@ async fn real_waited_process_defers_goal_until_completion_wake_becomes_parent() 
     let notification = tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             let response = db.node.execute(&format!(
-                r#"{{ AgentMessage(filter: {{ message_key: {{ _eq: "{}" }} }}, limit: 2) {{ _docID message_key agent_did requester_did request_doc_id }} }}"#,
+                r#"{{ AgentMessage(filter: {{ message_key: {{ _eq: "{}" }} }}, limit: 2) {{ _docID message_key node_did requester_did request_doc_id }} }}"#,
                 gents::graphql::escape_graphql_string(&notification_key)
             )).await;
             assert!(!response.has_errors(), "notification query: {:?}", response.errors);
@@ -701,7 +701,7 @@ async fn real_waited_process_defers_goal_until_completion_wake_becomes_parent() 
     let (header, reconstructed) = gents::session::load_canonical_message_from_node(
         db.node.as_ref(),
         notification["_docID"].as_str().unwrap(),
-        notification["agent_did"].as_str().unwrap(),
+        notification["node_did"].as_str().unwrap(),
         notification["requester_did"].as_str(),
     )
     .await
@@ -814,10 +814,10 @@ struct ChildRow {
     #[serde(rename = "_docID")]
     doc_id: String,
     request_id: String,
-    agent_did: String,
+    node_did: String,
     requester_did: Option<String>,
     session_id: String,
-    behavior_id: Option<String>,
+    agent_id: Option<String>,
     caused_by_parent_request_id: Option<String>,
     caused_by_parent_request_doc_id: Option<String>,
     caused_by_trigger_id: Option<String>,
@@ -825,10 +825,10 @@ struct ChildRow {
     input: Option<serde_json::Value>,
     lifecycle_state: Option<String>,
     retry_key: Option<String>,
-    subagent_depth: Option<i64>,
+    request_hop: Option<i64>,
     workspace_id: Option<String>,
     workspace_authority: Option<String>,
-    workspace_owner_agent_did: Option<String>,
+    workspace_owner_node_did: Option<String>,
     workspace_seal_hash: Option<String>,
 }
 
@@ -838,10 +838,10 @@ async fn goal_children(db: &TestDb) -> Vec<ChildRow> {
         .execute(
             r#"{
                 AgentRequest(filter: { caused_by_trigger_kind: { _eq: "goal" } }) {
-                    _docID request_id agent_did requester_did session_id behavior_id caused_by_parent_request_id caused_by_parent_request_doc_id
+                    _docID request_id node_did requester_did session_id agent_id caused_by_parent_request_id caused_by_parent_request_doc_id
                     caused_by_trigger_id caused_by_trigger_kind input lifecycle_state
-                    retry_key subagent_depth workspace_id workspace_authority
-                    workspace_owner_agent_did workspace_seal_hash
+                    retry_key request_hop workspace_id workspace_authority
+                    workspace_owner_node_did workspace_seal_hash
                 }
             }"#,
         )
@@ -877,14 +877,14 @@ async fn goal_continuation_preserves_nested_workspace_lineage() {
         "2026-07-15T00:00:00Z",
         admission,
     );
-    parent.subagent_depth = 2;
+    parent.request_hop = 2;
     parent.caused_by_parent_request_id = Some("grandparent-request".to_string());
     parent.caused_by_parent_request_doc_id = Some("grandparent-request-doc".to_string());
     parent.caused_by_parent_tool_call_id = Some("grandparent-tool-call".to_string());
     parent.caused_by_parent_tool_call_doc_id = Some("grandparent-tool-call-doc".to_string());
     parent.workspace_id = Some("workspace-goal".to_string());
     parent.workspace_authority = Some("readOnly".to_string());
-    parent.workspace_owner_agent_did = Some(did.to_string());
+    parent.workspace_owner_node_did = Some(did.to_string());
     parent.workspace_seal_hash = Some("seal-hash".to_string());
     gents::sign_agent_request_create_as_registered_target(&mut parent)
         .await
@@ -934,10 +934,10 @@ async fn goal_continuation_preserves_nested_workspace_lineage() {
     let children = goal_children(&db).await;
     assert_eq!(children.len(), 1);
     let child = &children[0];
-    assert_eq!(child.subagent_depth, Some(2));
+    assert_eq!(child.request_hop, Some(2));
     assert_eq!(child.workspace_id.as_deref(), Some("workspace-goal"));
     assert_eq!(child.workspace_authority.as_deref(), Some("readOnly"));
-    assert_eq!(child.workspace_owner_agent_did.as_deref(), Some(did));
+    assert_eq!(child.workspace_owner_node_did.as_deref(), Some(did));
     assert_eq!(child.workspace_seal_hash.as_deref(), Some("seal-hash"));
     let child_identity = (
         child.doc_id.clone(),
@@ -973,10 +973,10 @@ async fn goal_continuation_preserves_nested_workspace_lineage() {
             ),
             child_identity
         );
-        assert_eq!(child.subagent_depth, Some(2));
+        assert_eq!(child.request_hop, Some(2));
         assert_eq!(child.workspace_id.as_deref(), Some("workspace-goal"));
         assert_eq!(child.workspace_authority.as_deref(), Some("readOnly"));
-        assert_eq!(child.workspace_owner_agent_did.as_deref(), Some(did));
+        assert_eq!(child.workspace_owner_node_did.as_deref(), Some(did));
         assert_eq!(child.workspace_seal_hash.as_deref(), Some("seal-hash"));
         assert_eq!(
             load_canonical_goal(db.node.as_ref(), did, SESSION)
@@ -1063,10 +1063,7 @@ async fn completed_request_materializes_exactly_one_same_session_goal_child() {
     assert_eq!(children.len(), 1);
     let child = &children[0];
     assert_eq!(child.session_id, SESSION);
-    assert_eq!(
-        child.behavior_id.as_deref(),
-        Some(crate::support::AGENT_NAME)
-    );
+    assert_eq!(child.agent_id.as_deref(), Some(crate::support::AGENT_NAME));
     assert_eq!(
         child.caused_by_parent_request_id.as_deref(),
         Some("parent-complete")
@@ -1131,7 +1128,7 @@ async fn foreign_request_id_collision_cannot_preempt_owned_goal_continuation() {
     if !matches!(fired, Ok(Some(_))) {
         let state = db
             .node
-            .execute("{ Goal { goal_id status last_continued_from_request_id continuation_sequence } AgentRequest { request_id agent_did session_id retry_key caused_by_trigger_kind } }")
+            .execute("{ Goal { goal_id status last_continued_from_request_id continuation_sequence } AgentRequest { request_id node_did session_id retry_key caused_by_trigger_kind } }")
             .await;
         let outcome = match fired {
             Err(_) => "timeout",
@@ -1173,8 +1170,8 @@ async fn foreign_retry_key_collision_is_rejected_instead_of_reused() {
     );
     let mutation = format!(
         r#"mutation {{ create_AgentRequest(input: {{
-            request_id: "foreign-retry-collision", purpose: "normal", agent_did: "did:key:foreign",
-            behavior_id: "foreign", session_id: "foreign-session",
+            request_id: "foreign-retry-collision", purpose: "normal", node_did: "did:key:foreign",
+            agent_id: "foreign", session_id: "foreign-session",
             retry_root_request: "foreign-retry-collision",
             retry_key: "{}",
             content: "foreign", lifecycle_state: "completed",
@@ -1936,7 +1933,7 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
             r#"mutation {{ add_InferenceCall(input: {{
                 call_id: "over-budget-failed-call",
                 request_id: "{parent}",
-                agent_did: "{}",
+                node_did: "{}",
                 call_seq: 1,
                 attempt: 1,
                 call_state: "failed",
@@ -2016,7 +2013,7 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
         );
         gents::tool_call_lifecycle::ToolCallLifecycle::reconcile_background_completion_side_effects(&db.node, db.node_identity.did()).await.unwrap();
         let observed = db.node.execute(
-            "{ AgentRequest { _docID request_id created_at lifecycle_state execution_origin caused_by_trigger_kind caused_by_parent_request_id } AgentMessage { _docID agent_did requester_did request_doc_id } AgentToolCall { _docID tool_name lifecycle_state completion_notification_delivered_at } }",
+            "{ AgentRequest { _docID request_id created_at lifecycle_state execution_origin caused_by_trigger_kind caused_by_parent_request_id } AgentMessage { _docID node_did requester_did request_doc_id } AgentToolCall { _docID tool_name lifecycle_state completion_notification_delivered_at } }",
         ).await;
         assert!(!observed.has_errors(), "{:?}", observed.errors);
         let data = observed.data.unwrap();
@@ -2064,7 +2061,7 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
             let (_, message) = gents::session::load_canonical_message_from_node(
                 db.node.as_ref(),
                 header["_docID"].as_str().unwrap(),
-                header["agent_did"].as_str().unwrap(),
+                header["node_did"].as_str().unwrap(),
                 header["requester_did"].as_str(),
             )
             .await
@@ -2123,7 +2120,7 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
         let history = gents::load_history(
             &db.node,
             &children[0].session_id,
-            &children[0].agent_did,
+            &children[0].node_did,
             children[0].requester_did.as_deref(),
         )
         .await
@@ -2174,8 +2171,8 @@ async fn token_budget_materializes_one_wrapup_and_never_repeats_it() {
             request_id: "parent-budget",
             call_seq: 1,
             backend_id: "backend-test",
-            behavior_id: "test",
-            agent_did: "{}",
+            agent_id: "test",
+            node_did: "{}",
             call_kind: "inference",
             attempt: 1,
             call_state: "completed",
@@ -2196,8 +2193,8 @@ async fn token_budget_materializes_one_wrapup_and_never_repeats_it() {
             request_id: "parent-budget",
             call_seq: 1,
             backend_id: "backend-test",
-            behavior_id: "test",
-            agent_did: "did:key:foreign-goal-owner",
+            agent_id: "test",
+            node_did: "did:key:foreign-goal-owner",
             call_kind: "inference",
             attempt: 1,
             call_state: "completed",
@@ -2330,8 +2327,8 @@ async fn session_token_usage_charges_cached_input_as_part_of_the_total() {
             request_id: "parent-cached",
             call_seq: 1,
             backend_id: "backend-test",
-            behavior_id: "test",
-            agent_did: "{}",
+            agent_id: "test",
+            node_did: "{}",
             call_kind: "inference",
             attempt: 1,
             call_state: "completed",
@@ -2553,7 +2550,7 @@ async fn a_later_limited_call_wins_over_an_earlier_retry() {
 /// An active Goal whose request failed on a limit whose reset has passed.
 async fn seed_a_passed_reset(db: &TestDb, opted_in: bool) {
     let did = db.node_identity.did();
-    crate::support::fixtures::bind_behavior_backend(
+    crate::support::fixtures::bind_agent_backend(
         db.node.as_ref(),
         did,
         crate::support::AGENT_NAME,
@@ -2596,7 +2593,7 @@ async fn seed_a_passed_reset(db: &TestDb, opted_in: bool) {
                 }}) {{ _docID }}
                 add_InferenceCall(input: {{
                     call_id: "limited-call", request_id: "usage-limited-request", call_seq: 1,
-                    backend_id: "reset-backend", behavior_id: "{agent}", agent_did: "{did}",
+                    backend_id: "reset-backend", agent_id: "{agent}", node_did: "{did}",
                     call_kind: "inference", attempt: 1, call_state: "failed",
                     queued_at: "2026-07-15T00:00:05Z", started_at: "2026-07-15T00:00:05Z",
                     ended_at: "2026-07-15T00:00:10Z", failure_reason: "{RENDERED_LIMIT}"
@@ -2668,9 +2665,9 @@ async fn goal_after_a_passed_reset(name: &str, opted_in: bool) -> (Option<GoalSt
 async fn a_database_update_leaves_a_passed_reset_to_the_rescan_tick() {
     let db = test_db("goal-reset-update").await;
     seed_a_passed_reset(&db, true).await;
-    publish_behavior_readiness(
+    publish_node_readiness(
         &db,
-        gents_protocol::row::BehaviorReadinessProcessState::Ready,
+        gents_protocol::row::NodeReadinessProcessState::Ready,
         None,
     )
     .await;
@@ -2804,7 +2801,7 @@ async fn failed_wrapup_retries_twice_then_is_durably_abandoned() {
                 add_InferenceCall(input: {{
                     call_id: "wrapup-budget-call",
                     request_id: "parent-wrapup-retry",
-                    agent_did: "{}",
+                    node_did: "{}",
                     call_seq: 1,
                     attempt: 1,
                     call_state: "completed",
@@ -3068,14 +3065,14 @@ async fn seed_operator_resume_parent(db: &TestDb, request_id: &str) -> String {
     parent.caused_by_correlation = Some("original-graph-correlation".into());
     parent.caused_by_source_doc_id = Some("original-event-document".into());
     parent.caused_by_trigger_context = Some(r#"{"source_fields":{"artifact":"original"}}"#.into());
-    parent.subagent_depth = 2;
+    parent.request_hop = 2;
     parent.caused_by_parent_request_id = Some("upstream-request".into());
     parent.caused_by_parent_request_doc_id = Some("upstream-document".into());
     parent.caused_by_parent_tool_call_id = Some("upstream-tool-call".into());
     parent.caused_by_parent_tool_call_doc_id = Some("upstream-tool-document".into());
     parent.workspace_id = Some("resume-workspace".into());
     parent.workspace_authority = Some("readOnly".into());
-    parent.workspace_owner_agent_did = Some(did.to_string());
+    parent.workspace_owner_node_did = Some(did.to_string());
     parent.workspace_seal_hash = Some("resume-seal".into());
     gents::sign_agent_request_create(db.node_identity.as_ref(), &mut parent)
         .await
@@ -3099,14 +3096,14 @@ async fn seed_operator_resume_parent(db: &TestDb, request_id: &str) -> String {
 async fn operator_resume_child_row(db: &TestDb, doc_id: &str) -> serde_json::Value {
     let query = format!(
         r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{
-        _docID request_id agent_did requester_did session_id behavior_id lifecycle_state
+        _docID request_id node_did requester_did session_id agent_id lifecycle_state
         content created_at execution_origin retry_key input admission_kind admission_signer_did
         admission_signature runtime_issuer_did runtime_source_request_id runtime_source_kind
         caused_by_trigger_id caused_by_trigger_doc_id caused_by_trigger_kind
         caused_by_correlation caused_by_source_doc_id caused_by_trigger_context
         caused_by_parent_request_id caused_by_parent_request_doc_id
         caused_by_parent_tool_call_id caused_by_parent_tool_call_doc_id
-        subagent_depth workspace_id workspace_authority workspace_owner_agent_did workspace_seal_hash
+        request_hop workspace_id workspace_authority workspace_owner_node_did workspace_seal_hash
     }} }}"#,
         gents::graphql::escape_graphql_string(doc_id)
     );
@@ -3167,7 +3164,7 @@ async fn operator_resume_publishes_one_lineage_child_and_fences_old_pause() {
     let child = operator_resume_child_row(&db, &receipt.doc_id).await;
     assert_eq!(child["request_id"], receipt.request_id);
     for field in [
-        "agent_did",
+        "node_did",
         "requester_did",
         "admission_signer_did",
         "runtime_issuer_did",
@@ -3175,7 +3172,7 @@ async fn operator_resume_publishes_one_lineage_child_and_fences_old_pause() {
         assert_eq!(child[field], did, "{field}");
     }
     assert_eq!(child["session_id"], SESSION);
-    assert_eq!(child["behavior_id"], crate::support::AGENT_NAME);
+    assert_eq!(child["agent_id"], crate::support::AGENT_NAME);
     assert_eq!(child["lifecycle_state"], "pending");
     assert_eq!(child["execution_origin"], "scheduled");
     assert_eq!(child["runtime_source_request_id"], "resume-parent");
@@ -3195,10 +3192,10 @@ async fn operator_resume_publishes_one_lineage_child_and_fences_old_pause() {
     assert_eq!(child["caused_by_parent_request_doc_id"], parent_doc);
     assert!(child["caused_by_parent_tool_call_id"].is_null());
     assert!(child["caused_by_parent_tool_call_doc_id"].is_null());
-    assert_eq!(child["subagent_depth"], 2);
+    assert_eq!(child["request_hop"], 2);
     assert_eq!(child["workspace_id"], "resume-workspace");
     assert_eq!(child["workspace_authority"], "readOnly");
-    assert_eq!(child["workspace_owner_agent_did"], did);
+    assert_eq!(child["workspace_owner_node_did"], did);
     assert_eq!(child["workspace_seal_hash"], "resume-seal");
     assert!(
         !update_goal_fields_if_status(
@@ -3506,7 +3503,7 @@ async fn operator_resume_rejects_corrupted_child_receipt_without_reactivation() 
     // input by replacing the fixture row while retaining its original signature.
     let original = db.node.execute(&format!(
         r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{
-            request_id agent_did requester_did admission_kind admission_signer_did admission_signature enrollment_request_id enrollment_request_digest enrollment_admin_did enrollment_authorization_sequence enrollment_authorization_expires_at runtime_issuer_did runtime_source_request_id runtime_source_kind behavior_id session_id retry_parent_request retry_parent_request_doc_id retry_root_request retry_key content max_total_tokens input execution_origin caused_by_trigger_id caused_by_trigger_doc_id caused_by_trigger_kind caused_by_correlation caused_by_trigger_context caused_by_source_doc_id created_at retry_count max_retries valid_until subagent_depth caused_by_parent_request_id caused_by_parent_request_doc_id caused_by_parent_tool_call_id caused_by_parent_tool_call_doc_id workspace_id workspace_authority workspace_owner_agent_did workspace_seal_hash lifecycle_state
+            request_id node_did requester_did admission_kind admission_signer_did admission_signature enrollment_request_id enrollment_request_digest enrollment_admin_did enrollment_authorization_sequence enrollment_authorization_expires_at runtime_issuer_did runtime_source_request_id runtime_source_kind agent_id session_id retry_parent_request retry_parent_request_doc_id retry_root_request retry_key content max_total_tokens input execution_origin caused_by_trigger_id caused_by_trigger_doc_id caused_by_trigger_kind caused_by_correlation caused_by_trigger_context caused_by_source_doc_id created_at retry_count max_retries valid_until request_hop caused_by_parent_request_id caused_by_parent_request_doc_id caused_by_parent_tool_call_id caused_by_parent_tool_call_doc_id workspace_id workspace_authority workspace_owner_node_did workspace_seal_hash lifecycle_state
         }} }}"#, gents::graphql::escape_graphql_string(&first.doc_id),
     )).await;
     assert!(!original.has_errors(), "{:?}", original.errors);
@@ -3688,9 +3685,9 @@ async fn seed_goal_fields(
     fields: &str,
 ) -> anyhow::Result<()> {
     let doc_id = gents::graphql::escape_graphql_string(&goal.doc_id);
-    let agent_did = gents::graphql::escape_graphql_string(&goal.agent_did);
+    let node_did = gents::graphql::escape_graphql_string(&goal.node_did);
     let response = node.execute(&format!(
-        r#"mutation {{ update_Goal(filter: {{ _docID: {{ _eq: "{doc_id}" }}, agent_did: {{ _eq: "{agent_did}" }} }}, input: {{ {fields} }}) {{ _docID }} }}"#
+        r#"mutation {{ update_Goal(filter: {{ _docID: {{ _eq: "{doc_id}" }}, node_did: {{ _eq: "{node_did}" }} }}, input: {{ {fields} }}) {{ _docID }} }}"#
     )).await;
     anyhow::ensure!(
         !response.has_errors(),
@@ -3766,8 +3763,8 @@ async fn seed_same_second_canonical_goal_child(
     let identity = gents::RequestIdentity {
         requester_did: None,
         request_id: child_id.clone(),
-        agent_did: did.to_owned(),
-        behavior_id: crate::support::AGENT_NAME.to_owned(),
+        node_did: did.to_owned(),
+        agent_id: crate::support::AGENT_NAME.to_owned(),
         session_id: SESSION.to_owned(),
         content: "The canonical continuation made durable progress".to_owned(),
         execution_origin: gents::lifecycle::ExecutionOrigin::Scheduled,
@@ -3784,7 +3781,7 @@ async fn seed_same_second_canonical_goal_child(
     );
     spec.trigger_lineage.trigger_id = Some(goal.goal_id.clone());
     spec.trigger_lineage.trigger_kind = Some("goal".to_owned());
-    spec.subagent = Some(gents::ParentLink {
+    spec.parent = Some(gents::ParentLink {
         parent_request_id: parent_id.to_owned(),
         parent_request_doc_id: parent_doc,
         ..Default::default()
@@ -3940,7 +3937,7 @@ async fn reject_before_claim(db: &TestDb, doc_id: &str, reason: &str) {
 #[tokio::test]
 async fn unready_behavior_defers_goal_continuation_without_writes_or_retry_charge() {
     use gents_protocol::row::{
-        BehaviorReadinessProcessState as Process, BehaviorReadinessUnavailableReason as Reason,
+        AgentReadinessUnavailableReason as Reason, NodeReadinessProcessState as Process,
     };
     let db = test_db("goal-readiness-wait").await;
     seed_completed_request(&db, "parent-waits-for-readiness").await;
@@ -3954,7 +3951,7 @@ async fn unready_behavior_defers_goal_continuation_without_writes_or_retry_charg
     )
     .await
     .expect("set goal");
-    publish_behavior_readiness(&db, Process::Recovering, None).await;
+    publish_node_readiness(&db, Process::Recovering, None).await;
     publish_reconcile_phase(&db, "idle").await;
     let before = canonical_goal_json(&db).await;
     let (mut source, _tx) = unready_source(&db);
@@ -3972,7 +3969,7 @@ async fn unready_behavior_defers_goal_continuation_without_writes_or_retry_charg
             "idle",
         ),
     ] {
-        publish_behavior_readiness(&db, process, reason).await;
+        publish_node_readiness(&db, process, reason).await;
         publish_reconcile_phase(&db, phase).await;
         assert!(
             tokio::time::timeout(Duration::from_millis(300), source.next_fire())
@@ -4011,7 +4008,7 @@ async fn unready_behavior_defers_goal_continuation_without_writes_or_retry_charg
         assert!(goal_children(&db).await.is_empty());
     }
 
-    publish_behavior_readiness(&db, Process::Ready, None).await;
+    publish_node_readiness(&db, Process::Ready, None).await;
     tokio::time::timeout(Duration::from_secs(2), source.next_fire())
         .await
         .expect("goal source timed out after readiness recovered")
@@ -4020,7 +4017,7 @@ async fn unready_behavior_defers_goal_continuation_without_writes_or_retry_charg
     assert_eq!(children.len(), 1);
     assert_eq!(children[0].session_id, SESSION);
     assert_eq!(
-        children[0].behavior_id.as_deref(),
+        children[0].agent_id.as_deref(),
         Some(crate::support::AGENT_NAME)
     );
     assert_eq!(
@@ -4050,7 +4047,7 @@ async fn unready_behavior_defers_goal_continuation_without_writes_or_retry_charg
 #[tokio::test]
 async fn readiness_rejected_goal_children_never_spend_the_retry_budget() {
     use gents_protocol::row::{
-        BehaviorReadinessProcessState as Process, BehaviorReadinessUnavailableReason as Reason,
+        AgentReadinessUnavailableReason as Reason, NodeReadinessProcessState as Process,
     };
     let db = test_db("goal-readiness-race").await;
     seed_completed_request(&db, "parent-before-race").await;
@@ -4083,7 +4080,7 @@ async fn readiness_rejected_goal_children_never_spend_the_retry_budget() {
             false
         );
 
-        publish_behavior_readiness(
+        publish_node_readiness(
             &db,
             Process::Ready,
             Some(Reason::RuntimeConfigurationInvalid),
@@ -4116,7 +4113,7 @@ async fn readiness_rejected_goal_children_never_spend_the_retry_budget() {
             0,
             "round {round}"
         );
-        publish_behavior_readiness(&db, Process::Ready, None).await;
+        publish_node_readiness(&db, Process::Ready, None).await;
         publish_reconcile_phase(&db, "idle").await;
     }
 
@@ -4154,7 +4151,7 @@ async fn readiness_rejected_goal_children_never_spend_the_retry_budget() {
         .last_failure
         .as_deref()
         .is_some_and(|reason| reason.contains("not been republished since its rejection")));
-    publish_behavior_readiness(&db, Process::Ready, None).await;
+    publish_node_readiness(&db, Process::Ready, None).await;
     tokio::time::timeout(Duration::from_secs(2), source.next_fire())
         .await
         .expect("goal source timed out after readiness was republished")
@@ -4170,9 +4167,9 @@ async fn readiness_rejected_goal_children_never_spend_the_retry_budget() {
 }
 
 #[tokio::test]
-async fn settled_invalid_behavior_pauses_goal_with_its_reason() {
+async fn settled_invalid_agent_pauses_goal_with_its_reason() {
     use gents_protocol::row::{
-        BehaviorReadinessProcessState as Process, BehaviorReadinessUnavailableReason as Reason,
+        AgentReadinessUnavailableReason as Reason, NodeReadinessProcessState as Process,
     };
     let db = test_db("goal-readiness-settled").await;
     seed_completed_request(&db, "parent-invalid-behavior").await;
@@ -4186,7 +4183,7 @@ async fn settled_invalid_behavior_pauses_goal_with_its_reason() {
     )
     .await
     .expect("set goal");
-    publish_behavior_readiness(
+    publish_node_readiness(
         &db,
         Process::Ready,
         Some(Reason::RuntimeConfigurationInvalid),
@@ -4206,7 +4203,7 @@ async fn settled_invalid_behavior_pauses_goal_with_its_reason() {
     assert_eq!(goal.parsed_status(), Some(GoalStatus::Paused));
     assert_eq!(
         goal.last_failure.as_deref(),
-        Some("behavior test is unavailable: runtime configuration is invalid")
+        Some("agent test is unavailable: runtime configuration is invalid")
     );
     assert_eq!(goal.infrastructure_retry_count.unwrap_or_default(), 0);
     assert_eq!(goal.continuation_sequence(), 0);
@@ -4215,7 +4212,7 @@ async fn settled_invalid_behavior_pauses_goal_with_its_reason() {
 
 #[tokio::test]
 async fn claimed_continuation_waits_for_readiness_before_materializing() {
-    use gents_protocol::row::BehaviorReadinessProcessState as Process;
+    use gents_protocol::row::NodeReadinessProcessState as Process;
     let db = test_db("goal-claimed-readiness").await;
     seed_completed_request(&db, "parent-claimed-waits").await;
     let goal = set_goal(
@@ -4233,7 +4230,7 @@ async fn claimed_continuation_waits_for_readiness_before_materializing() {
             .await
             .expect("claim continuation")
     );
-    publish_behavior_readiness(&db, Process::Recovering, None).await;
+    publish_node_readiness(&db, Process::Recovering, None).await;
     let claimed = canonical_goal_json(&db).await;
     let (mut source, _tx) = unready_source(&db);
     assert!(
@@ -4249,7 +4246,7 @@ async fn claimed_continuation_waits_for_readiness_before_materializing() {
         "waiting must leave the durable claim untouched"
     );
 
-    publish_behavior_readiness(&db, Process::Ready, None).await;
+    publish_node_readiness(&db, Process::Ready, None).await;
     tokio::time::timeout(Duration::from_secs(2), source.next_fire())
         .await
         .expect("goal source timed out after readiness recovered")

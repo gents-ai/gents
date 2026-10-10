@@ -39,7 +39,7 @@ export function useManagedServerTrayControls({ actions, stores }: DesktopApp) {
             // the owner window; never replace it with a secondary focus error.
           }
           try {
-            toast.error(`Agent menu command failed: ${message}`);
+            toast.error(`Node menu command failed: ${message}`);
           } catch {
             // A notification renderer failure must not become an unhandled task.
           }
@@ -71,12 +71,12 @@ export function trayServerFor({
       const status = await actions.refreshLocalServer();
       if (status) return status;
       throw new Error(
-        `Could not check the background agent: ${stores.localServer.getState().readFailure}`,
+        `Could not check the background node: ${stores.localServer.getState().readFailure}`,
       );
     },
-    start: (agentName) => actions.startLocalServer(agentName),
+    start: (nodeName) => actions.startLocalServer(nodeName),
     stop: () => actions.stopLocalServer(),
-    restart: (agentName, authority) => actions.restartLocalServer(agentName, authority),
+    restart: (nodeName, authority) => actions.restartLocalServer(nodeName, authority),
     settle: (status) => actions.settleLocalServer(status),
     offers: actions.localServerOffers,
     watchWait: (listener) =>

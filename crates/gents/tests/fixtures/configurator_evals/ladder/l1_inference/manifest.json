@@ -16,7 +16,7 @@
     "cases/train_basic_exec_profile_bind.json",
     "cases/val_minimal_limits.json",
     "cases/val_moderate_limits_reuse_backend.json",
-    "cases/val_new_behavior_reviewer.json",
+    "cases/val_new_agent_reviewer.json",
     "cases/val_reasoning_effort_high.json",
     "cases/val_stream_settings.json",
     "cases/val_trap_preserve_default_profile.json",

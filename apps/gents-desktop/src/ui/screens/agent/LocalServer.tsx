@@ -1,4 +1,4 @@
-/* The OS-managed local agent service. The desktop observes and controls it,
+/* The OS-managed local node service. The desktop observes and controls it,
    but does not own its process lifetime. */
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
@@ -33,7 +33,7 @@ export function LocalServer() {
   /* the tray, or startup, may be starting or stopping it */
   const operating = stores.localServer.use.operation() !== null;
   const statusError = readFailure
-    ? `Could not check the background agent: ${readFailure}`
+    ? `Could not check the background node: ${readFailure}`
     : null;
   const [acting, setBusy] = useState(false);
   const busy = acting || operating;
@@ -62,7 +62,7 @@ export function LocalServer() {
   const updating =
     wait?.kind === "updating" ||
     (status ? managedServerWaitKind(status) === "updating" : false);
-  const name = status?.agentName ?? "gents";
+  const name = status?.nodeName ?? "gents";
   const home = status?.suggestedToolRoot ?? status?.effectiveToolRoot ?? "";
   const authority = authorityForSelection(toolCeiling, selectedDirectory);
   const beginAuthorityEdit = () => {
@@ -120,9 +120,9 @@ export function LocalServer() {
             size="sm"
             variant="outline"
             disabled={busy || status?.state === "external"}
-            onClick={() => void act("Agent stopped", () => actions.stopLocalServer())}
+            onClick={() => void act("Node stopped", () => actions.stopLocalServer())}
           >
-            {busy ? <Spinner /> : null} Stop agent
+            {busy ? <Spinner /> : null} Stop node
           </Button>
         ) : (
           <Button
@@ -130,17 +130,17 @@ export function LocalServer() {
             variant="brand"
             disabled={busy || status?.state === "starting"}
             onClick={() =>
-              void act("Agent started", () => actions.startLocalServer(name))
+              void act("Node started", () => actions.startLocalServer(name))
             }
           >
-            {busy || status?.state === "starting" ? <Spinner /> : null} Start agent
+            {busy || status?.state === "starting" ? <Spinner /> : null} Start node
           </Button>
         )
       }
     >
       <Row
         label="State"
-        description="Agent readiness is checked against the OS service and runtime endpoint. Pairing and desktop connectivity are observed separately."
+        description="Node readiness is checked against the OS service and runtime endpoint. Pairing and desktop connectivity are observed separately."
       >
         <span className="flex items-center gap-2">
           {(statusError || status?.error) && (
@@ -150,8 +150,8 @@ export function LocalServer() {
           )}
           {status?.state === "running" && status.approvalRequired && (
             <span role="alert" className="text-xs text-destructive">
-              macOS no longer allows Gents in the background, so the agent will not
-              start again after it stops. Turn on Gents under {LOGIN_ITEMS_PATH}.
+              macOS no longer allows Gents in the background, so the node will not start
+              again after it stops. Turn on Gents under {LOGIN_ITEMS_PATH}.
             </span>
           )}
           {wait && (
@@ -174,13 +174,13 @@ export function LocalServer() {
       </Row>
       <Row
         label="Desktop app"
-        description="Closing the window keeps controls in the menu bar. Quit Desktop closes only this frontend; the agent keeps running."
+        description="Closing the window keeps controls in the menu bar. Quit Desktop closes only this frontend; the node keeps running."
       >
         <Fact>Independent</Fact>
       </Row>
       <Row
         label="Start at login"
-        description="Let your operating system—not the desktop app—start the agent when you sign in. Stop agent keeps this preference, so it may start again at your next login."
+        description="Let your operating system—not the desktop app—start the node when you sign in. Stop node keeps this preference, so it may start again at your next login."
       >
         <Switch
           aria-label="Start at login"
@@ -195,7 +195,7 @@ export function LocalServer() {
       </Row>
       <Row
         label="Native logs"
-        description="Agent runtime diagnostics are separate from desktop connectivity and pairing observations."
+        description="Node runtime diagnostics are separate from desktop connectivity and pairing observations."
       >
         <Fact mono>{snapshot?.bootstrap?.diagnosticsHint ?? "System logs"}</Fact>
       </Row>
@@ -218,7 +218,7 @@ export function LocalServer() {
           <div>
             <p className="text-sm font-medium">Restart-required access change</p>
             <p className="text-xs text-muted-foreground">
-              The agent keeps its current access unless the native service stops
+              The node keeps its current access unless the native service stops
               successfully. It restarts only after the reviewed root and ceiling are
               saved.
             </p>

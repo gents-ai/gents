@@ -17,8 +17,8 @@ function session(
   return {
     liveCursor: "cursor",
     sessionId: "session-1",
-    agentDid: "did:key:test",
-    behaviorId: "behavior-1",
+    nodeDid: "did:key:test",
+    agentId: "agent-1",
     title: "Test",
     previewText: null,
     status: "active",
@@ -59,7 +59,7 @@ function session(
 
 function readsFor(
   api: DesktopApiAdapter,
-  store = createSelectionStore({ agentDid: "did:key:test", sessionId: "session-1" }),
+  store = createSelectionStore({ nodeDid: "did:key:test", sessionId: "session-1" }),
   setError = vi.fn(),
 ) {
   const sessionStore = createSessionStore();
@@ -174,7 +174,7 @@ describe("createSessionReads", () => {
     const setError = vi.fn();
     const reads = readsFor(
       { fetchSessionSnapshot, fetchSessionLiveDelta } as unknown as DesktopApiAdapter,
-      createSelectionStore({ agentDid: "did:key:test", sessionId: "session-1" }),
+      createSelectionStore({ nodeDid: "did:key:test", sessionId: "session-1" }),
       setError,
     );
     await reads.refreshSession("session-1");
@@ -278,7 +278,7 @@ describe("createSessionReads", () => {
       .mockResolvedValueOnce(other)
       .mockResolvedValueOnce(terminal);
     const store = createSelectionStore({
-      agentDid: "did:key:test",
+      nodeDid: "did:key:test",
       sessionId: "session-1",
     });
     const reads = readsFor(
@@ -574,7 +574,7 @@ describe("createSessionReads", () => {
       return Promise.resolve(other);
     });
     const store = createSelectionStore({
-      agentDid: "did:key:test",
+      nodeDid: "did:key:test",
       sessionId: "session-1",
     });
     const reads = readsFor(

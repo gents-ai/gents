@@ -98,16 +98,15 @@ mod tests {
                 "{name} must be branchable for DAG sync"
             );
         }
-        assert!(gents_protocol::schemas::AGENT_BEHAVIOR_READINESS.contains("@branchable"));
+        assert!(gents_protocol::schemas::NODE_READINESS.contains("@branchable"));
     }
 
     #[test]
-    fn behavior_readiness_remains_subscribed() {
+    fn node_readiness_remains_subscribed() {
         let names = subscribed_collection_names();
-        assert!(names.contains(&"AgentBehaviorReadiness"));
-        assert!(gents_protocol::schemas::ALL_COLLECTION_NAMES.contains(&"AgentBehaviorReadiness"));
-        assert!(!gents_protocol::schemas::BRANCHABLE_COLLECTION_NAMES
-            .contains(&"AgentBehaviorReadiness"));
+        assert!(names.contains(&"NodeReadiness"));
+        assert!(gents_protocol::schemas::ALL_COLLECTION_NAMES.contains(&"NodeReadiness"));
+        assert!(!gents_protocol::schemas::BRANCHABLE_COLLECTION_NAMES.contains(&"NodeReadiness"));
     }
 
     #[test]

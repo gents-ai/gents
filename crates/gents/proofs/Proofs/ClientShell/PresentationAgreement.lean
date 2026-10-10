@@ -6,7 +6,7 @@ import Proofs.ClientShell.Projection
 The React composer owns only its local text. For a non-empty local draft it
 must present the canonical shell decision unchanged; an empty local draft adds
 only the canonical `composerEmpty` blocker. It never reconstructs readiness
-from transport, deployment, behavior, or turn observations.
+from transport, deployment, agent, or turn observations.
 -/
 
 namespace ClientShell

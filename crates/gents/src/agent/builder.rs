@@ -6,9 +6,7 @@ use crate::llm::tool::ToolDyn;
 use anyhow::{anyhow, Result};
 use defra_node::EmbeddedNode;
 
-use super::{
-    assemble_principal_and_behaviors, runtime, BehaviorBuildError, Gents, ProcessLifecycleObserver,
-};
+use super::{assemble_node_and_agents, runtime, AgentBuildError, Gents, ProcessLifecycleObserver};
 use crate::admission::BackendAdmissionConfig;
 use crate::agent::completion_retry::CompletionRetryProfileFields;
 #[cfg(test)]
@@ -16,18 +14,18 @@ use crate::backend_provider::BackendProviderKind;
 use crate::backend_registry::lookup_backend;
 use crate::compaction::CompactionStrategy;
 use crate::config::{
-    ResolvedBehavior, SamplingConfig, DEFAULT_COMPACTION_THRESHOLD, DEFAULT_CONTEXT_WINDOW,
+    ResolvedAgent, SamplingConfig, DEFAULT_COMPACTION_THRESHOLD, DEFAULT_CONTEXT_WINDOW,
     DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_MAX_TURNS,
     DEFAULT_MODEL_NAME, DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS, DEFAULT_STREAM_BATCH_MS,
     DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
 };
 use crate::health_checker::HealthCheckerOptions;
 use crate::hook::{BackgroundExecutionRegistry, FailurePolicy};
-use crate::identity::{AgentIdentity, RuntimePrincipal};
+use crate::identity::{NodeIdentity, RuntimeNode};
 use crate::mcp_pool::McpPool;
 use crate::retry::RetryPolicy;
 use crate::tool_surface::{
-    BashMode, BehaviorToolConfig, CustomToolFactory, FileToolMode, ResolvedToolSelection,
+    AgentToolSurfaceConfig, BashMode, CustomToolFactory, FileToolMode, ResolvedToolSelection,
     ToolCeiling,
 };
 
@@ -37,8 +35,8 @@ const TEST_DEFAULT_BACKEND_ENDPOINT: &str = "http://localhost:8000/v1";
 #[derive(Default)]
 pub struct GentsBuilder {
     node: Option<Arc<EmbeddedNode>>,
-    identity: Option<Arc<dyn AgentIdentity>>,
-    default_behavior_id: Option<String>,
+    identity: Option<Arc<dyn NodeIdentity>>,
+    default_agent_id: Option<String>,
     tool_ceiling: ToolCeiling,
     mcp_pool: McpPool,
     local_hostname: Option<String>,
@@ -49,9 +47,9 @@ pub struct GentsBuilder {
     process_state_observer: Option<Arc<dyn ProcessLifecycleObserver>>,
     rendered_request_capture_factory:
         Option<crate::rendered_request::RenderedRequestCaptureFactory>,
-    behaviors: Vec<PendingAgentBehavior>,
+    agents: Vec<PendingAgent>,
     /// This runtime's measured probe health (#640), consulted alongside the
-    /// document when admitting a behavior's backend. Empty by default —
+    /// document when admitting an agent_config's backend. Empty by default —
     /// build paths that run before the prober has an opinion (startup,
     /// tests) never veto on measured health, matching
     /// `BackendAdmissionConfig::measured_unhealthy`'s own default.
@@ -69,7 +67,7 @@ impl GentsBuilder {
         self
     }
 
-    pub fn identity(mut self, identity: Arc<dyn AgentIdentity>) -> Self {
+    pub fn identity(mut self, identity: Arc<dyn NodeIdentity>) -> Self {
         self.identity = Some(identity);
         self
     }
@@ -86,8 +84,8 @@ impl GentsBuilder {
         self
     }
 
-    pub fn default_behavior_id(mut self, behavior_id: impl Into<String>) -> Self {
-        self.default_behavior_id = Some(behavior_id.into());
+    pub fn default_agent_id(mut self, agent_id: impl Into<String>) -> Self {
+        self.default_agent_id = Some(agent_id.into());
         self
     }
 
@@ -155,10 +153,10 @@ impl GentsBuilder {
         self
     }
 
-    pub fn behavior(self, name: impl Into<String>) -> BehaviorBuilder {
-        BehaviorBuilder {
+    pub fn agent(self, name: impl Into<String>) -> AgentBuilder {
+        AgentBuilder {
             agent: self,
-            behavior: PendingAgentBehavior::new(name),
+            pending_agent: PendingAgent::new(name),
         }
     }
 
@@ -174,47 +172,41 @@ impl GentsBuilder {
                 "Gents runtime requires an EmbeddedNode configured with a node signing DID"
             );
         }
-        if self.behaviors.is_empty() {
-            anyhow::bail!("Gents builder requires at least one behavior");
+        if self.agents.is_empty() {
+            anyhow::bail!("Gents builder requires at least one agent");
         }
 
-        let default_behavior_id = self
-            .default_behavior_id
+        let default_agent_id = self
+            .default_agent_id
             .clone()
-            .unwrap_or_else(|| self.behaviors[0].name.clone());
-        let behavior_names = self
-            .behaviors
+            .unwrap_or_else(|| self.agents[0].name.clone());
+        let agent_names = self
+            .agents
             .iter()
-            .map(|behavior| behavior.name.clone())
+            .map(|agent_config| agent_config.name.clone())
             .collect::<Vec<_>>();
-        if !behavior_names
-            .iter()
-            .any(|name| name == &default_behavior_id)
-        {
+        if !agent_names.iter().any(|name| name == &default_agent_id) {
             anyhow::bail!(
-                "default behavior {} is not present in builder behaviors",
-                default_behavior_id
+                "default agent {} is not present in builder agents",
+                default_agent_id
             );
         }
-        let duplicates = find_duplicates(&behavior_names);
+        let duplicates = find_duplicates(&agent_names);
         if !duplicates.is_empty() {
             anyhow::bail!(
-                "duplicate behavior names in builder: {}",
+                "duplicate agent names in builder: {}",
                 duplicates.into_iter().collect::<Vec<_>>().join(", ")
             );
         }
 
-        let mut behavior_factories: Vec<
+        let mut agent_factories: Vec<
             Box<
-                dyn FnOnce(
-                        Arc<RuntimePrincipal>,
-                    )
-                        -> std::result::Result<ResolvedBehavior, BehaviorBuildError>
+                dyn FnOnce(Arc<RuntimeNode>) -> std::result::Result<ResolvedAgent, AgentBuildError>
                     + Send,
             >,
-        > = Vec::with_capacity(self.behaviors.len());
-        for behavior in self.behaviors {
-            let factory = behavior
+        > = Vec::with_capacity(self.agents.len());
+        for agent_config in self.agents {
+            let factory = agent_config
                 .into_factory(
                     node.as_ref(),
                     identity.did(),
@@ -222,33 +214,31 @@ impl GentsBuilder {
                     &self.backend_health,
                 )
                 .await?;
-            behavior_factories.push(factory);
+            agent_factories.push(factory);
         }
 
-        let principal_data = RuntimePrincipal {
-            agent_did: identity.did().to_string(),
+        let node_data = RuntimeNode {
+            node_did: identity.did().to_string(),
             identity: identity.clone(),
-            default_behavior_id: default_behavior_id.clone(),
+            default_agent_id: default_agent_id.clone(),
             display_name: None,
             enabled: true,
         };
 
-        let (principal, behavior_results) =
-            assemble_principal_and_behaviors(principal_data, behavior_factories);
+        let (principal, agent_results) = assemble_node_and_agents(node_data, agent_factories);
 
-        let mut behaviors = Vec::with_capacity(behavior_results.len());
-        for result in behavior_results {
-            let behavior_arc = result.map_err(|e| {
-                anyhow::anyhow!("behavior '{}' build failed: {}", e.behavior_id, e.error)
-            })?;
-            behaviors.push(behavior_arc);
+        let mut agents = Vec::with_capacity(agent_results.len());
+        for result in agent_results {
+            let agent_arc = result
+                .map_err(|e| anyhow::anyhow!("agent '{}' build failed: {}", e.agent_id, e.error))?;
+            agents.push(agent_arc);
         }
-        behaviors.sort_by(|left, right| {
-            let left_is_default = left.behavior_id == default_behavior_id;
-            let right_is_default = right.behavior_id == default_behavior_id;
+        agents.sort_by(|left, right| {
+            let left_is_default = left.agent_id == default_agent_id;
+            let right_is_default = right.agent_id == default_agent_id;
             right_is_default
                 .cmp(&left_is_default)
-                .then_with(|| left.behavior_id.cmp(&right.behavior_id))
+                .then_with(|| left.agent_id.cmp(&right.agent_id))
         });
 
         let capture_node = node.clone();
@@ -256,9 +246,9 @@ impl GentsBuilder {
 
         Ok(Gents {
             node,
-            principal,
-            behaviors,
-            unavailable_behaviors: Default::default(),
+            runtime_node: principal,
+            agents,
+            unavailable_agents: Default::default(),
             document_runtime_context: None,
             mcp_pool: self.mcp_pool,
             local_hostname: self
@@ -277,7 +267,7 @@ impl GentsBuilder {
             startup_readiness: Default::default(),
             #[cfg(test)]
             router_dispatch_probe: None,
-            // Same default as `Gents::from_default_behavior_documents`: every
+            // Same default as `Gents::from_default_agent_documents`: every
             // provider request must pass through the durable DefraDB sink.
             rendered_request_capture_factory: Some(
                 self.rendered_request_capture_factory.unwrap_or_else(|| {
@@ -296,50 +286,50 @@ impl GentsBuilder {
     }
 }
 
-pub struct BehaviorBuilder {
+pub struct AgentBuilder {
     agent: GentsBuilder,
-    behavior: PendingAgentBehavior,
+    pending_agent: PendingAgent,
 }
 
-impl BehaviorBuilder {
+impl AgentBuilder {
     pub fn backend_id(mut self, backend_id: impl Into<String>) -> Self {
-        self.behavior.backend_id = Some(backend_id.into());
+        self.pending_agent.backend_id = Some(backend_id.into());
         self
     }
 
     pub fn model_name(mut self, model_name: impl Into<String>) -> Self {
-        self.behavior.model_name = model_name.into();
+        self.pending_agent.model_name = model_name.into();
         self
     }
 
     pub fn system_prompt(mut self, system_prompt: impl Into<String>) -> Self {
-        self.behavior.system_prompt = system_prompt.into();
+        self.pending_agent.system_prompt = system_prompt.into();
         self
     }
 
     pub fn context_window(mut self, context_window: usize) -> Self {
-        self.behavior.context_window = context_window;
+        self.pending_agent.context_window = context_window;
         self
     }
 
     pub fn max_output_tokens(mut self, max_output_tokens: usize) -> Self {
-        self.behavior.max_output_tokens = max_output_tokens;
+        self.pending_agent.max_output_tokens = max_output_tokens;
         self
     }
 
     pub fn max_turns(mut self, max_turns: usize) -> Self {
-        self.behavior.max_turns = max_turns;
-        self.behavior.max_turns_explicit = true;
+        self.pending_agent.max_turns = max_turns;
+        self.pending_agent.max_turns_explicit = true;
         self
     }
 
     pub fn enable_file_tools(mut self, mode: FileToolMode) -> Self {
-        self.behavior.tool_selection.file_tools = mode;
+        self.pending_agent.tool_selection.file_tools = mode;
         self
     }
 
     pub fn enable_bash(mut self, mode: BashMode) -> Self {
-        self.behavior.tool_selection.bash = mode;
+        self.pending_agent.tool_selection.bash = mode;
         self
     }
 
@@ -348,33 +338,33 @@ impl BehaviorBuilder {
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
-        self.behavior.tool_selection.cli_tool_names =
+        self.pending_agent.tool_selection.cli_tool_names =
             cli_tool_names.into_iter().map(Into::into).collect();
         self
     }
 
     pub fn enable_meta_tools(mut self, enable_meta_tools: bool) -> Self {
-        self.behavior.tool_selection.enable_meta_tools = enable_meta_tools;
+        self.pending_agent.tool_selection.enable_meta_tools = enable_meta_tools;
         self
     }
 
     pub fn enable_goal_tools(mut self, enable_goal_tools: bool) -> Self {
-        self.behavior.tool_selection.enable_goal_tools = enable_goal_tools;
+        self.pending_agent.tool_selection.enable_goal_tools = enable_goal_tools;
         self
     }
 
     pub fn enable_goal_creation(mut self, enable_goal_creation: bool) -> Self {
-        self.behavior.tool_selection.enable_goal_creation = enable_goal_creation;
+        self.pending_agent.tool_selection.enable_goal_creation = enable_goal_creation;
         self
     }
 
     pub fn enable_defra_query(mut self, enable_defra_query: bool) -> Self {
-        self.behavior.tool_selection.enable_defra_query = enable_defra_query;
+        self.pending_agent.tool_selection.enable_defra_query = enable_defra_query;
         self
     }
 
     pub fn enable_self_config(mut self, enable_self_config: bool) -> Self {
-        self.behavior.tool_selection.enable_self_config = enable_self_config;
+        self.pending_agent.tool_selection.enable_self_config = enable_self_config;
         self
     }
 
@@ -383,33 +373,35 @@ impl BehaviorBuilder {
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
-        self.behavior.tool_selection.self_config_categories =
+        self.pending_agent.tool_selection.self_config_categories =
             Some(categories.into_iter().map(Into::into).collect());
         self
     }
 
     pub fn self_config_no_lockout(mut self, no_lockout: bool) -> Self {
-        self.behavior.tool_selection.self_config_no_lockout = no_lockout;
+        self.pending_agent.tool_selection.self_config_no_lockout = no_lockout;
         self
     }
 
     pub fn self_config_preview(mut self, preview: bool) -> Self {
-        self.behavior.tool_selection.self_config_preview = preview;
+        self.pending_agent.tool_selection.self_config_preview = preview;
         self
     }
 
     pub fn enable_context_budget(mut self, enable_context_budget: bool) -> Self {
-        self.behavior.tool_selection.enable_context_budget = enable_context_budget;
+        self.pending_agent.tool_selection.enable_context_budget = enable_context_budget;
         self
     }
 
     pub fn enable_memory(mut self, enable_memory: bool) -> Self {
-        self.behavior.tool_selection.enable_memory = enable_memory;
+        self.pending_agent.tool_selection.enable_memory = enable_memory;
         self
     }
 
     pub fn enable_session_history_tool(mut self, enable_session_history_tool: bool) -> Self {
-        self.behavior.tool_selection.enable_session_history_tool = enable_session_history_tool;
+        self.pending_agent
+            .tool_selection
+            .enable_session_history_tool = enable_session_history_tool;
         self
     }
 
@@ -418,7 +410,7 @@ impl BehaviorBuilder {
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
-        self.behavior.tool_selection.defra_query_collections =
+        self.pending_agent.tool_selection.defra_query_collections =
             collections.into_iter().map(Into::into).collect();
         self
     }
@@ -428,7 +420,7 @@ impl BehaviorBuilder {
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
-        self.behavior.tool_selection.allowed_mcp_service_ids =
+        self.pending_agent.tool_selection.allowed_mcp_service_ids =
             service_ids.into_iter().map(Into::into).collect();
         self
     }
@@ -437,49 +429,50 @@ impl BehaviorBuilder {
     where
         T: ToolDyn + Clone + Send + Sync + 'static,
     {
-        self.behavior
+        self.pending_agent
             .custom_tools
             .push(CustomToolFactory::from_tool(tool));
         self
     }
 
     pub fn custom_tool_factory(mut self, tool: CustomToolFactory) -> Self {
-        self.behavior.custom_tools.push(tool);
+        self.pending_agent.custom_tools.push(tool);
         self
     }
 
     pub fn compaction_threshold(mut self, compaction_threshold: f64) -> Self {
-        self.behavior.compaction_threshold = compaction_threshold;
+        self.pending_agent.compaction_threshold = compaction_threshold;
         self
     }
 
     pub fn compaction_strategy(mut self, compaction_strategy: CompactionStrategy) -> Self {
-        self.behavior.compaction_strategy = compaction_strategy;
+        self.pending_agent.compaction_strategy = compaction_strategy;
         self
     }
 
     pub fn stream_batch_ms(mut self, stream_batch_ms: u64) -> Self {
-        self.behavior.stream_batch_ms = stream_batch_ms;
+        self.pending_agent.stream_batch_ms = stream_batch_ms;
         self
     }
 
     pub fn stream_liveness_timeout_secs(mut self, stream_liveness_timeout_secs: u64) -> Self {
-        self.behavior.stream_liveness_timeout = Duration::from_secs(stream_liveness_timeout_secs);
+        self.pending_agent.stream_liveness_timeout =
+            Duration::from_secs(stream_liveness_timeout_secs);
         self
     }
 
     pub fn provider_idle_timeout_secs(mut self, provider_idle_timeout_secs: u64) -> Self {
-        self.behavior.provider_idle_timeout = Duration::from_secs(provider_idle_timeout_secs);
+        self.pending_agent.provider_idle_timeout = Duration::from_secs(provider_idle_timeout_secs);
         self
     }
 
     pub fn deadline_duration_secs(mut self, deadline_duration_secs: u64) -> Self {
-        self.behavior.deadline_duration = Duration::from_secs(deadline_duration_secs);
+        self.pending_agent.deadline_duration = Duration::from_secs(deadline_duration_secs);
         self
     }
 
     pub fn done(mut self) -> GentsBuilder {
-        self.agent.behaviors.push(self.behavior);
+        self.agent.agents.push(self.pending_agent);
         self.agent
     }
 }
@@ -496,7 +489,7 @@ fn find_duplicates(values: &[String]) -> HashSet<String> {
 }
 
 #[derive(Clone)]
-pub(crate) struct PendingAgentBehavior {
+pub(crate) struct PendingAgent {
     name: String,
     backend_id: Option<String>,
     #[cfg(test)]
@@ -519,7 +512,7 @@ pub(crate) struct PendingAgentBehavior {
     skills: Vec<crate::skills::Skill>,
 }
 
-impl PendingAgentBehavior {
+impl PendingAgent {
     pub(crate) fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -548,27 +541,25 @@ impl PendingAgentBehavior {
     async fn into_factory(
         self,
         node: &EmbeddedNode,
-        agent_did: &str,
+        node_did: &str,
         tool_ceiling: &ToolCeiling,
         backend_health: &crate::backend_health::BackendHealthMap,
     ) -> Result<
         Box<
-            dyn FnOnce(
-                    Arc<RuntimePrincipal>,
-                ) -> std::result::Result<ResolvedBehavior, BehaviorBuildError>
+            dyn FnOnce(Arc<RuntimeNode>) -> std::result::Result<ResolvedAgent, AgentBuildError>
                 + Send,
         >,
     > {
         let backend_id = self
             .backend_id
             .as_deref()
-            .ok_or_else(|| anyhow!("behavior '{}' is missing backend_id", self.name))?
+            .ok_or_else(|| anyhow!("agent '{}' is missing backend_id", self.name))?
             .to_string();
-        let backend = lookup_backend(node, agent_did, &backend_id)
+        let backend = lookup_backend(node, node_did, &backend_id)
             .await?
             .ok_or_else(|| {
                 anyhow!(
-                    "behavior '{}' references missing backend {}",
+                    "agent '{}' references missing backend {}",
                     self.name,
                     backend_id
                 )
@@ -578,14 +569,14 @@ impl PendingAgentBehavior {
         // this builder's measured health the same way the reconciler does
         // before gating on it.
         let observation =
-            crate::backend_registry::lookup_backend_observation(node, agent_did, &backend_id)
+            crate::backend_registry::lookup_backend_observation(node, node_did, &backend_id)
                 .await?
                 .ok_or_else(|| anyhow!("backend {} disappeared during assembly", backend_id))?;
         let admission_config = BackendAdmissionConfig::from_backend(&backend, &observation)?
             .with_measured_unhealthy(backend_health.measured_blocks_routing(&backend_id).await);
         if !admission_config.is_available() {
             anyhow::bail!(
-                "behavior '{}' backend {} is unavailable (enabled={} probe_status={} measured_unhealthy={})",
+                "agent '{}' backend {} is unavailable (enabled={} probe_status={} measured_unhealthy={})",
                 self.name,
                 backend_id,
                 backend.enabled,
@@ -594,14 +585,14 @@ impl PendingAgentBehavior {
             );
         }
 
-        let behavior_name = self.name.clone();
+        let agent_name = self.name.clone();
         let backend_fields = backend.backend_fields();
         let tool_ceiling = tool_ceiling.clone();
 
         Ok(Box::new(move |principal| {
             self.build_with_resolved_backend(principal, backend_fields, &tool_ceiling)
-                .map_err(|error| BehaviorBuildError {
-                    behavior_id: behavior_name,
+                .map_err(|error| AgentBuildError {
+                    agent_id: agent_name,
                     error,
                 })
         }))
@@ -609,11 +600,11 @@ impl PendingAgentBehavior {
 
     fn build_with_resolved_backend(
         self,
-        principal: Arc<RuntimePrincipal>,
+        principal: Arc<RuntimeNode>,
         backend_fields: crate::backend_registry::BackendFields,
         tool_ceiling: &ToolCeiling,
-    ) -> Result<ResolvedBehavior> {
-        let behavior_name = self.name.clone();
+    ) -> Result<ResolvedAgent> {
+        let agent_name = self.name.clone();
         self.sampling.validate_for_provider(
             backend_fields.backend_provider_kind,
             backend_fields.openai_wire_api,
@@ -621,7 +612,7 @@ impl PendingAgentBehavior {
 
         let compaction = crate::document_config::CompactionConfig {
             compaction_id: self.name.clone(),
-            agent_did: principal.agent_did.clone(),
+            node_did: principal.node_did.clone(),
             display_name: None,
             strategy: self.compaction_strategy,
             threshold: Some(self.compaction_threshold),
@@ -633,9 +624,9 @@ impl PendingAgentBehavior {
             tags: Vec::new(),
         };
         compaction.validate()?;
-        Ok(ResolvedBehavior {
-            behavior_id: self.name,
-            principal,
+        Ok(ResolvedAgent {
+            agent_id: self.name,
+            node: principal,
             backend_id: backend_fields.backend_id,
             backend_provider_kind: backend_fields.backend_provider_kind,
             openai_wire_api: backend_fields.openai_wire_api,
@@ -652,8 +643,8 @@ impl PendingAgentBehavior {
                 crate::config::MaxTurnsProvenance::Default
             },
             system_prompt: self.system_prompt,
-            tools: BehaviorToolConfig::from_selection(
-                &behavior_name,
+            tools: AgentToolSurfaceConfig::from_selection(
+                &agent_name,
                 self.tool_selection,
                 tool_ceiling,
                 self.custom_tools,
@@ -673,19 +664,19 @@ impl PendingAgentBehavior {
 }
 
 #[cfg(test)]
-impl PendingAgentBehavior {
-    pub(crate) fn build_with_identity_for_test<I>(self, identity: I) -> ResolvedBehavior
+impl PendingAgent {
+    pub(crate) fn build_with_identity_for_test<I>(self, identity: I) -> ResolvedAgent
     where
-        I: AgentIdentity + 'static,
+        I: NodeIdentity + 'static,
     {
         let backend_id = self.backend_id.clone();
         let backend_endpoint = self.backend_endpoint.clone();
-        let behavior_name = self.name.clone();
-        let identity: Arc<dyn AgentIdentity> = Arc::new(identity);
-        let principal = Arc::new(RuntimePrincipal {
-            agent_did: identity.did().to_string(),
+        let agent_name = self.name.clone();
+        let identity: Arc<dyn NodeIdentity> = Arc::new(identity);
+        let principal = Arc::new(RuntimeNode {
+            node_did: identity.did().to_string(),
             identity,
-            default_behavior_id: behavior_name.clone(),
+            default_agent_id: agent_name.clone(),
             display_name: None,
             enabled: true,
         });
@@ -720,20 +711,20 @@ mod tests {
 
     #[test]
     fn builder_max_turns_resolves_to_a_programmatic_provenance() {
-        let behavior = GentsBuilder::default()
-            .behavior("general")
+        let agent_config = GentsBuilder::default()
+            .agent("general")
             .max_turns(40)
-            .behavior
+            .pending_agent
             .build_with_identity_for_test(test_identity("builder-max-turns-explicit"));
 
-        assert_eq!(behavior.max_turns, 40);
+        assert_eq!(agent_config.max_turns, 40);
         assert_eq!(
-            behavior.max_turns_provenance,
+            agent_config.max_turns_provenance,
             MaxTurnsProvenance::BuilderOverride
         );
-        let message = behavior.max_turns_provenance.describe();
+        let message = agent_config.max_turns_provenance.describe();
         assert!(
-            message.contains("BehaviorBuilder::max_turns"),
+            message.contains("AgentBuilder::max_turns"),
             "a builder-configured limit must name the builder: {message}"
         );
         assert!(
@@ -744,19 +735,22 @@ mod tests {
 
     #[test]
     fn builder_without_max_turns_resolves_to_the_built_in_default() {
-        let behavior = GentsBuilder::default()
-            .behavior("general")
-            .behavior
+        let agent_config = GentsBuilder::default()
+            .agent("general")
+            .pending_agent
             .build_with_identity_for_test(test_identity("builder-max-turns-default"));
 
-        assert_eq!(behavior.max_turns, DEFAULT_MAX_TURNS);
-        assert_eq!(behavior.max_turns_provenance, MaxTurnsProvenance::Default);
-        // This behavior has no InferenceExecution document, so advice naming
+        assert_eq!(agent_config.max_turns, DEFAULT_MAX_TURNS);
+        assert_eq!(
+            agent_config.max_turns_provenance,
+            MaxTurnsProvenance::Default
+        );
+        // This agent has no InferenceExecution document, so advice naming
         // only that document would not raise its limit.
-        let message = behavior.max_turns_provenance.describe();
+        let message = agent_config.max_turns_provenance.describe();
         assert!(
-            message.contains("BehaviorBuilder::max_turns"),
-            "a default limit on a built behavior must name the builder knob: {message}"
+            message.contains("AgentBuilder::max_turns"),
+            "a default limit on a built agent must name the builder knob: {message}"
         );
     }
 }

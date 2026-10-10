@@ -21,7 +21,7 @@ use crate::request_helpers::{
     RequestOutputEnvelope,
 };
 use crate::{
-    create_agent_request, post_graphql, print_json, resolve_agent_did, resolve_graphql_endpoint,
+    create_agent_request, post_graphql, print_json, resolve_graphql_endpoint, resolve_node_did,
     resolve_request_content, resolve_request_id, wait_for_terminal_response,
     write_json_output_file, RequestSubmitOptions,
 };
@@ -56,16 +56,16 @@ fn wait_result(
 
 async fn request_submit(args: RequestSubmitArgs) -> Result<()> {
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
-    let agent_did = resolve_agent_did(args.home.as_deref(), args.agent_did.as_deref())?;
+    let node_did = resolve_node_did(args.home.as_deref(), args.node_did.as_deref())?;
     let content = resolve_request_content(args.content.as_deref(), args.content_file.as_deref())?;
     let valid_until = parse_valid_until_flag(args.valid_until.as_deref())?;
-    ensure_local_request_signer(args.home.as_deref(), &agent_did)?;
+    ensure_local_request_signer(args.home.as_deref(), &node_did)?;
     let submitted = create_agent_request(
         &graphql,
-        &agent_did,
+        &node_did,
         &content,
         args.session_id.as_deref(),
-        args.behavior_id.as_deref(),
+        args.agent_id.as_deref(),
         RequestSubmitOptions {
             caused_by_source_doc_id: None,
             input: args
@@ -85,8 +85,8 @@ async fn request_submit(args: RequestSubmitArgs) -> Result<()> {
     let request_summary = json!({
         "request_id": submitted.request_id,
         "session_id": submitted.session_id,
-        "agent_did": submitted.agent_did,
-        "behavior_id": submitted.behavior_id,
+        "node_did": submitted.node_did,
+        "agent_id": submitted.agent_id,
         "input": submitted.input,
     });
     if args.no_wait {
@@ -164,8 +164,8 @@ struct RequestShowSnapshot {
 #[derive(Debug, Clone, Serialize)]
 struct RequestShowHeader {
     request_id: String,
-    agent_did: String,
-    behavior_id: String,
+    node_did: String,
+    agent_id: String,
     session_id: String,
     lifecycle_state: String,
     backend_id: Option<String>,
@@ -191,7 +191,7 @@ struct RequestShowHeader {
     caused_by_source_doc_id: Option<String>,
     workspace_id: Option<String>,
     workspace_authority: Option<String>,
-    workspace_owner_agent_did: Option<String>,
+    workspace_owner_node_did: Option<String>,
     workspace_seal_hash: Option<String>,
 }
 
@@ -258,10 +258,10 @@ struct NativeExecutorView {
 #[derive(Debug, Clone, Serialize)]
 struct ChildRequestView {
     request_id: String,
-    agent_did: String,
+    node_did: String,
     session_id: String,
     state: String,
-    behavior_id: String,
+    agent_id: String,
     created_at: Option<String>,
     caused_by_parent_tool_call_id: Option<String>,
 }
@@ -306,14 +306,14 @@ async fn load_request_show_snapshot(
         .collect::<Result<Vec<_>, _>>()?;
 
     let request_terminal = canonical_request.is_terminal();
-    let request_agent_did = canonical_request.agent_did.unwrap_or_default();
-    let blocked = gents::blocked_turn::blocked_turn(&access, &request_agent_did, request_id)
+    let request_node_did = canonical_request.node_did.unwrap_or_default();
+    let blocked = gents::blocked_turn::blocked_turn(&access, &request_node_did, request_id)
         .await
         .unwrap_or_else(|error| {
             tracing::warn!(request_id, error = %format!("{error:#}"), "blocked turn unreadable");
             None
         });
-    let liveness = crate::commands::status::load_liveness_value(graphql, &request_agent_did).await;
+    let liveness = crate::commands::status::load_liveness_value(graphql, &request_node_did).await;
     let active_tool_calls = active_tool_call_keys(&liveness);
     let native_executors_available = liveness
         .get("active_native_executors_available")
@@ -420,8 +420,8 @@ fn request_show_request_query(request_id: &str, schema: &RequestShowSchema) -> S
         "_docID",
         "requester_did",
         "request_id",
-        "agent_did",
-        "behavior_id",
+        "node_did",
+        "agent_id",
         "session_id",
         "lifecycle_state",
         "backend_id",
@@ -447,7 +447,7 @@ fn request_show_request_query(request_id: &str, schema: &RequestShowSchema) -> S
         "caused_by_correlation",
         "caused_by_trigger_context",
         "caused_by_source_doc_id",
-        "subagent_depth",
+        "request_hop",
     ];
     append_optional_fields(
         &mut fields,
@@ -461,7 +461,7 @@ fn request_show_request_query(request_id: &str, schema: &RequestShowSchema) -> S
             "execution_lease_expires_at",
             "workspace_id",
             "workspace_authority",
-            "workspace_owner_agent_did",
+            "workspace_owner_node_did",
             "workspace_seal_hash",
         ],
     );
@@ -488,9 +488,9 @@ fn request_show_tool_calls_query(
         .context("request show missing physical identity")?;
     let scope = gents::session::session_scope_filter(
         request
-            .agent_did
+            .node_did
             .as_deref()
-            .context("request show missing principal")?,
+            .context("request show missing node")?,
         request
             .session_id
             .as_deref()
@@ -545,8 +545,8 @@ fn request_header_view(
 ) -> Result<RequestShowHeader> {
     Ok(RequestShowHeader {
         request_id: string_field_or_unknown(row, "request_id"),
-        agent_did: string_field_or_unknown(row, "agent_did"),
-        behavior_id: string_field_or_unknown(row, "behavior_id"),
+        node_did: string_field_or_unknown(row, "node_did"),
+        agent_id: string_field_or_unknown(row, "agent_id"),
         session_id: string_field_or_unknown(row, "session_id"),
         lifecycle_state: string_field_or_unknown(row, "lifecycle_state"),
         backend_id: string_field(row, "backend_id"),
@@ -578,7 +578,7 @@ fn request_header_view(
         caused_by_source_doc_id: string_field(row, "caused_by_source_doc_id"),
         workspace_id: string_field(row, "workspace_id"),
         workspace_authority: string_field(row, "workspace_authority"),
-        workspace_owner_agent_did: string_field(row, "workspace_owner_agent_did"),
+        workspace_owner_node_did: string_field(row, "workspace_owner_node_did"),
         workspace_seal_hash: string_field(row, "workspace_seal_hash"),
     })
 }
@@ -789,10 +789,10 @@ fn backgrounded_tool_view(tool: &RequestToolCallView) -> BackgroundedToolView {
 fn child_request_view(row: &Value) -> ChildRequestView {
     ChildRequestView {
         request_id: string_field_or_unknown(row, "request_id"),
-        agent_did: string_field_or_unknown(row, "agent_did"),
+        node_did: string_field_or_unknown(row, "node_did"),
         session_id: string_field_or_unknown(row, "session_id"),
         state: string_field_or_unknown(row, "lifecycle_state"),
-        behavior_id: string_field_or_unknown(row, "behavior_id"),
+        agent_id: string_field_or_unknown(row, "agent_id"),
         created_at: string_field(row, "created_at"),
         caused_by_parent_tool_call_id: string_field(row, "caused_by_parent_tool_call_id"),
     }
@@ -920,8 +920,8 @@ fn render_request_show_text(
     let request = &snapshot.request;
     lines.push(format!("Request {}", request.request_id));
     lines.push(format!("state: {}", request.lifecycle_state));
-    lines.push(format!("agent_did: {}", request.agent_did));
-    lines.push(format!("behavior_id: {}", request.behavior_id));
+    lines.push(format!("node_did: {}", request.node_did));
+    lines.push(format!("agent_id: {}", request.agent_id));
     lines.push(format!("session_id: {}", request.session_id));
     push_option_line(&mut lines, "backend_id", request.backend_id.as_deref());
     push_option_line(
@@ -971,8 +971,8 @@ fn render_request_show_text(
         }
         lines.push(line);
         if let (Some(profile), Some(switch)) = (&blocked.profile, &blocked.switch_command) {
-            let users = blocked.behaviors_on_profile.len();
-            let noun = if users == 1 { "behavior" } else { "behaviors" };
+            let users = blocked.agents_on_profile.len();
+            let noun = if users == 1 { "agent" } else { "agents" };
             lines.push(format!(
                 "  profile {profile} (used by {users} {noun}); switch: {switch}"
             ));
@@ -1096,8 +1096,8 @@ fn render_request_show_text(
     } else {
         for child in &snapshot.child_requests {
             lines.push(format!(
-                "  - {} state={} behavior_id={} agent_did={} session_id={}",
-                child.request_id, child.state, child.behavior_id, child.agent_did, child.session_id
+                "  - {} state={} agent_id={} node_did={} session_id={}",
+                child.request_id, child.state, child.agent_id, child.node_did, child.session_id
             ));
             push_option_line(
                 &mut lines,
@@ -1241,8 +1241,8 @@ async fn fetch_interrupt_request_row(
                 limit: 1
             ) {{
                 request_id
-                agent_did
-                behavior_id
+                node_did
+                agent_id
                 session_id
                 lifecycle_state
                 failure_reason
@@ -1313,8 +1313,8 @@ fn request_interrupt_summary(
         .unwrap_or_default();
     json!({
         "request_id": row.request_id,
-        "agent_did": nonempty_owned(row.agent_did.as_deref()),
-        "behavior_id": nonempty_owned(row.behavior_id.as_deref()),
+        "node_did": nonempty_owned(row.node_did.as_deref()),
+        "agent_id": nonempty_owned(row.agent_id.as_deref()),
         "session_id": nonempty_owned(row.session_id.as_deref()),
         "lifecycle_state": lifecycle_state,
         "failure_reason": nonempty_owned(row.failure_reason.as_deref()),
@@ -1398,10 +1398,10 @@ async fn request_resend(args: RequestResendArgs) -> Result<()> {
             stale.failure_reason.as_deref().unwrap_or("<missing>")
         );
     }
-    let stale_agent_did = stale
-        .agent_did
+    let stale_node_did = stale
+        .node_did
         .as_deref()
-        .context("stale request has no agent_did")?;
+        .context("stale request has no node_did")?;
     let stale_content = stale
         .content
         .as_deref()
@@ -1411,13 +1411,13 @@ async fn request_resend(args: RequestResendArgs) -> Result<()> {
         .as_deref()
         .context("stale request has no _docID")?;
     let valid_until = Some(chrono::Utc::now() + chrono::Duration::minutes(5));
-    ensure_local_request_signer(args.home.as_deref(), stale_agent_did)?;
+    ensure_local_request_signer(args.home.as_deref(), stale_node_did)?;
     let submitted = create_agent_request(
         &graphql,
-        stale_agent_did,
+        stale_node_did,
         stale_content,
         None,
-        stale.behavior_id.as_deref(),
+        stale.agent_id.as_deref(),
         RequestSubmitOptions {
             caused_by_source_doc_id: None,
             input: stale.input.clone(),
@@ -1432,8 +1432,8 @@ async fn request_resend(args: RequestResendArgs) -> Result<()> {
     let request_summary = json!({
         "request_id": submitted.request_id,
         "session_id": submitted.session_id,
-        "agent_did": submitted.agent_did,
-        "behavior_id": submitted.behavior_id,
+        "node_did": submitted.node_did,
+        "agent_id": submitted.agent_id,
         "retry_parent_request": stale_id,
         "retry_root_request": stale.retry_root_request,
     });
@@ -1474,9 +1474,9 @@ mod tests {
             request: crate::request_helpers::CliRequestMetadata {
                 request_doc_id: "request-doc".into(),
                 request_id: "request".into(),
-                agent_did: "did:key:agent".into(),
+                node_did: "did:key:agent".into(),
                 requester_did: Some("did:key:requester".into()),
-                behavior_id: Some("behavior".into()),
+                agent_id: Some("agent".into()),
                 session_id: "session".into(),
                 lifecycle_state: RequestLifecycleState::Completed,
                 failure_reason: None,
@@ -1514,7 +1514,7 @@ mod tests {
                 provider: "claude-subscription".into(),
             }),
             profile: Some("main".into()),
-            behaviors_on_profile: vec!["x".into(), "y".into()],
+            agents_on_profile: vec!["x".into(), "y".into()],
             resets_at,
             switch_command: Some("gents config profile set-account main".into()),
         }
@@ -1538,7 +1538,7 @@ mod tests {
         );
         assert!(
             text.contains(
-                "profile main (used by 2 behaviors); switch: gents config profile set-account main"
+                "profile main (used by 2 agents); switch: gents config profile set-account main"
             ),
             "{text}"
         );
@@ -1646,8 +1646,8 @@ mod tests {
     fn request_show_json_retains_typed_input_and_aggregate_budget() {
         let request = json!({
             "request_id": "request-one",
-            "agent_did": "did:key:agent",
-            "behavior_id": "default",
+            "node_did": "did:key:agent",
+            "agent_id": "default",
             "session_id": "session-one",
             "lifecycle_state": "pending",
             "input": {"selected_skill_ids":["review"]},
@@ -1670,8 +1670,8 @@ mod tests {
     fn request_show_json_retains_null_aggregate_budget_key() {
         let request = json!({
             "request_id": "request-one",
-            "agent_did": "did:key:agent",
-            "behavior_id": "default",
+            "node_did": "did:key:agent",
+            "agent_id": "default",
             "session_id": "session-one",
             "lifecycle_state": "pending",
         });

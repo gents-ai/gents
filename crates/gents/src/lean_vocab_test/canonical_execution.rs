@@ -119,7 +119,7 @@ pub(crate) struct LeanCanonicalExecutionSeed {
     pub(crate) title_binding: Option<LeanCanonicalTitleBinding>,
     pub(crate) request_id: u64,
     pub(crate) session_id: u64,
-    pub(crate) principal: u64,
+    pub(crate) node_did: u64,
     pub(crate) lease: LeanRequestExecutionWorld,
     pub(crate) transcript_session_id: u64,
     pub(crate) next_sequence: u64,
@@ -136,7 +136,7 @@ pub(crate) struct LeanCanonicalTitleBinding {
     pub(crate) logical_request: u64,
     pub(crate) parent_physical: u64,
     pub(crate) parent_logical: u64,
-    pub(crate) agent: u64,
+    pub(crate) node: u64,
     pub(crate) session: u64,
     pub(crate) authenticated: bool,
 }

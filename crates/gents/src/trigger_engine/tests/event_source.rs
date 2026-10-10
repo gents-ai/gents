@@ -368,10 +368,10 @@ fn resolved_event_trigger_with_filter(
     }
 }
 
-fn event_test_behavior() -> Arc<ResolvedBehavior> {
-    static BEHAVIOR: std::sync::OnceLock<Arc<ResolvedBehavior>> = std::sync::OnceLock::new();
+fn event_test_behavior() -> Arc<ResolvedAgent> {
+    static BEHAVIOR: std::sync::OnceLock<Arc<ResolvedAgent>> = std::sync::OnceLock::new();
     BEHAVIOR
-        .get_or_init(|| integration_test_behavior("general"))
+        .get_or_init(|| integration_test_agent("general"))
         .clone()
 }
 
@@ -393,7 +393,7 @@ fn snapshot_with_event_triggers(
         event_triggers: triggers,
         ..Default::default()
     })
-    .with_principal(stub_principal());
+    .with_node(stub_principal());
     Arc::new(resolved.activate(generation, HashMap::new()))
 }
 
@@ -403,18 +403,18 @@ async fn persist_event_bindings(
 ) {
     let access = crate::config_client::ConfigAccess::Local(node.clone());
     for trigger in snapshot.active_event_triggers().values() {
-        let behavior = snapshot.behavior(&trigger.task.behavior_id).unwrap();
-        let owner = behavior.agent_did();
+        let behavior = snapshot.agent(&trigger.task.agent_id).unwrap();
+        let owner = behavior.node_did();
         access.transact("test.event_binding", |txn| Box::pin(async move {
             txn.execute_with_variables(
                 "mutation($input:EventSourceMutationInputArg!){create_EventSource(input:$input){_docID}}",
-                &serde_json::json!({"input":{"agent_did":owner,"event_source_id":trigger.trigger_id,
+                &serde_json::json!({"input":{"node_did":owner,"event_source_id":trigger.trigger_id,
                     "source_collection":trigger.source_collection,"event_kind":"created",
                     "filter":trigger.filter,"correlation_field":trigger.correlation_field}}),
             ).await?;
             txn.execute_with_variables(
                 "mutation($input:TriggerMutationInputArg!){create_Trigger(input:$input){_docID}}",
-                &serde_json::json!({"input":{"agent_did":owner,"trigger_id":trigger.trigger_id,
+                &serde_json::json!({"input":{"node_did":owner,"trigger_id":trigger.trigger_id,
                     "task_id":trigger.task_id,"enabled":true,"concurrency":trigger.concurrency,
                     "source":{"kind":"event","event_source_id":trigger.trigger_id}}}),
             ).await?;
@@ -429,7 +429,7 @@ async fn admit_observed_event(
 ) -> FireResult {
     use gents_protocol::trigger_delivery::{FireIdentity, TriggerFire};
     let identity = FireIdentity {
-        owner_did: event_test_behavior().agent_did().to_owned(),
+        owner_did: event_test_behavior().node_did().to_owned(),
         trigger_id: intent.trigger_id.clone().unwrap(),
         source_collection: intent.event_vars["source_collection"]
             .as_str()
@@ -455,7 +455,7 @@ async fn admit_observed_event(
         attempt: None,
         created_at: "2030-01-01T00:00:00Z".into(),
     };
-    let mutation = format!("mutation {{create_AgentRequest(input: {{request_id: \"{}\", agent_did: \"{}\", session_id: \"{}\", behavior_id: \"general\", content: \"fixture delivery\", purpose: \"normal\", lifecycle_state: \"pending\", created_at: \"2030-01-01T00:00:00Z\"}}) {{_docID}}}}",
+    let mutation = format!("mutation {{create_AgentRequest(input: {{request_id: \"{}\", node_did: \"{}\", session_id: \"{}\", agent_id: \"general\", content: \"fixture delivery\", purpose: \"normal\", lifecycle_state: \"pending\", created_at: \"2030-01-01T00:00:00Z\"}}) {{_docID}}}}",
         escape_graphql_string(&fire.request_id), escape_graphql_string(&fire.identity.owner_did), escape_graphql_string(&fire.session_id));
     crate::config_client::ConfigAccess::Local(node.clone())
         .transact("test.event_admission", |txn| {
@@ -706,7 +706,7 @@ async fn a_callback_result_fires_its_bindings_event_source_once() {
                     result_id: format!("res-{invocation_id}"),
                     invocation_id: invocation_id.to_string(),
                     binding_id: Some(binding_id.to_string()),
-                    owner_agent_did: "did:key:zWriter".to_string(),
+                    owner_node_did: "did:key:zWriter".to_string(),
                     workspace_id: None,
                     work_unit_id: None,
                     caused_by_correlation: None,
@@ -836,14 +836,14 @@ async fn per_group_timeout_uses_durable_first_seen_clock() {
         ..resolved_event_trigger("durable-group-trigger", "DurableGroupMember", task)
     };
     let (group_key, trigger_config_key) =
-        EventSource::group_state_keys(event_test_behavior().agent_did(), &trigger, "run-old");
+        EventSource::group_state_keys(event_test_behavior().node_did(), &trigger, "run-old");
     let first_seen_at =
         (Utc::now() - ChronoDuration::seconds(120)).to_rfc3339_opts(SecondsFormat::Millis, true);
     let mutation = format!(
         r#"mutation {{
             create_EventGroupState(input: {{
                 group_key: "{}"
-                agent_did: "{owner}"
+                node_did: "{owner}"
                 consumer: {{kind:"trigger",trigger_id:"durable-group-trigger"}}
                 correlation: "run-old"
                 consumer_config_key: "{}"
@@ -853,7 +853,7 @@ async fn per_group_timeout_uses_durable_first_seen_clock() {
         escape_graphql_string(&group_key),
         escape_graphql_string(&trigger_config_key),
         escape_graphql_string(&first_seen_at),
-        owner = escape_graphql_string(event_test_behavior().agent_did()),
+        owner = escape_graphql_string(event_test_behavior().node_did()),
     );
     let response = node.execute(&mutation).await;
     assert!(!response.has_errors(), "{:#?}", response.errors);
@@ -1252,19 +1252,19 @@ fn group_state_identity_changes_only_with_membership_definition() {
         ..resolved_event_trigger("group-trigger", "GroupMember", task)
     };
     let initial =
-        EventSource::group_state_keys(event_test_behavior().agent_did(), &trigger, "run-a");
+        EventSource::group_state_keys(event_test_behavior().node_did(), &trigger, "run-a");
 
     trigger.task.prompt_template = "changed prompt".into();
     trigger.expected_count = Some(3);
     assert_eq!(
-        EventSource::group_state_keys(event_test_behavior().agent_did(), &trigger, "run-a"),
+        EventSource::group_state_keys(event_test_behavior().node_did(), &trigger, "run-a"),
         initial,
         "task and policy changes must not restart a group's first-seen clock",
     );
 
     trigger.filter = Some(r#"{ kind: { _eq: "include" } }"#.into());
     assert_ne!(
-        EventSource::group_state_keys(event_test_behavior().agent_did(), &trigger, "run-a"),
+        EventSource::group_state_keys(event_test_behavior().node_did(), &trigger, "run-a"),
         initial,
         "membership filter changes must use fresh recovery state",
     );
@@ -1577,7 +1577,7 @@ async fn create_event_trigger_doc(
     task_id: &str,
     source_collection: &str,
 ) {
-    let input = serde_json::json!({"agent_did":event_test_behavior().agent_did(),"trigger_id":trigger_id,"task_id":task_id,"source":{"kind":"event","event_source_id":source_collection},"enabled":true,"concurrency":"serial","fire_count":0});
+    let input = serde_json::json!({"node_did":event_test_behavior().node_did(),"trigger_id":trigger_id,"task_id":task_id,"source":{"kind":"event","event_source_id":source_collection},"enabled":true,"concurrency":"serial","fire_count":0});
     crate::config_client::ConfigAccess::transact_local(node, None, "test.trigger_fixture", |txn| {
         let input = &input;
         Box::pin(async move {
@@ -1595,8 +1595,8 @@ async fn create_event_trigger_doc(
 
 async fn observed_trigger(node: &defra_node::EmbeddedNode, id: &str) -> serde_json::Value {
     let query = format!(
-        "{{Trigger(filter:{{agent_did:{{_eq:\"{}\"}},trigger_id:{{_eq:\"{}\"}}}},limit:2){{task_id source enabled concurrency last_status last_error last_attempt_at last_fired_source_doc_id fire_count}}}}",
-        escape_graphql_string(event_test_behavior().agent_did()),
+        "{{Trigger(filter:{{node_did:{{_eq:\"{}\"}},trigger_id:{{_eq:\"{}\"}}}},limit:2){{task_id source enabled concurrency last_status last_error last_attempt_at last_fired_source_doc_id fire_count}}}}",
+        escape_graphql_string(event_test_behavior().node_did()),
         escape_graphql_string(id)
     );
     let response = node.execute(&query).await;
@@ -1858,7 +1858,7 @@ async fn event_source_on_result_writes_runtime_fields_on_skipped_or_errored() {
     // exactly the path the `on_result` closure takes internally.
     EventSource::spawn_runtime_field_write(
         node.clone(),
-        event_test_behavior().agent_did().to_owned(),
+        event_test_behavior().node_did().to_owned(),
         trigger_id.clone(),
         source_doc_id.clone(),
         FireResult::Errored {

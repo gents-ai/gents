@@ -6,18 +6,18 @@ use crate::oauth_credential::ServingAccount;
 
 use super::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
 
-/// Every profile of `agent_did` in this transaction's snapshot.
+/// Every profile of `node_did` in this transaction's snapshot.
 pub async fn list_inference_profiles_in_txn(
     txn: &super::ConfigApplyTxn<'_>,
-    agent_did: &str,
+    node_did: &str,
 ) -> Result<Vec<InferenceProfile>> {
     let fields = super::config_projection(Collection::InferenceProfile, None)?
         .0
         .join(" ");
     let response = txn
         .execute(&format!(
-            r#"{{ InferenceProfile(filter: {{ agent_did: {{ _eq: "{}" }} }}) {{ {fields} }} }}"#,
-            crate::graphql::escape_graphql_string(agent_did)
+            r#"{{ InferenceProfile(filter: {{ node_did: {{ _eq: "{}" }} }}) {{ {fields} }} }}"#,
+            crate::graphql::escape_graphql_string(node_did)
         ))
         .await?;
     gents_protocol::graphql::graphql_rows_from_response(&response, "InferenceProfile")
@@ -47,7 +47,7 @@ pub async fn write_inference_profile_document(
                 super::desired_state::read_record(
                     txn,
                     Collection::InferenceProfile,
-                    &profile.agent_did,
+                    &profile.node_did,
                     &profile.profile_id,
                 )
                 .await?
@@ -58,30 +58,30 @@ pub async fn write_inference_profile_document(
         .await
 }
 
-/// The accounts a behavior's turns need: its profile's, then its context's
+/// The accounts a agent's turns need: its profile's, then its context's
 /// compaction profile's, the chain readiness walks. A profile or backend
 /// that is not stored is left out.
-pub async fn behavior_accounts(
+pub async fn agent_accounts(
     access: &ConfigAccess,
-    agent_did: &str,
-    behavior_id: &str,
+    node_did: &str,
+    agent_id: &str,
 ) -> Result<Vec<(String, ServingAccount)>> {
     let profile_backends = access
-        .transact("config.behavior_accounts", |txn| {
+        .transact("config.agent_accounts", |txn| {
             Box::pin(async move {
-                let behavior: crate::document_config::AgentBehavior =
-                    read(txn, Collection::AgentBehavior, agent_did, behavior_id)
+                let agent: crate::document_config::Agent =
+                    read(txn, Collection::Agent, node_did, agent_id)
                         .await?
-                        .with_context(|| format!("behavior {behavior_id:?} not found"))?;
-                let mut profile_ids = vec![behavior.inference_profile_id];
+                        .with_context(|| format!("agent {agent_id:?} not found"))?;
+                let mut profile_ids = vec![agent.inference_profile_id];
                 let context: Option<crate::document_config::AgentContext> =
-                    match behavior.context_id.as_deref() {
-                        Some(id) => read(txn, Collection::AgentContext, agent_did, id).await?,
+                    match agent.context_id.as_deref() {
+                        Some(id) => read(txn, Collection::AgentContext, node_did, id).await?,
                         None => None,
                     };
                 let compaction: Option<crate::document_config::CompactionConfig> =
                     match context.and_then(|context| context.compaction_id) {
-                        Some(id) => read(txn, Collection::Compaction, agent_did, &id).await?,
+                        Some(id) => read(txn, Collection::Compaction, node_did, &id).await?,
                         None => None,
                     };
                 if let Some(id) = compaction.and_then(|compaction| compaction.inference_profile_id)
@@ -91,18 +91,18 @@ pub async fn behavior_accounts(
                     }
                 }
                 let mut profile_backends = Vec::new();
-                for profile_id in profile_ids {
+                for profile_id in &profile_ids {
                     let profile: Option<InferenceProfile> =
-                        read(txn, Collection::InferenceProfile, agent_did, &profile_id).await?;
+                        read(txn, Collection::InferenceProfile, node_did, profile_id).await?;
                     if let Some(profile) = profile {
-                        profile_backends.push((profile_id, profile.backend_id));
+                        profile_backends.push((profile_id.clone(), profile.backend_id));
                     }
                 }
                 Ok(profile_backends)
             })
         })
         .await?;
-    let serving = super::serving_accounts(access, agent_did).await?;
+    let serving = super::serving_accounts(access, node_did).await?;
     Ok(profile_backends
         .into_iter()
         .filter_map(|(profile_id, backend_id)| {
@@ -116,10 +116,10 @@ pub async fn behavior_accounts(
 async fn read<T: serde::de::DeserializeOwned>(
     txn: &super::ConfigApplyTxn<'_>,
     collection: Collection,
-    agent_did: &str,
+    node_did: &str,
     id: &str,
 ) -> Result<Option<T>> {
-    super::desired_state::read_record(txn, collection, agent_did, id)
+    super::desired_state::read_record(txn, collection, node_did, id)
         .await?
         .map(|(_, value)| {
             serde_json::from_value(value).with_context(|| format!("decoding scoped {collection:?}"))
@@ -140,7 +140,7 @@ mod tests {
         crate::ensure_runtime_schemas(&node).await?;
         let access = ConfigAccess::Local(node);
         for owner in ["did:key:owner", "did:key:other"] {
-            let backend = json!({"agent_did":owner,"backend_id":"local","name":"Local",
+            let backend = json!({"node_did":owner,"backend_id":"local","name":"Local",
                 "provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:8000/v1",
                 "auth":{"kind":"unauthenticated"}});
             let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
@@ -160,12 +160,12 @@ mod tests {
                 .await?;
         }
         let mut initial: InferenceProfile = serde_json::from_value(json!({
-            "agent_did":"did:key:owner","profile_id":"same","backend_id":"local",
+            "node_did":"did:key:owner","profile_id":"same","backend_id":"local",
             "model_name":"exact-model","reasoning_effort":"high","max_output_tokens":1234,"tags":["old"]
         }))?;
         let first_id = write_inference_profile_document(&access, &initial).await?;
         let mut foreign = initial.clone();
-        foreign.agent_did = "did:key:other".to_owned();
+        foreign.node_did = "did:key:other".to_owned();
         assert_ne!(
             write_inference_profile_document(&access, &foreign).await?,
             first_id
@@ -186,7 +186,7 @@ mod tests {
                         let value = super::super::read_desired_state_document_in_txn(
                             txn,
                             Collection::InferenceProfile,
-                            &expected.agent_did,
+                            &expected.node_did,
                             &expected.profile_id,
                         )
                         .await?
@@ -227,7 +227,7 @@ mod tests {
         let did = "did:key:z6MkTestProfileEvents";
         let node = Arc::new(EmbeddedNode::builder().build().await?);
         crate::ensure_runtime_schemas(&node).await?;
-        crate::ensure_agent_principal(&node, did).await?;
+        crate::ensure_node(&node, did).await?;
         let access = ConfigAccess::Local(node);
         let spec = crate::inference_setup::connection_spec(
             crate::inference_setup::InferenceProviderId::Anthropic,
@@ -235,13 +235,13 @@ mod tests {
             "",
         )?;
         let original = crate::InferenceBackend {
-            agent_did: did.to_owned(),
+            node_did: did.to_owned(),
             backend_id: "claude".into(),
             name: "Claude".into(),
             provider_kind: spec.provider_kind,
             openai_wire_api: spec.openai_wire_api,
             endpoint: spec.endpoint,
-            auth: crate::document_config::BackendAuth::PrincipalOAuth { account_ref: None },
+            auth: crate::document_config::BackendAuth::NodeOAuth { account_ref: None },
             connect_timeout_secs: None,
             discovery_timeout_secs: None,
             max_concurrent: None,
@@ -263,7 +263,7 @@ mod tests {
             ("compaction", b_backend.as_str()),
         ] {
             let profile: InferenceProfile = serde_json::from_value(json!({
-                "agent_did": did, "profile_id": profile_id, "backend_id": backend_id,
+                "node_did": did, "profile_id": profile_id, "backend_id": backend_id,
                 "model_name": "model-x",
             }))?;
             write_inference_profile_document(&access, &profile).await?;
@@ -362,12 +362,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn behavior_accounts_follow_profile_and_compaction() -> Result<()> {
+    async fn agent_accounts_follow_profile_and_compaction() -> Result<()> {
         use crate::oauth_credential::{set_account_enabled, store_sign_in, AccountState};
-        let did = "did:key:z6MkTestBehaviorAccounts";
+        let did = "did:key:z6MkTestAgentAccounts";
         let node = Arc::new(EmbeddedNode::builder().build().await?);
         crate::ensure_runtime_schemas(&node).await?;
-        crate::ensure_agent_principal(&node, did).await?;
+        crate::ensure_node(&node, did).await?;
         let access = ConfigAccess::Local(node);
         let spec = crate::inference_setup::connection_spec(
             crate::inference_setup::InferenceProviderId::Anthropic,
@@ -375,9 +375,9 @@ mod tests {
             "",
         )?;
         let original = json!({
-            "agent_did": did, "backend_id": "claude", "name": "Claude",
+            "node_did": did, "backend_id": "claude", "name": "Claude",
             "provider_kind": spec.provider_kind, "endpoint": spec.endpoint,
-            "auth": {"kind": "principal_oauth"},
+            "auth": {"kind": "node_oauth"},
         });
         super::super::write_inference_backend_document(&access, &serde_json::from_value(original)?)
             .await?;
@@ -389,12 +389,12 @@ mod tests {
             b.credential.account_ref.as_deref().unwrap()
         );
         let documents = [
-            (Collection::InferenceProfile, json!({"agent_did": did, "profile_id": "profile-a", "backend_id": "claude", "model_name": "model-x"})),
-            (Collection::InferenceProfile, json!({"agent_did": did, "profile_id": "profile-b", "backend_id": b_backend, "model_name": "model-x"})),
-            (Collection::Compaction, json!({"agent_did": did, "compaction_id": "compaction-a", "inference_profile_id": "profile-a"})),
-            (Collection::AgentContext, json!({"agent_did": did, "context_id": "context-x", "compaction_id": "compaction-a"})),
-            (Collection::AgentBehavior, json!({"agent_did": did, "behavior_id": "behavior-x", "context_id": "context-x", "inference_profile_id": "profile-b"})),
-            (Collection::AgentBehavior, json!({"agent_did": did, "behavior_id": "behavior-y", "inference_profile_id": "profile-a"})),
+            (Collection::InferenceProfile, json!({"node_did": did, "profile_id": "profile-a", "backend_id": "claude", "model_name": "model-x"})),
+            (Collection::InferenceProfile, json!({"node_did": did, "profile_id": "profile-b", "backend_id": b_backend, "model_name": "model-x"})),
+            (Collection::Compaction, json!({"node_did": did, "compaction_id": "compaction-a", "inference_profile_id": "profile-a"})),
+            (Collection::AgentContext, json!({"node_did": did, "context_id": "context-x", "compaction_id": "compaction-a"})),
+            (Collection::Agent, json!({"node_did": did, "agent_id": "agent-x", "context_id": "context-x", "inference_profile_id": "profile-b"})),
+            (Collection::Agent, json!({"node_did": did, "agent_id": "agent-y", "inference_profile_id": "profile-a"})),
         ]
         .into_iter()
         .map(|(collection, value)| DesiredStateApplyDocument {
@@ -405,7 +405,7 @@ mod tests {
         .collect();
         let plan = DesiredStateApplyPlan::new(documents)?;
         access
-            .transact("test.behavior_accounts", |txn| {
+            .transact("test.agent_accounts", |txn| {
                 let plan = &plan;
                 Box::pin(async move {
                     super::super::apply_desired_state_plan(txn, plan)
@@ -426,7 +426,7 @@ mod tests {
         };
 
         assert_eq!(
-            behavior_accounts(&access, did, "behavior-x").await?,
+            agent_accounts(&access, did, "agent-x").await?,
             [
                 expected("profile-b", "label-b", AccountState::Enabled),
                 expected("profile-a", "Claude", AccountState::Enabled),
@@ -434,16 +434,14 @@ mod tests {
         );
         set_account_enabled(&access, did, &b.credential.credential_id, false).await?;
         assert_eq!(
-            behavior_accounts(&access, did, "behavior-x").await?[0],
+            agent_accounts(&access, did, "agent-x").await?[0],
             expected("profile-b", "label-b", AccountState::Disabled)
         );
         assert_eq!(
-            behavior_accounts(&access, did, "behavior-y").await?,
+            agent_accounts(&access, did, "agent-y").await?,
             [expected("profile-a", "Claude", AccountState::Enabled)]
         );
-        assert!(behavior_accounts(&access, did, "behavior-unknown")
-            .await
-            .is_err());
+        assert!(agent_accounts(&access, did, "agent-unknown").await.is_err());
         Ok(())
     }
 }

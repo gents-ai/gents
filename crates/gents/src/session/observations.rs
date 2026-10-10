@@ -10,13 +10,13 @@ use anyhow::Context;
 /// advancement. The pure mirror of Lean `AgentSession.RequestFact`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionRequestFact {
-    pub agent_did: String,
+    pub node_did: String,
     pub session_id: String,
     /// Exact requester scope; `None` is its own scope, not a wildcard.
     pub requester_did: Option<String>,
-    pub behavior_id: String,
+    pub agent_id: String,
     pub created_at: String,
-    /// The signed causal hop (`subagent_depth`).
+    /// The signed causal hop (`request_hop`).
     pub hop: u32,
     pub observed: gents_protocol::session::SessionRequestObservation,
 }
@@ -65,11 +65,11 @@ fn incoming_is_canonical_latest(
 }
 
 fn scoped_request_filter(
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     requester_scope: Option<Option<&str>>,
 ) -> String {
-    let agent_did = escape_graphql_string(agent_did);
+    let node_did = escape_graphql_string(node_did);
     let session_id = escape_graphql_string(session_id);
     let requester_filter = if requester_scope.is_none() {
         String::new()
@@ -83,7 +83,7 @@ fn scoped_request_filter(
         r#", requester_did: { _eq: null }"#.to_string()
     };
     format!(
-        r#"filter: {{ agent_did: {{ _eq: "{agent_did}" }}, session_id: {{ _eq: "{session_id}" }}, purpose: {{ _eq: "normal" }}{requester_filter} }}"#
+        r#"filter: {{ node_did: {{ _eq: "{node_did}" }}, session_id: {{ _eq: "{session_id}" }}, purpose: {{ _eq: "normal" }}{requester_filter} }}"#
     )
 }
 
@@ -97,7 +97,7 @@ pub(crate) async fn load_scoped_request_facts_in_txn(
 ) -> Result<Vec<SessionRequestFact>> {
     load_request_facts_in_txn(
         txn,
-        &session.agent_did,
+        &session.node_did,
         &session.session_id,
         if all_requesters {
             None
@@ -110,18 +110,18 @@ pub(crate) async fn load_scoped_request_facts_in_txn(
 
 async fn load_request_facts_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     requester_scope: Option<Option<&str>>,
 ) -> Result<Vec<SessionRequestFact>> {
     let query = format!(
         r#"{{
             AgentRequest({}) {{
-                _docID request_id agent_did session_id requester_did behavior_id created_at lifecycle_state
-                subagent_depth
+                _docID request_id node_did session_id requester_did agent_id created_at lifecycle_state
+                request_hop
             }}
         }}"#,
-        scoped_request_filter(agent_did, session_id, requester_scope)
+        scoped_request_filter(node_did, session_id, requester_scope)
     );
     let response = txn.execute(&query).await?;
     let rows: Vec<serde_json::Value> = serde_json::from_value(
@@ -141,10 +141,10 @@ async fn load_request_facts_in_txn(
             )
             .context("invalid request created_at")?;
             Ok(SessionRequestFact {
-                agent_did: row
-                    .get("agent_did")
+                node_did: row
+                    .get("node_did")
                     .and_then(serde_json::Value::as_str)
-                    .context("request row omitted agent_did")?
+                    .context("request row omitted node_did")?
                     .to_string(),
                 session_id: row
                     .get("session_id")
@@ -155,10 +155,10 @@ async fn load_request_facts_in_txn(
                     .get("requester_did")
                     .and_then(serde_json::Value::as_str)
                     .map(str::to_string),
-                behavior_id: row
-                    .get("behavior_id")
+                agent_id: row
+                    .get("agent_id")
                     .and_then(serde_json::Value::as_str)
-                    .context("request row omitted behavior_id")?
+                    .context("request row omitted agent_id")?
                     .to_string(),
                 created_at: row
                     .get("created_at")
@@ -166,7 +166,7 @@ async fn load_request_facts_in_txn(
                     .context("request row omitted created_at")?
                     .to_string(),
                 hop: row
-                    .get("subagent_depth")
+                    .get("request_hop")
                     .and_then(serde_json::Value::as_u64)
                     .and_then(|hop| u32::try_from(hop).ok())
                     .unwrap_or(0),
@@ -215,24 +215,24 @@ pub(crate) fn session_current_hop(facts: &[SessionRequestFact]) -> u32 {
 /// cross-session cause climbs past it.
 pub(crate) async fn load_session_current_hop_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
 ) -> Result<u32> {
     Ok(session_current_hop(
-        &load_request_facts_in_txn(txn, agent_did, session_id, None).await?,
+        &load_request_facts_in_txn(txn, node_did, session_id, None).await?,
     ))
 }
 
 /// [`load_session_current_hop_in_txn`] in its own read transaction.
 pub(crate) async fn load_session_current_hop(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
 ) -> Result<u32> {
-    let (agent_did, session_id) = (agent_did.to_owned(), session_id.to_owned());
+    let (node_did, session_id) = (node_did.to_owned(), session_id.to_owned());
     crate::config_client::ConfigAccess::transact_local(node, None, "session.current_hop", |txn| {
-        let (agent_did, session_id) = (agent_did.clone(), session_id.clone());
-        Box::pin(async move { load_session_current_hop_in_txn(txn, &agent_did, &session_id).await })
+        let (node_did, session_id) = (node_did.clone(), session_id.clone());
+        Box::pin(async move { load_session_current_hop_in_txn(txn, &node_did, &session_id).await })
     })
     .await
 }
@@ -242,11 +242,11 @@ pub(crate) async fn load_session_current_hop(
 /// absent requester scope. Ordering uses parsed time then logical request ID.
 pub async fn load_latest_request_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     requester_scope: Option<Option<&str>>,
 ) -> Result<Option<SessionRequestFact>> {
-    let rows = load_request_facts_in_txn(txn, agent_did, session_id, requester_scope).await?;
+    let rows = load_request_facts_in_txn(txn, node_did, session_id, requester_scope).await?;
     let mut identities = std::collections::BTreeSet::new();
     let mut latest = None;
     for row in rows {
@@ -264,18 +264,18 @@ pub async fn load_latest_request_in_txn(
     Ok(latest)
 }
 
-/// Validate that `incoming` matches the session owner's scope and behavior,
+/// Validate that `incoming` matches the session owner's scope and agent,
 /// mirroring the Lean `advance` guard.
 fn validate_incoming_scope(
     session: &gents_protocol::session::AgentSession,
     incoming: &SessionRequestFact,
 ) -> Result<()> {
     anyhow::ensure!(
-        incoming.agent_did == session.agent_did
+        incoming.node_did == session.node_did
             && incoming.session_id == session.session_id
-            && incoming.behavior_id == session.behavior_id
+            && incoming.agent_id == session.agent_id
             && incoming.requester_did == session.requester_did,
-        "incoming request does not match the session owner/session/requester/behavior scope"
+        "incoming request does not match the session owner/session/requester/agent scope"
     );
     Ok(())
 }
@@ -304,7 +304,7 @@ pub(crate) async fn advance_session_request_observation_in_txn(
 ) -> Result<bool> {
     let session = load_agent_session_row_in_txn(
         txn,
-        &incoming.agent_did,
+        &incoming.node_did,
         &incoming.session_id,
         incoming.requester_did.as_deref(),
     )
@@ -338,13 +338,13 @@ pub(crate) async fn advance_session_request_observation_in_txn(
 
 /// Lifecycle/preview refresh inside the caller's transaction: reread the
 /// authoritative row by its exact physical `_docID` **and** logical
-/// `request_id`, validate the session scope/behavior and stored-observation
+/// `request_id`, validate the session scope/agent and stored-observation
 /// identity, and copy the observed state from the authoritative row. Event
 /// lifecycle payloads have no influence; a missing or mismatched row is a
 /// no-op, never an older-local-request fallback.
 pub(crate) async fn refresh_session_request_observation_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
-    agent_did: &str,
+    node_did: &str,
     requester_did: Option<&str>,
     session_id: &str,
     request_doc_id: &str,
@@ -352,7 +352,7 @@ pub(crate) async fn refresh_session_request_observation_in_txn(
     now: &str,
 ) -> Result<bool> {
     let Some(session) =
-        load_agent_session_row_in_txn(txn, agent_did, session_id, requester_did).await?
+        load_agent_session_row_in_txn(txn, node_did, session_id, requester_did).await?
     else {
         return Ok(false);
     };
@@ -378,7 +378,7 @@ pub(crate) async fn refresh_session_request_observation_in_txn(
                 }},
                 limit: 2
             ) {{
-                _docID request_id agent_did session_id requester_did behavior_id created_at lifecycle_state
+                _docID request_id node_did session_id requester_did agent_id created_at lifecycle_state
             }}
         }}"#
     );
@@ -409,14 +409,14 @@ pub(crate) async fn refresh_session_request_observation_in_txn(
         )
         .context("decoding request lifecycle_state")?,
     };
-    let scope_ok = row.get("agent_did").and_then(serde_json::Value::as_str)
-        == Some(session.session.agent_did.as_str())
+    let scope_ok = row.get("node_did").and_then(serde_json::Value::as_str)
+        == Some(session.session.node_did.as_str())
         && row.get("session_id").and_then(serde_json::Value::as_str)
             == Some(session.session.session_id.as_str())
         && row.get("requester_did").and_then(serde_json::Value::as_str)
             == session.session.requester_did.as_deref()
-        && row.get("behavior_id").and_then(serde_json::Value::as_str)
-            == Some(session.session.behavior_id.as_str());
+        && row.get("agent_id").and_then(serde_json::Value::as_str)
+            == Some(session.session.agent_id.as_str());
     if !scope_ok {
         return Ok(false);
     }
@@ -437,7 +437,7 @@ pub(crate) async fn refresh_session_request_observation_in_txn(
 
 pub(crate) async fn update_session_title_with_source(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     requester_did: Option<&str>,
     session_id: &str,
     title: &str,
@@ -455,7 +455,7 @@ pub(crate) async fn update_session_title_with_source(
             Box::pin(async move {
                 apply_title_in_txn(
                     txn,
-                    agent_did,
+                    node_did,
                     requester_did,
                     session_id,
                     Some(&title),
@@ -477,7 +477,7 @@ pub(crate) async fn update_session_title_with_source(
 /// are preserved; activity advances monotonically.
 pub async fn apply_title_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
-    agent_did: &str,
+    node_did: &str,
     requester_did: Option<&str>,
     session_id: &str,
     title: Option<&str>,
@@ -485,8 +485,7 @@ pub async fn apply_title_in_txn(
     now: &str,
 ) -> Result<()> {
     chrono::DateTime::parse_from_rfc3339(now).context("invalid title update timestamp")?;
-    let Some(row) =
-        load_agent_session_row_in_txn(txn, agent_did, session_id, requester_did).await?
+    let Some(row) = load_agent_session_row_in_txn(txn, node_did, session_id, requester_did).await?
     else {
         anyhow::bail!("updating title: no AgentSession for session_id={session_id}");
     };
@@ -527,11 +526,11 @@ pub async fn apply_title_in_txn(
 
 pub(crate) async fn load_recent_titles_for_agent(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     exclude_session_id: &str,
     limit: usize,
 ) -> Result<Vec<String>> {
-    let escaped_agent_did = escape_graphql_string(agent_did);
+    let escaped_node_did = escape_graphql_string(node_did);
     let escaped_session_id = escape_graphql_string(exclude_session_id);
     // Activity lives in the observation JSON. Rank the complete owner scope
     // before limiting; a creation-time window can omit recently active sessions.
@@ -539,7 +538,7 @@ pub(crate) async fn load_recent_titles_for_agent(
         r#"{{
             AgentSession(
                 filter: {{
-                    agent_did: {{ _eq: "{escaped_agent_did}" }},
+                    node_did: {{ _eq: "{escaped_node_did}" }},
                     session_id: {{ _ne: "{escaped_session_id}" }}
                 }}
             ) {{
@@ -551,8 +550,8 @@ pub(crate) async fn load_recent_titles_for_agent(
     let resp = node.execute(&query).await;
     if resp.has_errors() {
         anyhow::bail!(
-            "loading recent titles for agent_did={}: {:?}",
-            agent_did,
+            "loading recent titles for node_did={}: {:?}",
+            node_did,
             resp.errors
         );
     }
@@ -597,12 +596,11 @@ pub(crate) async fn load_recent_titles_for_agent(
 
 pub(crate) async fn session_needs_generated_title(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     requester_did: Option<&str>,
     session_id: &str,
 ) -> Result<bool> {
-    let Some(session) = load_agent_session(node, agent_did, session_id, requester_did).await?
-    else {
+    let Some(session) = load_agent_session(node, node_did, session_id, requester_did).await? else {
         return Ok(false);
     };
     validate_agent_session(&session)?;
@@ -654,8 +652,8 @@ mod observation_refresh_tests {
                 ] {
                     txn.execute_with_variables(
                         "mutation($input: AgentRequestMutationInputArg!) { create_AgentRequest(input: $input) { _docID } }",
-                        &serde_json::json!({"input": {"request_id": id, "purpose": "normal", "agent_did": agent,
-                            "requester_did": requester, "session_id": "head-session", "behavior_id": "head-behavior",
+                        &serde_json::json!({"input": {"request_id": id, "purpose": "normal", "node_did": agent,
+                            "requester_did": requester, "session_id": "head-session", "agent_id": "head-agent",
                             "content": "prompt", "created_at": time, "lifecycle_state": "pending"}}),
                     ).await?;
                 }
@@ -684,8 +682,8 @@ mod observation_refresh_tests {
             .execute(
                 r#"mutation {
             create_AgentRequest(input: {
-                request_id: "refresh-request", purpose: "normal", agent_did: "did:test:refresh",
-                session_id: "refresh-session", behavior_id: "refresh-behavior",
+                request_id: "refresh-request", purpose: "normal", node_did: "did:test:refresh",
+                session_id: "refresh-session", agent_id: "refresh-agent",
                 content: "prompt", created_at: "2030-01-01T00:00:00Z",
                 lifecycle_state: "processing"
             }) { _docID }
@@ -698,7 +696,7 @@ mod observation_refresh_tests {
             |txn| Box::pin(async move {
                 let now = "2030-01-01T00:00:01Z";
                 crate::session::ensure_session_in_txn(
-                    &txn, "refresh-session", "did:test:refresh", "refresh-behavior",
+                    &txn, "refresh-session", "did:test:refresh", "refresh-agent",
                     None, None, None, now,
                 ).await?;
                 let owner = load_agent_session_row_in_txn(
@@ -740,9 +738,9 @@ mod observation_refresh_tests {
                     &serde_json::json!({"input": {
                         "request_id": "refresh-request",
                         "purpose": "normal",
-                        "agent_did": "did:test:refresh",
+                        "node_did": "did:test:refresh",
                         "session_id": "other-session",
-                        "behavior_id": "refresh-behavior",
+                        "agent_id": "refresh-agent",
                         "content": "foreign prompt",
                         "created_at": "2030-01-01T00:00:04Z",
                         "lifecycle_state": "failed"
@@ -793,10 +791,10 @@ mod session_hop_tests {
 
     fn fact(request_id: &str, created_at: &str, hop: u32) -> SessionRequestFact {
         SessionRequestFact {
-            agent_did: "did:test:agent".into(),
+            node_did: "did:test:agent".into(),
             session_id: "session".into(),
             requester_did: None,
-            behavior_id: "general".into(),
+            agent_id: "general".into(),
             created_at: created_at.into(),
             hop,
             observed: gents_protocol::session::SessionRequestObservation {

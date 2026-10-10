@@ -168,7 +168,7 @@ theorem T1_manual_unconditional
 
 /-- A missing/disabled trigger produces no work. A selected task goes through the
 same owned resolver as direct task and graph execution; resolution errors remain
-visible to the caller. `scope` is the principal owning this runtime snapshot. -/
+visible to the caller. `scope` is the node owning this runtime snapshot. -/
 def resolveDispatch (registry : Configuration.Registry) (scope : String)
     (snap : TriggerSnapshot) (intent : FireIntent) :
     Option (Except Configuration.ResolveError Configuration.ResolvedSessionConfig) :=
@@ -197,7 +197,7 @@ theorem event_dispatch_selects_configured_task (snap : TriggerSnapshot)
   simp [dispatch, hk, hi, ha]
 
 /-- Successful trigger execution has an owned, enabled Task and delegates its
-behavior to the canonical resolver. Trigger lineage cannot bypass task admission. -/
+agent to the canonical resolver. Trigger lineage cannot bypass task admission. -/
 theorem resolveDispatch_ok_iff (registry : Configuration.Registry)
     (scope : String) (snap : TriggerSnapshot) (intent : FireIntent)
     (session : Configuration.ResolvedSessionConfig) :

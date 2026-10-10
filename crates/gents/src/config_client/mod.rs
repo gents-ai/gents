@@ -9,9 +9,9 @@
 //! optional `identity::Did`, and every statement executed inside that
 //! transaction carries it as the DefraDB ACP actor. Authorization remains at
 //! the node. Embedded CLI paths default to the node DID and signer. HTTP paths
-//! authenticate as the [`GraphqlEndpoint`] principal with a DefraDB bearer; a
-//! served home's node access control admits writes only from its own
-//! principal, so anonymous HTTP access is read-only.
+//! authenticate as the [`GraphqlEndpoint`]'s DID with a DefraDB bearer; a
+//! served home's node access control admits writes only from its own DID, so
+//! anonymous HTTP access is read-only.
 //!
 //! Write conventions (load-bearing — see `AGENTS.md`):
 //! - every interpolated value goes through
@@ -53,7 +53,7 @@ pub(crate) fn is_classified_transaction_conflict(error: &anyhow::Error) -> bool 
 
 pub mod patch;
 
-pub use agent_behavior::write_agent_behavior_document;
+pub use agent_behavior::write_agent_document;
 pub use common::{mint_recreate_identity, mint_recreate_identity_timestamp};
 #[cfg(test)]
 pub(crate) use desired_state::canonical_struct_fields;
@@ -75,7 +75,7 @@ pub use inference_backend::{
     write_inference_backend_document,
 };
 pub use inference_profile::{
-    behavior_accounts, list_inference_profiles_in_txn, write_inference_profile_document,
+    agent_accounts, list_inference_profiles_in_txn, write_inference_profile_document,
 };
 pub use profile_switch::{
     switch_candidates, switch_profile_account, SwitchCandidate, SwitchPlan, SwitchReceipt,
@@ -106,12 +106,11 @@ use futures::future::BoxFuture;
 use gents_protocol::graphql::GraphqlRequestOptions;
 use serde_json::{json, Value};
 
-/// A served node's HTTP GraphQL endpoint and the principal its requests act
-/// as.
+/// A served node's HTTP GraphQL endpoint and the DID its requests act as.
 ///
 /// A node with node access control enabled refuses anonymous writes, schema
-/// changes and P2P administration. Requests from an endpoint with a principal
-/// carry a short-lived DefraDB bearer signed by that principal's key, which
+/// changes and P2P administration. Requests from an endpoint with a DID carry
+/// a short-lived DefraDB bearer signed by that DID's key, which
 /// must be loaded in this process; minting fails instead of degrading to an
 /// anonymous request.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -138,7 +137,7 @@ impl GraphqlEndpoint {
         }
     }
 
-    /// Forward a caller's DefraDB bearer without minting a runtime-principal
+    /// Forward a caller's DefraDB bearer without minting a runtime node
     /// credential. DefraDB checks its signature, DID, audience and ACP; this
     /// endpoint never authenticates or widens the delegated authority.
     pub fn with_delegated_authorization(
@@ -207,7 +206,7 @@ impl GraphqlEndpoint {
     }
 }
 
-/// Serialized as its URL: the principal is an access decision, not output.
+/// Serialized as its URL: the acting DID is an access decision, not output.
 impl serde::Serialize for GraphqlEndpoint {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.serialize_str(&self.url)

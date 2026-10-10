@@ -38,9 +38,9 @@ impl RequestLifecycle {
     /// sweep idempotent across concurrent ticks and process restarts.
     pub async fn redrive_failed_background_wakeups(
         node: &EmbeddedNode,
-        agent_did: &str,
+        node_did: &str,
     ) -> Result<BackgroundWakeRedriveReport> {
-        let (candidates, successors, pending) = load_candidates(node, agent_did).await?;
+        let (candidates, successors, pending) = load_candidates(node, node_did).await?;
         let mut report = BackgroundWakeRedriveReport {
             scanned: candidates.len(),
             ..Default::default()
@@ -117,32 +117,32 @@ impl RequestLifecycle {
 
 async fn load_candidates(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
 ) -> Result<(
     Vec<AgentRequestRow>,
     Vec<AgentRequestRow>,
     Vec<AgentRequestRow>,
 )> {
-    let agent_did = escape_graphql_string(agent_did);
+    let node_did = escape_graphql_string(node_did);
     let response = node
         .execute(&format!(
             r#"{{
                 failed: AgentRequest(filter: {{
-                    agent_did: {{ _eq: "{agent_did}" }},
+                    node_did: {{ _eq: "{node_did}" }},
                     lifecycle_state: {{ _eq: "failed" }},
                     execution_origin: {{ _eq: "scheduled" }}
                 }}, order: [{{ terminalized_at: ASC }}, {{ request_id: ASC }}]) {{
-                    _docID request_id agent_did requester_did behavior_id session_id
+                    _docID request_id node_did requester_did agent_id session_id
                     retry_root_request input
-                    subagent_depth retry_count max_retries
+                    request_hop retry_count max_retries
                     terminalized_at
                 }}
                 successors: AgentRequest(filter: {{
-                    agent_did: {{ _eq: "{agent_did}" }},
+                    node_did: {{ _eq: "{node_did}" }},
                     retry_parent_request_doc_id: {{ _neq: null }}
                 }}) {{ request_id retry_parent_request_doc_id }}
                 pending: AgentRequest(filter: {{
-                    agent_did: {{ _eq: "{agent_did}" }},
+                    node_did: {{ _eq: "{node_did}" }},
                     lifecycle_state: {{ _eq: "pending" }}
                 }}) {{ request_id session_id requester_did input }}
             }}"#
@@ -174,16 +174,16 @@ fn required_i64(value: Option<i64>, field: &str) -> Result<i64> {
 
 fn validate_failed_wake(candidate: &AgentRequestRow) -> Result<()> {
     required_str(candidate.doc_id.as_deref(), "_docID")?;
-    required_str(candidate.agent_did.as_deref(), "agent_did")?;
-    required_str(candidate.behavior_id.as_deref(), "behavior_id")?;
+    required_str(candidate.node_did.as_deref(), "node_did")?;
+    required_str(candidate.agent_id.as_deref(), "agent_id")?;
     required_str(candidate.session_id.as_deref(), "session_id")?;
     required_i64(candidate.retry_count, "retry_count")?;
     required_i64(candidate.max_retries, "max_retries")?;
     candidate
-        .subagent_depth
+        .request_hop
         .map(u32::try_from)
         .transpose()
-        .context("failed background wake subagent_depth must fit in u32")?;
+        .context("failed background wake request_hop must fit in u32")?;
     Ok(())
 }
 
@@ -293,11 +293,11 @@ async fn redrive_in_transaction(
         return Ok(RedriveOutcome::Coalesced);
     }
 
-    let agent_did = required_str(candidate.agent_did.as_deref(), "agent_did")?;
+    let node_did = required_str(candidate.node_did.as_deref(), "node_did")?;
     let session_id = required_str(candidate.session_id.as_deref(), "session_id")?;
     let source_doc_id = required_str(candidate.doc_id.as_deref(), "_docID")?;
     let Some(head) =
-        crate::session::load_latest_request_in_txn(txn, agent_did, session_id, None).await?
+        crate::session::load_latest_request_in_txn(txn, node_did, session_id, None).await?
     else {
         return Ok(RedriveOutcome::Ineligible);
     };
@@ -308,7 +308,7 @@ async fn redrive_in_transaction(
     }
     let Some(_owner) = crate::session::load_agent_session_row_in_txn(
         txn,
-        agent_did,
+        node_did,
         session_id,
         candidate.requester_did.as_deref(),
     )
@@ -318,13 +318,13 @@ async fn redrive_in_transaction(
     };
     // Lean `CausalHop.continuation_preserves_hop`: the retried wake copies
     // the session's current hop, like every same-session continuation.
-    let hop = crate::session::load_session_current_hop_in_txn(txn, agent_did, session_id).await?;
+    let hop = crate::session::load_session_current_hop_in_txn(txn, node_did, session_id).await?;
     let response = txn
         .execute_local_response(&redrive_mutation(candidate, request_id, &retry_key, hop).await?)
         .await?;
     let created = crate::watcher::agent_request_from_mutation_response(&response, "successor")?
         .context("background wake successor create matched no document")?;
-    let successor = crate::session::load_latest_request_in_txn(txn, agent_did, session_id, None)
+    let successor = crate::session::load_latest_request_in_txn(txn, node_did, session_id, None)
         .await?
         .context("background wake successor is missing")?;
     anyhow::ensure!(
@@ -360,15 +360,14 @@ fn agent_request_rows(data: &serde_json::Value, name: &str) -> Result<Vec<AgentR
 
 fn precondition_query(candidate: &AgentRequestRow, retry_key: &str) -> Result<String> {
     let doc_id = escape_graphql_string(required_str(candidate.doc_id.as_deref(), "_docID")?);
-    let agent_did =
-        escape_graphql_string(required_str(candidate.agent_did.as_deref(), "agent_did")?);
+    let node_did = escape_graphql_string(required_str(candidate.node_did.as_deref(), "node_did")?);
     let session_id =
         escape_graphql_string(required_str(candidate.session_id.as_deref(), "session_id")?);
     let retry_key = escape_graphql_string(retry_key);
     Ok(format!(
         r#"{{
             source: AgentRequest(filter: {{
-                _docID: {{ _eq: "{doc_id}" }}, agent_did: {{ _eq: "{agent_did}" }},
+                _docID: {{ _eq: "{doc_id}" }}, node_did: {{ _eq: "{node_did}" }},
                 lifecycle_state: {{ _eq: "failed" }},
                 execution_origin: {{ _eq: "scheduled" }}
             }}, limit: 2) {{ {request_fields} retry_count max_retries retry_root_request }}
@@ -376,7 +375,7 @@ fn precondition_query(candidate: &AgentRequestRow, retry_key: &str) -> Result<St
                 filter: {{ retry_key: {{ _eq: "{retry_key}" }} }}, limit: 1
             ) {{ request_id _docID }}
             pending: AgentRequest(filter: {{
-                session_id: {{ _eq: "{session_id}" }}, agent_did: {{ _eq: "{agent_did}" }},
+                session_id: {{ _eq: "{session_id}" }}, node_did: {{ _eq: "{node_did}" }},
                 lifecycle_state: {{ _eq: "pending" }}
             }}) {{ request_id input }}
         }}"#,
@@ -397,15 +396,15 @@ async fn redrive_mutation(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or(&candidate.request_id);
-    let agent_did = required_str(candidate.agent_did.as_deref(), "agent_did")?;
-    let behavior_id = required_str(candidate.behavior_id.as_deref(), "behavior_id")?;
+    let node_did = required_str(candidate.node_did.as_deref(), "node_did")?;
+    let agent_id = required_str(candidate.agent_id.as_deref(), "agent_id")?;
     let session_id = required_str(candidate.session_id.as_deref(), "session_id")?;
     let doc_id = required_str(candidate.doc_id.as_deref(), "_docID")?;
     let retry_count = required_i64(candidate.retry_count, "retry_count")?;
     let max_retries = required_i64(candidate.max_retries, "max_retries")?;
     let admission =
         gents_protocol::request_admission::AgentRequestAdmissionRecord::runtime_local_control(
-            agent_did,
+            node_did,
             &candidate.request_id,
         );
     let parent_link = ParentLink {
@@ -417,15 +416,15 @@ async fn redrive_mutation(
     let identity = RequestIdentity {
         requester_did: candidate.requester_did.clone(),
         request_id: request_id.to_string(),
-        agent_did: agent_did.to_string(),
-        behavior_id: behavior_id.to_string(),
+        node_did: node_did.to_string(),
+        agent_id: agent_id.to_string(),
         session_id: session_id.to_string(),
         content: BACKGROUND_COMPLETION_WAKE_PROMPT.to_string(),
         execution_origin: ExecutionOrigin::Scheduled,
         created_at: now.clone(),
     };
     let spec = RequestSpec {
-        subagent: Some(parent_link),
+        parent: Some(parent_link),
         retry: Some(RetryLink {
             parent_request_id: Some(candidate.request_id.clone()),
             parent_request_doc_id: Some(doc_id.to_string()),

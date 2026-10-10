@@ -3,7 +3,7 @@ use super::*;
 
 #[tokio::test]
 async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts() {
-    use crate::identity::AgentIdentity;
+    use crate::identity::NodeIdentity;
     use std::sync::Arc;
 
     let fx = Fixture::new();
@@ -18,7 +18,7 @@ async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts
     let identity =
         crate::identity::KeyIdentity::load_or_create(fx._root.path().join("operator.key"), None)
             .unwrap();
-    crate::document_config::ensure_agent_principal(&node, identity.did())
+    crate::document_config::ensure_node(&node, identity.did())
         .await
         .unwrap();
     let access = crate::ConfigAccess::Local(node.clone());
@@ -33,7 +33,7 @@ async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts
         .unwrap();
     assert_eq!(outcome.workspace.lifecycle_state, "sealed");
     assert_eq!(outcome.workspace.base_sha, fx.base_sha);
-    assert_eq!(outcome.workspace.owner_agent_did, identity.did());
+    assert_eq!(outcome.workspace.owner_node_did, identity.did());
     assert_eq!(
         outcome.workspace.path_capability,
         WorkspacePathCapability::exact_paths(Vec::new()).unwrap()
@@ -52,9 +52,9 @@ async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts
 
     // Inspect persisted state independently of the returned in-memory result.
     let persisted = node.execute(r#"{
-        IsolatedWorkspace { workspace_id owner_agent_did base_sha lifecycle_state seal_hash path_capability }
-        WorkspacePlacement { workspace_id owner_agent_did host_path observed_tree_hash }
-        RepositoryPlacement { repository_id agent_did }
+        IsolatedWorkspace { workspace_id owner_node_did base_sha lifecycle_state seal_hash path_capability }
+        WorkspacePlacement { workspace_id owner_node_did host_path observed_tree_hash }
+        RepositoryPlacement { repository_id node_did }
         AgentRequest { _docID }
         AgentMessage { _docID }
         AgentOutputSegment { _docID }
@@ -67,7 +67,7 @@ async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts
     let workspace = &data["IsolatedWorkspace"][0];
     assert_eq!(workspace["workspace_id"], outcome.workspace.workspace_id);
     assert_eq!(workspace["lifecycle_state"], "sealed");
-    assert_eq!(workspace["owner_agent_did"], identity.did());
+    assert_eq!(workspace["owner_node_did"], identity.did());
     assert_eq!(workspace["base_sha"], fx.base_sha);
     assert_eq!(workspace["seal_hash"], base_tree);
     let capability: WorkspacePathCapability =
@@ -82,7 +82,7 @@ async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts
         workspace["workspace_id"]
     );
     assert_eq!(
-        data["WorkspacePlacement"][0]["owner_agent_did"],
+        data["WorkspacePlacement"][0]["owner_node_did"],
         identity.did()
     );
     assert_eq!(

@@ -16,7 +16,7 @@ use gents::agent::p2p_reconcile::enrollment::{
     EnrollmentRouteReceipt as PureRouteReceipt, NetworkAdminPin as PureAdminPin,
 };
 use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
-use gents::AgentIdentity;
+use gents::NodeIdentity;
 use gents_protocol::enrollment::{
     decode_offer, derive_enrollment_id, enrollment_schema_fingerprint, AuthorizationRevisionKind,
     AuthorizationRevisionRecord, EnrollmentDecisionKind, EnrollmentDecisionRecord,
@@ -38,7 +38,7 @@ use crate::client::peer_directory::RemovalCause;
 
 pub(super) async fn current_local_endpoint(
     p2p: &Arc<dyn P2POps>,
-    identity: &dyn AgentIdentity,
+    identity: &dyn NodeIdentity,
 ) -> Result<EndpointRecord> {
     let peer_id = timeout(P2P_OPERATION_TIMEOUT, p2p.local_peer_id())
         .await
@@ -64,7 +64,7 @@ pub struct EnrollmentRequestResult {
     pub network_id: String,
     pub admin_did: String,
     pub server_peer: String,
-    pub owner_agent: String,
+    pub owner_node: String,
     pub state: String,
     pub expires_at: String,
 }
@@ -161,7 +161,7 @@ impl ClientCore {
         .context("enrollment server has no configured authenticated identity")?;
         validate_authenticated_server_did(&offer.admin_did, &resolved_server_did.to_string())?;
         anyhow::ensure!(
-            self.principal
+            self.node_identity
                 .verify(&offer.admin_did, &offer.signing_payload(), &offer.admin_sig)
                 .await?,
             "enrollment offer signature is invalid"
@@ -197,7 +197,7 @@ impl ClientCore {
                         "gents-enrollment-request-id-v1",
                         &[
                             &offer.offer_id,
-                            self.principal.did(),
+                            self.node_identity.did(),
                             &candidate_peer,
                             &client_nonce,
                         ],
@@ -213,7 +213,7 @@ impl ClientCore {
                     network_id: offer.network_id.clone(),
                     admin_did: offer.admin_did.clone(),
                     server_peer: offer.server_peer.clone(),
-                    candidate_did: self.principal.did().to_string(),
+                    candidate_did: self.node_identity.did().to_string(),
                     candidate_peer,
                     candidate_ticket,
                     owner_agent: offer.owner_agent.clone(),
@@ -224,7 +224,7 @@ impl ClientCore {
                     candidate_sig: Vec::new(),
                 };
                 request.request_digest = request.computed_digest();
-                request.candidate_sig = self.principal.sign(&request.signing_payload())?;
+                request.candidate_sig = self.node_identity.sign(&request.signing_payload())?;
                 request
                     .validate_against_offer(&offer)
                     .context("validating authored enrollment request")?;
@@ -257,7 +257,7 @@ impl ClientCore {
             network_id: request.network_id,
             admin_did: request.admin_did,
             server_peer: request.server_peer,
-            owner_agent: request.owner_agent,
+            owner_node: request.owner_agent,
             state: "pending_approval".to_string(),
             expires_at: request.expires_at,
         })
@@ -280,11 +280,12 @@ impl ClientCore {
         let revisions = listing_revision_rows(&response)?;
         let request_rows = rows::<EnrollmentRequestRow>(&response, "NetworkEnrollmentRequest")?;
         let retired = self.sync_state.retired_enrollment_digests().await;
-        let assembly_requests = listing_assembly_requests(&request_rows, &self.principal).await;
+        let assembly_requests = listing_assembly_requests(&request_rows, &self.node_identity).await;
         let mut active = Vec::new();
 
         for row in &request_rows {
-            if row.candidate_did != self.principal.did() || row.candidate_peer != self.local_peer_id
+            if row.candidate_did != self.node_identity.did()
+                || row.candidate_peer != self.local_peer_id
             {
                 continue;
             }
@@ -311,13 +312,13 @@ impl ClientCore {
                 "persisted enrollment offer has an incompatible schema"
             );
             anyhow::ensure!(
-                self.principal
+                self.node_identity
                     .verify(&offer.admin_did, &offer.signing_payload(), &offer.admin_sig)
                     .await?,
                 "persisted enrollment offer signature is invalid"
             );
             anyhow::ensure!(
-                self.principal
+                self.node_identity
                     .verify(
                         &request.candidate_did,
                         &request.signing_payload(),
@@ -340,7 +341,7 @@ impl ClientCore {
                 &assembly_requests,
                 &decisions,
                 &revisions,
-                &self.principal,
+                &self.node_identity,
                 &self.local_peer_id,
             )
             .await?;
@@ -381,7 +382,7 @@ impl ClientCore {
                 network_id: request.network_id,
                 admin_did: request.admin_did,
                 server_peer: request.server_peer,
-                owner_agent: request.owner_agent,
+                owner_node: request.owner_agent,
                 state: state.to_string(),
                 expires_at: request.expires_at,
             });
@@ -411,7 +412,7 @@ impl ClientCore {
         let rows = rows::<EnrollmentRequestRow>(&response, "NetworkEnrollmentRequest")?;
         let row = select_retryable_local_request(
             &rows,
-            self.principal.did(),
+            self.node_identity.did(),
             &self.local_peer_id,
             request_id,
         )?
@@ -540,7 +541,7 @@ impl ClientCore {
         let rows = rows::<EnrollmentRequestRow>(&response, "NetworkEnrollmentRequest")?;
         let Some(row) = select_retryable_local_request(
             &rows,
-            self.principal.did(),
+            self.node_identity.did(),
             candidate_peer,
             &offer.offer_id,
         )?
@@ -568,7 +569,7 @@ impl ClientCore {
         );
         request.validate_against_offer(offer)?;
         anyhow::ensure!(
-            self.principal
+            self.node_identity
                 .verify(
                     &request.candidate_did,
                     &request.signing_payload(),
@@ -777,7 +778,7 @@ struct ApprovedStatusEnrollment {
     server_peer: String,
     server_ticket: String,
     admin_did: String,
-    owner_agent: String,
+    owner_node: String,
     request_digest: String,
     authorization_sequence: u64,
     authorization_expires_at: String,
@@ -951,7 +952,7 @@ pub(super) async fn reconcile_status_enrollment_approvals(
                     &approval.server_peer,
                     &label,
                     &address,
-                    &approval.owner_agent,
+                    &approval.owner_node,
                     &approval.network_id,
                     &approval.request_id,
                     &approval.request_digest,
@@ -1024,14 +1025,14 @@ async fn enrolled_server_address(
         return Ok(approval.server_ticket.clone());
     };
     let home = known
-        .local_agent_home
+        .local_node_home
         .as_deref()
         .context("managed enrollment has no local home")?;
     let live = crate::local_runtime::discover_standard_runtime(std::path::Path::new(home)).await?;
     let (ticket_peer, _) = parse_public_peer_addr(&live.p2p_listen_address)
         .map_err(|error| anyhow::anyhow!("managed runtime has an invalid P2P address: {error}"))?;
     anyhow::ensure!(
-        live.agent_did == approval.owner_agent
+        live.node_did == approval.owner_node
             && live.p2p_peer_id == approval.server_peer
             && ticket_peer.to_string() == approval.server_peer,
         "discovered managed runtime identity does not match approved enrollment"
@@ -1420,7 +1421,7 @@ fn scoped_authority_outcomes(
     let mut owner_peers = BTreeMap::<String, Vec<String>>::new();
     for approval in &approved {
         owner_peers
-            .entry(approval.owner_agent.clone())
+            .entry(approval.owner_node.clone())
             .or_default()
             .push(approval.server_peer.clone());
     }
@@ -1435,7 +1436,7 @@ fn scoped_authority_outcomes(
                 add_scoped_conflict(
                     &mut conflicts,
                     peer,
-                    "one enrolled owner agent has multiple current transport routes",
+                    "one enrolled owner node has multiple current transport routes",
                 );
             }
         }
@@ -1620,7 +1621,7 @@ async fn project_desktop_approval(
                     server_peer: request.server_peer,
                     server_ticket: offer.server_ticket,
                     admin_did: request.admin_did,
-                    owner_agent: request.owner_agent,
+                    owner_node: request.owner_agent,
                     request_digest: request.request_digest,
                     authorization_sequence: decision.authorization_sequence,
                     authorization_expires_at: decision.authorization_expires_at,
@@ -2010,7 +2011,7 @@ fn to_pure_offer(
         resolved_server_did: verified
             .then(|| offer.admin_did.clone())
             .unwrap_or_default(),
-        owner_agent: offer.owner_agent.clone(),
+        owner_node: offer.owner_agent.clone(),
         profile: offer.profile.clone(),
         schema_compatible: offer.schema_fingerprint == enrollment_schema_fingerprint(),
         admin_signed: verified,
@@ -2036,7 +2037,7 @@ fn to_pure_request(request: &EnrollmentRequestRecord, verified: bool, fresh: boo
             .then(|| request.candidate_did.clone())
             .unwrap_or_default(),
         candidate_ticket_peer: request.candidate_peer.clone(),
-        owner_agent: request.owner_agent.clone(),
+        owner_node: request.owner_agent.clone(),
         profile: request.profile.clone(),
         client_nonce: request.client_nonce.clone(),
         issued_at: request.issued_at.clone(),
@@ -2054,7 +2055,7 @@ fn to_pure_decision(decision: &EnrollmentDecisionRecord, verified: bool) -> Pure
         admin_did: decision.admin_did.clone(),
         candidate_did: decision.candidate_did.clone(),
         candidate_peer: decision.candidate_peer.clone(),
-        owner_agent: decision.owner_agent.clone(),
+        owner_node: decision.owner_agent.clone(),
         kind: match decision.decision {
             EnrollmentDecisionKind::Approved => PureDecisionKind::Approved,
             EnrollmentDecisionKind::Denied => PureDecisionKind::Denied,
@@ -2078,7 +2079,7 @@ fn to_pure_revision(revision: &AuthorizationRevisionRecord, verified: bool) -> P
         admin_did: revision.admin_did.clone(),
         member_did: revision.member_did.clone(),
         member_peer: revision.member_peer.clone(),
-        owner_agent: revision.owner_agent.clone(),
+        owner_node: revision.owner_agent.clone(),
         sequence: revision.sequence as usize,
         authorization_expires_at: revision.authorization_expires_at.clone(),
         kind: match revision.kind {
@@ -2099,7 +2100,7 @@ fn to_pure_receipt(receipt: &EnrollmentRouteReceiptRecord, verified: bool) -> Pu
         member_did: receipt.member_did.clone(),
         member_peer: receipt.member_peer.clone(),
         server_peer: receipt.server_peer.clone(),
-        owner_agent: receipt.owner_agent.clone(),
+        owner_node: receipt.owner_agent.clone(),
         authorization_sequence: receipt.authorization_sequence as usize,
         authorization_expires_at: receipt.authorization_expires_at.clone(),
         direction: PureRouteDirection::ClientToServer,
@@ -2179,7 +2180,7 @@ mod tests {
             server_peer: server_peer.into(),
             server_ticket: "ticket".into(),
             admin_did: "did:key:admin".into(),
-            owner_agent: owner_agent.into(),
+            owner_node: owner_agent.into(),
             request_digest: format!("digest-{server_peer}-{owner_agent}"),
             authorization_sequence: 1,
             authorization_expires_at: "2026-09-29T00:00:00Z".into(),
@@ -2210,7 +2211,7 @@ mod tests {
             for (route, body) in [
                 (
                     "/status",
-                    json!({"agent_did": live_owner, "lifecycle": "ready"}),
+                    json!({"node_did": live_owner, "lifecycle": "ready"}),
                 ),
                 (
                     "/api/v0/p2p/shareable-address",
@@ -2226,7 +2227,7 @@ mod tests {
             std::fs::write(
                 home.join("init.json"),
                 json!({
-                    "agent_name": "managed", "agent_did": live_owner,
+                    "node_name": "managed", "node_did": live_owner,
                 })
                 .to_string(),
             )
@@ -2234,7 +2235,7 @@ mod tests {
             std::fs::write(
                 home.join(gents::home::RUNTIME_STATE_FILE_NAME),
                 json!({
-                    "agent_name": "managed", "agent_did": live_owner,
+                    "node_name": "managed", "node_did": live_owner,
                     "graphql": graphql, "p2p_transport": "iroh", "p2p_peer_id": live_peer,
                 })
                 .to_string(),
@@ -2308,7 +2309,7 @@ mod tests {
             }
             assert_eq!(approval, unchanged);
             let mut remote = known.clone();
-            remote.local_agent_home = None;
+            remote.local_node_home = None;
             assert_eq!(
                 enrolled_server_address(&approval, Some(&remote))
                     .await
@@ -2793,7 +2794,7 @@ mod tests {
                 &approved.server_peer,
                 "Enrolled Agent",
                 &approved.server_ticket,
-                &approved.owner_agent,
+                &approved.owner_node,
                 &approved.network_id,
                 &approved.request_id,
                 &approved.request_digest,
@@ -2823,7 +2824,7 @@ mod tests {
                 &approved.server_peer,
                 "Enrolled Agent",
                 &approved.server_ticket,
-                &approved.owner_agent,
+                &approved.owner_node,
                 &approved.network_id,
                 &approved.request_id,
                 &approved.request_digest,
@@ -2875,7 +2876,7 @@ mod tests {
                 &approved.server_peer,
                 "Enrolled Agent",
                 &approved.server_ticket,
-                &approved.owner_agent,
+                &approved.owner_node,
                 &approved.network_id,
                 "replacement-request-id",
                 "replacement-request-digest",
@@ -3083,7 +3084,7 @@ mod tests {
             server_peer: transport.peer.clone(),
             server_ticket: "ticket".into(),
             admin_did: "did:key:approved".into(),
-            owner_agent: String::new(),
+            owner_node: String::new(),
             request_digest: String::new(),
             authorization_sequence: 1,
             authorization_expires_at: String::new(),
@@ -3469,7 +3470,8 @@ mod tests {
             PrincipalIdentity::load_or_create(&DesktopPaths::from_root(temp.path().join("admin")))
                 .await
                 .unwrap();
-        let authority = signed_enrollment_authority(&admin, core.principal(), core.local_peer_id());
+        let authority =
+            signed_enrollment_authority(&admin, core.node_identity(), core.local_peer_id());
         commit_admin_pin(&core, &authority).await;
         commit_enrollment_request(&core, &authority.request).await;
         commit_decision(&core, &authority).await;
@@ -3484,7 +3486,7 @@ mod tests {
             observations: 0.into(),
         });
         let p2p: Arc<dyn P2POps> = transport.clone();
-        let principal = Arc::new(core.principal().clone());
+        let principal = Arc::new(core.node_identity().clone());
         let route_manager = Arc::new(ClientRouteManager::new(
             core.node_arc(),
             Arc::clone(&p2p),
@@ -3575,7 +3577,8 @@ mod tests {
             PrincipalIdentity::load_or_create(&DesktopPaths::from_root(temp.path().join("admin")))
                 .await
                 .unwrap();
-        let authority = signed_enrollment_authority(&admin, core.principal(), core.local_peer_id());
+        let authority =
+            signed_enrollment_authority(&admin, core.node_identity(), core.local_peer_id());
         commit_admin_pin(&core, &authority).await;
         commit_enrollment_request(&core, &authority.request).await;
         commit_decision(&core, &authority).await;
@@ -3613,7 +3616,8 @@ mod tests {
             PrincipalIdentity::load_or_create(&DesktopPaths::from_root(temp.path().join("admin")))
                 .await
                 .unwrap();
-        let authority = signed_enrollment_authority(&admin, core.principal(), core.local_peer_id());
+        let authority =
+            signed_enrollment_authority(&admin, core.node_identity(), core.local_peer_id());
         commit_enrollment_request(&core, &authority.request).await;
         locally_retire(&core, &authority).await;
 
@@ -3640,7 +3644,8 @@ mod tests {
             PrincipalIdentity::load_or_create(&DesktopPaths::from_root(temp.path().join("admin")))
                 .await
                 .unwrap();
-        let authority = signed_enrollment_authority(&admin, core.principal(), core.local_peer_id());
+        let authority =
+            signed_enrollment_authority(&admin, core.node_identity(), core.local_peer_id());
         commit_admin_pin(&core, &authority).await;
         commit_enrollment_request(&core, &authority.request).await;
         commit_decision(&core, &authority).await;
@@ -3676,7 +3681,8 @@ mod tests {
             PrincipalIdentity::load_or_create(&DesktopPaths::from_root(temp.path().join("admin")))
                 .await
                 .unwrap();
-        let authority = signed_enrollment_authority(&admin, core.principal(), core.local_peer_id());
+        let authority =
+            signed_enrollment_authority(&admin, core.node_identity(), core.local_peer_id());
         commit_admin_pin(&core, &authority).await;
         commit_enrollment_request(&core, &authority.request).await;
         commit_decision(&core, &authority).await;
@@ -3705,7 +3711,7 @@ mod tests {
             observations: 0.into(),
         });
         let p2p: Arc<dyn P2POps> = transport.clone();
-        let principal = Arc::new(core.principal().clone());
+        let principal = Arc::new(core.node_identity().clone());
         let route_manager = Arc::new(ClientRouteManager::new(
             core.node_arc(),
             Arc::clone(&p2p),
@@ -3766,7 +3772,8 @@ mod tests {
             PrincipalIdentity::load_or_create(&DesktopPaths::from_root(temp.path().join("admin")))
                 .await
                 .unwrap();
-        let authority = signed_enrollment_authority(&admin, core.principal(), core.local_peer_id());
+        let authority =
+            signed_enrollment_authority(&admin, core.node_identity(), core.local_peer_id());
         commit_admin_pin(&core, &authority).await;
         commit_enrollment_request(&core, &authority.request).await;
         commit_decision(&core, &authority).await;
@@ -3781,7 +3788,7 @@ mod tests {
             observations: 0.into(),
         });
         let p2p: Arc<dyn P2POps> = transport.clone();
-        let principal = Arc::new(core.principal().clone());
+        let principal = Arc::new(core.node_identity().clone());
         let route_manager = Arc::new(ClientRouteManager::new(
             core.node_arc(),
             Arc::clone(&p2p),

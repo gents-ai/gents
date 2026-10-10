@@ -16,21 +16,21 @@ async fn codex_shim_remote_frontend_keeps_client_codex_home_separate() -> Result
     let mock_endpoint = MockChatEndpoint::start(&model_name, "unused")?;
     let server_port = allocate_port()?;
     let graphql = graphql_url(server_port);
-    let agent_name = format!("cli-codex-shim-{}", Uuid::new_v4().simple());
+    let node_name = format!("cli-codex-shim-{}", Uuid::new_v4().simple());
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
-            &agent_name,
+            "--node-name",
+            &node_name,
             "--model-name",
             &model_name,
             "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
     let expected_model_selection =
-        gents_model_selection_id(&default_backend_id(&agent_did), &model_name);
+        gents_model_selection_id(&default_backend_id(&node_did), &model_name);
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();
     let mut serve = spawn_server_with_env(
@@ -49,7 +49,7 @@ async fn codex_shim_remote_frontend_keeps_client_codex_home_separate() -> Result
     serve
         .capturing(wait_for_runtime_ready(
             &graphql,
-            &agent_did,
+            &node_did,
             Duration::from_secs(30),
         ))
         .await?;
@@ -126,7 +126,7 @@ async fn codex_shim_remote_frontend_keeps_client_codex_home_separate() -> Result
         read_typed_response(&mut ws, request_id(2)).await?;
     assert_eq!(
         thread_start.model, expected_model_selection,
-        "Gents remote runtime should use the bound behavior model, not the client Codex model"
+        "Gents remote runtime should use the bound agent model, not the client Codex model"
     );
     assert_eq!(thread_start.model_provider, "gents");
     assert_eq!(thread_start.approval_policy, codex::AskForApproval::Never);
@@ -183,8 +183,8 @@ async fn stock_codex_remote_pty_smoke_uses_existing_client_codex_home_with_real_
         "expected PTY transcript to contain an echoed prompt and assistant response for {prompt_token}\nstdout:\n{stdout}\nstderr:\n{stderr}\ntranscript:\n{transcript}"
     );
     let prompt = smoke_prompt(prompt_token);
-    let (_request_id, _session_id, _behavior_id) =
-        wait_for_request(&smoke.graphql, &smoke.agent_did, &prompt).await?;
+    let (_request_id, _session_id, _agent_id) =
+        wait_for_request(&smoke.graphql, &smoke.node_did, &prompt).await?;
     assert_shim_trace_methods(
         &smoke.shim_trace,
         &["initialize", "thread/start", "turn/start"],
@@ -254,10 +254,10 @@ async fn stock_codex_remote_tmux_multiturn_uses_existing_client_codex_home_with_
             token_occurrences(&token_search_text, transformed_token) >= 1,
             "expected tmux transcript to contain transformed multi-turn response {transformed_token}, got:\n{transcript}"
         );
-        let (_request_id, first_session_id, _behavior_id) =
-            wait_for_request(&smoke.graphql, &smoke.agent_did, &first_prompt).await?;
-        let (_request_id, second_session_id, _behavior_id) =
-            wait_for_request(&smoke.graphql, &smoke.agent_did, second_prompt).await?;
+        let (_request_id, first_session_id, _agent_id) =
+            wait_for_request(&smoke.graphql, &smoke.node_did, &first_prompt).await?;
+        let (_request_id, second_session_id, _agent_id) =
+            wait_for_request(&smoke.graphql, &smoke.node_did, second_prompt).await?;
         assert_eq!(first_session_id, second_session_id);
         assert_shim_trace_methods(&smoke.shim_trace, &["initialize", "thread/start"])?;
         assert_shim_trace_method_count_at_least(&smoke.shim_trace, "turn/start", 2)?;

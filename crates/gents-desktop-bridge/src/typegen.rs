@@ -191,12 +191,12 @@ fn export_all(dir: &Path) -> Result<(), String> {
         MailboxItemRequest,
         gents_protocol::mailbox_question::MailboxQuestion,
         SessionRenameRequest,
-        AgentConfigSaveRequest,
-        DefaultBehaviorSetRequest,
+        NodeConfigSaveRequest,
+        DefaultAgentSetRequest,
         ConfigComponentsApplyRequest,
         ConfigComponentsPatchRequest,
         ConfigComponentPatch,
-        BehaviorSaveRequest,
+        AgentSaveRequest,
         SkillDeleteRequest,
         TaskDeleteRequest,
         ScheduleDeleteRequest,
@@ -206,7 +206,7 @@ fn export_all(dir: &Path) -> Result<(), String> {
         InferenceProfileDeleteRequest,
         ToolsDeleteRequest,
         ToolServiceDeleteRequest,
-        BehaviorDeleteRequest,
+        AgentDeleteRequest,
         ContextDeleteRequest,
         BackendSaveRequest,
         InferenceProfileSaveRequest,
@@ -336,7 +336,7 @@ fn ts_rs_exports_tagged_enum_and_camel_case_structs() {
     let bootstrap = std::fs::read_to_string(tmp.path().join("DesktopBootstrapSummary.ts"))
         .expect("DesktopBootstrapSummary.ts");
     assert!(
-        bootstrap.contains("defaultAgentHome") && bootstrap.contains("clientStateExists"),
+        bootstrap.contains("defaultNodeHome") && bootstrap.contains("clientStateExists"),
         "serde rename_all camelCase should be reflected; got:\n{bootstrap}"
     );
     let error = std::fs::read_to_string(tmp.path().join("BridgeError.ts")).expect("BridgeError.ts");
@@ -500,12 +500,12 @@ fn canonical_config_requests_preserve_compact_authoring_and_auth_wire_tags() {
     BackendSaveRequest::export_all_to(dir.path()).expect("backend export");
     ToolsSaveRequest::export_all_to(dir.path()).expect("tools export");
     ToolServiceSaveRequest::export_all_to(dir.path()).expect("service export");
-    BehaviorSaveRequest::export_all_to(dir.path()).expect("behavior export");
+    AgentSaveRequest::export_all_to(dir.path()).expect("agent export");
     InferenceProfileSaveRequest::export_all_to(dir.path()).expect("profile export");
     normalize_generated_types(dir.path()).expect("wire number normalization");
-    let behavior = std::fs::read_to_string(dir.path().join("AgentBehavior.ts")).unwrap();
-    assert!(behavior.contains("inference_profile_id: string"));
-    assert!(!behavior.contains("inference_profile_id?:"));
+    let agent = std::fs::read_to_string(dir.path().join("Agent.ts")).unwrap();
+    assert!(agent.contains("inference_profile_id: string"));
+    assert!(!agent.contains("inference_profile_id?:"));
     let effort = std::fs::read_to_string(dir.path().join("ReasoningEffort.ts")).unwrap();
     assert!(effort.contains("high") && effort.contains("none"));
     let auth = std::fs::read_to_string(dir.path().join("BackendAuth.ts")).unwrap();
@@ -517,7 +517,7 @@ fn canonical_config_requests_preserve_compact_authoring_and_auth_wire_tags() {
         gents::document_config::BackendAuth::Environment {
             variable: "API_KEY".into(),
         },
-        gents::document_config::BackendAuth::PrincipalOAuth { account_ref: None },
+        gents::document_config::BackendAuth::NodeOAuth { account_ref: None },
     ] {
         let wire = serde_json::to_value(configured).unwrap();
         assert!(auth.contains(wire["kind"].as_str().unwrap()));
@@ -527,14 +527,14 @@ fn canonical_config_requests_preserve_compact_authoring_and_auth_wire_tags() {
     assert!(tools.contains("host?: HostTools | null"));
     assert!(tools.contains("tags?: Array<string> | null"));
     for compact in [
-        serde_json::json!({"document":{"tools_id":"tools","agent_did":"did:test:owner"}}),
-        serde_json::json!({"document":{"tools_id":"tools","agent_did":"did:test:owner","tags":null,"host":{"files":{"mode":null}}}}),
+        serde_json::json!({"document":{"tools_id":"tools","node_did":"did:test:owner"}}),
+        serde_json::json!({"document":{"tools_id":"tools","node_did":"did:test:owner","tags":null,"host":{"files":{"mode":null}}}}),
     ] {
         serde_json::from_value::<ToolsSaveRequest>(compact).unwrap();
     }
     assert!(
         serde_json::from_value::<ToolsSaveRequest>(serde_json::json!({
-            "document":{"tools_id":"tools","agent_did":"did:test:owner","enable_file_tools":true}
+            "document":{"tools_id":"tools","node_did":"did:test:owner","enable_file_tools":true}
         }))
         .is_err()
     );

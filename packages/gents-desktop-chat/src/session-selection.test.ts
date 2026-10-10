@@ -2,31 +2,31 @@ import { describe, expect, it } from "vitest";
 
 import type { SessionSummary } from "@source-inc/gents-desktop-client";
 
-import { sessionBelongsToBehavior } from "./session-selection.js";
+import { sessionBelongsToAgent } from "./session-selection.js";
 
-function session(behaviorId?: string | null): SessionSummary {
+function session(agentId?: string | null): SessionSummary {
   return {
     sessionId: "session",
-    behaviorId,
+    agentId,
     messageCount: 0,
     toolCallCount: 0,
   };
 }
 
-describe("session behavior selection", () => {
-  it("matches persisted behavior ids exactly", () => {
+describe("session agent selection", () => {
+  it("matches persisted agent ids exactly", () => {
     expect(
-      sessionBelongsToBehavior(session("session-classifier"), "default"),
+      sessionBelongsToAgent(session("session-classifier"), "default"),
     ).toBe(false);
     expect(
-      sessionBelongsToBehavior(
+      sessionBelongsToAgent(
         session("session-classifier"),
         "session-classifier",
       ),
     ).toBe(true);
   });
 
-  it("does not assign an unbound session to a behavior", () => {
-    expect(sessionBelongsToBehavior(session(null), "default")).toBe(false);
+  it("does not assign an unbound session to an agent", () => {
+    expect(sessionBelongsToAgent(session(null), "default")).toBe(false);
   });
 });

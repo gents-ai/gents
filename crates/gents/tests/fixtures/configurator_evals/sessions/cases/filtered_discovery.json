@@ -7,10 +7,10 @@
       {
         "collection": "AgentSession",
         "document": {
-          "agent_did": "$trial",
+          "node_did": "$trial",
           "requester_did": "$trial",
           "session_id": "launch-review",
-          "behavior_id": "engineer",
+          "agent_id": "engineer",
           "created_at": "2025-01-01T00:00:00Z",
           "closed_at": "2025-01-02T00:00:00Z",
           "title": {
@@ -25,10 +25,10 @@
       {
         "collection": "AgentSession",
         "document": {
-          "agent_did": "$trial",
+          "node_did": "$trial",
           "requester_did": "$trial",
           "session_id": "support-review",
-          "behavior_id": "engineer",
+          "agent_id": "engineer",
           "created_at": "2025-01-01T00:00:00Z",
           "closed_at": null,
           "title": {
@@ -43,10 +43,10 @@
       {
         "collection": "AgentSession",
         "document": {
-          "agent_did": "$trial",
+          "node_did": "$trial",
           "requester_did": "$trial",
           "session_id": "launch-followup",
-          "behavior_id": "engineer",
+          "agent_id": "engineer",
           "created_at": "2025-01-01T00:00:00Z",
           "closed_at": "2025-01-02T00:00:00Z",
           "title": {
@@ -61,10 +61,10 @@
       {
         "collection": "AgentSession",
         "document": {
-          "agent_did": "did:key:z6MkfXG2FkNy3u7Eg3jm8e2YQpGz7Z1JqWgHDAP1hLk9r2bR",
+          "node_did": "did:key:z6MkfXG2FkNy3u7Eg3jm8e2YQpGz7Z1JqWgHDAP1hLk9r2bR",
           "requester_did": "did:key:z6MkfXG2FkNy3u7Eg3jm8e2YQpGz7Z1JqWgHDAP1hLk9r2bR",
           "session_id": "partner-review",
-          "behavior_id": "engineer",
+          "agent_id": "engineer",
           "created_at": "2025-01-01T00:00:00Z",
           "closed_at": "2025-01-02T00:00:00Z",
           "title": {
@@ -139,7 +139,7 @@
           "name": "source_sessions",
           "collection": "AgentSession",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             },
             "session_id": {

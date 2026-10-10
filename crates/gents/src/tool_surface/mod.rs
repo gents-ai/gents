@@ -4,12 +4,13 @@ mod explain;
 mod modes;
 mod output_budget;
 mod policy;
+pub mod presets;
 mod root_admission;
 mod runtime_context;
 mod selection;
 mod timeouts;
 
-pub use behavior_config::BehaviorToolConfig;
+pub use behavior_config::AgentToolSurfaceConfig;
 pub use build::measured_mcp_services_for_access;
 pub(crate) use build::{measured_available_mcp_service_ids, resolve_effective_tool_root};
 pub use explain::{ToolSurfaceExplanation, ToolSurfaceWarning};
@@ -19,17 +20,17 @@ pub use policy::{
     EndpointScope, RuntimeToolAvailability, ToolPolicyBash, ToolPolicySurface, ToolPolicyVersion,
     TOOL_POLICY_V1,
 };
-pub(crate) use root_admission::{
-    canonicalize_tools_root, load_workspace_root_policy_in_txn, resolve_admitted_tool_root,
-    resolve_configured_tool_root, RootAdmission, RootExecutionGuard,
-};
 #[doc(hidden)]
 pub use root_admission::{
-    project_workspace_root_policy, WorkspaceRootDocument, WorkspaceRootPolicy,
+    admit_authored_root, project_workspace_root_policy, WorkspaceRootDocument, WorkspaceRootPolicy,
+};
+pub(crate) use root_admission::{
+    canonicalize_tools_root, load_workspace_root_policy_in_txn, resolve_admitted_tool_root,
+    resolve_configured_tool_root, RootExecutionGuard,
 };
 pub use runtime_context::ToolRuntimeContext;
 pub use selection::{resolve_goal_capabilities, CustomToolFactory, ResolvedToolSelection};
-pub(crate) use selection::{BackgroundToolConfig, SubagentToolConfig};
+pub(crate) use selection::{AgentToolConfig, BackgroundToolConfig};
 pub use timeouts::{BackgroundTimeoutPolicy, BackgroundTimeouts, BoundedTimeout, ToolTimeouts};
 
 use std::collections::{HashMap, HashSet};
@@ -42,12 +43,12 @@ use crate::defra_query::{
     build_defra_query_tool, BoundedQueryTool, CollectionScope, DEFRA_QUERY_TOOL_NAME,
 };
 use crate::defra_write::BoundedWriteTool;
-use crate::document_config::{QueryToolDecl, SubagentTargetDocument, WriteToolDecl};
+use crate::document_config::{AgentTargetDocument, QueryToolDecl, WriteToolDecl};
 use crate::meta_tools::build_meta_tools;
 use crate::toolset::{
-    background_tool_names, build_background_tools, build_context_budget_tool, build_goal_tools,
-    build_session_history_tool, build_subagent_tools, subagent_tool_names, CliToolConfig, ToolSet,
-    CONTEXT_BUDGET_TOOL_NAME, SESSION_HISTORY_TOOL_NAME,
+    agent_tool_names, background_tool_names, build_agent_tools, build_background_tools,
+    build_context_budget_tool, build_goal_tools, build_session_history_tool, CliToolConfig,
+    ToolSet, CONTEXT_BUDGET_TOOL_NAME, SESSION_HISTORY_TOOL_NAME,
 };
 #[cfg(feature = "agent-memory")]
 use crate::toolset::{build_memory_tool, MEMORY_TOOL_NAME};
@@ -65,7 +66,7 @@ pub struct ToolSurface {
     include_goal_creation: bool,
     allowed_mcp_service_ids: Vec<String>,
     remote_tools: Option<crate::document_config::RemoteTools>,
-    subagent_tools: SubagentToolConfig,
+    agent_tools: AgentToolConfig,
     background_tools: BackgroundToolConfig,
     custom_tools: Vec<CustomToolFactory>,
     pub(super) enable_memory: bool,
@@ -86,14 +87,14 @@ pub struct ToolSurface {
     pub(super) plugin_tools: Vec<crate::document_config::PluginToolRef>,
     /// The plugin tools above resolved against the host plugin store when the
     /// surface was resolved. It exists so that installing or removing a named
-    /// plugin is a behavior change the reconciler sees (it feeds the runtime
+    /// plugin is an Agent configuration change the reconciler sees (it feeds the runtime
     /// configuration fingerprint and the slot comparison through this struct's
-    /// Debug), re-admitting a behavior whose build failed on the missing tool.
+    /// Debug), re-admitting an Agent whose build failed on the missing tool.
     /// The whole installed record is kept, so a same-artifact reinstall that
     /// changes what the built tool renders or enforces (instructions,
     /// declaration, grant, model binding) refreshes the slot too. `None`
     /// records a not-installed or pin-mismatched plugin and never makes a
-    /// behavior unavailable: building tools stays the fail-closed gate.
+    /// Agent unavailable: building tools stays the fail-closed gate.
     pub(super) plugin_resolutions: Vec<(
         crate::document_config::PluginToolRef,
         Option<crate::plugin::store::InstalledPlugin>,
@@ -106,13 +107,13 @@ pub struct ToolSurface {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SelfConfigToolConfig {
     pub enabled: bool,
-    pub behavior_id: String,
+    pub agent_id: String,
     pub categories: std::collections::BTreeSet<String>,
     pub no_lockout: bool,
     pub preview: bool,
     pub enable_pack_install: bool,
     pub enable_graph_tools: bool,
-    /// Runtime-owned host ceiling captured when this behavior's tool surface
+    /// Runtime-owned host ceiling captured when this Agent's tool surface
     /// is resolved. It is observation data for self-configuration responses,
     /// never a writable configuration document.
     pub process_ceiling: SelfConfigProcessCeiling,
@@ -217,13 +218,13 @@ impl ToolSurface {
     }
 
     #[allow(dead_code)]
-    pub(crate) fn subagent_tools(&self) -> &SubagentToolConfig {
-        &self.subagent_tools
+    pub(crate) fn agent_tools(&self) -> &AgentToolConfig {
+        &self.agent_tools
     }
 
-    pub(crate) fn subagent_targets(&self) -> &[SubagentTargetDocument] {
-        if self.subagent_tools.enabled {
-            &self.subagent_tools.targets
+    pub(crate) fn agent_targets(&self) -> &[AgentTargetDocument] {
+        if self.agent_tools.enabled {
+            &self.agent_tools.targets
         } else {
             &[]
         }
@@ -233,14 +234,14 @@ impl ToolSurface {
         &self.background_tools
     }
 
-    pub(crate) fn retain_subagent_targets(
+    pub(crate) fn retain_agent_targets(
         &mut self,
-        own_agent_did: &str,
-        active_behavior_ids: &HashSet<String>,
+        own_node_did: &str,
+        active_agent_ids: &HashSet<String>,
     ) {
-        self.subagent_tools.targets.retain(|target| {
-            if target.target_agent_did == own_agent_did {
-                active_behavior_ids.contains(&target.behavior_id)
+        self.agent_tools.targets.retain(|target| {
+            if target.target_node_did == own_node_did {
+                active_agent_ids.contains(&target.agent_id)
             } else {
                 true
             }
@@ -255,7 +256,7 @@ impl ToolSurface {
                 &self.allowed_mcp_service_ids,
             ));
         }
-        names.extend(subagent_tool_names(&self.subagent_tools));
+        names.extend(agent_tool_names(&self.agent_tools));
         names.extend(background_tool_names(&self.background_tools));
         names.extend(self.custom_tools.iter().map(|tool| tool.name().to_string()));
         #[cfg(feature = "agent-memory")]
@@ -336,14 +337,14 @@ impl ToolSurface {
                     runtime.health_map.clone(),
                     runtime.local_hostname.clone(),
                     runtime.local_subnet.clone(),
-                    runtime.agent_did.clone(),
+                    runtime.node_did.clone(),
                     self.allowed_mcp_service_ids.clone(),
                     self.remote_tools.clone().unwrap_or_default(),
                 )
                 .await?,
             );
         }
-        tools.extend(build_subagent_tools(self.subagent_tools.clone()));
+        tools.extend(build_agent_tools(self.agent_tools.clone()));
         tools.extend(build_background_tools(self.background_tools.clone()));
         for tool in &self.custom_tools {
             tools.push(tool.build()?);
@@ -352,13 +353,13 @@ impl ToolSurface {
         if self.enable_memory {
             tools.push(build_memory_tool(
                 runtime.node.clone(),
-                runtime.agent_did.clone(),
+                runtime.node_did.clone(),
             ));
         }
         if self.enable_context_budget_tool {
             tools.push(build_context_budget_tool(
                 runtime.node.clone(),
-                runtime.agent_did.clone(),
+                runtime.node_did.clone(),
             ));
         }
         if self.enable_schema_tool {
@@ -377,7 +378,7 @@ impl ToolSurface {
         if self.enable_session_history_tool {
             tools.push(build_session_history_tool(
                 runtime.node.clone(),
-                runtime.agent_did.clone(),
+                runtime.node_did.clone(),
             ));
         }
         let datastore_actor = if self.enable_defra_query
@@ -387,9 +388,9 @@ impl ToolSurface {
             let identity = runtime
                 .identity
                 .as_ref()
-                .context("datastore tools require the principal identity")?;
+                .context("datastore tools require the node identity")?;
             anyhow::ensure!(
-                identity.did() == runtime.agent_did,
+                identity.did() == runtime.node_did,
                 "datastore identity differs from principal DID"
             );
             Some(identity::Did::new(identity.did().to_owned())?)
@@ -421,7 +422,7 @@ impl ToolSurface {
         }
         tools.extend(crate::self_config::build_self_config_tools(
             runtime.node.clone(),
-            runtime.agent_did.clone(),
+            runtime.node_did.clone(),
             runtime.identity.clone(),
             &self.self_config,
             runtime.plugins.clone(),
@@ -527,7 +528,7 @@ impl std::fmt::Debug for ToolSurface {
             .field("include_goal_creation", &self.include_goal_creation)
             .field("allowed_mcp_service_ids", &self.allowed_mcp_service_ids)
             .field("remote_tools", &self.remote_tools)
-            .field("subagent_tools", &self.subagent_tools)
+            .field("agent_tools", &self.agent_tools)
             .field("background_tools", &self.background_tools)
             .field(
                 "custom_tools",
@@ -579,11 +580,11 @@ impl std::fmt::Debug for ToolSurface {
     }
 }
 
-pub(crate) fn resolve_subagent_target_descriptions(
+pub(crate) fn resolve_agent_target_descriptions(
     tool_surface: &ToolSurface,
 ) -> Vec<(String, String)> {
     tool_surface
-        .subagent_targets()
+        .agent_targets()
         .iter()
         .map(|target| {
             (

@@ -104,20 +104,16 @@ async fn oneshot_renews_while_silent_then_preserves_partial_output_on_eof() {
     let identity =
         crate::identity::KeyIdentity::load_or_create(dir.path().join("identity.key"), None)
             .unwrap();
-    let mut behavior = crate::agent::PendingAgentBehavior::new("oneshot-lease")
-        .build_with_identity_for_test(identity);
-    crate::test_support::install_test_behavior(
-        node.as_ref(),
-        behavior.agent_did(),
-        &behavior.behavior_id,
-    )
-    .await;
+    let mut behavior =
+        crate::agent::PendingAgent::new("oneshot-lease").build_with_identity_for_test(identity);
+    crate::test_support::install_test_agent(node.as_ref(), behavior.node_did(), &behavior.agent_id)
+        .await;
     behavior.model_name = "scripted".to_owned();
     behavior.stream_liveness_timeout = Duration::from_secs(1);
     behavior.deadline_duration = Duration::from_secs(60);
-    let prompt = LayeredPromptBuilder::for_behavior(
+    let prompt = LayeredPromptBuilder::for_agent(
         &behavior.system_prompt,
-        &behavior.behavior_id,
+        &behavior.agent_id,
         &[],
         false,
         &[],
@@ -216,7 +212,7 @@ async fn oneshot_renews_while_silent_then_preserves_partial_output_on_eof() {
     let (header, native) = crate::session::load_canonical_message_from_node(
         &node,
         &message_doc_id,
-        behavior.agent_did(),
+        behavior.node_did(),
         requester_did,
     )
     .await
@@ -233,7 +229,7 @@ async fn oneshot_renews_while_silent_then_preserves_partial_output_on_eof() {
     assert!(gents_protocol::transcript::present_message(&native)
         .body_markdown
         .contains("durable one-shot partial"));
-    let repeated = RequestLifecycle::recover_all(&node, behavior.agent_did())
+    let repeated = RequestLifecycle::recover_all(&node, behavior.node_did())
         .await
         .unwrap();
     assert_eq!(repeated.requests_recovered, 0);
@@ -316,7 +312,7 @@ async fn oneshot_configured_output_gate_requires_real_write_and_respects_trigger
         WriteToolDecl, WriteToolField, WriteToolOutputObligation, WriteToolOutputObligationScope,
     };
     use crate::tool_surface::{
-        BehaviorToolConfig, ResolvedToolSelection, ToolCeiling, ToolRuntimeContext,
+        AgentToolSurfaceConfig, ResolvedToolSelection, ToolCeiling, ToolRuntimeContext,
     };
 
     for request_scoped in [true, false] {
@@ -335,12 +331,12 @@ async fn oneshot_configured_output_gate_requires_real_write_and_respects_trigger
         let identity =
             crate::identity::KeyIdentity::load_or_create(dir.path().join("identity.key"), None)
                 .unwrap();
-        let mut behavior = crate::agent::PendingAgentBehavior::new("oneshot-output")
+        let mut behavior = crate::agent::PendingAgent::new("oneshot-output")
             .build_with_identity_for_test(identity);
-        crate::test_support::install_test_behavior(
+        crate::test_support::install_test_agent(
             node.as_ref(),
-            behavior.agent_did(),
-            &behavior.behavior_id,
+            behavior.node_did(),
+            &behavior.agent_id,
         )
         .await;
         behavior.model_name = "scripted".into();
@@ -367,8 +363,8 @@ async fn oneshot_configured_output_gate_requires_real_write_and_respects_trigger
                 expected_count_field: None,
             }),
         }];
-        behavior.tools = BehaviorToolConfig::from_selection(
-            &behavior.behavior_id,
+        behavior.tools = AgentToolSurfaceConfig::from_selection(
+            &behavior.agent_id,
             selection,
             &ToolCeiling::readwrite(dir.path()),
             Vec::new(),
@@ -376,7 +372,7 @@ async fn oneshot_configured_output_gate_requires_real_write_and_respects_trigger
         .unwrap();
         let surface = behavior
             .tools
-            .resolve(&node, behavior.agent_did(), &Default::default())
+            .resolve(&node, behavior.node_did(), &Default::default())
             .await
             .unwrap();
         let obligations = surface.output_obligations();
@@ -385,8 +381,7 @@ async fn oneshot_configured_output_gate_requires_real_write_and_respects_trigger
             1,
             "configured writer contract must survive surface resolution"
         );
-        let runtime =
-            ToolRuntimeContext::oneshot_with_agent_did(node.clone(), behavior.agent_did());
+        let runtime = ToolRuntimeContext::oneshot_with_node_did(node.clone(), behavior.node_did());
         let tools = Arc::new(surface.build_tools(&runtime).await.unwrap());
         let prompt = LayeredPromptBuilder::new(&behavior, &surface, &[]);
         let mut config = loop_config(

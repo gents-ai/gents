@@ -19,18 +19,18 @@ import { bootstrap, deployment } from "./config-panel-wiring/fixtures";
 const FORGE_DID = "did:key:z6MkForgeIdentity0123456789";
 const forgeBootstrap = {
   ...bootstrap,
-  initAgentName: "Forge",
-  initAgentDid: FORGE_DID,
+  initNodeName: "Forge",
+  initNodeDid: FORGE_DID,
 };
 const forge: DeploymentView = {
   ...deployment,
   peerId: "peer-forge",
   label: "Forge",
-  agentDid: FORGE_DID,
+  nodeDid: FORGE_DID,
   source: "local-standard",
-  agentPrincipal: {
-    ...deployment.agentPrincipal,
-    agentDid: FORGE_DID,
+  node: {
+    ...deployment.node,
+    nodeDid: FORGE_DID,
     displayName: "Forge",
   },
 };
@@ -38,11 +38,11 @@ const remote: DeploymentView = {
   ...deployment,
   peerId: "peer-remote",
   label: "Remote",
-  agentDid: "did:key:z6MkRemote",
+  nodeDid: "did:key:z6MkRemote",
   source: "enrollment",
-  agentPrincipal: {
-    ...deployment.agentPrincipal,
-    agentDid: "did:key:z6MkRemote",
+  node: {
+    ...deployment.node,
+    nodeDid: "did:key:z6MkRemote",
     displayName: "Remote",
   },
 };
@@ -51,8 +51,8 @@ function status(overrides: Partial<ManagedServerStatus> = {}): ManagedServerStat
   return {
     state: "running",
     autoStart: true,
-    agentName: "Forge",
-    agentDid: FORGE_DID,
+    nodeName: "Forge",
+    nodeDid: FORGE_DID,
     graphql: null,
     effectiveToolCeiling: "readwrite",
     effectiveToolRoot: "/tmp/work",
@@ -92,13 +92,13 @@ function fleet(listed: DeploymentView[]) {
 
 async function openAddAgent(app: DesktopApp) {
   renderIn(app, <AgentsScreen />);
-  await userEvent.click(screen.getByRole("button", { name: /Add agent/ }));
+  await userEvent.click(screen.getByRole("button", { name: /Add node/ }));
   return screen.findByRole("dialog");
 }
 
 beforeEach(() => vi.clearAllMocks());
 
-describe("Add agent enrollment", () => {
+describe("Add node enrollment", () => {
   it.each([[forge], [remote]])(
     "does not offer local reconnect for existing or removed local agents",
     async (listed) => {
@@ -108,9 +108,9 @@ describe("Add agent enrollment", () => {
         within(dialog).queryByRole("button", { name: /reconnect/i }),
       ).not.toBeInTheDocument();
       expect(
-        within(dialog).queryByRole("radio", { name: /Local agent/ }),
+        within(dialog).queryByRole("radio", { name: /Local node/ }),
       ).not.toBeInTheDocument();
-      expect(within(dialog).getByLabelText("Agent server")).toBeInTheDocument();
+      expect(within(dialog).getByLabelText("Node server")).toBeInTheDocument();
       expect(api.startManagedServer).not.toHaveBeenCalled();
       expect(api.initLocalStandardRuntime).not.toHaveBeenCalled();
     },
@@ -145,7 +145,7 @@ describe("Add agent enrollment", () => {
     api.requestStatusEnrollment.mockRejectedValueOnce(new Error("server refused"));
     let dialog = await openAddAgent(app);
     await userEvent.type(
-      within(dialog).getByLabelText("Agent server"),
+      within(dialog).getByLabelText("Node server"),
       "server.example:9191",
     );
     await userEvent.click(
@@ -156,7 +156,7 @@ describe("Add agent enrollment", () => {
     );
     await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-    await userEvent.click(screen.getByRole("button", { name: /Add agent/ }));
+    await userEvent.click(screen.getByRole("button", { name: /Add node/ }));
     dialog = await screen.findByRole("dialog");
     expect(within(dialog).queryByRole("alert")).not.toBeInTheDocument();
   });
@@ -166,7 +166,7 @@ describe("Add agent enrollment", () => {
     api.requestStatusEnrollment.mockResolvedValue({ requestId: "request-1" });
     const dialog = await openAddAgent(app);
     await userEvent.type(
-      within(dialog).getByLabelText("Agent server"),
+      within(dialog).getByLabelText("Node server"),
       "server.example:9191",
     );
     await userEvent.click(
@@ -202,13 +202,13 @@ describe("first-run local agent name", () => {
     let reviewed: ManagedServerAuthorityInput | undefined;
     const api = {
       managedServerStatus: vi.fn(async () =>
-        status({ state: "disabled", agentName: null, agentDid: null }),
+        status({ state: "disabled", nodeName: null, nodeDid: null }),
       ),
       startManagedServer: vi.fn(
         async (_name: string, authority?: ManagedServerAuthorityInput) => {
           reviewed = authority;
           return status({
-            agentName: opts.runtimeName,
+            nodeName: opts.runtimeName,
             effectiveToolCeiling: reviewed!.toolCeiling,
             effectiveToolRoot: reviewed!.toolRoot ?? null,
           });
@@ -219,7 +219,7 @@ describe("first-run local agent name", () => {
         bootstrap: forgeBootstrap,
         client: { deployments: [forge] },
       })),
-      initLocalStandardRuntime: vi.fn(async () => ({ agentDid: FORGE_DID })),
+      initLocalStandardRuntime: vi.fn(async () => ({ nodeDid: FORGE_DID })),
       startDesktopClient: vi.fn(async () => ({
         bootstrap: forgeBootstrap,
         client: { deployments: [forge] },
@@ -236,9 +236,9 @@ describe("first-run local agent name", () => {
       ? forgeBootstrap
       : {
           ...bootstrap,
-          initAgentName: null,
-          initAgentDid: null,
-          agentHomeExists: false,
+          initNodeName: null,
+          initNodeDid: null,
+          nodeHomeExists: false,
         };
     renderIn(
       testApp({ api, snapshot: { bootstrap: snapshotBootstrap } }),
@@ -249,7 +249,7 @@ describe("first-run local agent name", () => {
 
   it("shows an existing home's agent by name instead of asking for one it would ignore", async () => {
     const { api } = setup({ existingHome: true, runtimeName: "Forge" });
-    const name = screen.getByLabelText("Agent name");
+    const name = screen.getByLabelText("Node name");
     expect(name).toHaveValue("Forge");
     expect(name).toHaveAttribute("readonly");
     await userEvent.type(name, "Scout");
@@ -268,7 +268,7 @@ describe("first-run local agent name", () => {
 
   it("persists the entered name for a new home", async () => {
     const { api } = setup({ existingHome: false, runtimeName: "Scout" });
-    const name = screen.getByLabelText("Agent name");
+    const name = screen.getByLabelText("Node name");
     await userEvent.clear(name);
     await userEvent.type(name, "Scout");
     const next = screen.getByTestId("setup-next");
@@ -286,7 +286,7 @@ describe("first-run local agent name", () => {
 
   it("fails clearly instead of continuing under another agent's name", async () => {
     const { api } = setup({ existingHome: false, runtimeName: "Forge" });
-    const name = screen.getByLabelText("Agent name");
+    const name = screen.getByLabelText("Node name");
     await userEvent.clear(name);
     await userEvent.type(name, "Scout");
     const next = screen.getByTestId("setup-next");
@@ -295,7 +295,7 @@ describe("first-run local agent name", () => {
 
     expect(
       await screen.findByText(
-        "This computer already has a local agent named Forge, so Scout was not created. Go back to continue with Forge.",
+        "This computer already has a local node named Forge, so Scout was not created. Go back to continue with Forge.",
       ),
     ).toBeInTheDocument();
     expect(api.initLocalStandardRuntime).not.toHaveBeenCalled();

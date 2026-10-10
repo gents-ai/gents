@@ -393,7 +393,7 @@ async fn quiesced_pinned_route_group_becomes_durable_failure_evidence() {
         &node,
         format!(
             r#"mutation {{ create_EventGroupState(input: {{
-                group_key: "pinned-entry-group", agent_did: "{}", consumer: {{ kind: "trigger", trigger_id: "{}" }},
+                group_key: "pinned-entry-group", node_did: "{}", consumer: {{ kind: "trigger", trigger_id: "{}" }},
                 correlation: "{}", consumer_config_key: "pinned-entry-group-v1",
                 first_seen_at: "2026-09-05T00:00:00Z",
                 quiesced_at: "2026-09-05T00:01:00Z",
@@ -424,7 +424,7 @@ async fn quiesced_pinned_route_group_becomes_durable_failure_evidence() {
             &node,
             format!(
                 r#"mutation {{ create_EventGroupState(input: {{
-            group_key: "{key}", agent_did: "{}", consumer: {consumer}, correlation: "{}",
+            group_key: "{key}", node_did: "{}", consumer: {consumer}, correlation: "{}",
             consumer_config_key: "unrelated", first_seen_at: "2026-09-04T00:00:00Z",
             quiesced_at: "2026-09-04T00:01:00Z", quiesced_reason: "foreign failure"
         }}) {{_docID}} }}"#,

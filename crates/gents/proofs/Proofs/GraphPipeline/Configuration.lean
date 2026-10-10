@@ -14,11 +14,11 @@ inductive StageTarget where
 /-- Projection of an installed StageCapability: reference and caller selection.
 Schemas/versioning remain in the existing compiler validation boundary. -/
 structure CapabilitySelection where
-  agentDid : String
+  nodeDid : String
   target : StageTarget
   allowedCallers : List String
 
-/-- The artifact digest a principal's host has installed under a plugin name. -/
+/-- The artifact digest a node's host has installed under a plugin name. -/
 abbrev PluginInstalls := String → String → Option String
 
 /-- How a resolved stage runs. -/
@@ -27,16 +27,16 @@ inductive StageExecutor where
   | plugin (plugin digest : String)
 
 /-- A plugin stage runs only the exact artifact it was admitted with. -/
-def resolvePlugin (installs : PluginInstalls) (agentDid plugin digest : String) :
+def resolvePlugin (installs : PluginInstalls) (nodeDid plugin digest : String) :
     Except Configuration.ResolveError StageExecutor :=
-  match installs agentDid plugin with
+  match installs nodeDid plugin with
   | none => .error .missingPlugin
   | some installed =>
     if installed = digest then .ok (.plugin plugin digest) else .error .pluginDigestMismatch
 
-/-- A graph resolves a capability's target under that capability's principal.
+/-- A graph resolves a capability's target under that capability's node.
 Foreign capabilities are usable when authorized; no foreign config is installed
-or rewritten, and there is no graph-specific behavior/model override. -/
+or rewritten, and there is no graph-specific agent/model override. -/
 def resolveStage (capabilities : String → Option CapabilitySelection)
     (registry : Configuration.Registry) (installs : PluginInstalls)
     (caller capabilityId : String) :
@@ -46,8 +46,8 @@ def resolveStage (capabilities : String → Option CapabilitySelection)
   | some cap =>
     if caller ∈ cap.allowedCallers then
       match cap.target with
-      | .task taskId => (Configuration.resolveTask registry cap.agentDid taskId).map .model
-      | .plugin plugin digest => resolvePlugin installs cap.agentDid plugin digest
+      | .task taskId => (Configuration.resolveTask registry cap.nodeDid taskId).map .model
+      | .plugin plugin digest => resolvePlugin installs cap.nodeDid plugin digest
     else .error .callerNotAllowed
 
 theorem empty_callers_denied (capabilities : String → Option CapabilitySelection)
@@ -63,7 +63,7 @@ theorem stage_uses_common_task_resolver (capabilities : String → Option Capabi
     (hc : capabilities capabilityId = some cap) (ha : caller ∈ cap.allowedCallers)
     (ht : cap.target = .task taskId) :
     resolveStage capabilities registry installs caller capabilityId =
-      (Configuration.resolveTask registry cap.agentDid taskId).map .model := by
+      (Configuration.resolveTask registry cap.nodeDid taskId).map .model := by
   simp [resolveStage, hc, ha, ht]
 
 /-- A plugin stage never resolves to a model request. -/
@@ -89,7 +89,7 @@ theorem plugin_stage_runs_the_pinned_artifact (capabilities : String → Option 
     (hc : capabilities capabilityId = some cap) (ht : cap.target = .plugin plugin digest)
     (p d : String)
     (h : resolveStage capabilities registry installs caller capabilityId = .ok (.plugin p d)) :
-    p = plugin ∧ d = digest ∧ installs cap.agentDid plugin = some digest ∧
+    p = plugin ∧ d = digest ∧ installs cap.nodeDid plugin = some digest ∧
       caller ∈ cap.allowedCallers := by
   unfold resolveStage resolvePlugin at h
   simp only [hc, ht] at h
@@ -111,7 +111,7 @@ theorem plugin_digest_substitution_denied (capabilities : String → Option Capa
     (caller capabilityId : String) (cap : CapabilitySelection) (plugin digest installed : String)
     (hc : capabilities capabilityId = some cap) (ha : caller ∈ cap.allowedCallers)
     (ht : cap.target = .plugin plugin digest)
-    (hi : installs cap.agentDid plugin = some installed) (hne : installed ≠ digest) :
+    (hi : installs cap.nodeDid plugin = some installed) (hne : installed ≠ digest) :
     resolveStage capabilities registry installs caller capabilityId =
       .error .pluginDigestMismatch := by
   simp [resolveStage, resolvePlugin, hc, ha, ht, hi, hne]

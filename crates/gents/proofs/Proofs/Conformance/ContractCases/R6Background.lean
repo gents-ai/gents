@@ -160,15 +160,15 @@ def r6GoalOwnerCase (name : String) (goal : Option Goals.Status) : R6Backgroundi
     redriveAllowed := some redrive.isSome }
 
 def wakeSession : AgentSession.Document :=
-  { scope := ⟨1, 900, some 2⟩, behavior := 3, createdAt := 0 }
+  { scope := ⟨1, 900, some 2⟩, agent := 3, createdAt := 0 }
 def wakeParent (wake : BackgroundCompletion.FailedWake) : AgentSession.RequestFact :=
-  { purpose := .normal, scope := wakeSession.scope, behavior := 3, createdAt := 1,
+  { purpose := .normal, scope := wakeSession.scope, agent := 3, createdAt := 1,
     observed := ⟨101, wake.requestId, wake.ctx.state⟩ }
 def wakeSuccessor : AgentSession.RequestFact :=
-  { purpose := .normal, scope := wakeSession.scope, behavior := 3, createdAt := 3, observed := ⟨102, 902, .pending⟩ }
+  { purpose := .normal, scope := wakeSession.scope, agent := 3, createdAt := 3, observed := ⟨102, 902, .pending⟩ }
 /-- Different requester still blocks stale session-wide recovery. -/
 def newerInteractive : AgentSession.RequestFact :=
-  { purpose := .normal, scope := { wakeSession.scope with requester := some 99 }, behavior := 3,
+  { purpose := .normal, scope := { wakeSession.scope with requester := some 99 }, agent := 3,
     createdAt := 2, observed := ⟨103, 903, .processing⟩ }
 
 def r6FailedWakeRedriveCase
@@ -274,13 +274,14 @@ def r6WakeFailureBoundaryCase
     (some SessionQueue.QueueSource.backgroundCompletion.toDefraDB)
     (some "background_completion:900")
 
+/-- A deliberately noncanonical queue source that `fromDefraDB?` must reject. -/
 def r6NoncanonicalQueueSourceCase : R6BackgroundingCase :=
-  let noncanonical := "subagent_completion"
+  let noncanonical := "unrecognized_completion_source"
   let parsed := SessionQueue.QueueSource.fromDefraDB? noncanonical
   r6Case
-    "noncanonical_subagent_completion_source_is_rejected"
+    "noncanonical_completion_source_is_rejected"
     "queue_source"
-    "reject_noncanonical_subagent_completion"
+    "reject_noncanonical_completion"
     parsed.isNone
     1
     "completed"
@@ -291,9 +292,9 @@ def r6NoncanonicalQueueSourceCase : R6BackgroundingCase :=
     none
 
 def processScope
-    (requestId sessionId agentDid : String)
+    (requestId sessionId nodeDid : String)
     (requesterDid : Option String) : Background.ProcessControl.Scope :=
-  { requestId, sessionId, agentDid, requesterDid }
+  { requestId, sessionId, nodeDid, requesterDid }
 
 def r6ProcessControlCase
     (name action scenario : String)
@@ -610,8 +611,8 @@ theorem r6BackgroundingCases_pinned :
       , ("acknowledgement_projection_restart_is_atomic", true,
           "background", "completed", some "background_completion",
           some "background_completion:900")
-      , ("noncanonical_subagent_completion_source_is_rejected", true,
-          "background", "completed", some "subagent_completion",
+      , ("noncanonical_completion_source_is_rejected", true,
+          "background", "completed", some "unrecognized_completion_source",
           none)
       , ("list_processes_same_requester_next_turn_authorized", true,
           "background", "running", none, none)

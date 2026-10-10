@@ -3,22 +3,22 @@ use std::time::Duration;
 
 use gents::document_config::{DatastoreTools, SurfaceToolDecl, Tools};
 use gents::mailbox::{canonical_mailbox_write_decl, list_mailbox_items, MailboxStatus};
-use gents::{AgentIdentity, Collection, DatastoreToolSurfaceDocument};
+use gents::{Collection, DatastoreToolSurfaceDocument, NodeIdentity};
 
 use crate::support::accepted_turn::{
     boot_prepared_accepted_turn, prepare_accepted_turn, AcceptedTurnSpec,
 };
-use crate::support::fixtures::configure_behavior_tools;
+use crate::support::fixtures::configure_agent_tools;
 use crate::support::interrupt::create_runtime_request_caused_by_source;
 use crate::support::live_inference::wait_for_request_terminal;
 use crate::support::streaming_backend::{StreamChunk, StreamPlan, StreamResponse};
 use crate::support::test_db;
 
-const BEHAVIOR: &str = "mailbox-turn-engineer";
+const AGENT: &str = "mailbox-turn-engineer";
 const SURFACE: &str = "engineer-mailbox";
 
 /// Filing an informational mailbox item through a surface shaped like the
-/// Engineer's (`gents init --setup-steward`) is an ordinary tool call: the
+/// Engineer's (`gents init --engineer`) is an ordinary tool call: the
 /// receipt reaches the model and the request completes on the next turn.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn filing_a_mailbox_item_returns_a_receipt_and_the_turn_continues() {
@@ -31,8 +31,8 @@ async fn filing_a_mailbox_item_returns_a_receipt_and_the_turn_continues() {
         AcceptedTurnSpec {
             backend_id: "mailbox-tool-turn-backend",
             model: "mailbox-tool-turn-model",
-            parent_behavior_id: BEHAVIOR,
-            configured_behavior_ids: &[BEHAVIOR],
+            parent_agent_id: AGENT,
+            configured_agent_ids: &[AGENT],
             request_id,
             session_id: "mailbox-tool-turn-session",
             prompt,
@@ -47,25 +47,25 @@ async fn filing_a_mailbox_item_returns_a_receipt_and_the_turn_continues() {
             )],
             child_plans: Vec::new(),
             valid_until: None,
-            subagent_depth: None,
+            request_hop: None,
             request_setup: None,
         },
     )
     .await;
-    configure_behavior_tools(
+    configure_agent_tools(
         db.node.as_ref(),
         &did,
-        BEHAVIOR,
+        AGENT,
         None,
         Tools {
-            tools_id: format!("{BEHAVIOR}:tools"),
-            agent_did: did.clone(),
+            tools_id: format!("{AGENT}:tools"),
+            node_did: did.clone(),
             datastore: Some(DatastoreTools {
                 enable_defra_query: Some(true),
                 datastore_tool_surface_ids: Some(vec![SURFACE.into()]),
                 ..Default::default()
             }),
-            subagents: Some(gents::document_config::SubagentTools {
+            agents: Some(gents::document_config::AgentTools {
                 target_ids: Vec::new(),
                 enabled: Some(true),
             }),
@@ -74,14 +74,14 @@ async fn filing_a_mailbox_item_returns_a_receipt_and_the_turn_continues() {
                 enable_graph_tools: Some(true),
                 ..Default::default()
             }),
-            self_config: Some(gents::agent::persona_ops::setup_steward_self_config()),
+            self_config: Some(gents::self_config::engineer_self_config()),
             ..Default::default()
         },
         vec![(
             Collection::DatastoreToolSurface,
             serde_json::to_value(DatastoreToolSurfaceDocument {
                 surface_id: SURFACE.into(),
-                agent_did: did.clone(),
+                node_did: did.clone(),
                 display_name: Some("Engineer escalations".into()),
                 enabled: true,
                 entries: Some(vec![
@@ -94,8 +94,8 @@ async fn filing_a_mailbox_item_returns_a_receipt_and_the_turn_continues() {
         )],
     )
     .await;
-    let identity: Arc<dyn AgentIdentity> = db.node_identity.clone();
-    let agent = gents::Gents::from_default_behavior_documents(
+    let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
+    let agent = gents::Gents::from_default_agent_documents(
         db.node.clone(),
         identity,
         gents::DocumentRuntimeOptions::default(),
@@ -152,14 +152,14 @@ async fn filing_a_mailbox_item_returns_a_receipt_and_the_turn_continues() {
 }
 
 pub(super) async fn configure_engineer_mailbox(db: &crate::support::TestDb, did: &str) {
-    configure_behavior_tools(
+    configure_agent_tools(
         db.node.as_ref(),
         did,
-        BEHAVIOR,
+        AGENT,
         None,
         Tools {
-            tools_id: format!("{BEHAVIOR}:tools"),
-            agent_did: did.to_string(),
+            tools_id: format!("{AGENT}:tools"),
+            node_did: did.to_string(),
             datastore: Some(DatastoreTools {
                 datastore_tool_surface_ids: Some(vec![SURFACE.into()]),
                 ..Default::default()
@@ -170,7 +170,7 @@ pub(super) async fn configure_engineer_mailbox(db: &crate::support::TestDb, did:
             Collection::DatastoreToolSurface,
             serde_json::to_value(DatastoreToolSurfaceDocument {
                 surface_id: SURFACE.into(),
-                agent_did: did.to_string(),
+                node_did: did.to_string(),
                 display_name: Some("Engineer escalations".into()),
                 enabled: true,
                 entries: Some(vec![
@@ -223,8 +223,8 @@ async fn a_filed_question_is_answered_through_the_reply_request() {
         AcceptedTurnSpec {
             backend_id: "mailbox-question-backend",
             model: "mailbox-question-model",
-            parent_behavior_id: BEHAVIOR,
-            configured_behavior_ids: &[BEHAVIOR],
+            parent_agent_id: AGENT,
+            configured_agent_ids: &[AGENT],
             request_id: "mailbox-question-request",
             session_id,
             prompt: "mailbox-question-prompt",
@@ -238,14 +238,14 @@ async fn a_filed_question_is_answered_through_the_reply_request() {
                 vec![StreamResponse::completes(reply.clone(), ["noted"])],
             )],
             valid_until: None,
-            subagent_depth: None,
+            request_hop: None,
             request_setup: None,
         },
     )
     .await;
     configure_engineer_mailbox(&db, &did).await;
-    let identity: Arc<dyn AgentIdentity> = db.node_identity.clone();
-    let agent = gents::Gents::from_default_behavior_documents(
+    let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
+    let agent = gents::Gents::from_default_agent_documents(
         db.node.clone(),
         identity,
         gents::DocumentRuntimeOptions::default(),
@@ -281,7 +281,7 @@ async fn a_filed_question_is_answered_through_the_reply_request() {
     let reply_doc = create_runtime_request_caused_by_source(
         db.node.as_ref(),
         &did,
-        BEHAVIOR,
+        AGENT,
         "mailbox-question-reply",
         session_id,
         &item.doc_id,
@@ -372,8 +372,8 @@ async fn a_question_answered_while_its_session_is_busy_is_queued_behind_the_turn
         AcceptedTurnSpec {
             backend_id: "mailbox-question-busy-backend",
             model: "mailbox-question-busy-model",
-            parent_behavior_id: BEHAVIOR,
-            configured_behavior_ids: &[BEHAVIOR],
+            parent_agent_id: AGENT,
+            configured_agent_ids: &[AGENT],
             request_id: asking,
             session_id,
             prompt,
@@ -387,7 +387,7 @@ async fn a_question_answered_while_its_session_is_busy_is_queued_behind_the_turn
                 vec![StreamResponse::completes(reply.clone(), ["noted"])],
             )],
             valid_until: None,
-            subagent_depth: None,
+            request_hop: None,
             request_setup: None,
         },
     )
@@ -395,8 +395,8 @@ async fn a_question_answered_while_its_session_is_busy_is_queued_behind_the_turn
     // The asking turn keeps working: its next provider turn waits on the test.
     prepared.backend.enable_dynamic_followups(prompt);
     configure_engineer_mailbox(&db, &did).await;
-    let identity: Arc<dyn AgentIdentity> = db.node_identity.clone();
-    let agent = gents::Gents::from_default_behavior_documents(
+    let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
+    let agent = gents::Gents::from_default_agent_documents(
         db.node.clone(),
         identity,
         gents::DocumentRuntimeOptions::default(),
@@ -431,7 +431,7 @@ async fn a_question_answered_while_its_session_is_busy_is_queued_behind_the_turn
         "mailbox-question-busy-reply",
         &did,
         &did,
-        BEHAVIOR,
+        AGENT,
         session_id,
         &reply,
         "interactive",

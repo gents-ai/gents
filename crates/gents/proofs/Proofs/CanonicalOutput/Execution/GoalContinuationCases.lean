@@ -28,7 +28,7 @@ def goalEntry : SessionQueue.QueueEntry :=
 
 def physicalBinding (status : Goals.Status := .active) : GoalContinuation.Binding :=
   { goalDocument := 70, goalOwner := "owner", goalSession := "session"
-  , observedStatus := status, executionAgent := 1, executionSession := 1
+  , observedStatus := status, executionNode := 1, executionSession := 1
   , parentDocument := 10, parentLogical := 10, childDocument := 200, childRequester := none
   , childEntry := goalEntry, observation := ⟨[], some [], false⟩, authenticated := true }
 
@@ -38,7 +38,7 @@ def parentLease : RequestExecutionLease.World Generation :=
   , continuationCount := 0, tokenChargeCount := 0 }
 
 def parentWorld : World :=
-  { requestId := 10, sessionId := 1, purpose := .normal, principal := 1
+  { requestId := 10, sessionId := 1, purpose := .normal, nodeDid := 1
   , lease := parentLease, segments := [], messages := [], transcript := transcript
   , compactionCursor := none, toolContexts := []
   , terminalSelection := some .noMessage }

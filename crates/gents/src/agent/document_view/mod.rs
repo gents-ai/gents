@@ -21,12 +21,12 @@ pub(crate) struct DocumentRecord<T> {
 /// principal; loader rejects duplicates and no global-ID fallback is permitted.
 #[derive(Debug, Clone)]
 pub(crate) struct DocumentRuntimeView {
-    pub(crate) principal: DocumentRecord<AgentPrincipal>,
-    pub(crate) behaviors: HashMap<String, DocumentRecord<AgentBehavior>>,
+    pub(crate) node: DocumentRecord<Node>,
+    pub(crate) agents: HashMap<String, DocumentRecord<Agent>>,
     pub(crate) contexts: HashMap<String, DocumentRecord<AgentContext>>,
     pub(crate) compactions: HashMap<String, DocumentRecord<CompactionConfig>>,
     pub(crate) tools: HashMap<String, DocumentRecord<Tools>>,
-    pub(crate) subagent_targets: HashMap<String, DocumentRecord<SubagentTargetDocument>>,
+    pub(crate) agent_targets: HashMap<String, DocumentRecord<AgentTargetDocument>>,
     pub(crate) skills: HashMap<String, DocumentRecord<SkillDocument>>,
     pub(crate) datastore_tool_surfaces:
         HashMap<String, DocumentRecord<DatastoreToolSurfaceDocument>>,
@@ -49,7 +49,7 @@ pub(crate) struct DocumentRuntimeView {
     pub(crate) repository_placements: HashMap<String, DocumentRecord<RepositoryPlacement>>,
     pub(crate) backend_observations: HashMap<String, InferenceBackendObservation>,
     /// Backends whose provider_kind this build does not know, ID to kind. Their
-    /// rows are skipped; behaviors on them resolve as unavailable, not pending.
+    /// rows are skipped; agents on them resolve as unavailable, not pending.
     pub(crate) unknown_kind_backends: HashMap<String, String>,
     pub(crate) oauth_credentials: HashMap<String, DocumentRecord<OAuthCredential>>,
 }
@@ -69,28 +69,28 @@ impl DocumentRuntimeView {
     ) -> bool {
         crate::oauth_credential::pick_oauth_credential(
             self.oauth_credentials.values().map(|record| &record.value),
-            &self.principal.value.agent_did,
+            &self.node.value.node_did,
             provider,
             pick,
         )
         .is_some()
     }
 
-    pub(crate) fn has_unresolved_behavior_references(&self) -> bool {
+    pub(crate) fn has_unresolved_agent_references(&self) -> bool {
         !self.pending_visibility_details().is_empty()
     }
 
     pub(crate) fn pending_visibility_details(&self) -> Vec<String> {
         let mut details = Vec::new();
-        if let Some(id) = self.principal.value.default_behavior_id.as_deref() {
-            if !self.behaviors.contains_key(id) {
+        if let Some(id) = self.node.value.default_agent_id.as_deref() {
+            if !self.agents.contains_key(id) {
                 details.push(format!(
-                    "principal {} references missing default behavior {id}",
-                    self.principal.value.agent_did
+                    "principal {} references missing default agent {id}",
+                    self.node.value.node_did
                 ));
             }
         }
-        for record in self.behaviors.values() {
+        for record in self.agents.values() {
             snapshot::collect_unresolved_behavior_references(self, &record.value, &mut details);
         }
         details.sort();
@@ -177,7 +177,7 @@ fn expand_eth_tools_with<'a>(
                 tool_id
             )
         })?;
-        if doc.agent_did.trim() != selection.agent_did.trim() {
+        if doc.node_did.trim() != selection.node_did.trim() {
             bail!(
                 "Tools {} references EthTool {} owned by a different agent",
                 selection.tools_id,
@@ -208,7 +208,7 @@ fn expand_eth_tools_with<'a>(
                 chain_id,
                 rpc_url,
                 &decls,
-                &doc.agent_did,
+                &doc.node_did,
                 doc.key_binding_id.as_deref(),
                 crate::eth::HttpEthRpc::configured_timeout(doc.rpc_timeout_secs)?,
             )?;

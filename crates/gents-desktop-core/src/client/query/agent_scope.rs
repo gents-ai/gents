@@ -1,45 +1,40 @@
 use super::*;
 
-/// Load the bounded observer projection for a specific `agent_did`.
-/// Agent-keyed collections (including Goal) are filtered by `agent_did`;
+/// Load the bounded observer projection for a specific `node_did`.
+/// Node-keyed collections (including Goal) are filtered by `node_did`;
 /// session metadata is read directly from the canonical AgentSession owner.
 /// Transcript content is intentionally excluded and remains in DefraDB.
 /// Control-plane
 /// collections (InferenceBackend, InferenceProfile, ToolServiceRegistry,
 /// Task and Schedule) load in full — they're operator-authored
 /// and small.
-pub async fn load_agent_scoped_snapshot(
-    node: &EmbeddedNode,
-    agent_did: &str,
-) -> Result<ClientStore> {
-    let did = escape_graphql_string(agent_did);
-    let did_filter = format!("filter: {{ agent_did: {{ _eq: \"{did}\" }} }}");
+pub async fn load_node_scoped_snapshot(node: &EmbeddedNode, node_did: &str) -> Result<ClientStore> {
+    let did = escape_graphql_string(node_did);
+    let did_filter = format!("filter: {{ node_did: {{ _eq: \"{did}\" }} }}");
 
-    // Agent-keyed collections.
-    let agent_principals: Vec<AgentPrincipal> = load_rows(
+    // Node-keyed collections.
+    let nodes: Vec<Node> = load_rows(
         node,
-        AGENT_PRINCIPAL_NAME,
-        &format!("query {{ {AGENT_PRINCIPAL_NAME}({did_filter}) {{ {AGENT_PRINCIPAL_FIELDS} }} }}"),
+        NODE_NAME,
+        &format!("query {{ {NODE_NAME}({did_filter}) {{ {NODE_FIELDS} }} }}"),
     )
     .await?;
-    let behaviors: Vec<AgentBehavior> = load_rows(
+    let agents: Vec<Agent> = load_rows(
         node,
-        AGENT_BEHAVIOR_NAME,
-        &format!("query {{ {AGENT_BEHAVIOR_NAME}({did_filter}) {{ {AGENT_BEHAVIOR_FIELDS} }} }}"),
+        AGENT_NAME,
+        &format!("query {{ {AGENT_NAME}({did_filter}) {{ {AGENT_FIELDS} }} }}"),
     )
     .await?;
-    let runtimes: Vec<AgentRuntimeRow> = load_rows(
+    let runtimes: Vec<NodeRuntimeRow> = load_rows(
         node,
-        AGENT_RUNTIME_NAME,
-        &format!("query {{ {AGENT_RUNTIME_NAME}({did_filter}) {{ {AGENT_RUNTIME_FIELDS} }} }}"),
+        NODE_RUNTIME_NAME,
+        &format!("query {{ {NODE_RUNTIME_NAME}({did_filter}) {{ {NODE_RUNTIME_FIELDS} }} }}"),
     )
     .await?;
-    let behavior_readiness: Vec<AgentBehaviorReadinessRow> = load_rows(
+    let node_readiness: Vec<NodeReadinessRow> = load_rows(
         node,
-        AGENT_BEHAVIOR_READINESS_NAME,
-        &format!(
-            "query {{ {AGENT_BEHAVIOR_READINESS_NAME}({did_filter}) {{ {AGENT_BEHAVIOR_READINESS_FIELDS} }} }}"
-        ),
+        NODE_READINESS_NAME,
+        &format!("query {{ {NODE_READINESS_NAME}({did_filter}) {{ {NODE_READINESS_FIELDS} }} }}"),
     )
     .await?;
     let requests: Vec<AgentRequestRow> = load_rows(
@@ -171,10 +166,10 @@ pub async fn load_agent_scoped_snapshot(
         &format!("query {{ EventSource({did_filter}) {{ {EVENT_SOURCE_FIELDS} }} }}"),
     )
     .await?;
-    let subagent_targets: Vec<SubagentTargetDocument> = load_rows(
+    let agent_targets: Vec<AgentTargetDocument> = load_rows(
         node,
-        "SubagentTarget",
-        &format!("query {{ SubagentTarget({did_filter}) {{ {SUBAGENT_TARGET_FIELDS} }} }}"),
+        AGENT_TARGET_NAME,
+        &format!("query {{ {AGENT_TARGET_NAME}({did_filter}) {{ {AGENT_TARGET_FIELDS} }} }}"),
     )
     .await?;
     let datastore_tool_surfaces: Vec<DatastoreToolSurfaceDocument> = load_rows(
@@ -191,77 +186,77 @@ pub async fn load_agent_scoped_snapshot(
         &format!("query {{ ChainKeyBinding({did_filter}) {{ {CHAIN_KEY_BINDING_FIELDS} }} }}"),
     )
     .await?;
-    let session_source_agent_dids = vec![Some(agent_did.to_string()); sessions.len()];
-    let trigger_source_agent_dids = vec![Some(agent_did.to_string()); triggers.len()];
-    let trigger_observation_source_agent_dids =
-        vec![Some(agent_did.to_string()); trigger_observations.len()];
-    let source_scope = |len| vec![Some(agent_did.to_string()); len];
-    let task_source_agent_dids = source_scope(tasks.len());
-    let schedule_source_agent_dids = source_scope(schedules.len());
-    let schedule_observation_source_agent_dids = source_scope(schedule_observations.len());
-    let skill_source_agent_dids = source_scope(skills.len());
-    let tools_source_agent_dids = source_scope(tools.len());
-    let context_source_agent_dids = source_scope(contexts.len());
-    let compaction_source_agent_dids = source_scope(compactions.len());
-    let inference_backend_source_agent_dids = source_scope(inference_backends.len());
-    let backend_observation_source_agent_dids = source_scope(backend_observations.len());
-    let inference_profile_source_agent_dids = source_scope(inference_profiles.len());
-    let inference_sampling_source_agent_dids = source_scope(inference_sampling.len());
-    let inference_execution_source_agent_dids = source_scope(inference_execution.len());
-    let tool_service_registry_source_agent_dids = source_scope(tool_service_registries.len());
-    let event_source_source_agent_dids = source_scope(event_sources.len());
-    let subagent_target_source_agent_dids = source_scope(subagent_targets.len());
-    let datastore_tool_surface_source_agent_dids = source_scope(datastore_tool_surfaces.len());
-    let chain_key_binding_source_agent_dids = source_scope(chain_key_bindings.len());
+    let session_source_node_dids = vec![Some(node_did.to_string()); sessions.len()];
+    let trigger_source_node_dids = vec![Some(node_did.to_string()); triggers.len()];
+    let trigger_observation_source_node_dids =
+        vec![Some(node_did.to_string()); trigger_observations.len()];
+    let source_scope = |len| vec![Some(node_did.to_string()); len];
+    let task_source_node_dids = source_scope(tasks.len());
+    let schedule_source_node_dids = source_scope(schedules.len());
+    let schedule_observation_source_node_dids = source_scope(schedule_observations.len());
+    let skill_source_node_dids = source_scope(skills.len());
+    let tools_source_node_dids = source_scope(tools.len());
+    let context_source_node_dids = source_scope(contexts.len());
+    let compaction_source_node_dids = source_scope(compactions.len());
+    let inference_backend_source_node_dids = source_scope(inference_backends.len());
+    let backend_observation_source_node_dids = source_scope(backend_observations.len());
+    let inference_profile_source_node_dids = source_scope(inference_profiles.len());
+    let inference_sampling_source_node_dids = source_scope(inference_sampling.len());
+    let inference_execution_source_node_dids = source_scope(inference_execution.len());
+    let tool_service_registry_source_node_dids = source_scope(tool_service_registries.len());
+    let event_source_source_node_dids = source_scope(event_sources.len());
+    let agent_target_source_node_dids = source_scope(agent_targets.len());
+    let datastore_tool_surface_source_node_dids = source_scope(datastore_tool_surfaces.len());
+    let chain_key_binding_source_node_dids = source_scope(chain_key_bindings.len());
 
     Ok(ClientStore::from_rows(ClientStoreRows {
-        agent_principals,
-        behaviors,
+        nodes,
+        agents,
         runtimes,
-        behavior_readiness,
+        node_readiness,
         requests,
         mailbox_items,
         sessions,
-        session_source_agent_dids,
+        session_source_node_dids,
         goals,
         tasks,
-        task_source_agent_dids,
+        task_source_node_dids,
         schedules,
-        schedule_source_agent_dids,
-        schedule_observation_source_agent_dids,
+        schedule_source_node_dids,
+        schedule_observation_source_node_dids,
         schedule_observations,
         triggers,
         trigger_observations,
-        trigger_source_agent_dids,
-        trigger_observation_source_agent_dids,
+        trigger_source_node_dids,
+        trigger_observation_source_node_dids,
         skills,
-        skill_source_agent_dids,
+        skill_source_node_dids,
         tools,
-        tools_source_agent_dids,
+        tools_source_node_dids,
         contexts,
-        context_source_agent_dids,
+        context_source_node_dids,
         compactions,
-        compaction_source_agent_dids,
+        compaction_source_node_dids,
         inference_backends,
-        inference_backend_source_agent_dids,
+        inference_backend_source_node_dids,
         backend_observations,
-        backend_observation_source_agent_dids,
+        backend_observation_source_node_dids,
         inference_profiles,
-        inference_profile_source_agent_dids,
+        inference_profile_source_node_dids,
         inference_sampling,
-        inference_sampling_source_agent_dids,
+        inference_sampling_source_node_dids,
         inference_execution,
-        inference_execution_source_agent_dids,
+        inference_execution_source_node_dids,
         tool_service_registries,
-        tool_service_registry_source_agent_dids,
+        tool_service_registry_source_node_dids,
         event_sources,
-        event_source_source_agent_dids,
-        subagent_targets,
-        subagent_target_source_agent_dids,
+        event_source_source_node_dids,
+        agent_targets,
+        agent_target_source_node_dids,
         datastore_tool_surfaces,
-        datastore_tool_surface_source_agent_dids,
+        datastore_tool_surface_source_node_dids,
         chain_key_bindings,
-        chain_key_binding_source_agent_dids,
+        chain_key_binding_source_node_dids,
         ..ClientStoreRows::default()
     }))
 }

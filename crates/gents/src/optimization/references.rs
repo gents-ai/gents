@@ -38,7 +38,7 @@ pub fn journal_run_ids(journal: &[JournalEntry]) -> BTreeSet<String> {
 /// The ids of every job `owner` has, sorted.
 pub async fn job_ids(access: &ConfigAccess, owner: &str) -> Result<Vec<String>> {
     let query = format!(
-        r#"{{ OptimizationJob(filter: {{ owner_agent_did: {{ _eq: "{owner}" }} }}) {{ job_id }} }}"#,
+        r#"{{ OptimizationJob(filter: {{ owner_node_did: {{ _eq: "{owner}" }} }}) {{ job_id }} }}"#,
         owner = escape_graphql_string(owner),
     );
     let response = access

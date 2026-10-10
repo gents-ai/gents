@@ -29,20 +29,20 @@ pub struct BootedAgent {
     shutdown_tx: tokio::sync::watch::Sender<bool>,
     handle: Option<tokio::task::JoinHandle<anyhow::Result<()>>>,
     signal_shutdown_on_drop: bool,
-    pub agent_did: String,
+    pub node_did: String,
 }
 
 impl BootedAgent {
     pub fn new(
         shutdown_tx: tokio::sync::watch::Sender<bool>,
         handle: tokio::task::JoinHandle<anyhow::Result<()>>,
-        agent_did: String,
+        node_did: String,
     ) -> Self {
         Self {
             shutdown_tx,
             handle: Some(handle),
             signal_shutdown_on_drop: true,
-            agent_did,
+            node_did: node_did,
         }
     }
 
@@ -88,24 +88,24 @@ impl Drop for BootedAgent {
     }
 }
 
-pub async fn wait_for_runtime_ready(node: &EmbeddedNode, agent_did: &str) {
-    gents::eval::runner::embedded::wait_for_runtime_ready(node, agent_did)
+pub async fn wait_for_runtime_ready(node: &EmbeddedNode, node_did: &str) {
+    gents::eval::runner::embedded::wait_for_runtime_ready(node, node_did)
         .await
         .expect("runtime ready");
 }
 
 pub async fn create_runtime_request(
     node: &EmbeddedNode,
-    agent_did: &str,
-    behavior_id: &str,
+    node_did: &str,
+    agent_id: &str,
     request_id: &str,
     session_id: &str,
     content: &str,
 ) -> String {
     create_runtime_request_inner(
         node,
-        agent_did,
-        behavior_id,
+        node_did,
+        agent_id,
         request_id,
         session_id,
         None,
@@ -118,8 +118,8 @@ pub async fn create_runtime_request(
 
 pub async fn create_runtime_request_with_valid_until(
     node: &EmbeddedNode,
-    agent_did: &str,
-    behavior_id: &str,
+    node_did: &str,
+    agent_id: &str,
     request_id: &str,
     session_id: &str,
     valid_until: &str,
@@ -127,8 +127,8 @@ pub async fn create_runtime_request_with_valid_until(
 ) -> String {
     create_runtime_request_inner(
         node,
-        agent_did,
-        behavior_id,
+        node_did,
+        agent_id,
         request_id,
         session_id,
         Some(valid_until),
@@ -141,8 +141,8 @@ pub async fn create_runtime_request_with_valid_until(
 
 pub async fn create_runtime_request_with_execution_origin(
     node: &EmbeddedNode,
-    agent_did: &str,
-    behavior_id: &str,
+    node_did: &str,
+    agent_id: &str,
     request_id: &str,
     session_id: &str,
     execution_origin: &str,
@@ -150,8 +150,8 @@ pub async fn create_runtime_request_with_execution_origin(
 ) -> String {
     create_runtime_request_inner(
         node,
-        agent_did,
-        behavior_id,
+        node_did,
+        agent_id,
         request_id,
         session_id,
         None,
@@ -164,8 +164,8 @@ pub async fn create_runtime_request_with_execution_origin(
 
 pub async fn create_runtime_request_caused_by_source(
     node: &EmbeddedNode,
-    agent_did: &str,
-    behavior_id: &str,
+    node_did: &str,
+    agent_id: &str,
     request_id: &str,
     session_id: &str,
     caused_by_source_doc_id: &str,
@@ -173,8 +173,8 @@ pub async fn create_runtime_request_caused_by_source(
 ) -> String {
     create_runtime_request_inner(
         node,
-        agent_did,
-        behavior_id,
+        node_did,
+        agent_id,
         request_id,
         session_id,
         None,
@@ -187,8 +187,8 @@ pub async fn create_runtime_request_caused_by_source(
 
 async fn create_runtime_request_inner(
     node: &EmbeddedNode,
-    agent_did: &str,
-    behavior_id: &str,
+    node_did: &str,
+    agent_id: &str,
     request_id: &str,
     session_id: &str,
     valid_until: Option<&str>,
@@ -196,20 +196,20 @@ async fn create_runtime_request_inner(
     caused_by_source_doc_id: Option<&str>,
     content: &str,
 ) -> String {
-    ensure_generated_session(node, agent_did, behavior_id, session_id).await;
+    ensure_generated_session(node, node_did, agent_id, session_id).await;
 
     let created_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         request_id,
-        agent_did,
-        agent_did,
-        behavior_id,
+        node_did,
+        node_did,
+        agent_id,
         session_id,
         content,
         execution_origin,
         created_at,
-        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(agent_did),
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(node_did),
     );
     create.max_retries = i64::from(gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES);
     create.valid_until = valid_until.map(str::to_string);
@@ -232,8 +232,8 @@ async fn create_runtime_request_inner(
 
 async fn ensure_generated_session(
     node: &EmbeddedNode,
-    agent_did: &str,
-    behavior_id: &str,
+    node_did: &str,
+    agent_id: &str,
     session_id: &str,
 ) {
     if super::snapshots::fetch_session_snapshot(node, session_id)
@@ -243,9 +243,9 @@ async fn ensure_generated_session(
         return;
     }
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let mut session = super::session_document(session_id, behavior_id, &now);
-    session.agent_did = agent_did.to_owned();
-    session.requester_did = Some(agent_did.to_owned());
+    let mut session = super::session_document(session_id, agent_id, &now);
+    session.node_did = node_did.to_owned();
+    session.requester_did = Some(node_did.to_owned());
     session.title = Some(gents_protocol::session::SessionTitle {
         text: "generated-title".into(),
         source: gents_protocol::session::SessionTitleSource::Generated,

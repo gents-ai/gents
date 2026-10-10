@@ -19,32 +19,30 @@ fn recent_runs_view(runs: &TaskRecentRuns) -> TaskRecentRunsView {
     }
 }
 
-pub(super) fn source_matches_agent(
+pub(super) fn source_matches_node(
     sources: &[Option<String>],
     row_index: usize,
-    agent_did: &str,
+    node_did: &str,
     require_source_scope: bool,
 ) -> bool {
     match sources.get(row_index).and_then(|source| source.as_deref()) {
-        Some(source_agent_did) => source_agent_did == agent_did,
+        Some(source_node_did) => source_node_did == node_did,
         None => !require_source_scope,
     }
 }
 
-pub(super) fn request_matches_agent(request: &AgentRequestRow, agent_did: &str) -> bool {
-    request.agent_did.as_deref() == Some(agent_did)
+pub(super) fn request_matches_node(request: &AgentRequestRow, node_did: &str) -> bool {
+    request.node_did.as_deref() == Some(node_did)
 }
 
 pub(super) fn recent_runs_for_task_views(
     triggers: &[TriggerView],
-    agent_did: &str,
+    node_did: &str,
     task_id: &str,
 ) -> TaskRecentRunsView {
     let matching = triggers
         .iter()
-        .filter(|trigger| {
-            trigger.config.agent_did == agent_did && trigger.config.task_id == task_id
-        })
+        .filter(|trigger| trigger.config.node_did == node_did && trigger.config.task_id == task_id)
         .collect::<Vec<_>>();
     let latest = matching
         .iter()
@@ -88,13 +86,13 @@ pub(super) fn recent_runs_for_task_views(
 pub(super) fn session_summaries(
     sessions: &[AgentSession],
     requests: &[AgentRequestRow],
-    agent_did: &str,
+    node_did: &str,
     tasks: &[TaskView],
     triggers: &[TriggerView],
 ) -> Vec<SessionSummary> {
     let mut summaries = sessions
         .iter()
-        .filter(|session| session.agent_did == agent_did)
+        .filter(|session| session.node_did == node_did)
         .map(|session| {
             let observation = session.observation.as_ref();
             let indexed = observation.and_then(|value| value.latest_request.as_ref());
@@ -102,7 +100,7 @@ pub(super) fn session_summaries(
                 indexed.is_some_and(|indexed| {
                     request.doc_id.as_deref() == Some(indexed.request_doc_id.as_str())
                         && request.request_id == indexed.request_id
-                }) && request.agent_did.as_deref() == Some(session.agent_did.as_str())
+                }) && request.node_did.as_deref() == Some(session.node_did.as_str())
                     && request.session_id.as_deref() == Some(session.session_id.as_str())
                     && request.requester_did == session.requester_did
             });
@@ -127,7 +125,7 @@ pub(super) fn session_summaries(
                 let session_requests = requests
                     .iter()
                     .filter(|row| {
-                        row.agent_did.as_deref() == Some(session.agent_did.as_str())
+                        row.node_did.as_deref() == Some(session.node_did.as_str())
                             && row.session_id.as_deref() == Some(session.session_id.as_str())
                             && row.requester_did == session.requester_did
                     })
@@ -148,7 +146,7 @@ pub(super) fn session_summaries(
                     triggers
                         .iter()
                         .find(|trigger| {
-                            trigger.config.agent_did == session.agent_did
+                            trigger.config.node_did == session.node_did
                                 && Some(trigger.config.trigger_id.as_str()) == trigger_id.as_deref()
                         })
                         .map(|trigger| trigger.config.task_id.clone())
@@ -160,7 +158,7 @@ pub(super) fn session_summaries(
             SessionSummary {
                 started_by: None,
                 session_id: session.session_id.clone(),
-                agent_did: session.agent_did.clone(),
+                node_did: session.node_did.clone(),
                 requester_did: session.requester_did.clone(),
                 latest_request_doc_id: request
                     .and_then(|request| request.doc_id.clone())
@@ -171,7 +169,7 @@ pub(super) fn session_summaries(
                 title: session.title.as_ref().map(|title| title.text.clone()),
                 preview_text: observation.and_then(|value| value.preview.clone()),
                 status: lifecycle.map(|state| state.as_str().to_owned()),
-                behavior_id: Some(session.behavior_id.clone()),
+                agent_id: Some(session.agent_id.clone()),
                 latest_request_id: request
                     .map(|request| request.request_id.clone())
                     .or_else(|| indexed.map(|indexed| indexed.request_id.clone())),
@@ -209,15 +207,13 @@ pub(super) fn session_summaries(
 
 pub(super) fn task_run_history(
     store: &ClientStore,
-    agent_did: &str,
+    node_did: &str,
     task_id: &str,
     triggers: &[TriggerView],
 ) -> Vec<TaskRunSummaryView> {
     let trigger_ids = triggers
         .iter()
-        .filter(|trigger| {
-            trigger.config.agent_did == agent_did && trigger.config.task_id == task_id
-        })
+        .filter(|trigger| trigger.config.node_did == node_did && trigger.config.task_id == task_id)
         .map(|trigger| trigger.config.trigger_id.as_str())
         .collect::<Vec<_>>();
 
@@ -225,7 +221,7 @@ pub(super) fn task_run_history(
         .requests
         .iter()
         .filter(|request| {
-            if !request_matches_agent(request, agent_did) {
+            if !request_matches_node(request, node_did) {
                 return false;
             }
             request
@@ -236,10 +232,10 @@ pub(super) fn task_run_history(
         .map(|request| TaskRunSummaryView {
             request_id: request.request_id.clone(),
             request_doc_id: request.doc_id.clone(),
-            agent_did: agent_did.to_owned(),
+            node_did: node_did.to_owned(),
             requester_did: request.requester_did.clone(),
             session_id: normalize_optional(request.session_id.as_deref()),
-            behavior_id: request.behavior_id.clone(),
+            agent_id: request.agent_id.clone(),
             lifecycle_state: request
                 .lifecycle_state
                 .map(|state| state.as_str().to_string()),
@@ -269,7 +265,7 @@ mod trigger_recent_runs_tests {
         let trigger =
             |owner: &str, id: &str, source: serde_json::Value, fires, at: &str| TriggerView {
                 config: serde_json::from_value(serde_json::json!({
-                    "agent_did": owner, "trigger_id": id, "task_id": "task", "source": source
+                    "node_did": owner, "trigger_id": id, "task_id": "task", "source": source
                 }))
                 .unwrap(),
                 next_run_at: None,
@@ -359,7 +355,7 @@ pub(super) async fn resolve_summary_starters<'a, R: gents::config_client::Config
             scopes
                 .get(parent.as_str())
                 .map(|scope| super::super::types::LinkedSessionView {
-                    agent_did: scope.agent_did.clone(),
+                    node_did: scope.node_did.clone(),
                     session_id: scope.session_id.clone(),
                     requester_did: scope.requester_did.clone(),
                     cause_request_doc_id: parent.clone(),

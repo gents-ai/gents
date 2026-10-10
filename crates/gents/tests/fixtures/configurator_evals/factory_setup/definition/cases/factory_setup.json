@@ -16,10 +16,10 @@
       "capture": [
         {
           "kind": "documents",
-          "name": "behaviors",
-          "collection": "AgentBehavior",
+          "name": "agents",
+          "collection": "Agent",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             },
             "enabled": {
@@ -27,7 +27,7 @@
             }
           },
           "fields": [
-            "behavior_id",
+            "agent_id",
             "display_name",
             "context_id",
             "enabled",
@@ -39,7 +39,7 @@
           "name": "contexts",
           "collection": "AgentContext",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
@@ -54,7 +54,7 @@
           "name": "tools",
           "collection": "Tools",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
@@ -62,7 +62,7 @@
             "tools_id",
             "host",
             "datastore",
-            "subagents",
+            "agents",
             "self_config"
           ]
         },
@@ -71,13 +71,13 @@
           "name": "surfaces",
           "collection": "DatastoreToolSurface",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
           "fields": [
             "surface_id",
-            "agent_did",
+            "node_did",
             "display_name",
             "enabled",
             "entries"
@@ -88,7 +88,7 @@
           "name": "profiles",
           "collection": "InferenceProfile",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
@@ -106,7 +106,7 @@
           "name": "executions",
           "collection": "InferenceExecution",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
@@ -122,7 +122,7 @@
           "name": "backends",
           "collection": "InferenceBackend",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
@@ -135,7 +135,7 @@
           "name": "sources",
           "collection": "EventSource",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
@@ -150,7 +150,7 @@
           "name": "triggers",
           "collection": "Trigger",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             },
             "enabled": {
@@ -170,13 +170,13 @@
           "name": "tasks",
           "collection": "Task",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
           "fields": [
             "task_id",
-            "behavior_id",
+            "agent_id",
             "enabled",
             "emit_outcome",
             "prompt_template"
@@ -185,18 +185,18 @@
         {
           "kind": "documents",
           "name": "targets",
-          "collection": "SubagentTarget",
+          "collection": "AgentTarget",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
           "fields": [
             "target_id",
-            "agent_did",
+            "node_did",
             "name",
-            "target_agent_did",
-            "behavior_id"
+            "target_node_did",
+            "agent_id"
           ]
         },
         {
@@ -234,18 +234,18 @@
           "name": "crew_requests",
           "collection": "AgentRequest",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             },
             "_not": {
               "_or": [
                 {
-                  "behavior_id": {
+                  "agent_id": {
                     "_like": "%:engineer"
                   }
                 },
                 {
-                  "behavior_id": {
+                  "agent_id": {
                     "_eq": "engineer"
                   }
                 }
@@ -257,7 +257,7 @@
           },
           "fields": [
             "request_id",
-            "behavior_id",
+            "agent_id",
             "lifecycle_state"
           ]
         },
@@ -333,7 +333,7 @@
           "name": "sampling",
           "collection": "InferenceSampling",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
@@ -348,7 +348,7 @@
           "name": "all_triggers",
           "collection": "Trigger",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
@@ -362,15 +362,15 @@
         },
         {
           "kind": "documents",
-          "name": "all_behaviors",
-          "collection": "AgentBehavior",
+          "name": "all_agents",
+          "collection": "Agent",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
           "fields": [
-            "behavior_id",
+            "agent_id",
             "display_name",
             "context_id",
             "enabled",
@@ -408,7 +408,7 @@
                 "category": "collections"
               },
               {
-                "capture": "all_behaviors",
+                "capture": "all_agents",
                 "min": 7,
                 "max": 7,
                 "category": "completeness"
@@ -445,12 +445,12 @@
               }
             ],
             "agents": {
-              "behaviors": "behaviors",
+              "agents": "agents",
               "contexts": "contexts",
               "tools": "tools",
               "expect": [
                 {
-                  "behavior_id": "planner",
+                  "agent_id": "planner",
                   "datastore": {
                     "surfaces": "surfaces",
                     "create": [
@@ -499,12 +499,12 @@
                       "matches": "^(false|null)$"
                     },
                     {
-                      "field": "subagents.enabled",
+                      "field": "agents.enabled",
                       "matches": "^(false|null)$"
                     }
                   ],
                   "category": "role_permissions",
-                  "behavior": [
+                  "agent": [
                     {
                       "field": "enabled",
                       "equals": true
@@ -522,7 +522,7 @@
                   }
                 },
                 {
-                  "behavior_id": "researcher",
+                  "agent_id": "researcher",
                   "datastore": {
                     "surfaces": "surfaces",
                     "create": [
@@ -573,12 +573,12 @@
                       "matches": "^(false|null)$"
                     },
                     {
-                      "field": "subagents.enabled",
+                      "field": "agents.enabled",
                       "matches": "^(false|null)$"
                     }
                   ],
                   "category": "role_permissions",
-                  "behavior": [
+                  "agent": [
                     {
                       "field": "enabled",
                       "equals": true
@@ -596,7 +596,7 @@
                   }
                 },
                 {
-                  "behavior_id": "analyst",
+                  "agent_id": "analyst",
                   "datastore": {
                     "surfaces": "surfaces",
                     "create": [
@@ -657,12 +657,12 @@
                       "matches": "^(false|null)$"
                     },
                     {
-                      "field": "subagents.enabled",
+                      "field": "agents.enabled",
                       "matches": "^(false|null)$"
                     }
                   ],
                   "category": "role_permissions",
-                  "behavior": [
+                  "agent": [
                     {
                       "field": "enabled",
                       "equals": true
@@ -680,7 +680,7 @@
                   }
                 },
                 {
-                  "behavior_id": "reviewer",
+                  "agent_id": "reviewer",
                   "datastore": {
                     "surfaces": "surfaces",
                     "create": [
@@ -735,12 +735,12 @@
                       "matches": "^(false|null)$"
                     },
                     {
-                      "field": "subagents.enabled",
+                      "field": "agents.enabled",
                       "matches": "^(false|null)$"
                     }
                   ],
                   "category": "role_permissions",
-                  "behavior": [
+                  "agent": [
                     {
                       "field": "enabled",
                       "equals": true
@@ -758,7 +758,7 @@
                   }
                 },
                 {
-                  "behavior_id": "publisher",
+                  "agent_id": "publisher",
                   "datastore": {
                     "surfaces": "surfaces",
                     "create": [
@@ -811,12 +811,12 @@
                       "matches": "^(false|null)$"
                     },
                     {
-                      "field": "subagents.enabled",
+                      "field": "agents.enabled",
                       "matches": "^(false|null)$"
                     }
                   ],
                   "category": "role_permissions",
-                  "behavior": [
+                  "agent": [
                     {
                       "field": "enabled",
                       "equals": true
@@ -834,7 +834,7 @@
                   }
                 },
                 {
-                  "behavior_id": "coordinator",
+                  "agent_id": "coordinator",
                   "datastore": {
                     "surfaces": "surfaces",
                     "create": [
@@ -897,7 +897,7 @@
                     }
                   ],
                   "category": "role_permissions",
-                  "behavior": [
+                  "agent": [
                     {
                       "field": "enabled",
                       "equals": true
@@ -911,7 +911,7 @@
                   ],
                   "delegates": {
                     "targets": "targets",
-                    "behaviors": [
+                    "agents": [
                       "researcher",
                       "reviewer"
                     ]
@@ -922,11 +922,11 @@
                   }
                 },
                 {
-                  "behavior_id": "engineer",
+                  "agent_id": "engineer",
                   "category": "delegation",
                   "delegates": {
                     "targets": "targets",
-                    "behaviors": [
+                    "agents": [
                       "planner",
                       "researcher",
                       "analyst",
@@ -940,7 +940,7 @@
             },
             "links": [
               {
-                "capture": "behaviors",
+                "capture": "agents",
                 "field": "inference_profile_id",
                 "target_capture": "profiles",
                 "target_key": "profile_id",
@@ -957,7 +957,7 @@
                 }
               },
               {
-                "capture": "behaviors",
+                "capture": "agents",
                 "field": "inference_profile_id",
                 "target_capture": "profiles",
                 "target_key": "profile_id",
@@ -989,7 +989,7 @@
                 }
               },
               {
-                "capture": "behaviors",
+                "capture": "agents",
                 "field": "inference_profile_id",
                 "target_capture": "profiles",
                 "target_key": "profile_id",
@@ -1006,7 +1006,7 @@
                 }
               },
               {
-                "capture": "behaviors",
+                "capture": "agents",
                 "field": "inference_profile_id",
                 "target_capture": "profiles",
                 "target_key": "profile_id",
@@ -1038,7 +1038,7 @@
                 }
               },
               {
-                "capture": "behaviors",
+                "capture": "agents",
                 "field": "inference_profile_id",
                 "target_capture": "profiles",
                 "target_key": "profile_id",
@@ -1055,7 +1055,7 @@
                 }
               },
               {
-                "capture": "behaviors",
+                "capture": "agents",
                 "field": "inference_profile_id",
                 "target_capture": "profiles",
                 "target_key": "profile_id",
@@ -1087,7 +1087,7 @@
                 }
               },
               {
-                "capture": "behaviors",
+                "capture": "agents",
                 "field": "inference_profile_id",
                 "target_capture": "profiles",
                 "target_key": "profile_id",
@@ -1104,7 +1104,7 @@
                 }
               },
               {
-                "capture": "behaviors",
+                "capture": "agents",
                 "field": "inference_profile_id",
                 "target_capture": "profiles",
                 "target_key": "profile_id",
@@ -1136,7 +1136,7 @@
                 }
               },
               {
-                "capture": "behaviors",
+                "capture": "agents",
                 "field": "inference_profile_id",
                 "target_capture": "profiles",
                 "target_key": "profile_id",
@@ -1153,7 +1153,7 @@
                 }
               },
               {
-                "capture": "behaviors",
+                "capture": "agents",
                 "field": "inference_profile_id",
                 "target_capture": "profiles",
                 "target_key": "profile_id",
@@ -1185,7 +1185,7 @@
                 }
               },
               {
-                "capture": "behaviors",
+                "capture": "agents",
                 "field": "inference_profile_id",
                 "target_capture": "profiles",
                 "target_key": "profile_id",
@@ -1202,7 +1202,7 @@
                 }
               },
               {
-                "capture": "behaviors",
+                "capture": "agents",
                 "field": "inference_profile_id",
                 "target_capture": "profiles",
                 "target_key": "profile_id",
@@ -1483,7 +1483,7 @@
                 "category": "automation"
               },
               {
-                "capture": "behaviors",
+                "capture": "agents",
                 "field": "inference_profile_id",
                 "target_capture": "profiles",
                 "target_key": "profile_id",
@@ -1511,7 +1511,7 @@
                 }
               },
               {
-                "capture": "behaviors",
+                "capture": "agents",
                 "field": "inference_profile_id",
                 "target_capture": "profiles",
                 "target_key": "profile_id",
@@ -1539,7 +1539,7 @@
                 }
               },
               {
-                "capture": "behaviors",
+                "capture": "agents",
                 "field": "inference_profile_id",
                 "target_capture": "profiles",
                 "target_key": "profile_id",
@@ -1567,7 +1567,7 @@
                 }
               },
               {
-                "capture": "behaviors",
+                "capture": "agents",
                 "field": "inference_profile_id",
                 "target_capture": "profiles",
                 "target_key": "profile_id",
@@ -1595,7 +1595,7 @@
                 }
               },
               {
-                "capture": "behaviors",
+                "capture": "agents",
                 "field": "inference_profile_id",
                 "target_capture": "profiles",
                 "target_key": "profile_id",
@@ -1623,7 +1623,7 @@
                 }
               },
               {
-                "capture": "behaviors",
+                "capture": "agents",
                 "field": "inference_profile_id",
                 "target_capture": "profiles",
                 "target_key": "profile_id",
@@ -1670,9 +1670,9 @@
                     "target_key": "task_id"
                   },
                   {
-                    "field": "behavior_id",
-                    "target_capture": "behaviors",
-                    "target_key": "behavior_id"
+                    "field": "agent_id",
+                    "target_capture": "agents",
+                    "target_key": "agent_id"
                   }
                 ],
                 "category": "automation"
@@ -1697,9 +1697,9 @@
                     "target_key": "task_id"
                   },
                   {
-                    "field": "behavior_id",
-                    "target_capture": "behaviors",
-                    "target_key": "behavior_id"
+                    "field": "agent_id",
+                    "target_capture": "agents",
+                    "target_key": "agent_id"
                   }
                 ],
                 "category": "automation"
@@ -1724,9 +1724,9 @@
                     "target_key": "task_id"
                   },
                   {
-                    "field": "behavior_id",
-                    "target_capture": "behaviors",
-                    "target_key": "behavior_id"
+                    "field": "agent_id",
+                    "target_capture": "agents",
+                    "target_key": "agent_id"
                   }
                 ],
                 "category": "automation"
@@ -1751,9 +1751,9 @@
                     "target_key": "task_id"
                   },
                   {
-                    "field": "behavior_id",
-                    "target_capture": "behaviors",
-                    "target_key": "behavior_id"
+                    "field": "agent_id",
+                    "target_capture": "agents",
+                    "target_key": "agent_id"
                   }
                 ],
                 "category": "automation"
@@ -1778,9 +1778,9 @@
                     "target_key": "task_id"
                   },
                   {
-                    "field": "behavior_id",
-                    "target_capture": "behaviors",
-                    "target_key": "behavior_id"
+                    "field": "agent_id",
+                    "target_capture": "agents",
+                    "target_key": "agent_id"
                   }
                 ],
                 "category": "automation"
@@ -1906,10 +1906,10 @@
       "capture": [
         {
           "kind": "documents",
-          "name": "behaviors",
-          "collection": "AgentBehavior",
+          "name": "agents",
+          "collection": "Agent",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             },
             "enabled": {
@@ -1917,7 +1917,7 @@
             }
           },
           "fields": [
-            "behavior_id",
+            "agent_id",
             "display_name",
             "context_id",
             "enabled",
@@ -1929,7 +1929,7 @@
           "name": "contexts",
           "collection": "AgentContext",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
@@ -1944,7 +1944,7 @@
           "name": "tools",
           "collection": "Tools",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
@@ -1952,7 +1952,7 @@
             "tools_id",
             "host",
             "datastore",
-            "subagents",
+            "agents",
             "self_config"
           ]
         },
@@ -1961,13 +1961,13 @@
           "name": "surfaces",
           "collection": "DatastoreToolSurface",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
           "fields": [
             "surface_id",
-            "agent_did",
+            "node_did",
             "display_name",
             "enabled",
             "entries"
@@ -1978,7 +1978,7 @@
           "name": "profiles",
           "collection": "InferenceProfile",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
@@ -1996,7 +1996,7 @@
           "name": "executions",
           "collection": "InferenceExecution",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
@@ -2012,7 +2012,7 @@
           "name": "backends",
           "collection": "InferenceBackend",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
@@ -2025,7 +2025,7 @@
           "name": "sources",
           "collection": "EventSource",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
@@ -2040,7 +2040,7 @@
           "name": "triggers",
           "collection": "Trigger",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             },
             "enabled": {
@@ -2060,13 +2060,13 @@
           "name": "tasks",
           "collection": "Task",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
           "fields": [
             "task_id",
-            "behavior_id",
+            "agent_id",
             "enabled",
             "emit_outcome",
             "prompt_template"
@@ -2075,18 +2075,18 @@
         {
           "kind": "documents",
           "name": "targets",
-          "collection": "SubagentTarget",
+          "collection": "AgentTarget",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
           "fields": [
             "target_id",
-            "agent_did",
+            "node_did",
             "name",
-            "target_agent_did",
-            "behavior_id"
+            "target_node_did",
+            "agent_id"
           ]
         },
         {
@@ -2124,18 +2124,18 @@
           "name": "crew_requests",
           "collection": "AgentRequest",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             },
             "_not": {
               "_or": [
                 {
-                  "behavior_id": {
+                  "agent_id": {
                     "_like": "%:engineer"
                   }
                 },
                 {
-                  "behavior_id": {
+                  "agent_id": {
                     "_eq": "engineer"
                   }
                 }
@@ -2147,7 +2147,7 @@
           },
           "fields": [
             "request_id",
-            "behavior_id",
+            "agent_id",
             "lifecycle_state"
           ]
         },
@@ -2223,7 +2223,7 @@
           "name": "sampling",
           "collection": "InferenceSampling",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
@@ -2238,7 +2238,7 @@
           "name": "all_triggers",
           "collection": "Trigger",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
@@ -2252,15 +2252,15 @@
         },
         {
           "kind": "documents",
-          "name": "all_behaviors",
-          "collection": "AgentBehavior",
+          "name": "all_agents",
+          "collection": "Agent",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
           "fields": [
-            "behavior_id",
+            "agent_id",
             "display_name",
             "context_id",
             "enabled",
@@ -2298,7 +2298,7 @@
                 "category": "collections"
               },
               {
-                "capture": "all_behaviors",
+                "capture": "all_agents",
                 "min": 7,
                 "max": 7,
                 "category": "completeness"
@@ -2335,12 +2335,12 @@
               }
             ],
             "agents": {
-              "behaviors": "behaviors",
+              "agents": "agents",
               "contexts": "contexts",
               "tools": "tools",
               "expect": [
                 {
-                  "behavior_id": "planner",
+                  "agent_id": "planner",
                   "datastore": {
                     "surfaces": "surfaces",
                     "create": [
@@ -2389,12 +2389,12 @@
                       "matches": "^(false|null)$"
                     },
                     {
-                      "field": "subagents.enabled",
+                      "field": "agents.enabled",
                       "matches": "^(false|null)$"
                     }
                   ],
                   "category": "role_permissions",
-                  "behavior": [
+                  "agent": [
                     {
                       "field": "enabled",
                       "equals": true
@@ -2412,7 +2412,7 @@
                   }
                 },
                 {
-                  "behavior_id": "researcher",
+                  "agent_id": "researcher",
                   "datastore": {
                     "surfaces": "surfaces",
                     "create": [
@@ -2463,12 +2463,12 @@
                       "matches": "^(false|null)$"
                     },
                     {
-                      "field": "subagents.enabled",
+                      "field": "agents.enabled",
                       "matches": "^(false|null)$"
                     }
                   ],
                   "category": "role_permissions",
-                  "behavior": [
+                  "agent": [
                     {
                       "field": "enabled",
                       "equals": true
@@ -2486,7 +2486,7 @@
                   }
                 },
                 {
-                  "behavior_id": "analyst",
+                  "agent_id": "analyst",
                   "datastore": {
                     "surfaces": "surfaces",
                     "create": [
@@ -2547,12 +2547,12 @@
                       "matches": "^(false|null)$"
                     },
                     {
-                      "field": "subagents.enabled",
+                      "field": "agents.enabled",
                       "matches": "^(false|null)$"
                     }
                   ],
                   "category": "role_permissions",
-                  "behavior": [
+                  "agent": [
                     {
                       "field": "enabled",
                       "equals": true
@@ -2570,7 +2570,7 @@
                   }
                 },
                 {
-                  "behavior_id": "reviewer",
+                  "agent_id": "reviewer",
                   "datastore": {
                     "surfaces": "surfaces",
                     "create": [
@@ -2625,12 +2625,12 @@
                       "matches": "^(false|null)$"
                     },
                     {
-                      "field": "subagents.enabled",
+                      "field": "agents.enabled",
                       "matches": "^(false|null)$"
                     }
                   ],
                   "category": "role_permissions",
-                  "behavior": [
+                  "agent": [
                     {
                       "field": "enabled",
                       "equals": true
@@ -2648,7 +2648,7 @@
                   }
                 },
                 {
-                  "behavior_id": "publisher",
+                  "agent_id": "publisher",
                   "datastore": {
                     "surfaces": "surfaces",
                     "create": [
@@ -2701,12 +2701,12 @@
                       "matches": "^(false|null)$"
                     },
                     {
-                      "field": "subagents.enabled",
+                      "field": "agents.enabled",
                       "matches": "^(false|null)$"
                     }
                   ],
                   "category": "role_permissions",
-                  "behavior": [
+                  "agent": [
                     {
                       "field": "enabled",
                       "equals": true
@@ -2724,7 +2724,7 @@
                   }
                 },
                 {
-                  "behavior_id": "coordinator",
+                  "agent_id": "coordinator",
                   "datastore": {
                     "surfaces": "surfaces",
                     "create": [
@@ -2787,7 +2787,7 @@
                     }
                   ],
                   "category": "role_permissions",
-                  "behavior": [
+                  "agent": [
                     {
                       "field": "enabled",
                       "equals": true
@@ -2801,7 +2801,7 @@
                   ],
                   "delegates": {
                     "targets": "targets",
-                    "behaviors": [
+                    "agents": [
                       "researcher",
                       "reviewer"
                     ]
@@ -2812,11 +2812,11 @@
                   }
                 },
                 {
-                  "behavior_id": "engineer",
+                  "agent_id": "engineer",
                   "category": "delegation",
                   "delegates": {
                     "targets": "targets",
-                    "behaviors": [
+                    "agents": [
                       "planner",
                       "researcher",
                       "analyst",
@@ -2830,7 +2830,7 @@
             },
             "links": [
               {
-                "capture": "behaviors",
+                "capture": "agents",
                 "field": "inference_profile_id",
                 "target_capture": "profiles",
                 "target_key": "profile_id",
@@ -2847,7 +2847,7 @@
                 }
               },
               {
-                "capture": "behaviors",
+                "capture": "agents",
                 "field": "inference_profile_id",
                 "target_capture": "profiles",
                 "target_key": "profile_id",
@@ -2879,7 +2879,7 @@
                 }
               },
               {
-                "capture": "behaviors",
+                "capture": "agents",
                 "field": "inference_profile_id",
                 "target_capture": "profiles",
                 "target_key": "profile_id",
@@ -2896,7 +2896,7 @@
                 }
               },
               {
-                "capture": "behaviors",
+                "capture": "agents",
                 "field": "inference_profile_id",
                 "target_capture": "profiles",
                 "target_key": "profile_id",
@@ -2928,7 +2928,7 @@
                 }
               },
               {
-                "capture": "behaviors",
+                "capture": "agents",
                 "field": "inference_profile_id",
                 "target_capture": "profiles",
                 "target_key": "profile_id",
@@ -2945,7 +2945,7 @@
                 }
               },
               {
-                "capture": "behaviors",
+                "capture": "agents",
                 "field": "inference_profile_id",
                 "target_capture": "profiles",
                 "target_key": "profile_id",
@@ -2977,7 +2977,7 @@
                 }
               },
               {
-                "capture": "behaviors",
+                "capture": "agents",
                 "field": "inference_profile_id",
                 "target_capture": "profiles",
                 "target_key": "profile_id",
@@ -2994,7 +2994,7 @@
                 }
               },
               {
-                "capture": "behaviors",
+                "capture": "agents",
                 "field": "inference_profile_id",
                 "target_capture": "profiles",
                 "target_key": "profile_id",
@@ -3026,7 +3026,7 @@
                 }
               },
               {
-                "capture": "behaviors",
+                "capture": "agents",
                 "field": "inference_profile_id",
                 "target_capture": "profiles",
                 "target_key": "profile_id",
@@ -3043,7 +3043,7 @@
                 }
               },
               {
-                "capture": "behaviors",
+                "capture": "agents",
                 "field": "inference_profile_id",
                 "target_capture": "profiles",
                 "target_key": "profile_id",
@@ -3075,7 +3075,7 @@
                 }
               },
               {
-                "capture": "behaviors",
+                "capture": "agents",
                 "field": "inference_profile_id",
                 "target_capture": "profiles",
                 "target_key": "profile_id",
@@ -3092,7 +3092,7 @@
                 }
               },
               {
-                "capture": "behaviors",
+                "capture": "agents",
                 "field": "inference_profile_id",
                 "target_capture": "profiles",
                 "target_key": "profile_id",
@@ -3373,7 +3373,7 @@
                 "category": "automation"
               },
               {
-                "capture": "behaviors",
+                "capture": "agents",
                 "field": "inference_profile_id",
                 "target_capture": "profiles",
                 "target_key": "profile_id",
@@ -3401,7 +3401,7 @@
                 }
               },
               {
-                "capture": "behaviors",
+                "capture": "agents",
                 "field": "inference_profile_id",
                 "target_capture": "profiles",
                 "target_key": "profile_id",
@@ -3429,7 +3429,7 @@
                 }
               },
               {
-                "capture": "behaviors",
+                "capture": "agents",
                 "field": "inference_profile_id",
                 "target_capture": "profiles",
                 "target_key": "profile_id",
@@ -3457,7 +3457,7 @@
                 }
               },
               {
-                "capture": "behaviors",
+                "capture": "agents",
                 "field": "inference_profile_id",
                 "target_capture": "profiles",
                 "target_key": "profile_id",
@@ -3485,7 +3485,7 @@
                 }
               },
               {
-                "capture": "behaviors",
+                "capture": "agents",
                 "field": "inference_profile_id",
                 "target_capture": "profiles",
                 "target_key": "profile_id",
@@ -3513,7 +3513,7 @@
                 }
               },
               {
-                "capture": "behaviors",
+                "capture": "agents",
                 "field": "inference_profile_id",
                 "target_capture": "profiles",
                 "target_key": "profile_id",
@@ -3560,9 +3560,9 @@
                     "target_key": "task_id"
                   },
                   {
-                    "field": "behavior_id",
-                    "target_capture": "behaviors",
-                    "target_key": "behavior_id"
+                    "field": "agent_id",
+                    "target_capture": "agents",
+                    "target_key": "agent_id"
                   }
                 ],
                 "category": "automation"
@@ -3587,9 +3587,9 @@
                     "target_key": "task_id"
                   },
                   {
-                    "field": "behavior_id",
-                    "target_capture": "behaviors",
-                    "target_key": "behavior_id"
+                    "field": "agent_id",
+                    "target_capture": "agents",
+                    "target_key": "agent_id"
                   }
                 ],
                 "category": "automation"
@@ -3614,9 +3614,9 @@
                     "target_key": "task_id"
                   },
                   {
-                    "field": "behavior_id",
-                    "target_capture": "behaviors",
-                    "target_key": "behavior_id"
+                    "field": "agent_id",
+                    "target_capture": "agents",
+                    "target_key": "agent_id"
                   }
                 ],
                 "category": "automation"
@@ -3641,9 +3641,9 @@
                     "target_key": "task_id"
                   },
                   {
-                    "field": "behavior_id",
-                    "target_capture": "behaviors",
-                    "target_key": "behavior_id"
+                    "field": "agent_id",
+                    "target_capture": "agents",
+                    "target_key": "agent_id"
                   }
                 ],
                 "category": "automation"
@@ -3668,9 +3668,9 @@
                     "target_key": "task_id"
                   },
                   {
-                    "field": "behavior_id",
-                    "target_capture": "behaviors",
-                    "target_key": "behavior_id"
+                    "field": "agent_id",
+                    "target_capture": "agents",
+                    "target_key": "agent_id"
                   }
                 ],
                 "category": "automation"
@@ -3789,9 +3789,9 @@
     }
   ],
   "goal": {
-    "AgentBehavior": 7,
+    "Agent": 7,
     "InferenceProfile": 4,
-    "SubagentTarget": 6,
+    "AgentTarget": 6,
     "EventSource": 5,
     "Task": 5,
     "Trigger": 5,

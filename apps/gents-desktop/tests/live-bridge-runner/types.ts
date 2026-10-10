@@ -2,7 +2,7 @@ export type RunnerReadyMessage = {
   kind: "ready";
   baseUrl: string;
   deploymentLabel: string;
-  agentDid: string;
+  nodeDid: string;
   toolRoot: string;
   dataRoot?: string;
 };
@@ -24,9 +24,9 @@ type InferenceCallDiagnostics = {
   callId: string;
   requestId: string;
   requestDocId: string;
-  agentDid: string;
+  nodeDid: string;
   backendId: string | null;
-  behaviorId: string | null;
+  agentId: string | null;
   callKind: string;
   callState: string;
 };
@@ -89,9 +89,9 @@ export type LiveBridgeRunnerOptions = {
   provider?: string | null;
   apiKey?: string | null;
   apiKeyEnvVar?: string | null;
-  subagentInferenceUrl?: string | null;
-  subagentModelName?: string | null;
-  subagentProvider?: string | null;
-  subagentApiKey?: string | null;
-  subagentApiKeyEnvVar?: string | null;
+  agentTargetInferenceUrl?: string | null;
+  agentTargetModelName?: string | null;
+  agentTargetProvider?: string | null;
+  agentTargetApiKey?: string | null;
+  agentTargetApiKeyEnvVar?: string | null;
 };

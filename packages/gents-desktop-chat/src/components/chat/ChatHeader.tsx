@@ -11,7 +11,7 @@ import {
 } from "@source-inc/gents-desktop-client";
 
 export type ChatHeaderProps = {
-  behaviorLabel: string | null;
+  agentLabel: string | null;
   syncHealth: SyncHealthView | null;
   context?: DesktopSessionSnapshot["context"] | null;
   selectedSessionTitle: string | null;
@@ -249,7 +249,7 @@ function ContextMeter({
 }
 
 export function ChatHeader({
-  behaviorLabel,
+  agentLabel,
   syncHealth,
   context,
   selectedSessionTitle,
@@ -351,7 +351,7 @@ export function ChatHeader({
         )}
       </div>
       <div className="chat-status">
-        {behaviorLabel ? <span className="chip">{behaviorLabel}</span> : null}
+        {agentLabel ? <span className="chip">{agentLabel}</span> : null}
         {context ? <ContextMeter context={context} /> : null}
         <span
           className={syncStatus.kind === "ready" ? "chip chip-green" : "chip"}

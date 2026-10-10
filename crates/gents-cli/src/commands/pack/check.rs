@@ -214,7 +214,7 @@ fn load_config(archive: &PackArchive) -> Result<gents::document_config::PackConf
     let config = gents::pack::load_pack_config(
         archive.manifest(),
         &gents::pack::PackInstallOptions {
-            agent_did: PLACEHOLDER_OWNER.into(),
+            node_did: PLACEHOLDER_OWNER.into(),
         },
         &|path| archive.asset(path).map(Vec::from),
         &|_| None,

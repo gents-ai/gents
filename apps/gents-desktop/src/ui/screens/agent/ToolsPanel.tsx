@@ -1,5 +1,5 @@
 import type { NodeView } from "../../../hooks/fleetStore";
-import type { Tools, SubagentTargetDocument } from "@source-inc/gents-desktop-client";
+import type { Tools, AgentTargetDocument } from "@source-inc/gents-desktop-client";
 import { dependentsWarning } from "./dependents";
 import { navigate } from "@/lib/router";
 import {
@@ -28,7 +28,7 @@ import { Disclosure } from "../../components/Disclosure";
 export function newToolsDocument(deployment: NodeView): Tools {
   return {
     tools_id: newId("tools"),
-    agent_did: deployment.agentDid,
+    node_did: deployment.nodeDid,
     display_name: "",
     host: { files: { mode: "ReadOnly" }, bash: { mode: "Off" } },
   };
@@ -58,7 +58,7 @@ export function parseAdvancedTools(
   const allowed = new Set([
     "host",
     "remote",
-    "subagents",
+    "agents",
     "built_ins",
     "datastore",
     "integrations",
@@ -67,7 +67,7 @@ export function parseAdvancedTools(
   ]);
   const unknown = Object.keys(advanced).find((key) => !allowed.has(key));
   if (unknown) throw new Error(`Unknown advanced configuration field: ${unknown}`);
-  if ("tools_id" in advanced || "agent_did" in advanced || "display_name" in advanced)
+  if ("tools_id" in advanced || "node_did" in advanced || "display_name" in advanced)
     throw new Error("IDs and display name are edited in their dedicated fields");
   const positiveWholeNumber = (label: string, value: unknown) => {
     if (
@@ -124,13 +124,13 @@ export function parseAdvancedTools(
     TOOL_LIMIT_DEFAULTS.lspTimeout,
     TOOL_LIMIT_DEFAULTS.maxLspTimeout,
   );
-  for (const target of advanced.subagents?.target_ids ?? []) {
+  for (const target of advanced.agents?.target_ids ?? []) {
     if (
-      ![...(deployment.subagentTargets ?? []), ...pendingTargets].some(
+      ![...(deployment.agentTargets ?? []), ...pendingTargets].some(
         (row) => row.target_id === target,
       )
     )
-      throw new Error(`Unknown subagent target: ${target}`);
+      throw new Error(`Unknown agent target: ${target}`);
   }
   for (const service of advanced.remote?.services ?? []) {
     const names = [
@@ -214,7 +214,7 @@ export function ToolsEditor({
     : null;
   const base = {
     name: "agent" as const,
-    agentDid: deployment.agentDid,
+    nodeDid: deployment.nodeDid,
     section: "tools",
   };
   const saved = {
@@ -223,12 +223,12 @@ export function ToolsEditor({
     files: (tools.host?.files?.mode ?? "Off") as "Off" | "ReadOnly" | "ReadWrite",
     bash: (tools.host?.bash?.mode ?? "Off") as "Off" | "ReadOnly" | "Unrestricted",
     background: tools.host?.bash?.background_enabled ?? false,
-    pendingTargets: [] as SubagentTargetDocument[],
+    pendingTargets: [] as AgentTargetDocument[],
     advanced: JSON.stringify(
       {
         host: tools.host ?? null,
         remote: tools.remote ?? null,
-        subagents: tools.subagents ?? null,
+        agents: tools.agents ?? null,
         built_ins: tools.built_ins ?? null,
         datastore: tools.datastore ?? null,
         integrations: tools.integrations ?? null,
@@ -255,7 +255,7 @@ export function ToolsEditor({
         ...tools,
         ...advanced,
         tools_id: tools.tools_id,
-        agent_did: deployment.agentDid,
+        node_did: deployment.nodeDid,
         display_name: next.displayName.trim() || null,
         host: {
           ...advancedHost,
@@ -276,9 +276,9 @@ export function ToolsEditor({
       if (next.pendingTargets.length) {
         await changeConfig("applyConfigComponents", {
           document: {
-            agent_principal: { agent_did: deployment.agentDid },
+            node: { node_did: deployment.nodeDid },
             tools: [document],
-            subagent_targets: next.pendingTargets,
+            agent_targets: next.pendingTargets,
           },
         });
       } else {
@@ -360,28 +360,26 @@ export function ToolsEditor({
         onChange={(value) => d.set("advanced", value)}
         deployment={{
           ...deployment,
-          subagentTargets: [
-            ...(deployment.subagentTargets ?? []),
+          agentTargets: [
+            ...(deployment.agentTargets ?? []),
             ...d.draft.pendingTargets.filter(
               (target) =>
-                !deployment.subagentTargets?.some(
+                !deployment.agentTargets?.some(
                   (saved) => saved.target_id === target.target_id,
                 ),
             ),
           ],
         }}
-        onCreateTarget={(behaviorId) => {
-          const behavior = deployment.behaviorConfigs.find(
-            (row) => row.behavior_id === behaviorId,
-          );
-          if (!behavior) return;
-          const target: SubagentTargetDocument = {
+        onCreateTarget={(agentId) => {
+          const agent = deployment.agentConfigs.find((row) => row.agent_id === agentId);
+          if (!agent) return;
+          const target: AgentTargetDocument = {
             target_id: newId("target"),
-            agent_did: deployment.agentDid,
-            target_agent_did: deployment.agentDid,
-            behavior_id: behaviorId,
-            name: behavior.display_name ?? behaviorId,
-            description: behavior.description ?? null,
+            node_did: deployment.nodeDid,
+            target_node_did: deployment.nodeDid,
+            agent_id: agentId,
+            name: agent.display_name ?? agentId,
+            description: agent.description ?? null,
           };
           d.set("pendingTargets", [...d.draft.pendingTargets, target]);
         }}
@@ -395,7 +393,7 @@ export function ToolsEditor({
             label="Canonical JSON"
             stacked
             expandedByDefault
-            description="Host limits, MCP grants, subagents, built-ins, datastore, integrations, self-config, and tags. Invalid or unknown fields are rejected before persistence."
+            description="Host limits, MCP grants, agent targets, built-ins, datastore, integrations, self-config, and tags. Invalid or unknown fields are rejected before persistence."
             value={d.draft.advanced}
             onChange={(v) => d.set("advanced", v)}
             error={d.problems.advanced}
@@ -436,7 +434,7 @@ export function ToolsEditor({
           onDelete={() =>
             changeConfig("deleteToolsConfig", {
               toolsId: tools.tools_id,
-              agentDid: deployment.agentDid,
+              nodeDid: deployment.nodeDid,
             })
           }
         />
@@ -455,7 +453,7 @@ export function ToolsPanel({
   const { changeConfig } = useApp().actions;
   const base = {
     name: "agent" as const,
-    agentDid: deployment.agentDid,
+    nodeDid: deployment.nodeDid,
     section: "tools",
   };
   return (
@@ -486,7 +484,7 @@ export function ToolsPanel({
             onDelete={() =>
               changeConfig("deleteToolsConfig", {
                 toolsId: t.tools_id,
-                agentDid: deployment.agentDid,
+                nodeDid: deployment.nodeDid,
               })
             }
             warning={dependentsWarning(deployment, "tools", t.tools_id)}
@@ -494,13 +492,13 @@ export function ToolsPanel({
         ),
       }))}
       createLabel="New tools"
-      empty="No Tools documents. A behavior reaches tools only through its context."
+      empty="No Tools documents. An agent reaches tools only through its context."
       onCreate={async () => {
         const tools_id = newId("tools");
         await changeConfig("saveToolsConfig", {
           document: {
             tools_id,
-            agent_did: deployment.agentDid,
+            node_did: deployment.nodeDid,
             display_name: "New tools",
             host: { files: { mode: "ReadOnly" }, bash: { mode: "Off" } },
             tags: null,
@@ -508,7 +506,7 @@ export function ToolsPanel({
         });
         navigate({
           name: "agent",
-          agentDid: deployment.agentDid,
+          nodeDid: deployment.nodeDid,
           section: "tools",
           item: tools_id,
         });

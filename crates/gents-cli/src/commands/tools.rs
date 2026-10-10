@@ -3,14 +3,14 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use gents::tool_surface::{measured_mcp_services_for_access, RuntimeToolAvailability};
-use gents::{BehaviorToolConfig, ToolCeiling};
+use gents::{AgentToolSurfaceConfig, ToolCeiling};
 use serde_json::{json, Value};
 
 use crate::cli::args::{ToolCeilingArg, ToolExplainArgs, ToolsCommand};
 use crate::shared::StoredInitConfig;
 use crate::{
     build_config_export_bundle, format_tool_ceiling, print_json, read_init_config,
-    resolve_agent_did, resolve_config_access,
+    resolve_config_access, resolve_node_did,
 };
 
 pub(crate) async fn dispatch(command: ToolsCommand) -> Result<()> {
@@ -22,45 +22,42 @@ pub(crate) async fn dispatch(command: ToolsCommand) -> Result<()> {
 async fn explain(args: ToolExplainArgs) -> Result<()> {
     let (access, home_dir) =
         resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
-    let agent_did = resolve_agent_did(args.home.as_deref(), args.agent_did.as_deref())?;
+    let node_did = resolve_node_did(args.home.as_deref(), args.node_did.as_deref())?;
     let init_config = read_init_config(&home_dir)?;
     let (ceiling_arg, ceiling_source, tool_root, tool_ceiling) =
         resolve_tool_ceiling(init_config.as_ref())?;
-    let bundle = build_config_export_bundle(&access, &agent_did).await?;
+    let bundle = build_config_export_bundle(&access, &node_did).await?;
     let available_services = measured_mcp_services_for_access(
         &access,
-        &agent_did,
+        &node_did,
         &bundle.config.tool_service_registries,
     )
     .await?;
     let availability =
         RuntimeToolAvailability::from_online_mcp_services(available_services.clone());
-    let enabled_behavior_ids = bundle
+    let enabled_agent_ids = bundle
         .config
-        .agent_behaviors
+        .agents
         .iter()
-        .filter(|behavior| behavior.enabled)
-        .map(|behavior| behavior.behavior_id.clone())
+        .filter(|agent| agent.enabled)
+        .map(|agent| agent.agent_id.clone())
         .collect::<BTreeSet<_>>();
-    let enabled_behavior_id_set = enabled_behavior_ids.iter().cloned().collect::<HashSet<_>>();
+    let enabled_agent_id_set = enabled_agent_ids.iter().cloned().collect::<HashSet<_>>();
     let mut configuration_issues = BTreeMap::new();
-    let mut behaviors = Vec::new();
-    for behavior in &bundle.config.agent_behaviors {
+    let mut agents = Vec::new();
+    for agent in &bundle.config.agents {
         if args
-            .behavior_id
+            .agent_id
             .as_deref()
-            .is_some_and(|id| behavior.behavior_id != id)
+            .is_some_and(|id| agent.agent_id != id)
         {
             continue;
         }
-        if !behavior.enabled {
-            configuration_issues.insert(
-                behavior.behavior_id.clone(),
-                "behavior is disabled".to_owned(),
-            );
+        if !agent.enabled {
+            configuration_issues.insert(agent.agent_id.clone(), "agent is disabled".to_owned());
         }
         let resolved = (|| -> Result<_> {
-            let context = behavior
+            let context = agent
                 .context_id
                 .as_deref()
                 .map(|id| {
@@ -68,7 +65,7 @@ async fn explain(args: ToolExplainArgs) -> Result<()> {
                         .config
                         .contexts
                         .iter()
-                        .find(|context| context.agent_did == agent_did && context.context_id == id)
+                        .find(|context| context.node_did == node_did && context.context_id == id)
                         .with_context(|| format!("referenced AgentContext {id} is missing"))
                 })
                 .transpose()?;
@@ -78,20 +75,20 @@ async fn explain(args: ToolExplainArgs) -> Result<()> {
                     .config
                     .tools
                     .iter()
-                    .find(|tools| tools.agent_did == agent_did && tools.tools_id == id)
+                    .find(|tools| tools.node_did == node_did && tools.tools_id == id)
                     .with_context(|| format!("referenced Tools {id} is missing"))?;
-                BehaviorToolConfig::from_tools_documents(
-                    &behavior.behavior_id,
+                AgentToolSurfaceConfig::from_tools_documents(
+                    &agent.agent_id,
                     tools,
                     &bundle.config.datastore_tool_surfaces,
                     &bundle.config.eth_tools,
-                    &bundle.config.subagent_targets,
+                    &bundle.config.agent_targets,
                     &tool_ceiling,
                     Vec::new(),
                 )?
             } else {
-                BehaviorToolConfig::from_tools_documents(
-                    &behavior.behavior_id,
+                AgentToolSurfaceConfig::from_tools_documents(
+                    &agent.agent_id,
                     &gents::document_config::Tools::default(),
                     &[],
                     &[],
@@ -105,39 +102,39 @@ async fn explain(args: ToolExplainArgs) -> Result<()> {
         let (tools_id, config) = match resolved {
             Ok(value) => value,
             Err(error) => {
-                configuration_issues.insert(behavior.behavior_id.clone(), format!("{error:#}"));
+                configuration_issues.insert(agent.agent_id.clone(), format!("{error:#}"));
                 continue;
             }
         };
         let explanation = config.explain_with_runtime_availability(
             availability.clone(),
-            &agent_did,
-            &enabled_behavior_id_set,
+            &node_did,
+            &enabled_agent_id_set,
         );
-        behaviors.push(json!({
-            "behavior_id": behavior.behavior_id,
-            "display_name": behavior.display_name,
-            "enabled": behavior.enabled,
-            "context_id": behavior.context_id,
+        agents.push(json!({
+            "agent_id": agent.agent_id,
+            "display_name": agent.display_name,
+            "enabled": agent.enabled,
+            "context_id": agent.context_id,
             "tools_id": tools_id,
             "tools_source": if tools_id.is_some() { "document" } else { "default_no_tools_binding" },
             "surface": explanation,
         }));
     }
 
-    if let Some(only_behavior_id) = args.behavior_id.as_deref() {
-        let found = behaviors.iter().any(|row| {
-            row.get("behavior_id")
+    if let Some(only_agent_id) = args.agent_id.as_deref() {
+        let found = agents.iter().any(|row| {
+            row.get("agent_id")
                 .and_then(Value::as_str)
-                .is_some_and(|value| value == only_behavior_id)
-        }) || configuration_issues.contains_key(only_behavior_id);
+                .is_some_and(|value| value == only_agent_id)
+        }) || configuration_issues.contains_key(only_agent_id);
         if !found {
-            anyhow::bail!("behavior {only_behavior_id} was not found for agent {agent_did}");
+            anyhow::bail!("agent {only_agent_id} was not found for agent {node_did}");
         }
     }
 
     let output = json!({
-        "agent_did": agent_did,
+        "node_did": node_did,
         "access_mode": access.mode(),
         "home": home_dir,
         "host_tool_ceiling": {
@@ -145,21 +142,21 @@ async fn explain(args: ToolExplainArgs) -> Result<()> {
             "source": ceiling_source,
             "tool_root": tool_root,
             "scope": "host_native_file_bash_cli_only",
-            "note": "This ceiling currently clamps host-native file/bash/CLI tools, not every model-callable built-in read, MCP, subagent, or operator HTTP surface."
+            "note": "This ceiling currently clamps host-native file/bash/CLI tools, not every model-callable built-in read, MCP, agent, or operator HTTP surface."
         },
         "runtime_availability": {
             "measured_available_mcp_service_ids": available_services,
             "local_target_eligibility": {
-                "source": "enabled_behavior_configuration",
-                "enabled_behavior_ids": enabled_behavior_ids.iter().cloned().collect::<Vec<_>>(),
+                "source": "enabled_agent_configuration",
+                "enabled_agent_ids": enabled_agent_ids.iter().cloned().collect::<Vec<_>>(),
                 "runtime_readiness_verified": false
             },
         },
-        "behaviors": behaviors,
+        "agents": agents,
         "configuration_issues": configuration_issues,
         "operator_surfaces": {
             "included_in_model_tool_surface": false,
-            "note": "Server HTTP routes and optional external /mcp are binary/operator surfaces; they are not included in per-behavior model-callable tool_names."
+            "note": "Server HTTP routes and optional external /mcp are binary/operator surfaces; they are not included in per-agent model-callable tool_names."
         },
     });
     print_json(&output)?;

@@ -17,7 +17,7 @@ pub(crate) const GROUP_RECOVERY_PAGE_SIZE: usize = 256;
 #[derive(Clone, Copy)]
 pub(crate) enum Delivery<'a> {
     Trigger {
-        agent_did: &'a str,
+        node_did: &'a str,
         trigger: &'a ResolvedEventTrigger,
     },
     Callback {
@@ -28,8 +28,8 @@ pub(crate) enum Delivery<'a> {
 impl Delivery<'_> {
     pub(crate) fn owner(&self) -> &str {
         match self {
-            Self::Trigger { agent_did, .. } => agent_did,
-            Self::Callback { binding, .. } => &binding.agent_did,
+            Self::Trigger { node_did, .. } => node_did,
+            Self::Callback { binding, .. } => &binding.node_did,
         }
     }
     pub(crate) fn consumer(&self) -> EventConsumer {
@@ -130,7 +130,7 @@ impl Delivery<'_> {
                 "callback event source requires created events"
             );
             anyhow::ensure!(
-                binding.agent_did == source.agent_did
+                binding.node_did == source.node_did
                     && binding.event_source_id == source.event_source_id,
                 "callback source owner/reference mismatch"
             );
@@ -243,7 +243,7 @@ pub(crate) struct GroupRecord {
     pub(crate) doc_id: String,
     pub(crate) state: EventGroupState,
 }
-const GROUP_FIELDS: &str = "group_key agent_did consumer correlation consumer_config_key first_seen_at quiesced_at quiesced_reason";
+const GROUP_FIELDS: &str = "group_key node_did consumer correlation consumer_config_key first_seen_at quiesced_at quiesced_reason";
 fn decode_group(
     response: &Value,
     delivery: Delivery<'_>,
@@ -261,7 +261,7 @@ fn decode_group(
                 .context("group record missing physical ID")?;
             let state: EventGroupState = serde_json::from_value(row)?;
             anyhow::ensure!(
-                state.agent_did == delivery.owner()
+                state.node_did == delivery.owner()
                     && state.consumer == delivery.consumer()
                     && state.consumer_config_key == delivery.config_key()
                     && state.correlation == correlation
@@ -274,7 +274,7 @@ fn decode_group(
 }
 fn group_query(delivery: Delivery<'_>, correlation: &str) -> String {
     format!(
-        "{{EventGroupState(filter:{{agent_did:{{_eq:\"{}\"}},group_key:{{_eq:\"{}\"}}}},limit:2){{_docID {GROUP_FIELDS}}}}}",
+        "{{EventGroupState(filter:{{node_did:{{_eq:\"{}\"}},group_key:{{_eq:\"{}\"}}}},limit:2){{_docID {GROUP_FIELDS}}}}}",
         escape_graphql_string(delivery.owner()),
         escape_graphql_string(&delivery.group_key(correlation))
     )
@@ -293,7 +293,7 @@ pub(crate) async fn load_or_create_group(
     crate::config_client::ConfigAccess::transact_local(node,None,"event.group_clock",|txn| Box::pin(async move {
         let query=group_query(delivery,correlation);
         if let Some(row)=decode_group(&txn.execute(&query).await?,delivery,correlation)? {return Ok(row);}
-        let state=EventGroupState {group_key:delivery.group_key(correlation),agent_did:delivery.owner().into(),consumer:delivery.consumer(),correlation:correlation.into(),consumer_config_key:delivery.config_key(),first_seen_at:Utc::now().to_rfc3339_opts(SecondsFormat::Millis,true),quiesced_at:None,quiesced_reason:None};
+        let state=EventGroupState {group_key:delivery.group_key(correlation),node_did:delivery.owner().into(),consumer:delivery.consumer(),correlation:correlation.into(),consumer_config_key:delivery.config_key(),first_seen_at:Utc::now().to_rfc3339_opts(SecondsFormat::Millis,true),quiesced_at:None,quiesced_reason:None};
         txn.execute_with_variables("mutation($input:EventGroupStateMutationInputArg!){create_EventGroupState(input:$input){_docID}}",&json!({"input":state})).await?;
         decode_group(&txn.execute(&query).await?,delivery,correlation)?.context("created event group disappeared")
     })).await
@@ -307,7 +307,7 @@ pub(crate) async fn quiesce_group(
     if record.state.quiesced_at.is_some() {
         return Ok(());
     }
-    crate::config_client::ConfigAccess::write_local(node,"event.quiesce_group",&format!("mutation{{update_EventGroupState(filter:{{_docID:{{_eq:\"{}\"}},agent_did:{{_eq:\"{}\"}}}},input:{{quiesced_at:\"{}\",quiesced_reason:\"{}\"}}){{_docID}}}}",escape_graphql_string(&record.doc_id),escape_graphql_string(&record.state.agent_did),escape_graphql_string(&Utc::now().to_rfc3339_opts(SecondsFormat::Millis,true)),escape_graphql_string(reason))).await.map(|_| ())
+    crate::config_client::ConfigAccess::write_local(node,"event.quiesce_group",&format!("mutation{{update_EventGroupState(filter:{{_docID:{{_eq:\"{}\"}},node_did:{{_eq:\"{}\"}}}},input:{{quiesced_at:\"{}\",quiesced_reason:\"{}\"}}){{_docID}}}}",escape_graphql_string(&record.doc_id),escape_graphql_string(&record.state.node_did),escape_graphql_string(&Utc::now().to_rfc3339_opts(SecondsFormat::Millis,true)),escape_graphql_string(reason))).await.map(|_| ())
 }
 
 pub(crate) enum GroupOutcome {
@@ -511,8 +511,8 @@ mod tests {
     use super::*;
 
     fn config(owner: &str) -> (CallbackBinding, EventSource) {
-        let binding = serde_json::from_value(json!({"agent_did":owner,"binding_id":"same-id","callback_id":"callback","event_source_id":"source","input_fields":["value"]})).unwrap();
-        let source = serde_json::from_value(json!({"agent_did":owner,"event_source_id":"source","source_collection":"GroupMember","correlation_field":"batch","group":{"expected_count":{"source_field":"expected"},"timeout_secs":1}})).unwrap();
+        let binding = serde_json::from_value(json!({"node_did":owner,"binding_id":"same-id","callback_id":"callback","event_source_id":"source","input_fields":["value"]})).unwrap();
+        let source = serde_json::from_value(json!({"node_did":owner,"event_source_id":"source","source_collection":"GroupMember","correlation_field":"batch","group":{"expected_count":{"source_field":"expected"},"timeout_secs":1}})).unwrap();
         (binding, source)
     }
 
@@ -561,7 +561,7 @@ mod tests {
                 emit_outcome: false,
                 task_id: "task".into(),
                 name: None,
-                behavior_id: "behavior".into(),
+                agent_id: "behavior".into(),
                 prompt_template: String::new(),
                 goal_objective_template: None,
                 goal_token_budget: None,
@@ -584,7 +584,7 @@ mod tests {
         assert_ne!(
             initial,
             Delivery::Trigger {
-                agent_did: "owner-a",
+                node_did: "owner-a",
                 trigger: &trigger
             }
             .group_key("batch-a")
@@ -604,7 +604,7 @@ mod tests {
         );
         assert!(expected_count(delivery, &[json!({"expected":2}), json!({"expected":3})]).is_err());
         assert!(expected_count(delivery, &[json!({"expected":0})]).is_err());
-        source.agent_did = "owner-b".into();
+        source.node_did = "owner-b".into();
         assert!(Delivery::Callback {
             binding: &binding,
             source: &source

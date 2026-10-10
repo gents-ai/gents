@@ -20,7 +20,7 @@ async fn goal_configuration_rejects_implicit_resume_and_clear_is_durable() -> Re
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
+            "--node-name",
             &agent_name,
             "--model-name",
             &model_name,
@@ -28,10 +28,10 @@ async fn goal_configuration_rejects_implicit_resume_and_clear_is_durable() -> Re
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
 
     let session_id = format!("goal-session-{}", Uuid::new_v4().simple());
     let objective = "Finish the CLI durable goal";
@@ -135,7 +135,7 @@ async fn goal_configuration_rejects_implicit_resume_and_clear_is_durable() -> Re
                 create_Goal(input: {{
                     goal_id: "duplicate-{}",
                     session_id: "{}",
-                    agent_did: "{}",
+                    node_did: "{}",
                     objective: "replicated twin",
                     status: "paused",
                     created_at: "2026-07-16T00:00:00Z"
@@ -143,7 +143,7 @@ async fn goal_configuration_rejects_implicit_resume_and_clear_is_durable() -> Re
             }}"#,
             Uuid::new_v4().simple(),
             escape_graphql_string(&session_id),
-            escape_graphql_string(&agent_did),
+            escape_graphql_string(&node_did),
         ),
     )
     .await?;
@@ -192,7 +192,7 @@ async fn goal_resume_request_reuses_signed_predecessor_and_returns_same_child() 
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
+            "--node-name",
             &agent_name,
             "--model-name",
             &model_name,
@@ -200,10 +200,10 @@ async fn goal_resume_request_reuses_signed_predecessor_and_returns_same_child() 
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
     let session_id = format!("resume-session-{}", Uuid::new_v4().simple());
 
     // The real CLI signs and submits the predecessor; the running daemon owns
@@ -215,8 +215,8 @@ async fn goal_resume_request_reuses_signed_predecessor_and_returns_same_child() 
             "submit",
             "--graphql",
             &graphql,
-            "--agent-did",
-            &agent_did,
+            "--node-did",
+            &node_did,
             "--session-id",
             &session_id,
             "--content",
@@ -280,7 +280,7 @@ async fn goal_resume_request_reuses_signed_predecessor_and_returns_same_child() 
         &format!(
             r#"{{
         AgentRequest(filter: {{ {} }}) {{
-            _docID request_id session_id agent_did caused_by_trigger_kind
+            _docID request_id session_id node_did caused_by_trigger_kind
             caused_by_parent_request_id caused_by_parent_request_doc_id
         }}
     }}"#,
@@ -310,8 +310,8 @@ async fn goal_resume_request_reuses_signed_predecessor_and_returns_same_child() 
         Some(session_id.as_str())
     );
     assert_eq!(
-        child.get("agent_did").and_then(Value::as_str),
-        Some(agent_did.as_str())
+        child.get("node_did").and_then(Value::as_str),
+        Some(node_did.as_str())
     );
     assert_eq!(
         child.get("caused_by_trigger_kind").and_then(Value::as_str),

@@ -1,39 +1,33 @@
-use gents::config_client::GraphqlEndpoint;
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::{Context, Result};
-use gents::agent::persona_presets;
-use gents::document_config::AgentBehavior;
+use gents::document_config::Agent;
 use gents::graphql::escape_graphql_string;
-use gents::{default_behavior_id_for_agent, AgentIdentity, Collection};
-use gents_protocol::persona::{LocalPersonaRequestRecord, PERSONA_AUTHORITY_LOCAL_SELF};
-use serde::Deserialize;
+use gents::self_config::{configure_agent, ConfigureAgentParams, StringUpdate};
+use gents::tool_surface::presets;
+use gents::{default_agent_id_for_node, Collection, NodeIdentity};
 use serde_json::{json, Value};
 
 use crate::cli::output_format::OutputFormat;
 use crate::cli::*;
-use crate::config_writes::{write_agent_behavior_document, ConfigAccess};
+use crate::config_writes::{write_agent_document, ConfigAccess};
 use crate::request_helpers::resolve_dual_id;
 use crate::{
     graphql_rows, load_initialized_home_identity, print_json, read_init_config,
     resolve_config_access, resolve_home_dir,
 };
 
-pub(super) async fn behavior_set(args: BehaviorUpsertArgs) -> Result<()> {
-    let behavior_id = args
-        .behavior_id
+pub(super) async fn agent_set(args: AgentUpsertArgs) -> Result<()> {
+    let agent_id = args
+        .agent_id
         .clone()
-        .unwrap_or_else(|| default_behavior_id_for_agent(&args.agent_did));
+        .unwrap_or_else(|| default_agent_id_for_node(&args.node_did));
     let access = ConfigAccess::Graphql(crate::resolve_graphql_endpoint(Some(&args.graphql), None)?);
-    // Raw set means one complete canonical document: omitted optionals clear,
-    // no sparse legacy merge. `write_agent_behavior_document` validates
-    // references (same-principal context/profile existence) inside its
-    // transaction; this deliberately stays outside persona admission (see
-    // `gents::agent::persona_ops`).
-    let behavior = AgentBehavior {
-        behavior_id: behavior_id.clone(),
-        agent_did: args.agent_did.clone(),
+    // Complete replacement clears omitted optionals. The shared writer
+    // validates same-node references in the publication transaction.
+    let agent = Agent {
+        agent_id: agent_id.clone(),
+        node_did: args.node_did.clone(),
         display_name: args.display_name.clone(),
         description: args.description.clone(),
         context_id: args.context_id.clone(),
@@ -42,11 +36,11 @@ pub(super) async fn behavior_set(args: BehaviorUpsertArgs) -> Result<()> {
         tags: args.tags.clone(),
         created_at: Some(chrono::Utc::now().to_rfc3339()),
     };
-    let doc_id = write_agent_behavior_document(&access, &behavior).await?;
+    let doc_id = write_agent_document(&access, &agent).await?;
     let output = json!({
         "doc_id": doc_id,
-        "behavior_id": behavior_id,
-        "agent_did": args.agent_did,
+        "agent_id": agent_id,
+        "node_did": args.node_did,
         "context_id": args.context_id,
         "inference_profile_id": args.inference_profile_id,
         "enabled": args.enabled,
@@ -55,16 +49,7 @@ pub(super) async fn behavior_set(args: BehaviorUpsertArgs) -> Result<()> {
     Ok(())
 }
 
-const PERSONA_REQUEST_POLL_TIMEOUT: Duration = Duration::from_secs(10);
-
-#[derive(Debug, Default, Deserialize)]
-struct PersonaRequestStatusRow {
-    status: Option<String>,
-    status_detail: Option<String>,
-    applied_behavior_id: Option<String>,
-}
-
-fn local_identity(home: Option<&std::path::Path>) -> Result<Arc<dyn AgentIdentity>> {
+fn local_identity(home: Option<&std::path::Path>) -> Result<Arc<dyn NodeIdentity>> {
     let home_dir = resolve_home_dir(home);
     let config = read_init_config(&home_dir)?.with_context(|| {
         format!(
@@ -75,185 +60,88 @@ fn local_identity(home: Option<&std::path::Path>) -> Result<Arc<dyn AgentIdentit
     load_initialized_home_identity(&home_dir, &config)
 }
 
-async fn poll_persona_request(
-    access: &ConfigAccess,
-    owner: &str,
-    request_key: &str,
-) -> Result<String> {
-    let key = escape_graphql_string(request_key);
-    let owner = escape_graphql_string(owner);
-    let query = format!(
-        r#"{{ PersonaConfigRequest(filter: {{ agent_did: {{ _eq: "{owner}" }}, request_key: {{ _eq: "{key}" }} }}, limit: 2) {{ status status_detail applied_behavior_id }} }}"#
-    );
-    let deadline = tokio::time::Instant::now() + PERSONA_REQUEST_POLL_TIMEOUT;
-    loop {
-        let mut rows = graphql_rows(access, "PersonaConfigRequest", &query).await?;
-        anyhow::ensure!(rows.len() <= 1, "ambiguous persona request {request_key}");
-        if let Some(row) = rows.pop() {
-            let row: PersonaRequestStatusRow = serde_json::from_value(row)?;
-            match row.status.as_deref() {
-                Some("applied") => {
-                    return row
-                        .applied_behavior_id
-                        .context("applied persona request missing behavior id");
-                }
-                Some("rejected") => anyhow::bail!("{}", row.status_detail.unwrap_or_default()),
-                _ => {}
-            }
-        }
-        anyhow::ensure!(
-            tokio::time::Instant::now() < deadline,
-            "persona request {request_key} remained pending for {PERSONA_REQUEST_POLL_TIMEOUT:?}"
-        );
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
-}
-async fn submit_local_persona(
-    graphql: &GraphqlEndpoint,
+async fn submit_agent(
+    graphql: &str,
     home: Option<&std::path::Path>,
-    mut record: LocalPersonaRequestRecord,
-) -> Result<String> {
-    let identity = local_identity(home)?;
-    anyhow::ensure!(
-        identity.did() == record.agent_did,
-        "initialized home signer {} does not own target agent {}",
-        identity.did(),
-        record.agent_did
-    );
-    record.local_signature = identity.sign(&record.signing_payload()).await?;
-    record.validate_shape()?;
-    let access = ConfigAccess::Graphql(graphql.clone());
-    let mutation = gents::agent::persona_ops::local_persona_request_mutation(&record);
-    access
-        .write("cli.config.behavior.persona_request", &mutation)
-        .await?;
-    poll_persona_request(&access, &record.agent_did, &record.request_key).await
-}
-
-fn local_record(
-    agent_did: String,
-    op: &str,
-    behavior_id: Option<String>,
-    clone_from: Option<String>,
-    persona_name: Option<String>,
-    description: Option<String>,
-    system_prompt: Option<String>,
-    root: Option<String>,
-    preset: Option<String>,
-    profile_id: Option<String>,
-) -> LocalPersonaRequestRecord {
-    LocalPersonaRequestRecord {
-        request_key: format!("cli-{}", uuid::Uuid::new_v4()),
-        requester_did: agent_did.clone(),
-        agent_did: agent_did.clone(),
-        authority_kind: PERSONA_AUTHORITY_LOCAL_SELF.to_string(),
-        local_signer_did: agent_did,
-        op: op.to_string(),
-        behavior_id,
-        clone_from,
-        persona_name,
-        description,
-        system_prompt,
-        root,
-        preset,
-        profile_id,
-        edit_fields: Vec::new(),
-        make_default: false,
-        created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        local_signature: Vec::new(),
-    }
-}
-
-async fn require_source_behavior(
-    graphql: &GraphqlEndpoint,
     owner: &str,
-    behavior_id: &str,
+    params: ConfigureAgentParams,
 ) -> Result<()> {
-    let access = ConfigAccess::Graphql(graphql.clone());
-    load_document(
+    let identity = local_identity(home)?;
+    let access = ConfigAccess::Graphql(crate::resolve_graphql_endpoint(Some(graphql), home)?);
+    let result = configure_agent(
         &access,
-        Collection::AgentBehavior,
-        "agent_did",
-        Some(owner),
-        behavior_id,
-    )
-    .await?
-    .with_context(|| format!("unknown behavior_id {behavior_id:?} under {owner:?}"))?;
-    Ok(())
-}
-
-pub(super) async fn behavior_create(args: BehaviorCreateArgs) -> Result<()> {
-    let record = local_record(
-        args.agent_did.clone(),
-        "create",
-        None,
-        args.clone_from.clone(),
-        Some(args.display_name.clone()),
-        args.description.clone(),
-        args.system_prompt.clone(),
-        args.root.clone(),
-        args.preset.clone(),
-        Some(args.profile_id.clone()),
-    );
-    let request_key = record.request_key.clone();
-    let behavior_id = submit_local_persona(
-        &crate::resolve_graphql_endpoint(Some(&args.graphql), args.home.as_deref())?,
-        args.home.as_deref(),
-        record,
+        owner,
+        identity.as_ref(),
+        &params,
+        &Default::default(),
     )
     .await?;
-    print_json(&json!({"status":"applied", "request_key":request_key, "behavior_id":behavior_id}))
+    print_json(&serde_json::from_str::<Value>(&result)?)
 }
 
-pub(super) async fn behavior_clone(args: BehaviorCloneArgs) -> Result<()> {
-    let agent_did = local_identity(args.home.as_deref())?.did().to_owned();
-    let graphql = crate::resolve_graphql_endpoint(Some(&args.graphql), args.home.as_deref())?;
-    require_source_behavior(&graphql, &agent_did, &args.source_behavior_id).await?;
-    // Profile is required, no implicit fallback: the materializer validates the
-    // published profile under the target agent's scope.
-    let record = local_record(
-        agent_did,
-        "create",
-        None,
-        Some(args.source_behavior_id.clone()),
-        Some(args.display_name.clone()),
-        args.description.clone(),
-        args.system_prompt.clone(),
-        args.root.clone(),
-        None,
-        Some(args.profile_id.clone()),
-    );
-    let request_key = record.request_key.clone();
-    let behavior_id = submit_local_persona(&graphql, args.home.as_deref(), record).await?;
-    print_json(&json!({"status":"applied", "request_key":request_key, "behavior_id":behavior_id}))
+fn optional_update(value: Option<String>) -> StringUpdate {
+    value.map(StringUpdate::Set).unwrap_or_default()
 }
 
-pub(super) async fn behavior_disable(args: BehaviorDisableArgs) -> Result<()> {
-    let agent_did = local_identity(args.home.as_deref())?.did().to_owned();
-    let graphql = crate::resolve_graphql_endpoint(Some(&args.graphql), args.home.as_deref())?;
-    require_source_behavior(&graphql, &agent_did, &args.behavior_id).await?;
-    let record = local_record(
-        agent_did,
-        "disable",
-        Some(args.behavior_id.clone()),
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-    );
-    let request_key = record.request_key.clone();
-    let behavior_id = submit_local_persona(&graphql, args.home.as_deref(), record).await?;
-    print_json(&json!({"status":"applied", "request_key":request_key, "behavior_id":behavior_id}))
+pub(super) async fn agent_create(args: AgentCreateArgs) -> Result<()> {
+    let action = if args.clone_from.is_some() {
+        "clone"
+    } else {
+        "create"
+    };
+    submit_agent(
+        &args.graphql,
+        args.home.as_deref(),
+        &args.node_did,
+        ConfigureAgentParams {
+            action: action.into(),
+            clone_from: args.clone_from,
+            display_name: StringUpdate::Set(args.display_name),
+            description: optional_update(args.description),
+            system_prompt: optional_update(args.system_prompt),
+            root: optional_update(args.root),
+            preset: optional_update(args.preset),
+            profile_id: StringUpdate::Set(args.profile_id),
+            ..Default::default()
+        },
+    )
+    .await
 }
 
-// -- enriched show: base AgentBehavior fields plus a `resolved` section
-// (the linked AgentContext's prompt/skills, its referenced Tools groups with
-// the preset classification and root, and the referenced InferenceProfile).
-// Read-only, so this reads straight through `ConfigAccess`/`graphql_rows`
-// rather than the persona-request channel above.
+pub(super) async fn agent_clone(args: AgentCloneArgs) -> Result<()> {
+    let owner = local_identity(args.home.as_deref())?.did().to_owned();
+    submit_agent(
+        &args.graphql,
+        args.home.as_deref(),
+        &owner,
+        ConfigureAgentParams {
+            action: "clone".into(),
+            clone_from: Some(args.source_agent_id),
+            display_name: StringUpdate::Set(args.display_name),
+            description: optional_update(args.description),
+            system_prompt: optional_update(args.system_prompt),
+            root: optional_update(args.root),
+            profile_id: StringUpdate::Set(args.profile_id),
+            ..Default::default()
+        },
+    )
+    .await
+}
+
+pub(super) async fn agent_disable(args: AgentDisableArgs) -> Result<()> {
+    let owner = local_identity(args.home.as_deref())?.did().to_owned();
+    submit_agent(
+        &args.graphql,
+        args.home.as_deref(),
+        &owner,
+        ConfigureAgentParams {
+            action: "disable".into(),
+            agent_id: Some(args.agent_id),
+            ..Default::default()
+        },
+    )
+    .await
+}
 
 async fn load_document(
     access: &ConfigAccess,
@@ -265,7 +153,7 @@ async fn load_document(
     let escaped_id = escape_graphql_string(id);
     let filter = match owner {
         Some(owner) => format!(
-            r#"agent_did: {{ _eq: "{}" }}, "#,
+            r#"node_did: {{ _eq: "{}" }}, "#,
             escape_graphql_string(owner)
         ),
         None => String::new(),
@@ -309,8 +197,8 @@ async fn classify_preset(access: &ConfigAccess, value: &Value) -> Result<Option<
         let row = load_document(
             access,
             Collection::DatastoreToolSurface,
-            "surface_id agent_did display_name enabled entries created_at tags",
-            Some(&tools.agent_did),
+            "surface_id node_did display_name enabled entries created_at tags",
+            Some(&tools.node_did),
             id,
         )
         .await?
@@ -318,40 +206,35 @@ async fn classify_preset(access: &ConfigAccess, value: &Value) -> Result<Option<
         surfaces.push(serde_json::from_value(row)?);
     }
     let merged = merge_datastore_tool_surfaces(&tools, &surfaces)?;
-    persona_presets::classify_tools(&tools, &merged)
+    presets::classify_tools(&tools, &merged)
 }
 
-const CANONICAL_BEHAVIOR_SHOW_FIELDS: &str = "behavior_id agent_did display_name description context_id inference_profile_id enabled tags created_at";
+const CANONICAL_AGENT_SHOW_FIELDS: &str = "agent_id node_did display_name description context_id inference_profile_id enabled tags created_at";
 
 const CANONICAL_PROFILE_SHOW_FIELDS: &str = "profile_id display_name description backend_id model_name reasoning_effort context_window max_output_tokens sampling_id execution_id tags";
 
-pub(super) async fn behavior_show(args: ConfigShowArgs) -> Result<()> {
-    let id = resolve_dual_id(
-        "behavior",
-        "--id",
-        args.id.as_deref(),
-        args.id_flag.as_deref(),
-    )?;
+pub(super) async fn agent_show(args: ConfigShowArgs) -> Result<()> {
+    let id = resolve_dual_id("agent", "--id", args.id.as_deref(), args.id_flag.as_deref())?;
     args.output
-        .ensure_supported("config behavior show", &[OutputFormat::Json])?;
+        .ensure_supported("config agent show", &[OutputFormat::Json])?;
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref())
         .await
-        .context("resolving access for config behavior show")?;
+        .context("resolving access for config agent show")?;
 
     let mut row = load_document(
         &access,
-        Collection::AgentBehavior,
-        CANONICAL_BEHAVIOR_SHOW_FIELDS,
+        Collection::Agent,
+        CANONICAL_AGENT_SHOW_FIELDS,
         None,
         &id,
     )
     .await?
-    .ok_or_else(|| anyhow::anyhow!("not found: no AgentBehavior document with behavior_id {id}"))?;
+    .ok_or_else(|| anyhow::anyhow!("not found: no Agent document with agent_id {id}"))?;
 
-    let agent_did = row
-        .get("agent_did")
+    let node_did = row
+        .get("node_did")
         .and_then(Value::as_str)
-        .context("AgentBehavior is missing its owner DID")?
+        .context("Agent is missing its owner DID")?
         .to_string();
     let context_id = row
         .get("context_id")
@@ -369,8 +252,8 @@ pub(super) async fn behavior_show(args: ConfigShowArgs) -> Result<()> {
             load_document(
                 &access,
                 Collection::AgentContext,
-                "context_id agent_did display_name description system_prompt tools_id compaction_id skill_ids tags",
-                Some(&agent_did),
+                "context_id node_did display_name description system_prompt tools_id compaction_id skill_ids tags",
+                Some(&node_did),
                 context_id,
             )
             .await?
@@ -387,8 +270,8 @@ pub(super) async fn behavior_show(args: ConfigShowArgs) -> Result<()> {
             load_document(
                 &access,
                 Collection::Tools,
-                "tools_id agent_did display_name host remote subagents built_ins datastore integrations self_config tags",
-                Some(&agent_did),
+                "tools_id node_did display_name host remote agents built_ins datastore integrations self_config tags",
+                Some(&node_did),
                 tools_id,
             )
             .await?
@@ -401,7 +284,7 @@ pub(super) async fn behavior_show(args: ConfigShowArgs) -> Result<()> {
                 &access,
                 Collection::InferenceProfile,
                 CANONICAL_PROFILE_SHOW_FIELDS,
-                Some(&agent_did),
+                Some(&node_did),
                 profile_id,
             )
             .await?
@@ -437,11 +320,8 @@ mod tests {
     use std::sync::Arc;
 
     use defra_node::EmbeddedNode;
-    use gents::agent::persona_ops::{
-        apply_persona_request, PersonaCatalogView, PersonaOp, PersonaRequestDoc,
-    };
     use gents::document_config::Tools;
-    use gents::{ensure_runtime_schemas, upsert_agent_behavior};
+    use gents::{ensure_runtime_schemas, upsert_agent};
     use serde_json::Value;
 
     use super::*;
@@ -458,7 +338,7 @@ mod tests {
         extra_fields: &str,
     ) -> Result<Option<Value>> {
         let query = format!(
-            r#"{{ {collection}(filter: {{ agent_did: {{ _eq: "{}" }}, {id_field}: {{ _eq: "{}" }} }}, limit: 2) {{ {id_field} agent_did {extra_fields} }} }}"#,
+            r#"{{ {collection}(filter: {{ node_did: {{ _eq: "{}" }}, {id_field}: {{ _eq: "{}" }} }}, limit: 2) {{ {id_field} node_did {extra_fields} }} }}"#,
             escape_graphql_string(owner),
             escape_graphql_string(id),
         );
@@ -478,14 +358,8 @@ mod tests {
         Ok(rows.into_iter().next())
     }
 
-    /// Canonical persona materialization contract exercised through the public
-    /// `apply_persona_request` entry point (the same one this crate's
-    /// `behavior create`/`clone` commands drive): a profile-only create mints
-    /// the canonical Behavior -> AgentContext -> Tools chain with no
-    /// backend/model copy on the behavior, and a clone copies the source
-    /// context/tools into private documents while switching the profile.
     #[tokio::test]
-    async fn persona_create_and_clone_materialize_canonical_chain() -> Result<()> {
+    async fn agent_create_and_clone_materialize_canonical_chain() -> Result<()> {
         let tempdir = tempfile::tempdir()?;
         let node = Arc::new(
             EmbeddedNode::builder()
@@ -495,46 +369,48 @@ mod tests {
                 .expect("embedded node boots"),
         );
         ensure_runtime_schemas(&node).await?;
-        let owner = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
+        let identity = gents::identity::KeyIdentity::load_or_create(
+            tempdir.path().join("identity.key"),
+            None,
+        )?;
+        let owner = identity.did();
         let actor = identity::Did::new(owner.to_string()).expect("valid test ACP actor");
-        gents::ensure_agent_principal(&node, owner).await?;
+        gents::ensure_node(&node, owner).await?;
         use gents::config_client::{
             apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
         };
         let documents = [
-            (Collection::InferenceBackend,json!({"agent_did":owner,"backend_id":"backend","name":"Test","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:1/v1","auth":{"kind":"unauthenticated"}})),
-            (Collection::InferenceProfile,json!({"agent_did":owner,"profile_id":"profile-1","backend_id":"backend","model_name":"test"})),
+            (Collection::InferenceBackend,json!({"node_did":owner,"backend_id":"backend","name":"Test","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:1/v1","auth":{"kind":"unauthenticated"}})),
+            (Collection::InferenceProfile,json!({"node_did":owner,"profile_id":"profile-1","backend_id":"backend","model_name":"test"})),
         ].into_iter().map(|(collection,value)| DesiredStateApplyDocument{collection,add:value.clone(),update:value}).collect();
         let plan = DesiredStateApplyPlan::new(documents)?;
-        ConfigAccess::transact_local(&node, Some(actor.clone()), "test.persona.profile", |txn| {
+        ConfigAccess::transact_local(&node, Some(actor.clone()), "test.agent.profile", |txn| {
             let plan = &plan;
             Box::pin(async move { apply_desired_state_plan(txn, plan).await })
         })
         .await?;
 
-        let doc = PersonaRequestDoc {
-            request_key: "canonical-create-1".to_string(),
-            agent_did: owner.to_string(),
-            op_raw: "create".to_string(),
-            op: Some(PersonaOp::Create { clone_from: None }),
-            persona_name: Some("Canonical".to_string()),
-            description: Some("Canonical test behavior".to_string()),
-            system_prompt: Some("Perform the requested work and verify it.".to_string()),
-            root: Some("".to_string()),
-            preset: Some("write".to_string()),
-            profile_id: Some("profile-1".to_string()),
+        let access = ConfigAccess::Local(node.clone());
+        let doc = ConfigureAgentParams {
+            action: "create".into(),
+            display_name: StringUpdate::Set("Canonical".into()),
+            description: StringUpdate::Set("Canonical test agent".into()),
+            system_prompt: StringUpdate::Set("Perform the requested work and verify it.".into()),
+            preset: StringUpdate::Set("write".into()),
+            profile_id: StringUpdate::Set("profile-1".into()),
             ..Default::default()
         };
-        let outcome =
-            apply_persona_request(&node, actor.clone(), &doc, &PersonaCatalogView::default())
-                .await?;
-        assert!(!outcome.repaired);
+        let outcome: Value = serde_json::from_str(
+            &configure_agent(&access, owner, &identity, &doc, &Default::default()).await?,
+        )?;
+        assert_eq!(outcome["committed"], true);
+        let agent_id = outcome["agent_id"].as_str().context("created agent ID")?;
 
-        let behavior = gents::load_agent_behavior(&node, &outcome.behavior_id)
+        let agent = gents::load_agent(&node, agent_id)
             .await?
-            .expect("created behavior exists");
-        assert_eq!(behavior.inference_profile_id, "profile-1");
-        let context_id = behavior.context_id.clone().expect("create mints a context");
+            .expect("created agent exists");
+        assert_eq!(agent.inference_profile_id, "profile-1");
+        let context_id = agent.context_id.clone().expect("create mints a context");
         let context_row = read_canonical(
             &node,
             "AgentContext",
@@ -563,27 +439,24 @@ mod tests {
             Some(gents::tool_surface::BashMode::Unrestricted),
         );
 
-        // Clone-by-create: private context/tools copies, new profile selection.
-        let clone_doc = PersonaRequestDoc {
-            request_key: "canonical-clone-1".to_string(),
-            agent_did: owner.to_string(),
-            op_raw: "create".to_string(),
-            op: Some(PersonaOp::Create {
-                clone_from: Some(outcome.behavior_id.clone()),
-            }),
-            persona_name: Some("Cloned".to_string()),
-            root: None,
-            preset: None,
-            profile_id: Some("profile-1".to_string()),
+        let clone_doc = ConfigureAgentParams {
+            action: "clone".into(),
+            clone_from: Some(agent_id.to_owned()),
+            display_name: StringUpdate::Set("Cloned".into()),
+            profile_id: StringUpdate::Set("profile-1".into()),
             ..Default::default()
         };
-        let clone_outcome =
-            apply_persona_request(&node, actor, &clone_doc, &PersonaCatalogView::default()).await?;
-        assert!(!clone_outcome.repaired);
-        assert_ne!(clone_outcome.behavior_id, outcome.behavior_id);
-        let cloned = gents::load_agent_behavior(&node, &clone_outcome.behavior_id)
+        let clone_outcome: Value = serde_json::from_str(
+            &configure_agent(&access, owner, &identity, &clone_doc, &Default::default()).await?,
+        )?;
+        assert_eq!(clone_outcome["committed"], true);
+        let cloned_id = clone_outcome["agent_id"]
+            .as_str()
+            .context("cloned agent ID")?;
+        assert_ne!(cloned_id, agent_id);
+        let cloned = gents::load_agent(&node, cloned_id)
             .await?
-            .expect("cloned behavior exists");
+            .expect("cloned agent exists");
         let cloned_context_id = cloned
             .context_id
             .clone()
@@ -611,19 +484,19 @@ mod tests {
         let access = ConfigAccess::Local(node.clone());
         assert!(load_document(
             &access,
-            Collection::AgentBehavior,
-            "behavior_id agent_did",
+            Collection::Agent,
+            "agent_id node_did",
             Some("did:key:foreign"),
-            &outcome.behavior_id
+            agent_id
         )
         .await?
         .is_none());
         assert!(load_document(
             &access,
-            Collection::AgentBehavior,
-            "behavior_id agent_did",
+            Collection::Agent,
+            "agent_id node_did",
             Some(owner),
-            &outcome.behavior_id
+            agent_id
         )
         .await?
         .is_some());
@@ -637,7 +510,7 @@ mod tests {
         Ok(())
     }
 
-    /// The raw `behavior set` door is a complete canonical replacement through
+    /// The raw `agent set` door is a complete canonical replacement through
     /// the shared writer: omitted optionals clear and a dangling
     /// context/profile reference fails the write transaction.
     #[tokio::test]
@@ -651,10 +524,10 @@ mod tests {
                 .expect("embedded node boots"),
         );
         ensure_runtime_schemas(&node).await?;
-        gents::ensure_agent_principal(&node, "did:key:set-owner").await?;
-        let behavior = AgentBehavior {
-            behavior_id: "b1".to_string(),
-            agent_did: "did:key:set-owner".to_string(),
+        gents::ensure_node(&node, "did:key:set-owner").await?;
+        let agent = Agent {
+            agent_id: "b1".to_string(),
+            node_did: "did:key:set-owner".to_string(),
             display_name: None,
             description: None,
             context_id: None,
@@ -663,19 +536,18 @@ mod tests {
             tags: Vec::new(),
             created_at: None,
         };
-        // The shared writer behavior_set drives owns the reference validation;
+        // The shared writer agent_set drives owns the reference validation;
         // a dangling profile rejects inside its transaction.
-        assert!(format!(
-            "{:#}",
-            upsert_agent_behavior(&node, &behavior).await.unwrap_err()
-        )
-        .contains("missing-profile"));
+        assert!(
+            format!("{:#}", upsert_agent(&node, &agent).await.unwrap_err())
+                .contains("missing-profile")
+        );
         // Nothing was published: the canonical chain stays empty.
         let response = node
-            .execute("{ AgentBehavior {behavior_id} AgentContext {context_id} Tools {tools_id} }")
+            .execute("{ Agent {agent_id} AgentContext {context_id} Tools {tools_id} }")
             .await;
         assert!(!response.has_errors(), "{:?}", response.errors);
-        for name in ["AgentBehavior", "AgentContext", "Tools"] {
+        for name in ["Agent", "AgentContext", "Tools"] {
             assert_eq!(
                 response.data.as_ref().unwrap()[name],
                 serde_json::json!([]),

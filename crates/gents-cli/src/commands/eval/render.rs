@@ -225,7 +225,7 @@ pub(crate) fn trial_text(view: &TrialView, out: &mut dyn Write) -> io::Result<()
         writeln!(
             out,
             "attempt {} trial_id {} agent {} session {}",
-            latest.attempt, latest.trial_id, latest.trial_agent_did, latest.session_id
+            latest.attempt, latest.trial_id, latest.trial_node_did, latest.session_id
         )?;
         writeln!(
             out,

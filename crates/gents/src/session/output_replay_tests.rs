@@ -39,7 +39,7 @@ struct CapturedRequest {
     body: serde_json::Value,
 }
 
-const AGENT_DID: &str = "did:test:replay-agent";
+const NODE_DID: &str = "did:test:replay-agent";
 const SESSION_ID: &str = "replay-session";
 const REQUEST_ID: &str = "replay-request";
 
@@ -56,7 +56,7 @@ struct ReplayFixture {
 impl ReplayFixture {
     fn scope(&self) -> CanonicalReplayScope<'_> {
         CanonicalReplayScope {
-            agent_did: AGENT_DID,
+            node_did: NODE_DID,
             requester_did: None,
             session_id: SESSION_ID,
             request_id: REQUEST_ID,
@@ -128,9 +128,9 @@ impl ReplayFixture {
                 request_doc_id: self.request_doc_id.clone(),
                 request_commit_cid: self.request_commit_cid.clone(),
                 request_id: REQUEST_ID.into(),
-                agent_did: AGENT_DID.into(),
+                node_did: NODE_DID.into(),
                 requester_did: String::new(),
-                behavior_id: "general".into(),
+                agent_id: "general".into(),
                 session_id: SESSION_ID.into(),
                 model_name: "test-model".into(),
                 provider_family: Some(family.into()),
@@ -168,7 +168,7 @@ impl ReplayFixture {
                         doc_id: "bae-00000000-0000-5000-8000-000000000000".into(),
                         field_commit_cid: "missing-base-commit".into(),
                         depth: 0,
-                        agent_did: AGENT_DID.into(),
+                        node_did: NODE_DID.into(),
                         requester_did: String::new(),
                         session_id: SESSION_ID.into(),
                         source: serde_json::to_value(source)
@@ -200,7 +200,7 @@ impl ReplayFixture {
             key: "assistant-note".into(),
         };
         let segment = OutputSegment {
-            agent_did: AGENT_DID.into(),
+            node_did: NODE_DID.into(),
             requester_did: None,
             session_id: SESSION_ID.into(),
             request_doc_id: self.request_doc_id.clone(),
@@ -248,7 +248,7 @@ impl ReplayFixture {
                 "assistant-note",
             ),
             session_id: SESSION_ID.into(),
-            agent_did: AGENT_DID.into(),
+            node_did: NODE_DID.into(),
             requester_did: None,
             request_doc_id: Some(self.request_doc_id.clone()),
             publication: MessagePublication::RequestExecution {
@@ -281,7 +281,7 @@ impl ReplayFixture {
         self.boundary = capture_source_boundary(
             &self.node,
             SESSION_ID,
-            AGENT_DID,
+            NODE_DID,
             None,
             &self.request_doc_id,
             &self.request_commit_cid,
@@ -401,13 +401,13 @@ async fn fixture_with_provider_payload_and_scope_and_tool(
     let created = node
         .execute(&format!(
             r#"mutation {{ create_AgentRequest(input: {{
-                request_id: "{}", purpose: "normal", agent_did: "{}",
-                behavior_id: "general", session_id: "{}", content: "prompt",
+                request_id: "{}", purpose: "normal", node_did: "{}",
+                agent_id: "general", session_id: "{}", content: "prompt",
                 lifecycle_state: "pending", execution_origin: "interactive",
-                created_at: "{}", retry_count: 0, max_retries: 3, subagent_depth: 0
+                created_at: "{}", retry_count: 0, max_retries: 3, request_hop: 0
             }}) {{ _docID }} }}"#,
             crate::graphql::escape_graphql_string(REQUEST_ID),
-            crate::graphql::escape_graphql_string(AGENT_DID),
+            crate::graphql::escape_graphql_string(NODE_DID),
             crate::graphql::escape_graphql_string(SESSION_ID),
             crate::graphql::escape_graphql_string(&now),
         ))
@@ -521,7 +521,7 @@ async fn fixture_with_provider_payload_and_scope_and_tool(
         )
     };
     let segment = OutputSegment {
-        agent_did: AGENT_DID.into(),
+        node_did: NODE_DID.into(),
         requester_did: None,
         session_id: SESSION_ID.into(),
         request_doc_id: request_doc_id.clone(),
@@ -561,7 +561,7 @@ async fn fixture_with_provider_payload_and_scope_and_tool(
             serde_json::to_string(&source).unwrap()
         ),
         session_id: SESSION_ID.into(),
-        agent_did: AGENT_DID.into(),
+        node_did: NODE_DID.into(),
         requester_did: None,
         request_doc_id: Some(request_doc_id.clone()),
         publication: MessagePublication::RequestExecution {
@@ -640,7 +640,7 @@ async fn fixture_with_provider_payload_and_scope_and_tool(
     let boundary = capture_source_boundary(
         &node,
         SESSION_ID,
-        AGENT_DID,
+        NODE_DID,
         None,
         &request_doc_id,
         &request_commit_cid,
@@ -893,7 +893,7 @@ async fn non_required_signed_history_with_wrong_provider_scope_stays_permissive(
     let history = super::output::load_sequenced_messages(
         &fixture.node,
         SESSION_ID,
-        AGENT_DID,
+        NODE_DID,
         None,
         None,
         None,
@@ -1112,7 +1112,7 @@ async fn replay_resolution_reads_shared_request_once_and_keeps_every_physical_ca
     fixture.boundary = capture_source_boundary(
         &fixture.node,
         SESSION_ID,
-        AGENT_DID,
+        NODE_DID,
         None,
         &fixture.request_doc_id,
         &fixture.request_commit_cid,
@@ -1239,12 +1239,12 @@ async fn historical_request_store_faults_propagate_instead_of_dropping_reasoning
         .node
         .execute(&format!(
             r#"mutation {{ create_AgentRequest(input: {{
-                request_id: "replay-request-next", purpose: "normal", agent_did: "{}",
-                behavior_id: "general", session_id: "{}", content: "next",
+                request_id: "replay-request-next", purpose: "normal", node_did: "{}",
+                agent_id: "general", session_id: "{}", content: "next",
                 lifecycle_state: "pending", execution_origin: "interactive",
-                created_at: "{}", retry_count: 0, max_retries: 3, subagent_depth: 0
+                created_at: "{}", retry_count: 0, max_retries: 3, request_hop: 0
             }}) {{ _docID }} }}"#,
-            crate::graphql::escape_graphql_string(AGENT_DID),
+            crate::graphql::escape_graphql_string(NODE_DID),
             crate::graphql::escape_graphql_string(SESSION_ID),
             crate::graphql::escape_graphql_string(&now),
         ))
@@ -1268,7 +1268,7 @@ async fn historical_request_store_faults_propagate_instead_of_dropping_reasoning
     let boundary = capture_source_boundary(
         &fixture.node,
         SESSION_ID,
-        AGENT_DID,
+        NODE_DID,
         None,
         &current_doc_id,
         &current_commit_cid,

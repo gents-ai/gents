@@ -15,7 +15,7 @@ use crate::defra_node::EmbeddedNode;
 use crate::graphql::{escape_graphql_string, validate_collection_identifier};
 use crate::llm::tool::{Tool, ToolDefinition};
 use crate::tool_surface::EndpointScope;
-use crate::AgentIdentity;
+use crate::NodeIdentity;
 
 #[cfg(test)]
 mod tests;
@@ -26,7 +26,7 @@ const OVERLAY_SOURCE: &str = "engineer";
 #[derive(Clone)]
 pub struct P2pTool {
     node: Arc<EmbeddedNode>,
-    identity: Option<Arc<dyn AgentIdentity>>,
+    identity: Option<Arc<dyn NodeIdentity>>,
     mutate: bool,
     collections: EndpointScope<String, ()>,
 }
@@ -54,7 +54,7 @@ struct Reply {
 impl P2pTool {
     pub fn new(
         node: Arc<EmbeddedNode>,
-        identity: Option<Arc<dyn AgentIdentity>>,
+        identity: Option<Arc<dyn NodeIdentity>>,
         mutate: bool,
         collections: EndpointScope<String, ()>,
     ) -> Self {
@@ -66,7 +66,7 @@ impl P2pTool {
         }
     }
 
-    fn actor(&self) -> Result<Arc<dyn AgentIdentity>> {
+    fn actor(&self) -> Result<Arc<dyn NodeIdentity>> {
         let identity = self
             .identity
             .clone()
@@ -77,7 +77,7 @@ impl P2pTool {
         );
         if let Some(context) = crate::tool_call_lifecycle::runtime::current_tool_runtime_context() {
             ensure!(
-                context.agent_did.as_deref() == Some(identity.did()),
+                context.node_did.as_deref() == Some(identity.did()),
                 "P2P tool principal differs from the running request"
             );
         }
@@ -134,7 +134,7 @@ impl P2pTool {
             .rows(
                 "DataPlanePairingDesired",
                 Some(&format!("{{peer_id: {{_eq: {}}}}}", quoted(peer))),
-                "_docID peer_id agent_did collections replicator_addresses template source",
+                "_docID peer_id node_did collections replicator_addresses template source",
             )
             .await?;
         ensure!(rows.len() <= 1, "ambiguous pairing document");
@@ -143,7 +143,7 @@ impl P2pTool {
 
     fn owned_overlay(&self, row: &Value, actor: &str) -> Result<()> {
         ensure!(
-            row["agent_did"].as_str() == Some(actor)
+            row["node_did"].as_str() == Some(actor)
                 && row["source"].as_str() == Some(OVERLAY_SOURCE),
             "pairing overlay is managed by another owner; do not change its policy"
         );
@@ -167,12 +167,12 @@ impl P2pTool {
             let fields = fields.clone();
             let collections_scope = collections_scope.clone();
             Box::pin(async move {
-                let response = txn.execute(&format!("{{DataPlanePairingDesired(filter: {{peer_id: {{_eq: {}}}}}, limit: 2) {{_docID peer_id agent_did collections replicator_addresses template source}}}}", quoted(&peer))).await?;
+                let response = txn.execute(&format!("{{DataPlanePairingDesired(filter: {{peer_id: {{_eq: {}}}}}, limit: 2) {{_docID peer_id node_did collections replicator_addresses template source}}}}", quoted(&peer))).await?;
                 let rows = response["data"]["DataPlanePairingDesired"].as_array().context("missing pairing documents")?;
                 ensure!(rows.len() <= 1, "ambiguous pairing document");
                 let before = rows.first();
                 if let Some(row) = before {
-                    ensure!(row["agent_did"].as_str() == Some(actor.as_str()) && row["source"].as_str() == Some(OVERLAY_SOURCE), "pairing overlay is managed by another owner; do not change its policy");
+                    ensure!(row["node_did"].as_str() == Some(actor.as_str()) && row["source"].as_str() == Some(OVERLAY_SOURCE), "pairing overlay is managed by another owner; do not change its policy");
                     let before_collections: Vec<String> = if row["collections"].is_null() {Vec::new()} else {serde_json::from_value(row["collections"].clone()).context("malformed existing collection scope")?};
                     ensure!(collections_scope.permits_all(before_collections.iter()), "existing pairing contains collections outside the P2P grant; next call: p2p {{\"argv\":[\"pairings\",\"list\"]}}");
                     if !before_collections.is_empty() {
@@ -302,7 +302,7 @@ impl P2pTool {
                     .rows(
                         "PeerRegistry",
                         None,
-                        "peer_id agent_did display_name network_id addresses status updated_at",
+                        "peer_id node_did display_name network_id addresses status updated_at",
                     )
                     .await?;
                 Ok(reply(
@@ -319,7 +319,7 @@ impl P2pTool {
                     .rows(
                         "PeerRegistry",
                         Some(&format!("{{peer_id: {{_eq: {}}}}}", quoted(peer))),
-                        "peer_id agent_did display_name network_id addresses status updated_at",
+                        "peer_id node_did display_name network_id addresses status updated_at",
                     )
                     .await?;
                 let connected = admin.active_peers().await?.iter().any(|entry| {
@@ -344,7 +344,7 @@ impl P2pTool {
                     .rows(
                         "DataPlanePairingDesired",
                         filter.as_deref(),
-                        "peer_id agent_did collections source template",
+                        "peer_id node_did collections source template",
                     )
                     .await?;
                 let applied = self
@@ -439,7 +439,7 @@ impl P2pTool {
                 if let Some(row) = &before {
                     self.owned_overlay(row, actor.did())?;
                 }
-                let desired = json!({"peer_id":peer,"agent_did":actor.did(),"collections":collections,"replicator_addresses":[active.request.candidate_ticket],"template":"app-collections","source":OVERLAY_SOURCE});
+                let desired = json!({"peer_id":peer,"node_did":actor.did(),"collections":collections,"replicator_addresses":[active.request.candidate_ticket],"template":"app-collections","source":OVERLAY_SOURCE});
                 if *operation == "preview" {
                     return Ok(reply(
                         json!({"proposed":desired,"current":before}),
@@ -448,7 +448,7 @@ impl P2pTool {
                     ));
                 }
                 ensure!(self.mutate, "P2P mutations are disabled by the tool grant");
-                let fields = format!("{{peer_id: {}, agent_did: {}, collections: {}, replicator_addresses: {}, template: \"app-collections\", source: {}}}",
+                let fields = format!("{{peer_id: {}, node_did: {}, collections: {}, replicator_addresses: {}, template: \"app-collections\", source: {}}}",
                     quoted(peer), quoted(actor.did()), crate::graphql::graphql_string_list_literal(collections.iter().map(String::as_str)), crate::graphql::graphql_string_list_literal([active.request.candidate_ticket.as_str()]), quoted(OVERLAY_SOURCE));
                 let unchanged = self
                     .mutate_overlay(peer, Some(desired.clone()), Some(fields))

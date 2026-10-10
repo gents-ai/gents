@@ -10,12 +10,12 @@ export type VisibleSessionHydration = SessionHydrationView & {
 export function visibleSessionHydration(
   hydration: SessionHydrationView | null | undefined,
   sessionId: string | null,
-  agentDid?: string | null,
+  nodeDid?: string | null,
 ): VisibleSessionHydration | null {
   if (!hydration || !sessionId || hydration.sessionId !== sessionId) {
     return null;
   }
-  if (agentDid && hydration.agentDid !== agentDid) {
+  if (nodeDid && hydration.nodeDid !== nodeDid) {
     return null;
   }
   if (

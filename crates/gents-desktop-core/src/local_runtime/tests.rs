@@ -1,8 +1,8 @@
 use super::identity::{normalize_optional_string, resolve_p2p_peer_id};
 use super::{
     augment_peer_status_payload_for_desktop, await_serving_runtime_within,
-    dangerously_overwrite_desktop_home, default_agent_home, graphql_endpoint_for_desktop_access,
-    init_standard_local_runtime, load_operator_principal, load_standard_runtime_identity,
+    dangerously_overwrite_desktop_home, default_node_home, graphql_endpoint_for_desktop_access,
+    init_standard_local_runtime, load_operator_node_identity, load_standard_runtime_identity,
     operator_signer, render_human_summary, reset_desktop_runtime_state, runtime_graphql_url,
     runtime_status_url, serving_runtime, DesktopInitOptions, DesktopInitSummary,
     StoredRuntimeState, LOCAL_STANDARD_SOURCE,
@@ -15,12 +15,12 @@ fn sample_summary() -> DesktopInitSummary {
     DesktopInitSummary {
         status: "initialized",
         source: LOCAL_STANDARD_SOURCE,
-        agent_home: "/tmp/agent".to_string(),
+        node_home: "/tmp/node".to_string(),
         desktop_home: "/tmp/desktop".to_string(),
         peer_directory: "/tmp/desktop/peers.json".to_string(),
-        label: "Local Agent".to_string(),
-        agent_name: "default".to_string(),
-        agent_did: "did:test:default".to_string(),
+        label: "Local Node".to_string(),
+        node_name: "default".to_string(),
+        node_did: "did:test:default".to_string(),
         graphql: "http://127.0.0.1:9191/graphql".to_string(),
         p2p_transport: "iroh".to_string(),
         p2p_peer_id: "peer-runtime".to_string(),
@@ -39,12 +39,12 @@ fn init_summary_serializes_camel_case() {
     let summary = DesktopInitSummary {
         status: "ok",
         source: "local",
-        agent_home: "/h".into(),
+        node_home: "/h".into(),
         desktop_home: "/d".into(),
         peer_directory: "/p".into(),
         label: "L".into(),
-        agent_name: "n".into(),
-        agent_did: "did:key:z".into(),
+        node_name: "n".into(),
+        node_did: "did:key:z".into(),
         graphql: "http://x".into(),
         p2p_transport: "iroh".into(),
         p2p_peer_id: "pid".into(),
@@ -53,14 +53,14 @@ fn init_summary_serializes_camel_case() {
         next_steps: vec![],
     };
     let value = serde_json::to_value(&summary).unwrap();
-    assert_eq!(value["agentDid"], "did:key:z");
-    assert!(value.get("agent_did").is_none());
+    assert_eq!(value["nodeDid"], "did:key:z");
+    assert!(value.get("node_did").is_none());
     assert!(value.get("statusEndpoint").is_none());
 }
 
 #[test]
-fn default_agent_home_uses_fresh_gents_home() {
-    let home = default_agent_home().expect("agent home");
+fn default_node_home_uses_fresh_gents_home() {
+    let home = default_node_home().expect("node home");
 
     assert_eq!(
         home.file_name().and_then(|name| name.to_str()),
@@ -75,8 +75,8 @@ fn configured_runtime_missing_key_is_not_created_by_desktop_read() {
     std::fs::write(
         tempdir.path().join("init.json"),
         serde_json::json!({
-            "agent_name": "local",
-            "agent_did": "did:key:configured",
+            "node_name": "local",
+            "node_did": "did:key:configured",
             "key_path": key_path,
         })
         .to_string(),
@@ -99,8 +99,8 @@ fn configured_runtime_wrong_existing_key_is_preserved() {
     std::fs::write(
         tempdir.path().join("init.json"),
         serde_json::json!({
-            "agent_name": "local",
-            "agent_did": "did:key:different",
+            "node_name": "local",
+            "node_did": "did:key:different",
             "key_path": key_path,
         })
         .to_string(),
@@ -110,7 +110,7 @@ fn configured_runtime_wrong_existing_key_is_preserved() {
     let error = load_standard_runtime_identity(tempdir.path())
         .err()
         .expect("wrong configured key must be rejected");
-    assert!(format!("{error:#}").contains("identity does not match configured agent DID"));
+    assert!(format!("{error:#}").contains("identity does not match configured node DID"));
     assert_eq!(std::fs::read(&key_path).unwrap(), original);
 }
 
@@ -167,7 +167,7 @@ fn desktop_graphql_rewrites_loopback_endpoint_for_remote_status_host() {
 fn desktop_graphql_is_added_to_status_payload() {
     let payload = augment_peer_status_payload_for_desktop(
         serde_json::json!({
-            "agent_did": "did:key:z6MkAgent",
+            "node_did": "did:key:z6MkNode",
             "graphql": "http://127.0.0.1:9181/api/v0/graphql"
         }),
         "http://100.73.235.38:9181/status",
@@ -241,33 +241,33 @@ fn discovery_binds_to_the_live_ready_did() {
     let did = "did:key:z6MkLocal";
     let observe = |status: serde_json::Value| serving_runtime(&status, did);
     assert_eq!(
-        observe(json!({ "agent_did": did, "lifecycle": "starting" })).unwrap(),
+        observe(json!({ "node_did": did, "lifecycle": "starting" })).unwrap(),
         ObservedServeLifecycle::Starting
     );
     assert_eq!(
-        observe(json!({ "agent_did": did, "lifecycle": "ready" })).unwrap(),
+        observe(json!({ "node_did": did, "lifecycle": "ready" })).unwrap(),
         ObservedServeLifecycle::Ready
     );
     assert_eq!(
-        observe(json!({ "agent_did": did, "version": "0.18.2" })).unwrap(),
+        observe(json!({ "node_did": did, "version": "0.18.2" })).unwrap(),
         ObservedServeLifecycle::Outdated {
             version: Some("0.18.2".to_string())
         }
     );
     for live in [
         json!({ "lifecycle": "ready" }),
-        json!({ "agent_did": "", "lifecycle": "ready" }),
-        json!({ "agent_did": "   ", "lifecycle": "ready" }),
-        json!({ "agent_did": 7, "lifecycle": "ready" }),
-        json!({ "agent_did": "z6MkLocal", "lifecycle": "ready" }),
-        json!({ "agent_did": "did:", "lifecycle": "ready" }),
-        json!({ "agent_did": "did:key:z6MkOther", "lifecycle": "ready" }),
+        json!({ "node_did": "", "lifecycle": "ready" }),
+        json!({ "node_did": "   ", "lifecycle": "ready" }),
+        json!({ "node_did": 7, "lifecycle": "ready" }),
+        json!({ "node_did": "z6MkLocal", "lifecycle": "ready" }),
+        json!({ "node_did": "did:", "lifecycle": "ready" }),
+        json!({ "node_did": "did:key:z6MkOther", "lifecycle": "ready" }),
     ] {
         assert!(observe(live.clone()).is_err(), "accepted {live}");
     }
     for blank in ["", "  "] {
         assert!(
-            serving_runtime(&json!({ "agent_did": blank, "lifecycle": "ready" }), blank).is_err()
+            serving_runtime(&json!({ "node_did": blank, "lifecycle": "ready" }), blank).is_err()
         );
     }
 }
@@ -303,15 +303,15 @@ fn seed_home(home: &std::path::Path, did: &str, graphql: &str) {
     std::fs::create_dir_all(home).unwrap();
     std::fs::write(
         home.join("init.json"),
-        json!({ "agent_name": "Local", "agent_did": did }).to_string(),
+        json!({ "node_name": "Local", "node_did": did }).to_string(),
     )
     .unwrap();
     std::fs::write(
         home.join("runtime.json"),
         json!({
             "graphql": graphql,
-            "agent_name": "Local",
-            "agent_did": did,
+            "node_name": "Local",
+            "node_did": did,
             "p2p_transport": "iroh",
         })
         .to_string(),
@@ -334,10 +334,10 @@ async fn discovery_rejects_a_bad_live_did_without_touching_the_peer_store() {
         let server = serve_status_after(
             listener,
             std::time::Duration::ZERO,
-            json!({ "agent_did": live, "lifecycle": "ready" }),
+            json!({ "node_did": live, "lifecycle": "ready" }),
         )
         .await;
-        let home = temp.path().join("agent");
+        let home = temp.path().join("node");
         seed_home(
             &home,
             did,
@@ -346,7 +346,7 @@ async fn discovery_rejects_a_bad_live_did_without_touching_the_peer_store() {
         let paths = DesktopPaths::from_root(temp.path().join("desktop"));
 
         let error = init_standard_local_runtime(DesktopInitOptions {
-            agent_home: home,
+            node_home: home,
             desktop_paths: paths.clone(),
             label: "Local".to_string(),
         })
@@ -368,8 +368,8 @@ async fn discovery_waits_for_a_runtime_that_is_not_listening_yet() {
     let port = listener.local_addr().unwrap().port();
     let runtime = StoredRuntimeState {
         graphql: format!("http://127.0.0.1:{port}/api/v0/graphql"),
-        agent_name: "Local".to_string(),
-        agent_did: did.to_string(),
+        node_name: "Local".to_string(),
+        node_did: did.to_string(),
         p2p_transport: "iroh".to_string(),
         p2p_peer_id: None,
     };
@@ -377,7 +377,7 @@ async fn discovery_waits_for_a_runtime_that_is_not_listening_yet() {
     let server = serve_status_after(
         listener,
         std::time::Duration::from_millis(600),
-        json!({ "agent_did": did, "lifecycle": "ready" }),
+        json!({ "node_did": did, "lifecycle": "ready" }),
     )
     .await;
     let client = reqwest::Client::builder()
@@ -398,13 +398,13 @@ async fn discovery_fails_at_once_for_a_runtime_that_predates_readiness() {
     let server = serve_status_after(
         listener,
         std::time::Duration::ZERO,
-        json!({ "agent_did": did, "version": "0.18.2" }),
+        json!({ "node_did": did, "version": "0.18.2" }),
     )
     .await;
     let runtime = StoredRuntimeState {
         graphql: format!("http://127.0.0.1:{port}/api/v0/graphql"),
-        agent_name: "Local".to_string(),
-        agent_did: did.to_string(),
+        node_name: "Local".to_string(),
+        node_did: did.to_string(),
         p2p_transport: "iroh".to_string(),
         p2p_peer_id: None,
     };
@@ -428,20 +428,20 @@ async fn discovery_fails_at_once_for_a_runtime_that_predates_readiness() {
 
 const HOSTED_GRAPHQL: &str = "http://127.0.0.1:9191/api/v0/graphql";
 
-/// A runtime home under `dir` with a file principal key, serving
+/// A runtime home under `dir` with a file identity key, serving
 /// `HOSTED_GRAPHQL`. Returns the home and its DID.
 fn hosted_home(dir: &std::path::Path) -> (std::path::PathBuf, String) {
-    use gents::identity::AgentIdentity as _;
+    use gents::identity::NodeIdentity as _;
 
-    let home = dir.join("agent");
+    let home = dir.join("node");
     std::fs::create_dir_all(&home).unwrap();
-    let key_path = home.join("principal.key");
+    let key_path = home.join("node.key");
     let identity = gents::identity::KeyIdentity::load_or_create(&key_path, None).unwrap();
     let did = identity.did().to_string();
     seed_home(&home, &did, HOSTED_GRAPHQL);
     std::fs::write(
         home.join("init.json"),
-        json!({ "agent_name": "Local", "agent_did": did, "key_path": key_path }).to_string(),
+        json!({ "node_name": "Local", "node_did": did, "key_path": key_path }).to_string(),
     )
     .unwrap();
     (home, did)
@@ -450,22 +450,22 @@ fn hosted_home(dir: &std::path::Path) -> (std::path::PathBuf, String) {
 fn hosted_record(home: &std::path::Path, did: &str, graphql: &str) -> crate::client::PeerRecord {
     let mut record =
         crate::client::PeerRecord::local_standard("Local", "iroh://peer", did, graphql);
-    record.local_agent_home = Some(home.to_string_lossy().into_owned());
+    record.local_node_home = Some(home.to_string_lossy().into_owned());
     record
 }
 
-/// The desktop signs as a co-hosted runtime's principal only toward the
+/// The desktop signs as a co-hosted runtime's node identity only toward the
 /// endpoint that runtime's home currently serves.
 #[test]
-fn operator_principal_requires_the_homes_own_runtime_endpoint() {
+fn operator_node_identity_requires_the_homes_own_runtime_endpoint() {
     let tempdir = tempfile::tempdir().unwrap();
     let (home, did) = hosted_home(tempdir.path());
     let served = HOSTED_GRAPHQL;
     let record = |graphql: &str| hosted_record(&home, &did, graphql);
 
-    load_operator_principal(&record(served)).expect("the home's own runtime endpoint");
+    load_operator_node_identity(&record(served)).expect("the home's own runtime endpoint");
 
-    let elsewhere = load_operator_principal(&record("http://127.0.0.1:9999/api/v0/graphql"))
+    let elsewhere = load_operator_node_identity(&record("http://127.0.0.1:9999/api/v0/graphql"))
         .expect_err("an endpoint the home does not serve");
     assert!(
         elsewhere.to_string().contains("does not serve"),
@@ -474,15 +474,15 @@ fn operator_principal_requires_the_homes_own_runtime_endpoint() {
 
     let mut remote = record(served);
     remote.source = Some("manual".to_string());
-    assert!(load_operator_principal(&remote).is_err());
+    assert!(load_operator_node_identity(&remote).is_err());
 
     let mut homeless = record(served);
-    homeless.local_agent_home = None;
-    assert!(load_operator_principal(&homeless).is_err());
+    homeless.local_node_home = None;
+    assert!(load_operator_node_identity(&homeless).is_err());
 }
 
 /// The usage read is signed by the hosted runtime's own identity, loaded
-/// under the same checks as its operator principal.
+/// under the same checks as its operator node identity.
 #[test]
 fn operator_signer_is_the_hosted_runtimes_own_identity() {
     let tempdir = tempfile::tempdir().unwrap();
@@ -505,6 +505,6 @@ fn operator_signer_is_the_hosted_runtimes_own_identity() {
     assert!(operator_signer(&remote).is_err());
 
     let mut homeless = record(HOSTED_GRAPHQL);
-    homeless.local_agent_home = None;
+    homeless.local_node_home = None;
     assert!(operator_signer(&homeless).is_err());
 }

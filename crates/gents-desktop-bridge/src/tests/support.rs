@@ -20,8 +20,8 @@ pub async fn seed_standalone_fixture() -> (Arc<ClientCore>, TempDir) {
     let mutation = r#"mutation {
         create_AgentRequest(input: { purpose: "normal",
             request_id: "req_solo",
-            agent_did: "did:test:operator",
-            behavior_id: "test-behavior",
+            node_did: "did:test:operator",
+            agent_id: "test-agent",
             session_id: "sess_solo",
             content: "standalone fixture",
             lifecycle_state: "processing",
@@ -73,14 +73,14 @@ impl gents::config_client::ConfigRead for CountingRead {
     }
 }
 
-/// `req_parent` in `sess_parent` made four agents-tool calls:
+/// `req_parent` in `sess_parent` made four agent-tool calls:
 /// - `tc_start` (`agent_new`) started `sess_child` (`req_child`), then
 ///   `tc_message` (`agent_message`) messaged it again (`req_child_2`);
-/// - `tc_peer` (`agent_new`) started `sess_peer` on another agent (`req_peer`);
+/// - `tc_peer` (`agent_new`) started `sess_peer` on another node (`req_peer`);
 /// - `tc_existing` (`agent_message`) messaged `sess_existing`, which the
 ///   person started (`req_existing_1`), as `req_existing_2`.
 ///
-/// Every session's requester is the operator principal, as the runtime writes
+/// Every session's requester is the operator node, as the runtime writes
 /// a started session. Returns the core and `req_parent`'s document id.
 pub async fn seed_provenance_fixture() -> (Arc<ClientCore>, TempDir, String) {
     let (core, tmp) = boot_core().await;
@@ -118,7 +118,7 @@ pub async fn seed_provenance_fixture() -> (Arc<ClientCore>, TempDir, String) {
     )
     .await;
 
-    for (call, tool, request_id, agent_did, session_id, state, created_at, started) in [
+    for (call, tool, request_id, node_did, session_id, state, created_at, started) in [
         (
             "tc_start",
             "agent_new",
@@ -164,7 +164,7 @@ pub async fn seed_provenance_fixture() -> (Arc<ClientCore>, TempDir, String) {
         create_request(
             &core,
             request_id,
-            agent_did,
+            node_did,
             session_id,
             state,
             created_at,
@@ -172,7 +172,7 @@ pub async fn seed_provenance_fixture() -> (Arc<ClientCore>, TempDir, String) {
         )
         .await;
         if started {
-            create_session(&core, agent_did, session_id, Some(&parent)).await;
+            create_session(&core, node_did, session_id, Some(&parent)).await;
         }
     }
     (core, tmp, parent)
@@ -253,7 +253,7 @@ async fn created_doc_id(core: &Arc<ClientCore>, mutation: &str, collection: &str
 async fn create_request(
     core: &Arc<ClientCore>,
     request_id: &str,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     lifecycle_state: &str,
     created_at: &str,
@@ -262,14 +262,14 @@ async fn create_request(
     let caused = cause
         .map(|(doc, call, call_doc)| {
             format!(
-                r#"subagent_depth: 1, caused_by_parent_request_id: "req_parent", caused_by_parent_request_doc_id: "{doc}", caused_by_parent_tool_call_id: "{call}", caused_by_parent_tool_call_doc_id: "{call_doc}","#
+                r#"request_hop: 1, caused_by_parent_request_id: "req_parent", caused_by_parent_request_doc_id: "{doc}", caused_by_parent_tool_call_id: "{call}", caused_by_parent_tool_call_doc_id: "{call_doc}","#
             )
         })
         .unwrap_or_default();
     created_doc_id(
         core,
         &format!(
-            r#"mutation {{ create_AgentRequest(input: {{ purpose: "normal", request_id: "{request_id}", agent_did: "{agent_did}", requester_did: "{OPERATOR}", behavior_id: "worker", session_id: "{session_id}", {caused} content: "work", lifecycle_state: "{lifecycle_state}", backend_id: "", created_at: "{created_at}", retry_count: 0 }}) {{ _docID }} }}"#
+            r#"mutation {{ create_AgentRequest(input: {{ purpose: "normal", request_id: "{request_id}", node_did: "{node_did}", requester_did: "{OPERATOR}", agent_id: "worker", session_id: "{session_id}", {caused} content: "work", lifecycle_state: "{lifecycle_state}", backend_id: "", created_at: "{created_at}", retry_count: 0 }}) {{ _docID }} }}"#
         ),
         "AgentRequest",
     )
@@ -278,15 +278,15 @@ async fn create_request(
 
 async fn create_session(
     core: &Arc<ClientCore>,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     started_by: Option<&str>,
 ) {
     let session = gents_protocol::session::AgentSession {
         session_id: session_id.into(),
-        agent_did: agent_did.into(),
+        node_did: node_did.into(),
         requester_did: Some(OPERATOR.into()),
-        behavior_id: "worker".into(),
+        agent_id: "worker".into(),
         created_at: "2026-05-20T00:00:00Z".into(),
         closed_at: None,
         title: None,
@@ -313,7 +313,7 @@ async fn create_tool_call(core: &Arc<ClientCore>, call: &str, tool: &str) -> Str
     created_doc_id(
         core,
         &format!(
-            r#"mutation {{ create_AgentToolCall(input: {{ tool_call_key: "sess_parent:{call}", agent_did: "{OPERATOR}", requester_did: "{OPERATOR}", session_id: "sess_parent", request_id: "req_parent", message_sequence: 1, tool_name: "{tool}", tool_call_id: "{call}", args: "{{}}", result: "", status: "called", lifecycle_state: "running", await_mode: "background" }}) {{ _docID }} }}"#
+            r#"mutation {{ create_AgentToolCall(input: {{ tool_call_key: "sess_parent:{call}", node_did: "{OPERATOR}", requester_did: "{OPERATOR}", session_id: "sess_parent", request_id: "req_parent", message_sequence: 1, tool_name: "{tool}", tool_call_id: "{call}", status: "called", lifecycle_state: "running", await_mode: "background" }}) {{ _docID }} }}"#
         ),
         "AgentToolCall",
     )

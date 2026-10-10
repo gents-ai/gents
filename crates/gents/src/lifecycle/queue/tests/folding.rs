@@ -24,13 +24,13 @@ async fn insert_row(node: &EmbeddedNode, input: serde_json::Value) -> String {
     .unwrap()
 }
 
-/// Modeled requester 1 is the agent's own principal; 2 is another signer.
+/// Modeled requester 1 is the agent's owning node; 2 is another signer.
 fn requester_did(db: &TestDb, requester: Option<u64>) -> Option<String> {
     match requester {
-        Some(1) => Some(db.agent_did().to_owned()),
+        Some(1) => Some(db.node_did().to_owned()),
         Some(2) => Some(FOREIGN_REQUESTER.to_owned()),
         None => None,
-        Some(other) => panic!("no native principal for modeled requester {other}"),
+        Some(other) => panic!("no native node for modeled requester {other}"),
     }
 }
 
@@ -72,16 +72,16 @@ async fn enqueue(
         json!({
             "request_id": entry.request_id.to_string(),
             "purpose": "normal",
-            "agent_did": db.agent_did(),
+            "node_did": db.node_did(),
             "requester_did": requester_did(db, entry.requester_id),
-            "behavior_id": TEST_BEHAVIOR_ID,
+            "agent_id": TEST_AGENT_ID,
             "session_id": session_id,
             "content": format!("message {}", entry.request_id),
             "input": generated_input(entry),
             "lifecycle_state": "pending",
             "execution_origin": entry.execution_origin,
             "created_at": format!("2026-09-01T00:00:{arrival:02}Z"),
-            "subagent_depth": 0,
+            "request_hop": 0,
             "retry_count": 0,
             "max_retries": 3,
         }),
@@ -159,10 +159,10 @@ async fn claim_request(
     admitted: &[u64],
 ) -> ActiveTurn {
     let head = request.request_id.clone();
-    let mut lifecycle = RequestLifecycle::new_with_agent_did(
+    let mut lifecycle = RequestLifecycle::new_with_node_did(
         db.node.clone(),
-        TEST_BEHAVIOR_ID,
-        db.agent_did(),
+        TEST_AGENT_ID,
+        db.node_did(),
         request,
         60,
     );
@@ -201,7 +201,7 @@ async fn generated_fold_queue_cases_bind_to_native_claims() {
 }
 
 async fn drive(case: &LeanFoldQueueCase) {
-    assert_eq!(case.agent_id, 1, "fixture maps modeled agent 1 to its DID");
+    assert_eq!(case.node_id, 1, "fixture maps modeled node 1 to its DID");
     let db = test_db(&case.name).await;
     let session_id = case.session_id.to_string();
     let mut bound: HashMap<u64, String> = HashMap::new();
@@ -209,7 +209,7 @@ async fn drive(case: &LeanFoldQueueCase) {
     let mut arrivals: Vec<u64> = Vec::new();
     let mut active: Option<ActiveTurn> = None;
     let mut claims = Vec::new();
-    let writer = DefraStreamWriter::new(db.node.clone(), db.agent_did(), Duration::ZERO);
+    let writer = DefraStreamWriter::new(db.node.clone(), db.node_did(), Duration::ZERO);
     for event in &case.inputs {
         match event {
             LeanFoldQueueInput::Enqueue { entry } => {
@@ -467,7 +467,7 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
             bound.insert(id, enqueue(&db, &session_id, &entry, arrival).await);
         }
         let head_doc = bound[&case.head].clone();
-        let writer = DefraStreamWriter::new(db.node.clone(), db.agent_did(), Duration::ZERO);
+        let writer = DefraStreamWriter::new(db.node.clone(), db.node_did(), Duration::ZERO);
         let mut generations: HashMap<u64, ActiveTurn> = HashMap::new();
         let mut first = claim_head(&db, &bound, case.head, &[case.selected]).await;
         first.begin(&writer).await;

@@ -15,7 +15,7 @@ use super::apply_session_timeline_page;
 use super::apply_session_timeline_page_with_query;
 use super::build_session_live_delta_from_store;
 use super::build_session_snapshot_from_store;
-use super::build_session_snapshot_from_store_for_agent;
+use super::build_session_snapshot_from_store_for_node;
 use super::recent_runs_for_task_views;
 use super::session_summaries;
 use super::task_run_history;
@@ -35,7 +35,7 @@ fn canonical_text_message(
     let segment = OutputSegmentRow {
         doc_id: close_doc_id.clone(),
         segment: OutputSegment {
-            agent_did: "did:test:amy".to_string(),
+            node_did: "did:test:amy".to_string(),
             requester_did: None,
             session_id: session_id.to_string(),
             request_doc_id: request_doc_id.unwrap_or("fork-origin-request").to_string(),
@@ -67,7 +67,7 @@ fn canonical_text_message(
         message: TranscriptMessage {
             message_key: doc_id.to_string(),
             session_id: session_id.to_string(),
-            agent_did: "did:test:amy".to_string(),
+            node_did: "did:test:amy".to_string(),
             requester_did: None,
             request_doc_id: request_doc_id.map(str::to_string),
             publication: MessagePublication::RequestExecution {
@@ -111,7 +111,7 @@ pub(super) fn push_canonical_text_message(
     rows.output_segments.push(segment);
 }
 
-fn push_canonical_text_message_for_agent(
+fn push_canonical_text_message_for_node(
     rows: &mut ClientStoreRows,
     doc_id: &str,
     session_id: &str,
@@ -119,14 +119,14 @@ fn push_canonical_text_message_for_agent(
     sequence: u32,
     role: MessageRole,
     text: &str,
-    agent_did: &str,
+    node_did: &str,
     requester_did: Option<&str>,
 ) {
     let (mut header, mut segment) =
         canonical_text_message(doc_id, session_id, request_doc_id, sequence, role, text);
-    header.message.agent_did = agent_did.to_string();
+    header.message.node_did = node_did.to_string();
     header.message.requester_did = requester_did.map(str::to_string);
-    segment.segment.agent_did = agent_did.to_string();
+    segment.segment.node_did = node_did.to_string();
     segment.segment.requester_did = requester_did.map(str::to_string);
     rows.transcript_messages.push(header);
     rows.output_segments.push(segment);

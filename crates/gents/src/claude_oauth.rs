@@ -45,11 +45,11 @@ pub fn normalize_provider(raw: &str) -> String {
 }
 
 pub fn classify_claude_auth_error(
-    agent_did: &str,
+    node_did: &str,
     provider: &str,
     problem: &OAuthAuthProblem,
 ) -> String {
-    classify_oauth_auth_error(&CLAUDE_OAUTH_PRODUCT, agent_did, provider, problem)
+    classify_oauth_auth_error(&CLAUDE_OAUTH_PRODUCT, node_did, provider, problem)
 }
 
 /// Tokens returned by the authorization-code exchange. `expires_in` is seconds.
@@ -81,12 +81,12 @@ impl fmt::Debug for ClaudeLoginTokens {
 }
 
 pub fn credential_from_login_tokens(
-    agent_did: impl Into<String>,
+    node_did: impl Into<String>,
     provider: impl Into<String>,
     tokens: &ClaudeLoginTokens,
     now: DateTime<Utc>,
 ) -> OAuthCredential {
-    let agent_did = agent_did.into();
+    let node_did = node_did.into();
     let provider = provider.into();
     let access_token_expires_at = tokens
         .expires_in
@@ -95,8 +95,8 @@ pub fn credential_from_login_tokens(
         .unwrap_or_else(|| now + Duration::hours(1));
     OAuthCredential {
         doc_id: None,
-        credential_id: oauth_credential_id(&agent_did, &provider),
-        agent_did,
+        credential_id: oauth_credential_id(&node_did, &provider),
+        node_did,
         provider,
         access_token: tokens.access_token.clone(),
         refresh_token: tokens.refresh_token.clone(),
@@ -163,7 +163,7 @@ mod tests {
             &OAuthAuthProblem::Missing,
         );
         assert!(
-            text.contains("gents claude-login --agent-did did:key:z6MkTest"),
+            text.contains("gents claude-login --node-did did:key:z6MkTest"),
             "{text}"
         );
         assert!(text.contains("Claude subscription backend"), "{text}");

@@ -20,15 +20,15 @@ export function createProvenanceStore() {
   return createSelectors(createStore<ProvenanceState>(() => ({ shown: null })));
 }
 
-/* The listed session with this agent and label. Two listed scopes under one
+/* The listed session with this node and label. Two listed scopes under one
    label are ambiguous, and neither is picked. */
 export function uniquelyListed(
   sessions: readonly SessionSummary[] | undefined,
-  agentDid: string | null,
+  nodeDid: string | null,
   sessionId: string | null,
 ): SessionSummary | null {
   const matches = (sessions ?? []).filter(
-    (s) => s.agentDid === agentDid && s.sessionId === sessionId,
+    (s) => s.nodeDid === nodeDid && s.sessionId === sessionId,
   );
   return matches.length === 1 ? matches[0]! : null;
 }
@@ -42,9 +42,9 @@ type ProvenanceParams = {
 
 /**
  * The selected session's provenance, read while a screen shows it. Its
- * scope is exact: the session's agent, label and requester, as the session
+ * scope is exact: the session's node, label and requester, as the session
  * list reports them. It is asked again when the transcript's rows change
- * (a streamed chunk to the live reply does not move them) or the agent's
+ * (a streamed chunk to the live reply does not move them) or the node's
  * session list does. It is also asked when the observed lineage inputs
  * change (`provenanceVersion`), so a
  * caused request settling anywhere this desktop observes refreshes it.
@@ -64,7 +64,7 @@ export function createProvenance({ api, stores }: ProvenanceParams) {
   let missed = false;
   let watchers = 0;
   let stopWatching = () => {};
-  /* the agent's session list as a cue, rebuilt only when the list changes */
+  /* the node's session list as a cue, rebuilt only when the list changes */
   let listed: { sessions: readonly SessionSummary[] | undefined; cue: string } = {
     sessions: undefined,
     cue: "",
@@ -82,22 +82,20 @@ export function createProvenance({ api, stores }: ProvenanceParams) {
   }
 
   function consider() {
-    const { agentDid, sessionId: selected } = stores.selection.getState();
+    const { nodeDid, sessionId: selected } = stores.selection.getState();
     const state = stores.session.getState();
-    const session = heldFor(state.session, selected, agentDid);
+    const session = heldFor(state.session, selected, nodeDid);
     const sessionId = session?.sessionId ?? null;
-    const sessions = agentDid
-      ? stores.fleet.getState().sessionsOf[agentDid]
-      : undefined;
-    const summary = uniquelyListed(sessions, agentDid, sessionId);
+    const sessions = nodeDid ? stores.fleet.getState().sessionsOf[nodeDid] : undefined;
+    const summary = uniquelyListed(sessions, nodeDid, sessionId);
     const requesterDid = summary?.requesterDid ?? null;
-    const scope = `${agentDid ?? ""}\u0000${sessionId ?? ""}\u0000${requesterDid ?? ""}`;
+    const scope = `${nodeDid ?? ""}\u0000${sessionId ?? ""}\u0000${requesterDid ?? ""}`;
     const shown = held?.scope === scope ? held.value : null;
     if (stores.provenance.getState().shown !== shown)
       stores.provenance.setState({ shown });
 
     /* without the session's summary its exact scope is unknown */
-    if (!agentDid || !sessionId || !summary) return;
+    if (!nodeDid || !sessionId || !summary) return;
     const version = session?.projectionRevision?.provenanceVersion ?? null;
     const cues = `${scope}\u0002${state.facts.rowsRevision}\u0002${sessionsCue(sessions)}`;
     if (asked?.cues === cues && asked.version === version) return;
@@ -107,7 +105,7 @@ export function createProvenance({ api, stores }: ProvenanceParams) {
     }
     asked = { cues, version };
     out = true;
-    void api.sessionProvenance({ sessionId, agentDid, requesterDid }).then(
+    void api.sessionProvenance({ sessionId, nodeDid, requesterDid }).then(
       (value) => {
         held = { scope, value };
         landed();

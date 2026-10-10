@@ -31,14 +31,13 @@ enum InferenceRecoveryOutcome {
 impl InferenceCall {
     pub async fn recover_all(
         node: &EmbeddedNode,
-        agent_did: &str,
+        node_did: &str,
     ) -> Result<InferenceCallRecoveryReport> {
-        let rows = load_stale_inference_calls(node, agent_did).await?;
+        let rows = load_stale_inference_calls(node, node_did).await?;
         let mut calls_recovered = 0;
 
         for row in rows {
-            let Some(parent) = lookup_parent_request(node, agent_did, &row.request_id).await?
-            else {
+            let Some(parent) = lookup_parent_request(node, node_did, &row.request_id).await? else {
                 continue;
             };
             let Some(outcome) = recovery_outcome(&row, &parent) else {
@@ -74,14 +73,14 @@ impl InferenceCall {
 
 async fn load_stale_inference_calls(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
 ) -> Result<Vec<StaleInferenceCallRow>> {
-    let escaped_agent_did = escape_graphql_string(agent_did);
+    let escaped_node_did = escape_graphql_string(node_did);
     let query = format!(
         r#"{{
             InferenceCall(
                 filter: {{
-                    agent_did: {{ _eq: "{escaped_agent_did}" }},
+                    node_did: {{ _eq: "{escaped_node_did}" }},
                     call_state: {{ _in: ["queued", "running"] }}
                 }}
             ) {{
@@ -107,16 +106,16 @@ async fn load_stale_inference_calls(
 
 async fn lookup_parent_request(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     request_id: &str,
 ) -> Result<Option<AgentRequestRow>> {
-    let escaped_agent_did = escape_graphql_string(agent_did);
+    let escaped_node_did = escape_graphql_string(node_did);
     let escaped_request_id = escape_graphql_string(request_id);
     let query = format!(
         r#"{{
             AgentRequest(
                 filter: {{
-                    agent_did: {{ _eq: "{escaped_agent_did}" }},
+                    node_did: {{ _eq: "{escaped_node_did}" }},
                     request_id: {{ _eq: "{escaped_request_id}" }}
                 }},
                 limit: 1

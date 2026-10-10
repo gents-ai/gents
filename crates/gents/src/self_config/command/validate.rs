@@ -5,15 +5,15 @@ use crate::config_client::{
 
 impl ConfigCommandTool {
     pub(super) async fn validate_saved(&self, argv: &[String]) -> Result<String> {
-        self.ensure_behavior_catalog("validate", None)?;
-        anyhow::ensure!(argv.is_empty(), "validate takes no parameters; it checks saved configuration for your authenticated principal");
+        self.ensure_agent_catalog("validate", None)?;
+        anyhow::ensure!(argv.is_empty(), "validate takes no parameters; it checks saved configuration for your authenticated node");
         let identity = self.core.identity()?;
         let (counts, mut errors, selected_surfaces) = ConfigAccess::transact_local(
             &self.node,
             Some(identity),
             "self_config.validate",
             |txn| Box::pin(async move {
-                let references = crate::ConfigReferences::load_in_txn(txn, &self.agent_did).await?;
+                let references = crate::ConfigReferences::load_in_txn(txn, &self.node_did).await?;
                 let mut counts = BTreeMap::<&str, usize>::new();
                 let mut errors = Vec::new();
                 for ((collection, id), document) in references.documents() {
@@ -105,8 +105,8 @@ impl ConfigCommandTool {
             "checked_documents": counts.values().sum::<usize>(),
             "collections": counts,
             "errors": errors,
-            "scope": "Saved configuration for the authenticated principal: canonical fields, references, publication checks and selected datastore tools against current collection schemas. Config and schema observations are not one atomic snapshot. Does not test credentials, remote destinations, runtime execution or user intent.",
-            "next": if errors.is_empty() { "Inspect behavior get to verify selections match the user's request; exercise tools to verify runtime behavior. Report what remains untested." } else { "Read the named objects, correct existing objects with resource update (create only missing objects), and run validate again before reporting completion." },
+            "scope": "Saved configuration for the authenticated node: canonical fields, references, publication checks and selected datastore tools against current collection schemas. Config and schema observations are not one atomic snapshot. Does not test credentials, remote destinations, runtime execution or user intent.",
+            "next": if errors.is_empty() { "Inspect agent get to verify selections match the user's request; exercise tools to verify runtime agent. Report what remains untested." } else { "Read the named objects, correct existing objects with resource update (create only missing objects), and run validate again before reporting completion." },
             "committed": false,
         }.pretty()
     }

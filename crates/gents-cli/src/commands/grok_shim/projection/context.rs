@@ -56,14 +56,14 @@ mod tests {
         gents::schema::ensure_runtime_schemas(&node).await.unwrap();
         let mut requests = Vec::new();
         for content in ["first", "second"] {
-            let response = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{purpose: "normal", request_id: "same-label", agent_did: "owner", requester_did: "requester", session_id: "session", behavior_id: "behavior", content: "{content}", lifecycle_state: "pending"}}) {{_docID}} }}"#)).await;
+            let response = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{purpose: "normal", request_id: "same-label", node_did: "owner", requester_did: "requester", session_id: "session", agent_id: "behavior", content: "{content}", lifecycle_state: "pending"}}) {{_docID}} }}"#)).await;
             ensure_no_errors(&response, "seed physical context request").unwrap();
             let doc = gents_protocol::graphql::extract_mutation_doc_id(
                 &json!({"data":response.data}),
                 "AgentRequest",
             )
             .unwrap();
-            requests.push(serde_json::from_value::<AgentRequestRow>(json!({"_docID":doc,"request_id":"same-label","agent_did":"owner","requester_did":"requester","session_id":"session"})).unwrap());
+            requests.push(serde_json::from_value::<AgentRequestRow>(json!({"_docID":doc,"request_id":"same-label","node_did":"owner","requester_did":"requester","session_id":"session"})).unwrap());
         }
         assert_ne!(requests[0].doc_id, requests[1].doc_id);
         let accounting = json!({
@@ -74,7 +74,7 @@ mod tests {
         });
         let doc = escape_graphql_string(requests[0].doc_id.as_deref().unwrap());
         let encoded = escape_graphql_string(&accounting.to_string());
-        let response = node.execute(&format!(r#"mutation {{create_InferenceCall(input: {{call_id: "context-call", agent_did: "owner", request_id: "same-label", request_doc_id: "{doc}", call_kind: "inference", call_seq: 1, queued_at: "2026-09-04T12:00:00Z", completion_tokens: 25, context_accounting_json: "{encoded}"}}) {{_docID}} }}"#)).await;
+        let response = node.execute(&format!(r#"mutation {{create_InferenceCall(input: {{call_id: "context-call", node_did: "owner", request_id: "same-label", request_doc_id: "{doc}", call_kind: "inference", call_seq: 1, queued_at: "2026-09-04T12:00:00Z", completion_tokens: 25, context_accounting_json: "{encoded}"}}) {{_docID}} }}"#)).await;
         ensure_no_errors(&response, "seed physical inference context").unwrap();
         assert_eq!(load(&node, &requests[0]).await.unwrap().unwrap().used, 975);
         assert!(load(&node, &requests[1]).await.unwrap().is_none());
@@ -90,7 +90,7 @@ mod tests {
         for field in ["owner", "session", "requester"] {
             let mut foreign = requests[0].clone();
             match field {
-                "owner" => foreign.agent_did = Some("foreign".into()),
+                "owner" => foreign.node_did = Some("foreign".into()),
                 "session" => foreign.session_id = Some("foreign".into()),
                 _ => foreign.requester_did = None,
             }

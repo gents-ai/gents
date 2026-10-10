@@ -44,7 +44,7 @@ pub enum Scope {
     /// different collections scope to different DID sources.
     PerCollection(&'static [CollectionRule]),
     /// Direction-aware mobile/desktop client route. Transcript artifacts are
-    /// scoped by both requester DID and owning agent DID. Return-leg runtime
+    /// scoped by both requester DID and owning node DID. Return-leg runtime
     /// configuration is collection-bounded but unfiltered because its mutable
     /// owner fields are not legal DefraDB replicator predicates.
     /// Resolve this through `policy::resolve_template_filters` so the caller
@@ -55,9 +55,9 @@ pub enum Scope {
 /// DID source for one per-collection filter rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DidSource {
-    /// Use this node's local agent DID.
+    /// Use this node's DID.
     LocalDid,
-    /// Use the paired peer's agent DID.
+    /// Use the paired peer's node DID.
     PeerDid,
     /// Use the DID that owns the pairing's authoritative projection.
     ///
@@ -237,11 +237,11 @@ const CONVERSATION_COLLECTIONS: &[&str] = &[
     "AgentOutputSegment",
     "AgentSession",
     "CompactionEntry",
-    "AgentBehavior",
+    "Agent",
     "AgentContext",
     "CompactionConfig",
     "Tools",
-    "SubagentTarget",
+    "AgentTarget",
     "InferenceProfile",
     "InferenceSampling",
     "InferenceExecution",
@@ -264,8 +264,8 @@ const CONVERSATION_TRANSCRIPT_COLLECTIONS: &[&str] = &[
 
 /// Bounded client dataplane. Unlike `machine`, this is intentionally a
 /// deployment route rather than fleet gossip: transcript rows are gated by
-/// requester and owning agent, while the small control plane lets a client
-/// render behaviors and automations without importing arbitrary history.
+/// requester and owning node, while the small control plane lets a client
+/// render agents and automations without importing arbitrary history.
 /// `InferenceBackend` is deliberately absent: the frozen schema contains raw
 /// API-key material. Clients resolve model choices through inference profiles;
 /// backend credentials remain on their existing operator/runtime route.
@@ -277,14 +277,13 @@ pub const CLIENT_COLLECTIONS: &[&str] = &[
     "AgentSession",
     "CompactionEntry",
     "MailboxItem",
-    "PersonaConfigRequest",
     "PeerEndpoint",
     "SessionHydrationRequest",
-    "AgentBehavior",
+    "Agent",
     "AgentContext",
     "CompactionConfig",
     "Tools",
-    "SubagentTarget",
+    "AgentTarget",
     "InferenceProfile",
     "InferenceSampling",
     "InferenceExecution",
@@ -298,7 +297,7 @@ pub const CLIENT_COLLECTIONS: &[&str] = &[
     "Schedule",
     "Trigger",
     "EventSource",
-    "AgentBehaviorReadiness",
+    "NodeReadiness",
 ];
 
 /// Client-authored rows that may travel toward a runtime. Runtime-owned
@@ -315,7 +314,6 @@ pub const CLIENT_TO_RUNTIME_COLLECTIONS: &[&str] = &[
     "AgentSession",
     "CompactionEntry",
     "MailboxItem",
-    "PersonaConfigRequest",
     "PeerEndpoint",
     "SessionHydrationRequest",
 ];
@@ -373,7 +371,7 @@ const CLIENT_INDEX_RULES: &[CollectionRule] = &[
 /// The fleet-discovery directory collection replicated by the `machine`
 /// template (issue #714). Registered in `gents-schemas`; named here as a
 /// literal because the catalog is deliberately dependency-free strings.
-pub const AGENT_DIRECTORY_COLLECTION: &str = "AgentDirectoryEntry";
+pub const NODE_DIRECTORY_COLLECTION: &str = "NodeDirectoryEntry";
 
 /// Machine template collections: the ordinary conversation plane plus mailbox,
 /// hydration and directory observations. Credentials remain operator-only.
@@ -384,11 +382,11 @@ const MACHINE_COLLECTIONS: &[&str] = &[
     "AgentOutputSegment",
     "AgentSession",
     "CompactionEntry",
-    "AgentBehavior",
+    "Agent",
     "AgentContext",
     "CompactionConfig",
     "Tools",
-    "SubagentTarget",
+    "AgentTarget",
     "InferenceProfile",
     "InferenceSampling",
     "InferenceExecution",
@@ -400,7 +398,7 @@ const MACHINE_COLLECTIONS: &[&str] = &[
     "EthTool",
     "MailboxItem",
     "SessionHydrationRequest",
-    AGENT_DIRECTORY_COLLECTION,
+    NODE_DIRECTORY_COLLECTION,
 ];
 
 const MACHINE_RULES: &[CollectionRule] = &[
@@ -445,20 +443,20 @@ const MACHINE_RULES: &[CollectionRule] = &[
         source: DidSource::PeerDid,
     },
     CollectionRule {
-        collection: AGENT_DIRECTORY_COLLECTION,
+        collection: NODE_DIRECTORY_COLLECTION,
         field: "source_did",
         source: DidSource::HomeDid,
     },
 ];
 
-/// Agent-config collections: behavior + tool configuration.  Unscoped because
+/// Agent-config collections: agent + tool configuration.  Unscoped because
 /// the operator wants the full config set replicated, not per-peer slices.
 const AGENT_CONFIG_COLLECTIONS: &[&str] = &[
-    "AgentBehavior",
+    "Agent",
     "AgentContext",
     "CompactionConfig",
     "Tools",
-    "SubagentTarget",
+    "AgentTarget",
     "InferenceProfile",
     "InferenceSampling",
     "InferenceExecution",
@@ -471,14 +469,14 @@ const AGENT_CONFIG_COLLECTIONS: &[&str] = &[
     "InferenceBackend",
 ];
 
-/// Caller → target leg of cross-principal `agent_new`/`agent_message`:
+/// Caller → target leg of cross-node `agent_new`/`agent_message`:
 /// carry only the requests addressed to this peer. The caller's own requests,
 /// sessions and tool calls stay home.
-const SUBAGENT_COORDINATOR_COLLECTIONS: &[&str] = &["AgentRequest"];
+const AGENT_TARGET_CALLER_COLLECTIONS: &[&str] = &["AgentRequest"];
 
-const SUBAGENT_COORDINATOR_RULES: &[CollectionRule] = &[CollectionRule {
+const AGENT_TARGET_CALLER_RULES: &[CollectionRule] = &[CollectionRule {
     collection: "AgentRequest",
-    field: "agent_did",
+    field: "node_did",
     source: DidSource::PeerDid,
 }];
 
@@ -486,14 +484,14 @@ const SUBAGENT_COORDINATOR_RULES: &[CollectionRule] = &[CollectionRule {
 /// output segments whose immutable requester route names the caller, so its
 /// completion observer can settle the row that caused them. Unrelated
 /// target-owned history does not replicate.
-const SUBAGENT_HOST_COLLECTIONS: &[&str] = &[
+const AGENT_TARGET_HOST_COLLECTIONS: &[&str] = &[
     "AgentRequest",
     "AgentSession",
     "AgentOutputSegment",
     "AgentMessage",
 ];
 
-const SUBAGENT_HOST_RULES: &[CollectionRule] = &[
+const AGENT_TARGET_HOST_RULES: &[CollectionRule] = &[
     CollectionRule {
         collection: "AgentOutputSegment",
         field: "requester_did",
@@ -516,8 +514,8 @@ const SUBAGENT_HOST_RULES: &[CollectionRule] = &[
     },
 ];
 
-pub const SUBAGENT_COORDINATOR_TEMPLATE: &str = "subagent-coordinator";
-pub const SUBAGENT_HOST_TEMPLATE: &str = "subagent-host";
+pub const AGENT_TARGET_CALLER_TEMPLATE: &str = "agent-target-caller";
+pub const AGENT_TARGET_HOST_TEMPLATE: &str = "agent-target-host";
 pub const APP_COLLECTIONS_TEMPLATE: &str = "app-collections";
 pub const MACHINE_TEMPLATE: &str = "machine";
 pub const CLIENT_INDEX_TEMPLATE: &str = "client-index";
@@ -555,15 +553,15 @@ static BUILTIN_TEMPLATES: &[ScopeTemplate] = &[
         delivery: Delivery::Replicate,
     },
     ScopeTemplate {
-        id: SUBAGENT_COORDINATOR_TEMPLATE,
-        collections: SUBAGENT_COORDINATOR_COLLECTIONS,
-        scope: Scope::PerCollection(SUBAGENT_COORDINATOR_RULES),
+        id: AGENT_TARGET_CALLER_TEMPLATE,
+        collections: AGENT_TARGET_CALLER_COLLECTIONS,
+        scope: Scope::PerCollection(AGENT_TARGET_CALLER_RULES),
         delivery: Delivery::Push,
     },
     ScopeTemplate {
-        id: SUBAGENT_HOST_TEMPLATE,
-        collections: SUBAGENT_HOST_COLLECTIONS,
-        scope: Scope::PerCollection(SUBAGENT_HOST_RULES),
+        id: AGENT_TARGET_HOST_TEMPLATE,
+        collections: AGENT_TARGET_HOST_COLLECTIONS,
+        scope: Scope::PerCollection(AGENT_TARGET_HOST_RULES),
         delivery: Delivery::Push,
     },
     ScopeTemplate {
@@ -737,8 +735,8 @@ mod tests {
         let t = resolve_template("agent-config").unwrap();
         assert_eq!(t.delivery, Delivery::Replicate);
         assert!(matches!(t.scope, Scope::Unscoped));
-        assert!(t.collections.contains(&"AgentBehavior"));
-        assert!(!t.collections.contains(&"AgentPrincipal"));
+        assert!(t.collections.contains(&"Agent"));
+        assert!(!t.collections.contains(&"Node"));
     }
 
     #[test]

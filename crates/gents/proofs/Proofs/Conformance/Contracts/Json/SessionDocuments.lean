@@ -7,9 +7,9 @@ namespace Conformance.Contracts
 open Lean Conformance.SessionDocuments
 
 def scopeJson (s : AgentSession.Scope) : Json := Json.mkObj
-  [("agent", toJson s.agent), ("session", toJson s.session), ("requester", toJson s.requester)]
+  [("node", toJson s.node), ("session", toJson s.session), ("requester", toJson s.requester)]
 def requestJson (r : AgentSession.RequestFact) : Json := Json.mkObj
-  [("purpose", toJson r.purpose.toWire), ("scope", scopeJson r.scope), ("behavior", toJson r.behavior),
+  [("purpose", toJson r.purpose.toWire), ("scope", scopeJson r.scope), ("agent", toJson r.agent),
    ("created_at", toJson r.createdAt), ("doc_id", toJson r.observed.docId),
    ("request_id", toJson r.observed.requestId), ("state", toJson r.observed.state.toDefraDB)]
 private def provenanceJson (p : AgentSession.Provenance) : Json := Json.mkObj
@@ -19,7 +19,7 @@ private def provenanceJson (p : AgentSession.Provenance) : Json := Json.mkObj
      [("source_session_id", toJson f.sourceSession), ("at_user_turn", toJson f.atUserTurn)])
      |>.getD Json.null)]
 def documentJson (d : AgentSession.Document) : Json := Json.mkObj
-  [("scope", scopeJson d.scope), ("behavior", toJson d.behavior),
+  [("scope", scopeJson d.scope), ("agent", toJson d.agent),
    ("created_at", toJson d.createdAt), ("closed_at", toJson d.closedAt),
    ("provenance", d.provenance.map provenanceJson |>.getD Json.null),
    ("tags", toJson d.tags), ("title", d.title.map (fun t => Json.mkObj
@@ -124,7 +124,7 @@ private def clearTitleJson : Json := Json.mkObj
    ("title", Json.null),
    ("after", documentJson (AgentSession.rename renameBefore none 4))]
 private def retryStateJson (s : SessionState) : Json := Json.mkObj
-  [("session_id", toJson s.sessionId), ("behavior", toJson s.behaviorId),
+  [("session_id", toJson s.sessionId), ("agent", toJson s.agentId),
    ("latest", toJson s.latest), ("requests", toJson ([1, 3].filter
      (fun id => decide (id ∈ s.requestIds)) |>.map (fun id => Json.mkObj
        [("request_id", toJson id), ("state", toJson (s.ctx id).state.toDefraDB),
@@ -166,19 +166,19 @@ private def historyJson (h : SessionFork.History) : Json := Json.mkObj
      [("doc_id", toJson c.id), ("session", toJson c.session),
       ("sequence", toJson c.sequence), ("through_sequence", toJson c.throughSequence)]))]
 private def selectionJson (name : String) (rows : List AgentSession.RequestFact)
-    (agent session : Nat) (requester : Option (Option Nat)) : Json := Json.mkObj
+    (node session : Nat) (requester : Option (Option Nat)) : Json := Json.mkObj
   [("name", toJson name), ("requests", toJson (rows.map requestJson)),
-   ("agent", toJson agent), ("session", toJson session),
+   ("node", toJson node), ("session", toJson session),
    ("requester_scoped", toJson requester.isSome),
    ("requester", toJson (requester.getD none)),
-   ("selected", (AgentSession.latest rows agent session requester).map requestJson |>.getD Json.null)]
+   ("selected", (AgentSession.latest rows node session requester).map requestJson |>.getD Json.null)]
 private def forkJson (name : String) (source : SessionFork.History)
     (target : AgentSession.Scope) (cut : Nat) (authorized idle coherent : Bool) : Json :=
   let authorization : SessionFork.SourceAuthorization :=
     if authorized then
       ⟨scope, source.messages.map (·.header.id), source.compactions.map (·.id)⟩
     else
-      ⟨{ scope with agent := scope.agent + 1 }, source.messages.map (·.header.id),
+      ⟨{ scope with node := scope.node + 1 }, source.messages.map (·.header.id),
         source.compactions.map (·.id)⟩
   Json.mkObj [("name", toJson name), ("source", historyJson source), ("parent", scopeJson scope),
    ("child", scopeJson target), ("exclusive_sequence_cut", toJson cut),
@@ -223,7 +223,7 @@ def sessionDocumentsJson : String := (Json.mkObj
       refreshJson "missing_current_row_noop" newerRequest [],
       refreshJson "foreign_scope_current_row_noop" newerRequest
         [{ completedRequest with scope := { completedRequest.scope with requester := some 99 } }],
-      refreshJson "wrong_behavior_current_row_noop" newerRequest [{ completedRequest with behavior := 99 }]])),
+      refreshJson "wrong_agent_current_row_noop" newerRequest [{ completedRequest with agent:= 99 }]])),
    ("selection", toJson [
       selectionJson "timestamp_tie_forward" [old, newerRequest] 1 10 none,
       selectionJson "timestamp_tie_reverse" [newerRequest, old] 1 10 none,

@@ -11,7 +11,7 @@ import { SetupScreen } from "../src/ui/screens/setup/SetupScreen";
 import type { ProviderId } from "../src/ui/screens/setup/inferenceSetupForm";
 import { createDesktopUiHarness } from "./ui-harness/desktopHarness";
 
-const AGENT = "did:key:z6MkBombadilAgent";
+const NODE_DID = "did:key:z6MkBombadilNode";
 
 /* The harness adapter without a managed runtime to gate on, with every call
    observable. */
@@ -55,14 +55,14 @@ describe("setup provider sign-in", () => {
           initialStep="inference"
           purpose="add-backend"
           provider={provider}
-          agentDid={AGENT}
+          nodeDid={NODE_DID}
           onCancel={vi.fn()}
           onDone={vi.fn()}
         />,
       );
       expect(await screen.findByText("Account connected")).toBeVisible();
       expect(login(api, provider)).toHaveBeenCalledTimes(1);
-      expect(login(api, provider)).toHaveBeenCalledWith(AGENT, null, null);
+      expect(login(api, provider)).toHaveBeenCalledWith(NODE_DID, null, null);
     },
   );
 
@@ -70,7 +70,7 @@ describe("setup provider sign-in", () => {
     const { api, app } = setup();
     renderIn(
       app,
-      <SetupScreen initialStep="inference" agentDid={AGENT} onDone={vi.fn()} />,
+      <SetupScreen initialStep="inference" nodeDid={NODE_DID} onDone={vi.fn()} />,
     );
     expect(await screen.findByRole("button", { name: "Sign in" })).toBeVisible();
     expect(api.codexLogin).not.toHaveBeenCalled();
@@ -85,7 +85,7 @@ describe("setup provider sign-in", () => {
     const { api, app } = setup();
     renderIn(
       app,
-      <SetupScreen initialStep="inference" agentDid={AGENT} onDone={vi.fn()} />,
+      <SetupScreen initialStep="inference" nodeDid={NODE_DID} onDone={vi.fn()} />,
     );
     await userEvent.click(await screen.findByTestId("setup-provider-openai"));
     expect(await screen.findByText("Account connected")).toBeVisible();
@@ -110,7 +110,7 @@ describe("setup provider sign-in", () => {
         initialStep="inference"
         purpose="add-backend"
         provider="anthropic"
-        agentDid={AGENT}
+        nodeDid={NODE_DID}
         onCancel={vi.fn()}
         onDone={vi.fn()}
       />,
@@ -134,7 +134,7 @@ describe("setup provider sign-in", () => {
     });
     renderIn(
       app,
-      <SetupScreen initialStep="inference" agentDid={AGENT} onDone={vi.fn()} />,
+      <SetupScreen initialStep="inference" nodeDid={NODE_DID} onDone={vi.fn()} />,
     );
     await userEvent.click(await screen.findByTestId("setup-provider-openai"));
     expect(api.codexLogin).not.toHaveBeenCalled();
@@ -147,7 +147,7 @@ describe("setup provider sign-in", () => {
     const { api, app } = setup();
     renderIn(
       app,
-      <SetupScreen initialStep="inference" agentDid={AGENT} onDone={vi.fn()} />,
+      <SetupScreen initialStep="inference" nodeDid={NODE_DID} onDone={vi.fn()} />,
     );
     const user = userEvent.setup();
     const method = () => screen.getByRole("combobox", { name: "Connection method" });
@@ -171,7 +171,7 @@ describe("setup provider sign-in", () => {
         initialStep="inference"
         purpose="add-backend"
         provider="anthropic"
-        agentDid={AGENT}
+        nodeDid={NODE_DID}
         onCancel={vi.fn()}
         onDone={vi.fn()}
       />,
@@ -186,7 +186,7 @@ describe("setup provider sign-in", () => {
       listProviderAccounts: vi.fn().mockResolvedValue([
         {
           credentialId: "credential-claude",
-          agentDid: AGENT,
+          nodeDid: NODE_DID,
           provider: "claude-subscription",
           accountId: null,
           planType: null,
@@ -203,7 +203,7 @@ describe("setup provider sign-in", () => {
         initialStep="inference"
         purpose="add-backend"
         provider="anthropic"
-        agentDid={AGENT}
+        nodeDid={NODE_DID}
         onCancel={vi.fn()}
         onDone={vi.fn()}
       />,
@@ -234,7 +234,7 @@ describe("the provider catalog", () => {
         initialStep="inference"
         purpose="add-backend"
         provider="anthropic"
-        agentDid={AGENT}
+        nodeDid={NODE_DID}
         onCancel={vi.fn()}
         onDone={vi.fn()}
       />,
@@ -254,7 +254,7 @@ describe("add another account", () => {
   } as const;
   const stored = (provider: string) => ({
     credentialId: "credential-personal",
-    agentDid: AGENT,
+    nodeDid: NODE_DID,
     provider,
     accountId: null,
     planType: null,
@@ -273,7 +273,7 @@ describe("add another account", () => {
     vi.fn().mockResolvedValue({
       docId: "credential-doc",
       credentialId: "credential-work",
-      agentDid: AGENT,
+      nodeDid: NODE_DID,
       provider: "claude-subscription",
       accountId: null,
       chatgptPlanType: null,
@@ -297,7 +297,7 @@ describe("add another account", () => {
         initialStep="inference"
         purpose="add-backend"
         provider={provider}
-        agentDid={AGENT}
+        nodeDid={NODE_DID}
         onCancel={vi.fn()}
         onDone={onDone}
       />,
@@ -312,7 +312,7 @@ describe("add another account", () => {
     await user.click(screen.getByRole("button", { name: "Sign in" }));
     await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
     expect(api.claudeLogin).toHaveBeenCalledTimes(1);
-    expect(api.claudeLogin).toHaveBeenCalledWith(AGENT, null, "Work");
+    expect(api.claudeLogin).toHaveBeenCalledWith(NODE_DID, null, "Work");
     expect(api.applyConfigComponents).not.toHaveBeenCalled();
   });
 
@@ -373,7 +373,7 @@ describe("add another account", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Retry save" }));
     await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
     expect(api.retrySaveProviderAccount).toHaveBeenCalledWith(
-      AGENT,
+      NODE_DID,
       "claude-subscription",
     );
     expect(screen.queryByText("Account connected")).not.toBeInTheDocument();
@@ -449,14 +449,14 @@ describe("add another account", () => {
       const { api, onDone } = addForm(provider, { [name]: signedIn("added") });
       await userEvent.click(await screen.findByRole("button", { name: "Sign in" }));
       await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
-      expect(login(api, provider)).toHaveBeenCalledWith(AGENT, null, null);
+      expect(login(api, provider)).toHaveBeenCalledWith(NODE_DID, null, null);
       expect(api.applyConfigComponents).not.toHaveBeenCalled();
     },
   );
 });
 
 describe("setup save", () => {
-  /* #2068: the runtime confirms the rebound default behavior only after it
+  /* #2068: the runtime confirms the rebound default agent only after it
      reconciles, starts the slot and replicates readiness back. A confirmation
      that lands after the old five-second budget must still complete the first
      save. */
@@ -464,7 +464,7 @@ describe("setup save", () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     let appliedAt: number | null = null;
     const harness = createDesktopUiHarness({ scenario: "empty-fleet" });
-    await harness.adapter.initLocalStandardRuntime({
+    const initialized = await harness.adapter.initLocalStandardRuntime({
       label: "Forge",
       dangerouslyOverwrite: false,
       reset: false,
@@ -484,11 +484,11 @@ describe("setup save", () => {
               ...snapshot.client,
               deployments: snapshot.client.deployments.map((deployment) => ({
                 ...deployment,
-                behaviorReadiness: {
-                  ...deployment.behaviorReadiness,
-                  behaviors: deployment.behaviorReadiness.behaviors.map((behavior) => ({
+                nodeReadiness: {
+                  ...deployment.nodeReadiness,
+                  agents: deployment.nodeReadiness.agents.map((agent) => ({
                     state: "unavailable" as const,
-                    behaviorId: behavior.behaviorId,
+                    agentId: agent.agentId,
                     reason: "backend_disabled" as const,
                   })),
                 },
@@ -502,7 +502,11 @@ describe("setup save", () => {
     const onDone = vi.fn();
     renderIn(
       app,
-      <SetupScreen initialStep="inference" agentDid={AGENT} onDone={onDone} />,
+      <SetupScreen
+        initialStep="inference"
+        nodeDid={initialized.nodeDid}
+        onDone={onDone}
+      />,
     );
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     await user.click(await screen.findByTestId("setup-provider-local"));

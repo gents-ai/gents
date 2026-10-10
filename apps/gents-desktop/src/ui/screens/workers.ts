@@ -1,6 +1,6 @@
 /* The sessions this one's calls reached. The runtime's lineage owner
    (`gents::session_origin::lineage`) decides which sessions this one started
-   — "subagents" to the person — and which it only messaged; both are
+   — "workers" to the person — and which it only messaged; both are
    ordinary sessions to the runtime. The bridge maps that answer and the
    request each agents-tool call caused; this joins them to the session list
    for who each session is, and to this transcript's rows by the call. Every
@@ -21,9 +21,9 @@ import { useApp } from "@/app/AppContext";
 import { NO_SESSIONS, useFleet } from "@/hooks/useFleet";
 import { useSessionFacts } from "../hooks/useSelectedSession";
 
-export type Subagent = {
+export type Worker = {
   sessionId: string;
-  agentDid: string;
+  nodeDid: string;
   summary: SessionSummary | null;
   /* the lineage owner's link: this session started it */
   link: LinkedSessionView;
@@ -34,13 +34,13 @@ export type Reached = {
   /* the request this row's call caused */
   request: CausedRequestView;
   summary: SessionSummary | null;
-  /* the subagent, when the call reached a session this one started */
-  subagent: Subagent | null;
+  /* the worker, when the call reached a session this one started */
+  worker: Worker | null;
 };
 
 export type Workers = {
   /* the sessions this one started */
-  all: Subagent[];
+  all: Worker[];
   byToolCall: (tool: RenderedToolCallView) => Reached | null;
   /* the operations facts for a background process row */
   background: (tool: RenderedToolCallView) => BackgroundedToolView | null;
@@ -54,13 +54,13 @@ export const NO_WORKERS: Workers = {
   loaded: false,
 };
 
-/* A session is identified by its whole scope (agent, label, requester),
+/* A session is identified by its whole scope (node, label, requester),
    never by its label alone. */
 export const scopeKey = (r: {
-  agentDid: string | null;
+  nodeDid: string | null;
   sessionId: string | null;
   requesterDid: string | null;
-}) => `${r.agentDid ?? ""}\u0000${r.sessionId ?? ""}\u0000${r.requesterDid ?? ""}`;
+}) => `${r.nodeDid ?? ""}\u0000${r.sessionId ?? ""}\u0000${r.requesterDid ?? ""}`;
 
 export const summariesByScope = (sessions: readonly SessionSummary[] | undefined) =>
   new Map((sessions ?? []).map((s) => [scopeKey(s), s]));
@@ -68,27 +68,27 @@ export const summariesByScope = (sessions: readonly SessionSummary[] | undefined
 /* The sessions the node with this DID lists under these scopes, and only
    those: a change elsewhere in its list does not re-render the caller. */
 export function useListedScopes(
-  agentDid: string | null | undefined,
+  nodeDid: string | null | undefined,
   scopes: readonly string[],
 ): readonly SessionSummary[] {
   return useFleet(
     useShallow((s) => {
-      if (!agentDid || !scopes.length) return NO_SESSIONS;
-      const byScope = summariesByScope(s.sessionsOf[agentDid]);
+      if (!nodeDid || !scopes.length) return NO_SESSIONS;
+      const byScope = summariesByScope(s.sessionsOf[nodeDid]);
       return scopes.flatMap((key) => byScope.get(key) ?? []);
     }),
   );
 }
 
-/* The subagents in a provenance view: the lineage owner's `started`. */
-export function subagentsOf(
+/* The workers in a provenance view: the lineage owner's `started`. */
+export function workersOf(
   provenance: Pick<SessionProvenanceView, "started">,
   sessions: readonly SessionSummary[] | undefined,
-): Subagent[] {
+): Worker[] {
   const summaries = summariesByScope(sessions);
   return provenance.started.map((link) => ({
     sessionId: link.sessionId,
-    agentDid: link.agentDid,
+    nodeDid: link.nodeDid,
     summary: summaries.get(scopeKey(link)) ?? null,
     link,
   }));
@@ -114,9 +114,9 @@ export function useWorkers(provenance: SessionProvenanceView | null): Workers {
     actions: { fetchOperationsSnapshot },
   } = useApp();
   const facts = useSessionFacts();
-  const agentDid = stores.selection.use.agentDid();
+  const nodeDid = stores.selection.use.nodeDid();
   const sessions = useListedScopes(
-    agentDid,
+    nodeDid,
     provenance
       ? [
           ...provenance.started.map(scopeKey),
@@ -125,7 +125,7 @@ export function useWorkers(provenance: SessionProvenanceView | null): Workers {
       : [],
   );
   const [heldOps, setHeldOps] = useState<Held<DesktopOperationsSnapshot> | null>(null);
-  const ops = heldOps?.scope === agentDid ? heldOps.value : null;
+  const ops = heldOps?.scope === nodeDid ? heldOps.value : null;
   /* asked again when a tool changes, which the session store counts */
   const tools = facts?.tools;
   const toolsRevision = facts?.toolsRevision ?? 0;
@@ -134,22 +134,22 @@ export function useWorkers(provenance: SessionProvenanceView | null): Workers {
     [tools],
   );
   useEffect(() => {
-    if (!hasProcesses || !agentDid) {
+    if (!hasProcesses || !nodeDid) {
       setHeldOps(null);
       return;
     }
     let live = true;
-    void fetchOperationsSnapshot({ agentDid }).then(
-      (o) => live && setHeldOps({ scope: agentDid, value: o }),
+    void fetchOperationsSnapshot({ nodeDid }).then(
+      (o) => live && setHeldOps({ scope: nodeDid, value: o }),
       () => live && setHeldOps(null),
     );
     return () => {
       live = false;
     };
-  }, [fetchOperationsSnapshot, hasProcesses, agentDid, toolsRevision]);
+  }, [fetchOperationsSnapshot, hasProcesses, nodeDid, toolsRevision]);
   return useMemo(() => {
     if (!provenance && !ops) return NO_WORKERS;
-    const all = provenance ? subagentsOf(provenance, sessions) : [];
+    const all = provenance ? workersOf(provenance, sessions) : [];
     const byScope = new Map(all.map((s) => [scopeKey(s.link), s]));
     const summaries = summariesByScope(sessions);
     const backgrounded = ops?.backgroundedTools ?? [];
@@ -165,7 +165,7 @@ export function useWorkers(provenance: SessionProvenanceView | null): Workers {
         return {
           request: call.caused,
           summary: summaries.get(scopeKey(call.caused)) ?? null,
-          subagent: byScope.get(scopeKey(call.caused)) ?? null,
+          worker: byScope.get(scopeKey(call.caused)) ?? null,
         };
       },
       background: (tool) =>

@@ -33,26 +33,26 @@ export function useBootstrap() {
   return useStore(useApp().stores.client, (state) => state.snapshot?.bootstrap);
 }
 
-/** The home's agent DID, which marks the node this machine runs. */
+/** The home's node DID, which marks the node this machine runs. */
 export function useHomeDid() {
   return useStore(
     useApp().stores.client,
-    (state) => state.snapshot?.bootstrap.initAgentDid ?? null,
+    (state) => state.snapshot?.bootstrap.initNodeDid ?? null,
   );
 }
 
 /** The selected node's DID, or the first node's while nothing is selected. */
-export function useSelectedAgentDid(): string | null {
-  const agentDid = useApp().stores.selection.use.agentDid();
-  const first = useFleet((state) => firstNode(state)?.agentDid ?? null);
-  return agentDid ?? first;
+export function useSelectedNodeDid(): string | null {
+  const nodeDid = useApp().stores.selection.use.nodeDid();
+  const first = useFleet((state) => firstNode(state)?.nodeDid ?? null);
+  return nodeDid ?? first;
 }
 
 /** The selected node as the fleet holds it, or the first one while nothing
     is selected yet; the same object while it is unchanged. */
 export function useSelectedNode(): NodeView | null {
-  const agentDid = useApp().stores.selection.use.agentDid();
-  return useFleet((state) => nodeOrFirst(state, agentDid));
+  const nodeDid = useApp().stores.selection.use.nodeDid();
+  return useFleet((state) => nodeOrFirst(state, nodeDid));
 }
 
 /** A mailbox item on the selected node, or the first node while nothing is
@@ -60,9 +60,9 @@ export function useSelectedNode(): NodeView | null {
 export function useSelectedNodeMailboxItem(
   itemId: string | null | undefined,
 ): MailboxItemView | null {
-  const agentDid = useApp().stores.selection.use.agentDid();
+  const nodeDid = useApp().stores.selection.use.nodeDid();
   return useFleet((state) => {
-    const node = nodeOrFirst(state, agentDid);
+    const node = nodeOrFirst(state, nodeDid);
     if (!node || !itemId) return null;
     return state.mailboxOf[nodeKeyOf(node)]?.find((m) => m.itemId === itemId) ?? null;
   });
@@ -113,7 +113,7 @@ export function useToolAuthority() {
 /** A value worked out over the fleet in the selection's scope; re-renders
     when it changes, item by item for a list. */
 export function useInScope<T>(pick: (ctx: ScopeContext) => T): T {
-  const selectedNodeDid = useSelectedAgentDid();
+  const selectedNodeDid = useSelectedNodeDid();
   const homeDid = useHomeDid();
   return useFleet(
     useShallow((state) => pick(scopeContextOf(state, selectedNodeDid, homeDid))),
@@ -130,9 +130,9 @@ export function useRecentSessions(limit: number) {
   return useInScope((ctx) => recentInScope(defaultScope("recents"), ctx, limit));
 }
 
-/** The behavior a message goes to: the selection's, settled against the node. */
-export function useSelectedBehaviorId() {
-  return useView((view) => view.behaviorReadiness.behaviorId);
+/** The agent a message goes to: the selection's, settled against the node. */
+export function useSelectedAgentId() {
+  return useView((view) => view.agentReadiness.agentId);
 }
 
 /** The folder the selected chat works in. */
@@ -146,11 +146,9 @@ export function useChatFolder() {
 export function useMailboxCause() {
   const { stores } = useApp();
   const route = stores.selection.use.mailboxRoute();
-  const behaviorId = useSelectedBehaviorId();
+  const agentId = useSelectedAgentId();
   const sessionId = stores.selection.use.sessionId();
-  return route
-    ? { itemId: route.itemId, behaviorId: behaviorId ?? "", sessionId }
-    : null;
+  return route ? { itemId: route.itemId, agentId: agentId ?? "", sessionId } : null;
 }
 
 /** Startup as screens show it. */
@@ -172,9 +170,9 @@ export function useStartup() {
     ...state,
     managedServerWait,
     incompatibleHome: useIncompatibleHome(stores.client, lifecycle.home),
-    /* a restart needs the agent and authority the failed start reported */
+    /* a restart needs the node name and authority the failed start reported */
     canRestartManagedServer: Boolean(
-      failure?.status.agentName &&
+      failure?.status.nodeName &&
       failure.status.effectiveToolCeiling &&
       actions.localServerOffers.restart,
     ),

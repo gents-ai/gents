@@ -22,13 +22,13 @@ const serviceTarget = `gui/${process.getuid()}/${service}`;
 const definition = join(homedir(), "Library", "LaunchAgents", `${service}.plist`);
 const target = resolve(repoRoot, process.env.CARGO_TARGET_DIR ?? "target", "debug");
 const artifactRoot = await mkdtemp(join(tmpdir(), "gents-native-local-"));
-const agentHome = join(artifactRoot, "agent");
+const nodeHome = join(artifactRoot, "node");
 const desktopHome = join(artifactRoot, "desktop");
 const toolRoot = join(artifactRoot, "workspace");
 const runTmp = join(artifactRoot, "tmp");
 const webviewStoreId = randomBytes(16).toString("hex");
 const binaries = join(artifactRoot, "bin");
-for (const directory of [agentHome, desktopHome, toolRoot, runTmp, binaries]) {
+for (const directory of [nodeHome, desktopHome, toolRoot, runTmp, binaries]) {
   await mkdir(directory);
 }
 console.log(`Native acceptance artifacts: ${artifactRoot}`);
@@ -36,7 +36,7 @@ await writeFile(
   "/tmp/gents-native-local-latest.json",
   JSON.stringify({
     artifactRoot,
-    agentHome,
+    nodeHome,
     desktopHome,
     toolRoot,
     serviceTarget,
@@ -49,11 +49,11 @@ let log = null;
 let passed = false;
 
 async function recordedCustody() {
-  const agent = JSON.parse(await readFile(join(agentHome, "init.json"), "utf8"));
+  const node = JSON.parse(await readFile(join(nodeHome, "init.json"), "utf8"));
   const desktop = JSON.parse(
     await readFile(join(desktopHome, "store-encryption.json"), "utf8"),
   );
-  const records = { agent: agent.store_encryption, desktop };
+  const records = { node: node.store_encryption, desktop };
   const expected =
     process.env.GENTS_E2E_FILE_STORE_KEYS === "1" ? "file" : "macos-keychain";
   for (const record of Object.values(records)) {
@@ -134,7 +134,7 @@ async function runPhase(phase) {
     GENTS_BIN: join(binaries, "gents"),
     GENTS_NATIVE_E2E: "1",
     GENTS_DESKTOP_CONSOLE_LOG: "1",
-    GENTS_E2E_AGENT_HOME: agentHome,
+    GENTS_E2E_NODE_HOME: nodeHome,
     GENTS_E2E_DESKTOP_HOME: desktopHome,
     GENTS_E2E_LOCAL_TOOL_ROOT: toolRoot,
     GENTS_E2E_AGENT_LABEL: "Native Acceptance Engineer",
@@ -295,7 +295,7 @@ try {
   await stopApp();
   // Remove only the isolated service definition created for this run's home.
   const contents = await readFile(definition, "utf8").catch(() => "");
-  if (contents.includes(agentHome)) {
+  if (contents.includes(nodeHome)) {
     await command("launchctl", ["bootout", serviceTarget]);
     await rm(definition);
   }

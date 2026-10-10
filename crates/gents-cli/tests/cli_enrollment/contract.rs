@@ -92,33 +92,23 @@ async fn run_contract_with_streaming_cadence(
         None,
         Arc::new(move |request| {
             tracing::info!("deterministic provider received inference request");
-            let latest = request
-                .get("messages")
-                .and_then(Value::as_array)
-                .and_then(|messages| {
-                    messages
-                        .iter()
-                        .rev()
-                        .find(|message| message["role"] == "user")
-                });
-            let latest = serde_json::json!({"messages": [latest]});
-            if request_contains_role_text(&latest, "user", OFFLINE_PROMPT) {
+            let latest = streaming::latest_user_text(request);
+            if latest.as_deref() == Some(OFFLINE_PROMPT) {
                 ChatAction::WaitThenSse(Arc::clone(&model_gate), completion_text_sse(OFFLINE_REPLY))
             } else {
-                let reply = if request_contains_role_text(&latest, "user", FOLLOWUP_PROMPT) {
+                let reply = if latest.as_deref() == Some(FOLLOWUP_PROMPT) {
                     FOLLOWUP_REPLY
                 } else {
                     REPLY
                 };
-                let selected_stream_gate =
-                    if request_contains_role_text(&latest, "user", FOLLOWUP_PROMPT) {
-                        &model_followup_stream_gate
-                    } else {
-                        &model_stream_gate
-                    };
+                let selected_stream_gate = if latest.as_deref() == Some(FOLLOWUP_PROMPT) {
+                    &model_followup_stream_gate
+                } else {
+                    &model_stream_gate
+                };
                 if let Some(gate) = selected_stream_gate.as_ref().filter(|_| {
-                    request_contains_role_text(&latest, "user", "First conversation turn")
-                        || request_contains_role_text(&latest, "user", FOLLOWUP_PROMPT)
+                    latest.as_deref() == Some("First conversation turn")
+                        || latest.as_deref() == Some(FOLLOWUP_PROMPT)
                 }) {
                     let body = completion_text_sse(reply);
                     let (first, rest) = body.split_once("\n\n").expect("SSE content frame");
@@ -156,7 +146,7 @@ async fn run_contract_with_streaming_cadence(
         &[
             "--home",
             home,
-            "--agent-name",
+            "--node-name",
             "pairing-contract",
             "--model-name",
             "pairing-contract",
@@ -164,8 +154,8 @@ async fn run_contract_with_streaming_cadence(
             model.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
-    let behavior = default_behavior_id_for_agent(&agent_did);
+    let node_did = node_did_from_init(&init)?;
+    let agent = default_agent_id_for_node(&node_did);
     let port = allocate_port()?;
     let graphql = graphql_url(port);
     let debug_filter = std::env::var("RUST_LOG").ok();
@@ -179,18 +169,18 @@ async fn run_contract_with_streaming_cadence(
     wait_for_port(port, &mut server)?;
 
     let result = server.capturing(async {
-        wait_for_runtime_ready(&graphql, &agent_did, ENROLL_BUDGET).await?;
-        let readiness_timestamp = seed_readiness_history(&graphql, &agent_did, readiness_revisions).await?;
+        wait_for_runtime_ready(&graphql, &node_did, ENROLL_BUDGET).await?;
+        let readiness_timestamp = seed_readiness_history(&graphql, &node_did, readiness_revisions).await?;
         let core = ClientCore::start_with_paths_and_options(
             DesktopPaths::from_root(&client_home), ClientCoreOptions::local_only(),
         ).await?;
-        core.set_selected_agent_did(Some(agent_did.clone()));
+        core.set_selected_node_did(Some(node_did.clone()));
         let enroll_budget = if readiness_timestamp.is_some() {
             ENROLL_BUDGET + AGED_HISTORY_RECOVERY
         } else {
             ENROLL_BUDGET
         };
-        let probe = ReadinessProbe::of(&core, &graphql, &agent_did);
+        let probe = ReadinessProbe::of(&core, &graphql, &node_did);
         let enrollment_started = Instant::now();
         let phases = std::sync::Mutex::new(Vec::<(&'static str, u128)>::new());
         let reached = |phase: &'static str| {
@@ -224,15 +214,15 @@ async fn run_contract_with_streaming_cadence(
             reached("runtime_saw_request");
             run_cli_json(&runtime_home, &["p2p", "enrollment", "approve", &pending.request_id, "--home", home])?;
             reached("operator_approved");
-            wait_for_chat_ready_enrollment(&core, &agent_did).await?;
+            wait_for_chat_ready_enrollment(&core, &node_did).await?;
             reached("chat_ready_route");
-            wait_for_client_behavior_readiness(&core, &agent_did).await?;
+            wait_for_client_node_readiness(&core, &node_did).await?;
             reached("client_readiness_row");
             if let Some(expected) = readiness_timestamp.as_deref() {
-                wait_for_readiness_revision(&core, &agent_did, expected).await?;
+                wait_for_readiness_revision(&core, &node_did, expected).await?;
                 reached("client_readiness_revision");
             }
-            anyhow::ensure!(query_collection_dids(core.node(), "AgentPrincipal").await?.is_empty(), "runtime principal replicated to app");
+            anyhow::ensure!(query_collection_dids(core.node(), "Node").await?.is_empty(), "runtime principal replicated to app");
             Ok::<_, anyhow::Error>(())
         }).await;
         sampler.abort();
@@ -265,8 +255,8 @@ async fn run_contract_with_streaming_cadence(
         visible_turn(
             &core,
             &graphql,
-            &agent_did,
-            &behavior,
+            &node_did,
+            &agent,
             &session,
             "First conversation turn",
             stream_gate.as_deref(),
@@ -278,9 +268,9 @@ async fn run_contract_with_streaming_cadence(
         // finishes. Reopen exactly the same home: no re-enrollment, identity
         // reset, injected desired rows, or hand-installed return replicator.
         let records = core.peer_records().await;
-        core.submit_request(&session, &agent_did, OFFLINE_PROMPT, Some(&behavior)).await?;
+        core.submit_request(&session, &node_did, OFFLINE_PROMPT, Some(&agent)).await?;
         let (request, _, _) = timeout(TURN_BUDGET, wait_for_runtime_agent_request(
-            &graphql, core.node(), &agent_did, OFFLINE_PROMPT,
+            &graphql, core.node(), &node_did, OFFLINE_PROMPT,
         )).await.context("second request did not reach runtime in 20s")??;
         core.shutdown().await?;
         drop(core);
@@ -292,16 +282,16 @@ async fn run_contract_with_streaming_cadence(
             DesktopPaths::from_root(&client_home), ClientCoreOptions::local_only(),
         ).await?;
         let client_core_ready = reconnect_started.elapsed();
-        core.set_selected_agent_did(Some(agent_did.clone()));
+        core.set_selected_node_did(Some(node_did.clone()));
         let recovered = timeout(RECONNECT_BUDGET.saturating_sub(reconnect_started.elapsed()), async {
-            wait_for_chat_ready_enrollment(&core, &agent_did).await?;
+            wait_for_chat_ready_enrollment(&core, &node_did).await?;
             let route_ready = reconnect_started.elapsed();
-            wait_for_client_behavior_readiness(&core, &agent_did).await?;
-            let behavior_ready = reconnect_started.elapsed();
-            wait_for_replicated_reply(&core, &session, &agent_did, &request, OFFLINE_REPLY).await?;
-            Ok::<_, anyhow::Error>((route_ready, behavior_ready, reconnect_started.elapsed()))
+            wait_for_client_node_readiness(&core, &node_did).await?;
+            let agent_ready = reconnect_started.elapsed();
+            wait_for_replicated_reply(&core, &session, &node_did, &request, OFFLINE_REPLY).await?;
+            Ok::<_, anyhow::Error>((route_ready, agent_ready, reconnect_started.elapsed()))
         }).await;
-        let (route_ready, behavior_ready, reply_ready) = match recovered {
+        let (route_ready, agent_ready, reply_ready) = match recovered {
             Ok(Ok(phases)) => phases,
             failed => {
                 let diagnostics = pairing_diagnostics(&core, &graphql).await;
@@ -314,25 +304,25 @@ async fn run_contract_with_streaming_cadence(
         tracing::info!(
             client_core_start_ms = client_core_ready.as_millis(),
             route_after_core_ms = route_ready.saturating_sub(client_core_ready).as_millis(),
-            behavior_after_route_ms = behavior_ready.saturating_sub(route_ready).as_millis(),
-            reply_after_behavior_ms = reply_ready.saturating_sub(behavior_ready).as_millis(),
+            agent_after_route_ms = agent_ready.saturating_sub(route_ready).as_millis(),
+            reply_after_agent_ms = reply_ready.saturating_sub(agent_ready).as_millis(),
             elapsed_ms = reply_ready.as_millis(),
             "app recovered offline reply",
         );
         visible_turn(
             &core,
             &graphql,
-            &agent_did,
-            &behavior,
+            &node_did,
+            &agent,
             &session,
             FOLLOWUP_PROMPT,
             followup_stream_gate.as_deref(),
             stream_visibility_budget,
         )
         .await?;
-        assert_local_pagination(&core, &graphql, &session, &agent_did).await?;
+        assert_local_pagination(&core, &graphql, &session, &node_did).await?;
         assert_observer_did_not_overflow(&core).await?;
-        anyhow::ensure!(query_collection_dids(core.node(), "AgentPrincipal").await?.is_empty(), "reopen replicated runtime principal");
+        anyhow::ensure!(query_collection_dids(core.node(), "Node").await?.is_empty(), "reopen replicated runtime principal");
         core.shutdown().await?;
         anyhow::ensure!(model.captured_chat_requests().iter().any(|request| {
             request_contains_role_text(request, "user", FOLLOWUP_PROMPT)
@@ -355,8 +345,8 @@ async fn run_contract_with_streaming_cadence(
 async fn visible_turn(
     core: &ClientCore,
     graphql: &str,
-    agent: &str,
-    behavior: &str,
+    node_did: &str,
+    agent_id: &str,
     session: &str,
     prompt: &str,
     stream_gate: Option<&tokio::sync::Semaphore>,
@@ -364,15 +354,15 @@ async fn visible_turn(
 ) -> Result<()> {
     let started = Instant::now();
     let result = timeout(TURN_BUDGET, async {
-        core.submit_request(session, agent, prompt, Some(behavior))
+        core.submit_request(session, node_did, prompt, Some(agent_id))
             .await?;
         let local_submit_completed = started.elapsed();
         let (request, _, _) =
-            wait_for_runtime_agent_request(graphql, core.node(), agent, prompt).await?;
+            wait_for_runtime_agent_request(graphql, core.node(), node_did, prompt).await?;
         let request_arrived = started.elapsed();
         let (selection_admitted, runtime_completed, client_visible) = tokio::try_join!(
             async {
-                select_session(core, session, agent).await?;
+                select_session(core, session, node_did).await?;
                 Ok::<_, anyhow::Error>(started.elapsed())
             },
             async {
@@ -389,10 +379,27 @@ async fn visible_turn(
                         stream_visibility_budget,
                     )
                     .await;
+                    if let Err(error) = &visibility {
+                        let query = format!(
+                            r#"{{ AgentOutputSegment(filter: {{session_id: {{_eq: "{}"}}}}) {{ _docID request_doc_id ordinal created_at }} }}"#,
+                            escape_graphql_string(session),
+                        );
+                        let runtime_segments = graphql_query(graphql, &query).await;
+                        let client_segments = gents::graphql::graphql_with_transaction_retry(
+                            core.node(), &query, "streaming failure diagnostics",
+                        ).await;
+                        tracing::error!(
+                            request,
+                            error = %error,
+                            runtime_segments = ?runtime_segments,
+                            client_segments = ?client_segments,
+                            "live visibility failed while provider completion remains gated"
+                        );
+                    }
                     gate.add_permits(1);
                     visibility?;
                 }
-                wait_for_replicated_reply(core, session, agent, &request, expected).await?;
+                wait_for_replicated_reply(core, session, node_did, &request, expected).await?;
                 Ok::<_, anyhow::Error>(started.elapsed())
             },
         )?;
@@ -480,16 +487,16 @@ async fn wait_for_replicated_reply(
     const DATABASE_PROBE_INTERVAL: Duration = Duration::from_millis(25);
 
     let filter = format!(
-        r#"request_id: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}, agent_did: {{_eq: "{}"}}, requester_did: {{_eq: "{}"}}"#,
+        r#"request_id: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}, node_did: {{_eq: "{}"}}, requester_did: {{_eq: "{}"}}"#,
         escape_graphql_string(request),
         escape_graphql_string(session),
         escape_graphql_string(agent),
-        escape_graphql_string(core.principal().did()),
+        escape_graphql_string(core.node_identity().did()),
     );
     let query = format!(
         r#"{{
         AgentRequest(filter: {{{filter}}}) {{
-            _docID request_id session_id agent_did requester_did
+            _docID request_id session_id node_did requester_did
             lifecycle_state terminal_output execution_generation failure_reason
         }}
     }}"#
@@ -533,8 +540,8 @@ async fn wait_for_replicated_reply(
                         .with_context(|| format!("decoding canonical AgentRequest row: {row}"))?;
                 anyhow::ensure!(
                     typed.session_id.as_deref() == Some(session)
-                        && typed.agent_did.as_deref() == Some(agent)
-                        && typed.requester_did.as_deref() == Some(core.principal().did()),
+                        && typed.node_did.as_deref() == Some(agent)
+                        && typed.requester_did.as_deref() == Some(core.node_identity().did()),
                     "replica AgentRequest row lost tenancy lineage for {request}: {row}"
                 );
                 if typed.is_terminal()
@@ -560,9 +567,9 @@ async fn wait_for_replicated_reply(
                         anyhow::ensure!(
                             header.request_doc_id.as_deref() == row.doc_id.as_deref()
                                 && header.session_id == session
-                                && header.agent_did == agent
+                                && header.node_did == agent
                                 && header.requester_did.as_deref()
-                                    == Some(core.principal().did()),
+                                    == Some(core.node_identity().did()),
                             "canonical terminal header lost tenancy lineage for {request}: header={header:?}"
                         );
                         body = presentation.body_markdown.clone();
@@ -701,14 +708,14 @@ impl ReadinessProbe {
             let runtime_row = graphql_query(
                 graphql,
                 &format!(
-                    r#"{{ AgentBehaviorReadiness(filter: {{agent_did: {{_eq: "{escaped}"}}}}) {{_docID updated_at}} }}"#
+                    r#"{{ NodeReadiness(filter: {{node_did: {{_eq: "{escaped}"}}}}) {{_docID updated_at}} }}"#
                 ),
             )
             .await;
             let Some(doc_id) = runtime_row
                 .as_ref()
                 .ok()
-                .and_then(|row| row.pointer("/data/AgentBehaviorReadiness/0/_docID"))
+                .and_then(|row| row.pointer("/data/NodeReadiness/0/_docID"))
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned)
             else {
@@ -729,9 +736,9 @@ impl ReadinessProbe {
                 .and_then(|data| highest_commit(data.get("_commits")));
             let client_rows = store
                 .snapshot()
-                .behavior_readiness
+                .node_readiness
                 .iter()
-                .filter(|row| &row.agent_did == agent)
+                .filter(|row| &row.node_did == agent)
                 .count();
             let sync = match p2p.sync_status().await {
                 Ok(status) => match JsonP2pSyncStatusAdapter.adapt(&status) {
@@ -773,7 +780,7 @@ fn highest_commit(commits: Option<&Value>) -> Option<i64> {
 }
 
 async fn pairing_diagnostics(core: &ClientCore, graphql: &str) -> String {
-    let query = "{ PeerPairingDesired { peer_id template source } PeerPairingApplied { peer_id } AgentBehaviorReadiness { agent_did updated_at } AgentRequest { _docID request_id agent_did requester_did lifecycle_state terminal_output } }";
+    let query = "{ PeerPairingDesired { peer_id template source } PeerPairingApplied { peer_id } NodeReadiness { node_did updated_at } AgentRequest { _docID request_id node_did requester_did lifecycle_state terminal_output } }";
     let client = core.node().execute(query).await;
     let runtime = graphql_query(graphql, query).await;
     let sync = core.sync_state();
@@ -813,7 +820,7 @@ async fn runtime_transcript_keys(
     requester: &str,
 ) -> Result<std::collections::BTreeSet<String>> {
     let filter = format!(
-        r#"session_id: {{_eq: "{}"}}, agent_did: {{_eq: "{}"}}, requester_did: {{_eq: "{}"}}"#,
+        r#"session_id: {{_eq: "{}"}}, node_did: {{_eq: "{}"}}, requester_did: {{_eq: "{}"}}"#,
         escape_graphql_string(session),
         escape_graphql_string(agent),
         escape_graphql_string(requester),
@@ -849,7 +856,7 @@ async fn local_transcript_keys(
             core.node(),
             session,
             Some(agent),
-            Some(core.principal().did()),
+            Some(core.node_identity().did()),
             cursor.as_deref(),
             Some(gents_desktop_core::client::MAX_SESSION_TRANSCRIPT_PAGE_SIZE),
         )
@@ -895,7 +902,8 @@ async fn assert_local_pagination(
     // turn waits for. The authoring runtime is therefore the only authority for
     // what local paging has to cover, and it is stable here because every
     // request in this session is terminal.
-    let expected = runtime_transcript_keys(graphql, session, agent, core.principal().did()).await?;
+    let expected =
+        runtime_transcript_keys(graphql, session, agent, core.node_identity().did()).await?;
     timeout(TURN_BUDGET, async {
         loop {
             let local = local_transcript_keys(core, session, agent).await?;
@@ -920,7 +928,7 @@ async fn assert_local_pagination(
             core.node(),
             session,
             Some(agent),
-            Some(core.principal().did()),
+            Some(core.node_identity().did()),
             cursor.as_deref(),
             Some(1),
         )
@@ -982,11 +990,15 @@ async fn seed_readiness_history(
         return Ok(None);
     }
     let agent = escape_graphql_string(agent);
-    let readiness = graphql_query(graphql, &format!(
-        r#"{{ AgentBehaviorReadiness(filter: {{agent_did: {{_eq: "{agent}"}}}}) {{snapshot_json}} }}"#,
-    )).await?;
+    let readiness = graphql_query(
+        graphql,
+        &format!(
+            r#"{{ NodeReadiness(filter: {{node_did: {{_eq: "{agent}"}}}}) {{snapshot_json}} }}"#,
+        ),
+    )
+    .await?;
     let snapshot = readiness
-        .pointer("/data/AgentBehaviorReadiness/0/snapshot_json")
+        .pointer("/data/NodeReadiness/0/snapshot_json")
         .and_then(Value::as_str)
         .context("aged fixture requires runtime readiness")?;
     let snapshot = escape_graphql_string(snapshot);
@@ -999,7 +1011,7 @@ async fn seed_readiness_history(
             fields.push_str(&format!(
                 // Match the removed publisher: even an unchanged snapshot was
                 // rewritten alongside its timestamp, adding another field DAG.
-                r#"r{revision}: update_AgentBehaviorReadiness(filter: {{agent_did: {{_eq: "{agent}"}}}}, input: {{snapshot_json: "{snapshot}", updated_at: "{}"}}) {{_docID}} "#,
+                r#"r{revision}: update_NodeReadiness(filter: {{node_did: {{_eq: "{agent}"}}}}, input: {{snapshot_json: "{snapshot}", updated_at: "{}"}}) {{_docID}} "#,
                 escape_graphql_string(&timestamp),
             ));
         }
@@ -1008,7 +1020,7 @@ async fn seed_readiness_history(
     let final_timestamp = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, true);
     if revisions > 0 {
         graphql_query(graphql, &format!(
-            r#"mutation {{ update_AgentBehaviorReadiness(filter: {{agent_did: {{_eq: "{agent}"}}}}, input: {{updated_at: "{}"}}) {{_docID}} }}"#,
+            r#"mutation {{ update_NodeReadiness(filter: {{node_did: {{_eq: "{agent}"}}}}, input: {{updated_at: "{}"}}) {{_docID}} }}"#,
             escape_graphql_string(&final_timestamp),
         )).await?;
         tracing::info!(
@@ -1022,7 +1034,7 @@ async fn seed_readiness_history(
 
 async fn wait_for_readiness_revision(core: &ClientCore, agent: &str, expected: &str) -> Result<()> {
     let query = format!(
-        r#"{{ AgentBehaviorReadiness(filter: {{agent_did: {{_eq: "{}"}}}}) {{agent_did snapshot_json updated_at}} }}"#,
+        r#"{{ NodeReadiness(filter: {{node_did: {{_eq: "{}"}}}}) {{node_did snapshot_json updated_at}} }}"#,
         escape_graphql_string(agent)
     );
     loop {
@@ -1035,21 +1047,16 @@ async fn wait_for_readiness_revision(core: &ClientCore, agent: &str, expected: &
         if let Some(row) = result
             .data
             .as_ref()
-            .and_then(|data| data["AgentBehaviorReadiness"].as_array())
+            .and_then(|data| data["NodeReadiness"].as_array())
             .and_then(|rows| rows.first())
         {
-            let row: gents_protocol::row::AgentBehaviorReadinessRow =
-                serde_json::from_value(row.clone())?;
+            let row: gents_protocol::row::NodeReadinessRow = serde_json::from_value(row.clone())?;
             let actual = chrono::DateTime::parse_from_rfc3339(&row.updated_at)?;
             if actual >= chrono::DateTime::parse_from_rfc3339(expected)? {
                 anyhow::ensure!(
                     matches!(
-                        gents_protocol::row::project_behavior_readiness_summary(
-                            Some(&row),
-                            agent,
-                            Utc::now()
-                        ),
-                        gents_protocol::row::ProjectedBehaviorReadinessSummary::Observed(_)
+                        gents_protocol::row::project_node_readiness_summary(Some(&row), agent),
+                        gents_protocol::row::ProjectedNodeReadinessSummary::Observed(_)
                     ),
                     "latest readiness revision is not a usable semantic snapshot"
                 );

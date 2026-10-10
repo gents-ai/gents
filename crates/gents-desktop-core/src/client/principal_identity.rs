@@ -3,7 +3,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use gents::identity::{
     load_file_identity, load_or_create_file_identity, register_ed25519_signing_identity,
-    AgentIdentity, ServiceAccount,
+    NodeIdentity, ServiceAccount,
 };
 use identity::{FullIdentity as _, Identity as _, RawIdentity};
 use serde::{Deserialize, Serialize};
@@ -18,7 +18,7 @@ pub struct PrincipalIdentity {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-struct PrincipalMetadata {
+struct NodeIdentityMetadata {
     did: String,
     public_key_bytes: Vec<u8>,
 }
@@ -31,7 +31,7 @@ impl PrincipalIdentity {
             Ok(metadata) => {
                 anyhow::ensure!(
                     metadata.file_type().is_file(),
-                    "principal metadata {} is not a regular file",
+                    "node identity metadata {} is not a regular file",
                     metadata_path.display()
                 );
                 true
@@ -39,7 +39,10 @@ impl PrincipalIdentity {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
             Err(error) => {
                 return Err(anyhow::Error::from(error)).with_context(|| {
-                    format!("inspecting principal metadata {}", metadata_path.display())
+                    format!(
+                        "inspecting node identity metadata {}",
+                        metadata_path.display()
+                    )
                 });
             }
         };
@@ -51,12 +54,12 @@ impl PrincipalIdentity {
             }
         })
         .await
-        .context("joining principal identity load")??;
+        .context("joining node identity load")??;
 
         let did = identity.did().map_err(anyhow::Error::from)?.to_string();
         let public_key_bytes = identity.public_key_bytes();
         let private_key_bytes = identity.private_key_bytes().to_vec();
-        let metadata = PrincipalMetadata {
+        let metadata = NodeIdentityMetadata {
             did: did.clone(),
             public_key_bytes: public_key_bytes.clone(),
         };
@@ -90,7 +93,7 @@ impl PrincipalIdentity {
     pub(crate) fn sign(&self, payload: &[u8]) -> Result<Vec<u8>> {
         RawIdentity::from_bytes(crypto::KeyType::Ed25519, &self.private_key_bytes)
             .map_err(anyhow::Error::from)
-            .with_context(|| format!("loading principal identity for {}", self.did))?
+            .with_context(|| format!("loading node identity for {}", self.did))?
             .sign(payload)
             .map_err(anyhow::Error::from)
             .with_context(|| format!("signing payload as {}", self.did))
@@ -98,7 +101,7 @@ impl PrincipalIdentity {
 }
 
 #[async_trait::async_trait]
-impl AgentIdentity for PrincipalIdentity {
+impl NodeIdentity for PrincipalIdentity {
     fn did(&self) -> &str {
         &self.did
     }
@@ -131,14 +134,14 @@ impl AgentIdentity for PrincipalIdentity {
     }
 }
 
-async fn validate_or_persist_metadata(path: &Path, expected: &PrincipalMetadata) -> Result<()> {
+async fn validate_or_persist_metadata(path: &Path, expected: &NodeIdentityMetadata) -> Result<()> {
     match tokio::fs::read(path).await {
         Ok(bytes) => {
-            let stored: PrincipalMetadata = serde_json::from_slice(&bytes)
-                .with_context(|| format!("parsing principal metadata {}", path.display()))?;
+            let stored: NodeIdentityMetadata = serde_json::from_slice(&bytes)
+                .with_context(|| format!("parsing node identity metadata {}", path.display()))?;
             if stored != *expected {
                 return Err(anyhow::anyhow!(
-                    "principal metadata mismatch at {}",
+                    "node identity metadata mismatch at {}",
                     path.display()
                 ));
             }
@@ -182,7 +185,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn first_launch_creates_principal_files() {
+    async fn first_launch_creates_node_identity_files() {
         let tempdir = tempfile::tempdir().unwrap();
         let paths = DesktopPaths::from_root(tempdir.path());
 
@@ -211,7 +214,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn missing_key_after_principal_metadata_does_not_create_new_identity() {
+    async fn missing_key_after_node_identity_metadata_does_not_create_new_identity() {
         let tempdir = tempfile::tempdir().unwrap();
         let paths = DesktopPaths::from_root(tempdir.path().join("desktop"));
         PrincipalIdentity::load_or_create(&paths).await.unwrap();
@@ -252,7 +255,7 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn new_principal_key_and_directory_are_private() {
+    async fn new_node_identity_key_and_directory_are_private() {
         use std::os::unix::fs::PermissionsExt;
 
         let tempdir = tempfile::tempdir().unwrap();
@@ -275,7 +278,7 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn principal_rejects_symlinked_key_without_touching_target() {
+    async fn node_identity_rejects_symlinked_key_without_touching_target() {
         use std::os::unix::fs::symlink;
 
         let tempdir = tempfile::tempdir().unwrap();
@@ -298,7 +301,7 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn principal_rejects_insecure_existing_key_without_rewriting_it() {
+    async fn node_identity_rejects_insecure_existing_key_without_rewriting_it() {
         use std::os::unix::fs::PermissionsExt;
 
         let tempdir = tempfile::tempdir().unwrap();

@@ -4,10 +4,10 @@ import Proofs.Conformance.ClientShell.Contracts.SessionTurn
 namespace Conformance.ClientShellContracts
 
 def contractPeer : PeerId := 40
-def contractAgent : AgentDid := 20
-def alternateAgent : AgentDid := 21
-def contractBehavior : BehaviorId := 30
-def alternateBehavior : BehaviorId := 31
+def contractNode : NodeDid := 20
+def alternateNode : NodeDid := 21
+def contractAgent : AgentId := 30
+def alternateAgent : AgentId := 31
 def sid1 : SessionId := 1
 def sid2 : SessionId := 2
 def reqOld : RequestId := 100
@@ -33,13 +33,13 @@ def sessionObs
     (sid : SessionId)
     (req : Option RequestId)
     (turn : Option ClientTurnState)
-    (agent : AgentDid := contractAgent)
-    (behavior : Option BehaviorId := some contractBehavior)
+    (node : NodeDid := contractNode)
+    (agentId : Option AgentId := some contractAgent)
     (queued : List RequestId := [])
     : SessionObservation :=
   { sessionId := sid
-  , agentDid := agent
-  , behaviorId := behavior
+  , nodeDid := node
+  , agentId := agentId
   , latestObservedRequest := req
   , latestTurn := turn
   , queuedRequests := queued
@@ -74,7 +74,7 @@ def foldedRows : List ClientShell.SessionTurn.Row :=
 def rowsObs (rows : List ClientShell.SessionTurn.Row) : List SessionObservation :=
   match rows.getLast? with
   | some newest =>
-      [ClientShell.SessionTurn.observe sid1 contractAgent (some contractBehavior) rows newest]
+      [ClientShell.SessionTurn.observe sid1 contractNode (some contractAgent) rows newest]
   | none => []
 
 def storeNewQueuedBehindRunning : LocalStore :=
@@ -91,20 +91,20 @@ def desktopRowsFor (store : LocalStore) : List ClientShell.SessionTurn.Row :=
   else []
 
 def storeSid2Completed : LocalStore :=
-  storeWith [sessionObs sid2 (some reqOther) (some turnCompleted) alternateAgent]
+  storeWith [sessionObs sid2 (some reqOther) (some turnCompleted) alternateNode]
 
 def selectedShell
     (session : Option SessionId)
     (workflow : SubmissionWorkflow := .idle)
-    (agent : Option AgentDid := some contractAgent)
+    (node : Option NodeDid := some contractNode)
     : ShellState :=
-  { selection := { peer := some contractPeer, agent := agent, session := session }
+  { selection := { peer := some contractPeer, node := node, session := session }
   , workflow := workflow
   }
 
 def ctxReady : SubmitContext :=
   { clientAvailable := true
-  , requestedBehavior := some contractBehavior
+  , requestedAgent := some contractAgent
   }
 
 def ctxOffline : SubmitContext :=
@@ -259,9 +259,9 @@ def clientShellCaseFromStep
   { name := name
   , property := property
   , input := inputName input
-  , preSelectionAgent := pre.selection.agent
+  , preSelectionNode := pre.selection.node
   , preSelectionSession := pre.selection.session
-  , postSelectionAgent := post.selection.agent
+  , postSelectionNode := post.selection.node
   , postSelectionSession := post.selection.session
   , preWorkflowKind := workflowKind pre.workflow
   , preWorkflowSession := workflowSession pre.workflow
@@ -285,7 +285,7 @@ def clientShellCaseFromStep
   , sendDecision := sendDecisionKind chat.sendDecision
   , sendBlockedReason := sendDecisionReason chat.sendDecision
   , frontendClientAvailable := ctx.clientAvailable
-  , frontendSelectedAgentDid := frontendLocal.selection.agent
+  , frontendSelectedNodeDid := frontendLocal.selection.node
   , frontendSelectedSessionId := frontendLocal.selection.session
   , frontendSending :=
       match frontendLocal.workflow with
@@ -335,7 +335,7 @@ def clientShellCases : List ClientShellContractCase :=
   let noAgent := selectedShell none .idle none
   let staleBeforeSwitch :=
     { selectedShell (some sid1) (.awaiting sid1 reqOld) with
-      selection := { peer := some contractPeer, agent := some alternateAgent, session := some sid1 }
+      selection := { peer := some contractPeer, node := some alternateNode, session := some sid1 }
     }
   let switchedStaleLocal :=
     { staleBeforeSwitch with selection := { staleBeforeSwitch.selection with session := some sid2 } }
@@ -346,7 +346,7 @@ def clientShellCases : List ClientShellContractCase :=
       "new_session_composer_clears_selection"
       "request_owned_session_creation"
       pre input storeNewCompleted .healthy ctxReady post post emptyStore
-  , let pre := selectedShell none (.submitting contractAgent none)
+  , let pre := selectedShell none (.submitting contractNode none)
     let input := ShellInput.mutation (.submitted sid1 reqNew)
     let post := step pre input emptyStore .healthy ctxReady
     clientShellCaseFromStep
@@ -401,7 +401,7 @@ def clientShellCases : List ClientShellContractCase :=
       "blocked_submit_agent_not_selected"
       "blocked_submit_gates"
       noAgent input emptyStore .healthy ctxReady noAgent noAgent emptyStore
-  , let pre := selectedShell (some sid1) (.submitting contractAgent (some sid1))
+  , let pre := selectedShell (some sid1) (.submitting contractNode (some sid1))
     let input := ShellInput.user .startSubmit
     clientShellCaseFromStep
       "blocked_submit_mutation_in_flight"
@@ -459,7 +459,7 @@ def clientShellCases : List ClientShellContractCase :=
         awaitingNew staleInput emptyStore .healthy ctxReady awaitingNew stalePost oldTerminalStore
     ]) ++ ([ClientTurnState.interrupted, .running].map fun turn =>
     let observed := storeWith [sessionObs sid1 (some reqNew) (some turn)]
-    let pre := selectedShell (some sid1) (.submitting contractAgent (some sid1))
+    let pre := selectedShell (some sid1) (.submitting contractNode (some sid1))
     let input := ShellInput.mutation (.submitted sid1 reqNew)
     let post := step pre input observed .healthy ctxReady
     clientShellCaseFromStep

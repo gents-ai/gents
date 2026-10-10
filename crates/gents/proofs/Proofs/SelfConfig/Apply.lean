@@ -63,7 +63,7 @@ validator; this model does not parse or duplicate the nested schema. -/
 structure Control where
   /-- `self_config.enable_self_config`: the `config` tool exists. -/
   selfConfig : Bool
-  /-- `subagents.enabled`: the agents tool group. -/
+  /-- `agents`: the agents tool group on Tools. -/
   agents : Bool
   /-- `self_config.self_config_no_lockout`: this guard applies to later writes. -/
   noLockout : Bool
@@ -85,7 +85,7 @@ validation). It is refused only a candidate that turns off its self-config tool,
 or drops the agents group, the no-lockout guard, or the `tools` authority it
 needs to restore any of them. Dropping the guard or that authority first would
 make the lockout a two-step edit, so both are retained like the tools they
-protect. Behavior and backend enablement are the same invariant on the other
+protect. Agent and backend enablement are the same invariant on the other
 reference-chain documents and remain their existing typed guards. -/
 def keepsControl (decode : Doc → Option Control) (stored candidate : Doc) : Bool :=
   match decode stored, decode candidate with
@@ -125,7 +125,7 @@ nobody else can. A write that raises nothing is accepted whatever the invoker
 holds, so editing a sibling that already carries a grant is not a self-grant. Unlike
 `keepsControl` this guard always runs: the native owner calls it from the
 shared validate slot, not the opt-in no-lockout slot. The native graph tool
-flag is not a grant (`PeerRegistryDiscovery.PersonaRequest.graphToolPresented`):
+flag is not a grant (`SelfConfig.graphToolPresented`):
 it presents run tools whose authority stays with each graph's allowed callers.
 Operator writes (the desktop, `config apply`) do not pass through this guard. -/
 def keepsGrants (decode : Doc → Option Grants) (held : Grants) (stored candidate : Doc) :
@@ -135,17 +135,16 @@ def keepsGrants (decode : Doc → Option Grants) (held : Grants) (stored candida
   | _, _ => false
 
 /-- The grant bound across a reselection. A write that changes which Tools
-document a Context or Behavior selects is bounded like a Tools write from the
+document a Context or Agent selects is bounded like a Tools write from the
 previously selected Tools (`keepsGrants`), so a re-point cannot acquire what a
 Tools write could not. With no previous selection (a new Context, or a clone,
 which copies its source's whole Tools document, operator grants included) the
 newly selected Tools are bounded like a Tools write over a document with no
 grant (`Grants.bot`): each grant within its own bound with nothing stored, so
 pack installation needs the invoker to hold it. Selecting no Tools carries no
-grant. A clone is checked when its request is created and
-previewed; the reconciler publishes it later from the source as it is then,
-without the invoker's grants, so a grant an operator adds to the source in that
-window is copied. Operator writes are unguarded by design. -/
+grant. A direct clone is checked against the invoking agent's held grants in
+the same transaction that reads the source and publishes the candidate.
+Operator writes are unguarded by design. -/
 def reselectionKeepsGrants (decode : Doc → Option Grants) (held : Grants)
     (before after : Option Doc) : Bool :=
   match before, after with
@@ -154,7 +153,7 @@ def reselectionKeepsGrants (decode : Doc → Option Grants) (held : Grants)
       keepsGrants decode held storedTools candidateTools
   | none, some candidateTools => (decode candidateTools).any (·.boundedBy Grants.bot held)
 
-/-- `reselectionKeepsGrants` on the Tools documents a Context or Behavior
+/-- `reselectionKeepsGrants` on the Tools documents a Context or Agent
 selects. `resolve` follows the chain through the owner-scoped reads the native
 guard uses; `none` selects no Tools, including a reference to a missing
 document, which the reference validator refuses on its own. -/
@@ -162,21 +161,20 @@ def chainKeepsGrants (decode : Doc → Option Grants) (held : Grants)
     (resolve : Doc → Option Doc) (stored candidate : Doc) : Bool :=
   reselectionKeepsGrants decode held (resolve stored) (resolve candidate)
 
-/-- The invoker's reachability, projected from its own behavior document:
-`enabled` (absent is true) and whether its tags carry the Setup tag. -/
+/-- The invoker's reachability, projected from its own agent document:
+`enabled` (absent is true) and whether its tags carry the Engineer tag. -/
 structure Reach where
   enabled : Bool
-  setupTag : Bool
+  engineerTag : Bool
   deriving DecidableEq, Repr
 
-/-- The behavior half of no lockout: the invoker stays enabled and keeps the
-Setup tag it had. The tag is how the desktop reaches the Engineer and how
-persona requests refuse editing or disabling it
-(`PersonaRequest.protected_edit_or_disable_rejected`); dropping it first would
+/-- The agent half of no lockout: the invoker stays enabled and keeps the
+Engineer tag it had. The tag is how the desktop reaches the Engineer and what
+`SelfConfig.agentDecision` protects from edit or disable; dropping it first would
 make self-disable a two-step edit. Other tags and fields stay editable. -/
 def keepsReach (decode : Doc → Option Reach) (stored candidate : Doc) : Bool :=
   match decode stored, decode candidate with
-  | some old, some new => new.enabled && retained old.setupTag new.setupTag
+  | some old, some new => new.enabled && retained old.engineerTag new.engineerTag
   | _, _ => false
 
 end SelfConfig

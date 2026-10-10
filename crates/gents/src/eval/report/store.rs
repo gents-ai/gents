@@ -21,7 +21,7 @@ use crate::graphql::escape_graphql_string;
 /// Every run `owner` has, oldest first (`created_at`, then `run_id`).
 pub async fn load_runs(access: &ConfigAccess, owner: &str) -> Result<Vec<RunRecord>> {
     let query = format!(
-        r#"{{ EvalRun(filter: {{ owner_agent_did: {{ _eq: "{owner}" }} }}) {{ run_id }} }}"#,
+        r#"{{ EvalRun(filter: {{ owner_node_did: {{ _eq: "{owner}" }} }}) {{ run_id }} }}"#,
         owner = escape_graphql_string(owner),
     );
     let response = access
@@ -167,7 +167,7 @@ mod tests {
                 cell_id: "baseline".into(),
                 label: "baseline".into(),
                 source: CellSource::Directory(pack.to_path_buf()),
-                behavior_id: "monitor".into(),
+                agent_id: "monitor".into(),
                 inference_profile_id: "local".into(),
             }],
             trials_per_case: 2,

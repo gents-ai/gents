@@ -11,11 +11,11 @@ import type {
 
 vi.mock("@/lib/router", () => ({ href: () => "#", navigate: vi.fn() }));
 
-import { SubagentList, WorkerStep, workerNow } from "../src/ui/screens/WorkerStep";
+import { WorkerList, WorkerStep, workerNow } from "../src/ui/screens/WorkerStep";
 import {
   NO_WORKERS,
   type Reached,
-  type Subagent,
+  type Worker,
   type Workers,
 } from "../src/ui/screens/workers";
 import { WorkerActionsContext } from "../src/ui/screens/WorkerActions";
@@ -37,7 +37,7 @@ const call = (
     statusKind,
     awaitMode: "background",
     presentation: {
-      kind: "subagent",
+      kind: "agent",
       action,
       name: "reviewer",
       sessionId: "child-session",
@@ -51,7 +51,7 @@ const summary = (turnState: string | null): SessionSummary =>
   ({
     sessionId: "child-session",
     title: "Reviewer",
-    behaviorId: null,
+    agentId: null,
     turnState,
     latestRequestId: "child-req-2",
     messageCount: null,
@@ -60,19 +60,19 @@ const summary = (turnState: string | null): SessionSummary =>
 
 const caused = (requestId: string, lifecycleState: string): CausedRequestView => ({
   requestId,
-  agentDid: "did:key:reviewer",
+  nodeDid: "did:key:reviewer",
   sessionId: "child-session",
   requesterDid: null,
   lifecycleState,
   createdAt: null,
 });
 
-const subagent = (turnState: string | null): Subagent => ({
+const worker = (turnState: string | null): Worker => ({
   sessionId: "child-session",
-  agentDid: "did:key:reviewer",
+  nodeDid: "did:key:reviewer",
   summary: summary(turnState),
   link: {
-    agentDid: "did:key:reviewer",
+    nodeDid: "did:key:reviewer",
     sessionId: "child-session",
     requesterDid: null,
     causeRequestDocId: "doc-parent-req",
@@ -82,13 +82,13 @@ const subagent = (turnState: string | null): Subagent => ({
 /* this row's call caused `request`; the session may be working on others */
 const reached = (
   request: CausedRequestView,
-  s: Subagent | null = subagent("running"),
-): Reached => ({ request, summary: s?.summary ?? summary("running"), subagent: s });
+  s: Worker | null = worker("running"),
+): Reached => ({ request, summary: s?.summary ?? summary("running"), worker: s });
 
 function workersWith(r: Reached | null): Workers {
   return {
     ...NO_WORKERS,
-    all: r?.subagent ? [r.subagent] : [],
+    all: r?.worker ? [r.worker] : [],
     byToolCall: () => r,
     loaded: true,
   };
@@ -107,7 +107,7 @@ function renderStep(
   return actions;
 }
 
-describe("a subagent row", () => {
+describe("an agent row", () => {
   it("shows the request this row's call caused, not the session's latest", () => {
     /* the session is working on a later request; this call's has finished */
     expect(
@@ -199,7 +199,7 @@ describe("a subagent row", () => {
       ...call("success"),
       toolName: "agent_interrupt",
       presentation: {
-        kind: "subagent",
+        kind: "agent",
         action: "interrupt",
         name: null,
         sessionId: "child-session",
@@ -256,25 +256,25 @@ describe("a background process row", () => {
   });
 });
 
-describe("subagent list", () => {
+describe("agent list", () => {
   it("lists each started session with its state and a way in", () => {
     render(
-      <SubagentList workers={workersWith(reached(caused("child-req", "completed")))} />,
+      <WorkerList workers={workersWith(reached(caused("child-req", "completed")))} />,
     );
-    expect(screen.getByText("Subagents")).toBeInTheDocument();
+    expect(screen.getByText("Workers")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Reviewer/ })).toBeInTheDocument();
   });
 
-  it("names each subagent's behavior from the selected node, outside the transcript", () => {
-    const named = subagent("completed");
-    named.summary = { ...named.summary!, behaviorId: "reviewer" };
+  it("names each agent's configuration from the selected node, outside the transcript", () => {
+    const named = worker("completed");
+    named.summary = { ...named.summary!, agentId: "reviewer" };
     const app = testApp({
       deployments: [
         node({
-          behaviors: [
+          agents: [
             {
-              ...deployment.behaviors[0],
-              behaviorId: "reviewer",
+              ...deployment.agents[0],
+              agentId: "reviewer",
               displayName: "Code Reviewer",
             },
           ],
@@ -283,7 +283,7 @@ describe("subagent list", () => {
     });
     renderIn(
       app,
-      <SubagentList
+      <WorkerList
         workers={workersWith(reached(caused("child-req", "completed"), named))}
       />,
     );
@@ -291,7 +291,7 @@ describe("subagent list", () => {
   });
 
   it("renders nothing for a session that started no other session", () => {
-    const view = render(<SubagentList workers={NO_WORKERS} />);
+    const view = render(<WorkerList workers={NO_WORKERS} />);
     expect(view.container).toBeEmptyDOMElement();
   });
 });

@@ -10,7 +10,7 @@ async fn existing_notification(
     message_key: &str,
 ) -> Result<Option<ExistingNotification>> {
     let scope = crate::session::session_scope_filter(
-        &parent.agent_did,
+        &parent.node_did,
         &parent.session_id,
         parent.requester_did.as_deref(),
     );

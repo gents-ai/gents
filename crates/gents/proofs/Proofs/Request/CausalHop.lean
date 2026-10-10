@@ -5,9 +5,9 @@ import Proofs.Basic
 
 Every agent is an ordinary agent, addressed directly; the runtime encodes no
 parent/child hierarchy. The one causal fact the runtime keeps is the hop: the
-signed, immutable `AgentRequest.subagent_depth`, written once by
+signed, immutable `AgentRequest.request_hop`, written once by
 `lifecycle::materialize` and checked at admission against the target's
-`AgentPrincipal.max_request_hop`.
+`Node.max_request_hop`.
 
 Each session has a *current hop*: the hop of its latest request. The hop
 bounds call *depth*, not how many calls a session makes, so it separates the
@@ -41,7 +41,7 @@ would be a same-session steering continuation with no hop increase.
 
 namespace CausalHop
 
-/-- Default `AgentPrincipal.max_request_hop` when the principal leaves it unset. -/
+/-- Default `Node.max_request_hop` when the node leaves it unset. -/
 def defaultMaxRequestHop : Nat := 8
 
 /-- Why a request exists, relative to the request whose hop it inherits. -/
@@ -68,7 +68,7 @@ def nextHop : Cause → Nat → Nat
   | .returnEdge, own => own
   | .continuation, own => own
 
-/-- Admission refuses a request whose hop exceeds the target principal's
+/-- Admission refuses a request whose hop exceeds the target node's
 `max_request_hop`. The check reads only the signed hop; no lineage walk,
 replication of the predecessor, or cooperation of the sender is needed. -/
 def admitHop (maxHop hop : Nat) : Bool := decide (hop ≤ maxHop)
@@ -147,7 +147,7 @@ theorem hopAlong_ge (start : Nat) (steps : List Step) :
 
 /-- Every admitted request has at most `maxHop` agent-to-agent sends in its
 causal chain, across any sessions and interleaved continuations: `maxHop` is
-the `max_request_hop` of the principal that admits it. There is no global
+the `max_request_hop` of the node that admits it. There is no global
 constant; `defaultMaxRequestHop` only fills an unset field. -/
 theorem admitted_chain_sends_le_max (maxHop start : Nat) (steps : List Step)
     (h_admit : admitHop maxHop (hopAlong start steps) = true) :

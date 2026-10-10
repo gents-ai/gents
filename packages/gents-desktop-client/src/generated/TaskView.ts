@@ -3,4 +3,4 @@ import type { TaskHook } from "./TaskHook.js";
 import type { TaskRecentRunsView } from "./TaskRecentRunsView.js";
 import type { TaskRunSummaryView } from "./TaskRunSummaryView.js";
 
-export type TaskView = { emitOutcome: boolean, taskId: string, name: string | null, description: string | null, behaviorId: string | null, promptTemplate: string | null, goalObjectiveTemplate: string | null, goalTokenBudget: number | null, hooks: Array<TaskHook>, enabled: boolean | null, outputSchemaRef: string | null, tags: Array<string>, recentRuns: TaskRecentRunsView, runHistory: Array<TaskRunSummaryView>, };
+export type TaskView = { emitOutcome: boolean, taskId: string, name: string | null, description: string | null, agentId: string | null, promptTemplate: string | null, goalObjectiveTemplate: string | null, goalTokenBudget: number | null, hooks: Array<TaskHook>, enabled: boolean | null, outputSchemaRef: string | null, tags: Array<string>, recentRuns: TaskRecentRunsView, runHistory: Array<TaskRunSummaryView>, };

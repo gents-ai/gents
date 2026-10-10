@@ -9,8 +9,8 @@ const status = (state: ManagedServerStatus["state"]) =>
   ({
     state,
     autoStart: true,
-    agentName: "Workshop Agent",
-    agentDid: null,
+    nodeName: "Workshop Agent",
+    nodeDid: null,
     graphql: null,
     effectiveToolCeiling: "readwrite",
     effectiveToolRoot: "/Users/test",

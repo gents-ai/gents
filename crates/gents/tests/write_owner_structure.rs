@@ -46,12 +46,10 @@ const NODE_EXECUTE_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents/src/lifecycle/recovery.rs", 2),
     ("crates/gents/src/oauth_credential.rs", 3),
     ("crates/gents/src/registry.rs", 1),
-    ("crates/gents/src/self_config/mod.rs", 2),
     ("crates/gents/src/session/observations.rs", 1),
     ("crates/gents/src/session/query.rs", 1),
     ("crates/gents/src/tool_call_lifecycle/query.rs", 2),
     ("crates/gents/src/tool_call_lifecycle/recovery.rs", 3),
-    ("crates/gents/src/tool_surface/root_admission.rs", 1),
 ];
 
 const NODE_ONLY_METHODS: &[&str] = &[
@@ -846,7 +844,7 @@ const OAUTH_ROW_READERS: &[&str] = &[
     "list_oauth_credentials",
     "list_oauth_credentials_on",
     "oauth_credentials_from_response",
-    "oauth_credentials_for_agent_query",
+    "oauth_credentials_for_node_query",
     "oauth_credential_by_id_query",
     "oauth_credential_by_doc_id_query",
     "lookup_oauth_credential_by_id",
@@ -1022,7 +1020,7 @@ fn oauth_pick_fence_flags_pickers_raw_queries_and_reads() {
         ("fn f(a: &A) { gents::oauth_credential::oauth_credential_query(\"d\", \"p\"); }", 1, 0),
         ("async fn load_oauth_credential() {}", 1, 0),
         ("fn f(v: &V) { v.has_enabled_oauth_credential(\"p\"); }", 1, 0),
-        (r#"fn f(d: &str) -> String { format!("query {{ OAuthCredential(filter: {{ agent_did: {{ _eq: \"{d}\" }} }}) {{ _docID }} }}") }"#, 1, 0),
+        (r#"fn f(d: &str) -> String { format!("query {{ OAuthCredential(filter: {{ node_did: {{ _eq: \"{d}\" }} }}) {{ _docID }} }}") }"#, 1, 0),
         ("fn f(a: &A) { list_oauth_credentials_on(a, \"d\"); }", 0, 1),
         ("fn f(v: &V) { v.oauth_credentials.values().find(|r| r.enabled); }", 0, 1),
         ("fn f(n: &N) { lookup_oauth_credential_by_id(n, \"id\"); load_oauth_credential_for_discovery(); }", 0, 1),

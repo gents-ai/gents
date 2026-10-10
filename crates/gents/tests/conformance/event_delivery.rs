@@ -218,7 +218,7 @@ impl ProductionEventDeliveryDriver {
                 let watcher = DefraWatcher::with_subscription_source(
                     Arc::new(mock_subs.clone()),
                     db.node.clone(),
-                    AGENT_DID,
+                    NODE_DID,
                 );
                 Self {
                     source,
@@ -563,12 +563,12 @@ async fn install_event_delivery_config(access: &gents::config_client::ConfigAcce
     let documents = [
         (Collection::InferenceBackend, json!({"backend_id":"event-backend", "name":"Test", "provider_kind":"OpenAiCompatible", "endpoint":"http://127.0.0.1:8000/v1", "auth":{"kind":"unauthenticated"}})),
         (Collection::InferenceProfile, json!({"profile_id":"event-profile", "backend_id":"event-backend", "model_name":"model"})),
-        (Collection::AgentBehavior, json!({"behavior_id":AGENT_NAME, "inference_profile_id":"event-profile"})),
-        (Collection::Task, json!({"task_id":EVENT_SOURCE_TASK_ID, "behavior_id":AGENT_NAME, "prompt_template":"handle event delivery doc"})),
+        (Collection::Agent, json!({"agent_id":AGENT_NAME, "inference_profile_id":"event-profile"})),
+        (Collection::Task, json!({"task_id":EVENT_SOURCE_TASK_ID, "agent_id":AGENT_NAME, "prompt_template":"handle event delivery doc"})),
         (Collection::EventSource, json!({"event_source_id":"event-delivery-source", "source_collection":EVENT_SOURCE_COLLECTION, "event_kind":"created"})),
         (Collection::Trigger, json!({"trigger_id":EVENT_SOURCE_TRIGGER_ID, "task_id":EVENT_SOURCE_TASK_ID, "enabled":true, "concurrency":"queued_serial", "source":{"kind":"event", "event_source_id":"event-delivery-source"}})),
     ].into_iter().map(|(collection, mut value)| {
-        value["agent_did"] = json!(AGENT_DID);
+        value["node_did"] = json!(NODE_DID);
         DesiredStateApplyDocument { collection, add:value.clone(), update:value }
     }).collect();
     let plan = DesiredStateApplyPlan::new(documents).expect("event source configuration plan");
@@ -576,8 +576,8 @@ async fn install_event_delivery_config(access: &gents::config_client::ConfigAcce
         let plan = &plan;
         Box::pin(async move {
             apply_desired_state_plan(txn, plan).await?;
-            let query = format!("{{ Trigger(filter: {{agent_did: {{_eq: \"{}\"}}, trigger_id: {{_eq: \"{}\"}}}}) {{_docID}} }}",
-                escape_graphql_string(AGENT_DID), escape_graphql_string(EVENT_SOURCE_TRIGGER_ID));
+            let query = format!("{{ Trigger(filter: {{node_did: {{_eq: \"{}\"}}, trigger_id: {{_eq: \"{}\"}}}}) {{_docID}} }}",
+                escape_graphql_string(NODE_DID), escape_graphql_string(EVENT_SOURCE_TRIGGER_ID));
             let response = txn.execute(&query).await?;
             Ok(response["data"]["Trigger"][0]["_docID"].as_str()
                 .expect("persisted trigger physical identity").to_owned())
@@ -598,7 +598,7 @@ async fn admit_event_delivery(
     use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
     use gents_protocol::trigger_delivery::{FireIdentity, TriggerFire};
     let identity = FireIdentity {
-        owner_did: AGENT_DID.into(),
+        owner_did: NODE_DID.into(),
         trigger_id: EVENT_SOURCE_TRIGGER_ID.into(),
         source_collection: EVENT_SOURCE_COLLECTION.into(),
         source_doc_id: doc_id.into(),
@@ -627,14 +627,14 @@ async fn admit_event_delivery(
         RequestIdentity {
             requester_did: None,
             request_id: fire.request_id.clone(),
-            agent_did: AGENT_DID.into(),
-            behavior_id: AGENT_NAME.into(),
+            node_did: NODE_DID.into(),
+            agent_id: AGENT_NAME.into(),
             session_id: fire.session_id.clone(),
             content: intent.task.prompt_template.clone(),
             execution_origin: ExecutionOrigin::Scheduled,
             created_at: now,
         },
-        AgentRequestAdmissionRecord::runtime_automated_trigger(AGENT_DID, EVENT_SOURCE_TRIGGER_ID),
+        AgentRequestAdmissionRecord::runtime_automated_trigger(NODE_DID, EVENT_SOURCE_TRIGGER_ID),
     );
     spec.trigger_lineage = TriggerLineage {
         trigger_id: Some(EVENT_SOURCE_TRIGGER_ID.into()),
@@ -674,7 +674,7 @@ fn active_snapshot_with_event_trigger() -> Arc<ActiveRuntimeSnapshot> {
         emit_outcome: false,
         task_id: EVENT_SOURCE_TASK_ID.to_string(),
         name: Some(EVENT_SOURCE_TASK_ID.to_string()),
-        behavior_id: AGENT_NAME.to_string(),
+        agent_id: AGENT_NAME.to_string(),
         prompt_template: "handle event delivery doc".to_string(),
         goal_objective_template: None,
         goal_token_budget: None,
@@ -712,38 +712,37 @@ fn active_snapshot(
 ) -> Arc<ActiveRuntimeSnapshot> {
     Arc::new(ActiveRuntimeSnapshot {
         generation: 1,
-        principal: None,
-        local_did: AGENT_DID.to_string(),
-        default_behavior_id: AGENT_NAME.to_string(),
-        behaviors: HashMap::from([(AGENT_NAME.to_string(), runtime_behavior(AGENT_NAME))]),
+        node: None,
+        local_did: NODE_DID.to_string(),
+        default_agent_id: AGENT_NAME.to_string(),
+        agents: HashMap::from([(AGENT_NAME.to_string(), runtime_agent(AGENT_NAME))]),
         tool_surfaces: HashMap::new(),
         backend_admission_configs: HashMap::new(),
-        unavailable_behaviors: HashMap::new(),
+        unavailable_agents: HashMap::new(),
         active_schedules: HashMap::new(),
         unavailable_schedules: HashSet::new(),
         active_event_triggers,
         unavailable_event_triggers: HashSet::new(),
         active_tasks,
         dispatchers: HashMap::new(),
-        behavior_executor_capacities: HashMap::new(),
-        behavior_executor_queue_capacities: HashMap::new(),
+        agent_executor_capacities: HashMap::new(),
+        agent_executor_queue_capacities: HashMap::new(),
     })
 }
 
-fn runtime_behavior(behavior_id: &str) -> Arc<gents::ResolvedBehavior> {
-    let identity: Arc<dyn gents::AgentIdentity> = Arc::new(
-        crate::support::fixtures::test_identity(&format!("event-delivery-{behavior_id}")),
-    );
-    let principal = Arc::new(gents::RuntimePrincipal {
-        agent_did: AGENT_DID.to_string(),
+fn runtime_agent(agent_id: &str) -> Arc<gents::ResolvedAgent> {
+    let identity: Arc<dyn gents::NodeIdentity> = Arc::new(crate::support::fixtures::test_identity(
+        &format!("event-delivery-{agent_id}"),
+    ));
+    let node = Arc::new(gents::RuntimeNode {
+        node_did: NODE_DID.to_string(),
         identity,
-        default_behavior_id: AGENT_NAME.to_string(),
+        default_agent_id: AGENT_NAME.to_string(),
         display_name: None,
         enabled: true,
     });
-    Arc::new(crate::support::fixtures::test_behavior_for_principal(
-        behavior_id,
-        principal,
+    Arc::new(crate::support::fixtures::test_agent_for_node(
+        agent_id, node,
     ))
 }
 

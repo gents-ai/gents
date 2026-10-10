@@ -20,14 +20,14 @@ use rig::streaming::{RawStreamingChoice, StreamingCompletionResponse};
 use tracing_subscriber::layer::{Context as LayerContext, SubscriberExt};
 use tracing_subscriber::{Layer, Registry};
 
-use super::{BehaviorDaemon, TitleTask};
+use super::{AgentDaemon, TitleTask};
 use crate::agent::completion_retry::CompletionRetryProfileFields;
 use crate::agent::runtime::{run_router_with_watcher, RuntimeAdmissionGate, StartupBarrier};
 use crate::backend_provider::BackendProviderKind;
-use crate::config::{ResolvedBehavior, SamplingConfig};
+use crate::config::{ResolvedAgent, SamplingConfig};
 use crate::config_client::ConfigAccess;
 use crate::hook::{BackgroundExecutionRegistry, BackgroundToolRegistry, FailurePolicy};
-use crate::identity::{AgentIdentity, KeyIdentity, RuntimePrincipal};
+use crate::identity::{KeyIdentity, NodeIdentity, RuntimeNode};
 use crate::lean_vocab_test::{
     LeanCanonicalExecutionCase, LeanCanonicalExecutionOperation, LeanCanonicalSource,
     LeanPayloadKind, LeanTerminalSelection,
@@ -36,7 +36,7 @@ use crate::prompt::LayeredPromptBuilder;
 use crate::runtime_snapshot::ActiveRuntimeSnapshot;
 use crate::runtime_status::RuntimeStatusHandle;
 use crate::session::canonical_rows::{decode_output_segment_row, AGENT_OUTPUT_SEGMENT_FIELDS};
-use crate::tool_surface::BehaviorToolConfig;
+use crate::tool_surface::AgentToolSurfaceConfig;
 use crate::watcher::{AgentRequest, DefraWatcher};
 
 #[derive(Clone)]
@@ -109,13 +109,13 @@ impl CompletionModel for TitleProvider {
         if let Some(error) = &self.error {
             return Err(CompletionError::ProviderError(error.clone()));
         }
-        if let Some((node, doc_id, agent_did)) = &self.fence_generation {
+        if let Some((node, doc_id, node_did)) = &self.fence_generation {
             let doc = crate::graphql::escape_graphql_string(doc_id);
-            let owner = crate::graphql::escape_graphql_string(agent_did);
+            let owner = crate::graphql::escape_graphql_string(node_did);
             ConfigAccess::Local(node.clone())
                 .write(
                     "test.title_fence_generation",
-                    &format!(r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{doc}" }}, agent_did: {{ _eq: "{owner}" }} }}, input: {{ execution_generation: "fenced-title-generation" }}) {{ _docID }} }}"#),
+                    &format!(r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{doc}" }}, node_did: {{ _eq: "{owner}" }} }}, input: {{ execution_generation: "fenced-title-generation" }}) {{ _docID }} }}"#),
                 )
                 .await
                 .expect("fence title generation");
@@ -159,8 +159,8 @@ impl CompletionModel for TitleProvider {
 struct TitleFixture {
     _directory: tempfile::TempDir,
     node: Arc<EmbeddedNode>,
-    behavior: Arc<ResolvedBehavior>,
-    identity: Arc<dyn AgentIdentity>,
+    agent_config: Arc<ResolvedAgent>,
+    identity: Arc<dyn NodeIdentity>,
     parent: AgentRequest,
     title: AgentRequest,
 }
@@ -176,19 +176,19 @@ impl TitleFixture {
                 .unwrap(),
         );
         crate::ensure_runtime_schemas(&node).await.unwrap();
-        let identity: Arc<dyn AgentIdentity> = Arc::new(
+        let identity: Arc<dyn NodeIdentity> = Arc::new(
             KeyIdentity::load_or_create(directory.path().join("principal.key"), None).unwrap(),
         );
-        let principal = Arc::new(RuntimePrincipal {
-            agent_did: identity.did().to_owned(),
+        let principal = Arc::new(RuntimeNode {
+            node_did: identity.did().to_owned(),
             identity: identity.clone(),
-            default_behavior_id: "general".into(),
+            default_agent_id: "general".into(),
             display_name: None,
             enabled: true,
         });
-        let behavior = Arc::new(ResolvedBehavior {
-            behavior_id: "general".into(),
-            principal,
+        let agent_config = Arc::new(ResolvedAgent {
+            agent_id: "general".into(),
+            node: principal,
             backend_id: Some("general:backend".into()),
             backend_provider_kind: BackendProviderKind::OpenAiCompatible,
             openai_wire_api: crate::OpenAiWireApi::ChatCompletions,
@@ -201,7 +201,7 @@ impl TitleFixture {
             max_turns: 2,
             max_turns_provenance: crate::config::MaxTurnsProvenance::Default,
             system_prompt: "system".into(),
-            tools: BehaviorToolConfig::meta_only(),
+            tools: AgentToolSurfaceConfig::meta_only(),
             compaction: None,
             compaction_inference: None,
             max_total_tokens: None,
@@ -215,7 +215,7 @@ impl TitleFixture {
             sampling: SamplingConfig::default(),
             skills: Vec::new(),
         });
-        crate::test_support::install_test_behavior(&node, identity.did(), &behavior.behavior_id)
+        crate::test_support::install_test_agent(&node, identity.did(), &agent_config.agent_id)
             .await;
         let request_id = uuid::Uuid::new_v4().to_string();
         let session_id = uuid::Uuid::new_v4().to_string();
@@ -225,7 +225,7 @@ impl TitleFixture {
             request_id,
             identity.did(),
             identity.did(),
-            &behavior.behavior_id,
+            &agent_config.agent_id,
             session_id,
             "explain the request",
             "interactive",
@@ -246,9 +246,9 @@ impl TitleFixture {
                 .unwrap();
         let session = gents_protocol::session::AgentSession {
             session_id: parent.session_id.clone(),
-            agent_did: parent.agent_did.clone(),
+            node_did: parent.node_did.clone(),
             requester_did: parent.requester_did.clone(),
-            behavior_id: parent.behavior_id.clone(),
+            agent_id: parent.agent_id.clone(),
             created_at: parent.created_at.clone(),
             closed_at: None,
             title: None,
@@ -276,7 +276,7 @@ impl TitleFixture {
         Self {
             _directory: directory,
             node,
-            behavior,
+            agent_config,
             identity,
             parent,
             title,
@@ -290,7 +290,7 @@ impl TitleFixture {
     ) -> TitleTask<M> {
         TitleTask {
             node: self.node.clone(),
-            behavior: self.behavior.clone(),
+            agent_config: self.agent_config.clone(),
             provider_family: None,
             model: Arc::new(model),
             verifier: crate::request_admission::AgentRequestAdmissionVerifier::new(
@@ -308,7 +308,7 @@ impl TitleFixture {
         crate::request_admission::terminalize_pending_request_rejection(
             self.node.as_ref(),
             &self.parent.doc_id,
-            &self.parent.agent_did,
+            &self.parent.node_did,
             "parent ended before title inference",
             "test.title_parent_terminal",
         )
@@ -328,12 +328,12 @@ impl TitleFixture {
     async fn interrupt_parent(&self) {
         let mut lifecycle = crate::lifecycle::RequestLifecycle::new_with_execution_binding(
             self.node.clone(),
-            &self.behavior.behavior_id,
-            &self.parent.agent_did,
+            &self.agent_config.agent_id,
+            &self.parent.node_did,
             self.parent.clone(),
-            self.behavior.deadline_duration.as_secs(),
+            self.agent_config.deadline_duration.as_secs(),
             crate::lifecycle::ExecutionOrigin::Interactive,
-            self.behavior.backend_id.clone().unwrap_or_default(),
+            self.agent_config.backend_id.clone().unwrap_or_default(),
         );
         assert_eq!(
             lifecycle.claim_with_identity().await.unwrap(),
@@ -342,7 +342,7 @@ impl TitleFixture {
         crate::interrupt::interrupt_request_by_doc_id(
             self.node.as_ref(),
             &self.parent.doc_id,
-            &self.parent.agent_did,
+            &self.parent.node_did,
             self.parent.requester_did.as_deref(),
         )
         .await
@@ -857,7 +857,7 @@ async fn crashed_title_recovers_committed_reasoning_without_publication() {
     let physical = crate::graphql::escape_graphql_string(&fixture.title.doc_id);
     let owner = crate::graphql::escape_graphql_string(fixture.identity.did());
     let response = ConfigAccess::Local(fixture.node.clone())
-        .execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{physical}" }}, agent_did: {{ _eq: "{owner}" }} }}, limit: 2) {{ execution_generation lifecycle_state }} }}"#))
+        .execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{physical}" }}, node_did: {{ _eq: "{owner}" }} }}, limit: 2) {{ execution_generation lifecycle_state }} }}"#))
         .await
         .expect("read title lease owner");
     let rows = response["data"]["AgentRequest"]
@@ -874,7 +874,7 @@ async fn crashed_title_recovers_committed_reasoning_without_publication() {
         &(chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339(),
     );
     let expired = ConfigAccess::Local(fixture.node.clone())
-        .write("test.title_expire_own_lease", &format!(r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{physical}" }}, agent_did: {{ _eq: "{owner}" }}, execution_generation: {{ _eq: "{generation}" }}, lifecycle_state: {{ _eq: "processing" }} }}, input: {{ execution_lease_expires_at: "{past}" }}) {{ _docID }} }}"#))
+        .write("test.title_expire_own_lease", &format!(r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{physical}" }}, node_did: {{ _eq: "{owner}" }}, execution_generation: {{ _eq: "{generation}" }}, lifecycle_state: {{ _eq: "processing" }} }}, input: {{ execution_lease_expires_at: "{past}" }}) {{ _docID }} }}"#))
         .await
         .expect("expire exact title generation");
     assert_eq!(
@@ -951,7 +951,7 @@ async fn title_audit_is_dispatched_once_by_watcher_router_and_daemon() {
             crate::request_admission::terminalize_pending_request_rejection(
                 fixture.node.as_ref(),
                 &fixture.title.doc_id,
-                &fixture.title.agent_did,
+                &fixture.title.node_did,
                 "retire setup title before live creation",
                 "test.title_live_creation_setup",
             )
@@ -961,9 +961,9 @@ async fn title_audit_is_dispatched_once_by_watcher_router_and_daemon() {
 
         let provider = TitleProvider::new(provider_events(&fields, true), false);
         let calls = provider.calls.clone();
-        let prompt_builder = LayeredPromptBuilder::for_behavior(
-            &fixture.behavior.system_prompt,
-            &fixture.behavior.behavior_id,
+        let prompt_builder = LayeredPromptBuilder::for_agent(
+            &fixture.agent_config.system_prompt,
+            &fixture.agent_config.agent_id,
             &[],
             false,
             &[],
@@ -982,21 +982,21 @@ async fn title_audit_is_dispatched_once_by_watcher_router_and_daemon() {
         let (dispatch, receiver) = tokio::sync::mpsc::channel(8);
         let snapshot = Arc::new(ActiveRuntimeSnapshot {
             generation: 1,
-            principal: None,
+            node: None,
             local_did: String::new(),
-            default_behavior_id: "general".into(),
-            behaviors: Default::default(),
+            default_agent_id: "general".into(),
+            agents: Default::default(),
             tool_surfaces: Default::default(),
             backend_admission_configs: Default::default(),
-            unavailable_behaviors: Default::default(),
+            unavailable_agents: Default::default(),
             active_schedules: Default::default(),
             unavailable_schedules: Default::default(),
             active_event_triggers: Default::default(),
             unavailable_event_triggers: Default::default(),
             active_tasks: Default::default(),
             dispatchers: std::collections::HashMap::from([("general".into(), dispatch)]),
-            behavior_executor_capacities: Default::default(),
-            behavior_executor_queue_capacities: Default::default(),
+            agent_executor_capacities: Default::default(),
+            agent_executor_queue_capacities: Default::default(),
         });
         status
             .readiness()
@@ -1009,9 +1009,9 @@ async fn title_audit_is_dispatched_once_by_watcher_router_and_daemon() {
             .unwrap();
         let (_snapshot_tx, snapshot_rx) = tokio::sync::watch::channel(snapshot);
         let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-        let mut daemon = BehaviorDaemon::new(
+        let mut daemon = AgentDaemon::new(
             fixture.node.clone(),
-            fixture.behavior.clone(),
+            fixture.agent_config.clone(),
             None,
             Arc::new(provider),
             preamble,
@@ -1148,9 +1148,9 @@ async fn start_owned_title_daemon(
     tokio::task::JoinHandle<anyhow::Result<()>>,
     crate::runtime_status::RuntimeStatusOwner,
 ) {
-    let prompt_builder = LayeredPromptBuilder::for_behavior(
-        &fixture.behavior.system_prompt,
-        &fixture.behavior.behavior_id,
+    let prompt_builder = LayeredPromptBuilder::for_agent(
+        &fixture.agent_config.system_prompt,
+        &fixture.agent_config.agent_id,
         &[],
         false,
         &[],
@@ -1169,21 +1169,21 @@ async fn start_owned_title_daemon(
     let (dispatch, receiver) = tokio::sync::mpsc::channel(8);
     let snapshot = ActiveRuntimeSnapshot {
         generation: 1,
-        principal: None,
+        node: None,
         local_did: String::new(),
-        default_behavior_id: "general".into(),
-        behaviors: Default::default(),
+        default_agent_id: "general".into(),
+        agents: Default::default(),
         tool_surfaces: Default::default(),
         backend_admission_configs: Default::default(),
-        unavailable_behaviors: Default::default(),
+        unavailable_agents: Default::default(),
         active_schedules: Default::default(),
         unavailable_schedules: Default::default(),
         active_event_triggers: Default::default(),
         unavailable_event_triggers: Default::default(),
         active_tasks: Default::default(),
         dispatchers: std::collections::HashMap::from([("general".into(), dispatch.clone())]),
-        behavior_executor_capacities: Default::default(),
-        behavior_executor_queue_capacities: Default::default(),
+        agent_executor_capacities: Default::default(),
+        agent_executor_queue_capacities: Default::default(),
     };
     status
         .readiness()
@@ -1195,9 +1195,9 @@ async fn start_owned_title_daemon(
         .await
         .unwrap();
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    let mut daemon = BehaviorDaemon::new(
+    let mut daemon = AgentDaemon::new(
         fixture.node.clone(),
-        fixture.behavior.clone(),
+        fixture.agent_config.clone(),
         None,
         Arc::new(provider),
         preamble,
@@ -1306,7 +1306,9 @@ async fn open_title_reasoning(fixture: &TitleFixture) -> Vec<String> {
 #[tokio::test]
 async fn owned_title_shutdown_drains_buffered_reasoning_before_join() {
     let mut fixture = TitleFixture::new().await;
-    Arc::get_mut(&mut fixture.behavior).unwrap().stream_batch_ms = 5_000;
+    Arc::get_mut(&mut fixture.agent_config)
+        .unwrap()
+        .stream_batch_ms = 5_000;
     fixture.terminalize_parent().await;
     let (provider, before_second, third_poll) = buffered_reasoning_title_provider();
     let calls = provider.calls.clone();
@@ -1354,7 +1356,9 @@ async fn owned_title_shutdown_drains_buffered_reasoning_before_join() {
 #[tokio::test]
 async fn owned_title_shutdown_reports_fenced_partial_without_terminalizing() {
     let mut fixture = TitleFixture::new().await;
-    Arc::get_mut(&mut fixture.behavior).unwrap().stream_batch_ms = 5_000;
+    Arc::get_mut(&mut fixture.agent_config)
+        .unwrap()
+        .stream_batch_ms = 5_000;
     fixture.terminalize_parent().await;
     let (provider, before_second, third_poll) = buffered_reasoning_title_provider();
     let calls = provider.calls.clone();
@@ -1371,11 +1375,11 @@ async fn owned_title_shutdown_reports_fenced_partial_without_terminalizing() {
     assert_eq!(before_messages, 0);
     assert!(before.iter().all(|row| row.segment.close.is_none()));
     let doc = crate::graphql::escape_graphql_string(&fixture.title.doc_id);
-    let owner = crate::graphql::escape_graphql_string(&fixture.title.agent_did);
+    let owner = crate::graphql::escape_graphql_string(&fixture.title.node_did);
     ConfigAccess::Local(fixture.node.clone())
         .write(
             "test.title_shutdown_fence_generation",
-            &format!(r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{doc}" }}, agent_did: {{ _eq: "{owner}" }} }}, input: {{ execution_generation: "fenced-title-generation" }}) {{ _docID }} }}"#),
+            &format!(r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{doc}" }}, node_did: {{ _eq: "{owner}" }} }}, input: {{ execution_generation: "fenced-title-generation" }}) {{ _docID }} }}"#),
         )
         .await
         .unwrap();
@@ -1480,7 +1484,7 @@ async fn reasoning_only_title_retains_each_attempt_and_uses_bounded_fallback() {
 #[tokio::test]
 async fn a_usage_limited_title_falls_back_without_failing_the_turn() {
     let fixture = TitleFixture::new().await;
-    let backend = fixture.behavior.backend_id.clone().unwrap();
+    let backend = fixture.agent_config.backend_id.clone().unwrap();
     let registry = crate::admission::AdmissionRegistry::new(fixture.node.clone());
     registry.reconcile(
         1,
@@ -1588,7 +1592,7 @@ async fn fenced_title_output_fails_closed_without_retry() {
     provider.fence_generation = Some((
         fixture.node.clone(),
         fixture.title.doc_id.clone(),
-        fixture.title.agent_did.clone(),
+        fixture.title.node_did.clone(),
     ));
     let calls = provider.calls.clone();
     let (_shutdown, rx) = tokio::sync::watch::channel(false);
@@ -1619,7 +1623,7 @@ async fn title_output_cap_applies_only_when_reasoning_is_disabled_on_the_wire() 
     let fixture = TitleFixture::new().await;
     let configured = Some(1024);
     let capped = Some(super::TITLE_VISIBLE_MAX_TOKENS);
-    let mut behavior = (*fixture.behavior).clone();
+    let mut agent_config = (*fixture.agent_config).clone();
     let chat = OpenAiWireApi::ChatCompletions;
     let responses = OpenAiWireApi::Responses;
     for (kind, wire, effort, expected) in [
@@ -1690,11 +1694,11 @@ async fn title_output_cap_applies_only_when_reasoning_is_disabled_on_the_wire() 
             configured,
         ),
     ] {
-        behavior.backend_provider_kind = kind;
-        behavior.openai_wire_api = wire;
-        behavior.sampling.reasoning_effort = effort;
+        agent_config.backend_provider_kind = kind;
+        agent_config.openai_wire_api = wire;
+        agent_config.sampling.reasoning_effort = effort;
         let config = crate::completion_factory::loop_config(
-            &behavior,
+            &agent_config,
             super::title_generation_preamble(),
             0,
             crate::rendered_request::CaptureScopeKind::Title,
@@ -1708,11 +1712,11 @@ async fn title_output_cap_applies_only_when_reasoning_is_disabled_on_the_wire() 
 
     // A later merge that re-enables thinking wins over the profile's
     // reasoning-off setting, so the visible-title cap no longer applies.
-    behavior.backend_provider_kind = BackendProviderKind::OpenAiCompatible;
-    behavior.openai_wire_api = chat;
-    behavior.sampling.reasoning_effort = Some(ReasoningEffort::None);
+    agent_config.backend_provider_kind = BackendProviderKind::OpenAiCompatible;
+    agent_config.openai_wire_api = chat;
+    agent_config.sampling.reasoning_effort = Some(ReasoningEffort::None);
     let config = crate::completion_factory::loop_config(
-        &behavior,
+        &agent_config,
         super::title_generation_preamble(),
         0,
         crate::rendered_request::CaptureScopeKind::Title,

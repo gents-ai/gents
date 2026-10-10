@@ -55,7 +55,7 @@ const EXERCISABLE_VIEWS: [&str; 2] = ["published", "conflicted"];
 /// generated segment and header shares the one runtime agent identity, which
 /// is all the reconstruction primitive requires (`request_doc_id` + `source`
 /// are the real coordinates). This is transport identity, not policy.
-const AGENT_DID: &str = "did:key:z6MkLeanConformanceAgent";
+const NODE_DID: &str = "did:key:z6MkLeanConformanceAgent";
 
 /// The NatID → string translation. Injective, so distinct modeled identities
 /// stay distinct physical identities, and idempotent replay (the same modeled
@@ -432,7 +432,7 @@ fn lean_message(message: &LeanCanonicalMessage<LeanPayloadSpec>) -> TranscriptMe
     TranscriptMessage {
         message_key: message.key.clone(),
         session_id: nat(message.header.session),
-        agent_did: AGENT_DID.to_owned(),
+        node_did: NODE_DID.to_owned(),
         requester_did: None,
         request_doc_id: message.header.request.map(nat),
         publication: lean_publication(&message.header.publication),
@@ -498,7 +498,7 @@ fn translate_records(
                 None => (None, Vec::new(), String::new()),
             };
             let segment = OutputSegment {
-                agent_did: AGENT_DID.to_owned(),
+                node_did: NODE_DID.to_owned(),
                 requester_did: None,
                 session_id: nat(session),
                 request_doc_id: nat(record.coordinate.request),
@@ -1250,7 +1250,7 @@ fn generated_auxiliary_cases_drive_native_audit_and_public_projection() {
                 message_id: target_message_id.as_deref(),
             },
             messages: &message_refs,
-            agent_did: AGENT_DID,
+            node_did: NODE_DID,
             requester_did: None,
             records: &observed,
             denied_headers: &denied_headers,
@@ -1332,7 +1332,7 @@ fn generated_reasoning_signature_cases_drive_native_header_validation() {
         let header = TranscriptMessage {
             message_key: format!("reasoning-signature:{}", case.name),
             session_id: first.session_id.clone(),
-            agent_did: first.agent_did.clone(),
+            node_did: first.node_did.clone(),
             requester_did: None,
             request_doc_id: Some(first.request_doc_id.clone()),
             publication: MessagePublication::RequestExecution {

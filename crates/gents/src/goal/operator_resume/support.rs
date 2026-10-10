@@ -51,12 +51,8 @@ impl Fixture {
             Arc::new(KeyIdentity::load_or_create(temp.path().join("target.key"), None).unwrap());
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         crate::schema::ensure_runtime_schemas(&node).await.unwrap();
-        crate::test_support::install_test_behavior(
-            node.as_ref(),
-            identity.did(),
-            "contract-behavior",
-        )
-        .await;
+        crate::test_support::install_test_agent(node.as_ref(), identity.did(), "contract-behavior")
+            .await;
         let goal = set_goal(
             &node,
             identity.did(),
@@ -148,7 +144,7 @@ impl Fixture {
             1,
             false,
             "2021-01-01T00:00:00Z",
-            self.parent.subagent_depth,
+            self.parent.request_hop,
         )
         .unwrap();
         if conflicting {
@@ -181,7 +177,7 @@ impl Fixture {
         execute(&self.node, &format!(r#"mutation {{ update_AgentRequest(filter: {{ request_id: {{ _eq: "{id}" }} }}, input: {{ lifecycle_state: "{state}" }}) {{ _docID }} }}"#)).await;
     }
     /// Sign Claude accounts A and B in, each with its backend, and put the
-    /// behavior's profile on A.
+    /// agent's profile on A.
     pub async fn claude_accounts(&self) -> ClaudeAccounts {
         let did = self.identity.did().to_owned();
         let access = ConfigAccess::Local(self.node.clone());
@@ -218,7 +214,7 @@ impl Fixture {
             accounts.push((backend, stored.credential_id));
         }
         let [(a, a_credential), (b, b_credential)] = <[_; 2]>::try_from(accounts).unwrap();
-        let profile = json!({"agent_did": did, "profile_id": PROFILE, "backend_id": a, "model_name": "test-model"});
+        let profile = json!({"node_did": did, "profile_id": PROFILE, "backend_id": a, "model_name": "test-model"});
         let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
             collection: Collection::InferenceProfile,
             add: profile.clone(),
@@ -241,21 +237,21 @@ impl Fixture {
         }
     }
 
-    /// The behavior's context compacts with profile `summ` on `backend`.
+    /// The agent's context compacts with profile `summ` on `backend`.
     pub async fn compacts_on(&self, access: &ConfigAccess, backend: &str) {
         let did = self.identity.did();
         let documents = [
             (
                 Collection::InferenceProfile,
-                json!({"agent_did": did, "profile_id": "summ", "backend_id": backend, "model_name": "model-s"}),
+                json!({"node_did": did, "profile_id": "summ", "backend_id": backend, "model_name": "model-s"}),
             ),
             (
                 Collection::Compaction,
-                json!({"agent_did": did, "compaction_id": "compaction-c", "inference_profile_id": "summ"}),
+                json!({"node_did": did, "compaction_id": "compaction-c", "inference_profile_id": "summ"}),
             ),
             (
                 Collection::AgentContext,
-                json!({"agent_did": did, "context_id": "contract-behavior:context", "tools_id": "contract-behavior:tools", "compaction_id": "compaction-c"}),
+                json!({"node_did": did, "context_id": "contract-behavior:context", "tools_id": "contract-behavior:tools", "compaction_id": "compaction-c"}),
             ),
         ];
         let plan = DesiredStateApplyPlan::new(
@@ -321,7 +317,7 @@ impl Fixture {
                     }}) {{ _docID }}
                     create_InferenceCall(input: {{
                         call_id: "call-{request_id}" request_id: "{request_id}" call_seq: 1
-                        backend_id: "{backend}" behavior_id: "contract-behavior" agent_did: "{did}"
+                        backend_id: "{backend}" agent_id: "contract-behavior" node_did: "{did}"
                         call_kind: "{kind}" attempt: 1 call_state: "failed"
                         failure_reason: "{failure}"
                         queued_at: "{at}" started_at: "{at}" ended_at: "{at}"
@@ -356,10 +352,10 @@ impl Fixture {
             let continuation = input.goal_continuation.as_ref().unwrap();
             // Assert concrete lineage independently of prepare_goal_continuation:
             // sharing its implementation must not hide a producer deletion.
-            assert_eq!(child.agent_did.as_deref(), Some(self.identity.did()));
+            assert_eq!(child.node_did.as_deref(), Some(self.identity.did()));
             assert_eq!(child.requester_did.as_deref(), Some(self.identity.did()));
             assert_eq!(child.session_id.as_deref(), Some(SESSION));
-            assert_eq!(child.behavior_id.as_deref(), Some("contract-behavior"));
+            assert_eq!(child.agent_id.as_deref(), Some("contract-behavior"));
             assert_eq!(child.execution_origin.as_deref(), Some("scheduled"));
             assert_eq!(child.caused_by_parent_request_id.as_deref(), Some(PARENT));
             assert_eq!(
@@ -368,7 +364,7 @@ impl Fixture {
             );
             assert_eq!(child.caused_by_parent_tool_call_id, None);
             assert_eq!(child.caused_by_parent_tool_call_doc_id, None);
-            assert_eq!(child.subagent_depth, Some(0));
+            assert_eq!(child.request_hop, Some(0));
             assert_eq!(
                 child.caused_by_trigger_id.as_deref(),
                 Some(self.goal.goal_id.as_str())
@@ -415,7 +411,7 @@ impl Fixture {
                 seq,
                 wrapup,
                 child.created_at.as_deref().unwrap(),
-                self.parent.subagent_depth,
+                self.parent.request_hop,
             )
             .unwrap();
             let actual: GoalBackedRequestFingerprint =

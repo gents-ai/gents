@@ -1,6 +1,5 @@
 use gents_protocol::row::{
-    project_behavior_readiness_summary, BehaviorReadinessUnavailableReason,
-    ProjectedBehaviorReadinessSummary,
+    project_node_readiness_summary, AgentReadinessUnavailableReason, ProjectedNodeReadinessSummary,
 };
 use serde_json::{json, Value};
 
@@ -30,25 +29,20 @@ fn render_healthz_payload_at(
     match data {
         Some(data) => {
             let local_runtime = data
-                .agent_runtimes
+                .node_runtimes
                 .iter()
-                .find(|runtime| runtime.agent_did == state.agent_did);
+                .find(|runtime| runtime.node_did == state.node_did);
             let local_readiness_row = data
-                .behavior_readiness
+                .node_readiness
                 .iter()
-                .find(|row| row.agent_did == state.agent_did);
-            let readiness = project_behavior_readiness_summary(
-                local_readiness_row,
-                &state.agent_did,
-                observed_at,
-            );
-            let runtime_ready =
-                matches!(&readiness, ProjectedBehaviorReadinessSummary::Observed(_));
+                .find(|row| row.node_did == state.node_did);
+            let readiness = project_node_readiness_summary(local_readiness_row, &state.node_did);
+            let runtime_ready = matches!(&readiness, ProjectedNodeReadinessSummary::Observed(_));
             let runtime_degraded = match &readiness {
-                ProjectedBehaviorReadinessSummary::Observed(summary) => {
-                    !summary.unavailable_behaviors.is_empty()
+                ProjectedNodeReadinessSummary::Observed(summary) => {
+                    !summary.unavailable_agents.is_empty()
                 }
-                ProjectedBehaviorReadinessSummary::Unknown(_) => true,
+                ProjectedNodeReadinessSummary::Unknown(_) => true,
             };
             // Measured backend health is never persisted to
             // `InferenceBackend` (#640; see `backend_health.rs`), so this
@@ -56,16 +50,16 @@ fn render_healthz_payload_at(
             // document's `enabled`/`probe_status` fields — only from the
             // readiness projection this runtime already published above.
             let backend_degraded = match &readiness {
-                ProjectedBehaviorReadinessSummary::Observed(summary) => {
-                    summary.unavailable_behaviors.values().any(|reason| {
+                ProjectedNodeReadinessSummary::Observed(summary) => {
+                    summary.unavailable_agents.values().any(|reason| {
                         matches!(
                             reason,
-                            BehaviorReadinessUnavailableReason::BackendTemporarilyUnavailable
-                                | BehaviorReadinessUnavailableReason::BackendDisabled
+                            AgentReadinessUnavailableReason::BackendTemporarilyUnavailable
+                                | AgentReadinessUnavailableReason::BackendDisabled
                         )
                     })
                 }
-                ProjectedBehaviorReadinessSummary::Unknown(_) => false,
+                ProjectedNodeReadinessSummary::Unknown(_) => false,
             };
             let liveness_degraded = data.liveness.expired_processing_count > 0;
             let codex_shim = state
@@ -140,7 +134,7 @@ fn render_healthz_payload_at(
                 "uptime_seconds": uptime_seconds,
                 "checks": checks,
                 "runtimes": local_runtime.into_iter().collect::<Vec<_>>(),
-                "behavior_readiness": local_readiness_row.into_iter().collect::<Vec<_>>(),
+                "node_readiness": local_readiness_row.into_iter().collect::<Vec<_>>(),
                 "backends": data.inference_backends,
                 "liveness": data.liveness,
             })
@@ -172,7 +166,7 @@ fn render_healthz_payload_at(
                 },
             },
             "runtimes": [],
-            "behavior_readiness": [],
+            "node_readiness": [],
             "backends": [],
         }),
     }
@@ -186,8 +180,8 @@ mod tests {
     use crate::http::liveness::{ActiveRequest, ActiveToolCall, RuntimeLivenessSnapshot};
     use crate::http::prometheus::{MetricsBackendRow, MetricsQueryData, MetricsRuntimeRow};
     use gents_protocol::row::{
-        AgentBehaviorReadinessRow, BehaviorReadinessEntry, BehaviorReadinessProcessState,
-        BehaviorReadinessSnapshot, BehaviorReadinessState, BEHAVIOR_READINESS_FORMAT_VERSION,
+        AgentReadinessEntry, AgentReadinessState, NodeReadinessProcessState, NodeReadinessRow,
+        NodeReadinessSnapshot, NODE_READINESS_FORMAT_VERSION,
     };
 
     fn state() -> RuntimeHttpState {
@@ -200,8 +194,8 @@ mod tests {
             p2p_graphql: gents::config_client::GraphqlEndpoint::anonymous(
                 "http://localhost:9181/api/v0/graphql",
             ),
-            agent_name: "test-agent".to_string(),
-            agent_did: "did:test:test".to_string(),
+            node_name: "test-agent".to_string(),
+            node_did: "did:test:test".to_string(),
             tool_ceiling: "readwrite".to_string(),
             tool_root: Some("/tmp/work".to_string()),
             home: None,
@@ -222,25 +216,25 @@ mod tests {
 
     fn ready_runtime() -> MetricsRuntimeRow {
         MetricsRuntimeRow {
-            agent_did: "did:test:test".to_string(),
+            node_did: "did:test:test".to_string(),
             reconcile_phase: "idle".to_string(),
             last_reconcile_result: "applied".to_string(),
             last_reconcile_completed_at: "2026-05-13T11:59:00Z".to_string(),
         }
     }
 
-    fn ready_readiness() -> AgentBehaviorReadinessRow {
-        AgentBehaviorReadinessRow {
-            agent_did: "did:test:test".to_string(),
-            snapshot_json: serde_json::to_string(&BehaviorReadinessSnapshot {
-                format_version: BEHAVIOR_READINESS_FORMAT_VERSION,
-                process_state: BehaviorReadinessProcessState::Ready,
+    fn ready_readiness() -> NodeReadinessRow {
+        NodeReadinessRow {
+            node_did: "did:test:test".to_string(),
+            snapshot_json: serde_json::to_string(&NodeReadinessSnapshot {
+                format_version: NODE_READINESS_FORMAT_VERSION,
+                process_state: NodeReadinessProcessState::Ready,
                 active_generation: 1,
                 router_generation: 1,
-                default_behavior_id: "default".to_string(),
-                behaviors: vec![BehaviorReadinessEntry {
-                    behavior_id: "default".to_string(),
-                    state: BehaviorReadinessState::Ready,
+                default_agent_id: "default".to_string(),
+                agents: vec![AgentReadinessEntry {
+                    agent_id: "default".to_string(),
+                    state: AgentReadinessState::Ready,
                     reason: None,
                 }],
             })
@@ -269,8 +263,8 @@ mod tests {
     #[test]
     fn healthz_reports_degraded_when_expired_processing_count_positive() {
         let data = MetricsQueryData {
-            agent_runtimes: vec![ready_runtime()],
-            behavior_readiness: vec![ready_readiness()],
+            node_runtimes: vec![ready_runtime()],
+            node_readiness: vec![ready_readiness()],
             inference_backends: vec![healthy_backend()],
             liveness: RuntimeLivenessSnapshot {
                 active_request_ids: vec!["req-stuck".to_string()],
@@ -283,7 +277,7 @@ mod tests {
                     deadline_expired: true,
                     deadline_age_ms: Some(60_000),
                     last_progress_age_ms: 300_000,
-                    subagent_depth: 0,
+                    request_hop: 0,
                     caused_by_parent_request_id: None,
                     caused_by_trigger_kind: None,
                 }],
@@ -334,21 +328,21 @@ mod tests {
     fn healthz_reports_backend_degraded_from_readiness_not_backend_document() {
         // The `InferenceBackend` row itself is healthy — this runtime's
         // *measured* health (#640, never persisted to that document) is
-        // what vetoed the behavior, and only the readiness projection
+        // what vetoed the agent_config, and only the readiness projection
         // carries that signal.
-        let vetoed_readiness = AgentBehaviorReadinessRow {
-            agent_did: "did:test:test".to_string(),
-            snapshot_json: serde_json::to_string(&BehaviorReadinessSnapshot {
-                format_version: BEHAVIOR_READINESS_FORMAT_VERSION,
-                process_state: BehaviorReadinessProcessState::Ready,
+        let vetoed_readiness = NodeReadinessRow {
+            node_did: "did:test:test".to_string(),
+            snapshot_json: serde_json::to_string(&NodeReadinessSnapshot {
+                format_version: NODE_READINESS_FORMAT_VERSION,
+                process_state: NodeReadinessProcessState::Ready,
                 active_generation: 1,
                 router_generation: 1,
-                default_behavior_id: "default".to_string(),
-                behaviors: vec![BehaviorReadinessEntry {
-                    behavior_id: "default".to_string(),
-                    state: BehaviorReadinessState::Unavailable,
+                default_agent_id: "default".to_string(),
+                agents: vec![AgentReadinessEntry {
+                    agent_id: "default".to_string(),
+                    state: AgentReadinessState::Unavailable,
                     reason: Some(
-                        gents_protocol::row::BehaviorReadinessUnavailableReason::BackendTemporarilyUnavailable,
+                        gents_protocol::row::AgentReadinessUnavailableReason::BackendTemporarilyUnavailable,
                     ),
                 }],
             })
@@ -356,8 +350,8 @@ mod tests {
             updated_at: "2026-05-13T11:59:30Z".to_string(),
         };
         let data = MetricsQueryData {
-            agent_runtimes: vec![ready_runtime()],
-            behavior_readiness: vec![vetoed_readiness],
+            node_runtimes: vec![ready_runtime()],
+            node_readiness: vec![vetoed_readiness],
             inference_backends: vec![healthy_backend()],
             liveness: RuntimeLivenessSnapshot::default(),
         };
@@ -381,8 +375,8 @@ mod tests {
     #[test]
     fn healthz_stays_ok_when_no_expired_processing() {
         let data = MetricsQueryData {
-            agent_runtimes: vec![ready_runtime()],
-            behavior_readiness: vec![ready_readiness()],
+            node_runtimes: vec![ready_runtime()],
+            node_readiness: vec![ready_readiness()],
             inference_backends: vec![healthy_backend()],
             liveness: RuntimeLivenessSnapshot::default(),
         };
@@ -395,7 +389,7 @@ mod tests {
     #[test]
     fn healthz_fails_closed_when_readiness_is_missing_or_malformed() {
         let mut missing = healthy_data();
-        missing.behavior_readiness.clear();
+        missing.node_readiness.clear();
         let payload = render_healthz_payload_at(&state(), Some(&missing), None, observed_at());
         assert_eq!(
             payload.get("status").and_then(Value::as_str),
@@ -407,11 +401,11 @@ mod tests {
                 .pointer("/checks/runtime/count")
                 .and_then(Value::as_u64),
             Some(0),
-            "diagnostic AgentRuntime rows must not create readiness inventory"
+            "diagnostic NodeRuntime rows must not create readiness inventory"
         );
 
         let mut malformed = healthy_data();
-        malformed.behavior_readiness[0].snapshot_json = "{}".to_string();
+        malformed.node_readiness[0].snapshot_json = "{}".to_string();
         let payload = render_healthz_payload_at(&state(), Some(&malformed), None, observed_at());
         assert_eq!(
             payload.get("status").and_then(Value::as_str),
@@ -423,7 +417,7 @@ mod tests {
     #[test]
     fn healthz_does_not_require_unchanged_readiness_to_be_rewritten() {
         let mut data = healthy_data();
-        data.behavior_readiness[0].updated_at = "2026-05-13T11:59:00Z".to_string();
+        data.node_readiness[0].updated_at = "2026-05-13T11:59:00Z".to_string();
 
         let payload = render_healthz_payload_at(&state(), Some(&data), None, observed_at());
 
@@ -434,7 +428,7 @@ mod tests {
     #[test]
     fn readiness_is_runtime_inventory_when_diagnostics_are_absent() {
         let mut data = healthy_data();
-        data.agent_runtimes.clear();
+        data.node_runtimes.clear();
 
         let payload = render_healthz_payload_at(&state(), Some(&data), None, observed_at());
 
@@ -452,15 +446,15 @@ mod tests {
                 .and_then(Value::as_array)
                 .map(Vec::len),
             Some(0),
-            "AgentRuntime remains optional diagnostics"
+            "NodeRuntime remains optional diagnostics"
         );
     }
 
     #[test]
     fn unrelated_ready_agent_cannot_mask_missing_local_readiness() {
         let mut data = healthy_data();
-        data.agent_runtimes[0].agent_did = "did:test:foreign".to_string();
-        data.behavior_readiness[0].agent_did = "did:test:foreign".to_string();
+        data.node_runtimes[0].node_did = "did:test:foreign".to_string();
+        data.node_readiness[0].node_did = "did:test:foreign".to_string();
 
         let payload = render_healthz_payload_at(&state(), Some(&data), None, observed_at());
 
@@ -484,7 +478,7 @@ mod tests {
         );
         assert_eq!(
             payload
-                .get("behavior_readiness")
+                .get("node_readiness")
                 .and_then(Value::as_array)
                 .map(Vec::len),
             Some(0)
@@ -499,8 +493,8 @@ mod tests {
 
     fn healthy_data() -> MetricsQueryData {
         MetricsQueryData {
-            agent_runtimes: vec![ready_runtime()],
-            behavior_readiness: vec![ready_readiness()],
+            node_runtimes: vec![ready_runtime()],
+            node_readiness: vec![ready_readiness()],
             inference_backends: vec![healthy_backend()],
             liveness: RuntimeLivenessSnapshot::default(),
         }
@@ -509,8 +503,8 @@ mod tests {
     #[test]
     fn healthz_reports_a_pending_shim_as_degraded() {
         let state = state_with_shim(crate::shared::CodexShimHealth::Pending {
-            bound_behavior_id: "default".to_string(),
-            reason: "no AgentBehavior document with that behavior_id exists".to_string(),
+            bound_agent_id: "default".to_string(),
+            reason: "no Agent document with that agent_id exists".to_string(),
         });
         let payload = render_healthz_payload_at(&state, Some(&healthy_data()), None, observed_at());
 
@@ -519,7 +513,7 @@ mod tests {
                 .pointer("/checks/codex_shim/status")
                 .and_then(Value::as_str),
             Some("pending"),
-            "a shim waiting for its behavior must be visible in /healthz; payload was {payload}"
+            "a shim waiting for its agent_config must be visible in /healthz; payload was {payload}"
         );
         assert_eq!(
             payload.get("status").and_then(Value::as_str),
@@ -538,8 +532,8 @@ mod tests {
         let state = state_with_shim(crate::shared::CodexShimHealth::Listening {
             websocket: "ws://127.0.0.1:9292/".to_string(),
             auth_required: true,
-            bound_agent_did: "did:key:agent".to_string(),
-            bound_behavior_id: "did:key:agent:default".to_string(),
+            bound_node_did: "did:key:agent".to_string(),
+            bound_agent_id: "did:key:agent:default".to_string(),
         });
         let payload = render_healthz_payload_at(&state, Some(&healthy_data()), None, observed_at());
 
@@ -557,7 +551,7 @@ mod tests {
         );
         assert_eq!(
             payload
-                .pointer("/checks/codex_shim/bound_agent_did")
+                .pointer("/checks/codex_shim/bound_node_did")
                 .and_then(Value::as_str),
             Some("did:key:agent")
         );

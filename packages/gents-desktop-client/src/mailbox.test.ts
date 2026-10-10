@@ -20,8 +20,8 @@ describe("mailbox client API", () => {
     await expect(api.startMailboxRequest("item-1")).resolves.toEqual(row);
     await expect(api.dismissMailboxItem("item-1")).resolves.toBeUndefined();
     await api.sendChatMessage({
-      agentDid: "did:agent",
-      behaviorId: "operator",
+      nodeDid: "did:node",
+      agentId: "operator",
       content: "continue",
       causedBySourceDocId: "item-1",
     });
@@ -40,8 +40,8 @@ describe("mailbox client API", () => {
         command: "desktop_chat_send",
         args: {
           request: {
-            agentDid: "did:agent",
-            behaviorId: "operator",
+            nodeDid: "did:node",
+            agentId: "operator",
             content: "continue",
             causedBySourceDocId: "item-1",
           },

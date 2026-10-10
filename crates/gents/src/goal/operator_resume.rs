@@ -1,7 +1,7 @@
 //! Operator resume composes the existing Goal and request owners in one transaction.
 use super::*;
 use crate::config_client::ConfigApplyTxn;
-use crate::identity::AgentIdentity;
+use crate::identity::NodeIdentity;
 use crate::lifecycle::materialize::{sign_request, RequestSigner};
 use crate::lifecycle::queue::{goal_continuation_identity, prepare_goal_continuation};
 use crate::request_admission::{verify_request_receipt_signature, SIGNED_REQUEST_FIELDS};
@@ -22,15 +22,15 @@ pub struct GoalResumeReceipt {
 /// after the child has finished and the goal has advanced again.
 pub async fn resume_goal_request(
     access: &crate::ConfigAccess,
-    identity: &dyn AgentIdentity,
-    agent_did: &str,
+    identity: &dyn NodeIdentity,
+    node_did: &str,
     session_id: &str,
     from_request_id: &str,
 ) -> Result<GoalResumeReceipt> {
     resume_goal_request_inner(
         access,
         identity,
-        agent_did,
+        node_did,
         session_id,
         from_request_id,
         None,
@@ -40,15 +40,15 @@ pub async fn resume_goal_request(
 
 async fn resume_goal_request_inner<'a>(
     access: &'a crate::ConfigAccess,
-    identity: &'a dyn AgentIdentity,
-    agent_did: &'a str,
+    identity: &'a dyn NodeIdentity,
+    node_did: &'a str,
     session_id: &'a str,
     from_request_id: &'a str,
     required_backend: Option<&'a str>,
 ) -> Result<GoalResumeReceipt> {
     anyhow::ensure!(
-        identity.did() == agent_did,
-        "goal resume requires the target principal's signing identity"
+        identity.did() == node_did,
+        "goal resume requires the target node's signing identity"
     );
     match access {
         crate::ConfigAccess::Local(node) => {
@@ -62,7 +62,7 @@ async fn resume_goal_request_inner<'a>(
                         stage_resume_inner(
                             txn,
                             identity,
-                            agent_did,
+                            node_did,
                             session_id,
                             from_request_id,
                             required_backend,
@@ -80,7 +80,7 @@ async fn resume_goal_request_inner<'a>(
                         stage_resume_inner(
                             txn,
                             identity,
-                            agent_did,
+                            node_did,
                             session_id,
                             from_request_id,
                             required_backend,
@@ -95,7 +95,7 @@ async fn resume_goal_request_inner<'a>(
 
 async fn existing_goal_resume_receipt<'a>(
     access: &'a crate::ConfigAccess,
-    agent_did: &'a str,
+    node_did: &'a str,
     session_id: &'a str,
     from_request_id: &'a str,
 ) -> Result<Option<GoalResumeReceipt>> {
@@ -103,7 +103,7 @@ async fn existing_goal_resume_receipt<'a>(
         .transact_readonly("goal.resume_existing_receipt", move |txn| {
             Box::pin(async move {
                 let (goal, _, parent_row) =
-                    resume_context_in_txn(txn, &agent_did, &session_id, &from_request_id).await?;
+                    resume_context_in_txn(txn, &node_did, &session_id, &from_request_id).await?;
                 existing_resume_receipt_in_txn(txn, &goal, &parent_row, &from_request_id).await
             })
         })
@@ -112,19 +112,19 @@ async fn existing_goal_resume_receipt<'a>(
 
 async fn resume_context_in_txn(
     txn: &ConfigApplyTxn<'_>,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     from_request_id: &str,
 ) -> Result<(GoalDocument, Vec<AgentRequestRow>, AgentRequestRow)> {
-    let goal = load_canonical_goal_in_txn(txn, agent_did, session_id)
+    let goal = load_canonical_goal_in_txn(txn, node_did, session_id)
         .await?
         .context("no canonical goal exists for this owner and session")?;
-    let escaped_did = escape_graphql_string(agent_did);
+    let escaped_did = escape_graphql_string(node_did);
     let escaped_session = escape_graphql_string(session_id);
     let response = txn
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{
-        agent_did: {{ _eq: "{escaped_did}" }}, session_id: {{ _eq: "{escaped_session}" }}
+        node_did: {{ _eq: "{escaped_did}" }}, session_id: {{ _eq: "{escaped_session}" }}
     }}, order: [{{ created_at: DESC }}, {{ request_id: DESC }}]) {{ {SIGNED_REQUEST_FIELDS} }} }}"#
         ))
         .await?;
@@ -199,8 +199,8 @@ pub struct GoalResumeOnReceipt {
 #[allow(clippy::too_many_arguments)]
 pub async fn resume_goal_on_account(
     access: &crate::ConfigAccess,
-    identity: &dyn AgentIdentity,
-    agent_did: &str,
+    identity: &dyn NodeIdentity,
+    node_did: &str,
     session_id: &str,
     from_request_id: &str,
     target_backend_id: &str,
@@ -209,17 +209,17 @@ pub async fn resume_goal_on_account(
 ) -> Result<GoalResumeOnReceipt> {
     use crate::blocked_turn::{blocked_turn_from, stopped_request, BlockedReason, FailedCall};
     anyhow::ensure!(
-        identity.did() == agent_did,
-        "goal resume requires the target principal's signing identity"
+        identity.did() == node_did,
+        "goal resume requires the target node's signing identity"
     );
     let (accounts, references, request, call) =
-        stopped_request(access, agent_did, from_request_id).await?;
+        stopped_request(access, node_did, from_request_id).await?;
     anyhow::ensure!(
         request.session_id.as_deref() == Some(session_id),
         "resume predecessor must uniquely belong to the goal owner and session"
     );
     if let Some(resume) =
-        existing_goal_resume_receipt(access, agent_did, session_id, from_request_id).await?
+        existing_goal_resume_receipt(access, node_did, session_id, from_request_id).await?
     {
         return Ok(GoalResumeOnReceipt {
             switch: None,
@@ -242,7 +242,7 @@ pub async fn resume_goal_on_account(
                 let slots = plugin_slots(&profile)?;
                 crate::config_client::switch_profile_account(
                     access,
-                    agent_did,
+                    node_did,
                     &profile,
                     target_backend_id,
                     move_companions,
@@ -274,7 +274,7 @@ pub async fn resume_goal_on_account(
     let resume = resume_goal_request_inner(
         access,
         identity,
-        agent_did,
+        node_did,
         session_id,
         from_request_id,
         Some(target_backend_id),
@@ -296,27 +296,27 @@ pub async fn resume_goal_on_account(
 
 pub(super) async fn stage_resume(
     txn: &ConfigApplyTxn<'_>,
-    identity: &dyn AgentIdentity,
-    agent_did: &str,
+    identity: &dyn NodeIdentity,
+    node_did: &str,
     session_id: &str,
     from_request_id: &str,
 ) -> Result<GoalResumeReceipt> {
-    stage_resume_inner(txn, identity, agent_did, session_id, from_request_id, None).await
+    stage_resume_inner(txn, identity, node_did, session_id, from_request_id, None).await
 }
 
 async fn stage_resume_inner(
     txn: &ConfigApplyTxn<'_>,
-    identity: &dyn AgentIdentity,
-    agent_did: &str,
+    identity: &dyn NodeIdentity,
+    node_did: &str,
     session_id: &str,
     from_request_id: &str,
     required_backend: Option<&str>,
 ) -> Result<GoalResumeReceipt> {
     let (goal, requests, parent_row) =
-        resume_context_in_txn(txn, agent_did, session_id, from_request_id).await?;
+        resume_context_in_txn(txn, node_did, session_id, from_request_id).await?;
     let parent = crate::watcher::AgentRequest::try_from(parent_row.clone())?;
-    let behavior = parent.behavior_id.clone();
-    let escaped_did = escape_graphql_string(agent_did);
+    let agent = parent.agent_id.clone();
+    let escaped_did = escape_graphql_string(node_did);
 
     if let Some(receipt) =
         existing_resume_receipt_in_txn(txn, &goal, &parent_row, from_request_id).await?
@@ -326,16 +326,13 @@ async fn stage_resume_inner(
 
     if let Some(target_backend_id) = required_backend {
         let references =
-            crate::document_config::ConfigReferences::load_in_txn(txn, agent_did).await?;
+            crate::document_config::ConfigReferences::load_in_txn(txn, node_did).await?;
         let mut call = crate::blocked_turn::last_failed_call_in_txn(txn, from_request_id)
             .await?
             .context("resume predecessor has no failed call")?;
         call.backend_id = Some(target_backend_id.to_owned());
-        let behavior_id = call
-            .behavior_id
-            .as_deref()
-            .unwrap_or(parent.behavior_id.as_str());
-        let profile_id = crate::blocked_turn::served_profile(&references, behavior_id, &call)
+        let agent_id = call.agent_id.as_deref().unwrap_or(parent.agent_id.as_str());
+        let profile_id = crate::blocked_turn::served_profile(&references, agent_id, &call)
             .context("profile that hit the limit is unavailable")?;
         let Some((_, backend)) = references.profile_with_backend(&profile_id)? else {
             anyhow::bail!("profile that hit the limit is unavailable");
@@ -348,7 +345,7 @@ async fn stage_resume_inner(
             backend.enabled,
             "target backend {target_backend_id:?} is disabled"
         );
-        if let crate::document_config::BackendAuth::PrincipalOAuth { account_ref } = &backend.auth {
+        if let crate::document_config::BackendAuth::NodeOAuth { account_ref } = &backend.auth {
             use crate::backend_provider::BackendProviderOauthExt;
             let provider = backend
                 .provider_kind
@@ -356,7 +353,7 @@ async fn stage_resume_inner(
                 .context("target backend has no OAuth provider")?;
             let account = crate::oauth_credential::resolve_oauth_credential_in_txn(
                 txn,
-                agent_did,
+                node_did,
                 provider,
                 crate::oauth_credential::AccountPick::Reference(account_ref.as_deref()),
             )
@@ -395,10 +392,10 @@ async fn stage_resume_inner(
     let wrapup = post.wrapup_requested && !post.wrapup_completed;
     let content = crate::trigger_engine::goal_source::continuation_prompt(&goal, None, wrapup);
     let session_hop =
-        crate::session::load_session_current_hop_in_txn(txn, agent_did, session_id).await?;
+        crate::session::load_session_current_hop_in_txn(txn, node_did, session_id).await?;
     let mut create = prepare_goal_continuation(
         &parent,
-        behavior,
+        agent,
         &goal.goal_id,
         &content,
         sequence,
@@ -431,7 +428,7 @@ async fn stage_resume_inner(
     let timestamp = escape_graphql_string(&now.to_rfc3339());
     let active_time = goal.current_active_time_seconds(now);
     let response = txn.execute(&format!(r#"mutation {{ update_Goal(filter: {{
-        _docID: {{ _eq: "{doc_id}" }}, agent_did: {{ _eq: "{escaped_did}" }},
+        _docID: {{ _eq: "{doc_id}" }}, node_did: {{ _eq: "{escaped_did}" }},
         status: {{ _eq: "{expected_status}" }}, continuation_sequence: {{ _eq: {expected_sequence} }}
     }}, input: {{
         status: "{status}", continuation_sequence: {sequence}, last_continued_from_request_id: "{from}",

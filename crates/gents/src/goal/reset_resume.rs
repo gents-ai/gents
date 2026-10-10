@@ -4,7 +4,7 @@ use super::*;
 use crate::blocked_turn::{goal_stopped_in_txn, served_profile};
 use crate::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::document_config::BackendAuth;
-use crate::identity::AgentIdentity;
+use crate::identity::NodeIdentity;
 use crate::oauth_credential::{resolve_oauth_credential_in_txn, AccountPick};
 use gents_loop::provider_limit::{classify_provider_limit, ProviderLimit};
 
@@ -15,7 +15,7 @@ use gents_loop::provider_limit::{classify_provider_limit, ProviderLimit};
 /// that reset passes.
 pub async fn resume_at_reset(
     node: &EmbeddedNode,
-    identity: &dyn AgentIdentity,
+    identity: &dyn NodeIdentity,
     goal: &GoalDocument,
     now: DateTime<Utc>,
 ) -> Result<Option<GoalResumeReceipt>> {
@@ -24,11 +24,9 @@ pub async fn resume_at_reset(
     {
         return Ok(None);
     }
-    let (agent_did, session_id) = (goal.agent_did.as_str(), goal.session_id.as_str());
+    let (node_did, session_id) = (goal.node_did.as_str(), goal.session_id.as_str());
     ConfigAccess::transact_local(node, None, "goal.resume_at_reset", move |txn| {
-        Box::pin(stage_reset_resume(
-            txn, identity, agent_did, session_id, now,
-        ))
+        Box::pin(stage_reset_resume(txn, identity, node_did, session_id, now))
     })
     .await
 }
@@ -36,13 +34,13 @@ pub async fn resume_at_reset(
 /// `ResetFacts.due`, read in the resume transaction, then `resume`.
 async fn stage_reset_resume(
     txn: &ConfigApplyTxn<'_>,
-    identity: &dyn AgentIdentity,
-    agent_did: &str,
+    identity: &dyn NodeIdentity,
+    node_did: &str,
     session_id: &str,
     now: DateTime<Utc>,
 ) -> Result<Option<GoalResumeReceipt>> {
     let Some((goal, references, request, Some(call))) =
-        goal_stopped_in_txn(txn, agent_did, session_id).await?
+        goal_stopped_in_txn(txn, node_did, session_id).await?
     else {
         return Ok(None);
     };
@@ -65,12 +63,12 @@ async fn stage_reset_resume(
     if !(started < reset && reset <= now) {
         return Ok(None);
     }
-    let behavior_id = call
-        .behavior_id
+    let agent_id = call
+        .agent_id
         .as_deref()
-        .or(request.behavior_id.as_deref())
+        .or(request.agent_id.as_deref())
         .unwrap_or_default();
-    let Some(profile) = served_profile(&references, behavior_id, &call) else {
+    let Some(profile) = served_profile(&references, agent_id, &call) else {
         return Ok(None);
     };
     let Some((_, backend)) = references.profile_with_backend(&profile)? else {
@@ -80,14 +78,14 @@ async fn stage_reset_resume(
     // before the limited call.
     let account_serves = backend.enabled
         && match &backend.auth {
-            BackendAuth::PrincipalOAuth { account_ref } => {
+            BackendAuth::NodeOAuth { account_ref } => {
                 use crate::backend_provider::BackendProviderOauthExt;
                 let Some(provider) = backend.provider_kind.oauth_provider() else {
                     return Ok(None);
                 };
                 resolve_oauth_credential_in_txn(
                     txn,
-                    agent_did,
+                    node_did,
                     provider,
                     AccountPick::Reference(account_ref.as_deref()),
                 )
@@ -101,7 +99,7 @@ async fn stage_reset_resume(
     if !account_serves {
         return Ok(None);
     }
-    super::operator_resume::stage_resume(txn, identity, agent_did, session_id, &request.request_id)
+    super::operator_resume::stage_resume(txn, identity, node_did, session_id, &request.request_id)
         .await
         .map(Some)
 }

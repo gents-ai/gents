@@ -1,5 +1,5 @@
 //! First-party Claude subscription OAuth login. Tokens are stored as an
-//! `OAuthCredential` document for the agent DID, exactly like `codex-login`
+//! `OAuthCredential` document for the node DID, exactly like `codex-login`
 //! and `grok-login`; the `claude` binary is not involved.
 
 use std::io::{self, BufRead, Write};
@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 
 use crate::cli::args::ClaudeLoginArgs;
 use crate::config_writes::ConfigAccess;
-use crate::{print_json, resolve_agent_did, resolve_config_access};
+use crate::{print_json, resolve_config_access, resolve_node_did};
 
 pub(crate) struct ClaudeLoginOptions {
     pub(crate) provider: String,
@@ -28,10 +28,10 @@ pub(crate) struct ClaudeLoginOutcome {
 pub(crate) async fn claude_login(args: ClaudeLoginArgs) -> Result<()> {
     let (access, home_dir) =
         resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
-    let agent_did = resolve_agent_did(Some(&home_dir), args.agent_did.as_deref())?;
+    let node_did = resolve_node_did(Some(&home_dir), args.node_did.as_deref())?;
     let outcome = run_claude_login(
         &access,
-        &agent_did,
+        &node_did,
         &ClaudeLoginOptions {
             provider: args.provider,
             label: args.label,
@@ -48,7 +48,7 @@ pub(crate) async fn claude_login(args: ClaudeLoginArgs) -> Result<()> {
 
 pub(crate) async fn run_claude_login(
     access: &ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
     opts: &ClaudeLoginOptions,
 ) -> Result<ClaudeLoginOutcome> {
     let provider = gents::claude_oauth::normalize_provider(&opts.provider);
@@ -105,7 +105,7 @@ pub(crate) async fn run_claude_login(
         account_uuid: tokens.account_uuid,
     };
     let credential = gents::claude_oauth::credential_from_login_tokens(
-        agent_did,
+        node_did,
         &provider,
         &login_tokens,
         chrono::Utc::now(),
@@ -130,7 +130,7 @@ pub(crate) fn claude_login_result_json(outcome: &ClaudeLoginOutcome) -> Value {
         "result": outcome.sign_in.result,
         "profiles": outcome.sign_in.profiles,
         "credential_id": credential.credential_id,
-        "agent_did": credential.agent_did,
+        "node_did": credential.node_did,
         "provider": credential.provider,
         "access_token_expires_at": credential.access_token_expires_at,
         "last_refresh": credential.last_refresh,

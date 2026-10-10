@@ -521,9 +521,9 @@ async fn a_provider_response_with_the_capture_still_armed_fails_the_turn() {
             request_doc_id: format!("doc-{request_id}"),
             request_commit_cid: "bafy-request-commit".to_string(),
             request_id: request_id.to_string(),
-            agent_did: "did:key:agent".to_string(),
+            node_did: "did:key:agent".to_string(),
             requester_did: String::new(),
-            behavior_id: "general".to_string(),
+            agent_id: "general".to_string(),
             session_id: session_id.to_string(),
             model_name: "model".to_string(),
             provider_family: None,
@@ -605,7 +605,7 @@ async fn generated_rendered_capture_cases_hold_against_the_real_defra_sink() {
         // idempotent (witness 100 vs 101 in the generated rows).
         let rendered_for_witness =
             |witness: u64| -> crate::rendered_request::RenderedCompletionRequest {
-                let agent_did = format!("did:key:z6Mk-sink-{}", case.agent_did);
+                let node_did = format!("did:key:z6Mk-sink-{}", case.node_did);
                 let session_id = format!("session-{}", case.session_id);
                 let request_doc_id = format!("bae-request-doc-{}", case.request_id);
                 let assembly_trace =
@@ -615,7 +615,7 @@ async fn generated_rendered_capture_cases_hold_against_the_real_defra_sink() {
                     );
                 crate::rendered_request::RenderedCompletionRequest {
                     capture_key: derive_capture_key(
-                        &agent_did,
+                        &node_did,
                         &session_id,
                         &request_doc_id,
                         CAPTURE_SCOPE_SINK,
@@ -630,9 +630,9 @@ async fn generated_rendered_capture_cases_hold_against_the_real_defra_sink() {
                     capture_scope: CAPTURE_SCOPE_SINK.to_string(),
                     turn_index: case.turn_index,
                     attempt: case.attempt,
-                    agent_did,
+                    node_did,
                     requester_did: "did:key:z6Mk-requester".to_string(),
-                    behavior_id: "behavior-sink".to_string(),
+                    agent_id: "behavior-sink".to_string(),
                     session_id,
                     model_name: "sink-model".to_string(),
                     source: RenderedRequestSource::OpenAiChatCompletions,

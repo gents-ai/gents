@@ -103,7 +103,7 @@ pub struct ProviderContextReduction {
     #[serde(default, rename = "_docID")]
     pub doc_id: String,
     pub reduction_key: String,
-    pub agent_did: String,
+    pub node_did: String,
     #[serde(default)]
     pub requester_did: Option<String>,
     pub session_id: String,
@@ -183,7 +183,7 @@ impl ProviderContextReduction {
 
 #[derive(Debug)]
 pub(crate) struct NewProviderContextReduction<'a> {
-    pub agent_did: &'a str,
+    pub node_did: &'a str,
     pub requester_did: Option<&'a str>,
     pub session_id: &'a str,
     pub request_id: &'a str,
@@ -207,7 +207,7 @@ pub(crate) struct NewProviderContextReduction<'a> {
 /// request-local durable fact. Prefix, suffix, checkpoint, and count come only
 /// from `ExactReduction` and cannot be supplied independently by the caller.
 pub(crate) struct NewExactProviderContextReduction<'a> {
-    pub(crate) agent_did: &'a str,
+    pub(crate) node_did: &'a str,
     pub(crate) requester_did: Option<&'a str>,
     pub(crate) session_id: &'a str,
     pub(crate) request_id: &'a str,
@@ -224,14 +224,14 @@ pub(crate) struct NewExactProviderContextReduction<'a> {
 }
 
 pub fn reduction_key(
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     request_doc_id: &str,
     turn_index: usize,
     reduction_index: usize,
 ) -> Result<String> {
     let digest = crate::rendered_request::sha256_canonical_json(&json!([
-        agent_did,
+        node_did,
         session_id,
         request_doc_id,
         turn_index,
@@ -243,12 +243,12 @@ pub fn reduction_key(
 pub async fn capture_source_boundary(
     node: &EmbeddedNode,
     session_id: &str,
-    agent_did: &str,
+    node_did: &str,
     requester_did: Option<&str>,
     request_doc_id: &str,
     request_commit_cid: &str,
 ) -> Result<SourceBoundary> {
-    let session_scope = crate::session::session_scope_filter(agent_did, session_id, requester_did);
+    let session_scope = crate::session::session_scope_filter(node_did, session_id, requester_did);
     let query = format!(
         r#"{{
             AgentMessage(
@@ -347,7 +347,7 @@ pub(crate) async fn persist(
         input.request_doc_id,
     )?;
     let reduction_key = reduction_key(
-        input.agent_did,
+        input.node_did,
         input.session_id,
         input.request_doc_id,
         input.turn_index,
@@ -383,7 +383,7 @@ pub(crate) async fn persist(
         r#"mutation {{
             create_ProviderContextReduction(input: {{
                 reduction_key: "{reduction_key}"
-                agent_did: "{agent_did}"
+                node_did: "{node_did}"
                 requester_did: {requester_did}
                 session_id: "{session_id}"
                 request_id: "{request_id}"
@@ -408,7 +408,7 @@ pub(crate) async fn persist(
             }}) {{ _docID }}
         }}"#,
         reduction_key = escape_graphql_string(&reduction_key),
-        agent_did = escape_graphql_string(input.agent_did),
+        node_did = escape_graphql_string(input.node_did),
         session_id = escape_graphql_string(input.session_id),
         request_id = escape_graphql_string(input.request_id),
         request_doc_id = escape_graphql_string(input.request_doc_id),
@@ -457,7 +457,7 @@ pub(crate) async fn persist_exact(
     let row = persist(
         node,
         NewProviderContextReduction {
-            agent_did: input.agent_did,
+            node_did: input.node_did,
             requester_did: input.requester_did,
             session_id: input.session_id,
             request_id: input.request_id,
@@ -626,7 +626,7 @@ pub fn rendered_capture_cites_reduction(
         .any(|key| key == reduction_key)
 }
 
-const REDUCTION_FIELDS: &str = "_docID reduction_key agent_did requester_did session_id request_id request_doc_id request_commit_cid reduction_index turn_index parent_reduction_key producer_call_id producer_call_seq source_boundary_json compacted_prefix_json retained_suffix_json pair_closed checkpoint_messages_json replay_associations_json summary messages_compacted original_tokens compacted_tokens created_at";
+const REDUCTION_FIELDS: &str = "_docID reduction_key node_did requester_did session_id request_id request_doc_id request_commit_cid reduction_index turn_index parent_reduction_key producer_call_id producer_call_seq source_boundary_json compacted_prefix_json retained_suffix_json pair_closed checkpoint_messages_json replay_associations_json summary messages_compacted original_tokens compacted_tokens created_at";
 
 async fn load_by_key(
     node: &EmbeddedNode,
@@ -655,7 +655,7 @@ async fn load_by_key(
 #[derive(Debug)]
 struct IntendedReduction {
     reduction_key: String,
-    agent_did: String,
+    node_did: String,
     requester_did: Option<String>,
     session_id: String,
     request_id: String,
@@ -681,7 +681,7 @@ impl IntendedReduction {
     fn from_input(input: &NewProviderContextReduction<'_>, reduction_key: String) -> Result<Self> {
         Ok(Self {
             reduction_key,
-            agent_did: input.agent_did.to_string(),
+            node_did: input.node_did.to_string(),
             requester_did: input.requester_did.map(ToOwned::to_owned),
             session_id: input.session_id.to_string(),
             request_id: input.request_id.to_string(),
@@ -716,7 +716,7 @@ impl IntendedReduction {
 
     fn ensure_matches(&self, row: &ProviderContextReduction) -> Result<()> {
         let matches = row.reduction_key == self.reduction_key
-            && row.agent_did == self.agent_did
+            && row.node_did == self.node_did
             && row.requester_did == self.requester_did
             && row.session_id == self.session_id
             && row.request_id == self.request_id
@@ -778,7 +778,7 @@ fn validate_recoverable_rows(rows: &[ProviderContextReduction]) -> Result<()> {
         return Ok(());
     };
     for row in rows {
-        if row.agent_did != first.agent_did
+        if row.node_did != first.node_did
             || row.requester_did != first.requester_did
             || row.session_id != first.session_id
             || row.request_id != first.request_id
@@ -794,7 +794,7 @@ fn validate_recoverable_rows(rows: &[ProviderContextReduction]) -> Result<()> {
         let turn_index = usize::try_from(row.turn_index)
             .context("ProviderContextReduction has a negative turn index")?;
         let expected_key = reduction_key(
-            &row.agent_did,
+            &row.node_did,
             &row.session_id,
             &row.request_doc_id,
             turn_index,
@@ -1001,7 +1001,7 @@ mod tests {
         let row = |index: i64, key: &str, parent: Option<&str>| ProviderContextReduction {
             doc_id: format!("doc-{index}"),
             reduction_key: key.to_string(),
-            agent_did: "did:a".to_string(),
+            node_did: "did:a".to_string(),
             requester_did: None,
             session_id: "s".to_string(),
             request_id: "r".to_string(),
@@ -1149,7 +1149,7 @@ mod tests {
         let first = persist(
             &node,
             NewProviderContextReduction {
-                agent_did: "did:key:agent",
+                node_did: "did:key:agent",
                 requester_did: Some("did:key:user"),
                 session_id: "session",
                 request_id: "request",
@@ -1174,7 +1174,7 @@ mod tests {
         let redelivery = persist(
             &node,
             NewProviderContextReduction {
-                agent_did: "did:key:agent",
+                node_did: "did:key:agent",
                 requester_did: Some("did:key:user"),
                 session_id: "session",
                 request_id: "request",
@@ -1202,7 +1202,7 @@ mod tests {
         let conflict = persist(
             &node,
             NewProviderContextReduction {
-                agent_did: "did:key:agent",
+                node_did: "did:key:agent",
                 requester_did: Some("did:key:user"),
                 session_id: "session",
                 request_id: "request",
@@ -1250,7 +1250,7 @@ mod tests {
         let second = persist(
             &node,
             NewProviderContextReduction {
-                agent_did: "did:key:agent",
+                node_did: "did:key:agent",
                 requester_did: Some("did:key:user"),
                 session_id: "session",
                 request_id: "request",
@@ -1310,9 +1310,9 @@ mod tests {
                 request_commit_cid: "request-cid-after-reclaim"
                 request_id: "request"
                 session_id: "session"
-                agent_did: "did:key:agent"
+                node_did: "did:key:agent"
                 requester_did: "did:key:user"
-                behavior_id: "behavior"
+                agent_id: "behavior"
                 capture_scope: "title.1"
                 turn_index: 99
                 attempt: 0
@@ -1349,9 +1349,9 @@ mod tests {
                 request_commit_cid: "request-cid-after-reclaim"
                 request_id: "request"
                 session_id: "session"
-                agent_did: "did:key:agent"
+                node_did: "did:key:agent"
                 requester_did: "did:key:user"
-                behavior_id: "behavior"
+                agent_id: "behavior"
                 capture_scope: "inference.1"
                 turn_index: 4
                 attempt: 0
@@ -1375,9 +1375,9 @@ mod tests {
             request_commit_cid: "request-cid-after-reclaim"
             request_id: "request"
             session_id: "session"
-            agent_did: "did:key:agent"
+            node_did: "did:key:agent"
             requester_did: "did:key:user"
-            behavior_id: "behavior"
+            agent_id: "behavior"
             capture_scope: "inference.1"
             turn_index: 4
             attempt: 1
@@ -1440,9 +1440,9 @@ mod tests {
                 request_commit_cid: "request-cid"
                 request_id: "request"
                 session_id: "session"
-                agent_did: "did:key:agent"
+                node_did: "did:key:agent"
                 requester_did: "did:key:user"
-                behavior_id: "behavior"
+                agent_id: "behavior"
                 capture_scope: "inference.1"
                 turn_index: 4
                 attempt: 2
@@ -1511,7 +1511,7 @@ mod tests {
         let error = persist(
             &node,
             NewProviderContextReduction {
-                agent_did: "did:key:agent",
+                node_did: "did:key:agent",
                 requester_did: None,
                 session_id: "session",
                 request_id: "request-pair",
@@ -1565,7 +1565,7 @@ mod tests {
             let mutation = format!(
                 r#"mutation {{ create_AgentMessage(input: {{
                     message_key: "session-boundary:{sequence}"
-                    agent_did: "did:test:boundary-owner"
+                    node_did: "did:test:boundary-owner"
                     requester_did: null
                     session_id: "session-boundary"
                     sequence: {sequence}
@@ -1585,7 +1585,7 @@ mod tests {
             .execute(
                 r#"mutation { create_AgentMessage(input: {
                 message_key: "other-boundary:3"
-                agent_did: "did:test:other-owner"
+                node_did: "did:test:other-owner"
                 requester_did: null
                 session_id: "session-boundary"
                 sequence: 3

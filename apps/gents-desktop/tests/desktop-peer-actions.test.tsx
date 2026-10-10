@@ -26,8 +26,8 @@ function usePeerRoute(
   const [stores] = useState(() =>
     shellStores({
       selection: {
-        agentDid: "agent-a",
-        behaviorId: "behavior-a",
+        nodeDid: "node-a",
+        agentId: "ops",
         sessionId: "session-a",
       },
     }),
@@ -41,36 +41,36 @@ function usePeerRoute(
       ensureDesktopClientStarted,
       mutateSnapshot: async <T,>(operation: () => Promise<T>) => operation(),
       refreshSnapshot: async () => {},
-      selectAgent: route.selectAgent,
+      selectNode: route.selectNode,
       reportFailure: vi.fn(),
     }),
   );
   return {
     actions,
-    agent: current.agentDid,
-    behavior: current.behaviorId,
+    node: current.nodeDid,
+    agent: current.agentId,
     route,
     sessionId: current.sessionId,
   };
 }
 
 describe("peer action route ownership", () => {
-  it("selects a newly provisioned local agent through the route owner", async () => {
+  it("selects a newly provisioned local node through the route owner", async () => {
     const api = {
-      initLocalStandardRuntime: vi.fn(async () => ({ agentDid: "agent-local" })),
+      initLocalStandardRuntime: vi.fn(async () => ({ nodeDid: "node-local" })),
     } as unknown as DesktopApiAdapter;
     const { result } = renderHook(() => usePeerRoute(api));
 
     await act(async () => result.current.actions.initLocalRuntime("Local"));
 
-    expect(result.current.agent).toBe("agent-local");
+    expect(result.current.node).toBe("node-local");
     expect(result.current.sessionId).toBeNull();
-    expect(result.current.behavior).toBeNull();
+    expect(result.current.agent).toBeNull();
   });
 
   it("preserves the exact client-start failure after local runtime init", async () => {
     const api = {
-      initLocalStandardRuntime: vi.fn(async () => ({ agentDid: "agent-local" })),
+      initLocalStandardRuntime: vi.fn(async () => ({ nodeDid: "node-local" })),
     } as unknown as DesktopApiAdapter;
     const startError = new Error("opening desktop identity key: permission denied");
     const { result } = renderHook(() =>
@@ -91,14 +91,14 @@ describe("peer action route ownership", () => {
     } as unknown as DesktopApiAdapter;
     const { result } = renderHook(() => usePeerRoute(api));
 
-    const completion = result.current.actions.removePeer("peer-a", "agent-a");
-    act(() => result.current.route.selectAgent("agent-b"));
+    const completion = result.current.actions.removePeer("peer-a", "node-a");
+    act(() => result.current.route.selectNode("node-b"));
     await act(async () => {
       pending.resolve({} as DesktopClientSnapshot);
       await completion;
     });
 
-    expect(result.current.agent).toBe("agent-b");
+    expect(result.current.node).toBe("node-b");
   });
 
   it("clears the route when its selected peer is removed", async () => {
@@ -107,11 +107,11 @@ describe("peer action route ownership", () => {
     } as unknown as DesktopApiAdapter;
     const { result } = renderHook(() => usePeerRoute(api));
 
-    await act(async () => result.current.actions.removePeer("peer-a", "agent-a"));
+    await act(async () => result.current.actions.removePeer("peer-a", "node-a"));
 
-    expect(result.current.agent).toBeNull();
+    expect(result.current.node).toBeNull();
     expect(result.current.sessionId).toBeNull();
-    expect(result.current.behavior).toBeNull();
+    expect(result.current.agent).toBeNull();
   });
 });
 
@@ -127,7 +127,7 @@ describe("enrolment and peer status leave failures to the screen", () => {
       ensureDesktopClientStarted: async () => ({ client: {} }) as DesktopClientSnapshot,
       mutateSnapshot: async <T,>(operation: () => Promise<T>) => operation(),
       refreshSnapshot,
-      selectAgent: vi.fn(),
+      selectNode: vi.fn(),
       reportFailure,
     });
 

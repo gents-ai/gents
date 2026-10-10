@@ -59,7 +59,7 @@ serialized under the existing mutation gate and a nondecreasing clock. Output
 and publication never renew. Independent owner scheduling while waiting is a
 native obligation; sleep may expire ownership and cannot be repaired by a late
 renewal. This is not cross-replica consensus or
-enforcement of the one-runtime-per-principal convention. Finite-silence recovery
+enforcement of the one-runtime-per-node convention. Finite-silence recovery
 eligibility does not establish scheduler fairness or database termination.
 Configured remote routes and cancellation/tool-policy admission are supplied by
 their existing authenticated owners, not inferred from published tool intent.
@@ -328,28 +328,27 @@ Historical bridge references below are not evidence that this target already run
 | Surface | Contract and retained owner |
 | --- | --- |
 | Document vocabulary | `ConfigDocuments` supplies apply, self-config, and sync projections with canonical names and field lists. Nested groups are values, not new documents. |
-| Authoring and inference | `Configuration` resolves a behavior into one `ResolvedSessionConfig`: actual context content plus inference. Typed document lookups use `(agent_did, logical ID)` and share one owner check; Task and graph stages reuse this result. `defaultBehaviorPublishable` requires a principal's default behavior to be owned and enabled, so a publishable default never resolves to `disabledBehavior`. Compact defaults, explicit auth, and backend/credential-scoped discovery retain their own boundaries. |
+| Authoring and inference | `Configuration` resolves a agent into one `ResolvedSessionConfig`: actual context content plus inference. Typed document lookups use `(node_did, logical ID)` and share one owner check; Task and graph stages reuse this result. `defaultAgentPublishable` requires a node's default agent to be owned and enabled, so a publishable default never resolves to `disabledAgent`. Compact defaults, explicit auth, and backend/credential-scoped discovery retain their own boundaries. |
 | Graph selection | `GraphPipeline/Configuration` resolves authorized installed capabilities through that same Task resolver. Foreign capability ownership is preserved. Event groups reuse `Triggers/Groups` validation and candidate resolution, with graph bounds checked at delivery. `graphEdgeValid` refuses `latest_only` on every edge (`graphEdgeConcurrencyValid`) and applies the group narrowing to grouped edges; `graph_pipeline_edge_delivery_cases` binds the compiler. |
 | Context and permissions | `Skills` uses an explicit context whitelist and preserves tool authority exactly. `PromptAssembly/Template` retains task rendering only; its existing assembler carries literal context text, with task substitutions confined to the task slot. `ToolPolicy/Configuration` enforces exact service/tool selection, independent presentation, background subsets, and tool-local limits alongside the existing ceiling lattice; its `effective*` owners clamp admitted document timeouts to host and fixed ceilings, and `tool_timeout_cases` binds the native resolution to them. Its `pluginCallAccess` owner gives each bound plugin call `read` unless it sets a declared write field, and `pluginCallAdmitted` runs it only where the operator's grant covers that call's access; `plugin_resource_cases.call_access` drives the executor's bind admission. `ToolPolicy/PluginNetwork` admits host-mediated plugin HTTP: a granted allow-list, HTTPS unless an entry names plaintext, and public addresses unless an entry names the IP literal; `plugin_resource_cases.network` drives the native admission and address classifier. `ToolPolicy/WriteInput` enforces typed scalar input, nullability, required fields, and caller exclusion from runtime-filled fields; 256 generated cases exercise the bounded writer's input validator. |
 | Event groups | Trigger and callback consumers share `EventGroupKey`, candidate eligibility and the durable clock in `EventDelivery/Group`. Callback input and group origin live on the existing invocation and survive its transitions; retries do not reproject live sources. |
-| Self-configuration | Existing patch/validate/guard owner remains. Canonical nested fields replace flattened legacy fields; the opt-in no-lockout guard (`keepsControl`, #1796) consumes decoded self-config and agents enablement and is the only lockout protection; the always-on `keepsGrants` bounds each operator-managed grant on its own, and pack installation may be raised only within what the stored Tools carry or the invoking agent holds; `reselectionKeepsGrants` applies the same bound to Context and Behavior re-points, new Contexts and clones; `SelfConfig/Auth` permits environment/OAuth reference edits while preventing new raw-key writes. |
-| Installation | `ApplyReconcile/Publication` validates same-owner reference closure and publishes atomically without altering observations. There is one publication model; reference cycles are supported. Document references carry their principal once, so same-label documents from different principals coexist. The runtime bridge requires successful complete configuration resolution and a separate availability observation; document presence does not imply readiness. Authored IDs use an injective mapping to lifecycle IDs. Candidate construction, ACP checks, and transaction implementation are refinement boundaries. `publishIf` adds an expected-field precondition on the same publication; a stale expectation leaves state unchanged and an empty scope is `publish`. |
+| Self-configuration | Existing patch/validate/guard owner remains. Canonical nested fields replace flattened legacy fields; the opt-in no-lockout guard (`keepsControl`, #1796) consumes decoded self-config and agents enablement and is the only lockout protection; the always-on `keepsGrants` bounds each operator-managed grant on its own, and pack installation may be raised only within what the stored Tools carry or the invoking agent holds; `reselectionKeepsGrants` applies the same bound to Context and Agent re-points, new Contexts and clones; `SelfConfig/Auth` permits environment/OAuth reference edits while preventing new raw-key writes. |
+| Installation | `ApplyReconcile/Publication` validates same-owner reference closure and publishes atomically without altering observations. There is one publication model; reference cycles are supported. Document references carry their node once, so same-label documents from different nodes coexist. The runtime bridge requires successful complete configuration resolution and a separate availability observation; document presence does not imply readiness. Authored IDs use an injective mapping to lifecycle IDs. Candidate construction, ACP checks, and transaction implementation are refinement boundaries. `publishIf` adds an expected-field precondition on the same publication; a stale expectation leaves state unchanged and an empty scope is `publish`. |
 | Execution | Tool execution removes per-call approval states/transitions. Request terminalization, managed execution, foreground progress, and enrollment authorization retain their owners. `TaskHooks` command results are external observations; the hook contract covers sequencing and failure handling, not exactly-once host effects. |
-| Identity | `Identity` resolves behavior labels with an explicit principal; shared labels never determine permissions or imply a global ID-to-principal mapping. Structural fixture results evaluate the actual well-formedness predicate. |
+| Identity | `Identity` resolves agent labels with an explicit node; shared labels never determine permissions or imply a global ID-to-node mapping. Structural fixture results evaluate the actual well-formedness predicate. |
 | Durable sessions | `AgentSession` owns identity, provenance, title, and request observation. Session observation updates use exact requester scope; same-request refresh consumes a transactional reread of the current request, not an out-of-order notification payload. Head selection queries authoritative request rows; cached observations do not authorize retries or background wakes. Retry selection uses exact requester scope; background wake selection spans requester scopes. |
 | Forks | `SessionFork` copies native message headers for a transcript prefix, preserves origin payload references, detaches live request links, and requires compaction cursors to name retained messages. The adapter must supply an authorized, coherent snapshot and translate user cuts and cursor encodings; hydration retains authorized origin dependencies. |
 | Request inputs | `Enrollment/RequestInput` reuses title and queue types and admits selected skills within context authority. Goal continuations carry original sequence/wrapup facts verified by the existing receipt owner. Sampling and aggregate limits come from inference configuration. |
-| Locality | Workspace/callback ownership uses the principal DID. Filesystem availability remains an execution boundary; no host fingerprint or single-runtime enforcement is introduced. |
+| Locality | Workspace/callback ownership uses the node DID. Filesystem availability remains an execution boundary; no host fingerprint or single-runtime enforcement is introduced. |
 
 Prompt proofs now preserve literal content through the existing slot assembler and
 exclude task substitutions from other slots. Wire serialization still needs a runtime
-bridge. Discovery preserves both the containing backend’s owner and its credential scope, including shared credentials; same backend labels across principals cannot alias. Observations remain independent of configuration. Numeric limits
+bridge. Discovery preserves both the containing backend’s owner and its credential scope, including shared credentials; same backend labels across nodes cannot alias. Observations remain independent of configuration. Numeric limits
 share one validator with capability-local defaults; provider/runtime wiring still
 requires conformance.
 The canonical decoder and host/provider adapters remain conformance boundaries.
-Persona profile catalogs must be built for the authorized principal. WorkspaceRoot
-is instead explicit operator-local global policy: it has no principal identity and
-does not replicate, so adapters must not invent per-principal root ownership.
+WorkspaceRoot is explicit operator-local global policy: it has no node identity and
+does not replicate, so adapters must not invent per-node root ownership.
 Canonical root admission is component-prefix based: an exact root or a narrower
 descendant is admitted, while unresolved paths and prefix-confusable siblings
 are rejected. Root publication distinguishes an unconfigured deployment (which
@@ -538,7 +537,7 @@ The current proof suite covers twenty practical areas:
     the tool result before terminalization. The model supplies a matching
     `Item` to the reply owner but does not prove that projection from the
     stored row; the native fixture uses a local-self requester, so distinct
-    requester/agent DIDs are not covered. Negative handoff guards remain
+    requester/node DIDs are not covered. Negative handoff guards remain
     model-only; generic Ask/Gate notifications do not automatically complete
     a request.
 20. Request execution leases (#1341, #1571): opaque fresh ownership generations,
@@ -616,7 +615,7 @@ Provider-input assembly for Claude: the body's `system[]` order and tools omissi
 | `Proofs/AgentSession.lean` | Canonical session identity, provenance, presentation and authoritative request selection |
 | `Proofs/SessionFork.lean` | Transcript-prefix copying, reference remapping and compaction cursor validation |
 | `Proofs/Enrollment/RequestInput.lean` | Typed signed invocation input and context-bound activation |
-| `Proofs/Enrollment/RequestAdmission.lean` | Signed request provenance and final claim: enrollment, local-self, runtime-internal (local control, automated trigger) and `peer` branches. A peer request is signed by its requester, targets another principal and is authorized by the target's `PeerAdmissionAuthority` ACP. Every branch bounds the signed causal hop by `max_request_hop`. Title requests are runtime-internal local control with parent-only provenance |
+| `Proofs/Enrollment/RequestAdmission.lean` | Signed request provenance and final claim: enrollment, local-self, runtime-internal (local control, automated trigger) and `peer` branches. A peer request is signed by its requester, targets another node and is authorized by the target's `PeerAdmissionAuthority` ACP. Every branch bounds the signed causal hop by `max_request_hop`. Title requests are runtime-internal local control with parent-only provenance |
 | `Proofs/Request/CausalHop.lean` | The only loop bound between agents: `nextHop` (roots 0, tool-caused +1, continuations copy), `admitHop`, and `admitted_chain_sends_le_max` |
 | `Proofs/SessionRecovery.lean` | Retry/reissue using authoritative scoped request rows |
 | `Proofs/SessionHydration/` | Exact applied peer/requester/agent route admission plus selected-network verified membership; exact requester/agent/session document selection; bounded delivery outcomes separated from terminal-write success or failure; explicit attempted versus confirmed-complete delivery for ambiguous transport failures; idempotent crash re-drive; and resettable session-scoped receiver progress (#1142). Fence: `tests/conformance/session_hydration.rs`. The reconciler consumes the selected set through DefraDB's bounded peer-targeted document pusher. Pairing transition invariants remain owned by `Proofs/PairingReconcile.lean`. |
@@ -627,6 +626,8 @@ Provider-input assembly for Claude: the body's `system[]` order and tools omissi
 | `Proofs/Eval.lean` | Eval core contract (#1515): closed outcome-kind vocabulary, provider reasons, the projection onto evidence classes, the theorem that no subject-causable outcome is excluded from the denominator, and monotone case-class reduction. Checks, numeric reducers and the runner are refinement boundaries |
 | `Proofs/Optimization.lean` | Configuration optimization (#1455) on the eval contract: worst-case unknown imputation, integer sufficiency and non-regression gates over per-case paired sums, the cost sub-gate, the ordered decision, the rule that too few cases can never be accepted, and the length-guarded job journal with bounded rounds. The permutation test, eval runs and the proposer are refinement boundaries |
 | `Proofs/SelfConfig.lean` | Barrel for agent self-configuration patch semantics: field partitions, merge, write step, and guardrails (#654), and the per-grant operator-grant guard |
+| `Proofs/SelfConfig/AgentDecision.lean` | Create, edit and disable decisions over the node's Agent catalog: protected (Engineer) agents are never edited or disabled, the default agent is never disabled, and a new agent takes an unused id. Create input requires a nonblank published profile, a prompt (or an enabled clone source); edit fields are omitted/clear/set patch entries (profile cannot be cleared); `agentOperationAdmitted` composes the catalog decision with these input predicates, and `materializedAgent` admits only through it before default promotion and `Configuration.resolveAgent` (disable starts no session). Executable regressions in `SelfConfig/Cases`; generated `agent_decision_cases` rows carry `create_input` and `edit_patch`, and `agent_materialization_cases` rows carry the `materializedAgent` session (or null). Neither has a Rust consumer yet (ledger follow-ups). |
+| `Proofs/SelfConfig/Selection.lean` | Scoped sibling-tools operation: omission preserves the stored selection, explicit network selection only narrows, and protected, shared or foreign-owner targets are refused. Generated `sibling_tools_cases` have no Rust consumer yet (ledger follow-up). |
 | `Proofs/Triggers.lean` | Barrel for trigger types, dispatch, reachability, serial, latest-only, and lineage proofs |
 | `Proofs/Triggers/Identity.lean` | Canonical fire identity framing and injectivity; owner, trigger, collection and physical document identity feed request, session and outcome IDs. |
 | `Proofs/Triggers/Queue.lean` | Single claim predicate for native arrival observations and the closed fire model; queued-serial FIFO, running-session exclusion, and the pre-journal ordinary cohort. |
@@ -651,7 +652,7 @@ Provider-input assembly for Claude: the body's `system[]` order and tools omissi
 | `Proofs/PromptAssembly/ReplayFrontier.lean` | Reasoning replay acceptance and frontier: `prefix_is_leading_reasoning_removal` (equal ordinary items plus a suffix of anchored capture reasoning is exactly leading-run removal), `maxAdmissibleSuffix_maximal`, `admissible_of_suffix`, `kept_turn_prefix_is_leading_removal`, `kept_before_items_in_capture` (no resurrection). ClaudeMap `restoreHistoricalReasoningSuffix` applies it per accepted turn. Fences: `tests/conformance/prompt_assembly.rs::generated_{reasoning_suffix,replay_prefix}_cases_*`; scenario acceptance is `native_decide`d in `ContractCases/PromptAssembly.lean`. |
 | `Proofs/P2PBackpressure.lean` | Obligation model (no conformance bridge): success-ack backing, pending-DAG capacity, strict push-slot release on timeout |
 | `Proofs/PeerRegistryDiscovery/DirectoryProjection.lean` | Agent directory projection (machine index v1): source-owned membership, foreign-row preservation, idempotent convergence, write-free settled fixpoint, retraction soundness. Fence: `tests/conformance/directory_projection.rs`. |
-| `Proofs/PeerRegistryDiscovery/RootAdmission.lean` | Canonical component-and-anchor containment plus operator-local `WorkspaceRoot` publication: no-document ceiling default, explicit-root narrowing, and all-disabled revocation without fallback. Filesystem resolution and execution-boundary re-resolution are Rust refinement obligations; the model makes no TOCTOU claim. Fence: generated `root_admission_cases` consumed by `tests/conformance/persona_request.rs`. |
+| `Proofs/PeerRegistryDiscovery/RootAdmission.lean` | Canonical component-and-anchor containment plus operator-local `WorkspaceRoot` publication: no-document ceiling default, explicit-root narrowing, and all-disabled revocation without fallback. Filesystem resolution and execution-boundary re-resolution are Rust refinement obligations; the model makes no TOCTOU claim. Root selection and the omitted/clear/set root-edit patch contract (`rootEditSelectionOk`) live here. Fence: generated `root_admission_cases` consumed by `tests/conformance/root_admission.rs`. |
 | `Proofs/Background/` | Background tool rows (native processes and `agent_new`/`agent_message` rows): admission budget, terminal CAS and notification delivery, completion continuation (independent of Goal presence), canonical output paging, process control and the foreground interrupt scope, which never cascades |
 | `Proofs/Recovery/` | Recovery sweep contracts (`RecoverySweep`), the registered sweep registry, per-collection sweeps including session-message rows and the startup restart-disposition classifier (#937), and the startup sweep ordering contract |
 | `Proofs/Session/` | Session queue model: queue sources (`background_completion`, steering), coalesce policy/keys, automated wake-up drain |
@@ -1042,7 +1043,7 @@ reverse-race regressions; no new legal lifecycle transitions are introduced.
 session boundary:
 
 - reissued requests stay in the same session
-- behavior identity is preserved
+- agent identity is preserved
 - latest-request semantics are updated coherently
 - retry counts advance monotonically and stay bounded
 
@@ -1051,7 +1052,7 @@ canonical request lifecycle and a narrow retry projection. The successor has no
 execution deadline before claim. `retryFromRows?` checks the exact physical parent
 and authoritative head in the session’s requester scope; compact observations are
 not admission evidence. Signing, typed input carryover, and the physical retry-key
-transaction remain adapter responsibilities. Inference resolves through the behavior
+transaction remain adapter responsibilities. Inference resolves through the agent
 at claim rather than a copied backend field. The next layer
 must delete the old test-local reissue implementation and use the real desktop owner.
 
@@ -1107,8 +1108,8 @@ router observed-generation readiness/liveness, and in-flight retirement safety.
 The key guarantees are:
 
 - generations only move forward
-- acceptance uses the request’s explicit behavior selection; an existing session must match
-- sessions stay pinned by behavior identity, not by mutable default selection
+- acceptance uses the request’s explicit agent selection; an existing session must match
+- sessions stay pinned by agent identity, not by mutable default selection
 - request acceptance and its owned session projection are one atomic transition
 - accepted request identities are monotone and cannot be admitted twice
 - publication is separate from resolution
@@ -1166,11 +1167,11 @@ shapes are integration/persistence concerns rather than Lean dispatch facts.
 
 **Projection boundary (#605):** `SystemState.requests` is a single agent's
 view — `TriggerKey` is only unique per agent, so the Rust queries that
-materialize it scope by the dispatching behavior's `agent_did`, and a
+materialize it scope by the dispatching agent's `node_did`, and a
 claimed/processing row past its claim deadline (+grace) projects as terminal
 (the owning loop enforces the same deadline in-memory, so such a row is a
 wedged orphan, not an in-flight run). Both halves are fenced by the
-scheduling conformance tests (`serial_gate_is_scoped_by_agent_did`,
+scheduling conformance tests (`serial_gate_is_scoped_by_node_did`,
 `serial_gate_ignores_expired_claims`,
 `supersede_only_touches_own_agent_requests`); see the docstrings on
 `Proofs/Triggers/Types.lean`'s `AgentRequest.isTerminal` and `SystemState`.
@@ -1319,7 +1320,7 @@ parallel Codex-specific state machine.
 `Proofs/ClientShell.lean` sits above the per-turn projection and models the
 desktop-style multi-session shell:
 
-- snapshots never mutate the user's selected principal route/session
+- snapshots never mutate the user's selected node route/session
 - transport health is a non-mutating input
 - local session switching is transport-independent
 - opening the new-session composer clears the local selection; explicit empty durable sessions remain supported
@@ -1468,8 +1469,8 @@ they finish on their slot's connection, sharing the pool
 (`available_rewrite_rejects_nothing`), and every admission is attributed to
 its own slot's connection in FIFO order (`serve_attributes_fifo`,
 `acquire_attributes_slot`). New slots are built for the new connection;
-behavior slot identity includes the keyed connection fingerprint because
-`ResolvedBehavior`'s Debug redacts credentials.
+agent slot identity includes the keyed connection fingerprint because
+the resolved agent's Debug redacts credentials.
 
 `Registry.Ledger` refines the Tokio realization: tokens are conserved across
 take, register, abandon, release, resize and reopen. Registration is the single
@@ -1499,7 +1500,7 @@ backend-gone and controller-drain cases; those are modeled as ordinary terminal
 call transitions rather than request-interrupt composition.
 
 Rust covers this bridge at the admission/permit level and with a full
-`BehaviorDaemon` mock-stream fixture: mid-stream interruption preserves partial
+the daemon mock-stream fixture: mid-stream interruption preserves partial
 response content, persists the linked inference call as `cancelled`, and leaves
 unrelated concurrent calls live.
 
@@ -1520,7 +1521,7 @@ These proofs do not establish:
 - OS sandbox behavior
 - wall-clock skew / real-time monotonicity (`Time := Nat` is abstract; #558)
 - ID-namespace collision freedom or cross-node identity uniqueness for
-  `RequestId` / `PeerId` / `AgentDid` collapsed to `Nat` (#558;
+  `RequestId` / `PeerId` / `NodeDid` collapsed to `Nat` (#558;
   `boundary.model.nat-typed-ids-time`)
 - fair-scheduler or bounded-latency temporal liveness for distributed
   delivery (tier 2/3; see § Liveness taxonomy and `tla/`)
@@ -1562,12 +1563,12 @@ resumes need strictly later resets, so there is at most one per reported reset
 (premise: a child published by a timer resume starts its calls after it).
 
 `GoalAutomation/ReadinessGate.lean` gates the existing `Goals.decide` on the
-canonical behavior-readiness projection. A publishing decision, and a claimed
-child awaiting materialization, wait while the behavior is not ready; automatic
+canonical agent-readiness projection. A publishing decision, and a claimed
+child awaiting materialization, wait while the agent is not ready; automatic
 continuation ends only once reconciliation has settled. A pre-claim readiness
 rejection is decided as a completed turn, but only against readiness written
 after the rejection. The theorems prove that only an attempt against a ready
-behavior spends the retry budget, that every scan trace stays within it, and
+agent spends the retry budget, that every scan trace stays within it, and
 that uncharged re-issues never outnumber readiness publications. Twenty
 generated cases drive the Rust gate and retry accounting.
 
@@ -1602,7 +1603,7 @@ real signed-row consumers, including physical parent, owner and pinned route.
 
 DefraDB ACP remains the access-control owner. Root attribution reuses the
 verified GraphRun/revision owner DID and existing signed receipt; it does not
-recompute Task/behavior permissions from mutable configuration. Foreign roots
+recompute Task/agent permissions from mutable configuration. Foreign roots
 cannot contribute counts or failure witnesses. Unrelated interactive session
 rows do not erase an invocation's Goal obligation; authenticated replacement
 Goal chains retain their distinct association semantics.
@@ -1688,7 +1689,7 @@ Sandbox cases additionally cover available and unavailable artifact enforcement.
 The unavailable-host admission case drives the production workspace resolver
 with an injected host observation, rather than only testing a later launch
 selector. Unsupported hosts reject before binding or provider dispatch.
-The contextual requested mode is already met with behavior and operator ceilings;
+The contextual requested mode is already met with agent and operator ceilings;
 an active binding and current live, uncanceled execution are constructor
 preconditions. Persistent LSP starts are initially denied before pool lookup in
 artifact context; supporting their longer lifetime requires preserving the same
@@ -1798,7 +1799,7 @@ only transports the seal produced by this owner; Ready creation is not sealing.
 `GraphPipeline/WorkspaceLineage.lean` derives one entry-root workspace tuple using
 verified run/plan/route and authenticated immutable physical request evidence.
 Destination authority comes from the pinned plan. Explicit conflicting workspace ID,
-seal or authority denies; absent/untrusted/ambiguous roots cannot grant. The principal
+seal or authority denies; absent/untrusted/ambiguous roots cannot grant. The node
 owner comes from verified workspace state, not a caller-supplied owner hint. Bootstrap
 requires the workspace ID in controller-stored input; the existing workspace owner
 may stamp an omitted seal. The helper

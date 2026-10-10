@@ -1,10 +1,10 @@
 {
-  "agent_principal": {},
-  "agent_behaviors": [
+  "node": {},
+  "agents": [
     {
-      "behavior_id": "fixture-author",
+      "agent_id": "fixture-author",
       "display_name": "Fixture author",
-      "description": "A tool-less behavior bound to the author slot.",
+      "description": "A tool-less agent bound to the author slot.",
       "context_id": "fixture-author-context",
       "inference_profile_id": "gents:inference-slot:author"
     }
@@ -13,7 +13,7 @@
     {
       "context_id": "fixture-author-context",
       "display_name": "Fixture author",
-      "system_prompt": "./agent_behaviors/fixture_author/system_prompt.md",
+      "system_prompt": "./agents/fixture_author/system_prompt.md",
       "tools_id": "fixture-author-tools"
     }
   ],

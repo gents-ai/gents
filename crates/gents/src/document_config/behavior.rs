@@ -10,18 +10,18 @@ use super::serde_helpers::{
     is_enabled, rows_with_doc_id,
 };
 
-/// Selects context and inference as one unit. Behaviors are reusable
-/// interfaces; the session binds to one by `behavior_id` only. There are no
+/// Selects context and inference as one unit. Agents are reusable
+/// interfaces; the session binds to one by `agent_id` only. There are no
 /// backend/model/compaction/skill copies here — `AgentContext` owns literal
 /// instructions, explicit skill selection, tools, and compaction, and
 /// `InferenceProfile` is the only model-selection path.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-pub struct AgentBehavior {
+pub struct Agent {
     /// Logical configuration key; `_docID` is the storage identity.
-    pub behavior_id: String,
-    pub agent_did: String,
+    pub agent_id: String,
+    pub node_did: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub display_name: Option<String>,
@@ -34,7 +34,7 @@ pub struct AgentBehavior {
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub context_id: Option<String>,
     /// Required: the only model selection path is
-    /// Task -> AgentBehavior -> InferenceProfile. There is no default
+    /// Task -> Agent -> InferenceProfile. There is no default
     /// fallback.
     pub inference_profile_id: String,
     #[serde(
@@ -58,7 +58,7 @@ pub struct AgentBehavior {
     pub created_at: Option<String>,
 }
 
-impl AgentBehavior {
+impl Agent {
     pub fn reference_violations(&self, refs: &ConfigReferences) -> Vec<String> {
         self.validate_references(refs)
             .err()
@@ -67,37 +67,31 @@ impl AgentBehavior {
     }
 
     pub fn validate_references(&self, refs: &ConfigReferences) -> Result<()> {
-        refs.validate_document(
-            crate::Collection::AgentBehavior,
-            &serde_json::to_value(self)?,
-        )?;
+        refs.validate_document(crate::Collection::Agent, &serde_json::to_value(self)?)?;
         refs.validate()
     }
 }
 
-pub async fn load_agent_behavior(
-    node: &EmbeddedNode,
-    behavior_id: &str,
-) -> Result<Option<AgentBehavior>> {
-    Ok(load_agent_behavior_record(node, behavior_id)
+pub async fn load_agent(node: &EmbeddedNode, agent_id: &str) -> Result<Option<Agent>> {
+    Ok(load_agent_record(node, agent_id)
         .await?
         .map(|(_, behavior)| behavior))
 }
 
-pub(crate) async fn load_agent_behavior_record(
+pub(crate) async fn load_agent_record(
     node: &EmbeddedNode,
-    behavior_id: &str,
-) -> Result<Option<(String, AgentBehavior)>> {
-    let escaped_behavior_id = escape_graphql_string(behavior_id);
+    agent_id: &str,
+) -> Result<Option<(String, Agent)>> {
+    let escaped_agent_id = escape_graphql_string(agent_id);
     let query = format!(
         r#"{{
-            AgentBehavior(
-                filter: {{ behavior_id: {{ _eq: "{escaped_behavior_id}" }} }},
+            Agent(
+                filter: {{ agent_id: {{ _eq: "{escaped_agent_id}" }} }},
                 limit: 1
             ) {{
                 _docID
-                behavior_id
-                agent_did
+                agent_id
+                node_did
                 display_name
                 description
                 context_id
@@ -109,36 +103,33 @@ pub(crate) async fn load_agent_behavior_record(
         }}"#
     );
 
-    let resp = graphql_with_transaction_retry(node, &query, "query AgentBehavior").await?;
+    let resp = graphql_with_transaction_retry(node, &query, "query Agent").await?;
 
-    Ok(first_row_with_doc_id(resp.data.as_ref(), "AgentBehavior"))
+    Ok(first_row_with_doc_id(resp.data.as_ref(), "Agent"))
 }
 
-pub async fn list_agent_behaviors(
-    node: &EmbeddedNode,
-    agent_did: &str,
-) -> Result<Vec<AgentBehavior>> {
-    Ok(list_agent_behavior_records(node, agent_did)
+pub async fn list_agents(node: &EmbeddedNode, node_did: &str) -> Result<Vec<Agent>> {
+    Ok(list_agent_records(node, node_did)
         .await?
         .into_iter()
         .map(|(_, behavior)| behavior)
         .collect())
 }
 
-pub(crate) async fn list_agent_behavior_records(
+pub(crate) async fn list_agent_records(
     node: &EmbeddedNode,
-    agent_did: &str,
-) -> Result<Vec<(String, AgentBehavior)>> {
-    let escaped_agent_did = escape_graphql_string(agent_did);
+    node_did: &str,
+) -> Result<Vec<(String, Agent)>> {
+    let escaped_node_did = escape_graphql_string(node_did);
     let query = format!(
         r#"{{
-            AgentBehavior(
-                filter: {{ agent_did: {{ _eq: "{escaped_agent_did}" }} }},
+            Agent(
+                filter: {{ node_did: {{ _eq: "{escaped_node_did}" }} }},
                 order: {{ created_at: ASC }}
             ) {{
                 _docID
-                behavior_id
-                agent_did
+                agent_id
+                node_did
                 display_name
                 description
                 context_id
@@ -150,22 +141,22 @@ pub(crate) async fn list_agent_behavior_records(
         }}"#
     );
 
-    let resp = graphql_with_transaction_retry(node, &query, "list AgentBehavior").await?;
+    let resp = graphql_with_transaction_retry(node, &query, "list Agent").await?;
 
-    Ok(rows_with_doc_id(resp.data.as_ref(), "AgentBehavior"))
+    Ok(rows_with_doc_id(resp.data.as_ref(), "Agent"))
 }
 
-pub async fn upsert_agent_behavior(node: &EmbeddedNode, behavior: &AgentBehavior) -> Result<()> {
+pub async fn upsert_agent(node: &EmbeddedNode, behavior: &Agent) -> Result<()> {
     crate::config_client::ConfigAccess::transact_local(
         node,
         None,
-        "document_config.agent_behavior.upsert",
+        "document_config.agent.upsert",
         |txn| {
             Box::pin(async move {
                 let value = serde_json::to_value(behavior)?;
                 let plan = crate::config_client::DesiredStateApplyPlan::new(vec![
                     crate::config_client::DesiredStateApplyDocument {
-                        collection: crate::Collection::AgentBehavior,
+                        collection: crate::Collection::Agent,
                         add: value.clone(),
                         update: value,
                     },

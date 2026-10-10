@@ -32,16 +32,16 @@ pub(super) async fn diagnose_schema_presence(access: &ConfigAccess) -> Vec<Value
 
 pub(super) async fn load_runtime_row(
     access: &ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
 ) -> Result<Option<Value>> {
     use gents::graphql::escape_graphql_string;
     let query = format!(
         r#"{{
-            AgentRuntime(
-                filter: {{ agent_did: {{ _eq: "{agent_did}" }} }},
+            NodeRuntime(
+                filter: {{ node_did: {{ _eq: "{node_did}" }} }},
                 limit: 1
             ) {{
-                agent_did
+                node_did
                 reconcile_phase
                 last_reconcile_result
                 last_reconcile_error
@@ -49,9 +49,9 @@ pub(super) async fn load_runtime_row(
                 updated_at
             }}
         }}"#,
-        agent_did = escape_graphql_string(agent_did),
+        node_did = escape_graphql_string(node_did),
     );
-    Ok(crate::graphql_rows(access, "AgentRuntime", &query)
+    Ok(crate::graphql_rows(access, "NodeRuntime", &query)
         .await?
         .into_iter()
         .next())

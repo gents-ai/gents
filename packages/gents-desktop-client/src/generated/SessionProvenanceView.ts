@@ -14,7 +14,7 @@ export type SessionProvenanceView = { sessionId: string,
  */
 startedBy: LinkedSessionView | null,
 /**
- * Sessions this session's requests started: its subagents.
+ * Sessions this session's requests started.
  */
 started: Array<LinkedSessionView>,
 /**

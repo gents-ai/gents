@@ -10,7 +10,7 @@ import {
 } from "@gents/ui/components/select";
 import { EditorSheet } from "../src/ui/screens/agent/EditorSheet";
 
-/* a sheet opened from inside another, as a behavior's profile is */
+/* a sheet opened from inside another, as a agent's profile is */
 function Stacked({
   onCloseBelow = () => {},
   onCloseTop = () => {},
@@ -19,8 +19,8 @@ function Stacked({
   onCloseTop?: () => void;
 }) {
   return (
-    <EditorSheet open onClose={onCloseBelow} title="Behavior">
-      <p>behavior fields</p>
+    <EditorSheet open onClose={onCloseBelow} title="Agent">
+      <p>agent fields</p>
       <EditorSheet open onClose={onCloseTop} title="Profile">
         <p>profile fields</p>
       </EditorSheet>
@@ -76,7 +76,7 @@ describe("stacked editor sheets", () => {
   it("leave a wheel over a list the sheet opened to scroll that list", () => {
     const scrollBy = watchScrolls();
     render(
-      <EditorSheet open onClose={() => {}} title="Behavior">
+      <EditorSheet open onClose={() => {}} title="Agent">
         <Select defaultOpen defaultValue="a">
           <SelectTrigger>
             <SelectValue />

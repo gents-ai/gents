@@ -3,41 +3,41 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use sha2::{Digest, Sha512};
 
-use gents::{AgentIdentity, ServiceAccount};
+use gents::{NodeIdentity, ServiceAccount};
 
 #[allow(dead_code)]
-pub(crate) struct StubAgentIdentity {
+pub(crate) struct StubNodeIdentity {
     pub did: String,
 }
 
-impl StubAgentIdentity {
+impl StubNodeIdentity {
     #[allow(dead_code)]
     pub(crate) fn new(did: impl Into<String>) -> Self {
         Self { did: did.into() }
     }
 
     #[allow(dead_code)]
-    pub(crate) fn arc(did: impl Into<String>) -> Arc<dyn AgentIdentity> {
+    pub(crate) fn arc(did: impl Into<String>) -> Arc<dyn NodeIdentity> {
         Arc::new(Self::new(did))
     }
 }
 
 #[async_trait]
-impl AgentIdentity for StubAgentIdentity {
+impl NodeIdentity for StubNodeIdentity {
     fn did(&self) -> &str {
         &self.did
     }
 
     async fn sign(&self, _payload: &[u8]) -> anyhow::Result<Vec<u8>> {
         panic!(
-            "StubAgentIdentity::sign called for {} — routing tests must not sign",
+            "StubNodeIdentity::sign called for {} — routing tests must not sign",
             self.did
         )
     }
 
     async fn verify(&self, _did: &str, _payload: &[u8], _sig: &[u8]) -> anyhow::Result<bool> {
         panic!(
-            "StubAgentIdentity::verify called for {} — routing tests must not verify",
+            "StubNodeIdentity::verify called for {} — routing tests must not verify",
             self.did
         )
     }
@@ -52,14 +52,14 @@ impl AgentIdentity for StubAgentIdentity {
 /// real `KeyIdentity`; this helper only keeps unrelated lifecycle fixtures on
 /// the same explicit signed-authoring API as production.
 #[allow(dead_code)]
-pub(crate) struct SigningStubAgentIdentity {
+pub(crate) struct SigningStubNodeIdentity {
     did: String,
 }
 
 #[allow(dead_code)]
-impl SigningStubAgentIdentity {
+impl SigningStubNodeIdentity {
     #[allow(dead_code)]
-    pub(crate) fn arc(did: impl Into<String>) -> Arc<dyn AgentIdentity> {
+    pub(crate) fn arc(did: impl Into<String>) -> Arc<dyn NodeIdentity> {
         Arc::new(Self { did: did.into() })
     }
 
@@ -74,7 +74,7 @@ impl SigningStubAgentIdentity {
 }
 
 #[async_trait]
-impl AgentIdentity for SigningStubAgentIdentity {
+impl NodeIdentity for SigningStubNodeIdentity {
     fn did(&self) -> &str {
         &self.did
     }

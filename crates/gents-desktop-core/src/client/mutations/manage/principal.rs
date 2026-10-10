@@ -6,30 +6,27 @@ use gents::collection::Collection;
 use gents::config_client::{
     apply_desired_state_plan, ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
-use gents::document_config::AgentPrincipal;
+use gents::document_config::Node;
 
-pub async fn upsert_agent_principal_on(
-    access: &ConfigAccess,
-    document: &AgentPrincipal,
-) -> Result<()> {
+pub async fn upsert_node_on(access: &ConfigAccess, document: &Node) -> Result<()> {
     let value = serde_json::to_value(document)?;
     let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-        collection: Collection::AgentPrincipal,
+        collection: Collection::Node,
         add: value.clone(),
         update: value,
     }])?;
-    super::apply_plan(access, "desktop.agent_principal.save", plan).await
+    super::apply_plan(access, "desktop.node.save", plan).await
 }
 
 #[cfg(test)]
-pub async fn upsert_agent_principal(node: &EmbeddedNode, document: &AgentPrincipal) -> Result<()> {
+pub async fn upsert_node(node: &EmbeddedNode, document: &Node) -> Result<()> {
     let value = serde_json::to_value(document)?;
     let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-        collection: Collection::AgentPrincipal,
+        collection: Collection::Node,
         add: value.clone(),
         update: value,
     }])?;
-    ConfigAccess::transact_local(node, None, "desktop.agent_principal.save", |txn| {
+    ConfigAccess::transact_local(node, None, "desktop.node.save", |txn| {
         let plan = &plan;
         Box::pin(async move {
             apply_desired_state_plan(txn, plan).await?;
@@ -39,72 +36,64 @@ pub async fn upsert_agent_principal(node: &EmbeddedNode, document: &AgentPrincip
     .await
 }
 
-/// Make `behavior_id` the principal's default and enable it in one apply.
+/// Make `agent_id` the node's default and enable it in one apply.
 /// Publication rejects a disabled default, so the two changes cannot land
 /// separately; the same apply replaces a stored default that is disabled.
-pub async fn set_default_behavior_on(
+pub async fn set_default_agent_on(
     access: &ConfigAccess,
-    agent_did: &str,
-    behavior_id: &str,
+    node_did: &str,
+    agent_id: &str,
 ) -> Result<()> {
     access
-        .transact("desktop.principal.default_behavior", |txn| {
-            Box::pin(async move { set_default_behavior_in_txn(txn, agent_did, behavior_id).await })
+        .transact("desktop.node.default_agent", |txn| {
+            Box::pin(async move { set_default_agent_in_txn(txn, node_did, agent_id).await })
         })
         .await
 }
 
 #[cfg(test)]
-pub async fn set_default_behavior(
-    node: &EmbeddedNode,
-    agent_did: &str,
-    behavior_id: &str,
-) -> Result<()> {
-    ConfigAccess::transact_local(node, None, "desktop.principal.default_behavior", |txn| {
-        Box::pin(async move { set_default_behavior_in_txn(txn, agent_did, behavior_id).await })
+pub async fn set_default_agent(node: &EmbeddedNode, node_did: &str, agent_id: &str) -> Result<()> {
+    ConfigAccess::transact_local(node, None, "desktop.node.default_agent", |txn| {
+        Box::pin(async move { set_default_agent_in_txn(txn, node_did, agent_id).await })
     })
     .await
 }
 
-async fn set_default_behavior_in_txn(
+async fn set_default_agent_in_txn(
     txn: &gents::config_client::ConfigApplyTxn<'_>,
-    agent_did: &str,
-    behavior_id: &str,
+    node_did: &str,
+    agent_id: &str,
 ) -> Result<()> {
     use anyhow::Context;
     use gents::config_client::read_desired_state_record_in_txn;
-    let (_, mut principal) =
-        read_desired_state_record_in_txn(txn, Collection::AgentPrincipal, agent_did, agent_did)
+    let (_, mut node) = read_desired_state_record_in_txn(txn, Collection::Node, node_did, node_did)
+        .await?
+        .context("default agent requires an existing node")?;
+    let (_, mut agent) =
+        read_desired_state_record_in_txn(txn, Collection::Agent, node_did, agent_id)
             .await?
-            .context("default behavior requires an existing principal")?;
-    let (_, mut behavior) =
-        read_desired_state_record_in_txn(txn, Collection::AgentBehavior, agent_did, behavior_id)
-            .await?
-            .with_context(|| format!("AgentBehavior {behavior_id:?} does not exist"))?;
-    principal["default_behavior_id"] = behavior_id.into();
-    behavior["enabled"] = true.into();
+            .with_context(|| format!("Agent {agent_id:?} does not exist"))?;
+    node["default_agent_id"] = agent_id.into();
+    agent["enabled"] = true.into();
     let plan = DesiredStateApplyPlan::new(
-        [
-            (Collection::AgentBehavior, behavior),
-            (Collection::AgentPrincipal, principal),
-        ]
-        .into_iter()
-        .map(|(collection, value)| DesiredStateApplyDocument {
-            collection,
-            add: value.clone(),
-            update: value,
-        })
-        .collect(),
+        [(Collection::Agent, agent), (Collection::Node, node)]
+            .into_iter()
+            .map(|(collection, value)| DesiredStateApplyDocument {
+                collection,
+                add: value.clone(),
+                update: value,
+            })
+            .collect(),
     )?;
     apply_desired_state_plan(txn, &plan).await?;
     Ok(())
 }
 
-/// Apply supplied canonical components under an existing principal. The required
-/// PackConfig principal is scope-only: every field except agent_did must have its
-/// canonical default. Principal settings use upsert_agent_principal instead.
+/// Apply supplied canonical components under an existing node. The required
+/// PackConfig node is scope-only: every field except node_did must have its
+/// canonical default. Node settings use upsert_node instead.
 /// Omitted component documents remain unchanged. No deletes, interpolation,
-/// principal creation, or graph compilation are implied by this operation.
+/// node creation, or graph compilation are implied by this operation.
 #[cfg(test)]
 pub async fn apply_config_components(
     node: &EmbeddedNode,
@@ -118,12 +107,12 @@ pub async fn apply_config_components(
         Box::pin(async move {
             gents::config_client::read_desired_state_record_in_txn(
                 txn,
-                Collection::AgentPrincipal,
+                Collection::Node,
                 owner,
                 owner,
             )
             .await?
-            .context("component apply requires an existing principal")?;
+            .context("component apply requires an existing node")?;
             apply_desired_state_plan(txn, plan).await?;
             Ok(())
         })
@@ -144,12 +133,12 @@ pub async fn apply_config_components_on(
             Box::pin(async move {
                 gents::config_client::read_desired_state_record_in_txn(
                     txn,
-                    Collection::AgentPrincipal,
+                    Collection::Node,
                     owner,
                     owner,
                 )
                 .await?
-                .context("component apply requires an existing principal")?;
+                .context("component apply requires an existing node")?;
                 apply_desired_state_plan(txn, plan).await?;
                 Ok(())
             })
@@ -160,11 +149,11 @@ pub async fn apply_config_components_on(
 fn config_components_plan(
     document: &gents::document_config::PackConfig,
 ) -> Result<(String, DesiredStateApplyPlan)> {
-    let owner = document.agent_principal.agent_did.clone();
-    let scope: AgentPrincipal = serde_json::from_value(serde_json::json!({"agent_did":owner}))?;
+    let owner = document.node.node_did.clone();
+    let scope: Node = serde_json::from_value(serde_json::json!({"node_did":owner}))?;
     anyhow::ensure!(
-        serde_json::to_value(&document.agent_principal)? == serde_json::to_value(scope)?,
-        "component apply requires scope-only agent_principal; use principal save for principal settings"
+        serde_json::to_value(&document.node)? == serde_json::to_value(&scope)?,
+        "component apply requires scope-only node; use node save for node settings"
     );
     anyhow::ensure!(
         document.graph_intents.is_empty() && document.graph_capabilities.is_empty(),
@@ -174,15 +163,15 @@ fn config_components_plan(
     anyhow::ensure!(
         plan.documents().iter().all(|entry| entry
             .add
-            .get("agent_did")
+            .get("node_did")
             .and_then(serde_json::Value::as_str)
             == Some(owner.as_str())),
-        "component owner does not match the selected principal"
+        "component owner does not match the selected node"
     );
     let plan = DesiredStateApplyPlan::new(
         plan.documents()
             .iter()
-            .filter(|entry| entry.collection != Collection::AgentPrincipal)
+            .filter(|entry| entry.collection != Collection::Node)
             .cloned()
             .collect(),
     )?;
@@ -195,20 +184,20 @@ fn config_components_plan(
 /// This operation never creates or removes a document.
 pub async fn patch_config_components_on(
     access: &ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
     patches: &[(
         gents::config_client::patch::SelfConfigTarget,
         String,
         gents::config_client::patch::SelfConfigPatch,
     )],
 ) -> Result<()> {
-    patch_config_components_with(access, agent_did, patches).await
+    patch_config_components_with(access, node_did, patches).await
 }
 
 #[cfg(test)]
 pub async fn patch_config_components(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     patches: &[(
         gents::config_client::patch::SelfConfigTarget,
         String,
@@ -216,14 +205,14 @@ pub async fn patch_config_components(
     )],
 ) -> Result<()> {
     ConfigAccess::transact_local(node, None, "desktop.config.components.patch", |txn| {
-        Box::pin(async move { patch_config_components_in_txn(txn, agent_did, patches).await })
+        Box::pin(async move { patch_config_components_in_txn(txn, node_did, patches).await })
     })
     .await
 }
 
 async fn patch_config_components_with(
     access: &ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
     patches: &[(
         gents::config_client::patch::SelfConfigTarget,
         String,
@@ -232,14 +221,14 @@ async fn patch_config_components_with(
 ) -> Result<()> {
     access
         .transact("desktop.config.components.patch", |txn| {
-            Box::pin(async move { patch_config_components_in_txn(txn, agent_did, patches).await })
+            Box::pin(async move { patch_config_components_in_txn(txn, node_did, patches).await })
         })
         .await
 }
 
 async fn patch_config_components_in_txn(
     txn: &gents::config_client::ConfigApplyTxn<'_>,
-    agent_did: &str,
+    node_did: &str,
     patches: &[(
         gents::config_client::patch::SelfConfigTarget,
         String,
@@ -252,7 +241,7 @@ async fn patch_config_components_in_txn(
         read_desired_state_record_in_txn,
     };
     anyhow::ensure!(
-        !agent_did.trim().is_empty(),
+        !node_did.trim().is_empty(),
         "component patch requires an owner"
     );
     let mut identities = std::collections::HashSet::new();
@@ -267,13 +256,13 @@ async fn patch_config_components_in_txn(
         );
         ensure_admissible(*target, patch)?;
     }
-    read_desired_state_record_in_txn(txn, Collection::AgentPrincipal, agent_did, agent_did)
+    read_desired_state_record_in_txn(txn, Collection::Node, node_did, node_did)
         .await?
-        .context("component patch requires an existing principal")?;
+        .context("component patch requires an existing node")?;
     let mut documents = Vec::with_capacity(patches.len());
     for (target, id, patch) in patches {
         let (_, retained) =
-            read_desired_state_record_in_txn(txn, target.collection(), agent_did, id)
+            read_desired_state_record_in_txn(txn, target.collection(), node_did, id)
                 .await?
                 .with_context(|| {
                     format!(
@@ -304,18 +293,17 @@ mod tests {
     use serde_json::json;
 
     #[tokio::test]
-    async fn principal_replacement_keeps_authored_metadata_and_scoped_default_binding() -> Result<()>
-    {
+    async fn node_replacement_keeps_authored_metadata_and_scoped_default_binding() -> Result<()> {
         let node = EmbeddedNode::builder().build().await?;
         gents::ensure_runtime_schemas(&node).await?;
         let config: gents::document_config::PackConfig = serde_json::from_value(json!({
-            "agent_principal":{"agent_did":"did:test:other"},
-            "inference_backends":[{"agent_did":"did:test:other","backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}],
-            "inference_profiles":[{"agent_did":"did:test:other","profile_id":"profile","backend_id":"backend","model_name":"model"}],
-            "agent_behaviors":[{"agent_did":"did:test:other","behavior_id":"default","inference_profile_id":"profile"}]
+            "node":{"node_did":"did:test:other"},
+            "inference_backends":[{"node_did":"did:test:other","backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}],
+            "inference_profiles":[{"node_did":"did:test:other","profile_id":"profile","backend_id":"backend","model_name":"model"}],
+            "agents":[{"node_did":"did:test:other","agent_id":"default","inference_profile_id":"profile"}]
         }))?;
         let plan = DesiredStateApplyPlan::from_pack_config(&config)?;
-        ConfigAccess::transact_local(&node, None, "desktop.principal.seed", |txn| {
+        ConfigAccess::transact_local(&node, None, "desktop.node.seed", |txn| {
             let plan = &plan;
             Box::pin(async move {
                 apply_desired_state_plan(txn, plan).await?;
@@ -323,27 +311,27 @@ mod tests {
             })
         })
         .await?;
-        let mut document: AgentPrincipal = serde_json::from_value(
-            json!({"agent_did":"did:test:principal","display_name":"Agent","created_at":"2026-01-01T00:00:00Z","created_by":"did:test:creator","tags":["team"]}),
+        let mut document: Node = serde_json::from_value(
+            json!({"node_did":"did:test:node","display_name":"Agent","created_at":"2026-01-01T00:00:00Z","created_by":"did:test:creator","tags":["team"]}),
         )?;
-        upsert_agent_principal(&node, &document).await?;
-        document.default_behavior_id = Some("default".into());
-        assert!(upsert_agent_principal(&node, &document).await.is_err());
-        ConfigAccess::transact_local(&node, None, "desktop.principal.verify", |txn| {
+        upsert_node(&node, &document).await?;
+        document.default_agent_id = Some("default".into());
+        assert!(upsert_node(&node, &document).await.is_err());
+        ConfigAccess::transact_local(&node, None, "desktop.node.verify", |txn| {
             Box::pin(async move {
                 let (_, value) = read_desired_state_record_in_txn(
                     txn,
-                    Collection::AgentPrincipal,
-                    "did:test:principal",
-                    "did:test:principal",
+                    Collection::Node,
+                    "did:test:node",
+                    "did:test:node",
                 )
                 .await?
                 .unwrap();
-                let saved: AgentPrincipal = serde_json::from_value(value)?;
+                let saved: Node = serde_json::from_value(value)?;
                 assert_eq!(saved.created_at.as_deref(), Some("2026-01-01T00:00:00Z"));
                 assert_eq!(saved.created_by.as_deref(), Some("did:test:creator"));
                 assert_eq!(saved.tags, vec!["team"]);
-                assert!(saved.default_behavior_id.is_none());
+                assert!(saved.default_agent_id.is_none());
                 Ok(())
             })
         })
@@ -356,12 +344,12 @@ mod tests {
         gents::ensure_runtime_schemas(&node).await?;
         let owner = "did:test:default";
         let seed: gents::document_config::PackConfig = serde_json::from_value(json!({
-            "agent_principal":{"agent_did":owner,"default_behavior_id":"first","tags":["keep"]},
-            "inference_backends":[{"agent_did":owner,"backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}],
-            "inference_profiles":[{"agent_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model"}],
-            "agent_behaviors":[
-                {"agent_did":owner,"behavior_id":"first","inference_profile_id":"profile"},
-                {"agent_did":owner,"behavior_id":"second","inference_profile_id":"profile","enabled":false}
+            "node":{"node_did":owner,"default_agent_id":"first","tags":["keep"]},
+            "inference_backends":[{"node_did":owner,"backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}],
+            "inference_profiles":[{"node_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model"}],
+            "agents":[
+                {"node_did":owner,"agent_id":"first","inference_profile_id":"profile"},
+                {"node_did":owner,"agent_id":"second","inference_profile_id":"profile","enabled":false}
             ]
         }))?;
         let plan = DesiredStateApplyPlan::from_pack_config(&seed)?;
@@ -374,34 +362,34 @@ mod tests {
         })
         .await?;
         // A default stored disabled before the rule: every validated apply
-        // over this principal now fails until the default changes.
+        // over this node now fails until the default changes.
         ConfigAccess::write_local(
             &node,
             "test.default.stale",
-            r#"mutation { update_AgentBehavior(
-                filter: { agent_did: { _eq: "did:test:default" }, behavior_id: { _eq: "first" } },
+            r#"mutation { update_Agent(
+                filter: { node_did: { _eq: "did:test:default" }, agent_id: { _eq: "first" } },
                 input: { enabled: false }
             ) { _docID } }"#,
         )
         .await?;
 
-        assert!(set_default_behavior(&node, owner, "missing").await.is_err());
-        set_default_behavior(&node, owner, "second").await?;
+        assert!(set_default_agent(&node, owner, "missing").await.is_err());
+        set_default_agent(&node, owner, "second").await?;
         ConfigAccess::transact_local(&node, None, "desktop.default.verify", |txn| {
             Box::pin(async move {
-                let (_, principal) = read_desired_state_record_in_txn(
+                let (_, node) = read_desired_state_record_in_txn(
                     txn,
-                    Collection::AgentPrincipal,
+                    Collection::Node,
                     "did:test:default",
                     "did:test:default",
                 )
                 .await?
                 .unwrap();
-                assert_eq!(principal["default_behavior_id"], "second");
-                assert_eq!(principal["tags"], json!(["keep"]));
+                assert_eq!(node["default_agent_id"], "second");
+                assert_eq!(node["tags"], json!(["keep"]));
                 let (_, second) = read_desired_state_record_in_txn(
                     txn,
-                    Collection::AgentBehavior,
+                    Collection::Agent,
                     "did:test:default",
                     "second",
                 )
@@ -416,16 +404,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn component_apply_is_partial_atomic_scoped_and_preserves_principal() -> Result<()> {
+    async fn component_apply_is_partial_atomic_scoped_and_preserves_node() -> Result<()> {
         let node = EmbeddedNode::builder().build().await?;
         gents::ensure_runtime_schemas(&node).await?;
         let owner = "did:test:components";
         let seed: gents::document_config::PackConfig = serde_json::from_value(json!({
-            "agent_principal":{"agent_did":owner,"display_name":"Keep name","default_behavior_id":"behavior","created_at":"2026-01-01T00:00:00Z","created_by":"did:test:creator","tags":["keep"]},
-            "inference_backends":[{"agent_did":owner,"backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}],
-            "inference_profiles":[{"agent_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model"}],
-            "agent_behaviors":[{"agent_did":owner,"behavior_id":"behavior","context_id":"context","inference_profile_id":"profile"}],
-            "contexts":[{"agent_did":owner,"context_id":"context","system_prompt":"initial"}]
+            "node":{"node_did":owner,"display_name":"Keep name","default_agent_id":"agent","created_at":"2026-01-01T00:00:00Z","created_by":"did:test:creator","tags":["keep"]},
+            "inference_backends":[{"node_did":owner,"backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}],
+            "inference_profiles":[{"node_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model"}],
+            "agents":[{"node_did":owner,"agent_id":"agent","context_id":"context","inference_profile_id":"profile"}],
+            "contexts":[{"node_did":owner,"context_id":"context","system_prompt":"initial"}]
         }))?;
         let plan = DesiredStateApplyPlan::from_pack_config(&seed)?;
         ConfigAccess::transact_local(&node, None, "desktop.component.seed", |txn| {
@@ -436,19 +424,19 @@ mod tests {
             })
         })
         .await?;
-        let input = json!({"agent_principal":{"agent_did":owner},"contexts":[{"agent_did":owner,"context_id":"context","system_prompt":"literal ${NOT_AN_ENV} {{ not_a_template }}"}]});
+        let input = json!({"node":{"node_did":owner},"contexts":[{"node_did":owner,"context_id":"context","system_prompt":"literal ${NOT_AN_ENV} {{ not_a_template }}"}]});
         let document = serde_json::from_value(input.clone())?;
         apply_config_components(&node, &document).await?;
         let mut invalid = input.clone();
         invalid["contexts"][0]["system_prompt"] = json!("must roll back");
-        invalid["inference_profiles"] = json!([{"agent_did":owner,"profile_id":"bad","backend_id":"missing","model_name":"model"}]);
+        invalid["inference_profiles"] = json!([{"node_did":owner,"profile_id":"bad","backend_id":"missing","model_name":"model"}]);
         assert!(
             apply_config_components(&node, &serde_json::from_value(invalid)?)
                 .await
                 .is_err()
         );
         let mut foreign = input.clone();
-        foreign["contexts"][0]["agent_did"] = json!("did:test:foreign");
+        foreign["contexts"][0]["node_did"] = json!("did:test:foreign");
         assert!(
             apply_config_components(&node, &serde_json::from_value(foreign)?)
                 .await
@@ -456,41 +444,40 @@ mod tests {
         );
         for (key, value) in [
             ("display_name", json!("discarded")),
-            ("default_behavior_id", json!("different")),
+            ("default_agent_id", json!("different")),
             ("created_at", json!("2026-02-01T00:00:00Z")),
             ("created_by", json!("other")),
             ("enabled", json!(false)),
             ("tags", json!(["other"])),
         ] {
             let mut changed = input.clone();
-            changed["agent_principal"][key] = value;
+            changed["node"][key] = value;
             assert!(
                 apply_config_components(&node, &serde_json::from_value(changed)?)
                     .await
                     .is_err(),
-                "must reject meaningful principal setting {key}"
+                "must reject meaningful node setting {key}"
             );
         }
         let mut graph = input.clone();
-        graph["graph_capabilities"] = json!([{"agent_did":owner,"capability_id":"cap","revision":"r","target":{"kind":"task","task_id":"task"}}]);
+        graph["graph_capabilities"] = json!([{"node_did":owner,"capability_id":"cap","revision":"r","target":{"kind":"task","task_id":"task"}}]);
         assert!(
             apply_config_components(&node, &serde_json::from_value(graph)?)
                 .await
                 .is_err()
         );
-        let absent =
-            serde_json::from_value(json!({"agent_principal":{"agent_did":"did:test:missing"}}))?;
+        let absent = serde_json::from_value(json!({"node":{"node_did":"did:test:missing"}}))?;
         assert!(apply_config_components(&node, &absent).await.is_err());
         ConfigAccess::transact_local(&node, None, "desktop.component.verify", |txn| {
             Box::pin(async move {
-                let (_, principal) =
-                    read_desired_state_record_in_txn(txn, Collection::AgentPrincipal, owner, owner)
+                let (_, node) =
+                    read_desired_state_record_in_txn(txn, Collection::Node, owner, owner)
                         .await?
                         .unwrap();
-                assert_eq!(principal["display_name"], "Keep name");
-                assert_eq!(principal["default_behavior_id"], "behavior");
-                assert_eq!(principal["created_by"], "did:test:creator");
-                assert_eq!(principal["tags"], json!(["keep"]));
+                assert_eq!(node["display_name"], "Keep name");
+                assert_eq!(node["default_agent_id"], "agent");
+                assert_eq!(node["created_by"], "did:test:creator");
+                assert_eq!(node["tags"], json!(["keep"]));
                 assert!(read_desired_state_record_in_txn(
                     txn,
                     Collection::InferenceProfile,
@@ -509,7 +496,7 @@ mod tests {
                 .is_none());
                 assert!(read_desired_state_record_in_txn(
                     txn,
-                    Collection::AgentPrincipal,
+                    Collection::Node,
                     "did:test:missing",
                     "did:test:missing"
                 )
@@ -542,9 +529,9 @@ mod tests {
         let owner = "did:test:patch";
         for scope in [owner, "did:test:other-patch"] {
             let config: gents::document_config::PackConfig = serde_json::from_value(json!({
-                "agent_principal":{"agent_did":scope},
-                "inference_backends":[{"agent_did":scope,"backend_id":" backend ","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"api_key","key":"secret-retained"},"connect_timeout_secs":7,"discovery_timeout_secs":8,"max_queue_depth":0,"tags":["retained"]}],
-                "inference_profiles":[{"agent_did":scope,"profile_id":"profile","backend_id":" backend ","model_name":"initial"}]
+                "node":{"node_did":scope},
+                "inference_backends":[{"node_did":scope,"backend_id":" backend ","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"api_key","key":"secret-retained"},"connect_timeout_secs":7,"discovery_timeout_secs":8,"max_queue_depth":0,"tags":["retained"]}],
+                "inference_profiles":[{"node_did":scope,"profile_id":"profile","backend_id":" backend ","model_name":"initial"}]
             }))?;
             let plan = DesiredStateApplyPlan::from_pack_config(&config)?;
             ConfigAccess::transact_local(&node, None, "test.patch.seed", |txn| {
@@ -621,7 +608,7 @@ mod tests {
         ]).await.is_err());
         assert_eq!(read().await?, before);
         for changes in [
-            json!({"agent_did":"did:test:other-patch"}),
+            json!({"node_did":"did:test:other-patch"}),
             json!({"backend_id":"retarget"}),
             json!({"models":["invented"]}),
         ] {

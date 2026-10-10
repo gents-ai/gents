@@ -51,7 +51,7 @@ pub(super) async fn kill(
     let scopes = roots
         .iter()
         .map(|session| SessionScope {
-            agent_did: principal.to_owned(),
+            node_did: principal.to_owned(),
             session_id: session.clone(),
             requester_did: Some(principal.to_owned()),
         })
@@ -62,7 +62,7 @@ pub(super) async fn kill(
         }
         candidates.push((
             caused.scope.session_id,
-            caused.scope.agent_did,
+            caused.scope.node_did,
             caused.scope.requester_did,
         ));
     }

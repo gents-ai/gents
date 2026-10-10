@@ -9,34 +9,34 @@ use uuid::Uuid;
 #[tokio::test]
 async fn mcp_register_upserts_a_host_endpoint() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
-    let agent_home = tempdir.path().join("agent-home");
+    let node_home = tempdir.path().join("node-home");
     let service_id = format!("registered-mcp-{}", Uuid::new_v4().simple());
     {
-        let node = initialized_agent_node(tempdir.path(), &agent_home, "mcp-register-test").await?;
+        let node = initialized_node(tempdir.path(), &node_home, "mcp-register-test").await?;
         ensure_runtime_schemas(&node).await?;
     }
-    let agent_home_text = agent_home.to_str().context("agent home utf8")?;
+    let node_home_text = node_home.to_str().context("node home utf8")?;
     let output = run_cli_text(
         tempdir.path(),
         &[
             "mcp",
             "register",
             "--home",
-            agent_home_text,
+            node_home_text,
             "--endpoint",
             "http://127.0.0.1:9213/mcp",
             "--display-name",
             "Research Gateway",
-            "--send-agent-did",
+            "--send-node-did",
             &service_id,
         ],
     )?;
     assert!(output.contains(&service_id));
 
-    let node = initialized_agent_node(tempdir.path(), &agent_home, "mcp-register-read").await?;
+    let node = initialized_node(tempdir.path(), &node_home, "mcp-register-read").await?;
     let query = format!(
         r#"{{ ToolServiceRegistry(filter: {{ service_id: {{ _eq: "{service_id}" }} }}) {{
-            service_id display_name hostname lan_ip mcp_port mcp_path send_agent_did status
+            service_id display_name hostname lan_ip mcp_port mcp_path send_node_did status
         }} }}"#
     );
     let response = node.execute(&query).await;
@@ -52,7 +52,7 @@ async fn mcp_register_upserts_a_host_endpoint() -> Result<()> {
     assert_eq!(row.get("mcp_port").and_then(Value::as_i64), Some(9213));
     assert_eq!(row.get("mcp_path").and_then(Value::as_str), Some("/mcp"));
     assert_eq!(
-        row.get("send_agent_did").and_then(Value::as_bool),
+        row.get("send_node_did").and_then(Value::as_bool),
         Some(true)
     );
     assert_eq!(row.get("status").and_then(Value::as_str), Some("online"));
@@ -62,23 +62,23 @@ async fn mcp_register_upserts_a_host_endpoint() -> Result<()> {
 #[tokio::test]
 async fn mcp_probe_json_reports_health_snapshot_for_registry_service() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
-    let agent_home = tempdir.path().join("agent-home");
+    let node_home = tempdir.path().join("node-home");
     let service_id = format!("fixture-mcp-{}", Uuid::new_v4().simple());
 
     {
-        let node = initialized_agent_node(tempdir.path(), &agent_home, "mcp-probe-test").await?;
+        let node = initialized_node(tempdir.path(), &node_home, "mcp-probe-test").await?;
         ensure_runtime_schemas(&node).await?;
         seed_mcp_service(&node, &service_id, "fixture-host", "", "", 0, "online").await?;
     }
 
-    let agent_home = agent_home.to_str().context("agent home utf8")?;
+    let node_home = node_home.to_str().context("node home utf8")?;
     let output = run_cli_json(
         tempdir.path(),
         &[
             "mcp",
             "probe",
             "--home",
-            agent_home,
+            node_home,
             "--timeout",
             "1s",
             "--output",
@@ -114,7 +114,7 @@ async fn mcp_probe_json_reports_health_snapshot_for_registry_service() -> Result
 
     let table = run_cli_text(
         tempdir.path(),
-        &["mcp", "probe", "--home", agent_home, &service_id],
+        &["mcp", "probe", "--home", node_home, &service_id],
     )?;
     assert!(
         table.contains("SERVICE") && table.contains("HEALTH_STATE") && table.contains(&service_id),
@@ -127,27 +127,27 @@ async fn mcp_probe_json_reports_health_snapshot_for_registry_service() -> Result
 #[tokio::test]
 async fn mcp_probe_all_json_lists_each_online_service() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
-    let agent_home = tempdir.path().join("agent-home");
+    let node_home = tempdir.path().join("node-home");
     let missing_port_id = format!("a-fixture-mcp-{}", Uuid::new_v4().simple());
     let missing_address_id = format!("b-fixture-mcp-{}", Uuid::new_v4().simple());
     let offline_id = format!("z-fixture-mcp-{}", Uuid::new_v4().simple());
 
     {
-        let node = initialized_agent_node(tempdir.path(), &agent_home, "mcp-probe-all").await?;
+        let node = initialized_node(tempdir.path(), &node_home, "mcp-probe-all").await?;
         ensure_runtime_schemas(&node).await?;
         seed_mcp_service(&node, &missing_port_id, "fixture-host", "", "", 0, "online").await?;
         seed_mcp_service(&node, &missing_address_id, "", "", "", 9201, "online").await?;
         seed_mcp_service(&node, &offline_id, "offline-host", "", "", 0, "offline").await?;
     }
 
-    let agent_home = agent_home.to_str().context("agent home utf8")?;
+    let node_home = node_home.to_str().context("node home utf8")?;
     let output = run_cli_json(
         tempdir.path(),
         &[
             "mcp",
             "probe",
             "--home",
-            agent_home,
+            node_home,
             "--all",
             "--timeout",
             "1s",
@@ -180,17 +180,17 @@ async fn mcp_probe_all_json_lists_each_online_service() -> Result<()> {
 #[tokio::test]
 async fn mcp_probe_single_missing_service_fails() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
-    let agent_home = tempdir.path().join("agent-home");
+    let node_home = tempdir.path().join("node-home");
 
     {
-        let node = initialized_agent_node(tempdir.path(), &agent_home, "mcp-probe-missing").await?;
+        let node = initialized_node(tempdir.path(), &node_home, "mcp-probe-missing").await?;
         ensure_runtime_schemas(&node).await?;
     }
 
-    let agent_home = agent_home.to_str().context("agent home utf8")?;
+    let node_home = node_home.to_str().context("node home utf8")?;
     let stderr = run_cli_failure_stderr(
         tempdir.path(),
-        &["mcp", "probe", "--home", agent_home, "missing-service"],
+        &["mcp", "probe", "--home", node_home, "missing-service"],
     )?;
     assert!(
         stderr.contains("no online MCP service matched missing-service"),

@@ -148,10 +148,10 @@ impl Fixture {
         caps: BTreeSet<String>,
     ) -> HostExecutorContext<'a> {
         HostExecutorContext {
-            owner_agent_did: "did:key:zWorkspaceOwner".to_string(),
+            owner_node_did: "did:key:zWorkspaceOwner".to_string(),
             repository: RepositoryPlacementRef {
                 repository_id: "repo-1".to_string(),
-                owner_agent_did: "did:key:zWorkspaceOwner".to_string(),
+                owner_node_did: "did:key:zWorkspaceOwner".to_string(),
                 host_path: self.repo.clone(),
                 enabled: true,
             },
@@ -236,7 +236,7 @@ fn isolated_workspace_mutation_has_no_host_path() {
         branch: "topic".into(),
         creation_policy: "git_worktree_diff".into(),
         adapter: "git_worktree".into(),
-        owner_agent_did: "did:key:zWorkspaceOwner".into(),
+        owner_node_did: "did:key:zWorkspaceOwner".into(),
         writer_principal: "did:key:zW".into(),
         integrator_principal: "did:key:zI".into(),
         instruction_manifest: "{}".into(),
@@ -247,14 +247,14 @@ fn isolated_workspace_mutation_has_no_host_path() {
     };
     let mutation = isolated_workspace_upsert_mutation(&doc);
     assert!(!mutation.contains("host_path"));
-    assert!(mutation.contains("owner_agent_did: { _eq: \"did:key:zWorkspaceOwner\" }"));
+    assert!(mutation.contains("owner_node_did: { _eq: \"did:key:zWorkspaceOwner\" }"));
     assert!(mutation.contains("upsert_IsolatedWorkspace"));
     assert!(!mutation.contains("create_IsolatedWorkspace"));
     assert!(mutation.contains("seal_hash: null"));
     assert!(mutation.contains("instruction_manifest:"));
     let placement = WorkspacePlacementDoc {
         workspace_id: "ws-1".into(),
-        owner_agent_did: "did:key:zWorkspaceOwner".into(),
+        owner_node_did: "did:key:zWorkspaceOwner".into(),
         host_path: "/tmp/ws".into(),
         repository_placement_id: "repo-1".into(),
         adapter: "git_worktree".into(),
@@ -267,12 +267,12 @@ fn isolated_workspace_mutation_has_no_host_path() {
     let placement_mutation =
         workspace_placement_upsert_mutation(&placement, "2026-08-21T00:00:00Z");
     assert!(placement_mutation.contains("host_path:"));
-    assert!(placement_mutation.contains("owner_agent_did: { _eq: \"did:key:zWorkspaceOwner\" }"));
+    assert!(placement_mutation.contains("owner_node_did: { _eq: \"did:key:zWorkspaceOwner\" }"));
     assert!(!placement_mutation.contains("[]"));
     let repository_mutation = repository_placement_upsert_mutation(
         &RepositoryPlacementRef {
             repository_id: "repo-1".into(),
-            owner_agent_did: "did:key:zWorkspaceOwner".into(),
+            owner_node_did: "did:key:zWorkspaceOwner".into(),
             host_path: PathBuf::from("/tmp/repo\"quoted"),
             enabled: true,
         },
@@ -280,7 +280,7 @@ fn isolated_workspace_mutation_has_no_host_path() {
     )
     .unwrap();
     assert!(repository_mutation.contains("upsert_RepositoryPlacement"));
-    assert!(repository_mutation.contains("agent_did: { _eq: \"did:key:zWorkspaceOwner\" }"));
+    assert!(repository_mutation.contains("node_did: { _eq: \"did:key:zWorkspaceOwner\" }"));
     assert!(repository_mutation.contains("/tmp/repo\\\"quoted"));
     assert!(!repository_mutation.contains("[]"));
     let receipt = WorkspaceReceiptDoc {
@@ -316,7 +316,7 @@ fn workspace_creation_rejects_foreign_repository_owner_before_effects() {
     let plan = emit_create_workspace_plan(fx.action("ws-foreign-owner", "unit-1", "foreign-owner"));
     let mut journal = Vec::new();
     let mut ctx = fx.ctx(&mut docs, git_worktree_caps());
-    ctx.repository.owner_agent_did = "did:key:zOtherOwner".into();
+    ctx.repository.owner_node_did = "did:key:zOtherOwner".into();
     let error = execute_create_workspace_plan(&plan, &mut journal, &mut ctx).unwrap_err();
     assert!(matches!(error, HostExecuteError::Denied { .. }));
     assert!(
@@ -993,7 +993,7 @@ fn seal_drift_fails_closed() {
         workspace_id: "ws-drift".into(),
         work_unit_id: None,
         caused_by_invocation_id: None,
-        owner_agent_did: "did:key:zWorkspaceOwner".into(),
+        owner_node_did: "did:key:zWorkspaceOwner".into(),
         writer_principal: "did:key:zWriter".into(),
         integrator_principal: "did:key:zIntegrator".into(),
         lifecycle_state: "sealed".into(),
@@ -1002,7 +1002,7 @@ fn seal_drift_fails_closed() {
     };
     let mut placed = super::WorkspacePlacementRecord {
         workspace_id: "ws-drift".into(),
-        owner_agent_did: "did:key:zWorkspaceOwner".into(),
+        owner_node_did: "did:key:zWorkspaceOwner".into(),
         host_path: dest.to_string_lossy().into_owned(),
         observed_tree_hash: Some(hash.clone()),
     };
@@ -1014,7 +1014,7 @@ fn seal_drift_fails_closed() {
             authority: crate::toolset::WorkspaceAuthority::ReadOnly,
             seal_hash: Some(&hash),
             request_cwd: None,
-            agent_did: "did:key:zWorkspaceOwner",
+            node_did: "did:key:zWorkspaceOwner",
             operator_tool_root: Some(fx.parent()),
             workspace_write_sandbox_enforced: false,
             live_tree_hash: Some(&live),
@@ -1032,7 +1032,7 @@ fn seal_drift_fails_closed() {
             authority: crate::toolset::WorkspaceAuthority::ReadOnly,
             seal_hash: Some(&hash),
             request_cwd: None,
-            agent_did: "did:key:zWorkspaceOwner",
+            node_did: "did:key:zWorkspaceOwner",
             operator_tool_root: Some(fx.parent()),
             workspace_write_sandbox_enforced: false,
             live_tree_hash: Some(&hash),
@@ -1476,7 +1476,7 @@ fn cleanup_is_explicit_and_leaves_disk_until_called() {
     let mutation = super::documents::workspace_cleanup_docs_mutation(&cleaned.workspace, &[]);
     assert!(mutation.contains("lifecycle_state: \"cleaned\""));
     assert!(!mutation.contains("host_path"));
-    assert!(mutation.contains("owner_agent_did: { _eq: \"did:key:zWorkspaceOwner\" }"));
+    assert!(mutation.contains("owner_node_did: { _eq: \"did:key:zWorkspaceOwner\" }"));
 }
 
 #[test]

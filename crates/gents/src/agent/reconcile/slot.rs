@@ -9,7 +9,7 @@ use tokio_util::task::AbortOnDropHandle;
 
 use crate::admission::BackendAdmissionConfig;
 use crate::agent::worker_capacity::{scope_slot_capacity, WorkerCapacity};
-use crate::config::ResolvedBehavior;
+use crate::config::ResolvedAgent;
 use crate::retry::RetryPolicy;
 use crate::runtime_snapshot::ResolvedRuntimeSnapshot;
 use crate::startup_readiness::{BuildOutcome, BuildStanding};
@@ -18,7 +18,7 @@ use crate::watcher::AgentRequest;
 
 use std::collections::HashMap;
 
-const BEHAVIOR_EXECUTOR_QUEUE_CAPACITY: usize = 32;
+const AGENT_EXECUTOR_QUEUE_CAPACITY: usize = 32;
 // A configured backend may advertise a very large inference limit. Local
 // request workers are a separate bounded resource.
 const MAX_BEHAVIOR_WORKERS: usize = 256;
@@ -28,16 +28,16 @@ fn bounded_active_limit(requested: usize) -> usize {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum BehaviorSlotState {
+pub(super) enum AgentSlotState {
     Active,
     Retiring,
 }
 
-pub(super) struct BehaviorSlot {
+pub(super) struct AgentSlot {
     pub(super) dispatcher: mpsc::Sender<AgentRequest>,
-    pub(super) state_tx: watch::Sender<BehaviorSlotState>,
+    pub(super) state_tx: watch::Sender<AgentSlotState>,
     pub(super) handle: AbortOnDropHandle<Result<()>>,
-    pub(super) behavior_fingerprint: String,
+    pub(super) agent_fingerprint: String,
     pub(super) tool_surface_fingerprint: String,
     pub(super) executor_capacity: usize,
     #[cfg(test)]
@@ -46,14 +46,14 @@ pub(super) struct BehaviorSlot {
     pub(super) generation: u64,
 }
 
-impl BehaviorSlot {
+impl AgentSlot {
     pub(super) fn matches(
         &self,
-        behavior: &Arc<ResolvedBehavior>,
+        agent_config: &Arc<ResolvedAgent>,
         tool_surface: &Arc<ToolSurface>,
         executor_capacity: usize,
     ) -> bool {
-        self.behavior_fingerprint == crate::completion_factory::behavior_slot_fingerprint(behavior)
+        self.agent_fingerprint == crate::completion_factory::agent_slot_fingerprint(agent_config)
             && self.tool_surface_fingerprint == format!("{tool_surface:?}")
             && self.executor_capacity == executor_capacity
     }
@@ -62,20 +62,20 @@ impl BehaviorSlot {
 #[async_trait::async_trait]
 pub(crate) trait SlotFailurePolicy: Send + Sync {
     fn build_failure_budget(&self) -> u32;
-    fn on_build_failure(&self, _behavior_id: &str, _failure_number: u32, _error: &str) {}
-    async fn on_slot_created(&self, behavior_id: &str, generation: u64) -> Result<()>;
-    async fn try_demote(&self, behavior_id: &str, generation: u64, error: &str) -> Result<bool>;
-    async fn on_slot_retired(&self, behavior_id: &str, generation: u64, recreated: bool);
+    fn on_build_failure(&self, _agent_id: &str, _failure_number: u32, _error: &str) {}
+    async fn on_slot_created(&self, agent_id: &str, generation: u64) -> Result<()>;
+    async fn try_demote(&self, agent_id: &str, generation: u64, error: &str) -> Result<bool>;
+    async fn on_slot_retired(&self, agent_id: &str, generation: u64, recreated: bool);
 }
 
 async fn handle_slot_failure(
-    behavior_id: &str,
+    agent_id: &str,
     generation: u64,
     error: &str,
     failure_policy: Option<&dyn SlotFailurePolicy>,
     standing: &Arc<std::sync::Mutex<BuildStanding>>,
     shutdown: &mut watch::Receiver<bool>,
-    state_rx: &mut watch::Receiver<BehaviorSlotState>,
+    state_rx: &mut watch::Receiver<AgentSlotState>,
 ) -> bool {
     let Some(policy) = failure_policy else {
         return false;
@@ -109,7 +109,7 @@ async fn handle_slot_failure(
         }
     };
     if let Some(failure_number) = failure_number {
-        policy.on_build_failure(behavior_id, failure_number, error);
+        policy.on_build_failure(agent_id, failure_number, error);
     }
     match verdict {
         Verdict::Restart | Verdict::StillPending => return false,
@@ -119,15 +119,15 @@ async fn handle_slot_failure(
         }
         Verdict::Transitioned => {}
     }
-    match policy.try_demote(behavior_id, generation, error).await {
+    match policy.try_demote(agent_id, generation, error).await {
         Ok(true) => {}
         Ok(false) => tracing::warn!(
-            behavior_id,
+            agent_id,
             generation,
             "startup demotion was already stale; keeping the exhausted slot fail closed"
         ),
         Err(error) => tracing::error!(
-            behavior_id,
+            agent_id,
             generation,
             error = %error,
             "failed to persist startup demotion; keeping the exhausted slot fail closed"
@@ -139,10 +139,10 @@ async fn handle_slot_failure(
 
 async fn park_until_retired(
     shutdown: &mut watch::Receiver<bool>,
-    state_rx: &mut watch::Receiver<BehaviorSlotState>,
+    state_rx: &mut watch::Receiver<AgentSlotState>,
 ) {
     loop {
-        if *shutdown.borrow() || *state_rx.borrow() == BehaviorSlotState::Retiring {
+        if *shutdown.borrow() || *state_rx.borrow() == AgentSlotState::Retiring {
             return;
         }
         tokio::select! {
@@ -167,10 +167,10 @@ pub(super) fn spawn_slots<F, Fut>(
     runner: F,
     shutdown: watch::Receiver<bool>,
     failure_policy: Option<Arc<dyn SlotFailurePolicy>>,
-) -> HashMap<String, BehaviorSlot>
+) -> HashMap<String, AgentSlot>
 where
     F: Fn(
-            Arc<ResolvedBehavior>,
+            Arc<ResolvedAgent>,
             Arc<ToolSurface>,
             Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
             u64,
@@ -182,19 +182,19 @@ where
         + 'static,
     Fut: std::future::Future<Output = Result<()>> + Send + 'static,
 {
-    let mut slots = HashMap::with_capacity(resolved_snapshot.behaviors.len());
-    for (behavior_id, behavior) in &resolved_snapshot.behaviors {
+    let mut slots = HashMap::with_capacity(resolved_snapshot.agents.len());
+    for (agent_id, agent_config) in &resolved_snapshot.agents {
         let tool_surface = resolved_snapshot
             .tool_surfaces
-            .get(behavior_id)
+            .get(agent_id)
             .cloned()
-            .expect("resolved snapshot should include tool surfaces for runnable behaviors");
+            .expect("resolved snapshot should include tool surfaces for runnable agents");
         slots.insert(
-            behavior_id.clone(),
+            agent_id.clone(),
             spawn_slot_with_capacity(
-                behavior.clone(),
+                agent_config.clone(),
                 tool_surface,
-                behavior_executor_capacity(behavior, &resolved_snapshot.backend_admission_configs),
+                agent_executor_capacity(agent_config, &resolved_snapshot.backend_admission_configs),
                 generation,
                 retry_policy.clone(),
                 runner.clone(),
@@ -208,15 +208,15 @@ where
 
 #[cfg(test)]
 pub(super) fn spawn_slot<F, Fut>(
-    behavior: Arc<ResolvedBehavior>,
+    agent_config: Arc<ResolvedAgent>,
     tool_surface: Arc<ToolSurface>,
     retry_policy: RetryPolicy,
     runner: F,
     shutdown: watch::Receiver<bool>,
-) -> BehaviorSlot
+) -> AgentSlot
 where
     F: Fn(
-            Arc<ResolvedBehavior>,
+            Arc<ResolvedAgent>,
             Arc<ToolSurface>,
             Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
             u64,
@@ -229,7 +229,7 @@ where
     Fut: std::future::Future<Output = Result<()>> + Send + 'static,
 {
     spawn_slot_with_capacity(
-        behavior,
+        agent_config,
         tool_surface,
         1,
         1,
@@ -241,7 +241,7 @@ where
 }
 
 pub(super) fn spawn_slot_with_capacity<F, Fut>(
-    behavior: Arc<ResolvedBehavior>,
+    agent_config: Arc<ResolvedAgent>,
     tool_surface: Arc<ToolSurface>,
     executor_capacity: usize,
     generation: u64,
@@ -249,10 +249,10 @@ pub(super) fn spawn_slot_with_capacity<F, Fut>(
     runner: F,
     shutdown: watch::Receiver<bool>,
     failure_policy: Option<Arc<dyn SlotFailurePolicy>>,
-) -> BehaviorSlot
+) -> AgentSlot
 where
     F: Fn(
-            Arc<ResolvedBehavior>,
+            Arc<ResolvedAgent>,
             Arc<ToolSurface>,
             Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
             u64,
@@ -268,23 +268,23 @@ where
     let executor_capacity = bounded_active_limit(executor_capacity);
     if requested_capacity > executor_capacity {
         tracing::warn!(
-            behavior_id = %behavior.behavior_id,
+            agent_id = %agent_config.agent_id,
             requested_capacity,
             executor_capacity,
             max_worker_tasks = MAX_BEHAVIOR_WORKERS,
-            "local behavior worker capacity was bounded"
+            "local node agent worker capacity was bounded"
         );
     }
     let capacity = WorkerCapacity::new(executor_capacity);
-    let (dispatcher, request_rx) = mpsc::channel(BEHAVIOR_EXECUTOR_QUEUE_CAPACITY);
+    let (dispatcher, request_rx) = mpsc::channel(AGENT_EXECUTOR_QUEUE_CAPACITY);
     let request_rx = Arc::new(Mutex::new(request_rx));
-    let (state_tx, state_rx) = watch::channel(BehaviorSlotState::Active);
-    let behavior_fingerprint = crate::completion_factory::behavior_slot_fingerprint(&behavior);
+    let (state_tx, state_rx) = watch::channel(AgentSlotState::Active);
+    let agent_fingerprint = crate::completion_factory::agent_slot_fingerprint(&agent_config);
     let tool_surface_fingerprint = format!("{tool_surface:?}");
 
     let standing = Arc::new(std::sync::Mutex::new(BuildStanding::seeded()));
     let handle = AbortOnDropHandle::new(tokio::spawn(run_slot_workers(
-        behavior,
+        agent_config,
         tool_surface,
         request_rx,
         executor_capacity,
@@ -298,25 +298,25 @@ where
         standing,
     )));
 
-    BehaviorSlot {
+    AgentSlot {
         dispatcher,
         state_tx,
         handle,
-        behavior_fingerprint,
+        agent_fingerprint,
         tool_surface_fingerprint,
         executor_capacity,
         #[cfg(test)]
         worker_task_count: executor_capacity,
-        queue_capacity: BEHAVIOR_EXECUTOR_QUEUE_CAPACITY,
+        queue_capacity: AGENT_EXECUTOR_QUEUE_CAPACITY,
         generation,
     }
 }
 
-pub(super) fn behavior_executor_capacity(
-    behavior: &ResolvedBehavior,
+pub(super) fn agent_executor_capacity(
+    agent_config: &ResolvedAgent,
     backend_admission_configs: &HashMap<String, BackendAdmissionConfig>,
 ) -> usize {
-    let Some(backend_id) = behavior
+    let Some(backend_id) = agent_config
         .backend_id
         .as_deref()
         .map(str::trim)
@@ -333,15 +333,15 @@ pub(super) fn behavior_executor_capacity(
 }
 
 #[cfg(test)]
-pub(super) fn retire_slot(slot: BehaviorSlot) {
-    let _ = slot.state_tx.send(BehaviorSlotState::Retiring);
+pub(super) fn retire_slot(slot: AgentSlot) {
+    let _ = slot.state_tx.send(AgentSlotState::Retiring);
     drop(slot.dispatcher);
     tokio::spawn(async move {
         match slot.handle.await {
             Ok(Ok(())) => {}
-            Ok(Err(error)) => tracing::error!(error = %error, "retired behavior slot failed"),
+            Ok(Err(error)) => tracing::error!(error = %error, "retired agent slot failed"),
             Err(error) if !error.is_cancelled() => {
-                tracing::error!(error = %error, "retired behavior slot join failed");
+                tracing::error!(error = %error, "retired agent slot join failed");
             }
             Err(_) => {}
         }
@@ -349,20 +349,20 @@ pub(super) fn retire_slot(slot: BehaviorSlot) {
 }
 
 async fn run_slot_loop<F, Fut>(
-    behavior: Arc<ResolvedBehavior>,
+    agent_config: Arc<ResolvedAgent>,
     tool_surface: Arc<ToolSurface>,
     request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
     generation: u64,
     retry_policy: RetryPolicy,
     runner: F,
     mut shutdown: watch::Receiver<bool>,
-    mut state_rx: watch::Receiver<BehaviorSlotState>,
+    mut state_rx: watch::Receiver<AgentSlotState>,
     failure_policy: Option<Arc<dyn SlotFailurePolicy>>,
     standing: Arc<std::sync::Mutex<BuildStanding>>,
 ) -> Result<()>
 where
     F: Fn(
-            Arc<ResolvedBehavior>,
+            Arc<ResolvedAgent>,
             Arc<ToolSurface>,
             Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
             u64,
@@ -376,7 +376,7 @@ where
 {
     let mut failure_count = 0u32;
     loop {
-        if *shutdown.borrow() || *state_rx.borrow() == BehaviorSlotState::Retiring {
+        if *shutdown.borrow() || *state_rx.borrow() == AgentSlotState::Retiring {
             return Ok(());
         }
         // A sibling worker may have spent the budget already; a demoted slot
@@ -391,7 +391,7 @@ where
         }
 
         let outcome = AssertUnwindSafe(runner(
-            behavior.clone(),
+            agent_config.clone(),
             tool_surface.clone(),
             request_rx.clone(),
             generation,
@@ -403,13 +403,13 @@ where
         if *shutdown.borrow() {
             return match outcome {
                 Ok(Err(error)) => Err(error),
-                Err(_) => anyhow::bail!("behavior runner panicked during shutdown"),
+                Err(_) => anyhow::bail!("agent runner panicked during shutdown"),
                 Ok(Ok(())) => Ok(()),
             };
         }
 
         match outcome {
-            Ok(Ok(())) if *state_rx.borrow() == BehaviorSlotState::Retiring => return Ok(()),
+            Ok(Ok(())) if *state_rx.borrow() == AgentSlotState::Retiring => return Ok(()),
             Ok(Ok(())) => {
                 if let Ok(mut standing) = standing.lock() {
                     *standing = standing.step(u32::MAX, BuildOutcome::Started);
@@ -417,9 +417,9 @@ where
                 let delay = retry_policy.delay_for_attempt(failure_count);
                 failure_count += 1;
                 tracing::warn!(
-                    behavior_id = %behavior.behavior_id,
+                    agent_id = %agent_config.agent_id,
                     delay_ms = delay.as_millis() as u64,
-                    "behavior slot exited unexpectedly, scheduling restart"
+                    "agent slot exited unexpectedly, scheduling restart"
                 );
                 if !wait_for_restart(delay, &mut shutdown).await {
                     return Ok(());
@@ -427,7 +427,7 @@ where
             }
             Ok(Err(error)) => {
                 if handle_slot_failure(
-                    &behavior.behavior_id,
+                    &agent_config.agent_id,
                     generation,
                     &format!("{error:#}"),
                     failure_policy.as_deref(),
@@ -442,10 +442,10 @@ where
                 let delay = retry_policy.delay_for_attempt(failure_count);
                 failure_count += 1;
                 tracing::error!(
-                    behavior_id = %behavior.behavior_id,
+                    agent_id = %agent_config.agent_id,
                     error = %error,
                     delay_ms = delay.as_millis() as u64,
-                    "behavior slot failed, scheduling restart"
+                    "agent slot failed, scheduling restart"
                 );
                 if !wait_for_restart(delay, &mut shutdown).await {
                     return Ok(());
@@ -453,9 +453,9 @@ where
             }
             Err(_) => {
                 if handle_slot_failure(
-                    &behavior.behavior_id,
+                    &agent_config.agent_id,
                     generation,
-                    "behavior runner panicked",
+                    "agent runner panicked",
                     failure_policy.as_deref(),
                     &standing,
                     &mut shutdown,
@@ -468,9 +468,9 @@ where
                 let delay = retry_policy.delay_for_attempt(failure_count);
                 failure_count += 1;
                 tracing::error!(
-                    behavior_id = %behavior.behavior_id,
+                    agent_id = %agent_config.agent_id,
                     delay_ms = delay.as_millis() as u64,
-                    "behavior slot panicked, scheduling restart"
+                    "agent slot panicked, scheduling restart"
                 );
                 if !wait_for_restart(delay, &mut shutdown).await {
                     return Ok(());
@@ -481,7 +481,7 @@ where
 }
 
 async fn run_slot_workers<F, Fut>(
-    behavior: Arc<ResolvedBehavior>,
+    agent_config: Arc<ResolvedAgent>,
     tool_surface: Arc<ToolSurface>,
     request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
     executor_capacity: usize,
@@ -490,13 +490,13 @@ async fn run_slot_workers<F, Fut>(
     runner: F,
     generation: u64,
     shutdown: watch::Receiver<bool>,
-    state_rx: watch::Receiver<BehaviorSlotState>,
+    state_rx: watch::Receiver<AgentSlotState>,
     failure_policy: Option<Arc<dyn SlotFailurePolicy>>,
     standing: Arc<std::sync::Mutex<BuildStanding>>,
 ) -> Result<()>
 where
     F: Fn(
-            Arc<ResolvedBehavior>,
+            Arc<ResolvedAgent>,
             Arc<ToolSurface>,
             Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
             u64,
@@ -510,18 +510,18 @@ where
 {
     let worker_count = executor_capacity;
     tracing::info!(
-        behavior_id = %behavior.behavior_id,
+        agent_id = %agent_config.agent_id,
         executor_capacity,
         worker_count,
-        queue_capacity = BEHAVIOR_EXECUTOR_QUEUE_CAPACITY,
-        "behavior executor worker pool starting"
+        queue_capacity = AGENT_EXECUTOR_QUEUE_CAPACITY,
+        "agent executor worker pool starting"
     );
     let mut workers = JoinSet::new();
     for worker_index in 0..worker_count {
         workers.spawn(scope_slot_capacity(
             capacity.clone(),
             run_slot_loop(
-                behavior.clone(),
+                agent_config.clone(),
                 tool_surface.clone(),
                 request_rx.clone(),
                 generation,
@@ -534,10 +534,10 @@ where
             ),
         ));
         tracing::debug!(
-            behavior_id = %behavior.behavior_id,
+            agent_id = %agent_config.agent_id,
             worker_index,
             executor_capacity,
-            "behavior executor worker spawned"
+            "agent executor worker spawned"
         );
     }
 
@@ -546,9 +546,9 @@ where
         let error = match joined {
             Ok(Ok(())) => continue,
             Ok(Err(error)) => error,
-            Err(error) => anyhow::anyhow!("behavior executor worker task join failed: {error}"),
+            Err(error) => anyhow::anyhow!("agent executor worker task join failed: {error}"),
         };
-        tracing::error!(behavior_id = %behavior.behavior_id, error = %error, "behavior executor worker failed");
+        tracing::error!(agent_id = %agent_config.agent_id, error = %error, "agent executor worker failed");
         if first_error.is_none() {
             first_error = Some(error);
         }
@@ -583,13 +583,13 @@ mod tests {
             1
         }
 
-        async fn on_slot_created(&self, _behavior_id: &str, _generation: u64) -> Result<()> {
+        async fn on_slot_created(&self, _agent_id: &str, _generation: u64) -> Result<()> {
             Ok(())
         }
 
         async fn try_demote(
             &self,
-            _behavior_id: &str,
+            _agent_id: &str,
             _generation: u64,
             _error: &str,
         ) -> Result<bool> {
@@ -597,7 +597,7 @@ mod tests {
             Err(anyhow!("injected demotion persistence failure"))
         }
 
-        async fn on_slot_retired(&self, _behavior_id: &str, _generation: u64, _recreated: bool) {}
+        async fn on_slot_retired(&self, _agent_id: &str, _generation: u64, _recreated: bool) {}
     }
 
     #[tokio::test]
@@ -608,7 +608,7 @@ mod tests {
         });
         let standing = Arc::new(std::sync::Mutex::new(BuildStanding::seeded()));
         let (_shutdown_tx, mut shutdown_rx) = watch::channel(false);
-        let (state_tx, mut state_rx) = watch::channel(BehaviorSlotState::Active);
+        let (state_tx, mut state_rx) = watch::channel(AgentSlotState::Active);
         let standing_for_task = standing.clone();
         let task = tokio::spawn(async move {
             handle_slot_failure(
@@ -629,7 +629,7 @@ mod tests {
             !task.is_finished(),
             "a failed durable demotion must not restart the exhausted slot"
         );
-        state_tx.send_replace(BehaviorSlotState::Retiring);
+        state_tx.send_replace(AgentSlotState::Retiring);
         assert!(task.await.unwrap());
     }
 }

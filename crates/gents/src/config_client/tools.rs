@@ -22,7 +22,7 @@ pub async fn write_tools_document(access: &ConfigAccess, tools: &Tools) -> Resul
                 super::desired_state::read_record(
                     txn,
                     Collection::Tools,
-                    &tools.agent_did,
+                    &tools.node_did,
                     &tools.tools_id,
                 )
                 .await?
@@ -46,13 +46,13 @@ mod tests {
         crate::ensure_runtime_schemas(&node).await?;
         let access = ConfigAccess::Local(node);
         let mut tools: Tools = serde_json::from_value(json!({
-            "agent_did":"did:key:owner", "tools_id":"same",
+            "node_did":"did:key:owner", "tools_id":"same",
             "host":{"files":{"mode":"ReadOnly"}},
             "built_ins":{"enable_goal_tools":true}, "tags":["old"]
         }))?;
         let first_id = write_tools_document(&access, &tools).await?;
         let mut foreign = tools.clone();
-        foreign.agent_did = "did:key:other".into();
+        foreign.node_did = "did:key:other".into();
         assert_ne!(write_tools_document(&access, &foreign).await?, first_id);
         tools.host = None;
         tools.built_ins = None;

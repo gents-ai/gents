@@ -76,13 +76,13 @@ def transcriptCollections : List String :=
   ["AgentRequest", "AgentMessage", "AgentToolCall", "AgentOutputSegment",
    "AgentSession", "CompactionEntry"]
 
-/-- Configuration reachable from AgentBehavior -> AgentContext / InferenceProfile
+/-- Configuration reachable from Agent -> AgentContext / InferenceProfile
 and its referenced settings and documents: Tools, CompactionConfig, sampling,
-execution, retry policy, MCP registries, skills, datastore surfaces, subagent
+execution, retry policy, MCP registries, skills, datastore surfaces, agent
 targets, chain keys and eth tools. Excludes credential-bearing documents by
 construction, so ordinary client/conversation transport cannot carry them. -/
 def reachableConfigKinds : List ConfigDocuments.Collection :=
-  [.agentBehavior, .agentContext, .compaction, .tools, .subagentTarget,
+  [.agent, .agentContext, .compaction, .tools, .agentTarget,
    .inferenceProfile, .inferenceSampling, .inferenceExecution,
    .inferenceRetryPolicy, .toolServiceRegistry, .skill, .datastoreToolSurface,
    .chainKeyBinding, .ethTool]
@@ -97,7 +97,7 @@ def operatorConfigCollections : List String :=
   agentConfigCollections ++ ["InferenceBackend"]
 
 /-- Documents carrying credentials. `InferenceBackend` holds API-key material
-and `OAuthCredential` holds principal login/refresh credentials; neither
+and `OAuthCredential` holds node login/refresh credentials; neither
 belongs in ordinary client/conversation replication. -/
 def credentialCollections : List String := ["InferenceBackend", "OAuthCredential"]
 
@@ -108,11 +108,11 @@ def clientTranscriptCollections : List String :=
   transcriptCollections ++ ["MailboxItem"]
 
 def clientOwnerProjectionCollections : List String :=
-  ["AgentBehaviorReadiness"]
+  ["NodeReadiness"]
 
 def clientToRuntimeCollections : List String :=
   clientTranscriptCollections ++
-    ["PersonaConfigRequest", "PeerEndpoint", "SessionHydrationRequest"]
+    ["PeerEndpoint", "SessionHydrationRequest"]
 
 def clientControlPlaneCollections : List String :=
   agentConfigCollections ++
@@ -129,20 +129,20 @@ def clientRouteCollections : RouteDirection → List String
 
 def machineCollections : List String :=
   conversationCollections ++
-    ["MailboxItem", "SessionHydrationRequest", "AgentDirectoryEntry"]
+    ["MailboxItem", "SessionHydrationRequest", "NodeDirectoryEntry"]
 
 /-- A remote `agent_new` is an ordinary Peer AgentRequest authored on the
-caller node with `agent_did = target` and `requester_did = caller`. The
+caller node with `node_did = target` and `requester_did = caller`. The
 coordinator leg (caller → host) therefore carries only that request, selected
-by the target's `agent_did`; no tool-call row is needed to name the host. -/
-def subagentCoordinatorCollections : List String :=
+by the target's `node_did`; no tool-call row is needed to name the host. -/
+def agentTargetCallerCollections : List String :=
   ["AgentRequest"]
 
 /-- The host leg (host → caller) returns the caused request, its session and
 its transcript, selected by the caller's `requester_did`, so the result reaches
 the originating session. The host's AgentToolCall rows are host-local execution
 records and stay on the host, as do results, compaction and configuration. -/
-def subagentHostCollections : List String :=
+def agentTargetHostCollections : List String :=
   ["AgentRequest", "AgentSession", "AgentOutputSegment", "AgentMessage"]
 
 /-- The eager client index retains its existing requester scope. -/
@@ -161,12 +161,12 @@ def machineRules : List CollectionRule :=
   conversationRules ++
     [ { collection := "MailboxItem", field := "requester_did", source := .peerDid }
     , { collection := "SessionHydrationRequest", field := "requester_did", source := .peerDid }
-    , { collection := "AgentDirectoryEntry", field := "source_did", source := .homeDid } ]
+    , { collection := "NodeDirectoryEntry", field := "source_did", source := .homeDid } ]
 
-def subagentCoordinatorRules : List CollectionRule :=
-  [ { collection := "AgentRequest", field := "agent_did", source := .peerDid } ]
+def agentTargetCallerRules : List CollectionRule :=
+  [ { collection := "AgentRequest", field := "node_did", source := .peerDid } ]
 
-def subagentHostRules : List CollectionRule :=
+def agentTargetHostRules : List CollectionRule :=
   [ { collection := "AgentRequest",    field := "requester_did", source := .peerDid }
   , { collection := "AgentSession",    field := "requester_did", source := .peerDid }
   , { collection := "AgentOutputSegment", field := "requester_did", source := .peerDid }
@@ -206,16 +206,16 @@ def backupTemplate : Template :=
   , scope := .unscoped
   , delivery := .replicate }
 
-def subagentCoordinatorTemplate : Template :=
-  { id := "subagent-coordinator"
-  , collections := subagentCoordinatorCollections.toFinset
-  , scope := .perCollection subagentCoordinatorRules
+def agentTargetCallerTemplate : Template :=
+  { id := "agent-target-caller"
+  , collections := agentTargetCallerCollections.toFinset
+  , scope := .perCollection agentTargetCallerRules
   , delivery := .push }
 
-def subagentHostTemplate : Template :=
-  { id := "subagent-host"
-  , collections := subagentHostCollections.toFinset
-  , scope := .perCollection subagentHostRules
+def agentTargetHostTemplate : Template :=
+  { id := "agent-target-host"
+  , collections := agentTargetHostCollections.toFinset
+  , scope := .perCollection agentTargetHostRules
   , delivery := .push }
 
 def appCollectionsTemplate : Template :=
@@ -245,8 +245,8 @@ def builtinCatalog : Catalog :=
   , clientTemplate
   , agentConfigTemplate
   , backupTemplate
-  , subagentCoordinatorTemplate
-  , subagentHostTemplate
+  , agentTargetCallerTemplate
+  , agentTargetHostTemplate
   , appCollectionsTemplate
   , clientIndexTemplate ]
 

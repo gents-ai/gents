@@ -65,7 +65,7 @@ pub(crate) use output::{
 pub use query::{
     decode_session_row, public_request_filter, session_scope_filter, AGENT_SESSION_FIELDS,
 };
-pub(crate) use query::{load_session_behavior_id, load_session_requester_scope, require_session};
+pub(crate) use query::{load_session_agent_id, load_session_requester_scope, require_session};
 pub use request_output::{
     observe_request_output, CanonicalPresentation, CanonicalRequestOutput, CanonicalSelectedSource,
 };
@@ -74,8 +74,8 @@ pub use sessions::close_session;
 pub use sessions::load_agent_session_row_in_txn;
 #[cfg(test)]
 pub(crate) use sessions::{
-    create_session_with_behavior_id, create_session_with_id,
-    ensure_session_with_behavior_id_and_requester_did,
+    create_session_with_agent_id, create_session_with_id,
+    ensure_session_with_agent_id_and_requester_did,
 };
 pub(crate) use sessions::{ensure_session_in_txn, max_sequence, reopen_session_in_txn};
 

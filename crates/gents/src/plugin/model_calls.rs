@@ -63,7 +63,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 /// The profile an installation bound a plugin's model slot to.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelBinding {
-    pub agent_did: String,
+    pub node_did: String,
     pub profile_id: String,
 }
 
@@ -106,7 +106,7 @@ where
 {
     fn resolve<'a>(&'a self, binding: &'a ModelBinding) -> BoxFuture<'a, Result<ModelEndpoint>> {
         Box::pin(async move {
-            let owner = binding.agent_did.as_str();
+            let owner = binding.node_did.as_str();
             let profile_id = binding.profile_id.as_str();
             let (profile, backend) = self
                 .0
@@ -191,7 +191,7 @@ pub fn endpoint_for(
         api_key,
         model: profile.model_name.clone(),
         max_concurrent,
-        backend_key: format!("{}/{}", backend.agent_did, backend.backend_id),
+        backend_key: format!("{}/{}", backend.node_did, backend.backend_id),
         connect_timeout: Duration::from_secs(connect.unsigned_abs()),
         request_timeout: REQUEST_TIMEOUT,
         max_output_tokens: profile

@@ -1,8 +1,8 @@
-/* Who ran a session and where: the node's avatar behind, the behavior's in
+/* Who ran a session and where: the node's avatar behind, the agent's in
    front. Each carries its own hover card. The node is looked up from the
-   session's node id, and a behavior is named by the node it belongs to. The
+   session's node id, and an agent is named by the node it belongs to. The
    local node is where work is assumed to be, so only a remote node is shown;
-   a session whose node the client cannot see shows the behavior alone too. */
+   a session whose node the client cannot see shows the agent alone too. */
 import { useShallow } from "zustand/react/shallow";
 import type { SessionSummary } from "@source-inc/gents-desktop-client";
 import type { NodeView } from "../../hooks/fleetStore";
@@ -11,47 +11,52 @@ import { useHomeDid } from "@/hooks/useClient";
 import { nodeOf } from "../../hooks/fleetStore";
 import { useFleet } from "@/hooks/useFleet";
 import { isWorkingNode, nodeDidOf } from "@/lib/nodes";
-import { AgentAvatar } from "./AgentAvatar";
-import { AgentHoverCard, BehaviorHoverCard } from "./HoverCards";
-import { BehaviorAvatar } from "./parts";
-import { behaviorName } from "./behavior";
+import { NodeAvatar } from "./AgentAvatar";
+import { AgentHoverCard, NodeHoverCard } from "./HoverCards";
+import { AgentInitials } from "./parts";
+import { agentName } from "./behavior";
 
-export function NodeBehaviorStack({
+export function NodeAgentStack({
   nodeDid,
-  behaviorId,
+  agentId,
   description,
   size = "md",
   workers = [],
   keyboard = false,
 }: {
   nodeDid: string | null | undefined;
-  behaviorId: string | null | undefined;
+  agentId: string | null | undefined;
   description?: string;
   size?: "sm" | "md";
-  /** sessions this one handed out: their behaviors, and any remote node
+  /** sessions this one handed out: their agents, and any remote node
       they run on, join the stack so the row says the whole piece of work */
   workers?: readonly SessionSummary[];
-  /** the behavior avatar is a labelled button, so its card opens from the keyboard */
+  /** the agent avatar is a labelled button, so its card opens from the keyboard */
   keyboard?: boolean;
 }) {
   const homeDid = useHomeDid();
   const found = useFleet((state) => nodeOf(state, nodeDid));
   /* each worker's node, in the workers' order */
   const workersOn = useFleet(
-    useShallow((state) => workers.map((w) => nodeOf(state, w.agentDid))),
+    useShallow((state) => workers.map((w) => nodeOf(state, w.nodeDid))),
   );
   const node = found && !isWorkingNode(found, homeDid) ? found : null;
   const dim = size === "sm" ? "size-5 text-[9px]" : "size-7 text-[11px]";
   const overlap = size === "sm" ? "-ml-1.5" : "-ml-2";
   /* two marks overlap to read as one; hovering the pair spreads them on a
      pill so each can be read and hovered on its own */
-  /* one mark per distinct behavior the workers use, beyond this one; one
+  /* one mark per distinct agent the workers use, beyond this one; one
      per distinct remote node beyond this one; three of each at most */
-  const workerBehaviors = [
+  const workerAgents = [
     ...new Map(
       workers.flatMap((w, i) =>
-        w.behaviorId && w.behaviorId !== behaviorId
-          ? [[w.behaviorId, workersOn[i] ?? null] as const]
+        w.agentId && (w.agentId !== agentId || w.nodeDid !== nodeDid)
+          ? [
+              [
+                JSON.stringify([w.nodeDid, w.agentId]),
+                [w.agentId, workersOn[i] ?? null] as const,
+              ] as const,
+            ]
           : [],
       ),
     ),
@@ -63,25 +68,23 @@ export function NodeBehaviorStack({
       ),
     ),
   ];
-  const spread = node !== null || workerBehaviors.length > 0 || workerNodes.length > 0;
-  /* the order says whose is whose: this session's node and behavior lead,
-     then the workers' behaviors (folded into one count at rest), then any
+  const spread = node !== null || workerAgents.length > 0 || workerNodes.length > 0;
+  /* the order says whose is whose: this session's node and agent lead,
+     then the workers' agents (folded into one count at rest), then any
      remote node a worker runs on, which always shows since where work runs
-     matters at a glance. Hovering unfolds the behaviors, and the count stays
+     matters at a glance. Hovering unfolds the agents, and the count stays
      only for what the cap left out */
   const shownNodes = workerNodes.slice(0, 3);
-  const shownBehaviors = workerBehaviors.slice(0, 3);
+  const shownAgents = workerAgents.slice(0, 3);
   const leftOut =
-    workerNodes.length -
-    shownNodes.length +
-    (workerBehaviors.length - shownBehaviors.length);
+    workerNodes.length - shownNodes.length + (workerAgents.length - shownAgents.length);
   /* folded marks keep a zero-width box rather than leaving the layout: a
      hover card anchored to one is still closing when the pointer leaves,
      and an anchor with no box sends it to the page's corner */
   /* every mark moves with the same curve: width, margin, fade and ring
      together, so the fold reads as one motion rather than parts popping */
   const motion = "transition-[width,margin,opacity,box-shadow] duration-200 ease-out";
-  const foldedBehavior = cn(
+  const foldedAgent = cn(
     "ml-0 w-0 overflow-hidden opacity-0 ring-0",
     size === "sm" ? "group-hover/stack:w-5" : "group-hover/stack:w-7",
     "group-hover/stack:opacity-100 group-hover/stack:ring-2",
@@ -110,16 +113,13 @@ export function NodeBehaviorStack({
       )}
     >
       {node && (
-        <AgentHoverCard deployment={node} side="bottom">
-          <AgentAvatar
-            name={node.agentPrincipal.displayName ?? node.label}
-            className={shifted}
-          />
-        </AgentHoverCard>
+        <NodeHoverCard deployment={node} side="bottom">
+          <NodeAvatar name={node.node.displayName ?? node.label} className={shifted} />
+        </NodeHoverCard>
       )}
-      <BehaviorHoverCard
+      <AgentHoverCard
         deployment={found}
-        behaviorId={behaviorId ?? null}
+        agentId={agentId ?? null}
         description={description}
         side={spread ? "bottom" : "right"}
       >
@@ -128,36 +128,27 @@ export function NodeBehaviorStack({
              place a screen offers this, so the name is found once */
           <button
             type="button"
-            aria-label={`About ${behaviorName(behaviorId ?? null, found)} behavior`}
+            aria-label={`About ${agentName(agentId ?? null, found)} agent`}
             className="grid cursor-default place-items-center rounded-full p-0 leading-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:outline-none"
           >
-            <BehaviorAvatar
-              name={behaviorName(behaviorId ?? null, found)}
+            <AgentInitials
+              name={agentName(agentId ?? null, found)}
               className={shifted}
             />
           </button>
         ) : (
-          <BehaviorAvatar
-            name={behaviorName(behaviorId ?? null, found)}
-            className={shifted}
-          />
+          <AgentInitials name={agentName(agentId ?? null, found)} className={shifted} />
         )}
-      </BehaviorHoverCard>
-      {shownBehaviors.map(([b, on]) => (
-        <BehaviorHoverCard key={b} deployment={on} behaviorId={b} side="bottom">
-          <BehaviorAvatar
-            name={behaviorName(b, on)}
-            className={cn(shifted, foldedBehavior)}
-          />
-        </BehaviorHoverCard>
+      </AgentHoverCard>
+      {shownAgents.map(([identity, [b, on]]) => (
+        <AgentHoverCard key={identity} deployment={on} agentId={b} side="bottom">
+          <AgentInitials name={agentName(b, on)} className={cn(shifted, foldedAgent)} />
+        </AgentHoverCard>
       ))}
       {shownNodes.map((n) => (
-        <AgentHoverCard key={nodeDidOf(n)} deployment={n} side="bottom">
-          <AgentAvatar
-            name={n.agentPrincipal.displayName ?? n.label}
-            className={shifted}
-          />
-        </AgentHoverCard>
+        <NodeHoverCard key={nodeDidOf(n)} deployment={n} side="bottom">
+          <NodeAvatar name={n.node.displayName ?? n.label} className={shifted} />
+        </NodeHoverCard>
       ))}
       {workers.length > 0 && (
         <span

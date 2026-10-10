@@ -1,10 +1,10 @@
-import type { AgentConfigSaveRequest as GeneratedAgentConfigSaveRequest } from "../generated/AgentConfigSaveRequest.js";
-import type { DefaultBehaviorSetRequest as GeneratedDefaultBehaviorSetRequest } from "../generated/DefaultBehaviorSetRequest.js";
+import type { NodeConfigSaveRequest as GeneratedNodeConfigSaveRequest } from "../generated/NodeConfigSaveRequest.js";
+import type { DefaultAgentSetRequest as GeneratedDefaultAgentSetRequest } from "../generated/DefaultAgentSetRequest.js";
 import type { BackendDeleteRequest as GeneratedBackendDeleteRequest } from "../generated/BackendDeleteRequest.js";
 import type { BackendSaveRequest as GeneratedBackendSaveRequest } from "../generated/BackendSaveRequest.js";
-import type { BehaviorDeleteRequest as GeneratedBehaviorDeleteRequest } from "../generated/BehaviorDeleteRequest.js";
+import type { AgentDeleteRequest as GeneratedAgentDeleteRequest } from "../generated/AgentDeleteRequest.js";
 import type { ContextDeleteRequest as GeneratedContextDeleteRequest } from "../generated/ContextDeleteRequest.js";
-import type { BehaviorSaveRequest as GeneratedBehaviorSaveRequest } from "../generated/BehaviorSaveRequest.js";
+import type { AgentSaveRequest as GeneratedAgentSaveRequest } from "../generated/AgentSaveRequest.js";
 import type { ChatSendRequest as GeneratedChatSendRequest } from "../generated/ChatSendRequest.js";
 import type { MailboxItemRequest as GeneratedMailboxItemRequest } from "../generated/MailboxItemRequest.js";
 import type { SessionRenameRequest as GeneratedSessionRenameRequest } from "../generated/SessionRenameRequest.js";
@@ -37,16 +37,15 @@ type RequestInput<T> = {
   [K in keyof T as null extends T[K] ? K : never]?: T[K];
 };
 
-export type AgentConfigSaveRequest =
-  RequestInput<GeneratedAgentConfigSaveRequest>;
-export type DefaultBehaviorSetRequest =
-  RequestInput<GeneratedDefaultBehaviorSetRequest>;
+export type NodeConfigSaveRequest =
+  RequestInput<GeneratedNodeConfigSaveRequest>;
+export type DefaultAgentSetRequest =
+  RequestInput<GeneratedDefaultAgentSetRequest>;
 export type BackendDeleteRequest = RequestInput<GeneratedBackendDeleteRequest>;
 export type BackendSaveRequest = RequestInput<GeneratedBackendSaveRequest>;
-export type BehaviorDeleteRequest =
-  RequestInput<GeneratedBehaviorDeleteRequest>;
+export type AgentDeleteRequest = RequestInput<GeneratedAgentDeleteRequest>;
 export type ContextDeleteRequest = RequestInput<GeneratedContextDeleteRequest>;
-export type BehaviorSaveRequest = RequestInput<GeneratedBehaviorSaveRequest>;
+export type AgentSaveRequest = RequestInput<GeneratedAgentSaveRequest>;
 export type ChatSendRequest = RequestInput<GeneratedChatSendRequest>;
 export type MailboxItemRequest = RequestInput<GeneratedMailboxItemRequest>;
 export type SessionRenameRequest = RequestInput<GeneratedSessionRenameRequest>;

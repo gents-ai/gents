@@ -25,8 +25,8 @@ pub struct TaskRunResult {
     pub request_doc_id: String,
     pub request_id: String,
     pub session_id: String,
-    pub agent_did: String,
-    pub behavior_id: String,
+    pub node_did: String,
+    pub agent_id: String,
     pub lifecycle_state: Option<String>,
 }
 
@@ -35,8 +35,8 @@ pub struct TaskRunResult {
 pub struct ChatSendResult {
     pub session_id: String,
     pub request_id: String,
-    pub agent_did: String,
-    pub behavior_id: Option<String>,
+    pub node_did: String,
+    pub agent_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]

@@ -1,6 +1,6 @@
 //! Stock --agent is sent as session/new|load _meta.agentProfile. Select one
-//! immutable behavior-scoped service per connection, before exposing history.
-//! This is connection routing, not a second runtime behavior/identity owner.
+//! immutable agent-scoped service per connection, before exposing history.
+//! This is connection routing, not a second runtime agent/identity owner.
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -14,8 +14,8 @@ use super::AcpDelegateFactoryInputs;
 
 /// Stock Grok sends its built-in agents' `agent_type` (e.g. `grok-build`,
 /// `grok-build-plan`) as `_meta.agentProfile` even without `--agent`; those
-/// names are Grok's own, not Gents behavior ids, so they resolve to the
-/// default and cannot select a principal behavior of the same name.
+/// names are Grok's own, not Gents agent ids, so they resolve to the
+/// default and cannot select a principal agent of the same name.
 pub(super) fn grok_built_in_agent_profile(name: &str) -> bool {
     name == "grok-build" || name.starts_with("grok-build-")
 }
@@ -26,7 +26,7 @@ struct Binding {
     closed: bool,
 }
 
-pub(super) struct BehaviorConnection {
+pub(super) struct AgentConnection {
     inputs: AcpDelegateFactoryInputs,
     client_id: u64,
     registration: Registration,
@@ -34,7 +34,7 @@ pub(super) struct BehaviorConnection {
     binding: Mutex<Binding>,
 }
 
-impl BehaviorConnection {
+impl AgentConnection {
     pub(super) fn new(
         inputs: AcpDelegateFactoryInputs,
         client_id: u64,
@@ -56,21 +56,21 @@ impl BehaviorConnection {
         let profile = if selecting {
             request.params.pointer("/_meta/agentProfile").map(|value| {
                 value.as_str().filter(|value| !value.trim().is_empty())
-                    .map(str::trim).context("--agent must name a registered Gents behavior; inline agent definitions are not supported")
+                    .map(str::trim).context("--agent must name a registered Gents agent; inline agent definitions are not supported")
             }).transpose()?
         } else {
             None
         };
         let profile = profile.map(|name| match name {
-            "default" => self.inputs.behavior_id.as_str(),
-            built_in if grok_built_in_agent_profile(built_in) => self.inputs.behavior_id.as_str(),
+            "default" => self.inputs.agent_id.as_str(),
+            built_in if grok_built_in_agent_profile(built_in) => self.inputs.agent_id.as_str(),
             name => name,
         });
         let mut binding = self.binding.lock().await;
         anyhow::ensure!(!binding.closed, "connection already disconnected");
-        if let Some((behavior, service)) = &binding.selected {
-            anyhow::ensure!(profile.is_none_or(|requested| requested == behavior),
-                "connection is bound to behavior {behavior}; open another Grok connection with --agent to select a different behavior");
+        if let Some((agent, service)) = &binding.selected {
+            anyhow::ensure!(profile.is_none_or(|requested| requested == agent),
+                "connection is bound to agent {agent}; open another Grok connection with --agent to select a different agent");
             return Ok(Some(service.clone()));
         }
         if !selecting {
@@ -81,44 +81,44 @@ impl BehaviorConnection {
             }
             return Ok(Some(self.bootstrap.clone()));
         }
-        let behavior = profile.unwrap_or(&self.inputs.behavior_id).to_owned();
-        let escaped = gents::graphql::escape_graphql_string(&behavior);
-        let owner = gents::graphql::escape_graphql_string(&self.inputs.agent_did);
+        let agent = profile.unwrap_or(&self.inputs.agent_id).to_owned();
+        let escaped = gents::graphql::escape_graphql_string(&agent);
+        let owner = gents::graphql::escape_graphql_string(&self.inputs.node_did);
         let response = gents::graphql::graphql_with_transaction_retry(&self.inputs.node, &format!(
-            "{{AgentBehavior(filter:{{behavior_id:{{_eq:\"{escaped}\"}},agent_did:{{_eq:\"{owner}\"}}}},limit:2){{agent_did enabled}}}}"
-        ), "select Grok behavior").await?;
+            "{{Agent(filter:{{agent_id:{{_eq:\"{escaped}\"}},node_did:{{_eq:\"{owner}\"}}}},limit:2){{node_did enabled}}}}"
+        ), "select Grok agent").await?;
         let rows = response
             .data
             .as_ref()
-            .and_then(|data| data["AgentBehavior"].as_array())
-            .context("missing behavior selection result")?;
+            .and_then(|data| data["Agent"].as_array())
+            .context("missing agent selection result")?;
         anyhow::ensure!(
             rows.len() == 1
-                && rows[0]["agent_did"].as_str() == Some(self.inputs.agent_did.as_str())
+                && rows[0]["node_did"].as_str() == Some(self.inputs.node_did.as_str())
                 && rows[0]["enabled"].as_bool() == Some(true),
-            "unknown, disabled, or unauthorized Gents behavior: {behavior}"
+            "unknown, disabled, or unauthorized Gents agent: {agent}"
         );
-        let service = if behavior == self.inputs.behavior_id {
+        let service = if agent == self.inputs.agent_id {
             self.bootstrap.clone()
         } else {
             let mut inputs = self.inputs.clone();
             inputs.bound = super::projection::resolve_bound_model_context(
                 &inputs.node,
-                &inputs.agent_did,
-                &behavior,
+                &inputs.node_did,
+                &agent,
             )
             .await?;
-            inputs.behavior_id = behavior.clone();
+            inputs.agent_id = agent.clone();
             inputs.service(self.client_id, &self.registration)
         };
-        binding.selected = Some((behavior, service.clone()));
+        binding.selected = Some((agent, service.clone()));
         // Never hold the selection lock across dispatch: prompt cancellation
         // and disconnect must not wait for inference or outbound delivery.
         Ok(Some(service))
     }
 }
 
-impl AcpDelegate for BehaviorConnection {
+impl AcpDelegate for AgentConnection {
     fn handle_acp<'a>(
         &'a self,
         payload: &'a str,
@@ -136,7 +136,7 @@ impl AcpDelegate for BehaviorConnection {
                         let response: Value = match route {
                             Ok(None) => json!({"jsonrpc":"2.0", "id":id, "result":{
                                 "sessions":[], "nextCursor":null,
-                                "_meta":{"gents/behaviorSelectionRequired":true}
+                                "_meta":{"gents/agentSelectionRequired":true}
                             }}),
                             Err(error) => json!({"jsonrpc":"2.0", "id":id,
                                 "error":{"code":-32602, "message":error.to_string()}}),

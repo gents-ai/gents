@@ -65,7 +65,7 @@
                 "target_key": "task_id",
                 "expect": [
                   {
-                    "field": "behavior_id",
+                    "field": "agent_id",
                     "matches": "(^|:)engineer$"
                   },
                   {
@@ -124,7 +124,7 @@
           "name": "trigger_config",
           "collection": "Trigger",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
@@ -142,7 +142,7 @@
           "name": "eventsource_config",
           "collection": "EventSource",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
@@ -157,13 +157,13 @@
           "name": "task_config",
           "collection": "Task",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
           "fields": [
             "task_id",
-            "behavior_id",
+            "agent_id",
             "prompt_template",
             "emit_outcome",
             "enabled"
@@ -296,7 +296,7 @@
           "name": "completed_requests",
           "collection": "AgentRequest",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             },
             "caused_by_trigger_id": {
@@ -322,7 +322,7 @@
           "name": "rendered_request",
           "collection": "AgentRequest",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             },
             "caused_by_trigger_id": {

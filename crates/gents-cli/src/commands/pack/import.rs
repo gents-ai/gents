@@ -195,43 +195,43 @@ fn import_parts(
             );
             add(
                 pack,
-                PackAddCommand::Behavior {
+                PackAddCommand::Agent {
                     id: id.clone(),
                     slot: Some("worker".into()),
                 },
             )?;
             write_prompt(
                 pack,
-                &format!("agent_behaviors/{}/system_prompt.md", snake(&id)),
+                &format!("agents/{}/system_prompt.md", snake(&id)),
                 &root.join(file),
             )?;
             report
                 .converted
-                .push(format!("{file} became the {id} behavior's instructions"));
+                .push(format!("{file} became the {id} agent's instructions"));
         }
     }
     import_markdown_dir(root, "agents", pack, report, |pack, id, body_path| {
         add(
             pack,
-            PackAddCommand::Behavior {
+            PackAddCommand::Agent {
                 id: id.to_owned(),
                 slot: Some("agents".into()),
             },
         )?;
         write_prompt(
             pack,
-            &format!("agent_behaviors/{}/system_prompt.md", snake(id)),
+            &format!("agents/{}/system_prompt.md", snake(id)),
             body_path,
         )?;
-        Ok(format!("agent {id} became a behavior"))
+        Ok(format!("agent {id} became an agent"))
     })?;
     import_markdown_dir(root, "commands", pack, report, |pack, id, body_path| {
-        let behavior = "commands".to_owned();
-        if !has(pack, "agent_behaviors", "behavior_id", &behavior) {
+        let agent = "commands".to_owned();
+        if !has(pack, "agents", "agent_id", &agent) {
             add(
                 pack,
-                PackAddCommand::Behavior {
-                    id: behavior.clone(),
+                PackAddCommand::Agent {
+                    id: agent.clone(),
                     slot: Some("worker".into()),
                 },
             )?;
@@ -240,7 +240,7 @@ fn import_parts(
             pack,
             PackAddCommand::Task {
                 id: id.to_owned(),
-                behavior,
+                agent,
             },
         )?;
         write_prompt(pack, &format!("tasks/{}/prompt.md", snake(id)), body_path)?;
@@ -587,9 +587,7 @@ mod tests {
             json!(["read_file", "grep"])
         );
         assert!(config["tasks"].to_string().contains("summarize"));
-        assert!(config["agent_behaviors"]
-            .to_string()
-            .contains("security-reviewer"));
+        assert!(config["agents"].to_string().contains("security-reviewer"));
         let readme = std::fs::read_to_string(dir.join("README.md")).unwrap();
         assert!(readme.contains("License: MIT"), "{readme}");
         assert!(readme.contains("MCP server docs (HTTP)"), "{readme}");

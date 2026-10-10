@@ -60,7 +60,7 @@ pub(crate) struct FoldedConsumption {
     pub(crate) folded_request_doc_id: String,
     pub(crate) head_request_id: String,
     pub(crate) head_doc_id: String,
-    pub(crate) agent_did: String,
+    pub(crate) node_did: String,
 }
 
 impl FoldedConsumption {
@@ -69,7 +69,7 @@ impl FoldedConsumption {
             folded_request_doc_id: folded.to_owned(),
             head_request_id: head.request_id.clone(),
             head_doc_id: head.doc_id.clone(),
-            agent_did: head.agent_did.clone(),
+            node_did: head.node_did.clone(),
         })
     }
 }
@@ -103,16 +103,16 @@ fn folds_into(
         && row.lifecycle_state == Some(RequestLifecycleState::Pending)
         && row.purpose == Some(RequestPurpose::Normal)
         && row.execution_origin.as_deref() == Some(ExecutionOrigin::Interactive.as_str())
-        && row.agent_did.as_deref() == Some(head.agent_did.as_str())
+        && row.node_did.as_deref() == Some(head.node_did.as_str())
         && row.session_id.as_deref() == Some(head.session_id.as_str())
         && row.requester_did == head.requester_did
-        && row.behavior_id.as_deref() == Some(head.behavior_id.as_str())
+        && row.agent_id.as_deref() == Some(head.agent_id.as_str())
         && input.cwd == head.input.cwd
         && input.selected_skill_ids == head.input.selected_skill_ids
         && input.initial_title.is_none()
         && input.goal_continuation.is_none()
         && row.workspace_id == head.workspace_id
-        && row.workspace_owner_agent_did == head.workspace_owner_agent_did
+        && row.workspace_owner_node_did == head.workspace_owner_node_did
         && row.workspace_authority == head.workspace_authority
         && row.workspace_seal_hash == head.workspace_seal_hash
         && row.execution_generation.is_none()
@@ -130,14 +130,14 @@ const CANDIDATE_FIELDS: &str =
 fn pending_session_query(head: &AgentRequest) -> String {
     format!(
         r#"{{ AgentRequest(filter: {{
-            agent_did: {{ _eq: "{}" }},
+            node_did: {{ _eq: "{}" }},
             session_id: {{ _eq: "{}" }},
             purpose: {{ _eq: "normal" }},
             lifecycle_state: {{ _eq: "pending" }}
         }}, order: [{{ created_at: ASC }}, {{ request_id: ASC }}]) {{
             {} {CANDIDATE_FIELDS}
         }} }}"#,
-        escape_graphql_string(&head.agent_did),
+        escape_graphql_string(&head.node_did),
         escape_graphql_string(&head.session_id),
         crate::watcher::AGENT_REQUEST_FIELDS,
     )
@@ -243,7 +243,7 @@ pub(crate) async fn consume_folded_in_txn(
     let mutation = format!(
         r#"mutation {{ update_AgentRequest(docID: "{doc_id}", filter: {{
             _docID: {{ _eq: "{doc_id}" }},
-            agent_did: {{ _eq: "{}" }},
+            node_did: {{ _eq: "{}" }},
             lifecycle_state: {{ _eq: "pending" }}
         }}, input: {{
             lifecycle_state: "superseded",
@@ -252,8 +252,8 @@ pub(crate) async fn consume_folded_in_txn(
             failure_reason: "{}",
             terminalized_at: "{}",
             terminal_redrive_attempts: 0
-        }}) {{ _docID request_id workspace_id workspace_owner_agent_did }} }}"#,
-        escape_graphql_string(&consumption.agent_did),
+        }}) {{ _docID request_id workspace_id workspace_owner_node_did }} }}"#,
+        escape_graphql_string(&consumption.node_did),
         escape_graphql_string(&consumption.head_request_id),
         escape_graphql_string(&consumption.head_doc_id),
         escape_graphql_string(FOLDED_REASON),
@@ -276,7 +276,7 @@ pub(crate) async fn consume_folded_in_txn(
     crate::workspace::release_terminal_writer_binding(txn, &updated[0]).await?;
     crate::trigger_engine::durable::publish_request_outcome(
         txn,
-        &consumption.agent_did,
+        &consumption.node_did,
         &request_id,
         RequestLifecycleState::Superseded.as_str(),
         FOLDED_REASON,
@@ -292,11 +292,11 @@ pub(crate) async fn ensure_folded_consumed_in_txn(
 ) -> Result<()> {
     let response = txn
         .execute(&format!(
-            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }}, agent_did: {{ _eq: "{}" }} }}) {{
+            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }}, node_did: {{ _eq: "{}" }} }}) {{
                 request_id lifecycle_state superseded_by_request_doc_id failure_reason
             }} }}"#,
             escape_graphql_string(&consumption.folded_request_doc_id),
-            escape_graphql_string(&consumption.agent_did),
+            escape_graphql_string(&consumption.node_did),
         ))
         .await?;
     let rows: Vec<AgentRequestRow> =
@@ -323,13 +323,13 @@ pub(crate) async fn load_consumed_folded_inputs(
     }
     let query = format!(
         r#"{{ AgentRequest(filter: {{
-            agent_did: {{ _eq: "{}" }},
+            node_did: {{ _eq: "{}" }},
             session_id: {{ _eq: "{}" }},
             superseded_by_request_doc_id: {{ _eq: "{}" }},
             lifecycle_state: {{ _eq: "superseded" }},
             failure_reason: {{ _eq: "{}" }}
         }}) {{ _docID request_id requester_did content }} }}"#,
-        escape_graphql_string(&head.agent_did),
+        escape_graphql_string(&head.node_did),
         escape_graphql_string(&head.session_id),
         escape_graphql_string(&head.doc_id),
         escape_graphql_string(FOLDED_REASON),

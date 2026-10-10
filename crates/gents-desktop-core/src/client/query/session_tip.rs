@@ -58,7 +58,7 @@ fn live_store(data: &Value, expected: &AgentRequestRow) -> Result<ClientStore> {
     anyhow::ensure!(
         request.doc_id == expected.doc_id
             && request.request_id == expected.request_id
-            && request.agent_did == expected.agent_did
+            && request.node_did == expected.node_did
             && request.session_id == expected.session_id
             && request.requester_did == expected.requester_did,
         "live request scope changed"
@@ -77,7 +77,7 @@ pub struct RequestPromptOwnership {
 
 #[derive(Debug, Clone)]
 pub struct RequestPromptFact {
-    pub agent_did: String,
+    pub node_did: String,
     pub session_id: String,
     pub requester_did: Option<String>,
     pub materialized: bool,
@@ -137,7 +137,7 @@ pub async fn load_request_prompt_ownership_on(
 
 fn prompt_ownership_batch_query(requests: &[AgentRequestRow]) -> Option<String> {
     let first = requests.first()?;
-    let agent = escape_graphql_string(first.agent_did.as_deref()?);
+    let node = escape_graphql_string(first.node_did.as_deref()?);
     let session = escape_graphql_string(first.session_id.as_deref()?);
     let requester = first
         .requester_did
@@ -147,7 +147,7 @@ fn prompt_ownership_batch_query(requests: &[AgentRequestRow]) -> Option<String> 
     let ids = requests
         .iter()
         .map(|request| {
-            if request.agent_did != first.agent_did
+            if request.node_did != first.node_did
                 || request.session_id != first.session_id
                 || request.requester_did != first.requester_did
             {
@@ -161,10 +161,10 @@ fn prompt_ownership_batch_query(requests: &[AgentRequestRow]) -> Option<String> 
     let limit = MAX_TIP_REQUEST_ROWS + 1;
     Some(format!(
         r#"query DesktopRequestPromptOwnership {{
-        AgentMessage(filter: {{agent_did: {{_eq: "{agent}"}}, session_id: {{_eq: "{session}"}},
+        AgentMessage(filter: {{node_did: {{_eq: "{node}"}}, session_id: {{_eq: "{session}"}},
             requester_did: {{_eq: {requester}}}, request_doc_id: {{_in: [{ids}]}}}},
             order: {{sequence: ASC}}, limit: {limit}) {{
-            _docID request_doc_id agent_did session_id requester_did message_key role sequence
+            _docID request_doc_id node_did session_id requester_did message_key role sequence
         }}
     }}"#
     ))
@@ -221,10 +221,10 @@ fn prompt_ownership_query(requests: &[AgentRequestRow]) -> Result<String> {
     let mut fields = Vec::new();
     for (index, request) in requests.iter().enumerate() {
         let (doc, key, own) = input_owner(request)?;
-        let agent = request
-            .agent_did
+        let node = request
+            .node_did
             .as_deref()
-            .context("prompt lookup lacks principal")?;
+            .context("prompt lookup lacks node")?;
         let session = request
             .session_id
             .as_deref()
@@ -235,16 +235,16 @@ fn prompt_ownership_query(requests: &[AgentRequestRow]) -> Result<String> {
             .map(|did| format!("\"{}\"", escape_graphql_string(did)))
             .unwrap_or_else(|| "null".into());
         let scope = format!(
-            r#"request_doc_id: {{ _eq: "{}" }}, agent_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }}, requester_did: {{ _eq: {requester} }}"#,
+            r#"request_doc_id: {{ _eq: "{}" }}, node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }}, requester_did: {{ _eq: {requester} }}"#,
             escape_graphql_string(&doc),
-            escape_graphql_string(agent),
+            escape_graphql_string(node),
             escape_graphql_string(session)
         );
         let key = escape_graphql_string(&key);
         let exact = format!(r#"{scope}, message_key: {{ _eq: "{key}" }}, role: {{ _eq: "user" }}"#);
         let anchor_scope = if own { scope.clone() } else { exact.clone() };
-        fields.push(format!(r#"p{index}: AgentMessage(filter: {{ {exact} }}, limit: 2) {{ _docID request_doc_id agent_did session_id requester_did message_key role sequence }}
-        a{index}: AgentMessage(filter: {{ {anchor_scope} }}, order: {{ sequence: ASC }}, limit: 1) {{ _docID request_doc_id agent_did session_id requester_did message_key sequence }}"#));
+        fields.push(format!(r#"p{index}: AgentMessage(filter: {{ {exact} }}, limit: 2) {{ _docID request_doc_id node_did session_id requester_did message_key role sequence }}
+        a{index}: AgentMessage(filter: {{ {anchor_scope} }}, order: {{ sequence: ASC }}, limit: 1) {{ _docID request_doc_id node_did session_id requester_did message_key sequence }}"#));
     }
     Ok(format!(
         "query DesktopRequestPromptOwnership {{ {} }}",
@@ -278,7 +278,7 @@ fn decode_prompt_ownership(
         for row in prompt.iter().chain(anchor.iter()) {
             anyhow::ensure!(
                 row["request_doc_id"].as_str() == Some(owner.as_str())
-                    && row["agent_did"].as_str() == request.agent_did.as_deref()
+                    && row["node_did"].as_str() == request.node_did.as_deref()
                     && row["session_id"].as_str() == request.session_id.as_deref()
                     && row["requester_did"].as_str() == request.requester_did.as_deref(),
                 "prompt observation crossed physical request scope"
@@ -294,10 +294,10 @@ fn decode_prompt_ownership(
         facts.by_request_doc_id.insert(
             doc.clone(),
             RequestPromptFact {
-                agent_did: request
-                    .agent_did
+                node_did: request
+                    .node_did
                     .clone()
-                    .context("prompt lookup lacks principal")?,
+                    .context("prompt lookup lacks node")?,
                 session_id: request
                     .session_id
                     .clone()
@@ -336,11 +336,11 @@ fn tip_query(request: &AgentRequestRow, include_request: bool) -> Result<String>
             .as_deref()
             .context("tip request lacks physical identity")?,
     );
-    let agent = escape_graphql_string(
+    let node = escape_graphql_string(
         request
-            .agent_did
+            .node_did
             .as_deref()
-            .context("tip request lacks principal")?,
+            .context("tip request lacks node")?,
     );
     let session = escape_graphql_string(
         request
@@ -354,7 +354,7 @@ fn tip_query(request: &AgentRequestRow, include_request: bool) -> Result<String>
         .map(|value| format!("\"{}\"", escape_graphql_string(value)))
         .unwrap_or_else(|| "null".into());
     let scope = format!(
-        r#"request_doc_id: {{ _eq: "{doc}" }}, _or: [{{ agent_did: {{ _eq: "{agent}" }}, session_id: {{ _eq: "{session}" }}, requester_did: {{ _eq: {requester} }} }}]"#
+        r#"request_doc_id: {{ _eq: "{doc}" }}, _or: [{{ node_did: {{ _eq: "{node}" }}, session_id: {{ _eq: "{session}" }}, requester_did: {{ _eq: {requester} }} }}]"#
     );
     let live = include_request
         || request
@@ -387,7 +387,7 @@ fn tip_query(request: &AgentRequestRow, include_request: bool) -> Result<String>
     };
     let request_fields = if include_request {
         format!(
-            r#"AgentRequest(filter: {{ _docID: {{ _eq: "{doc}" }}, agent_did: {{ _eq: "{agent}" }}, session_id: {{ _eq: "{session}" }}, requester_did: {{ _eq: {requester} }} }}, limit: 2) {{ {AGENT_REQUEST_FIELDS} }}"#
+            r#"AgentRequest(filter: {{ _docID: {{ _eq: "{doc}" }}, node_did: {{ _eq: "{node}" }}, session_id: {{ _eq: "{session}" }}, requester_did: {{ _eq: {requester} }} }}, limit: 2) {{ {AGENT_REQUEST_FIELDS} }}"#
         )
     } else {
         String::new()
@@ -418,17 +418,17 @@ fn bounded_tip_rows<'a>(data: &'a Value, root: &str) -> Result<&'a [Value]> {
 }
 
 fn tip_rows(data: &Value, request: &AgentRequestRow) -> Result<ClientStoreRows> {
-    let agent = request
-        .agent_did
+    let node = request
+        .node_did
         .as_deref()
-        .context("tip request lacks principal")?;
+        .context("tip request lacks node")?;
     let session = request
         .session_id
         .as_deref()
         .context("tip request lacks session")?;
     let messages = decode_scoped_canonical_rows(
         bounded_tip_rows(data, AGENT_MESSAGE_NAME)?,
-        agent,
+        node,
         Some(session),
         request.requester_did.as_deref(),
         decode_transcript_message_row,
@@ -436,7 +436,7 @@ fn tip_rows(data: &Value, request: &AgentRequestRow) -> Result<ClientStoreRows> 
     let segments = if data.get(AGENT_OUTPUT_SEGMENT_NAME).is_some() {
         decode_scoped_request_output_segments(
             bounded_tip_rows(data, AGENT_OUTPUT_SEGMENT_NAME)?,
-            agent,
+            node,
             Some(session),
             request.requester_did.as_deref(),
         )?
@@ -476,7 +476,7 @@ mod tests {
                     let request = escape_graphql_string(request);
                     format!(
                         r#"m{sequence}: create_AgentMessage(input: {{
-                    message_key: "{key}", session_id: "session", agent_did: "agent",
+                    message_key: "{key}", session_id: "session", node_did: "agent",
                     request_doc_id: "{request}", requester_did: null,
                     publication: {{kind: "request_execution", execution_generation: "generation"}},
                     outcome: "complete", sequence: {sequence}, role: "user", blocks: null,
@@ -497,7 +497,7 @@ mod tests {
         // A historic payload is deliberately undecodable: selecting the whole
         // session would fail even though neither tip needs these bytes.
         ConfigAccess::write_local(&node, "test.tip_history", r#"mutation {
-            create_AgentOutputSegment(input: {agent_did:"agent", session_id:"session",
+            create_AgentOutputSegment(input: {node_did:"agent", session_id:"session",
                 request_doc_id:"completed", source:{kind:"not_a_source"}, payload:"historic"}) { _docID }
         }"#).await.unwrap();
         for (id, state) in [
@@ -507,7 +507,7 @@ mod tests {
             let request = AgentRequestRow {
                 doc_id: Some(id.into()),
                 request_id: id.into(),
-                agent_did: Some("agent".into()),
+                node_did: Some("agent".into()),
                 session_id: Some("session".into()),
                 lifecycle_state: Some(state),
                 ..Default::default()
@@ -523,7 +523,7 @@ mod tests {
         let scoped = |id: &str| AgentRequestRow {
             doc_id: Some(id.into()),
             request_id: id.into(),
-            agent_did: Some("agent".into()),
+            node_did: Some("agent".into()),
             session_id: Some("session".into()),
             ..Default::default()
         };
@@ -566,7 +566,7 @@ mod tests {
             None
         );
         let control_anchor = serde_json::json!({"p0":[], "a0":[{
-            "request_doc_id":"completed", "agent_did":"agent", "session_id":"session",
+            "request_doc_id":"completed", "node_did":"agent", "session_id":"session",
             "requester_did":"different-requester", "sequence":0,
             "message_key":"background-completion-notification:result:done"
         }]});
@@ -576,7 +576,7 @@ mod tests {
             control_facts.by_request_doc_id["completed"].first_sequence,
             None
         );
-        let malformed = serde_json::json!({"p0":[], "a0":[{"request_doc_id":"foreign", "agent_did":"agent", "session_id":"session", "requester_did":"different-requester", "sequence":0}]});
+        let malformed = serde_json::json!({"p0":[], "a0":[{"request_doc_id":"foreign", "node_did":"agent", "session_id":"session", "requester_did":"different-requester", "sequence":0}]});
         assert!(decode_prompt_ownership(
             &malformed,
             &requests[..1],
@@ -590,12 +590,12 @@ mod tests {
     fn incomplete_prompt_batches_do_not_establish_absence_or_select_tied_anchors() {
         let requests = [AgentRequestRow {
             doc_id: Some("request".into()),
-            agent_did: Some("agent".into()),
+            node_did: Some("agent".into()),
             session_id: Some("session".into()),
             ..Default::default()
         }];
         let row = serde_json::json!({
-            "request_doc_id": "request", "agent_did": "agent", "session_id": "session",
+            "request_doc_id": "request", "node_did": "agent", "session_id": "session",
             "requester_did": null, "message_key": "authored:request:prompt",
             "role": "user", "sequence": 0
         });
@@ -627,7 +627,7 @@ mod tests {
         let request = |doc: &str| AgentRequestRow {
             doc_id: Some(doc.into()),
             request_id: format!("req-{doc}"),
-            agent_did: Some("agent".into()),
+            node_did: Some("agent".into()),
             session_id: Some("session".into()),
             ..Default::default()
         };
@@ -645,7 +645,7 @@ mod tests {
         assert!(query.contains(r#"request_doc_id: {_in: ["head","head"]}"#));
         let row = |key: &str, sequence: i64| {
             serde_json::json!({
-                "request_doc_id": "head", "agent_did": "agent", "session_id": "session",
+                "request_doc_id": "head", "node_did": "agent", "session_id": "session",
                 "requester_did": null, "message_key": key, "role": "user", "sequence": sequence
             })
         };
@@ -688,7 +688,7 @@ mod tests {
             &node,
             "test.tip_open_stream",
             r#"mutation { create_AgentOutputSegment(input: {
-                agent_did: "agent", session_id: "session", request_doc_id: "doc-head",
+                node_did: "agent", session_id: "session", request_doc_id: "doc-head",
                 requester_did: "reader",
                 source: {kind: "authored", key: "stream"}, ordinal: 0,
                 writer: {kind: "request_execution", execution_generation: "generation-1"},
@@ -702,7 +702,7 @@ mod tests {
             purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
             doc_id: Some(format!("doc-{id}")),
             request_id: id.into(),
-            agent_did: Some("agent".into()),
+            node_did: Some("agent".into()),
             session_id: Some("session".into()),
             requester_did: Some(requester.into()),
             lifecycle_state: Some(state),

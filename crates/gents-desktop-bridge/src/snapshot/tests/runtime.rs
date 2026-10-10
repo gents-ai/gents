@@ -9,8 +9,8 @@ use lean_vocab_test::{lean_trigger_dispatch_case_count, lean_trigger_dispatch_ca
 
 fn canonical_session(requester: Option<&str>) -> AgentSession {
     serde_json::from_value(serde_json::json!({
-        "session_id":"session", "agent_did":"did:test:owner", "requester_did":requester,
-        "behavior_id":"behavior", "created_at":"2026-09-01T00:00:00Z",
+        "session_id":"session", "node_did":"did:test:owner", "requester_did":requester,
+        "agent_id":"agent", "created_at":"2026-09-01T00:00:00Z",
         "title":{"text":"Saved title","source":"user"}, "tags":["review"],
         "provenance":{"task_id":"task","graph_run_id":"graph","fork":{"source_session_id":"parent","at_user_turn":2}}
     }))
@@ -36,10 +36,10 @@ fn indexed_request(requester: Option<&str>) -> AgentRequestRow {
         purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
         doc_id: Some("physical-head".into()),
         request_id: "logical-head".into(),
-        agent_did: Some("did:test:owner".into()),
+        node_did: Some("did:test:owner".into()),
         requester_did: requester.map(str::to_owned),
         session_id: Some("session".into()),
-        behavior_id: Some("behavior".into()),
+        agent_id: Some("agent".into()),
         lifecycle_state: Some(RequestLifecycleState::Processing),
         ..Default::default()
     }
@@ -134,14 +134,14 @@ fn live_session_response_requires_physical_and_requester_identity() {
 }
 
 #[test]
-fn task_run_history_is_agent_scoped_when_trigger_ids_match() {
+fn task_run_history_is_node_scoped_when_trigger_ids_match() {
     let store = ClientStore::from_rows(ClientStoreRows {
         requests: vec![
             AgentRequestRow {
                 purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
                 doc_id: Some("doc-mini-1".into()),
                 request_id: "req-mini-1".into(),
-                agent_did: Some("did:test:mini-1".into()),
+                node_did: Some("did:test:mini-1".into()),
                 session_id: Some("session-mini-1".into()),
                 lifecycle_state: Some(RequestLifecycleState::Completed),
                 caused_by_trigger_id: Some("shared-schedule".into()),
@@ -152,7 +152,7 @@ fn task_run_history_is_agent_scoped_when_trigger_ids_match() {
                 purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
                 doc_id: Some("doc-mini-2".into()),
                 request_id: "req-mini-2".into(),
-                agent_did: Some("did:test:mini-2".into()),
+                node_did: Some("did:test:mini-2".into()),
                 session_id: Some("session-mini-2".into()),
                 lifecycle_state: Some(RequestLifecycleState::Completed),
                 caused_by_trigger_id: Some("shared-schedule".into()),
@@ -164,7 +164,7 @@ fn task_run_history_is_agent_scoped_when_trigger_ids_match() {
     });
     let triggers = vec![TriggerView {
         config: serde_json::from_value(serde_json::json!({
-            "agent_did":"did:test:mini-1", "trigger_id":"shared-schedule", "task_id":"task-1",
+            "node_did":"did:test:mini-1", "trigger_id":"shared-schedule", "task_id":"task-1",
             "source":{"kind":"schedule","schedule_id":"schedule"}
         }))
         .expect("trigger"),
@@ -250,7 +250,7 @@ fn task_recent_runs_view_consumes_generated_trigger_dispatch_lineage_contract_ca
         };
         let triggers = vec![TriggerView {
             config: serde_json::from_value(serde_json::json!({
-                "agent_did":"did:test:contract-agent", "trigger_id": trigger_id,
+                "node_did":"did:test:contract-node", "trigger_id": trigger_id,
                 "task_id": task_id, "source":source, "concurrency":case.concurrency
             }))
             .unwrap(),
@@ -265,9 +265,9 @@ fn task_recent_runs_view_consumes_generated_trigger_dispatch_lineage_contract_ca
             requests: vec![AgentRequestRow {
                 purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
                 request_id: request_id.clone(),
-                agent_did: Some("did:test:contract-agent".to_string()),
+                node_did: Some("did:test:contract-node".to_string()),
                 requester_did: None,
-                behavior_id: Some("contract-behavior".to_string()),
+                agent_id: Some("contract-agent".to_string()),
                 session_id: Some(format!("contract-session-{index}")),
                 retry_parent_request: None,
                 retry_root_request: None,
@@ -302,8 +302,7 @@ fn task_recent_runs_view_consumes_generated_trigger_dispatch_lineage_contract_ca
             ..ClientStoreRows::default()
         });
 
-        let recent_runs =
-            recent_runs_for_task_views(&triggers, "did:test:contract-agent", &task_id);
+        let recent_runs = recent_runs_for_task_views(&triggers, "did:test:contract-node", &task_id);
         assert_eq!(
             recent_runs.total_fires, 1,
             "case {} should project one recent fire",
@@ -340,7 +339,7 @@ fn task_recent_runs_view_consumes_generated_trigger_dispatch_lineage_contract_ca
             case.name
         );
 
-        let run_history = task_run_history(&store, "did:test:contract-agent", &task_id, &triggers);
+        let run_history = task_run_history(&store, "did:test:contract-node", &task_id, &triggers);
         assert_eq!(
             run_history.len(),
             1,
@@ -378,7 +377,7 @@ async fn summary_starter_resolves_physical_cause_outside_latest_request_cache() 
     let starter = summaries[0].started_by.as_ref().unwrap();
     assert_eq!(starter.session_id, "sess_parent");
     assert_eq!(starter.cause_request_doc_id, parent_doc_id);
-    assert_eq!(starter.agent_did, crate::tests::support::OPERATOR);
+    assert_eq!(starter.node_did, crate::tests::support::OPERATOR);
 }
 
 /// Every starter in a fleet snapshot resolves through one batched lineage
@@ -460,9 +459,9 @@ async fn fleet_snapshot_resolves_all_starters_with_one_query_per_build() {
             "{child} must resolve into its parent's session"
         );
         assert_eq!(
-            starter.agent_did,
+            starter.node_did,
             crate::tests::support::OPERATOR,
-            "{child} starter must carry the parent session's agent"
+            "{child} starter must carry the parent session's node"
         );
         assert_eq!(
             starter.requester_did.as_deref(),

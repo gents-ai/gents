@@ -2,27 +2,27 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
 
-pub(super) fn seed_runner_agent_home(
-    agent_home: &Path,
-    agent_name: &str,
-    agent_did: &str,
+pub(super) fn seed_runner_node_home(
+    node_home: &Path,
+    node_name: &str,
+    node_did: &str,
     peer_id: &str,
     listen_address: &str,
 ) -> Result<()> {
-    std::fs::create_dir_all(agent_home)?;
+    std::fs::create_dir_all(node_home)?;
     std::fs::write(
-        agent_home.join("init.json"),
+        node_home.join("init.json"),
         serde_json::to_vec_pretty(&serde_json::json!({
-            "agent_name": agent_name,
-            "agent_did": agent_did,
+            "node_name": node_name,
+            "node_did": node_did,
         }))?,
     )?;
     std::fs::write(
-        agent_home.join("runtime.json"),
+        node_home.join("runtime.json"),
         serde_json::to_vec_pretty(&serde_json::json!({
             "graphql": "",
-            "agent_name": agent_name,
-            "agent_did": agent_did,
+            "node_name": node_name,
+            "node_did": node_did,
             "p2p_transport": "iroh",
             "p2p_peer_id": peer_id,
             "p2p_listen_addresses": [listen_address],
@@ -88,6 +88,8 @@ fn should_skip_workspace_entry(name: &str) -> bool {
             | ".lake"
             | "target"
             | "node_modules"
+            | "test-results"
+            | "playwright-report"
             | ".next"
             | ".turbo"
             | "dist"
@@ -103,7 +105,16 @@ mod tests {
 
     #[test]
     fn fixture_copy_excludes_runtime_identity_secrets_and_build_caches() {
-        for name in [".gents", ".env", ".env.local", ".lake", "target", ".git"] {
+        for name in [
+            ".gents",
+            ".env",
+            ".env.local",
+            ".lake",
+            "target",
+            ".git",
+            "test-results",
+            "playwright-report",
+        ] {
             assert!(should_skip_workspace_entry(name), "must not copy {name}");
         }
         for name in ["README.md", "AGENTS.md", "src", "Cargo.toml"] {

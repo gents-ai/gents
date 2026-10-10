@@ -35,13 +35,13 @@ def activeClaim (inv : CallbackInvocation) : Bool :=
 def countActive (ownerId invocationId : String) (invs : List CallbackInvocation) : Nat :=
   (invs.filter fun inv =>
       activeClaim inv &&
-        decide (inv.ownerAgentDid = ownerId) &&
+        decide (inv.ownerNodeDid = ownerId) &&
         decide (inv.invocationId = invocationId)).length
 
 /-- Row-level invocation uniqueness, not a single-runtime/host-identity guarantee.
-Concurrent use of one principal on multiple hosts is explicitly outside this model. -/
+Concurrent use of one node on multiple hosts is explicitly outside this model. -/
 def ClaimUnique (invs : List CallbackInvocation) : Prop :=
-  invs.all (fun inv => decide (countActive inv.ownerAgentDid inv.invocationId invs ≤ 1)) = true
+  invs.all (fun inv => decide (countActive inv.ownerNodeDid inv.invocationId invs ≤ 1)) = true
 
 instance (invs : List CallbackInvocation) : Decidable (ClaimUnique invs) :=
   inferInstanceAs (Decidable (_ = true))
@@ -50,7 +50,7 @@ theorem identity_fields_preserved
     {pre post : CallbackInvocation}
     (h : Transition pre post) :
     post.invocationId = pre.invocationId ∧
-    post.ownerAgentDid = pre.ownerAgentDid := by
+    post.ownerNodeDid = pre.ownerNodeDid := by
   cases h <;> simp_all
 
 /-- Claim, execution and terminalization preserve the captured payload and

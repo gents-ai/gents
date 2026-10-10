@@ -36,11 +36,11 @@ const edited: RenderedToolCallView = {
 
 /* the runtime is a user service the desktop pairs with by enrollment: only
    the home's DID says it is this machine's */
-function appOn(agentDid: string) {
+function appOn(nodeDid: string) {
   return testApp({
     snapshot: {
-      bootstrap: { initAgentDid: "did:key:home" },
-      client: { deployments: [node({ agentDid, source: "enrollment" })] },
+      bootstrap: { initNodeDid: "did:key:home" },
+      client: { deployments: [node({ nodeDid, source: "enrollment" })] },
     },
   });
 }

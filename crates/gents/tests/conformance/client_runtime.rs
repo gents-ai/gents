@@ -1,9 +1,9 @@
 use super::*;
 
-fn readiness_reason(code: &str) -> gents_protocol::row::BehaviorReadinessUnavailableReason {
-    use gents_protocol::row::BehaviorReadinessUnavailableReason as Reason;
+fn readiness_reason(code: &str) -> gents_protocol::row::AgentReadinessUnavailableReason {
+    use gents_protocol::row::AgentReadinessUnavailableReason as Reason;
     match code {
-        "behavior_disabled" => Reason::BehaviorDisabled,
+        "agent_disabled" => Reason::AgentDisabled,
         "runtime_configuration_invalid" => Reason::RuntimeConfigurationInvalid,
         "backend_not_configured" => Reason::BackendNotConfigured,
         "backend_disabled" => Reason::BackendDisabled,
@@ -25,28 +25,28 @@ fn readiness_reason_code<T: serde::Serialize>(reason: T) -> String {
 }
 
 #[test]
-fn generated_behavior_readiness_cases_drive_the_production_projector() {
+fn generated_agent_readiness_cases_drive_the_production_projector() {
     use gents_protocol::row::{
-        project_behavior_readiness, project_behavior_readiness_source, AgentBehaviorReadinessRow,
-        BehaviorReadinessProcessState, BehaviorReadinessSourceEntry, ProjectedBehaviorReadiness,
-        BEHAVIOR_READINESS_FORMAT_VERSION,
+        project_node_readiness, project_node_readiness_source, AgentReadinessSourceEntry,
+        NodeReadinessProcessState, NodeReadinessRow, ProjectedAgentReadiness,
+        NODE_READINESS_FORMAT_VERSION,
     };
 
-    let cases = lean_client_behavior_readiness_cases();
+    let cases = lean_client_agent_readiness_cases();
     assert!(!cases.is_empty());
     for case in cases {
         let runtime_reason = readiness_reason(&case.runtime_unavailable_reason);
-        let process_state = serde_json::from_value::<BehaviorReadinessProcessState>(
+        let process_state = serde_json::from_value::<NodeReadinessProcessState>(
             serde_json::Value::String(case.process_state.clone()),
         )
         .unwrap_or_else(|error| panic!("{} invalid generated process state: {error}", case.name));
         let selected_assigned = case.runnable || case.unavailable || case.startup_demoted;
-        let default_behavior_id = if selected_assigned { "20" } else { "10" };
-        // Behavior "20" is the only behavior the generated cases assign; the
+        let default_agent_id = if selected_assigned { "20" } else { "10" };
+        // Agent "20" is the only agent the generated cases assign; the
         // unassigned rows keep a valid default ("10") while "20" stays absent
         // from the runtime projection.
-        let sources = vec![BehaviorReadinessSourceEntry {
-            behavior_id: default_behavior_id.to_string(),
+        let sources = vec![AgentReadinessSourceEntry {
+            agent_id: default_agent_id.to_string(),
             dispatcher_present: if selected_assigned {
                 case.runnable
             } else {
@@ -59,19 +59,19 @@ fn generated_behavior_readiness_cases_drive_the_production_projector() {
             },
             startup_demoted: selected_assigned && case.startup_demoted,
         }];
-        let mut snapshot = project_behavior_readiness_source(
+        let mut snapshot = project_node_readiness_source(
             process_state,
             case.active_generation,
             case.router_generation,
-            default_behavior_id,
+            default_agent_id,
             sources,
         )
         .unwrap_or_else(|error| panic!("{} invalid generated source: {error}", case.name));
         if case.observation_kind == "unsupported_version" {
-            snapshot.format_version = BEHAVIOR_READINESS_FORMAT_VERSION + 1;
+            snapshot.format_version = NODE_READINESS_FORMAT_VERSION + 1;
         }
-        let row = AgentBehaviorReadinessRow {
-            agent_did: "did:test:lean-readiness".to_string(),
+        let row = NodeReadinessRow {
+            node_did: "did:test:lean-readiness".to_string(),
             snapshot_json: if case.observation_kind == "malformed" {
                 "not-json".to_string()
             } else {
@@ -79,38 +79,28 @@ fn generated_behavior_readiness_cases_drive_the_production_projector() {
             },
             updated_at: "2026-08-28T00:00:00Z".to_string(),
         };
-        let projection = project_behavior_readiness(
+        let projection = project_node_readiness(
             case.observation_present.then_some(&row),
             "did:test:lean-readiness",
             ["20"],
             Some("20"),
-            chrono::DateTime::parse_from_rfc3339("2026-08-28T00:00:10Z")
-                .unwrap()
-                .with_timezone(&chrono::Utc),
         );
         let projected = projection
-            .behaviors
+            .agents
             .get("20")
-            .unwrap_or_else(|| panic!("{} missing selected behavior", case.name));
+            .unwrap_or_else(|| panic!("{} missing selected agent", case.name));
         // The generated model projects semantic runtime state, not an
         // observation lease. Idle age and clock skew cannot change its answer.
         for timestamp in ["1970-01-01T00:00:00Z", "2999-01-01T00:00:00Z"] {
             let mut aged_row = row.clone();
             aged_row.updated_at = timestamp.to_string();
-            let aged = project_behavior_readiness(
+            let aged = project_node_readiness(
                 case.observation_present.then_some(&aged_row),
                 "did:test:lean-readiness",
                 ["20"],
                 Some("20"),
-                chrono::DateTime::parse_from_rfc3339("2026-08-28T00:00:10Z")
-                    .unwrap()
-                    .with_timezone(&chrono::Utc),
             );
-            assert_eq!(
-                aged.behaviors, projection.behaviors,
-                "{}: {timestamp}",
-                case.name
-            );
+            assert_eq!(aged.agents, projection.agents, "{}: {timestamp}", case.name);
             assert_eq!(
                 aged.unknown_reason, projection.unknown_reason,
                 "{}: {timestamp}",
@@ -118,11 +108,11 @@ fn generated_behavior_readiness_cases_drive_the_production_projector() {
             );
         }
         let (state, reason) = match projected {
-            ProjectedBehaviorReadiness::Ready => ("ready", None),
-            ProjectedBehaviorReadiness::Unavailable(reason) => {
+            ProjectedAgentReadiness::Ready => ("ready", None),
+            ProjectedAgentReadiness::Unavailable(reason) => {
                 ("unavailable", Some(readiness_reason_code(*reason)))
             }
-            ProjectedBehaviorReadiness::Unknown(reason) => {
+            ProjectedAgentReadiness::Unknown(reason) => {
                 ("unknown", Some(readiness_reason_code(*reason)))
             }
         };

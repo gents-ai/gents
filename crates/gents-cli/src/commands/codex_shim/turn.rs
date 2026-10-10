@@ -36,13 +36,13 @@ pub(super) async fn start_gents_turn(
 ) -> Result<()> {
     if load_codex_thread(state, &thread_id)
         .await?
-        .is_some_and(|record| record.is_subagent())
+        .is_some_and(|record| record.is_caused())
     {
         return send_error(
             &connection.outbound,
             request_id,
             JSONRPC_INVALID_PARAMS,
-            "GENTS sub-agent threads accept no user input; the session that started them messages them with agent_message"
+            "GENTS caused threads accept no user input; the session that started them messages them with agent_message"
                 .to_string(),
         )
         .await;
@@ -194,13 +194,13 @@ pub(super) async fn steer_gents_turn(
 ) -> Result<()> {
     if load_codex_thread(state, &params.thread_id)
         .await?
-        .is_some_and(|record| record.is_subagent())
+        .is_some_and(|record| record.is_caused())
     {
         return send_error(
             &connection.outbound,
             request_id,
             JSONRPC_INVALID_PARAMS,
-            "GENTS sub-agent threads accept no user input; the session that started them messages them with agent_message"
+            "GENTS caused threads accept no user input; the session that started them messages them with agent_message"
                 .to_string(),
         )
         .await;

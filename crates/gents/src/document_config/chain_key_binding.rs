@@ -12,7 +12,7 @@ use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct ChainKeyBindingDocument {
     pub binding_id: String,
-    pub agent_did: String,
+    pub node_did: String,
     pub address: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
@@ -45,8 +45,8 @@ impl ChainKeyBindingDocument {
             "ChainKeyBinding requires binding_id"
         );
         anyhow::ensure!(
-            !self.agent_did.trim().is_empty(),
-            "ChainKeyBinding requires agent_did"
+            !self.node_did.trim().is_empty(),
+            "ChainKeyBinding requires node_did"
         );
         let address = self.address.trim();
         anyhow::ensure!(
@@ -83,35 +83,35 @@ fn binding_fields() -> Result<String> {
     )
 }
 
-pub fn list_chain_key_bindings_query(agent_did: &str) -> Result<String> {
-    anyhow::ensure!(!agent_did.trim().is_empty(), "chain key owner is required");
-    let owner = escape_graphql_string(agent_did);
+pub fn list_chain_key_bindings_query(node_did: &str) -> Result<String> {
+    anyhow::ensure!(!node_did.trim().is_empty(), "chain key owner is required");
+    let owner = escape_graphql_string(node_did);
     Ok(format!(
-        "{{ ChainKeyBinding(filter: {{agent_did: {{_eq: \"{owner}\"}}}}) {{ _docID {} }} }}",
+        "{{ ChainKeyBinding(filter: {{node_did: {{_eq: \"{owner}\"}}}}) {{ _docID {} }} }}",
         binding_fields()?
     ))
 }
 
-pub fn chain_key_binding_by_id_query(agent_did: &str, binding_id: &str) -> Result<String> {
+pub fn chain_key_binding_by_id_query(node_did: &str, binding_id: &str) -> Result<String> {
     anyhow::ensure!(
-        !agent_did.trim().is_empty() && !binding_id.trim().is_empty(),
+        !node_did.trim().is_empty() && !binding_id.trim().is_empty(),
         "chain key owner and binding ID are required"
     );
-    let owner = escape_graphql_string(agent_did);
+    let owner = escape_graphql_string(node_did);
     let binding = escape_graphql_string(binding_id);
     Ok(format!(
-        "{{ ChainKeyBinding(filter: {{agent_did: {{_eq: \"{owner}\"}}, binding_id: {{_eq: \"{binding}\"}}}}, limit: 2) {{ _docID {} }} }}",
+        "{{ ChainKeyBinding(filter: {{node_did: {{_eq: \"{owner}\"}}, binding_id: {{_eq: \"{binding}\"}}}}, limit: 2) {{ _docID {} }} }}",
         binding_fields()?
     ))
 }
 
 pub async fn list_chain_key_binding_records(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
 ) -> Result<Vec<(String, ChainKeyBindingDocument)>> {
     let response = graphql_with_transaction_retry(
         node,
-        &list_chain_key_bindings_query(agent_did)?,
+        &list_chain_key_bindings_query(node_did)?,
         "list ChainKeyBinding",
     )
     .await?;
@@ -154,10 +154,10 @@ pub fn preserve_chain_key_binding_update_fields(update: &mut serde_json::Value) 
 }
 
 pub fn upsert_chain_key_binding_mutation(doc: &ChainKeyBindingDocument) -> Result<String> {
-    let owner = escape_graphql_string(&doc.agent_did);
+    let owner = escape_graphql_string(&doc.node_did);
     let binding = escape_graphql_string(&doc.binding_id);
     anyhow::ensure!(
-        !doc.agent_did.trim().is_empty() && !doc.binding_id.trim().is_empty(),
+        !doc.node_did.trim().is_empty() && !doc.binding_id.trim().is_empty(),
         "chain key owner and binding ID are required"
     );
     let (_, add) = crate::config_client::config_projection(
@@ -168,7 +168,7 @@ pub fn upsert_chain_key_binding_mutation(doc: &ChainKeyBindingDocument) -> Resul
     let mut update = add.clone();
     preserve_chain_key_binding_update_fields(&mut update)?;
     Ok(format!(
-        "mutation {{ upsert_ChainKeyBinding(filter: {{agent_did: {{_eq: \"{owner}\"}}, binding_id: {{_eq: \"{binding}\"}}}}, add: {}, update: {}) {{ _docID }} }}",
+        "mutation {{ upsert_ChainKeyBinding(filter: {{node_did: {{_eq: \"{owner}\"}}, binding_id: {{_eq: \"{binding}\"}}}}, add: {}, update: {}) {{ _docID }} }}",
         gents_protocol::graphql::graphql_input_literal(&add)?,
         gents_protocol::graphql::graphql_input_literal(&update)?
     ))
@@ -176,7 +176,7 @@ pub fn upsert_chain_key_binding_mutation(doc: &ChainKeyBindingDocument) -> Resul
 
 pub fn create_chain_key_binding_mutation(doc: &ChainKeyBindingDocument) -> Result<String> {
     anyhow::ensure!(
-        !doc.agent_did.trim().is_empty() && !doc.binding_id.trim().is_empty(),
+        !doc.node_did.trim().is_empty() && !doc.binding_id.trim().is_empty(),
         "chain key owner and binding ID are required"
     );
     let (_, value) = crate::config_client::config_projection(
@@ -212,7 +212,7 @@ pub async fn upsert_chain_key_binding(
                 crate::config_client::read_desired_state_document_in_txn(
                     txn,
                     crate::Collection::ChainKeyBinding,
-                    &doc.agent_did,
+                    &doc.node_did,
                     &doc.binding_id,
                 )
                 .await?;
@@ -231,7 +231,7 @@ mod tests {
     fn binding(revoked_at: Option<&str>) -> ChainKeyBindingDocument {
         ChainKeyBindingDocument {
             binding_id: "bind-1".into(),
-            agent_did: "did:key:zAlice".into(),
+            node_did: "did:key:zAlice".into(),
             address: "0x1111111111111111111111111111111111111111".into(),
             key_backend: Some("keyring".into()),
             attestation: Some("0xsig".into()),

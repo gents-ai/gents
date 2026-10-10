@@ -314,7 +314,7 @@ mod tests {
         let identity =
             crate::identity::KeyIdentity::load_or_create(key.path().join("principal.key"), None)
                 .unwrap();
-        let did = crate::identity::AgentIdentity::did(&identity).to_string();
+        let did = crate::identity::NodeIdentity::did(&identity).to_string();
         super::super::ConfigAccess::graphql_as(endpoint, &did)
             .transact("test.per_request_bearer", |txn| {
                 Box::pin(async move {

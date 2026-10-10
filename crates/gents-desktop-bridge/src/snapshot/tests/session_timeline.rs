@@ -5,9 +5,9 @@ use gents_protocol::request_lifecycle::RequestLifecycleState;
 fn timeline_session() -> AgentSession {
     AgentSession {
         session_id: "sess-1".into(),
-        agent_did: "did:test:amy".into(),
+        node_did: "did:test:amy".into(),
         requester_did: None,
-        behavior_id: "default".into(),
+        agent_id: "default".into(),
         created_at: "2026-04-21T12:00:00Z".into(),
         closed_at: None,
         title: None,
@@ -33,7 +33,7 @@ fn canonical_headers_and_segments_render_in_sequence() {
             purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
             doc_id: Some("req-1".into()),
             request_id: "req-1".into(),
-            agent_did: Some("did:test:amy".into()),
+            node_did: Some("did:test:amy".into()),
             session_id: Some("sess-1".into()),
             lifecycle_state: Some(RequestLifecycleState::Processing),
             ..Default::default()
@@ -75,7 +75,7 @@ fn interrupted_queued_steering_keeps_request_owned_input_without_transcript() {
             purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
             doc_id: Some("steering-doc-1".into()),
             request_id: "steering-request-1".into(),
-            agent_did: Some("did:test:amy".into()),
+            node_did: Some("did:test:amy".into()),
             session_id: Some("sess-1".into()),
             lifecycle_state: Some(RequestLifecycleState::Interrupted),
             content: Some("queued steering text".into()),
@@ -110,7 +110,7 @@ fn missing_segment_remains_loading_in_the_timeline() {
             purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
             doc_id: Some("req-1".into()),
             request_id: "req-1".into(),
-            agent_did: Some("did:test:amy".into()),
+            node_did: Some("did:test:amy".into()),
             session_id: Some("sess-1".into()),
             lifecycle_state: Some(RequestLifecycleState::Processing),
             ..Default::default()
@@ -234,7 +234,7 @@ fn terminal_request_does_not_create_a_mutable_live_tail() {
         purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
         doc_id: Some("req-1".into()),
         request_id: "req-1".into(),
-        agent_did: Some("did:test:amy".into()),
+        node_did: Some("did:test:amy".into()),
         session_id: Some("sess-1".into()),
         lifecycle_state: Some(RequestLifecycleState::Completed),
         ..Default::default()
@@ -265,7 +265,7 @@ fn session_snapshot_consumes_generated_live_overlay_cases() {
         purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
         doc_id: Some("req-1".into()),
         request_id: "req-1".into(),
-        agent_did: Some("did:test:amy".into()),
+        node_did: Some("did:test:amy".into()),
         session_id: Some("sess-1".into()),
         lifecycle_state: Some(RequestLifecycleState::Processing),
         ..Default::default()
@@ -395,7 +395,7 @@ fn background_notification_is_control_by_message_key_with_honest_request_binding
     let mut rows = active_store().to_rows();
     push_canonical_text_message(
         &mut rows,
-        "background-completion-notification:child-1:subagent",
+        "background-completion-notification:child-1:agent",
         "sess-1",
         Some("req-1"),
         1,
@@ -471,7 +471,7 @@ fn a_sent_message_keeps_one_logical_request_id_from_pending_to_saved() {
         purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
         doc_id: Some("bae-doc-1".into()),
         request_id: "req-1".into(),
-        agent_did: Some("did:test:amy".into()),
+        node_did: Some("did:test:amy".into()),
         session_id: Some("sess-1".into()),
         lifecycle_state: Some(RequestLifecycleState::Processing),
         content: Some("inspect the repository".into()),
@@ -529,7 +529,7 @@ fn message_request_id_is_never_the_request_doc_id() {
             purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
             doc_id: Some("bae-doc-1".into()),
             request_id: "req-1".into(),
-            agent_did: Some("did:test:amy".into()),
+            node_did: Some("did:test:amy".into()),
             session_id: Some("sess-1".into()),
             lifecycle_state: Some(RequestLifecycleState::Completed),
             ..Default::default()
@@ -585,7 +585,7 @@ fn only_the_authored_prompt_row_owns_the_request_turn() {
             purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
             doc_id: Some("bae-doc-1".into()),
             request_id: "req-1".into(),
-            agent_did: Some("did:test:amy".into()),
+            node_did: Some("did:test:amy".into()),
             session_id: Some("sess-1".into()),
             lifecycle_state: Some(RequestLifecycleState::Processing),
             content: Some("inspect the repository".into()),
@@ -742,7 +742,7 @@ fn session_snapshot_projects_open_canonical_segment_before_header_arrives() {
     rows.output_segments.push(OutputSegmentRow {
         doc_id: "open-0".into(),
         segment: OutputSegment {
-            agent_did: "did:test:amy".into(),
+            node_did: "did:test:amy".into(),
             requester_did: None,
             session_id: "sess-1".into(),
             request_doc_id: "req-1".into(),
@@ -817,7 +817,7 @@ fn session_snapshot_keeps_full_live_overlay_when_only_prior_turn_shares_prefix()
 #[test]
 fn session_snapshot_renders_structured_tool_payloads_in_timeline() {
     let tool = serde_json::from_value(serde_json::json!({
-        "_docID": "tool-doc", "agent_did": "did:test:amy", "request_doc_id": "req-1",
+        "_docID": "tool-doc", "node_did": "did:test:amy", "request_doc_id": "req-1",
         "tool_call_key": "tool-1", "session_id": "sess-1", "request_id": "req-1",
         "message_sequence": 2, "tool_name": "glob", "tool_call_id": "call-1",
         "status": "completed", "lifecycle_state": "completed",
@@ -850,7 +850,7 @@ fn session_snapshot_renders_structured_tool_payloads_in_timeline() {
 #[test]
 fn structured_command_policy_denial_projects_to_rendered_tool() {
     let tool = serde_json::from_value(serde_json::json!({
-        "_docID": "tool-denial-doc", "agent_did": "did:test:amy", "request_doc_id": "req-denial",
+        "_docID": "tool-denial-doc", "node_did": "did:test:amy", "request_doc_id": "req-denial",
         "tool_call_key": "tool-denial", "session_id": "session-denial", "request_id": "req-denial",
         "message_sequence": 1, "tool_name": "bash", "tool_call_id": "call-denial",
         "status": "completed", "lifecycle_state": "failed", "completed_at": "2026-05-20T10:32:16Z",
@@ -861,9 +861,9 @@ fn structured_command_policy_denial_projects_to_rendered_tool() {
     .expect("canonical denial envelope");
     let session = AgentSession {
         session_id: "session-denial".into(),
-        agent_did: "did:test:amy".into(),
+        node_did: "did:test:amy".into(),
         requester_did: None,
-        behavior_id: "default".into(),
+        agent_id: "default".into(),
         created_at: "2026-04-21T12:00:00Z".into(),
         closed_at: None,
         title: None,
@@ -916,7 +916,7 @@ fn active_store() -> ClientStore {
             purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
             doc_id: Some("req-1".into()),
             request_id: "req-1".into(),
-            agent_did: Some("did:test:amy".into()),
+            node_did: Some("did:test:amy".into()),
             session_id: Some("sess-1".into()),
             lifecycle_state: Some(RequestLifecycleState::Processing),
             ..Default::default()

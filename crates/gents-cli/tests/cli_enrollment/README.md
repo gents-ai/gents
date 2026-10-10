@@ -18,7 +18,7 @@ Success requires:
   same home recovers the completed reply within 20 seconds, including startup.
 - A subsequent turn in the same session includes both distinct earlier replies
   in the provider transcript and completes visibly within the same turn budget.
-- Enrollment identity survives reopening; `AgentPrincipal` stays on the runtime.
+- Enrollment identity survives reopening; `Node` stays on the runtime.
 
 These are initial integration-test latency budgets. The independent live-model
 test exercises inference without substituting a fake provider. The deterministic

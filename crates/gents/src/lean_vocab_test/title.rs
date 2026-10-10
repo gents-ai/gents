@@ -31,7 +31,7 @@ pub(crate) struct LeanTitleRequestAdmissionCase {
     pub(crate) admission: LeanTitleAdmission,
     #[serde(deserialize_with = "required_nullable")]
     pub(crate) runtime_evidence: Option<LeanTitleRuntimeEvidence>,
-    pub(crate) session_behavior: String,
+    pub(crate) session_agent: String,
     pub(crate) expected_admitted: bool,
     pub(crate) expected_claimable: bool,
     pub(crate) expected_disposition: String,
@@ -42,13 +42,13 @@ pub(crate) struct LeanTitleRequestAdmissionCase {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanTitleRequest {
-    /// Signed causal hop; the native adapter maps it to `subagent_depth`.
+    /// Signed causal hop; the native adapter maps it to `request_hop`.
     pub(crate) hop: u32,
     pub(crate) request_id: String,
     pub(crate) purpose: LeanRequestPurpose,
-    pub(crate) target_agent: String,
+    pub(crate) target_node: String,
     pub(crate) requester_did: String,
-    pub(crate) behavior_id: String,
+    pub(crate) agent_id: String,
     pub(crate) session_id: String,
     pub(crate) content: String,
     pub(crate) input: LeanTitleRequestInput,
@@ -124,7 +124,7 @@ pub(crate) struct LeanTitleRuntimeEvidence {
     pub(crate) source_kind: String,
     pub(crate) issuer_did: String,
     pub(crate) source_request_id: String,
-    pub(crate) target_agent: String,
+    pub(crate) target_node: String,
     pub(crate) target_runtime_attestation_valid: bool,
     pub(crate) source_binding_current: bool,
     pub(crate) source_document_binding_current: bool,
@@ -137,9 +137,9 @@ pub(crate) struct LeanTitleRuntimeEvidence {
 pub(crate) struct LeanTitleParentEvidence {
     pub(crate) request_id: String,
     pub(crate) document_id: String,
-    pub(crate) agent_did: String,
+    pub(crate) node_did: String,
     pub(crate) session_id: String,
-    pub(crate) behavior_id: String,
+    pub(crate) agent_id: String,
     pub(crate) logical_binding_current: bool,
     pub(crate) physical_binding_current: bool,
 }
@@ -163,7 +163,7 @@ pub(crate) struct LeanTitleUsageCase {
 pub(crate) struct LeanTitleUsageParent {
     pub(crate) physical: u64,
     pub(crate) logical: u64,
-    pub(crate) agent: u64,
+    pub(crate) node: u64,
     pub(crate) session: u64,
     pub(crate) state: String,
 }
@@ -211,7 +211,7 @@ pub(crate) struct LeanTitleUsageBinding {
     pub(crate) logical: u64,
     pub(crate) parent_physical: u64,
     pub(crate) parent_logical: u64,
-    pub(crate) agent: u64,
+    pub(crate) node: u64,
     pub(crate) session: u64,
     pub(crate) authenticated: bool,
 }
@@ -277,8 +277,8 @@ pub(crate) struct LeanTitleJoinWorld {
     pub(crate) model_own_physical: String,
     pub(crate) purpose: LeanRequestPurpose,
     pub(crate) session: String,
-    pub(crate) principal: String,
-    pub(crate) queue_scope_agent: String,
+    pub(crate) node_did: String,
+    pub(crate) queue_scope_node: String,
     pub(crate) queue_scope_session: String,
     #[serde(deserialize_with = "required_nullable")]
     pub(crate) queue_active: Option<String>,
@@ -300,7 +300,7 @@ pub(crate) struct LeanTitleJoinBinding {
     pub(crate) logical_request: String,
     pub(crate) parent_physical: String,
     pub(crate) parent_logical: String,
-    pub(crate) agent: String,
+    pub(crate) node: String,
     pub(crate) session: String,
     pub(crate) authenticated: bool,
 }

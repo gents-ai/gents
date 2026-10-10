@@ -539,7 +539,7 @@ private def titleActivation : Handover.TitleActivation :=
   { binding :=
       { physicalRequest := 10, logicalRequest := 11
       , parentPhysical := 20, parentLogical := 21
-      , agent := 1, session := 1, authenticated := true }
+      , node := 1, session := 1, authenticated := true }
   , generation := 7, duration := 5, deadline := 10 }
 
 private def titleClaimed? : Option World :=
@@ -784,7 +784,7 @@ private def titleBindingJson (binding : Handover.TitleBinding) : String :=
     ",\"logical_request\":" ++ toString binding.logicalRequest ++
     ",\"parent_physical\":" ++ toString binding.parentPhysical ++
     ",\"parent_logical\":" ++ toString binding.parentLogical ++
-    ",\"agent\":" ++ toString binding.agent ++
+    ",\"node\":" ++ toString binding.node ++
     ",\"session\":" ++ toString binding.session ++
     ",\"authenticated\":" ++ jsonOptionalBool (some binding.authenticated) ++ "}"
 
@@ -796,7 +796,7 @@ def seedJson (value : World) : String :=
     ++ "\"purpose\":" ++ jsonString value.purpose.toWire ++ ","
     ++ "\"title_binding\":" ++ (titleBinding.map titleBindingJson).getD "null" ++ ","
     ++ "\"session_id\":" ++ toString value.sessionId ++ ","
-    ++ "\"principal\":" ++ toString value.principal ++ ","
+    ++ "\"node_did\":" ++ toString value.nodeDid ++ ","
     ++ "\"lease\":" ++ Conformance.RequestExecutionLeaseContracts.worldJson value.lease ++ ","
     ++ "\"transcript_session_id\":" ++ toString value.transcript.sessionId ++ ","
     ++ "\"next_sequence\":" ++ toString value.transcript.nextSeq ++ ","

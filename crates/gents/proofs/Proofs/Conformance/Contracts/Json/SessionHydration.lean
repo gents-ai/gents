@@ -10,7 +10,7 @@ structure SessionHydrationDecisionCase where
   name : String
   paired : Bool
   pairingRequesterMatches : Bool
-  pairingAgentMatches : Bool
+  pairingNodeMatches : Bool
   activeMember : Bool
   membershipNetworkMatches : Bool
   ownsSession : Bool
@@ -19,7 +19,7 @@ def hydrationRequest : SessionHydration.Request :=
   { key := "peer-1:session-1"
   , peer := "peer-1"
   , requester := "did:key:requester-1"
-  , agent := "did:key:agent-1"
+  , node := "did:key:node-1"
   , session := "session-1"
   , nativeSession := 2 }
 
@@ -48,7 +48,7 @@ def hydrationCatalog (w : SessionHydrationDecisionCase) : SessionHydration.Catal
   { appliedPairingRoutes := if w.paired then
       [{ peer := hydrationRequest.peer
        , requester := if w.pairingRequesterMatches then hydrationRequest.requester else "did:key:requester-2"
-       , agent := if w.pairingAgentMatches then hydrationRequest.agent else "did:key:agent-2" }].toFinset
+       , node := if w.pairingNodeMatches then hydrationRequest.node else "did:key:node-2" }].toFinset
       else ∅
   , selectedNetwork := "network-1"
   , verifiedActiveMemberships := if w.activeMember then
@@ -122,7 +122,7 @@ def hydrationAccessJson (access : CanonicalOutput.Hydration.ProvenanceAccess) : 
     "\"state\":" ++ jsonString (accessStateName access.state) ++ "," ++
     "\"peer\":" ++ jsonString access.scope.peer ++ "," ++
     "\"requester\":" ++ jsonString access.scope.requester ++ "," ++
-    "\"agent\":" ++ jsonString access.scope.agent ++ "," ++
+    "\"node\":" ++ jsonString access.scope.node ++ "," ++
     "\"session\":" ++ jsonString access.scope.session ++ "," ++
     "\"native_session\":" ++ toString access.scope.nativeSession ++ "}"
 
@@ -130,7 +130,7 @@ def hydrationRequestJson (request : SessionHydration.Request) : String :=
   "{" ++ "\"key\":" ++ jsonString request.key ++ "," ++
     "\"peer\":" ++ jsonString request.peer ++ "," ++
     "\"requester\":" ++ jsonString request.requester ++ "," ++
-    "\"agent\":" ++ jsonString request.agent ++ "," ++
+    "\"node\":" ++ jsonString request.node ++ "," ++
     "\"session\":" ++ jsonString request.session ++ "," ++
     "\"native_session\":" ++ toString request.nativeSession ++ "}"
 
@@ -165,32 +165,32 @@ def closureDocumentsJson (input : SessionHydration.ClosureInput) : String :=
 
 def sessionHydrationDecisionCases : List SessionHydrationDecisionCase :=
   [ { name := "admitted", paired := true,
-      pairingRequesterMatches := true, pairingAgentMatches := true, activeMember := true,
+      pairingRequesterMatches := true, pairingNodeMatches := true, activeMember := true,
       membershipNetworkMatches := true, ownsSession := true }
   , { name := "unpaired", paired := false,
-      pairingRequesterMatches := true, pairingAgentMatches := true, activeMember := true,
+      pairingRequesterMatches := true, pairingNodeMatches := true, activeMember := true,
       membershipNetworkMatches := true, ownsSession := true }
   , { name := "pairing_wrong_requester", paired := true,
-      pairingRequesterMatches := false, pairingAgentMatches := true, activeMember := true,
+      pairingRequesterMatches := false, pairingNodeMatches := true, activeMember := true,
       membershipNetworkMatches := true, ownsSession := true }
   , { name := "pairing_wrong_agent", paired := true,
-      pairingRequesterMatches := true, pairingAgentMatches := false, activeMember := true,
+      pairingRequesterMatches := true, pairingNodeMatches := false, activeMember := true,
       membershipNetworkMatches := true, ownsSession := true }
   , { name := "inactive_member", paired := true,
-      pairingRequesterMatches := true, pairingAgentMatches := true, activeMember := false,
+      pairingRequesterMatches := true, pairingNodeMatches := true, activeMember := false,
       membershipNetworkMatches := true, ownsSession := true }
   , { name := "foreign_network_member", paired := true,
-      pairingRequesterMatches := true, pairingAgentMatches := true, activeMember := true,
+      pairingRequesterMatches := true, pairingNodeMatches := true, activeMember := true,
       membershipNetworkMatches := false, ownsSession := true }
   , { name := "unowned_session", paired := true,
-      pairingRequesterMatches := true, pairingAgentMatches := true, activeMember := true,
+      pairingRequesterMatches := true, pairingNodeMatches := true, activeMember := true,
       membershipNetworkMatches := true, ownsSession := false } ]
 
 /-- Same logical session, but a different peer/request key cannot reuse the
 closure admitted for the original hydration request. -/
 def hydrationTwinCase : SessionHydrationDecisionCase :=
   { name := "twin", paired := true
-  , pairingRequesterMatches := true, pairingAgentMatches := true
+  , pairingRequesterMatches := true, pairingNodeMatches := true
   , activeMember := true, membershipNetworkMatches := true, ownsSession := true }
 
 example : SessionHydration.selectedDocuments
@@ -202,7 +202,7 @@ def sessionHydrationDecisionCaseJson (w : SessionHydrationDecisionCase) : String
     ++ "\"name\":" ++ jsonString w.name ++ ","
     ++ "\"paired\":" ++ boolString w.paired ++ ","
     ++ "\"pairing_requester_matches\":" ++ boolString w.pairingRequesterMatches ++ ","
-    ++ "\"pairing_agent_matches\":" ++ boolString w.pairingAgentMatches ++ ","
+    ++ "\"pairing_node_matches\":" ++ boolString w.pairingNodeMatches ++ ","
     ++ "\"active_member\":" ++ boolString w.activeMember ++ ","
     ++ "\"membership_network_matches\":" ++ boolString w.membershipNetworkMatches ++ ","
     ++ "\"owns_session\":" ++ boolString w.ownsSession ++ ","
@@ -275,7 +275,7 @@ def sessionHydrationApplyCaseJson (w : SessionHydrationApplyCase) : String :=
     { name := w.name
     , paired := w.admitted
     , pairingRequesterMatches := true
-    , pairingAgentMatches := true
+    , pairingNodeMatches := true
     , activeMember := true
     , membershipNetworkMatches := true
     , ownsSession := true }
@@ -307,9 +307,9 @@ def sessionHydrationApplyCasesJson : String :=
 structure SessionHydrationProgressCase where
   name : String
   prevSession : String
-  prevAgent : String
+  prevNode : String
   session : String
-  agent : String
+  node : String
   prevPhase : SessionHydration.ClientPhase
   prevMerged : Nat
   prevServed : Option Nat
@@ -331,7 +331,7 @@ def hydrationManifest (count : Option Nat) (isExact : Bool) :
 
 def progressPrev (w : SessionHydrationProgressCase) : SessionHydration.ClientProgress :=
   { session := w.prevSession
-  , agent := w.prevAgent
+  , node := w.prevNode
   , phase := w.prevPhase
   , mergedDocuments := hydrationDocumentKeys "doc-" w.prevMerged
   , servedDocuments := hydrationManifest w.prevServed true }
@@ -341,78 +341,78 @@ def progressObserved (w : SessionHydrationProgressCase) : SessionHydration.Clien
     (hydrationDocumentKeys "doc-" w.merged)
     (hydrationManifest w.served w.servedMatches)
     (if w.served.isSome || w.prevServed.isSome then .valid else .loading)
-    w.failed w.session w.agent
+    w.failed w.session w.node
 
 def sessionHydrationProgressCases : List SessionHydrationProgressCase :=
   [ { name := "open_requests"
-    , prevSession := "session-1", prevAgent := "agent-1"
-    , session := "session-1", agent := "agent-1"
+    , prevSession := "session-1", prevNode := "node-1"
+    , session := "session-1", node := "node-1"
     , prevPhase := .idle, prevMerged := 0, prevServed := none
     , merged := 0, served := none, failed := false, beginRequest := true }
   , { name := "local_documents_do_not_imply_request"
-    , prevSession := "session-1", prevAgent := "agent-1"
-    , session := "session-1", agent := "agent-1"
+    , prevSession := "session-1", prevNode := "node-1"
+    , session := "session-1", node := "node-1"
     , prevPhase := .idle, prevMerged := 0, prevServed := none
     , merged := 2, served := none, failed := false, beginRequest := false }
   , { name := "serving_partial"
-    , prevSession := "session-1", prevAgent := "agent-1"
-    , session := "session-1", agent := "agent-1"
+    , prevSession := "session-1", prevNode := "node-1"
+    , session := "session-1", node := "node-1"
     , prevPhase := .requested, prevMerged := 0, prevServed := none
     , merged := 2, served := some 5, failed := false, beginRequest := false }
   , { name := "complete_when_covered"
-    , prevSession := "session-1", prevAgent := "agent-1"
-    , session := "session-1", agent := "agent-1"
+    , prevSession := "session-1", prevNode := "node-1"
+    , session := "session-1", node := "node-1"
     , prevPhase := .serving, prevMerged := 2, prevServed := some 5
     , merged := 5, served := some 5, failed := false, beginRequest := false }
   , { name := "complete_with_additional_local_documents"
-    , prevSession := "session-1", prevAgent := "agent-1"
-    , session := "session-1", agent := "agent-1"
+    , prevSession := "session-1", prevNode := "node-1"
+    , session := "session-1", node := "node-1"
     , prevPhase := .serving, prevMerged := 2, prevServed := some 5
     , merged := 8, served := some 5, failed := false, beginRequest := false }
   , { name := "empty_session_completes"
-    , prevSession := "session-1", prevAgent := "agent-1"
-    , session := "session-1", agent := "agent-1"
+    , prevSession := "session-1", prevNode := "node-1"
+    , session := "session-1", node := "node-1"
     , prevPhase := .requested, prevMerged := 0, prevServed := none
     , merged := 0, served := some 0, failed := false, beginRequest := false }
   , { name := "cannot_complete_early"
-    , prevSession := "session-1", prevAgent := "agent-1"
-    , session := "session-1", agent := "agent-1"
+    , prevSession := "session-1", prevNode := "node-1"
+    , session := "session-1", node := "node-1"
     , prevPhase := .serving, prevMerged := 2, prevServed := some 5
     , merged := 4, served := some 5, failed := false, beginRequest := false }
   , { name := "equal_count_wrong_documents_cannot_complete"
-    , prevSession := "session-1", prevAgent := "agent-1"
-    , session := "session-1", agent := "agent-1"
+    , prevSession := "session-1", prevNode := "node-1"
+    , session := "session-1", node := "node-1"
     , prevPhase := .serving, prevMerged := 0, prevServed := none
     , merged := 5, served := some 5, servedMatches := false
     , failed := false, beginRequest := false }
   , { name := "failure_is_observed"
-    , prevSession := "session-1", prevAgent := "agent-1"
-    , session := "session-1", agent := "agent-1"
+    , prevSession := "session-1", prevNode := "node-1"
+    , session := "session-1", node := "node-1"
     , prevPhase := .serving, prevMerged := 1, prevServed := some 3
     , merged := 3, served := some 3, failed := true, beginRequest := false }
   , { name := "failed_stays_failed_without_retry"
-    , prevSession := "session-1", prevAgent := "agent-1"
-    , session := "session-1", agent := "agent-1"
+    , prevSession := "session-1", prevNode := "node-1"
+    , session := "session-1", node := "node-1"
     , prevPhase := .failed, prevMerged := 1, prevServed := some 3
     , merged := 3, served := some 3, failed := false, beginRequest := false }
   , { name := "retry_resets_failed"
-    , prevSession := "session-1", prevAgent := "agent-1"
-    , session := "session-1", agent := "agent-1"
+    , prevSession := "session-1", prevNode := "node-1"
+    , session := "session-1", node := "node-1"
     , prevPhase := .failed, prevMerged := 3, prevServed := some 3
     , merged := 3, served := some 3, failed := false, beginRequest := true }
   , { name := "retry_rejects_other_agent"
-    , prevSession := "session-1", prevAgent := "agent-1"
-    , session := "session-1", agent := "agent-2"
+    , prevSession := "session-1", prevNode := "node-1"
+    , session := "session-1", node := "node-2"
     , prevPhase := .failed, prevMerged := 3, prevServed := some 3
     , merged := 3, served := some 3, failed := false, beginRequest := false }
   , { name := "retry_rejects_other_session"
-    , prevSession := "session-1", prevAgent := "agent-1"
-    , session := "session-2", agent := "agent-1"
+    , prevSession := "session-1", prevNode := "node-1"
+    , session := "session-2", node := "node-1"
     , prevPhase := .failed, prevMerged := 3, prevServed := some 3
     , merged := 0, served := none, failed := false, beginRequest := false }
   , { name := "switch_session_resets_progress"
-    , prevSession := "session-1", prevAgent := "agent-1"
-    , session := "session-2", agent := "agent-1"
+    , prevSession := "session-1", prevNode := "node-1"
+    , session := "session-2", node := "node-1"
     , prevPhase := .complete, prevMerged := 5, prevServed := some 5
     , merged := 0, served := none, failed := false, beginRequest := false }
   ]
@@ -429,18 +429,18 @@ def phaseString : SessionHydration.ClientPhase → String
   | .failed => "failed"
 
 def sessionHydrationProgressCaseJson (w : SessionHydrationProgressCase) : String :=
-  let next := if w.beginRequest then SessionHydration.beginRequest w.session w.agent
+  let next := if w.beginRequest then SessionHydration.beginRequest w.session w.node
     else SessionHydration.observe (progressPrev w)
       (hydrationDocumentKeys "doc-" w.merged)
       (hydrationManifest w.served w.servedMatches)
       (if w.served.isSome || w.prevServed.isSome then .valid else .loading)
-      w.failed w.session w.agent
+      w.failed w.session w.node
   "{"
     ++ "\"name\":" ++ jsonString w.name ++ ","
     ++ "\"prev_session\":" ++ jsonString w.prevSession ++ ","
-    ++ "\"prev_agent\":" ++ jsonString w.prevAgent ++ ","
+    ++ "\"prev_node\":" ++ jsonString w.prevNode ++ ","
     ++ "\"session\":" ++ jsonString w.session ++ ","
-    ++ "\"agent\":" ++ jsonString w.agent ++ ","
+    ++ "\"node\":" ++ jsonString w.node ++ ","
     ++ "\"prev_phase\":" ++ jsonString (phaseString w.prevPhase) ++ ","
     ++ "\"prev_merged\":" ++ toString w.prevMerged ++ ","
     ++ "\"prev_served\":" ++ optionNatString w.prevServed ++ ","
@@ -453,7 +453,7 @@ def sessionHydrationProgressCaseJson (w : SessionHydrationProgressCase) : String
     ++ "\"expected_merged\":" ++ toString next.mergedCount ++ ","
     ++ "\"expected_covered\":" ++ toString next.coveredCount ++ ","
     ++ "\"expected_retry_admit\":" ++
-      boolString (SessionHydration.canRetry (progressObserved w) w.session w.agent) ++ ","
+      boolString (SessionHydration.canRetry (progressObserved w) w.session w.node) ++ ","
     ++ "\"expected_complete\":" ++
       boolString (decide (next.phase = SessionHydration.ClientPhase.complete))
     ++ "}"
@@ -523,7 +523,7 @@ def sessionHydrationDurableCaseJson (w : SessionHydrationDurableCase) : String :
   let next := SessionHydration.projectDurable
     w.request (hydrationDocumentKeys "doc-" w.merged)
       (match w.request with | .served _ => .valid | _ => .loading)
-      "session-exact" "agent-exact"
+      "session-exact" "node-exact"
   "{"
     ++ "\"name\":" ++ jsonString w.name ++ ","
     ++ "\"status\":" ++ jsonString (durableStatusString w.request) ++ ","

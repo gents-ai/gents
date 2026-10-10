@@ -28,23 +28,21 @@ pub(crate) async fn dispatch(command: ConfigCommand) -> Result<()> {
             BackendCommand::Show(args) => crud::config_show(crud::BACKEND_SPEC, args).await,
             BackendCommand::Rm(args) => crud::config_rm(crud::BACKEND_SPEC, args).await,
         },
-        ConfigCommand::Behavior { command } => match command {
-            BehaviorCommand::Set(args) => behavior::behavior_set(args).await,
-            BehaviorCommand::Create(args) => behavior::behavior_create(args).await,
-            BehaviorCommand::Clone(args) => behavior::behavior_clone(args).await,
-            BehaviorCommand::Disable(args) => behavior::behavior_disable(args).await,
-            BehaviorCommand::List(args) => crud::config_list(crud::BEHAVIOR_SPEC, args).await,
-            BehaviorCommand::Show(args) => behavior::behavior_show(args).await,
-            BehaviorCommand::Rm(args) => crud::config_rm(crud::BEHAVIOR_SPEC, args).await,
+        ConfigCommand::Agent { command } => match command {
+            AgentCommand::Set(args) => behavior::agent_set(args).await,
+            AgentCommand::Create(args) => behavior::agent_create(args).await,
+            AgentCommand::Clone(args) => behavior::agent_clone(args).await,
+            AgentCommand::Disable(args) => behavior::agent_disable(args).await,
+            AgentCommand::List(args) => crud::config_list(crud::AGENT_SPEC, args).await,
+            AgentCommand::Show(args) => behavior::agent_show(args).await,
+            AgentCommand::Rm(args) => crud::config_rm(crud::AGENT_SPEC, args).await,
         },
         ConfigCommand::Tools { command } => match command {
             ToolsConfigCommand::Set(args) => tools::tools_set(args).await,
             ToolsConfigCommand::List(args) => crud::config_list(crud::TOOLS_SPEC, args).await,
             ToolsConfigCommand::Show(args) => crud::config_show(crud::TOOLS_SPEC, args).await,
             ToolsConfigCommand::Rm(args) => crud::config_rm(crud::TOOLS_SPEC, args).await,
-            ToolsConfigCommand::SubagentTargetEntry(args) => {
-                tools::subagent_target_entry_command(args)
-            }
+            ToolsConfigCommand::AgentTargetEntry(args) => tools::agent_target_entry_command(args),
         },
         ConfigCommand::Profile { command } => match command {
             InferenceProfileCommand::Set(args) => profile::inference_profile_set(args).await,

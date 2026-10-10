@@ -211,8 +211,8 @@ function session(
   return {
     liveCursor: "cursor",
     sessionId: "session-1",
-    agentDid: "did:key:test",
-    behaviorId: "behavior-1",
+    nodeDid: "did:key:test",
+    agentId: "agent-1",
     title: "Test",
     previewText: null,
     status: "active",

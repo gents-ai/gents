@@ -13,7 +13,7 @@ async fn builder_rejects_node_without_signing_did() {
     let error = match Gents::builder()
         .node(node)
         .identity(identity)
-        .behavior("policy-ops")
+        .agent("policy-ops")
         .done()
         .build()
         .await
@@ -44,7 +44,7 @@ async fn builder_includes_custom_tools_in_resolved_tool_surface() {
         .node(node.clone())
         .identity(identity.clone())
         .tool_ceiling(ToolCeiling::meta_only())
-        .behavior("policy-ops")
+        .agent("policy-ops")
         .backend_id("builder-backend")
         .system_prompt("You manage policies.")
         .custom_tool(EchoTool)
@@ -53,15 +53,15 @@ async fn builder_includes_custom_tools_in_resolved_tool_surface() {
         .await
         .unwrap();
 
-    assert_eq!(agent.agent_did(), identity.did());
-    assert_eq!(agent.default_behavior_id(), "policy-ops");
+    assert_eq!(agent.node_did(), identity.did());
+    assert_eq!(agent.default_agent_id(), "policy-ops");
     assert!(agent.document_runtime_context().is_none());
     assert_eq!(
-        agent.behaviors()[0].tools.custom_tool_names(),
+        agent.agents()[0].tools.custom_tool_names(),
         vec!["echo_value".to_string()]
     );
 
-    let tool_surface = agent.behaviors()[0]
+    let tool_surface = agent.agents()[0]
         .tools
         .resolve(node.as_ref(), identity.did(), &Default::default())
         .await
@@ -80,7 +80,7 @@ async fn builder_requires_resolvable_backend_documents() {
     let error = match Gents::builder()
         .node(node)
         .identity(identity)
-        .behavior("policy-ops")
+        .agent("policy-ops")
         .backend_id("missing-backend")
         .done()
         .build()
@@ -92,7 +92,7 @@ async fn builder_requires_resolvable_backend_documents() {
 
     assert!(error
         .to_string()
-        .contains("behavior 'policy-ops' references missing backend missing-backend"));
+        .contains("agent 'policy-ops' references missing backend missing-backend"));
 }
 
 #[tokio::test]
@@ -121,7 +121,7 @@ async fn builder_rejects_backend_vetoed_by_measured_health() {
         .node(node)
         .identity(identity)
         .backend_health(backend_health)
-        .behavior("policy-ops")
+        .agent("policy-ops")
         .backend_id("builder-vetoed-backend")
         .done()
         .build()

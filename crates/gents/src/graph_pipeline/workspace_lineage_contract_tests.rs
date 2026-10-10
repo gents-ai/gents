@@ -1,7 +1,7 @@
 //! Child of graph_pipeline::run. Real installed plan, signed requests, Workspace
 //! owner provisioning, and native publication transaction; no policy simulator.
 use super::*;
-use crate::identity::{AgentIdentity, KeyIdentity};
+use crate::identity::{KeyIdentity, NodeIdentity};
 use crate::lifecycle::WorkspaceLineage;
 use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
 
@@ -44,17 +44,17 @@ impl Fixture {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
         let identity = super::super::runtime::graph_test_identity();
-        crate::document_config::ensure_agent_principal(&node, identity.did())
+        crate::document_config::ensure_node(&node, identity.did())
             .await
             .unwrap();
-        crate::test_support::install_test_behavior(&node, identity.did(), "package").await;
+        crate::test_support::install_test_agent(&node, identity.did(), "package").await;
         let access = ConfigAccess::Local(node.clone());
         let installed = install_test_graph_package(
             &access,
             identity.did(),
             "review_graph",
             &GraphPackageInstallBindings {
-                agent_did: identity.did().into(),
+                node_did: identity.did().into(),
                 inference_slots: std::collections::BTreeMap::from([
                     ("coordinator".into(), "package:inference".into()),
                     ("worker".into(), "package:inference".into()),
@@ -98,7 +98,7 @@ impl Fixture {
             } else {
                 &workspace.workspace.workspace_id
             });
-            input["workspace_owner_agent_did"] = json!(identity.did());
+            input["workspace_owner_node_did"] = json!(identity.did());
             input["workspace_authority"] = json!("readOnly");
         }
         let run = super::super::start_graph_run(
@@ -129,7 +129,7 @@ impl Fixture {
         WorkspaceLineage {
             workspace_id: Some(self.workspace.workspace.workspace_id.clone()),
             workspace_authority: Some("readOnly".into()),
-            workspace_owner_agent_did: Some(self.identity.did().into()),
+            workspace_owner_node_did: Some(self.identity.did().into()),
             workspace_seal_hash: self.workspace.workspace.seal_hash.clone(),
         }
     }
@@ -151,7 +151,7 @@ impl Fixture {
         let response = execute(
             &self.node,
             &format!(
-                "{{ Trigger(filter:{{agent_did:{{_eq:\"{}\"}},trigger_id:{{_eq:\"{}\"}}}}) {{_docID task_id}} }}",
+                "{{ Trigger(filter:{{node_did:{{_eq:\"{}\"}},trigger_id:{{_eq:\"{}\"}}}}) {{_docID task_id}} }}",
                 escape_graphql_string(self.identity.did()),
                 escape_graphql_string(&trigger)
             ),
@@ -161,7 +161,7 @@ impl Fixture {
         let task = execute(
             &self.node,
             &format!(
-                "{{ Task(filter:{{agent_did:{{_eq:\"{}\"}},task_id:{{_eq:\"{}\"}}}}) {{behavior_id}} }}",
+                "{{ Task(filter:{{node_did:{{_eq:\"{}\"}},task_id:{{_eq:\"{}\"}}}}) {{agent_id}} }}",
                 escape_graphql_string(self.identity.did()),
                 escape_graphql_string(row["task_id"].as_str().unwrap())
             ),
@@ -172,7 +172,7 @@ impl Fixture {
             id,
             self.identity.did(),
             self.identity.did(),
-            task["Task"][0]["behavior_id"].as_str().unwrap(),
+            task["Task"][0]["agent_id"].as_str().unwrap(),
             &format!("session-{id}"),
             "review source",
             "scheduled",
@@ -188,7 +188,7 @@ impl Fixture {
         request.caused_by_source_doc_id = Some(self.run.seed_doc_id.clone());
         request.workspace_id = lineage.workspace_id.clone();
         request.workspace_authority = lineage.workspace_authority.clone();
-        request.workspace_owner_agent_did = lineage.workspace_owner_agent_did.clone();
+        request.workspace_owner_node_did = lineage.workspace_owner_node_did.clone();
         request.workspace_seal_hash = lineage.workspace_seal_hash.clone();
         request
     }
@@ -225,7 +225,7 @@ fn abstract_tuple(fx: &Fixture, lineage: &WorkspaceLineage) -> Value {
     let workspace = lineage.workspace_id.as_ref().map(|id| {
         assert_eq!(id, &fx.workspace.workspace.workspace_id);
         assert_eq!(
-            lineage.workspace_owner_agent_did.as_deref(),
+            lineage.workspace_owner_node_did.as_deref(),
             Some(fx.identity.did())
         );
         assert_eq!(
@@ -253,7 +253,7 @@ fn explicit_from_case(fx: &Fixture, explicit: &Value) -> WorkspaceLineage {
             11,
             fx.workspace.workspace.workspace_id.clone(),
         ),
-        workspace_owner_agent_did: id("owner", 21, fx.identity.did().into()),
+        workspace_owner_node_did: id("owner", 21, fx.identity.did().into()),
         workspace_seal_hash: id(
             "seal_hash",
             31,
@@ -332,7 +332,7 @@ async fn generated_graph_workspace_cases_drive_installed_plan_and_signed_receipt
             execute(
                 &fx.node,
                 &format!(
-                    "mutation {{ delete_IsolatedWorkspace(filter: {{ workspace_id: {{ _eq: \"{}\" }}, owner_agent_did: {{ _eq: \"{}\" }} }}) {{ _docID }} }}",
+                    "mutation {{ delete_IsolatedWorkspace(filter: {{ workspace_id: {{ _eq: \"{}\" }}, owner_node_did: {{ _eq: \"{}\" }} }}) {{ _docID }} }}",
                     escape_graphql_string(&fx.workspace.workspace.workspace_id),
                     escape_graphql_string(fx.identity.did()),
                 ),
@@ -391,7 +391,7 @@ async fn generated_graph_workspace_cases_drive_installed_plan_and_signed_receipt
             let before = query_run(fx.node.as_ref(), &fx.run.run_id).await.unwrap();
             let populated = [
                 candidate.workspace_id.is_some(),
-                candidate.workspace_owner_agent_did.is_some(),
+                candidate.workspace_owner_node_did.is_some(),
                 candidate.workspace_authority.is_some(),
             ]
             .into_iter()
@@ -690,7 +690,7 @@ async fn installed_review_area_handoff_materializes_bound_goal_scanner() {
         ConcurrencyMode, EventTriggerFireMode, ResolvedEventTrigger, ResolvedRuntimeSnapshot,
         ResolvedTask,
     };
-    use crate::tool_surface::{BehaviorToolConfig, ResolvedToolSelection, ToolCeiling};
+    use crate::tool_surface::{AgentToolSurfaceConfig, ResolvedToolSelection, ToolCeiling};
     use crate::trigger_engine::{MaterializerHandle, TriggerKind, TriggerSource};
     use std::collections::HashMap;
     use tokio::sync::watch;
@@ -700,7 +700,7 @@ async fn installed_review_area_handoff_materializes_bound_goal_scanner() {
     let package = crate::test_support::load_test_graph_package(
         "review_graph",
         &crate::graph_package::GraphPackageInstallBindings {
-            agent_did: fx.identity.did().into(),
+            node_did: fx.identity.did().into(),
             inference_slots: std::collections::BTreeMap::from([
                 ("coordinator".into(), "package:inference".into()),
                 ("worker".into(), "package:inference".into()),
@@ -710,13 +710,13 @@ async fn installed_review_area_handoff_materializes_bound_goal_scanner() {
     );
     let mut tasks = HashMap::new();
     let mut routes = HashMap::new();
-    let mut behaviors = Vec::new();
+    let mut agents = Vec::new();
     let mut surfaces = HashMap::new();
     let mut write_area = None;
     for stage in ["recon", "scan"] {
         let trigger = fx.route(stage);
         let stored = execute(&fx.node, &format!(
-            "{{ Trigger(filter:{{agent_did:{{_eq:\"{owner}\"}},trigger_id:{{_eq:\"{trigger}\"}}}}) {{_docID task_id source}} EventSource(filter:{{agent_did:{{_eq:\"{owner}\"}},event_source_id:{{_eq:\"{trigger}\"}}}}) {{event_source_id source_collection}} }}",
+            "{{ Trigger(filter:{{node_did:{{_eq:\"{owner}\"}},trigger_id:{{_eq:\"{trigger}\"}}}}) {{_docID task_id source}} EventSource(filter:{{node_did:{{_eq:\"{owner}\"}},event_source_id:{{_eq:\"{trigger}\"}}}}) {{event_source_id source_collection}} }}",
             owner=escape_graphql_string(fx.identity.did()), trigger=escape_graphql_string(&trigger),
         )).await;
         let trigger_row = &stored["Trigger"][0];
@@ -725,7 +725,7 @@ async fn installed_review_area_handoff_materializes_bound_goal_scanner() {
             stored["EventSource"][0]["event_source_id"]
         );
         let task_rows = execute(&fx.node, &format!(
-            "{{ Task(filter:{{agent_did:{{_eq:\"{}\"}},task_id:{{_eq:\"{}\"}}}}) {{task_id display_name behavior_id prompt_template goal_objective_template goal_token_budget output_schema_ref hooks}} }}",
+            "{{ Task(filter:{{node_did:{{_eq:\"{}\"}},task_id:{{_eq:\"{}\"}}}}) {{task_id display_name agent_id prompt_template goal_objective_template goal_token_budget output_schema_ref hooks}} }}",
             escape_graphql_string(fx.identity.did()),
             escape_graphql_string(trigger_row["task_id"].as_str().unwrap()),
         )).await;
@@ -734,7 +734,7 @@ async fn installed_review_area_handoff_materializes_bound_goal_scanner() {
             emit_outcome: false,
             task_id: row["task_id"].as_str().unwrap().into(),
             name: row["display_name"].as_str().map(str::to_owned),
-            behavior_id: row["behavior_id"].as_str().unwrap().into(),
+            agent_id: row["agent_id"].as_str().unwrap().into(),
             prompt_template: row["prompt_template"].as_str().unwrap().into(),
             goal_objective_template: row["goal_objective_template"].as_str().map(str::to_owned),
             goal_token_budget: row["goal_token_budget"].as_i64(),
@@ -766,27 +766,27 @@ async fn installed_review_area_handoff_materializes_bound_goal_scanner() {
         }
         selection.enable_goal_tools = true;
         selection.enable_goal_creation = false;
-        let mut behavior = crate::agent::PendingAgentBehavior::new(&task.behavior_id)
+        let mut behavior = crate::agent::PendingAgent::new(&task.agent_id)
             .build_with_identity_for_test(super::super::runtime::graph_test_identity());
         behavior.backend_id = Some("graph-test-backend".into());
-        behavior.tools = BehaviorToolConfig::from_selection(
-            &task.behavior_id,
+        behavior.tools = AgentToolSurfaceConfig::from_selection(
+            &task.agent_id,
             selection,
             &ToolCeiling::readwrite(&fx.workspace.placement.host_path),
             Vec::new(),
         )
         .unwrap();
         surfaces.insert(
-            task.behavior_id.clone(),
+            task.agent_id.clone(),
             Arc::new(
                 behavior
                     .tools
-                    .resolve(&fx.node, behavior.agent_did(), &Default::default())
+                    .resolve(&fx.node, behavior.node_did(), &Default::default())
                     .await
                     .unwrap(),
             ),
         );
-        behaviors.push(Arc::new(behavior));
+        agents.push(Arc::new(behavior));
         routes.insert(
             stage,
             (
@@ -821,11 +821,11 @@ async fn installed_review_area_handoff_materializes_bound_goal_scanner() {
         group_min_count: 1,
         workspace_authority: Some("readOnly".into()),
     };
-    let principal = behaviors[0].principal.clone();
+    let principal = agents[0].node.clone();
     let snapshot = Arc::new(
         ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
-            tasks["recon"].behavior_id.clone(),
-            behaviors,
+            tasks["recon"].agent_id.clone(),
+            agents,
             surfaces,
             HashMap::new(),
             HashMap::new(),
@@ -834,7 +834,7 @@ async fn installed_review_area_handoff_materializes_bound_goal_scanner() {
             event_triggers: HashMap::from([(scan_route.0.clone(), trigger)]),
             ..Default::default()
         })
-        .with_principal(principal)
+        .with_node(principal)
         .activate(1, HashMap::new()),
     );
     let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot.clone());
@@ -868,7 +868,7 @@ async fn installed_review_area_handoff_materializes_bound_goal_scanner() {
         derived_entry.lineage.workspace_authority.as_deref(),
         Some("readOnly")
     );
-    assert!(derived_entry.lineage.workspace_owner_agent_did.is_none());
+    assert!(derived_entry.lineage.workspace_owner_node_did.is_none());
     let resolved_entry =
         super::workspace_lineage::finalize_graph_workspace(fx.node.as_ref(), derived_entry)
             .await
@@ -879,8 +879,8 @@ async fn installed_review_area_handoff_materializes_bound_goal_scanner() {
         expected_entry.workspace_id
     );
     assert_eq!(
-        resolved_entry.lineage.workspace_owner_agent_did,
-        expected_entry.workspace_owner_agent_did
+        resolved_entry.lineage.workspace_owner_node_did,
+        expected_entry.workspace_owner_node_did
     );
     assert_eq!(
         resolved_entry.lineage.workspace_authority,
@@ -902,7 +902,7 @@ async fn installed_review_area_handoff_materializes_bound_goal_scanner() {
                 fx.workspace.workspace.workspace_id.clone(),
             ),
             ("workspace_authority".into(), "readOnly".into()),
-            ("workspace_owner_agent_did".into(), fx.identity.did().into()),
+            ("workspace_owner_node_did".into(), fx.identity.did().into()),
             (
                 "workspace_seal_hash".into(),
                 fx.workspace.workspace.seal_hash.clone().unwrap(),
@@ -1023,7 +1023,7 @@ async fn installed_review_area_handoff_materializes_bound_goal_scanner() {
         assert_eq!(row.workspace_id, fx.tuple().workspace_id);
         assert_eq!(row.workspace_authority.as_deref(), Some("readOnly"));
         assert_eq!(
-            row.workspace_owner_agent_did.as_deref(),
+            row.workspace_owner_node_did.as_deref(),
             Some(fx.identity.did())
         );
         assert_eq!(row.workspace_seal_hash, fx.workspace.workspace.seal_hash);

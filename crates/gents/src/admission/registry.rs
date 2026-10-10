@@ -122,16 +122,16 @@ impl AdmissionRegistry {
         &self,
         request_id: impl Into<String>,
         backend_id: impl Into<String>,
-        behavior_id: impl Into<String>,
-        agent_did: impl Into<String>,
+        agent_id: impl Into<String>,
+        node_did: impl Into<String>,
         call_kind: CallKind,
     ) -> Result<AdmissionPermit, AdmissionError> {
         let backend_id = backend_id.into();
         self.acquire_with_connection_for_test(
             request_id,
             backend_id,
-            behavior_id,
-            agent_did,
+            agent_id,
+            node_did,
             call_kind,
             TEST_SLOT_CONNECTION,
         )
@@ -143,8 +143,8 @@ impl AdmissionRegistry {
         &self,
         request_id: impl Into<String>,
         backend_id: impl Into<String>,
-        behavior_id: impl Into<String>,
-        agent_did: impl Into<String>,
+        agent_id: impl Into<String>,
+        node_did: impl Into<String>,
         call_kind: CallKind,
         connection: &str,
     ) -> Result<AdmissionPermit, AdmissionError> {
@@ -153,8 +153,8 @@ impl AdmissionRegistry {
             request_id: request_id.into(),
             request_doc_id: "doc-test".to_string(),
             backend_id: backend_id.into(),
-            behavior_id: behavior_id.into(),
-            agent_did: agent_did.into(),
+            agent_id: agent_id.into(),
+            node_did: node_did.into(),
             session_id: "session-test".to_string(),
             call_kind,
             attempt: 1,
@@ -207,8 +207,8 @@ impl AdmissionRegistry {
         let pending = context.next_call(&self.inner.runtime_instance_id);
         if pending.backend_id.trim().is_empty() {
             return Err(AdmissionError(format!(
-                "behavior {} has no backend binding",
-                pending.behavior_id
+                "agent {} has no backend binding",
+                pending.agent_id
             )));
         }
 

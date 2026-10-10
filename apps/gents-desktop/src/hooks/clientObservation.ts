@@ -71,7 +71,7 @@ export function startClientObservation(
     let published = 0;
     const publishSelection = () => {
       const mine = ++published;
-      void api.setSelectedAgent(selection.getState().agentDid).catch((err) => {
+      void api.setSelectedNode(selection.getState().nodeDid).catch((err) => {
         if (!stopped && mine === published) lifecycle.setError(String(err));
       });
     };
@@ -105,8 +105,8 @@ export function startClientObservation(
     void controller.request("session");
     followPoll();
     const unsubscribeSelection = selection.subscribe((state, prev) => {
-      if (state.agentDid !== prev.agentDid) publishSelection();
-      if (state.agentDid !== prev.agentDid || state.sessionId !== prev.sessionId) {
+      if (state.nodeDid !== prev.nodeDid) publishSelection();
+      if (state.nodeDid !== prev.nodeDid || state.sessionId !== prev.sessionId) {
         void controller.request("session");
         followPoll();
       }

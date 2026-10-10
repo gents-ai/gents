@@ -272,7 +272,7 @@ fn authoring_accepts_fields_configuration_cannot_enumerate() {
     // Document and argument fields are caller-defined, and strict undefined is a
     // fire-time outcome: neither may be an authoring rejection.
     for template in [
-        "{{ doc.customer.name | upper }} at {{ ctx.now }} for {{ node.behavior_id }}",
+        "{{ doc.customer.name | upper }} at {{ ctx.now }} for {{ node.agent_id }}",
         "{{ args.mode | default('review') }} {{ args.count | int }}",
         "{{ doc.whatever.deeply.nested.field }}",
         "{% for row in group.docs %}{{ row.title | default('untitled') }}{% endfor %}",

@@ -11,19 +11,19 @@ async fn codex_shim_turn_steer_queues_gents_request_on_active_turn() -> Result<(
 
     let server_port = allocate_port()?;
     let graphql = graphql_url(server_port);
-    let agent_name = format!("cli-codex-shim-steer-{}", Uuid::new_v4().simple());
+    let node_name = format!("cli-codex-shim-steer-{}", Uuid::new_v4().simple());
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
-            &agent_name,
+            "--node-name",
+            &node_name,
             "--model-name",
             &model_name,
             "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();
     let mut serve = spawn_server_with_env(
@@ -44,7 +44,7 @@ async fn codex_shim_turn_steer_queues_gents_request_on_active_turn() -> Result<(
     serve
         .capturing(wait_for_runtime_ready(
             &graphql,
-            &agent_did,
+            &node_did,
             Duration::from_secs(30),
         ))
         .await?;
@@ -126,7 +126,7 @@ async fn codex_shim_turn_steer_queues_gents_request_on_active_turn() -> Result<(
     assert_eq!(steer.turn_id, turn_start.turn.id);
 
     let (steering_request_id, session_id, input) =
-        wait_for_request_input(&graphql, &agent_did, &steer_prompt).await?;
+        wait_for_request_input(&graphql, &node_did, &steer_prompt).await?;
     assert_eq!(session_id, thread_id);
     assert_eq!(
         input.queue.as_ref().expect("steering queue").source,
@@ -169,7 +169,7 @@ async fn codex_shim_turn_steer_queues_gents_request_on_active_turn() -> Result<(
     assert_eq!(second_steer.turn_id, turn_start.turn.id);
 
     let (second_steering_request_id, second_session_id, second_input) =
-        wait_for_request_input(&graphql, &agent_did, &second_steer_prompt).await?;
+        wait_for_request_input(&graphql, &node_did, &second_steer_prompt).await?;
     assert_eq!(second_session_id, thread_id);
     assert_eq!(
         second_input.queue.as_ref().expect("steering queue").queued_after_request_id.as_deref(),
@@ -218,19 +218,19 @@ async fn codex_shim_interrupt_completes_with_running_background_tool() -> Result
 
     let server_port = allocate_port()?;
     let graphql = graphql_url(server_port);
-    let agent_name = format!("cli-codex-shim-bg-interrupt-{}", Uuid::new_v4().simple());
+    let node_name = format!("cli-codex-shim-bg-interrupt-{}", Uuid::new_v4().simple());
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
-            &agent_name,
+            "--node-name",
+            &node_name,
             "--model-name",
             &model_name,
             "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();
     let mut serve = spawn_server_with_env(
@@ -251,7 +251,7 @@ async fn codex_shim_interrupt_completes_with_running_background_tool() -> Result
     serve
         .capturing(wait_for_runtime_ready(
             &graphql,
-            &agent_did,
+            &node_did,
             Duration::from_secs(30),
         ))
         .await?;
@@ -290,8 +290,8 @@ async fn codex_shim_interrupt_completes_with_running_background_tool() -> Result
     let started = read_turn_started(&mut ws).await?;
     assert_eq!(started.turn.id, turn_start.turn.id);
 
-    let (gents_request_id, session_id, _behavior_id) =
-        wait_for_request(&graphql, &agent_did, &prompt).await?;
+    let (gents_request_id, session_id, _agent_id) =
+        wait_for_request(&graphql, &node_did, &prompt).await?;
     assert_eq!(session_id, thread_id);
     let tool_call_key = format!("{session_id}:codex-bg-interrupt");
     seed_running_background_tool(&graphql, &gents_request_id, &session_id, &tool_call_key).await?;
@@ -383,19 +383,19 @@ async fn codex_shim_turn_steer_drains_queued_request_before_completing_turn() ->
 
     let server_port = allocate_port()?;
     let graphql = graphql_url(server_port);
-    let agent_name = format!("cli-codex-shim-steer-drain-{}", Uuid::new_v4().simple());
+    let node_name = format!("cli-codex-shim-steer-drain-{}", Uuid::new_v4().simple());
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
-            &agent_name,
+            "--node-name",
+            &node_name,
             "--model-name",
             &model_name,
             "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();
     let mut serve = spawn_server_with_env(
@@ -416,7 +416,7 @@ async fn codex_shim_turn_steer_drains_queued_request_before_completing_turn() ->
     serve
         .capturing(wait_for_runtime_ready(
             &graphql,
-            &agent_did,
+            &node_did,
             Duration::from_secs(30),
         ))
         .await?;
@@ -483,11 +483,11 @@ async fn codex_shim_turn_steer_drains_queued_request_before_completing_turn() ->
         capture.text
     );
 
-    let (_initial_request_id, initial_session_id, _behavior_id) =
-        wait_for_request(&graphql, &agent_did, &initial_prompt).await?;
+    let (_initial_request_id, initial_session_id, _agent_id) =
+        wait_for_request(&graphql, &node_did, &initial_prompt).await?;
     assert_eq!(initial_session_id, thread_id);
     let (steering_request_id, steering_session_id, input) =
-        wait_for_request_input(&graphql, &agent_did, &steer_prompt).await?;
+        wait_for_request_input(&graphql, &node_did, &steer_prompt).await?;
     assert_eq!(steering_session_id, thread_id);
     assert_ne!(steering_request_id, turn_start.turn.id);
     assert_eq!(
@@ -557,19 +557,19 @@ async fn codex_shim_turn_interrupt_on_caused_thread_interrupts_its_own_request()
 
     let server_port = allocate_port()?;
     let graphql = graphql_url(server_port);
-    let agent_name = format!("cli-codex-shim-caused-{}", Uuid::new_v4().simple());
+    let node_name = format!("cli-codex-shim-caused-{}", Uuid::new_v4().simple());
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
-            &agent_name,
+            "--node-name",
+            &node_name,
             "--model-name",
             &model_name,
             "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
     let shim_port = allocate_port()?;
     let shim_port_string = shim_port.to_string();
     let mut serve = spawn_server_with_env(
@@ -590,7 +590,7 @@ async fn codex_shim_turn_interrupt_on_caused_thread_interrupts_its_own_request()
     serve
         .capturing(wait_for_runtime_ready(
             &graphql,
-            &agent_did,
+            &node_did,
             Duration::from_secs(30),
         ))
         .await?;
@@ -622,14 +622,14 @@ async fn codex_shim_turn_interrupt_on_caused_thread_interrupts_its_own_request()
     )
     .await?;
     let _: codex::TurnStartResponse = read_typed_response(&mut ws, request_id(230)).await?;
-    let (parent_request_id, session_id, behavior_id) =
-        wait_for_request(&graphql, &agent_did, &prompt).await?;
+    let (parent_request_id, session_id, agent_id) =
+        wait_for_request(&graphql, &node_did, &prompt).await?;
     assert_eq!(session_id, thread_id);
 
     let (caused_request_id, caused_thread_id) =
-        seed_caused_running_request(&graphql, &parent_request_id, &behavior_id).await?;
+        seed_caused_running_request(&graphql, &parent_request_id, &agent_id).await?;
     let (grandchild_request_id, grandchild_thread_id) =
-        seed_caused_running_request(&graphql, &caused_request_id, &behavior_id).await?;
+        seed_caused_running_request(&graphql, &caused_request_id, &agent_id).await?;
 
     send_client_request(
         &mut ws,

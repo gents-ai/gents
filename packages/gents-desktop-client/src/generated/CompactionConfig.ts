@@ -13,7 +13,7 @@ export type CompactionConfig = {
 /**
  * Logical configuration key; `_docID` is the storage identity.
  */
-compaction_id: string, agent_did: string, display_name?: string | null, strategy?: CompactionStrategy | null,
+compaction_id: string, node_did: string, display_name?: string | null, strategy?: CompactionStrategy | null,
 /**
  * Fraction of the context window used as the provider-input threshold.
  * Unset uses the runtime default 0.75 (DEFAULT_COMPACTION_THRESHOLD).

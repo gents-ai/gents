@@ -67,7 +67,7 @@ where
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegistryEntry {
     pub peer_id: String,
-    pub agent_did: String,
+    pub node_did: String,
     pub addresses: Vec<String>,
     pub templates: Vec<String>,
     pub display_name: Option<String>,
@@ -89,7 +89,7 @@ struct PublishedRegistryEntry {
 
 pub fn registry_upsert_mutation(entry: &RegistryEntry, now: &str, kind: UpsertKind) -> String {
     let peer_id = escape_graphql_string(&entry.peer_id);
-    let agent_did = escape_graphql_string(&entry.agent_did);
+    let node_did = escape_graphql_string(&entry.node_did);
     let addresses = graphql_string_list_literal(entry.addresses.iter().map(String::as_str));
     let templates = graphql_string_list_literal(entry.templates.iter().map(String::as_str));
     let display_name = graphql_nullable_string_literal(entry.display_name.as_deref());
@@ -100,7 +100,7 @@ pub fn registry_upsert_mutation(entry: &RegistryEntry, now: &str, kind: UpsertKi
     let update_block = match kind {
         UpsertKind::Full => format!(
             r#"update: {{
-                    agent_did: "{agent_did}",
+                    node_did: "{node_did}",
                     addresses: {addresses},
                     templates: {templates},
                     display_name: {display_name},
@@ -125,7 +125,7 @@ pub fn registry_upsert_mutation(entry: &RegistryEntry, now: &str, kind: UpsertKi
                 filter: {{ peer_id: {{ _eq: "{peer_id}" }} }},
                 add: {{
                     peer_id: "{peer_id}",
-                    agent_did: "{agent_did}",
+                    node_did: "{node_did}",
                     addresses: {addresses},
                     templates: {templates},
                     display_name: {display_name},
@@ -142,21 +142,21 @@ pub fn registry_upsert_mutation(entry: &RegistryEntry, now: &str, kind: UpsertKi
 
 pub async fn run_registry_heartbeat(
     node: Arc<EmbeddedNode>,
-    agent_did: String,
+    node_did: String,
     network_id: String,
     cancel: CancellationToken,
 ) -> Result<()> {
     let scope = Arc::clone(&node);
     crate::identity::as_node_identity(
         &scope,
-        registry_heartbeat(node, agent_did, network_id, cancel),
+        registry_heartbeat(node, node_did, network_id, cancel),
     )
     .await
 }
 
 async fn registry_heartbeat(
     node: Arc<EmbeddedNode>,
-    agent_did: String,
+    node_did: String,
     network_id: String,
     cancel: CancellationToken,
 ) -> Result<()> {
@@ -174,7 +174,7 @@ async fn registry_heartbeat(
     if let Err(error) = tick_registry(
         &node,
         &p2p,
-        &agent_did,
+        &node_did,
         &network_id,
         "online",
         &mut published,
@@ -183,7 +183,7 @@ async fn registry_heartbeat(
     .await
     {
         tracing::warn!(
-            agent_did = %agent_did,
+            node_did = %node_did,
             network_id = %network_id,
             error = %error,
             "registry heartbeat: initial self-registration failed; will retry"
@@ -199,7 +199,7 @@ async fn registry_heartbeat(
                     tick_registry(
                         &node,
                         &p2p,
-                        &agent_did,
+                        &node_did,
                         &network_id,
                         "offline",
                         &mut published,
@@ -207,7 +207,7 @@ async fn registry_heartbeat(
                     ).await
                 {
                     tracing::warn!(
-                        agent_did = %agent_did,
+                        node_did = %node_did,
                         error = %error,
                         "registry heartbeat: offline status write failed during shutdown"
                     );
@@ -219,7 +219,7 @@ async fn registry_heartbeat(
                     tick_registry(
                         &node,
                         &p2p,
-                        &agent_did,
+                        &node_did,
                         &network_id,
                         "online",
                         &mut published,
@@ -227,7 +227,7 @@ async fn registry_heartbeat(
                     ).await
                 {
                     tracing::warn!(
-                        agent_did = %agent_did,
+                        node_did = %node_did,
                         error = %error,
                         "registry heartbeat: heartbeat tick failed; will retry next interval"
                     );
@@ -240,7 +240,7 @@ async fn registry_heartbeat(
 async fn tick_registry(
     node: &EmbeddedNode,
     p2p: &Arc<dyn defra_p2p_adapter::P2POperations>,
-    agent_did: &str,
+    node_did: &str,
     network_id: &str,
     status: &str,
     published: &mut Option<PublishedRegistryEntry>,
@@ -271,7 +271,7 @@ async fn tick_registry(
 
     let entry = RegistryEntry {
         peer_id: peer_id.clone(),
-        agent_did: agent_did.to_string(),
+        node_did: node_did.to_string(),
         addresses,
         templates: validate_offered_templates(DEFAULT_OFFERED_TEMPLATES.iter().copied())
             .expect("built-in registry templates must resolve"),
@@ -285,7 +285,7 @@ async fn tick_registry(
     else {
         tracing::trace!(
             peer_id = %entry.peer_id,
-            agent_did = %agent_did,
+            node_did = %node_did,
             status = %status,
             "registry heartbeat: unchanged lease is not yet due for renewal"
         );
@@ -307,7 +307,7 @@ async fn tick_registry(
 
     tracing::debug!(
         peer_id = %peer_id,
-        agent_did = %agent_did,
+        node_did = %node_did,
         status = %status,
         reason = publish_reason,
         "registry heartbeat: self-registration written"
@@ -341,7 +341,7 @@ mod tests {
     fn registry_entry(address: &str, status: &str) -> RegistryEntry {
         RegistryEntry {
             peer_id: "peer-one".into(),
-            agent_did: "did:key:one".into(),
+            node_did: "did:key:one".into(),
             addresses: vec![address.into()],
             templates: vec!["conversation".into()],
             display_name: None,
@@ -406,7 +406,7 @@ mod tests {
         let m = registry_upsert_mutation(
             &RegistryEntry {
                 peer_id: r#"p"1"#.into(),
-                agent_did: "did:key:a".into(),
+                node_did: "did:key:a".into(),
                 addresses: vec!["/ip4/1/tcp/1".into()],
                 templates: vec![],
                 display_name: Some("amy".into()),
@@ -429,7 +429,7 @@ mod tests {
     fn heartbeat_upsert_update_block_omits_display_name_but_keeps_templates() {
         let entry = RegistryEntry {
             peer_id: "peer-hb".into(),
-            agent_did: "did:key:hb".into(),
+            node_did: "did:key:hb".into(),
             addresses: vec!["/ip4/1/tcp/9/p2p/peer-hb".into()],
             templates: vec!["conversation".into()],
             display_name: Some("should-not-appear-in-update".into()),
@@ -469,7 +469,7 @@ mod tests {
     fn operator_upsert_update_block_includes_display_name_and_templates() {
         let entry = RegistryEntry {
             peer_id: "peer-op".into(),
-            agent_did: "did:key:op".into(),
+            node_did: "did:key:op".into(),
             addresses: vec!["/ip4/1/tcp/9/p2p/peer-op".into()],
             templates: vec!["conversation".into()],
             display_name: Some("my-node".into()),

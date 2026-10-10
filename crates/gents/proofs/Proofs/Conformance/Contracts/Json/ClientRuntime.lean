@@ -246,7 +246,7 @@ def queuedSteeringTraceJson (witness : QueuedSteering.TraceObservation) : String
     ",\"queuedAfter\":" ++ optionalNatJson script.entry.queuedAfter ++ "}" ++
     ",\"interruptAt\":" ++ optionalNatJson script.interruptAt ++
     ",\"preparedCandidate\":" ++ candidate.getD "null" ++
-    ",\"capture\":{\"agentDid\":" ++ toString key.agentDid ++
+    ",\"capture\":{\"nodeDid\":" ++ toString key.nodeDid ++
     ",\"sessionId\":" ++ toString key.sessionId ++
     ",\"requestDocId\":" ++ toString key.requestId ++
     ",\"turnIndex\":" ++ toString key.turnIndex ++

@@ -17,14 +17,14 @@ use anyhow::{Context, Result};
 /// `runs`, `close`) are DefraDB JSON scalar columns: read the bare field
 /// name, never an object subselection, and decode through the canonical
 /// protocol owners.
-pub const AGENT_OUTPUT_SEGMENT_FIELDS: &str = "agent_did requester_did session_id \
+pub const AGENT_OUTPUT_SEGMENT_FIELDS: &str = "node_did requester_did session_id \
 request_doc_id source ordinal writer runs payload close created_at _docID";
 
 /// Fields for one canonical `AgentMessage` (`TranscriptMessage`) read,
 /// mirroring the SDL field list plus the physical `_docID`. `publication`
 /// and `blocks` are DefraDB JSON scalar columns: read the bare field name,
 /// never an object subselection.
-pub const AGENT_MESSAGE_FIELDS: &str = "message_key session_id agent_did requester_did \
+pub const AGENT_MESSAGE_FIELDS: &str = "message_key session_id node_did requester_did \
 request_doc_id publication outcome sequence role native_id blocks created_at _docID";
 
 /// One canonical `AgentOutputSegment` row: the strict protocol segment plus
@@ -84,12 +84,12 @@ pub fn decode_transcript_message_row(row: &serde_json::Value) -> Result<Transcri
 }
 
 /// Read of every `AgentOutputSegment` of one physical request, filtered by
-/// the request alone; apply the principal scope with
+/// the request alone; apply the node scope with
 /// [`decode_scoped_request_output_segments`].
 ///
 /// DefraDB selects one single-field index. With multiple usable indexes it
 /// estimates each candidate with capped entry scans before choosing the most
-/// selective one. Naming only `request_doc_id` avoids estimation of principal
+/// selective one. Naming only `request_doc_id` avoids estimation of node
 /// and session history and makes the scan independent of their selectivity.
 pub fn request_output_segments_query(request_doc_id: &str) -> String {
     format!(
@@ -99,29 +99,29 @@ pub fn request_output_segments_query(request_doc_id: &str) -> String {
 }
 
 /// Decode the rows of [`request_output_segments_query`] that lie in one
-/// exact principal scope, and in `session_id` when given. Rows outside the
+/// exact node scope, and in `session_id` when given. Rows outside the
 /// scope are dropped undecoded, exactly as a scoped store filter would.
 pub fn decode_scoped_request_output_segments(
     rows: &[serde_json::Value],
-    agent_did: &str,
+    node_did: &str,
     session_id: Option<&str>,
     requester_did: Option<&str>,
 ) -> Result<Vec<OutputSegmentRow>> {
     decode_scoped_canonical_rows(
         rows,
-        agent_did,
+        node_did,
         session_id,
         requester_did,
         decode_output_segment_row,
     )
 }
 
-/// Apply the same exact principal/session scope before either canonical row
+/// Apply the same exact node/session scope before either canonical row
 /// decoder. A malformed foreign row must not poison an authorized projection.
 /// ACP remains enforced by the database read supplying these observations.
 pub fn decode_scoped_canonical_rows<T>(
     rows: &[serde_json::Value],
-    agent_did: &str,
+    node_did: &str,
     session_id: Option<&str>,
     requester_did: Option<&str>,
     decode: impl Fn(&serde_json::Value) -> Result<T>,
@@ -131,7 +131,7 @@ pub fn decode_scoped_canonical_rows<T>(
     }
     rows.iter()
         .filter(|row| {
-            text(row, "agent_did") == Some(agent_did)
+            text(row, "node_did") == Some(node_did)
                 && text(row, "requester_did") == requester_did
                 && session_id.is_none_or(|session| text(row, "session_id") == Some(session))
         })
@@ -195,7 +195,7 @@ mod tests {
     fn terminal_only_segment_row() -> serde_json::Value {
         serde_json::json!({
             "_docID": "seg-1",
-            "agent_did": "agent",
+            "node_did": "agent",
             "session_id": "session",
             "request_doc_id": "request",
             "source": {"kind": "authored", "key": "prompt"},
@@ -210,7 +210,7 @@ mod tests {
             "_docID": "msg-1",
             "message_key": "key",
             "session_id": "session",
-            "agent_did": "agent",
+            "node_did": "agent",
             "publication": {"kind": "fork", "origin_message_doc_id": "origin"},
             "outcome": "complete",
             "sequence": 3,
@@ -230,7 +230,7 @@ mod tests {
         let accepted = terminal_only_segment_row();
         let mut rows = vec![accepted.clone()];
         for (field, value) in [
-            ("agent_did", "foreign"),
+            ("node_did", "foreign"),
             ("requester_did", "foreign"),
             ("session_id", "foreign"),
         ] {
@@ -353,7 +353,7 @@ mod tests {
     /// a JSON array in the `$input` variable (not a nillable SDL list `null`).
     fn closed_segment_no_streams() -> gents_protocol::output::OutputSegment {
         gents_protocol::output::OutputSegment {
-            agent_did: "agent".into(),
+            node_did: "agent".into(),
             requester_did: None,
             session_id: "session".into(),
             request_doc_id: "request".into(),

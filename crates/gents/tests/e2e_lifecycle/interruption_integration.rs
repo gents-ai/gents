@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use gents::graphql::escape_graphql_string;
 use gents::lifecycle::{ClaimOutcome, ExecutionOrigin};
-use gents::{interrupt_request, AgentIdentity, Gents, RequestLifecycle, ToolCeiling};
+use gents::{interrupt_request, Gents, NodeIdentity, RequestLifecycle, ToolCeiling};
 use gents_protocol::output::{OutputOutcome, SourceClose, TerminalOutput};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
@@ -18,13 +18,13 @@ use crate::support::snapshots::fetch_request_snapshot;
 use crate::support::streaming_backend::{MockStreamingBackend, StreamScript};
 use crate::support::{
     build_request, create_request_with_valid_until, create_retry_request, first_row, test_db,
-    AGENT_DID, AGENT_NAME, BACKEND_ID, DEADLINE_SECS,
+    AGENT_NAME, BACKEND_ID, DEADLINE_SECS, NODE_DID,
 };
 
 const STREAM_MODEL: &str = "default";
 const STREAM_BACKEND_ID: &str = "backend-stream";
-const PRIMARY_BEHAVIOR: &str = "general";
-const SECONDARY_BEHAVIOR: &str = "code";
+const PRIMARY_AGENT: &str = "general";
+const SECONDARY_AGENT: &str = "code";
 const TARGET_MARKER: &str = "interrupt-target";
 const TARGET_PARTIAL: &str = "partial response content ";
 const SURVIVOR_MARKER: &str = "survivor-target";
@@ -83,7 +83,7 @@ async fn offline_replay_of_stale_requests_does_not_call_backend() {
         let mut lifecycle = RequestLifecycle::new_with_execution_binding(
             db.node.clone(),
             AGENT_NAME,
-            AGENT_DID,
+            NODE_DID,
             request,
             DEADLINE_SECS,
             ExecutionOrigin::Interactive,
@@ -135,7 +135,7 @@ async fn resend_from_stale_populates_retry_chain() {
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         db.node.clone(),
         AGENT_NAME,
-        AGENT_DID,
+        NODE_DID,
         request,
         DEADLINE_SECS,
         ExecutionOrigin::Interactive,
@@ -170,7 +170,7 @@ async fn resend_from_stale_populates_retry_chain() {
     let mut lifecycle_1 = RequestLifecycle::new_with_execution_binding(
         db.node.clone(),
         AGENT_NAME,
-        AGENT_DID,
+        NODE_DID,
         request_1,
         DEADLINE_SECS,
         ExecutionOrigin::Interactive,
@@ -233,7 +233,7 @@ fn interrupt_mid_stream_preserves_partial_and_cancels_inference_call() {
             &db,
             "daemon-interrupt-mid-stream",
             backend.endpoint(),
-            &[PRIMARY_BEHAVIOR],
+            &[PRIMARY_AGENT],
             2,
         )
         .await;
@@ -242,8 +242,8 @@ fn interrupt_mid_stream_preserves_partial_and_cancels_inference_call() {
         let session_id = "session-daemon-interrupt-mid-stream";
         let request_doc_id = create_runtime_request(
             db.node.as_ref(),
-            agent.agent_did.as_str(),
-            PRIMARY_BEHAVIOR,
+            agent.node_did.as_str(),
+            PRIMARY_AGENT,
             request_id,
             session_id,
             TARGET_MARKER,
@@ -278,7 +278,7 @@ fn interrupt_mid_stream_preserves_partial_and_cancels_inference_call() {
         let (header, native) = gents::session::load_canonical_message_from_node(
             db.node.as_ref(),
             &message_doc_id,
-            agent.agent_did.as_str(),
+            agent.node_did.as_str(),
             terminal.requester_did.as_deref(),
         )
         .await
@@ -327,7 +327,7 @@ fn interrupting_one_request_does_not_affect_another() {
             &db,
             "daemon-interrupt-isolation",
             backend.endpoint(),
-            &[PRIMARY_BEHAVIOR, SECONDARY_BEHAVIOR],
+            &[PRIMARY_AGENT, SECONDARY_AGENT],
             4,
         )
         .await;
@@ -336,8 +336,8 @@ fn interrupting_one_request_does_not_affect_another() {
         let target_session_id = "session-daemon-interrupt-target";
         let target_doc_id = create_runtime_request(
             db.node.as_ref(),
-            agent.agent_did.as_str(),
-            PRIMARY_BEHAVIOR,
+            agent.node_did.as_str(),
+            PRIMARY_AGENT,
             target_request_id,
             target_session_id,
             TARGET_MARKER,
@@ -348,8 +348,8 @@ fn interrupting_one_request_does_not_affect_another() {
         let survivor_session_id = "session-daemon-survivor";
         let survivor_doc_id = create_runtime_request(
             db.node.as_ref(),
-            agent.agent_did.as_str(),
-            SECONDARY_BEHAVIOR,
+            agent.node_did.as_str(),
+            SECONDARY_AGENT,
             survivor_request_id,
             survivor_session_id,
             SURVIVOR_MARKER,
@@ -399,7 +399,7 @@ fn interrupting_one_request_does_not_affect_another() {
         let (header, native) = gents::session::load_canonical_message_from_node(
             db.node.as_ref(),
             &message_doc_id,
-            agent.agent_did.as_str(),
+            agent.node_did.as_str(),
             survivor.requester_did.as_deref(),
         )
         .await
@@ -418,16 +418,16 @@ async fn boot_streaming_agent(
     db: &crate::support::TestDb,
     test_name: &str,
     endpoint: &str,
-    behavior_ids: &[&str],
+    agent_ids: &[&str],
     max_concurrent: i64,
 ) -> BootedAgent {
-    let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity(test_name));
+    let identity: Arc<dyn NodeIdentity> = Arc::new(test_identity(test_name));
     bind_streaming_backend(
         db.node.as_ref(),
         identity.did(),
         STREAM_BACKEND_ID,
         endpoint,
-        behavior_ids,
+        agent_ids,
         max_concurrent,
     )
     .await;
@@ -435,11 +435,11 @@ async fn boot_streaming_agent(
     let mut builder = Gents::builder()
         .node(db.node.clone())
         .identity(identity.clone())
-        .default_behavior_id(behavior_ids[0])
+        .default_agent_id(agent_ids[0])
         .tool_ceiling(ToolCeiling::meta_only());
-    for behavior_id in behavior_ids {
+    for agent_id in agent_ids {
         builder = builder
-            .behavior(*behavior_id)
+            .agent(*agent_id)
             .backend_id(STREAM_BACKEND_ID)
             .model_name(STREAM_MODEL)
             .stream_batch_ms(0)
@@ -447,40 +447,40 @@ async fn boot_streaming_agent(
     }
 
     let agent = builder.build().await.unwrap();
-    let agent_did = agent.agent_did().to_string();
+    let node_did = agent.node_did().to_string();
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
-    wait_for_runtime_ready(db.node.as_ref(), &agent_did).await;
+    wait_for_runtime_ready(db.node.as_ref(), &node_did).await;
 
-    BootedAgent::new(shutdown_tx, handle, agent_did)
+    BootedAgent::new(shutdown_tx, handle, node_did)
 }
 
 async fn bind_streaming_backend(
     node: &gents::defra_node::EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     backend_id: &str,
     endpoint: &str,
-    behavior_ids: &[&str],
+    agent_ids: &[&str],
     max_concurrent: i64,
 ) {
-    for behavior_id in behavior_ids {
-        crate::support::fixtures::bind_behavior_backend(
+    for agent_id in agent_ids {
+        crate::support::fixtures::bind_agent_backend(
             node,
-            agent_did,
-            behavior_id,
+            node_did,
+            agent_id,
             backend_id,
             endpoint,
             STREAM_MODEL,
         )
         .await;
     }
-    let escaped_agent_did = escape_graphql_string(agent_did);
+    let escaped_node_did = escape_graphql_string(node_did);
     let escaped_backend_id = escape_graphql_string(backend_id);
     let mutation = format!(
         r#"mutation {{
             update_InferenceBackend(
                 filter: {{
-                    agent_did: {{ _eq: "{escaped_agent_did}" }},
+                    node_did: {{ _eq: "{escaped_node_did}" }},
                     backend_id: {{ _eq: "{escaped_backend_id}" }}
                 }},
                 input: {{ max_concurrent: {max_concurrent} }}
@@ -525,8 +525,8 @@ async fn insert_inference_call(
                 request_id: "{escaped_request_id}",
                 call_seq: {call_seq},
                 backend_id: "{STREAM_BACKEND_ID}",
-                behavior_id: "{PRIMARY_BEHAVIOR}",
-                agent_did: "{AGENT_DID}",
+                agent_id: "{PRIMARY_AGENT}",
+                node_did: "{NODE_DID}",
                 call_kind: "inference",
                 attempt: {call_seq},
                 call_state: "{escaped_call_state}",

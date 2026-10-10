@@ -36,7 +36,7 @@ export function ProfilesPanel({
   const { changeConfig } = useApp().actions;
   const base = {
     name: "agent" as const,
-    agentDid: deployment.agentDid,
+    nodeDid: deployment.nodeDid,
     section: "profiles",
   };
   /* Add profile under a backend: the dialog opens on it */
@@ -48,10 +48,10 @@ export function ProfilesPanel({
       href: href({ ...base, item: p.profile_id }),
       title: p.display_name ?? p.profile_id,
       meta: (() => {
-        const users = deployment.behaviors.filter(
+        const users = deployment.agents.filter(
           (b) => b.inferenceProfileId === p.profile_id,
         ).length;
-        return `${p.model_name}${users ? ` · ${users} ${users === 1 ? "behavior" : "behaviors"}` : ""}`;
+        return `${p.model_name}${users ? ` · ${users} ${users === 1 ? "agent" : "agents"}` : ""}`;
       })(),
       badge: problem ?? undefined,
       badgeTone: "bad" as const,
@@ -75,7 +75,7 @@ export function ProfilesPanel({
           onDelete={() =>
             changeConfig("deleteInferenceProfileConfig", {
               profileId: p.profile_id,
-              agentDid: deployment.agentDid,
+              nodeDid: deployment.nodeDid,
             })
           }
           warning={dependentsWarning(deployment, "profile", p.profile_id)}

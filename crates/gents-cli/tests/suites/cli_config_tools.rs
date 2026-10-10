@@ -18,7 +18,7 @@ async fn tools_set_persists_canonical_nested_policy() -> Result<()> {
     let init = run_init_json(
         &home,
         &[
-            "--agent-name",
+            "--node-name",
             "tools-agent",
             "--model-name",
             &model,
@@ -26,7 +26,7 @@ async fn tools_set_persists_canonical_nested_policy() -> Result<()> {
             endpoint.endpoint(),
         ],
     )?;
-    let owner = agent_did_from_init(&init)?;
+    let owner = node_did_from_init(&init)?;
     let mut server = spawn_server(&home, port)?;
     wait_for_port(port, &mut server)?;
     wait_for_runtime_ready(&graphql, &owner, Duration::from_secs(30)).await?;
@@ -36,7 +36,7 @@ async fn tools_set_persists_canonical_nested_policy() -> Result<()> {
         &path,
         &json!({
             "tools_id":"review-tools",
-            "agent_did":owner,
+            "node_did":owner,
             "host":{
                 "files":{"mode":"ReadOnly"},
                 "bash":{
@@ -67,7 +67,7 @@ async fn tools_set_persists_canonical_nested_policy() -> Result<()> {
     let response = graphql_query(
         &graphql,
         &format!(
-            r#"{{ Tools(filter: {{ agent_did: {{ _eq: "{}" }}, tools_id: {{ _eq: "review-tools" }} }}, limit: 1) {{ tools_id host built_ins }} }}"#,
+            r#"{{ Tools(filter: {{ node_did: {{ _eq: "{}" }}, tools_id: {{ _eq: "review-tools" }} }}, limit: 1) {{ tools_id host built_ins }} }}"#,
             escape_graphql_string(&owner)
         ),
     )
@@ -90,8 +90,8 @@ async fn tools_set_persists_host_root_and_export_round_trips_it() -> Result<()> 
     fs::create_dir_all(&home)?;
     let port = allocate_port()?;
     let graphql = graphql_url(port);
-    let init = run_init_json(&home, &["--agent-name", "rooted-tools-agent"])?;
-    let owner = agent_did_from_init(&init)?;
+    let init = run_init_json(&home, &["--node-name", "rooted-tools-agent"])?;
+    let owner = node_did_from_init(&init)?;
     let mut server = spawn_server(&home, port)?;
     wait_for_port(port, &mut server)?;
     wait_for_runtime_ready(&graphql, &owner, Duration::from_secs(30)).await?;
@@ -102,7 +102,7 @@ async fn tools_set_persists_host_root_and_export_round_trips_it() -> Result<()> 
         &path,
         &json!({
             "tools_id":"rooted-tools",
-            "agent_did":owner,
+            "node_did":owner,
             "host":{"root":scoped_root,"files":{"mode":"ReadOnly"}}
         }),
     )?;

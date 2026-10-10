@@ -5,7 +5,7 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
     let plan =
         gents::config_client::DesiredStateApplyPlan::from_pack_config(manifest).and_then(|plan| {
             gents::document_config::ConfigReferences::from_documents(
-                &manifest.agent_principal.agent_did,
+                &manifest.node.node_did,
                 plan.documents()
                     .iter()
                     .map(|doc| (doc.collection, doc.add.clone())),
@@ -17,7 +17,7 @@ pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Ve
     }
     // Reference closure and inference bounds use the shared transaction over
     // retained + authored documents. Offline authoring does not require copies
-    // of existing backends, contexts, profiles, skills or the default behavior.
+    // of existing backends, contexts, profiles, skills or the default agent_config.
     // System prompts remain literal; only task templates are evaluated.
     tooling::validate_surfaces(manifest, errors);
     tooling::validate_eth_tools(manifest, errors);

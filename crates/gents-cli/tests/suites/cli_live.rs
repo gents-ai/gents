@@ -7,27 +7,29 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde_json::Value;
 use uuid::Uuid;
 
-fn apply_live_file_behavior_config(
+fn apply_live_file_agent_config(
     home: &std::path::Path,
     root: &std::path::Path,
     graphql: &str,
-    agent_did: &str,
+    node_did: &str,
     tools_id: &str,
     file_root: &std::path::Path,
     system_prompt: &std::path::Path,
-    behavior_ids: &[&str],
+    agent_ids: &[&str],
 ) -> Result<()> {
     run_cli_text(
         home,
         &[
             "config",
             "export",
+            "--home",
+            home.to_str().context("node home is not UTF-8")?,
             "--root",
             root.to_str().context("config root is not UTF-8")?,
             "--graphql",
             graphql,
-            "--agent-did",
-            agent_did,
+            "--node-did",
+            node_did,
         ],
     )?;
     let path = root.join("pack_config.json");
@@ -43,27 +45,27 @@ fn apply_live_file_behavior_config(
         "files": {"mode": "ReadOnly"}
     });
     let prompt = fs::read_to_string(system_prompt)?;
-    let base_behavior = config["agent_behaviors"][0].clone();
+    let base_agent = config["agents"][0].clone();
     let base_context = config["contexts"][0].clone();
-    for behavior_id in behavior_ids {
-        let existing_context_id = config["agent_behaviors"]
+    for agent_id in agent_ids {
+        let existing_context_id = config["agents"]
             .as_array()
-            .context("agent_behaviors is not an array")?
+            .context("agents is not an array")?
             .iter()
-            .find(|behavior| behavior["behavior_id"] == *behavior_id)
-            .and_then(|behavior| behavior["context_id"].as_str())
+            .find(|agent| agent["agent_id"] == *agent_id)
+            .and_then(|agent| agent["context_id"].as_str())
             .map(ToOwned::to_owned);
         let context_id = if let Some(context_id) = existing_context_id {
             context_id
         } else {
-            let context_id = format!("{behavior_id}:context");
-            let mut behavior = base_behavior.clone();
-            behavior["behavior_id"] = Value::String((*behavior_id).to_string());
-            behavior["context_id"] = Value::String(context_id.clone());
-            config["agent_behaviors"]
+            let context_id = format!("{agent_id}:context");
+            let mut agent = base_agent.clone();
+            agent["agent_id"] = Value::String((*agent_id).to_string());
+            agent["context_id"] = Value::String(context_id.clone());
+            config["agents"]
                 .as_array_mut()
-                .context("agent_behaviors is not an array")?
-                .push(behavior);
+                .context("agents is not an array")?
+                .push(agent);
             let mut context = base_context.clone();
             context["context_id"] = Value::String(context_id.clone());
             context["tools_id"] = Value::String(tools_id.to_string());
@@ -78,7 +80,7 @@ fn apply_live_file_behavior_config(
             .context("contexts is not an array")?
             .iter_mut()
             .find(|context| context["context_id"] == context_id)
-            .context("behavior context is missing")?;
+            .context("agent context is missing")?;
         context["system_prompt"] = Value::String(prompt.clone());
         context["tools_id"] = Value::String(tools_id.to_string());
     }
@@ -88,6 +90,8 @@ fn apply_live_file_behavior_config(
         &[
             "config",
             "apply",
+            "--home",
+            home.to_str().context("node home is not UTF-8")?,
             "--root",
             root.to_str().context("config root is not UTF-8")?,
             "--graphql",
@@ -133,7 +137,7 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
     let init_args = vec![
         "--home".to_string(),
         home_arg.to_string(),
-        "--agent-name".to_string(),
+        "--node-name".to_string(),
         agent_name.clone(),
         "--model-name".to_string(),
         model_name,
@@ -146,11 +150,11 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
     ];
     let init_arg_refs = init_args.iter().map(String::as_str).collect::<Vec<_>>();
     let init = run_init_json(&home_dir, &init_arg_refs)?;
-    let agent_did = agent_did_from_init(&init)?;
-    let behavior_id = init
-        .pointer("/init/default_behavior_id")
+    let node_did = node_did_from_init(&init)?;
+    let agent_id = init
+        .pointer("/init/default_agent_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("init output missing default_behavior_id: {init}"))?
+        .ok_or_else(|| anyhow!("init output missing default_agent_id: {init}"))?
         .to_string();
     let tools_id = init
         .pointer("/init/tools_id")
@@ -161,7 +165,7 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
     let (mut serve, readiness) =
         spawn_server_with_ready_json(&home_dir, port, &["--home", home_arg], &[])?;
     wait_for_port(port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
     assert_eq!(
         readiness.get("p2p_transport").and_then(Value::as_str),
         Some("iroh")
@@ -177,8 +181,8 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
         Some("local-standard")
     );
     assert_eq!(
-        desktop_init.get("agentDid").and_then(Value::as_str),
-        Some(agent_did.as_str())
+        desktop_init.get("nodeDid").and_then(Value::as_str),
+        Some(node_did.as_str())
     );
     assert_eq!(
         desktop_init.get("graphql").and_then(Value::as_str),
@@ -214,25 +218,25 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
         Some("local-standard")
     );
     assert_eq!(
-        peer.get("agent_did").and_then(Value::as_str),
-        Some(agent_did.as_str())
+        peer.get("node_did").and_then(Value::as_str),
+        Some(node_did.as_str())
     );
     assert_eq!(
         peer.get("graphql").and_then(Value::as_str),
         Some(graphql.as_str())
     );
 
-    apply_live_file_behavior_config(
+    apply_live_file_agent_config(
         &home_dir,
         &tempdir.path().join("live-config"),
         &graphql,
-        &agent_did,
+        &node_did,
         &tools_id,
         &home_dir,
         &system_prompt,
-        &[&behavior_id],
+        &[&agent_id],
     )?;
-    wait_for_runtime_quiescence(&graphql, &agent_did, 2, Duration::from_secs(6)).await?;
+    wait_for_runtime_quiescence(&graphql, &node_did, 2, Duration::from_secs(6)).await?;
 
     let session_id = Uuid::new_v4().to_string();
     let first_prompt = "Use the filesystem tools. First list demo-files, then read demo-files/alpha.txt, then reply with only the exact token in alpha.txt.";
@@ -339,7 +343,7 @@ async fn trace_project_exports_live_inference_turn_as_adapter_artifacts() -> Res
     let model_name = std::env::var("GENTS_CLI_E2E_MODEL_NAME")
         .unwrap_or_else(|_| DEFAULT_MODEL_NAME.to_string());
     let mut init_args = vec![
-        "--agent-name".to_string(),
+        "--node-name".to_string(),
         agent_name,
         "--model-name".to_string(),
         model_name.clone(),
@@ -356,11 +360,11 @@ async fn trace_project_exports_live_inference_turn_as_adapter_artifacts() -> Res
     init_args.push(model_endpoint);
     let init_arg_refs = init_args.iter().map(String::as_str).collect::<Vec<_>>();
     let init = run_init_json(&home_dir, &init_arg_refs)?;
-    let agent_did = agent_did_from_init(&init)?;
-    let behavior_id = init
-        .pointer("/init/default_behavior_id")
+    let node_did = node_did_from_init(&init)?;
+    let agent_id = init
+        .pointer("/init/default_agent_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("init output missing default_behavior_id: {init}"))?
+        .ok_or_else(|| anyhow!("init output missing default_agent_id: {init}"))?
         .to_string();
     let tools_id = init
         .pointer("/init/tools_id")
@@ -370,19 +374,19 @@ async fn trace_project_exports_live_inference_turn_as_adapter_artifacts() -> Res
 
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
 
-    apply_live_file_behavior_config(
+    apply_live_file_agent_config(
         &home_dir,
         &tempdir.path().join("projection-config"),
         &graphql,
-        &agent_did,
+        &node_did,
         &tools_id,
         &home_dir,
         &system_prompt,
-        &[&behavior_id],
+        &[&agent_id],
     )?;
-    wait_for_runtime_quiescence(&graphql, &agent_did, 2, Duration::from_secs(6)).await?;
+    wait_for_runtime_quiescence(&graphql, &node_did, 2, Duration::from_secs(6)).await?;
 
     let session_id = format!("live-projection-session-{}", Uuid::new_v4().simple());
     let prompt = format!(
@@ -395,12 +399,12 @@ async fn trace_project_exports_live_inference_turn_as_adapter_artifacts() -> Res
             "submit",
             "--graphql",
             &graphql,
-            "--agent-did",
-            &agent_did,
+            "--node-did",
+            &node_did,
             "--session-id",
             &session_id,
-            "--behavior-id",
-            &behavior_id,
+            "--agent-id",
+            &agent_id,
             "--content",
             &prompt,
             "--timeout-secs",
@@ -678,9 +682,9 @@ async fn trace_project_exports_live_inference_turn_as_adapter_artifacts() -> Res
             record.get("sample_kind").and_then(Value::as_str) == Some("participant")
                 && record
                     .get("metadata")
-                    .and_then(|metadata| metadata.get("agent_did"))
+                    .and_then(|metadata| metadata.get("node_did"))
                     .and_then(Value::as_str)
-                    == Some(agent_did.as_str())
+                    == Some(node_did.as_str())
         }),
         "live multi-agent eval JSONL missing owner participant: {multi_agent_eval_jsonl:#?}"
     );
@@ -703,7 +707,7 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
     fs::create_dir_all(&home_dir)?;
 
     struct LiveRequestSpec {
-        behavior_id: String,
+        agent_id: String,
         prompt: String,
         tokens: Vec<String>,
     }
@@ -730,7 +734,7 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
             paths.join(", ")
         );
         request_specs.push(LiveRequestSpec {
-            behavior_id: format!("live-{request_index}"),
+            agent_id: format!("live-{request_index}"),
             prompt,
             tokens,
         });
@@ -749,7 +753,7 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
     let model_name = std::env::var("GENTS_CLI_E2E_MODEL_NAME")
         .unwrap_or_else(|_| DEFAULT_MODEL_NAME.to_string());
     let mut init_args = vec![
-        "--agent-name".to_string(),
+        "--node-name".to_string(),
         agent_name.clone(),
         "--model-name".to_string(),
         model_name.clone(),
@@ -766,7 +770,7 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
     init_args.push(model_endpoint.clone());
     let init_arg_refs = init_args.iter().map(String::as_str).collect::<Vec<_>>();
     let init = run_init_json(&home_dir, &init_arg_refs)?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
     let backend_id = init
         .pointer("/init/backend_id")
         .and_then(Value::as_str)
@@ -779,23 +783,23 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
         .to_string();
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
 
-    let behavior_ids = request_specs
+    let agent_ids = request_specs
         .iter()
-        .map(|spec| spec.behavior_id.as_str())
+        .map(|spec| spec.agent_id.as_str())
         .collect::<Vec<_>>();
-    apply_live_file_behavior_config(
+    apply_live_file_agent_config(
         &home_dir,
         &tempdir.path().join("smoke-config"),
         &graphql,
-        &agent_did,
+        &node_did,
         &tools_id,
         &home_dir,
         &system_prompt,
-        &behavior_ids,
+        &agent_ids,
     )?;
-    wait_for_runtime_quiescence(&graphql, &agent_did, 2, Duration::from_secs(6)).await?;
+    wait_for_runtime_quiescence(&graphql, &node_did, 2, Duration::from_secs(6)).await?;
 
     let mut children = Vec::new();
     for spec in &request_specs {
@@ -806,10 +810,10 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
                 "submit",
                 "--graphql",
                 &graphql,
-                "--agent-did",
-                &agent_did,
-                "--behavior-id",
-                &spec.behavior_id,
+                "--node-did",
+                &node_did,
+                "--agent-id",
+                &spec.agent_id,
                 "--content",
                 &spec.prompt,
                 "--timeout-secs",
@@ -826,7 +830,7 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
     for (spec, child) in children {
         match child.wait_with_output() {
             Ok(output) => outputs.push((spec, output)),
-            Err(error) => wait_errors.push(format!("{}: {error}", spec.behavior_id)),
+            Err(error) => wait_errors.push(format!("{}: {error}", spec.agent_id)),
         }
     }
     if !wait_errors.is_empty() {
@@ -841,7 +845,7 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
             let (server_stdout, server_stderr) = serve.captured_output()?;
             bail!(
                 "live request {} failed\nstdout:\n{}\nstderr:\n{}\nserver stdout:\n{}\nserver stderr:\n{}",
-                spec.behavior_id,
+                spec.agent_id,
                 String::from_utf8_lossy(&output.stdout),
                 String::from_utf8_lossy(&output.stderr),
                 server_stdout,
@@ -849,10 +853,10 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
             );
         }
         let result: Value = serde_json::from_slice(&output.stdout)
-            .with_context(|| format!("parsing live request JSON for {}", spec.behavior_id))?;
+            .with_context(|| format!("parsing live request JSON for {}", spec.agent_id))?;
         assert_eq!(
-            result.get("behavior_id").and_then(Value::as_str),
-            Some(spec.behavior_id.as_str())
+            result.get("agent_id").and_then(Value::as_str),
+            Some(spec.agent_id.as_str())
         );
         let response = result
             .pointer("/output/presentation/body_markdown")
@@ -864,7 +868,7 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
             assert!(
                 response.contains(token),
                 "expected response for {} to contain token {token}, got {response}",
-                spec.behavior_id
+                spec.agent_id
             );
         }
         let session_id = result
@@ -883,17 +887,17 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
             assert!(
                 tool_results.contains(token),
                 "expected persisted read_file tool calls for {} to include token {token}: {tool_results}",
-                spec.behavior_id
+                spec.agent_id
             );
         }
     }
 
-    wait_for_completed_inference_behaviors(
+    wait_for_completed_inference_agents(
         &graphql,
         &backend_id,
         &request_specs
             .iter()
-            .map(|spec| spec.behavior_id.as_str())
+            .map(|spec| spec.agent_id.as_str())
             .collect::<Vec<_>>(),
     )
     .await?;

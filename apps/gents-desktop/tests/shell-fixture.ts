@@ -55,18 +55,18 @@ export function shellStores({
   };
 }
 
-/** A projection admitting a send and a retry under `behaviorId`, or one
+/** A projection admitting a send and a retry under `agentId`, or one
     whose send status is `blocked`, for actions tested apart from the
     stores' own projection. */
 export function admittingProjection(
-  behaviorId = "coding",
+  agentId = "coding",
   blocked?: string,
 ): ShellProjection {
   const status = blocked
-    ? { kind: "disabled", reason: "behaviorUnavailable", hint: blocked }
+    ? { kind: "disabled", reason: "agentUnavailable", hint: blocked }
     : { kind: "ready" };
   return {
-    behaviorReadiness: { kind: "ready", behaviorId },
+    agentReadiness: { kind: "ready", agentId },
     shellProjection: { nonEmptyContentSendStatus: status },
     retryShellProjection: { nonEmptyContentSendStatus: { kind: "ready" } },
   } as unknown as ShellProjection;

@@ -29,7 +29,7 @@ impl ConfigCommandTool {
             .unwrap_or_default();
         anyhow::ensure!(
             mode != crate::tool_surface::FileToolMode::Off,
-            "configuration discovery requires effective file read permission on the invoking behavior"
+            "configuration discovery requires effective file read permission on the invoking agent"
         );
         let root = effective
             .pointer("/runtime_effective/effective/root")

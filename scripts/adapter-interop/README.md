@@ -99,7 +99,7 @@ exports, and lets framework-side verifiers consume those Gents exports:
 ```sh
 GENTS_ADAPTER_INTEROP_ROUNDTRIP_FIXTURES=/path/to/generated/fixtures \
 GENTS_ADAPTER_INTEROP_EXPORTS=/path/to/generated/fixtures/gents-exports \
-  cargo test -p gents-cli --test cli_adapter_interop_roundtrip -- --ignored --nocapture
+  cargo test -p gents-cli --test cli_seeded cli_adapter_interop_roundtrip::external_adapter_native_captures_project_to_export_formats -- --exact --ignored --nocapture
 ```
 
 The Docker interop script runs this roundtrip stage after the envelope contract

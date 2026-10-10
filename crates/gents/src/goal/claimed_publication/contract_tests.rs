@@ -1,6 +1,6 @@
 //! Generated cases exercise the actual native transaction and publication owner.
 use super::*;
-use crate::identity::AgentIdentity;
+use crate::identity::NodeIdentity;
 use crate::lifecycle::queue::goal_continuation_identity;
 use crate::request_admission::SIGNED_REQUEST_FIELDS;
 use gents_protocol::row::AgentRequestRow;
@@ -42,7 +42,7 @@ async fn run_generated_running_wait() {
     assert_eq!(case.observation["waits"][0]["reply"], "timed_out_running");
     assert_eq!(case.observation["backgrounds"][0]["state"], "running");
     let fixture = Fixture::new_with_parent_state(&case.before, false).await;
-    let mut request = crate::RequestLifecycle::new_with_agent_did(
+    let mut request = crate::RequestLifecycle::new_with_node_did(
         fixture.node.clone(),
         "contract-behavior",
         fixture.identity.did(),
@@ -251,7 +251,7 @@ async fn run_generated_wait_observations() {
                     .unwrap(),
             )
             .unwrap();
-            let mut older_request = crate::RequestLifecycle::new_with_agent_did(
+            let mut older_request = crate::RequestLifecycle::new_with_node_did(
                 fixture.node.clone(),
                 "contract-behavior",
                 fixture.identity.did(),
@@ -297,7 +297,7 @@ async fn run_generated_wait_observations() {
                 TerminalizeResult::Won
             );
         }
-        let mut request = crate::RequestLifecycle::new_with_agent_did(
+        let mut request = crate::RequestLifecycle::new_with_node_did(
             fixture.node.clone(),
             "contract-behavior",
             fixture.identity.did(),
@@ -954,16 +954,16 @@ async fn claimed_publication_replay_keeps_its_hop_across_a_same_second_write() {
         &format!(
             r#"mutation {{ create_AgentRequest(input: {{
             request_id: "background-completion-same-second", purpose: "normal",
-            agent_did: "{}", requester_did: "{}", behavior_id: "contract-behavior",
+            node_did: "{}", requester_did: "{}", agent_id: "contract-behavior",
             session_id: "{SESSION}", content: "later work", execution_origin: "scheduled",
             lifecycle_state: "completed", failure_reason: "", created_at: "{}",
             retry_count: 0, max_retries: 3, retry_root_request: "background-completion-same-second",
-            subagent_depth: {}
+            request_hop: {}
         }}) {{ _docID }} }}"#,
             escape_graphql_string(fixture.identity.did()),
             escape_graphql_string(fixture.identity.did()),
             escape_graphql_string(child.created_at.as_deref().unwrap()),
-            child.subagent_depth.unwrap_or(0) + 5,
+            child.request_hop.unwrap_or(0) + 5,
         ),
     )
     .await;

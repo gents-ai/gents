@@ -6,10 +6,10 @@ import Proofs.CanonicalOutput.State
 namespace Conformance.ContractCases
 
 structure RuntimeReconcileCase where
-  requestedBehavior : Option BehaviorId
-  preDefaultBehavior : BehaviorId
-  preSessionBehavior : Option BehaviorId
-  preRunnable : List BehaviorId
+  requestedAgent : Option AgentId
+  preDefaultAgent : AgentId
+  preSessionAgent : Option AgentId
+  preRunnable : List AgentId
   name : String
   action : String
   legal : Bool
@@ -29,11 +29,11 @@ structure RuntimeReconcileCase where
   trackedSessionId : SessionId
   trackedRequestGeneration : Generation
   trackedRequestSession : SessionId
-  trackedRequestBehavior : BehaviorId
-  trackedSessionBehavior : BehaviorId
+  trackedRequestAgent : AgentId
+  trackedSessionAgent : AgentId
   deriving Repr
 
-structure ClientBehaviorReadinessCase where
+structure ClientAgentReadinessCase where
   name : String
   observationPresent : Bool
   observationKind : String
@@ -57,7 +57,7 @@ structure EnrollmentTraceStep where
   offerNetworkId : String
   offerAdminDid : String
   offerServerPeer : String
-  offerOwnerAgent : String
+  offerOwnerNode : String
   offerProfile : String
   challenge : String
   requestId : String
@@ -77,7 +77,7 @@ structure EnrollmentTraceStep where
   observedCandidatePeer : String
   resolvedCandidateDid : String
   candidateTicketPeer : String
-  ownerAgent : String
+  ownerNode : String
   clientNonce : String
   issuedAt : String
   expiresAt : String
@@ -93,7 +93,7 @@ structure EnrollmentTraceStep where
   decisionAdminDid : String
   decisionCandidateDid : String
   decisionCandidatePeer : String
-  decisionOwnerAgent : String
+  decisionOwnerNode : String
   decisionAdminSigned : Bool
   decisionFresh : Bool
   revisionKind : String
@@ -106,7 +106,7 @@ structure EnrollmentTraceStep where
   revisionAdminDid : String
   revisionMemberDid : String
   revisionMemberPeer : String
-  revisionOwnerAgent : String
+  revisionOwnerNode : String
   revisionAdminSigned : Bool
   receiptRequestId : String
   receiptRequestDigest : String
@@ -115,7 +115,7 @@ structure EnrollmentTraceStep where
   receiptMemberDid : String
   receiptMemberPeer : String
   receiptServerPeer : String
-  receiptOwnerAgent : String
+  receiptOwnerNode : String
   receiptAuthorizationSequence : Nat
   receiptAuthorizationExpiresAt : String
   receiptDirection : String
@@ -233,8 +233,8 @@ structure SessionRecoveryCase where
   postLatestId : RequestId
   preSessionId : SessionId
   postSessionId : SessionId
-  preBehaviorId : BehaviorId
-  postBehaviorId : BehaviorId
+  preAgentId : AgentId
+  postAgentId : AgentId
   preRequestCount : Nat
   postRequestCount : Nat
   preRetryCount : Nat

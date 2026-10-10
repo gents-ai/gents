@@ -4,8 +4,8 @@ use std::collections::{BTreeMap, HashMap};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, Utc};
 use gents_protocol::row::{
-    decode_behavior_readiness_snapshot, project_behavior_readiness_summary,
-    AgentBehaviorReadinessRow, ProjectedBehaviorReadinessSummary,
+    decode_node_readiness_snapshot, project_node_readiness_summary, NodeReadinessRow,
+    ProjectedNodeReadinessSummary,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
@@ -32,18 +32,18 @@ pub(crate) const LIVENESS_ACTIVITY_BUDGET: std::time::Duration =
 
 #[derive(Debug, Serialize)]
 pub(crate) struct MetricsQueryData {
-    pub(crate) agent_runtimes: Vec<MetricsRuntimeRow>,
-    pub(crate) behavior_readiness: Vec<AgentBehaviorReadinessRow>,
+    pub(crate) node_runtimes: Vec<MetricsRuntimeRow>,
+    pub(crate) node_readiness: Vec<NodeReadinessRow>,
     pub(crate) inference_backends: Vec<MetricsBackendRow>,
     pub(crate) liveness: RuntimeLivenessSnapshot,
 }
 
 #[derive(Debug, Deserialize)]
 struct MetricsQueryEnvelope {
-    #[serde(rename = "AgentRuntime", default)]
-    agent_runtimes: Vec<MetricsRuntimeRow>,
-    #[serde(rename = "AgentBehaviorReadiness", default)]
-    behavior_readiness: Vec<AgentBehaviorReadinessRow>,
+    #[serde(rename = "NodeRuntime", default)]
+    node_runtimes: Vec<MetricsRuntimeRow>,
+    #[serde(rename = "NodeReadiness", default)]
+    node_readiness: Vec<NodeReadinessRow>,
     #[serde(rename = "InferenceBackend", default)]
     inference_backends: Vec<MetricsBackendRow>,
     #[serde(rename = "AgentRequest", default)]
@@ -54,7 +54,7 @@ struct MetricsQueryEnvelope {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub(crate) struct MetricsRuntimeRow {
-    pub(crate) agent_did: String,
+    pub(crate) node_did: String,
     #[serde(default)]
     pub(crate) reconcile_phase: String,
     #[serde(default)]
@@ -79,8 +79,8 @@ pub(crate) struct MetricsBackendRow {
 
 #[derive(Debug)]
 struct InferenceMetricsQueryData {
-    principals: Vec<InferencePrincipalRow>,
-    behaviors: Vec<InferenceBehaviorRow>,
+    nodes: Vec<InferenceNodeRow>,
+    agents: Vec<InferenceAgentRow>,
     profiles: Vec<InferenceProfileRow>,
     calls: Vec<InferenceCallMetricRow>,
     window_seconds: i64,
@@ -88,10 +88,10 @@ struct InferenceMetricsQueryData {
 
 #[derive(Debug, Deserialize)]
 struct InferenceMetricsPageData {
-    #[serde(rename = "AgentPrincipal", default)]
-    principals: Vec<InferencePrincipalRow>,
-    #[serde(rename = "AgentBehavior", default)]
-    behaviors: Vec<InferenceBehaviorRow>,
+    #[serde(rename = "Node", default)]
+    nodes: Vec<InferenceNodeRow>,
+    #[serde(rename = "Agent", default)]
+    agents: Vec<InferenceAgentRow>,
     #[serde(rename = "InferenceProfile", default)]
     profiles: Vec<InferenceProfileRow>,
     #[serde(rename = "InferenceCall", default)]
@@ -99,19 +99,19 @@ struct InferenceMetricsPageData {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-struct InferencePrincipalRow {
+struct InferenceNodeRow {
     #[serde(default)]
-    agent_did: String,
+    node_did: String,
     #[serde(default)]
     display_name: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-struct InferenceBehaviorRow {
+struct InferenceAgentRow {
     #[serde(default)]
-    behavior_id: String,
+    agent_id: String,
     #[serde(default)]
-    agent_did: String,
+    node_did: String,
     #[serde(default)]
     display_name: String,
     #[serde(default)]
@@ -123,7 +123,7 @@ struct InferenceProfileRow {
     #[serde(default)]
     profile_id: String,
     #[serde(default)]
-    agent_did: String,
+    node_did: String,
     #[serde(default)]
     backend_id: String,
     #[serde(default)]
@@ -133,9 +133,9 @@ struct InferenceProfileRow {
 #[derive(Debug, Clone, Deserialize)]
 struct InferenceCallMetricRow {
     #[serde(default)]
-    agent_did: String,
+    node_did: String,
     #[serde(default)]
-    behavior_id: String,
+    agent_id: String,
     #[serde(default)]
     backend_id: String,
     #[serde(default)]
@@ -151,7 +151,7 @@ struct InferenceCallMetricRow {
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
 struct InferenceRequestMetricKey {
     agent: String,
-    agent_did: String,
+    node_did: String,
     backend_id: String,
     model: String,
     status: String,
@@ -160,7 +160,7 @@ struct InferenceRequestMetricKey {
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
 struct InferenceTokenMetricKey {
     agent: String,
-    agent_did: String,
+    node_did: String,
     backend_id: String,
     model: String,
 }
@@ -191,16 +191,16 @@ pub(crate) struct P2pMetricsSnapshot {
 
 pub(crate) async fn render_prometheus_metrics(
     graphql: &GraphqlEndpoint,
-    local_agent_did: &str,
+    local_node_did: &str,
     measured_backend_health: &HashMap<String, gents::BackendHealthSnapshot>,
     p2p: Option<&P2pMetricsSnapshot>,
 ) -> Result<String> {
-    let data = load_metrics_query_data(graphql, local_agent_did).await?;
+    let data = load_metrics_query_data(graphql, local_node_did).await?;
     let data = with_local_native_executors(data);
     let inference_metrics = load_inference_metrics_query_data(graphql).await?;
     let background_completion = gents::load_background_completion_diagnostics(
         &gents::config_client::ConfigAccess::Graphql(graphql.clone()),
-        local_agent_did,
+        local_node_did,
     )
     .await
     .ok();
@@ -216,17 +216,17 @@ pub(crate) async fn render_prometheus_metrics(
     push_metric_prelude(
         &mut lines,
         "gents_runtime_process_state",
-        "One-hot process lifecycle state for each agent runtime.",
+        "One-hot process lifecycle state for each node runtime.",
     );
     push_metric_prelude(
         &mut lines,
         "gents_runtime_reconcile_phase",
-        "One-hot reconcile phase for each agent runtime.",
+        "One-hot reconcile phase for each node runtime.",
     );
     push_metric_prelude(
         &mut lines,
         "gents_runtime_last_reconcile_result",
-        "One-hot last reconcile result for each agent runtime.",
+        "One-hot last reconcile result for each node runtime.",
     );
     push_metric_prelude(
         &mut lines,
@@ -240,18 +240,18 @@ pub(crate) async fn render_prometheus_metrics(
     );
     push_metric_prelude(
         &mut lines,
-        "gents_runtime_runnable_behaviors",
-        "Number of ready behaviors in the authoritative behavior-readiness snapshot.",
+        "gents_runtime_runnable_agents",
+        "Number of ready agents in the authoritative agent-readiness snapshot.",
     );
     push_metric_prelude(
         &mut lines,
-        "gents_runtime_unavailable_behaviors",
-        "Number of unavailable behaviors in the authoritative behavior-readiness snapshot.",
+        "gents_runtime_unavailable_agents",
+        "Number of unavailable agents in the authoritative agent-readiness snapshot.",
     );
     push_metric_prelude(
         &mut lines,
-        "gents_runtime_behavior_readiness_observed",
-        "Whether the authoritative behavior-readiness snapshot is valid and current.",
+        "gents_runtime_node_readiness_observed",
+        "Whether the authoritative agent-readiness snapshot is valid and current.",
     );
     push_metric_prelude(
         &mut lines,
@@ -260,12 +260,12 @@ pub(crate) async fn render_prometheus_metrics(
     );
 
     for readiness in runtime_inventory(&data) {
-        let agent_did = readiness.agent_did.clone();
+        let node_did = readiness.node_did.clone();
         let runtime = data
-            .agent_runtimes
+            .node_runtimes
             .iter()
-            .find(|runtime| runtime.agent_did == agent_did);
-        let lifecycle = decode_behavior_readiness_snapshot(readiness, &agent_did).ok();
+            .find(|runtime| runtime.node_did == node_did);
+        let lifecycle = decode_node_readiness_snapshot(readiness, &node_did).ok();
         for state in [
             "uninitialized",
             "recovering",
@@ -276,10 +276,7 @@ pub(crate) async fn render_prometheus_metrics(
             push_metric_sample(
                 &mut lines,
                 "gents_runtime_process_state",
-                &[
-                    ("agent_did", agent_did.clone()),
-                    ("state", state.to_string()),
-                ],
+                &[("node_did", node_did.clone()), ("state", state.to_string())],
                 i64::from(
                     lifecycle
                         .as_ref()
@@ -292,10 +289,7 @@ pub(crate) async fn render_prometheus_metrics(
                 push_metric_sample(
                     &mut lines,
                     "gents_runtime_reconcile_phase",
-                    &[
-                        ("agent_did", agent_did.clone()),
-                        ("phase", phase.to_string()),
-                    ],
+                    &[("node_did", node_did.clone()), ("phase", phase.to_string())],
                     i64::from(runtime.reconcile_phase == phase),
                 );
             }
@@ -304,7 +298,7 @@ pub(crate) async fn render_prometheus_metrics(
                     &mut lines,
                     "gents_runtime_last_reconcile_result",
                     &[
-                        ("agent_did", agent_did.clone()),
+                        ("node_did", node_did.clone()),
                         ("result", result.to_string()),
                     ],
                     i64::from(runtime.last_reconcile_result == result),
@@ -314,7 +308,7 @@ pub(crate) async fn render_prometheus_metrics(
         push_metric_sample(
             &mut lines,
             "gents_runtime_active_generation",
-            &[("agent_did", agent_did.clone())],
+            &[("node_did", node_did.clone())],
             lifecycle
                 .as_ref()
                 .map(|snapshot| snapshot.active_generation)
@@ -324,21 +318,21 @@ pub(crate) async fn render_prometheus_metrics(
         push_metric_sample(
             &mut lines,
             "gents_runtime_router_generation",
-            &[("agent_did", agent_did.clone())],
+            &[("node_did", node_did.clone())],
             lifecycle
                 .as_ref()
                 .map(|snapshot| snapshot.router_generation)
                 .and_then(|generation| i64::try_from(generation).ok())
                 .unwrap_or_default(),
         );
-        push_behavior_readiness_metrics(&mut lines, &agent_did, &data.behavior_readiness);
+        push_node_readiness_metrics(&mut lines, &node_did, &data.node_readiness);
         if let Some(timestamp) = runtime
             .and_then(|runtime| rfc3339_timestamp_seconds(&runtime.last_reconcile_completed_at))
         {
             push_metric_sample(
                 &mut lines,
                 "gents_runtime_last_reconcile_completed_at_seconds",
-                &[("agent_did", agent_did)],
+                &[("node_did", node_did)],
                 timestamp,
             );
         }
@@ -412,7 +406,7 @@ pub(crate) async fn render_prometheus_metrics(
     push_metric_prelude(
         &mut lines,
         "gents_ignored_foreign_processing_requests",
-        "Number of processing AgentRequest rows ignored because they belong to a different agent DID.",
+        "Number of processing AgentRequest rows ignored because they belong to a different node DID.",
     );
     push_metric_sample(
         &mut lines,
@@ -423,7 +417,7 @@ pub(crate) async fn render_prometheus_metrics(
     push_metric_prelude(
         &mut lines,
         "gents_ignored_foreign_running_tool_calls",
-        "Number of running AgentToolCall rows ignored because they belong to a different agent DID.",
+        "Number of running AgentToolCall rows ignored because they belong to a different node DID.",
     );
     push_metric_sample(
         &mut lines,
@@ -461,7 +455,7 @@ pub(crate) async fn render_prometheus_metrics(
     render_inference_metrics(&mut lines, &inference_metrics);
     render_background_completion_metrics(
         &mut lines,
-        local_agent_did,
+        local_node_did,
         background_completion.as_ref(),
     );
     render_p2p_metrics(&mut lines, p2p);
@@ -470,45 +464,40 @@ pub(crate) async fn render_prometheus_metrics(
     Ok(lines.join("\n"))
 }
 
-fn runtime_inventory(data: &MetricsQueryData) -> impl Iterator<Item = &AgentBehaviorReadinessRow> {
-    data.behavior_readiness.iter()
+fn runtime_inventory(data: &MetricsQueryData) -> impl Iterator<Item = &NodeReadinessRow> {
+    data.node_readiness.iter()
 }
 
-fn push_behavior_readiness_metrics(
-    lines: &mut Vec<String>,
-    agent_did: &str,
-    rows: &[AgentBehaviorReadinessRow],
-) {
-    push_behavior_readiness_metrics_at(lines, agent_did, rows, chrono::Utc::now());
+fn push_node_readiness_metrics(lines: &mut Vec<String>, node_did: &str, rows: &[NodeReadinessRow]) {
+    push_node_readiness_metrics_at(lines, node_did, rows, chrono::Utc::now());
 }
 
-fn push_behavior_readiness_metrics_at(
+fn push_node_readiness_metrics_at(
     lines: &mut Vec<String>,
-    agent_did: &str,
-    rows: &[AgentBehaviorReadinessRow],
+    node_did: &str,
+    rows: &[NodeReadinessRow],
     observed_at: chrono::DateTime<chrono::Utc>,
 ) {
-    let readiness = rows.iter().find(|row| row.agent_did == agent_did);
-    let (ready, unavailable, observed) =
-        match project_behavior_readiness_summary(readiness, agent_did, observed_at) {
-            ProjectedBehaviorReadinessSummary::Observed(summary) => (
-                i64::try_from(summary.ready_count).unwrap_or(i64::MAX),
-                i64::try_from(summary.unavailable_behaviors.len()).unwrap_or(i64::MAX),
-                1,
-            ),
-            ProjectedBehaviorReadinessSummary::Unknown(_) => (0, 0, 0),
-        };
-    let labels = [("agent_did", agent_did.to_string())];
-    push_metric_sample(lines, "gents_runtime_runnable_behaviors", &labels, ready);
+    let readiness = rows.iter().find(|row| row.node_did == node_did);
+    let (ready, unavailable, observed) = match project_node_readiness_summary(readiness, node_did) {
+        ProjectedNodeReadinessSummary::Observed(summary) => (
+            i64::try_from(summary.ready_count).unwrap_or(i64::MAX),
+            i64::try_from(summary.unavailable_agents.len()).unwrap_or(i64::MAX),
+            1,
+        ),
+        ProjectedNodeReadinessSummary::Unknown(_) => (0, 0, 0),
+    };
+    let labels = [("node_did", node_did.to_string())];
+    push_metric_sample(lines, "gents_runtime_runnable_agents", &labels, ready);
     push_metric_sample(
         lines,
-        "gents_runtime_unavailable_behaviors",
+        "gents_runtime_unavailable_agents",
         &labels,
         unavailable,
     );
     push_metric_sample(
         lines,
-        "gents_runtime_behavior_readiness_observed",
+        "gents_runtime_node_readiness_observed",
         &labels,
         observed,
     );
@@ -516,10 +505,10 @@ fn push_behavior_readiness_metrics_at(
 
 fn render_background_completion_metrics(
     lines: &mut Vec<String>,
-    agent_did: &str,
+    node_did: &str,
     diagnostics: Option<&gents::BackgroundCompletionDiagnostics>,
 ) {
-    let labels = [("agent_did", agent_did.to_string())];
+    let labels = [("node_did", node_did.to_string())];
     push_metric_prelude(
         lines,
         "gents_background_completion_diagnostics_available",
@@ -578,7 +567,7 @@ fn render_background_completion_metrics(
             lines,
             "gents_background_completion_epochs",
             &[
-                ("agent_did", agent_did.to_string()),
+                ("node_did", node_did.to_string()),
                 ("state", state.to_string()),
             ],
             count,
@@ -962,8 +951,8 @@ async fn load_inference_metrics_query_data(
 ) -> Result<InferenceMetricsQueryData> {
     let window_started_at = Utc::now() - Duration::seconds(INFERENCE_METRICS_WINDOW_SECS);
     let mut result = InferenceMetricsQueryData {
-        principals: Vec::new(),
-        behaviors: Vec::new(),
+        nodes: Vec::new(),
+        agents: Vec::new(),
         profiles: Vec::new(),
         calls: Vec::new(),
         window_seconds: INFERENCE_METRICS_WINDOW_SECS,
@@ -978,8 +967,8 @@ async fn load_inference_metrics_query_data(
         let query = inference_metrics_query(INFERENCE_METRICS_PAGE_SIZE, offset, offset == 0);
         let page = load_inference_metrics_page(graphql, &query).await?;
         if offset == 0 {
-            result.principals = page.principals;
-            result.behaviors = page.behaviors;
+            result.nodes = page.nodes;
+            result.agents = page.agents;
             result.profiles = page.profiles;
         }
 
@@ -1012,19 +1001,19 @@ async fn load_inference_metrics_page(
 fn inference_metrics_query(limit: usize, offset: usize, include_metadata: bool) -> String {
     let metadata = if include_metadata {
         r#"
-        AgentPrincipal {
-            agent_did
+        Node {
+            node_did
             display_name
         }
-        AgentBehavior {
-            behavior_id
-            agent_did
+        Agent {
+            agent_id
+            node_did
             display_name
             inference_profile_id
         }
         InferenceProfile {
             profile_id
-            agent_did
+            node_did
             backend_id
             model_name
         }
@@ -1045,8 +1034,8 @@ fn inference_metrics_query(limit: usize, offset: usize, include_metadata: bool) 
             limit: {limit},
             offset: {offset}
         ) {{
-            agent_did
-            behavior_id
+            node_did
+            agent_id
             backend_id
             call_state
             ended_at
@@ -1083,7 +1072,7 @@ fn render_inference_metrics(lines: &mut Vec<String>, data: &InferenceMetricsQuer
             "gents_inference_requests_window_count",
             &[
                 ("agent", key.agent),
-                ("agent_did", key.agent_did),
+                ("node_did", key.node_did),
                 ("backend_id", key.backend_id),
                 ("model", key.model),
                 ("status", key.status),
@@ -1103,7 +1092,7 @@ fn render_inference_metrics(lines: &mut Vec<String>, data: &InferenceMetricsQuer
             "gents_inference_prompt_tokens_window_sum",
             &[
                 ("agent", key.agent),
-                ("agent_did", key.agent_did),
+                ("node_did", key.node_did),
                 ("backend_id", key.backend_id),
                 ("model", key.model),
             ],
@@ -1122,7 +1111,7 @@ fn render_inference_metrics(lines: &mut Vec<String>, data: &InferenceMetricsQuer
             "gents_inference_completion_tokens_window_sum",
             &[
                 ("agent", key.agent),
-                ("agent_did", key.agent_did),
+                ("node_did", key.node_did),
                 ("backend_id", key.backend_id),
                 ("model", key.model),
             ],
@@ -1152,12 +1141,12 @@ fn retain_windowed_inference_calls(
 }
 
 fn build_inference_metric_families(data: &InferenceMetricsQueryData) -> InferenceMetricFamilies {
-    let principals = data
-        .principals
+    let nodes = data
+        .nodes
         .iter()
         .filter_map(|principal| {
-            let agent_did = clean_metric_label(&principal.agent_did)?;
-            Some((agent_did, clean_metric_label(&principal.display_name)))
+            let node_did = clean_metric_label(&principal.node_did)?;
+            Some((node_did, clean_metric_label(&principal.display_name)))
         })
         .collect::<BTreeMap<_, _>>();
     let mut families = InferenceMetricFamilies::default();
@@ -1166,31 +1155,35 @@ fn build_inference_metric_families(data: &InferenceMetricsQueryData) -> Inferenc
             continue;
         }
 
-        let behavior_id = clean_metric_label(&call.behavior_id);
-        let call_agent_did = clean_metric_label(&call.agent_did);
-        let behavior = behavior_id.as_deref().and_then(|behavior_id| {
-            data.behaviors.iter().find(|behavior| {
-                clean_metric_label(&behavior.behavior_id).as_deref() == Some(behavior_id)
-                    && call_agent_did
+        let agent_id = clean_metric_label(&call.agent_id);
+        let call_node_did = clean_metric_label(&call.node_did);
+        let agent_config = agent_id.as_deref().and_then(|agent_id| {
+            data.agents.iter().find(|agent_config| {
+                clean_metric_label(&agent_config.agent_id).as_deref() == Some(agent_id)
+                    && call_node_did
                         .as_deref()
-                        .is_none_or(|agent_did| behavior.agent_did == agent_did)
+                        .is_none_or(|node_did| agent_config.node_did == node_did)
             })
         });
-        let profile = behavior.and_then(|behavior| {
+        let profile = agent_config.and_then(|agent_config| {
             data.profiles.iter().find(|profile| {
-                profile.agent_did == behavior.agent_did
-                    && profile.profile_id == behavior.inference_profile_id
+                profile.node_did == agent_config.node_did
+                    && profile.profile_id == agent_config.inference_profile_id
             })
         });
-        let agent_did = call_agent_did
-            .or_else(|| behavior.and_then(|behavior| clean_metric_label(&behavior.agent_did)))
+        let node_did = call_node_did
+            .or_else(|| {
+                agent_config.and_then(|agent_config| clean_metric_label(&agent_config.node_did))
+            })
             .unwrap_or_else(|| "unknown".to_string());
-        let agent = principals
-            .get(&agent_did)
+        let agent = nodes
+            .get(&node_did)
             .cloned()
             .flatten()
-            .or_else(|| behavior.and_then(|behavior| clean_metric_label(&behavior.display_name)))
-            .unwrap_or_else(|| agent_did.clone());
+            .or_else(|| {
+                agent_config.and_then(|agent_config| clean_metric_label(&agent_config.display_name))
+            })
+            .unwrap_or_else(|| node_did.clone());
         let backend_id = clean_metric_label(&call.backend_id)
             .or_else(|| profile.and_then(|profile| clean_metric_label(&profile.backend_id)))
             .unwrap_or_else(|| "unknown".to_string());
@@ -1201,7 +1194,7 @@ fn build_inference_metric_families(data: &InferenceMetricsQueryData) -> Inferenc
 
         let request_key = InferenceRequestMetricKey {
             agent: agent.clone(),
-            agent_did: agent_did.clone(),
+            node_did: node_did.clone(),
             backend_id: backend_id.clone(),
             model: model.clone(),
             status,
@@ -1210,7 +1203,7 @@ fn build_inference_metric_families(data: &InferenceMetricsQueryData) -> Inferenc
 
         let token_key = InferenceTokenMetricKey {
             agent,
-            agent_did,
+            node_did,
             backend_id,
             model,
         };
@@ -1249,14 +1242,14 @@ fn nonnegative_metric_value(value: Option<i64>) -> Option<i64> {
 /// running tool calls), before the optional progress observation.
 pub(crate) struct MetricsCoreData {
     envelope: MetricsQueryEnvelope,
-    local_agent_did: String,
+    local_node_did: String,
 }
 
 pub(crate) async fn load_metrics_query_data(
     graphql: &GraphqlEndpoint,
-    local_agent_did: &str,
+    local_node_did: &str,
 ) -> Result<MetricsQueryData> {
-    let core = load_metrics_core_data(graphql, local_agent_did).await?;
+    let core = load_metrics_core_data(graphql, local_node_did).await?;
     Ok(core
         .with_liveness_activity(
             graphql,
@@ -1269,19 +1262,19 @@ pub(crate) async fn load_metrics_query_data(
 /// then pass what remains to [`MetricsCoreData::with_liveness_activity`].
 pub(crate) async fn load_metrics_core_data(
     graphql: &GraphqlEndpoint,
-    local_agent_did: &str,
+    local_node_did: &str,
 ) -> Result<MetricsCoreData> {
     let response = post_graphql(
         graphql,
         r#"{
-            AgentRuntime {
-                agent_did
+            NodeRuntime {
+                node_did
                 reconcile_phase
                 last_reconcile_result
                 last_reconcile_completed_at
             }
-            AgentBehaviorReadiness {
-                agent_did
+            NodeReadiness {
+                node_did
                 snapshot_json
                 updated_at
             }
@@ -1298,10 +1291,10 @@ pub(crate) async fn load_metrics_core_data(
             }) {
                 _docID
                 request_id
-                agent_did
+                node_did
                 claimed_at
                 deadline
-                subagent_depth
+                request_hop
                 caused_by_parent_request_id
                 caused_by_trigger_kind
             }
@@ -1309,7 +1302,7 @@ pub(crate) async fn load_metrics_core_data(
                 lifecycle_state: { _eq: "running" }
             }) {
                 request_id
-                agent_did
+                node_did
                 tool_call_id
                 tool_name
                 started_at
@@ -1327,7 +1320,7 @@ pub(crate) async fn load_metrics_core_data(
         serde_json::from_value(data).context("decoding runtime HTTP query response")?;
     Ok(MetricsCoreData {
         envelope,
-        local_agent_did: local_agent_did.to_string(),
+        local_node_did: local_node_did.to_string(),
     })
 }
 
@@ -1342,21 +1335,21 @@ impl MetricsCoreData {
     ) -> MetricsQueryData {
         let Self {
             envelope,
-            local_agent_did,
+            local_node_did,
         } = self;
         let deadline = deadline.min(tokio::time::Instant::now() + LIVENESS_ACTIVITY_BUDGET);
         let activity =
-            load_liveness_activity(graphql, &local_agent_did, &envelope.requests, deadline).await;
+            load_liveness_activity(graphql, &local_node_did, &envelope.requests, deadline).await;
         let liveness = compute_request_liveness_summary(
             Utc::now(),
-            &local_agent_did,
+            &local_node_did,
             envelope.requests,
             envelope.tool_calls,
             activity,
         );
         MetricsQueryData {
-            agent_runtimes: envelope.agent_runtimes,
-            behavior_readiness: envelope.behavior_readiness,
+            node_runtimes: envelope.node_runtimes,
+            node_readiness: envelope.node_readiness,
             inference_backends: envelope.inference_backends,
             liveness,
         }
@@ -1365,7 +1358,7 @@ impl MetricsCoreData {
 
 /// Newest tool-call and inference-call activity for each local processing
 /// request, keyed by the immutable `request_doc_id` and bound to the
-/// request's owning `agent_did`.
+/// request's owning `node_did`.
 ///
 /// Progress is an observation layered on the processing-request read: a
 /// failed activity read drops that chunk's activity (its requests fall back
@@ -1373,7 +1366,7 @@ impl MetricsCoreData {
 /// `/self`. All chunks share the caller's single `deadline`.
 async fn load_liveness_activity(
     graphql: &GraphqlEndpoint,
-    local_agent_did: &str,
+    local_node_did: &str,
     requests: &[LivenessRequestRow],
     deadline: tokio::time::Instant,
 ) -> Vec<LivenessActivityRow> {
@@ -1381,14 +1374,14 @@ async fn load_liveness_activity(
         .iter()
         .filter(|row| {
             owns_liveness_row(
-                local_agent_did.trim(),
-                row.agent_did.as_deref().unwrap_or_default(),
+                local_node_did.trim(),
+                row.node_did.as_deref().unwrap_or_default(),
             )
         })
         .filter_map(|row| {
             let doc_id = row.doc_id.as_deref().map(str::trim)?;
-            let agent_did = row.agent_did.as_deref().map(str::trim)?;
-            (!doc_id.is_empty() && !agent_did.is_empty()).then_some((doc_id, agent_did))
+            let node_did = row.node_did.as_deref().map(str::trim)?;
+            (!doc_id.is_empty() && !node_did.is_empty()).then_some((doc_id, node_did))
         })
         .collect::<Vec<_>>();
     let mut activity = Vec::new();
@@ -1432,9 +1425,9 @@ async fn load_liveness_activity_chunk(
 
 fn liveness_activity_query(requests: &[(&str, &str)]) -> String {
     let mut selections = String::new();
-    for (index, (request_doc_id, agent_did)) in requests.iter().enumerate() {
+    for (index, (request_doc_id, node_did)) in requests.iter().enumerate() {
         let request_doc_id = escape_graphql_string(request_doc_id);
-        let agent_did = escape_graphql_string(agent_did);
+        let node_did = escape_graphql_string(node_did);
         for (alias, collection, field, fields) in [
             (
                 "ts",
@@ -1456,14 +1449,14 @@ fn liveness_activity_query(requests: &[(&str, &str)]) -> String {
             {alias}{index}: {collection}(
                 filter: {{
                     request_doc_id: {{ _eq: "{request_doc_id}" }},
-                    agent_did: {{ _eq: "{agent_did}" }},
+                    node_did: {{ _eq: "{node_did}" }},
                     {field}: {{ _ne: null }}
                 }},
                 order: {{ {field}: DESC }},
                 limit: 1
             ) {{
                 request_doc_id
-                agent_did
+                node_did
                 {fields}
             }}"#
             ));
@@ -1595,13 +1588,13 @@ mod tests {
         let claimed_at = (Utc::now() - Duration::seconds(120)).to_rfc3339();
         let base = serde_json::json!({
             "data": {
-                "AgentRuntime": [],
-                "AgentBehaviorReadiness": [],
+                "NodeRuntime": [],
+                "NodeReadiness": [],
                 "InferenceBackend": [],
                 "AgentRequest": [{
                     "_docID": "doc-req-1",
                     "request_id": "req-1",
-                    "agent_did": "did:test:local",
+                    "node_did": "did:test:local",
                     "claimed_at": claimed_at,
                 }],
                 "AgentToolCall": []
@@ -1613,7 +1606,7 @@ mod tests {
                 let base = base.clone();
                 async move {
                     let query = body["query"].as_str().unwrap_or_default().to_string();
-                    if query.contains("AgentRuntime") {
+                    if query.contains("NodeRuntime") {
                         Ok(Json(base))
                     } else {
                         Err(StatusCode::BAD_REQUEST)
@@ -1647,40 +1640,39 @@ mod tests {
     }
 
     use gents_protocol::row::{
-        BehaviorReadinessEntry, BehaviorReadinessProcessState, BehaviorReadinessSnapshot,
-        BehaviorReadinessState, BehaviorReadinessUnavailableReason,
-        BEHAVIOR_READINESS_FORMAT_VERSION,
+        AgentReadinessEntry, AgentReadinessState, AgentReadinessUnavailableReason,
+        NodeReadinessProcessState, NodeReadinessSnapshot, NODE_READINESS_FORMAT_VERSION,
     };
 
-    fn metrics_runtime(agent_did: &str) -> MetricsRuntimeRow {
+    fn metrics_runtime(node_did: &str) -> MetricsRuntimeRow {
         MetricsRuntimeRow {
-            agent_did: agent_did.to_string(),
+            node_did: node_did.to_string(),
             reconcile_phase: "idle".to_string(),
             last_reconcile_result: "applied".to_string(),
             last_reconcile_completed_at: "2026-08-29T00:00:00Z".to_string(),
         }
     }
 
-    fn metrics_readiness(agent_did: &str) -> AgentBehaviorReadinessRow {
-        AgentBehaviorReadinessRow {
-            agent_did: agent_did.to_string(),
-            snapshot_json: serde_json::to_string(&BehaviorReadinessSnapshot {
-                format_version: BEHAVIOR_READINESS_FORMAT_VERSION,
-                process_state: BehaviorReadinessProcessState::Ready,
+    fn metrics_readiness(node_did: &str) -> NodeReadinessRow {
+        NodeReadinessRow {
+            node_did: node_did.to_string(),
+            snapshot_json: serde_json::to_string(&NodeReadinessSnapshot {
+                format_version: NODE_READINESS_FORMAT_VERSION,
+                process_state: NodeReadinessProcessState::Ready,
                 active_generation: 4,
                 router_generation: 4,
-                default_behavior_id: "default".to_string(),
-                behaviors: vec![
-                    BehaviorReadinessEntry {
-                        behavior_id: "default".to_string(),
-                        state: BehaviorReadinessState::Ready,
+                default_agent_id: "default".to_string(),
+                agents: vec![
+                    AgentReadinessEntry {
+                        agent_id: "default".to_string(),
+                        state: AgentReadinessState::Ready,
                         reason: None,
                     },
-                    BehaviorReadinessEntry {
-                        behavior_id: "offline".to_string(),
-                        state: BehaviorReadinessState::Unavailable,
+                    AgentReadinessEntry {
+                        agent_id: "offline".to_string(),
+                        state: AgentReadinessState::Unavailable,
                         reason: Some(
-                            BehaviorReadinessUnavailableReason::BackendTemporarilyUnavailable,
+                            AgentReadinessUnavailableReason::BackendTemporarilyUnavailable,
                         ),
                     },
                 ],
@@ -1697,91 +1689,92 @@ mod tests {
     }
 
     #[test]
-    fn behavior_readiness_metrics_distinguish_observed_from_unknown() {
+    fn node_readiness_metrics_distinguish_observed_from_unknown() {
         let runtime = metrics_runtime("did:test:metrics");
         let mut lines = Vec::new();
-        push_behavior_readiness_metrics_at(
+        push_node_readiness_metrics_at(
             &mut lines,
-            &runtime.agent_did,
+            &runtime.node_did,
             &[metrics_readiness("did:test:metrics")],
             readiness_observed_at(),
         );
         let rendered = lines.join("\n");
+        assert!(
+            rendered.contains(r#"gents_runtime_runnable_agents{node_did="did:test:metrics"} 1"#)
+        );
+        assert!(
+            rendered.contains(r#"gents_runtime_unavailable_agents{node_did="did:test:metrics"} 1"#)
+        );
         assert!(rendered
-            .contains(r#"gents_runtime_runnable_behaviors{agent_did="did:test:metrics"} 1"#));
-        assert!(rendered
-            .contains(r#"gents_runtime_unavailable_behaviors{agent_did="did:test:metrics"} 1"#));
-        assert!(rendered.contains(
-            r#"gents_runtime_behavior_readiness_observed{agent_did="did:test:metrics"} 1"#
-        ));
+            .contains(r#"gents_runtime_node_readiness_observed{node_did="did:test:metrics"} 1"#));
 
         for rows in [
             Vec::new(),
-            vec![AgentBehaviorReadinessRow {
+            vec![NodeReadinessRow {
                 snapshot_json: "{}".to_string(),
                 ..metrics_readiness("did:test:metrics")
             }],
         ] {
             let mut lines = Vec::new();
-            push_behavior_readiness_metrics_at(
+            push_node_readiness_metrics_at(
                 &mut lines,
-                &runtime.agent_did,
+                &runtime.node_did,
                 &rows,
                 readiness_observed_at(),
             );
             let rendered = lines.join("\n");
             assert!(rendered
-                .contains(r#"gents_runtime_runnable_behaviors{agent_did="did:test:metrics"} 0"#));
+                .contains(r#"gents_runtime_runnable_agents{node_did="did:test:metrics"} 0"#));
+            assert!(rendered
+                .contains(r#"gents_runtime_unavailable_agents{node_did="did:test:metrics"} 0"#));
             assert!(rendered.contains(
-                r#"gents_runtime_unavailable_behaviors{agent_did="did:test:metrics"} 0"#
-            ));
-            assert!(rendered.contains(
-                r#"gents_runtime_behavior_readiness_observed{agent_did="did:test:metrics"} 0"#
+                r#"gents_runtime_node_readiness_observed{node_did="did:test:metrics"} 0"#
             ));
         }
     }
 
     #[test]
-    fn behavior_readiness_metrics_keep_unchanged_semantic_state_observed() {
+    fn node_readiness_metrics_keep_unchanged_semantic_state_observed() {
         let mut lines = Vec::new();
-        push_behavior_readiness_metrics_at(
+        push_node_readiness_metrics_at(
             &mut lines,
             "did:test:metrics",
-            &[AgentBehaviorReadinessRow {
+            &[NodeReadinessRow {
                 updated_at: "2026-08-28T23:59:00Z".to_string(),
                 ..metrics_readiness("did:test:metrics")
             }],
             readiness_observed_at(),
         );
         let rendered = lines.join("\n");
+        assert!(
+            rendered.contains(r#"gents_runtime_runnable_agents{node_did="did:test:metrics"} 1"#)
+        );
+        assert!(
+            rendered.contains(r#"gents_runtime_unavailable_agents{node_did="did:test:metrics"} 1"#)
+        );
         assert!(rendered
-            .contains(r#"gents_runtime_runnable_behaviors{agent_did="did:test:metrics"} 1"#));
-        assert!(rendered
-            .contains(r#"gents_runtime_unavailable_behaviors{agent_did="did:test:metrics"} 1"#));
-        assert!(rendered.contains(
-            r#"gents_runtime_behavior_readiness_observed{agent_did="did:test:metrics"} 1"#
-        ));
+            .contains(r#"gents_runtime_node_readiness_observed{node_did="did:test:metrics"} 1"#));
     }
 
     #[test]
     fn metrics_runtime_inventory_is_readiness_not_diagnostics() {
         let readiness = metrics_readiness("did:test:readiness-only");
         let data = MetricsQueryData {
-            agent_runtimes: Vec::new(),
-            behavior_readiness: vec![readiness],
+            node_runtimes: Vec::new(),
+            node_readiness: vec![readiness],
             inference_backends: Vec::new(),
             liveness: RuntimeLivenessSnapshot::default(),
         };
         assert_eq!(
             runtime_inventory(&data)
-                .map(|row| row.agent_did.as_str())
+                .map(|row| row.node_did.as_str())
                 .collect::<Vec<_>>(),
             vec!["did:test:readiness-only"]
         );
 
         let diagnostics_only = MetricsQueryData {
-            agent_runtimes: vec![metrics_runtime("did:test:diagnostics-only")],
-            behavior_readiness: Vec::new(),
+            node_runtimes: vec![metrics_runtime("did:test:diagnostics-only")],
+            node_readiness: Vec::new(),
             inference_backends: Vec::new(),
             liveness: RuntimeLivenessSnapshot::default(),
         };
@@ -1934,13 +1927,13 @@ mod tests {
         );
         let rendered = lines.join("\n");
         assert!(rendered.contains(
-            r#"gents_background_completion_pending_notifications{agent_did="did:agent:amy"} 3"#
+            r#"gents_background_completion_pending_notifications{node_did="did:agent:amy"} 3"#
         ));
         assert!(rendered.contains(
-            r#"gents_background_completion_stranded_notifications{agent_did="did:agent:amy"} 2"#
+            r#"gents_background_completion_stranded_notifications{node_did="did:agent:amy"} 2"#
         ));
         assert!(rendered.contains(
-            r#"gents_background_completion_epochs{agent_did="did:agent:amy",state="exhausted"} 1"#
+            r#"gents_background_completion_epochs{node_did="did:agent:amy",state="exhausted"} 1"#
         ));
     }
 
@@ -2073,8 +2066,8 @@ mod tests {
     #[test]
     fn metrics_query_envelope_treats_null_probe_status_as_unknown() {
         let envelope: MetricsQueryEnvelope = serde_json::from_value(serde_json::json!({
-            "AgentRuntime": [],
-            "AgentBehaviorReadiness": [],
+            "NodeRuntime": [],
+            "NodeReadiness": [],
             "InferenceBackend": [{
                 "backend_id": "workstation-1",
                 "enabled": true,
@@ -2102,11 +2095,11 @@ mod tests {
         push_metric_sample(
             &mut lines,
             "gents_runtime_active_generation",
-            &[("agent_did", "did:key:zA\\b\"c\nd".to_string())],
+            &[("node_did", "did:key:zA\\b\"c\nd".to_string())],
             1,
         );
         assert_eq!(
-            lines[0], r#"gents_runtime_active_generation{agent_did="did:key:zA\\b\"c\nd"} 1"#,
+            lines[0], r#"gents_runtime_active_generation{node_did="did:key:zA\\b\"c\nd"} 1"#,
             "backslash must be doubled and quote/newline escaped, in that order"
         );
     }
@@ -2114,26 +2107,26 @@ mod tests {
     #[test]
     fn inference_metrics_group_by_agent_backend_model_and_status() {
         let data = InferenceMetricsQueryData {
-            principals: vec![InferencePrincipalRow {
-                agent_did: "did:key:zAgent".to_string(),
+            nodes: vec![InferenceNodeRow {
+                node_did: "did:key:zAgent".to_string(),
                 display_name: "observability-steward".to_string(),
             }],
-            behaviors: vec![InferenceBehaviorRow {
-                behavior_id: "behavior-1".to_string(),
-                agent_did: "did:key:zAgent".to_string(),
-                display_name: "fallback-behavior-name".to_string(),
+            agents: vec![InferenceAgentRow {
+                agent_id: "agent_config-1".to_string(),
+                node_did: "did:key:zAgent".to_string(),
+                display_name: "fallback-agent_config-name".to_string(),
                 inference_profile_id: "profile-1".to_string(),
             }],
             profiles: vec![InferenceProfileRow {
                 profile_id: "profile-1".to_string(),
-                agent_did: "did:key:zAgent".to_string(),
+                node_did: "did:key:zAgent".to_string(),
                 backend_id: "backend-from-profile".to_string(),
                 model_name: "fixture-model".to_string(),
             }],
             calls: vec![
                 InferenceCallMetricRow {
-                    agent_did: "did:key:zAgent".to_string(),
-                    behavior_id: "behavior-1".to_string(),
+                    node_did: "did:key:zAgent".to_string(),
+                    agent_id: "agent_config-1".to_string(),
                     backend_id: "backend-1".to_string(),
                     call_state: "completed".to_string(),
                     ended_at: "2026-06-13T10:00:00.000000000+00:00".to_string(),
@@ -2141,8 +2134,8 @@ mod tests {
                     completion_tokens: Some(4),
                 },
                 InferenceCallMetricRow {
-                    agent_did: "did:key:zAgent".to_string(),
-                    behavior_id: "behavior-1".to_string(),
+                    node_did: "did:key:zAgent".to_string(),
+                    agent_id: "agent_config-1".to_string(),
                     backend_id: "backend-1".to_string(),
                     call_state: "completed".to_string(),
                     ended_at: "2026-06-13T10:00:01.000000000+00:00".to_string(),
@@ -2150,8 +2143,8 @@ mod tests {
                     completion_tokens: Some(3),
                 },
                 InferenceCallMetricRow {
-                    agent_did: "did:key:zAgent".to_string(),
-                    behavior_id: "behavior-1".to_string(),
+                    node_did: "did:key:zAgent".to_string(),
+                    agent_id: "agent_config-1".to_string(),
                     backend_id: "backend-1".to_string(),
                     call_state: "failed".to_string(),
                     ended_at: "2026-06-13T10:00:02.000000000+00:00".to_string(),
@@ -2159,8 +2152,8 @@ mod tests {
                     completion_tokens: None,
                 },
                 InferenceCallMetricRow {
-                    agent_did: "did:key:zAgent".to_string(),
-                    behavior_id: "behavior-1".to_string(),
+                    node_did: "did:key:zAgent".to_string(),
+                    agent_id: "agent_config-1".to_string(),
                     backend_id: "backend-1".to_string(),
                     call_state: "running".to_string(),
                     ended_at: "2026-06-13T10:00:03.000000000+00:00".to_string(),
@@ -2174,7 +2167,7 @@ mod tests {
         let families = build_inference_metric_families(&data);
         let completed_key = InferenceRequestMetricKey {
             agent: "observability-steward".to_string(),
-            agent_did: "did:key:zAgent".to_string(),
+            node_did: "did:key:zAgent".to_string(),
             backend_id: "backend-1".to_string(),
             model: "fixture-model".to_string(),
             status: "completed".to_string(),
@@ -2185,7 +2178,7 @@ mod tests {
         };
         let token_key = InferenceTokenMetricKey {
             agent: "observability-steward".to_string(),
-            agent_did: "did:key:zAgent".to_string(),
+            node_did: "did:key:zAgent".to_string(),
             backend_id: "backend-1".to_string(),
             model: "fixture-model".to_string(),
         };
@@ -2199,15 +2192,15 @@ mod tests {
     #[test]
     fn inference_metrics_query_pages_terminal_calls_by_newest_end_time() {
         let first_page = inference_metrics_query(500, 0, true);
-        assert!(first_page.contains("AgentPrincipal"));
-        assert!(first_page.contains("AgentBehavior"));
+        assert!(first_page.contains("Node"));
+        assert!(first_page.contains("Agent"));
         assert!(first_page.contains("order: [{ ended_at: DESC }, { call_id: DESC }]"));
         assert!(first_page.contains("limit: 500"));
         assert!(first_page.contains("offset: 0"));
 
         let later_page = inference_metrics_query(500, 500, false);
-        assert!(!later_page.contains("AgentPrincipal"));
-        assert!(!later_page.contains("AgentBehavior"));
+        assert!(!later_page.contains("Node"));
+        assert!(!later_page.contains("Agent"));
         assert!(later_page.contains("offset: 500"));
     }
 
@@ -2216,8 +2209,8 @@ mod tests {
         let window_started_at = rfc3339_timestamp("2026-06-13T10:00:00.000000000+00:00").unwrap();
         let calls = vec![
             InferenceCallMetricRow {
-                agent_did: String::new(),
-                behavior_id: String::new(),
+                node_did: String::new(),
+                agent_id: String::new(),
                 backend_id: String::new(),
                 call_state: "completed".to_string(),
                 ended_at: "2026-06-13T10:00:01.000000000+00:00".to_string(),
@@ -2225,8 +2218,8 @@ mod tests {
                 completion_tokens: None,
             },
             InferenceCallMetricRow {
-                agent_did: String::new(),
-                behavior_id: String::new(),
+                node_did: String::new(),
+                agent_id: String::new(),
                 backend_id: String::new(),
                 call_state: "completed".to_string(),
                 ended_at: "2026-06-13T09:59:59.999999999+00:00".to_string(),
@@ -2246,22 +2239,22 @@ mod tests {
     #[test]
     fn render_inference_metrics_emits_windowed_gauge_families() {
         let data = InferenceMetricsQueryData {
-            principals: vec![],
-            behaviors: vec![InferenceBehaviorRow {
-                behavior_id: "behavior-1".to_string(),
-                agent_did: "did:key:zAgent".to_string(),
+            nodes: vec![],
+            agents: vec![InferenceAgentRow {
+                agent_id: "agent-1".to_string(),
+                node_did: "did:key:zAgent".to_string(),
                 display_name: "agent \"friendly\"".to_string(),
                 inference_profile_id: "profile-1".to_string(),
             }],
             profiles: vec![InferenceProfileRow {
                 profile_id: "profile-1".to_string(),
-                agent_did: "did:key:zAgent".to_string(),
+                node_did: "did:key:zAgent".to_string(),
                 backend_id: "backend-1".to_string(),
                 model_name: "model\none".to_string(),
             }],
             calls: vec![InferenceCallMetricRow {
-                agent_did: String::new(),
-                behavior_id: "behavior-1".to_string(),
+                node_did: String::new(),
+                agent_id: "agent-1".to_string(),
                 backend_id: String::new(),
                 call_state: "completed".to_string(),
                 ended_at: "2026-06-13T10:00:00.000000000+00:00".to_string(),
@@ -2279,13 +2272,13 @@ mod tests {
         assert!(body.contains("gents_inference_metrics_window_seconds 300"));
         assert!(body.contains("# TYPE gents_inference_requests_window_count gauge"));
         assert!(body.contains(
-            "gents_inference_requests_window_count{agent=\"agent \\\"friendly\\\"\",agent_did=\"did:key:zAgent\",backend_id=\"backend-1\",model=\"model\\none\",status=\"completed\"} 1"
+            "gents_inference_requests_window_count{agent=\"agent \\\"friendly\\\"\",node_did=\"did:key:zAgent\",backend_id=\"backend-1\",model=\"model\\none\",status=\"completed\"} 1"
         ));
         assert!(body.contains(
-            "gents_inference_prompt_tokens_window_sum{agent=\"agent \\\"friendly\\\"\",agent_did=\"did:key:zAgent\",backend_id=\"backend-1\",model=\"model\\none\"} 10"
+            "gents_inference_prompt_tokens_window_sum{agent=\"agent \\\"friendly\\\"\",node_did=\"did:key:zAgent\",backend_id=\"backend-1\",model=\"model\\none\"} 10"
         ));
         assert!(body.contains(
-            "gents_inference_completion_tokens_window_sum{agent=\"agent \\\"friendly\\\"\",agent_did=\"did:key:zAgent\",backend_id=\"backend-1\",model=\"model\\none\"} 3"
+            "gents_inference_completion_tokens_window_sum{agent=\"agent \\\"friendly\\\"\",node_did=\"did:key:zAgent\",backend_id=\"backend-1\",model=\"model\\none\"} 3"
         ));
     }
 }

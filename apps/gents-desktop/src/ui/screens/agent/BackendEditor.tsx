@@ -37,7 +37,7 @@ import { UsageRows } from "./ProviderUsage";
 import { accountWarnings, AccountRows, backendAccount } from "./ProviderAccounts";
 
 export function backendSave(
-  agentDid: string,
+  nodeDid: string,
   fields: {
     backendId: string;
     name: string;
@@ -55,14 +55,14 @@ export function backendSave(
 ): BackendSaveRequest {
   return {
     document: {
-      agent_did: agentDid,
+      node_did: nodeDid,
       backend_id: fields.backendId,
       name: fields.name,
       provider_kind: fields.providerKind as BackendProviderKind,
       openai_wire_api: (fields.openaiWireApi as OpenAiWireApi | null) ?? null,
       endpoint: fields.endpoint,
       auth: isSubscriptionKind(fields.providerKind)
-        ? { kind: "principal_oauth" }
+        ? { kind: "node_oauth" }
         : fields.apiKey
           ? { kind: "api_key", key: fields.apiKey }
           : fields.apiKeyEnvVar
@@ -105,7 +105,7 @@ export function BackendEditor({
   } = useApp();
   const base = {
     name: "agent" as const,
-    agentDid: deployment.agentDid,
+    nodeDid: deployment.nodeDid,
     section: "inference",
   };
   const saved = {
@@ -162,7 +162,7 @@ export function BackendEditor({
       let auth: InferenceBackend["auth"] | undefined;
       if (isSubscriptionKind(next.providerKind))
         auth = {
-          kind: "principal_oauth",
+          kind: "node_oauth",
           ...(backend.accountRef ? { account_ref: backend.accountRef } : {}),
         };
       else if (next.apiKey.trim()) auth = { kind: "api_key", key: next.apiKey };
@@ -171,7 +171,7 @@ export function BackendEditor({
       else if (!backend.apiKeyConfigured || isSubscriptionKind(saved.providerKind))
         auth = { kind: "unauthenticated" };
 
-      const changes: Partial<Omit<InferenceBackend, "agent_did" | "backend_id">> = {
+      const changes: Partial<Omit<InferenceBackend, "node_did" | "backend_id">> = {
         name,
         provider_kind: next.providerKind as BackendProviderKind,
         openai_wire_api: (next.openaiWireApi as OpenAiWireApi) || null,
@@ -185,7 +185,7 @@ export function BackendEditor({
       };
       if (auth) changes.auth = auth;
       await changeConfig("patchConfigComponents", {
-        agentDid: deployment.agentDid,
+        nodeDid: deployment.nodeDid,
         patches: [{ collection: "InferenceBackend", id: backend.backendId, changes }],
       });
     },
@@ -256,7 +256,7 @@ export function BackendEditor({
                     const connection = SUBSCRIPTION[d.draft.providerKind]!;
                     const result = await discoverInferenceModels({
                       requestKey: `backend-${backend.backendId}-${Date.now()}`,
-                      agentDid: deployment.agentDid,
+                      nodeDid: deployment.nodeDid,
                       provider: connection.providerId,
                       authMethod: connection.authMethod,
                       endpoint: d.draft.endpoint,
@@ -330,9 +330,9 @@ export function BackendEditor({
         )}
         <FactRow
           label="Used by"
-          description="Delete is blocked while a behavior points here."
+          description="Delete is blocked while an agent points here."
         >
-          {users.length ? users.join(", ") : "no behavior"}
+          {users.length ? users.join(", ") : "no agent"}
         </FactRow>
       </Group>
       <Group title={subscription ? "Subscription" : "Credential"}>
@@ -377,7 +377,7 @@ export function BackendEditor({
                     changeConfig(
                       "patchConfigComponents",
                       {
-                        agentDid: deployment.agentDid,
+                        nodeDid: deployment.nodeDid,
                         patches: [
                           {
                             collection: "InferenceBackend",
@@ -509,7 +509,7 @@ export function BackendEditor({
           warning={accountWarnings(deployment, accounts, removable).remove}
           base={base}
           onDelete={() =>
-            removeProviderAccount(deployment.agentDid, removable.credentialId)
+            removeProviderAccount(deployment.nodeDid, removable.credentialId)
           }
         />
       )}
@@ -521,7 +521,7 @@ export function BackendEditor({
           onDelete={() =>
             changeConfig("deleteBackendConfig", {
               backendId: backend.backendId,
-              agentDid: deployment.agentDid,
+              nodeDid: deployment.nodeDid,
             })
           }
         />

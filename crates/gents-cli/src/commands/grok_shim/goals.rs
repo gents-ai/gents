@@ -348,7 +348,7 @@ mod tests {
             ("foreign-session", "principal", "other"),
         ] {
             let result = node.execute(&format!(r#"mutation {{create_Goal(input: {{
-                goal_id:"{id}", agent_did:"{agent}", session_id:"{session}", objective:"Objective {id}",
+                goal_id:"{id}", node_did:"{agent}", session_id:"{session}", objective:"Objective {id}",
                 status:"active", tokens_used:12, active_time_seconds:3, created_at:"2026-09-01T00:00:00Z"
             }}) {{_docID}}}}"#)).await;
             ensure_no_errors(&result, "seed goal").unwrap();
@@ -425,7 +425,7 @@ mod tests {
         // Reusing a logical goal ID must not hit the stock pager's permanent
         // last_cleared_goal_id suppression for the preceding incarnation.
         let recreated = node.execute(r#"mutation {create_Goal(input:{
-            goal_id:"owned", agent_did:"principal", session_id:"session", objective:"New incarnation",
+            goal_id:"owned", node_did:"principal", session_id:"session", objective:"New incarnation",
             status:"active", created_at:"2026-09-02T00:00:00Z"
         }) {_docID}}"#).await;
         ensure_no_errors(&recreated, "recreate same logical goal").unwrap();
@@ -445,8 +445,8 @@ mod tests {
         // the canonical Goal row or depending on a Goal document event.
         for mutation in [
             r#"mutation {update_Goal(filter:{goal_id:{_eq:"owned"}}, input:{status:"complete",tokens_used:12}) {_docID}}"#,
-            r#"mutation {create_AgentRequest(input:{purpose: "normal", request_id:"usage-request",agent_did:"principal",session_id:"session"}) {_docID}}"#,
-            r#"mutation {create_InferenceCall(input:{call_id:"usage-call",request_id:"usage-request",agent_did:"principal",prompt_tokens:20,completion_tokens:3}) {_docID}}"#,
+            r#"mutation {create_AgentRequest(input:{purpose: "normal", request_id:"usage-request",node_did:"principal",session_id:"session"}) {_docID}}"#,
+            r#"mutation {create_InferenceCall(input:{call_id:"usage-call",request_id:"usage-request",node_did:"principal",prompt_tokens:20,completion_tokens:3}) {_docID}}"#,
         ] {
             ensure_no_errors(&node.execute(mutation).await, "seed completed usage").unwrap();
         }
@@ -488,7 +488,7 @@ mod tests {
     #[test]
     fn native_goal_snapshot_preserves_budget_usage_and_runtime_active_time() {
         let mut goal: GoalDocument = serde_json::from_value(json!({
-            "_docID":"physical-goal", "goal_id":"goal-1", "session_id":"s", "agent_did":"a",
+            "_docID":"physical-goal", "goal_id":"goal-1", "session_id":"s", "node_did":"a",
             "objective":"Finish the feature", "status":"active", "token_budget":1000,
             "tokens_used":123, "active_time_seconds":10,
             "active_started_at":"2026-09-01T00:00:00Z", "continuation_sequence":4

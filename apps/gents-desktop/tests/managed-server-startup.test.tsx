@@ -31,8 +31,8 @@ function managedStatus(
   return {
     state: "disabled",
     autoStart: false,
-    agentName: null,
-    agentDid: null,
+    nodeName: null,
+    nodeDid: null,
     graphql: null,
     effectiveToolCeiling: null,
     effectiveToolRoot: null,
@@ -54,7 +54,7 @@ describe("managed server startup waits", () => {
         managedServerStatus: vi.fn(async () =>
           Date.now() < updatingUntil
             ? managedStatus({ state: "starting", runtimeBooting: true })
-            : managedStatus({ state: "running", agentDid: "did:key:migrated" }),
+            : managedStatus({ state: "running", nodeDid: "did:key:migrated" }),
         ),
       } as unknown as DesktopApiAdapter;
       const waits: (ManagedServerWait | null)[] = [];
@@ -80,7 +80,7 @@ describe("managed server startup waits", () => {
       managedServerStatus: vi.fn(async () =>
         ++calls < 3
           ? managedStatus({ state: "starting", runtimeBooting: true })
-          : managedStatus({ state: "running", agentDid: "did:key:migrated" }),
+          : managedStatus({ state: "running", nodeDid: "did:key:migrated" }),
       ),
     } as unknown as DesktopApiAdapter;
     const restart = vi.fn(async (): Promise<ManagedServerStatus> => {
@@ -155,7 +155,7 @@ describe("managed server startup waits", () => {
     const statuses = [
       managedStatus({ state: "starting" }),
       managedStatus({ state: "starting" }),
-      managedStatus({ state: "running", agentDid: "did:key:slow" }),
+      managedStatus({ state: "running", nodeDid: "did:key:slow" }),
     ];
     const api = {
       managedServerStatus: vi.fn(async () => statuses.shift()!),
@@ -215,7 +215,7 @@ describe("managed server startup waits", () => {
         managedStatus({
           state: "failed",
           error:
-            "The background agent keeps exiting before it becomes ready: it exited with code 78.",
+            "The background node keeps exiting before it becomes ready: it exited with code 78.",
         }),
       ),
     } as unknown as DesktopApiAdapter;
@@ -224,7 +224,7 @@ describe("managed server startup waits", () => {
 
   it("offers restart and continuing without the agent when launch startup fails", async () => {
     const message =
-      "The background agent keeps exiting before it becomes ready: it exited with code 78.";
+      "The background node keeps exiting before it becomes ready: it exited with code 78.";
     const app = testApp({
       api: { restartManagedServer: vi.fn(async () => undefined) },
       supportsManagedServer: true,
@@ -236,7 +236,7 @@ describe("managed server startup waits", () => {
         message,
         managedStatus({
           state: "failed",
-          agentName: "Workshop Agent",
+          nodeName: "Workshop Node",
           effectiveToolCeiling: "readwrite",
         }),
       ),
@@ -283,7 +283,7 @@ describe("managed server startup waits", () => {
     expect(screen.queryByTestId("diagnostics-hint")).not.toBeInTheDocument();
   });
 
-  it("lets launch continue without the local agent while approval is pending", async () => {
+  it("lets launch continue without the local node while approval is pending", async () => {
     const api = {
       managedServerStatus: vi.fn(async () =>
         managedStatus({ state: "stopped", approvalRequired: true }),
@@ -305,19 +305,19 @@ describe("managed server startup waits", () => {
         state: "stopped",
         approvalRequired: true,
         autoStart: true,
-        agentName: "Workshop Agent",
+        nodeName: "Workshop Node",
       }),
-      managedStatus({ state: "stopped", autoStart: true, agentName: "Workshop Agent" }),
+      managedStatus({ state: "stopped", autoStart: true, nodeName: "Workshop Node" }),
     ];
     const api = {
       managedServerStatus: vi.fn(async () => statuses.shift() ?? managedStatus()),
       startManagedServer: vi.fn(async () =>
-        managedStatus({ state: "running", agentName: "Workshop Agent" }),
+        managedStatus({ state: "running", nodeName: "Workshop Node" }),
       ),
     } as unknown as DesktopApiAdapter;
 
     await expect(restoreManagedServer(api)).resolves.toBe(true);
-    expect(api.startManagedServer).toHaveBeenCalledExactlyOnceWith("Workshop Agent");
+    expect(api.startManagedServer).toHaveBeenCalledExactlyOnceWith("Workshop Node");
   });
 
   it("leaves a deliberately stopped agent stopped after macOS allows it", async () => {
@@ -326,12 +326,12 @@ describe("managed server startup waits", () => {
         state: "stopped",
         approvalRequired: true,
         autoStart: false,
-        agentName: "Workshop Agent",
+        nodeName: "Workshop Node",
       }),
       managedStatus({
         state: "stopped",
         autoStart: false,
-        agentName: "Workshop Agent",
+        nodeName: "Workshop Node",
       }),
     ];
     const api = {
@@ -348,7 +348,7 @@ describe("managed server startup waits", () => {
       state: "failed",
       runtimeBooting: true,
       error:
-        "The background agent keeps exiting before it becomes ready: it exited with code 78 and was restarted 2 times in a row.",
+        "The background node keeps exiting before it becomes ready: it exited with code 78 and was restarted 2 times in a row.",
     });
     expect(managedServerWaitKind(status)).toBeNull();
     expect(unsettledManagedServerError(status)?.message).toContain(
@@ -405,14 +405,14 @@ describe("managed server startup waits", () => {
     renderIn(app, <StartupScreen />);
     const screenText = screen.getByTestId("startup-screen");
     expect(screenText).toHaveTextContent(
-      "Waiting for the background agent to finish starting",
+      "Waiting for the background node to finish starting",
     );
     expect(screenText).toHaveTextContent("Waiting 1m 15s");
     expect(screen.queryByTestId("startup-retry")).not.toBeInTheDocument();
   });
 });
 
-describe("first-run local agent startup", () => {
+describe("first-run local node startup", () => {
   function firstRun() {
     let observed = managedStatus();
     let resolveStart!: (status: ManagedServerStatus) => void;
@@ -443,7 +443,7 @@ describe("first-run local agent startup", () => {
         providers: [],
       })),
       patchConfigComponents: vi.fn(async () => ({})),
-      initLocalStandardRuntime: vi.fn(async () => ({ agentDid: deployment.agentDid })),
+      initLocalStandardRuntime: vi.fn(async () => ({ nodeDid: deployment.nodeDid })),
       startDesktopClient: vi.fn(async () => ({
         bootstrap,
         client: { deployments: [deployment] },
@@ -451,7 +451,7 @@ describe("first-run local agent startup", () => {
     };
     return {
       api,
-      snapshot: { bootstrap: { ...bootstrap, initAgentName: "Forge" } },
+      snapshot: { bootstrap: { ...bootstrap, initNodeName: "Forge" } },
       observe: (next: Partial<ManagedServerStatus>) => {
         observed = managedStatus(next);
       },
@@ -459,8 +459,8 @@ describe("first-run local agent startup", () => {
       readyStatus: () =>
         managedStatus({
           state: "running",
-          agentName: "Forge",
-          agentDid: "did:key:z6MkForgeIdentity0123456789",
+          nodeName: "Forge",
+          nodeDid: "did:key:z6MkForgeIdentity0123456789",
           effectiveToolCeiling: reviewed!.toolCeiling,
           effectiveToolRoot: reviewed!.toolRoot ?? null,
           pairingReady: true,
@@ -468,8 +468,8 @@ describe("first-run local agent startup", () => {
       finishStart: () => {
         const ready = managedStatus({
           state: "running",
-          agentName: "Forge",
-          agentDid: "did:key:z6MkForgeIdentity0123456789",
+          nodeName: "Forge",
+          nodeDid: "did:key:z6MkForgeIdentity0123456789",
           effectiveToolCeiling: reviewed!.toolCeiling,
           effectiveToolRoot: reviewed!.toolRoot ?? null,
           pairingReady: true,
@@ -506,7 +506,7 @@ describe("first-run local agent startup", () => {
     await waitFor(
       () =>
         expect(screen.getByTestId("setup-screen")).toHaveTextContent(
-          "Waiting for the background agent to finish starting",
+          "Waiting for the background node to finish starting",
         ),
       { timeout: 3_000 },
     );
@@ -516,7 +516,7 @@ describe("first-run local agent startup", () => {
     run.finishStart();
     await screen.findByRole("heading", { name: "Ready" }, { timeout: 3_000 });
     const log = screen.getByRole("list", { name: "Setup progress" });
-    expect(log).toHaveTextContent("Start local agent");
+    expect(log).toHaveTextContent("Start local node");
     expect(log).toHaveTextContent("Forge is running as did:key:z6MkFo");
     expect(log).toHaveTextContent("Saved the local connection to Forge");
     expect(log).toHaveTextContent(`Connected securely to ${deployment.label}`);
@@ -531,7 +531,7 @@ describe("first-run local agent startup", () => {
     const run = firstRun();
     const remote = {
       ...deployment,
-      agentDid: "did:key:z6MkRemote",
+      nodeDid: "did:key:z6MkRemote",
       label: "Remote Node",
       source: "status",
     };
@@ -565,7 +565,7 @@ describe("first-run local agent startup", () => {
     await userEvent.click(next);
     await waitFor(() => expect(run.api.startManagedServer).toHaveBeenCalled());
 
-    run.observe({ state: "starting", runtimeBooting: true, agentName: "Forge" });
+    run.observe({ state: "starting", runtimeBooting: true, nodeName: "Forge" });
     run.rejectStart(
       new BridgeInvokeError({
         code: "runtimeStillBooting",

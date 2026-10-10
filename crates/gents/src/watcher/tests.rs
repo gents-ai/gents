@@ -69,12 +69,12 @@ fn automated_trigger_lineage_excludes_scheduled_control_requests() {
     };
     assert!(!background_wake.has_automated_trigger_lineage());
 
-    let subagent = AgentRequest {
-        caused_by_trigger_id: Some("tool-call".to_string()),
-        caused_by_trigger_kind: Some("subagent".to_string()),
+    let manual_trigger = AgentRequest {
+        caused_by_trigger_id: Some("manual-trigger".to_string()),
+        caused_by_trigger_kind: Some("manual".to_string()),
         ..base_request()
     };
-    assert!(!subagent.has_automated_trigger_lineage());
+    assert!(!manual_trigger.has_automated_trigger_lineage());
 }
 
 // ---------------------------------------------------------------------------
@@ -84,7 +84,7 @@ fn automated_trigger_lineage_excludes_scheduled_control_requests() {
 #[test]
 fn validate_rejects_mixed_parent_linkage_request_id_only() {
     let req = AgentRequest {
-        subagent_depth: 1,
+        request_hop: 1,
         caused_by_parent_request_id: Some("parent-req-1".to_string()),
         caused_by_parent_tool_call_id: None,
         ..base_request()
@@ -95,7 +95,7 @@ fn validate_rejects_mixed_parent_linkage_request_id_only() {
 #[test]
 fn validate_accepts_steering_request_lineage_without_tool_call_link() {
     let req = AgentRequest {
-        subagent_depth: 1,
+        request_hop: 1,
         input: serde_json::from_str(r#"{"queue":{"source":"steering","policy":"append","key":null,"queued_after_request_id":null}}"#).unwrap(),
         caused_by_parent_request_id: Some("parent-req-1".to_string()),
         caused_by_parent_request_doc_id: Some("parent-req-doc-1".to_string()),
@@ -108,7 +108,7 @@ fn validate_accepts_steering_request_lineage_without_tool_call_link() {
 #[test]
 fn validate_accepts_background_completion_lineage_without_tool_call_link() {
     let req = AgentRequest {
-        subagent_depth: 1,
+        request_hop: 1,
         input: serde_json::from_str(r#"{"queue":{"source":"background_completion","policy":"coalesce","key":"background_completion:session-1","queued_after_request_id":"child-1","background_completion_wake_version":1}}"#).unwrap(),
         caused_by_parent_request_id: Some("parent-req-1".to_string()),
         caused_by_parent_request_doc_id: Some("parent-req-doc-1".to_string()),
@@ -127,7 +127,7 @@ fn validate_accepts_background_completion_lineage_without_tool_call_link() {
 #[test]
 fn validate_accepts_depth_zero_background_completion_control_lineage() {
     let req = AgentRequest {
-        subagent_depth: 0,
+        request_hop: 0,
         input: serde_json::from_str(r#"{"queue":{"source":"background_completion","policy":"coalesce","key":"background_completion:session-1","queued_after_request_id":"goal-1","background_completion_wake_version":1}}"#).unwrap(),
         caused_by_parent_request_id: Some("goal-parent-1".to_string()),
         caused_by_parent_request_doc_id: Some("goal-parent-doc-1".to_string()),
@@ -146,7 +146,7 @@ fn validate_accepts_depth_zero_background_completion_control_lineage() {
 #[test]
 fn validate_accepts_depth_zero_steering_control_lineage() {
     let req = AgentRequest {
-        subagent_depth: 0,
+        request_hop: 0,
         input: serde_json::from_str(r#"{"queue":{"source":"steering","policy":"append","key":null,"queued_after_request_id":null}}"#).unwrap(),
         caused_by_parent_request_id: Some("parent-req-1".to_string()),
         caused_by_parent_request_doc_id: Some("parent-req-doc-1".to_string()),
@@ -158,7 +158,7 @@ fn validate_accepts_depth_zero_steering_control_lineage() {
 #[test]
 fn validate_rejects_mixed_parent_linkage_tool_call_id_only() {
     let req = AgentRequest {
-        subagent_depth: 1,
+        request_hop: 1,
         caused_by_parent_request_id: None,
         caused_by_parent_tool_call_id: Some("parent-tc-1".to_string()),
         ..base_request()
@@ -167,9 +167,9 @@ fn validate_rejects_mixed_parent_linkage_tool_call_id_only() {
 }
 
 #[test]
-fn validate_rejects_subagent_depth_zero_with_parent_fields() {
+fn validate_rejects_request_hop_zero_with_parent_fields() {
     let req = AgentRequest {
-        subagent_depth: 0,
+        request_hop: 0,
         caused_by_parent_request_id: Some("parent-req-1".to_string()),
         caused_by_parent_request_doc_id: Some("parent-req-doc-1".to_string()),
         caused_by_parent_tool_call_id: Some("parent-tc-1".to_string()),
@@ -182,7 +182,7 @@ fn validate_rejects_subagent_depth_zero_with_parent_fields() {
 #[test]
 fn validate_rejects_logical_parent_without_physical_parent() {
     let req = AgentRequest {
-        subagent_depth: 0,
+        request_hop: 0,
         input: serde_json::from_str(r#"{"queue":{"source":"goal","policy":"append","key":null,"queued_after_request_id":null}}"#).unwrap(),
         caused_by_parent_request_id: Some("parent-req-1".to_string()),
         caused_by_parent_request_doc_id: None,
@@ -194,7 +194,7 @@ fn validate_rejects_logical_parent_without_physical_parent() {
 #[test]
 fn validate_accepts_top_level_request() {
     let req = AgentRequest {
-        subagent_depth: 0,
+        request_hop: 0,
         caused_by_parent_request_id: None,
         caused_by_parent_request_doc_id: None,
         caused_by_parent_tool_call_id: None,
@@ -234,9 +234,9 @@ fn validate_accepts_durable_zero_budget_as_exhausted() {
 }
 
 #[test]
-fn validate_accepts_subagent_request() {
+fn validate_accepts_tool_call_child_request() {
     let req = AgentRequest {
-        subagent_depth: 1,
+        request_hop: 1,
         caused_by_parent_request_id: Some("parent-req-1".to_string()),
         caused_by_parent_request_doc_id: Some("parent-req-doc-1".to_string()),
         caused_by_parent_tool_call_id: Some("parent-tc-1".to_string()),
@@ -337,9 +337,9 @@ fn request(request_id: &str, session_id: &str) -> AgentRequest {
         purpose: gents_protocol::request_admission::RequestPurpose::Normal,
         doc_id: format!("doc-{request_id}"),
         request_id: request_id.to_string(),
-        agent_did: "did:key:z123".into(),
+        node_did: "did:key:z123".into(),
         requester_did: None,
-        behavior_id: "general".into(),
+        agent_id: "general".into(),
         session_id: session_id.to_string(),
         content: "hello".into(),
         max_total_tokens: None,
@@ -350,7 +350,7 @@ fn request(request_id: &str, session_id: &str) -> AgentRequest {
         execution_generation: None,
         execution_lease_secs: None,
         execution_lease_expires_at: None,
-        subagent_depth: 0,
+        request_hop: 0,
         caused_by_parent_request_id: None,
         caused_by_parent_request_doc_id: None,
         caused_by_parent_tool_call_id: None,
@@ -361,7 +361,7 @@ fn request(request_id: &str, session_id: &str) -> AgentRequest {
         caused_by_correlation: None,
         caused_by_trigger_context: None,
         workspace_id: None,
-        workspace_owner_agent_did: None,
+        workspace_owner_node_did: None,
         workspace_authority: None,
         workspace_seal_hash: None,
     }
@@ -380,21 +380,21 @@ async fn test_node() -> Arc<defra_node::EmbeddedNode> {
 /// Insert an AgentRequest row with an incoherent parent linkage into DefraDB
 /// and return its `_docID`.
 ///
-/// `subagent_depth` = 1, `caused_by_parent_request_id` is set, but
+/// `request_hop` = 1, `caused_by_parent_request_id` is set, but
 /// `caused_by_parent_tool_call_id` is absent — one half of the pair is
 /// missing, which the validator must reject.
 async fn insert_incoherent_agent_request(
     node: &defra_node::EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     request_id: &str,
 ) -> String {
     use crate::graphql::escape_graphql_string;
 
     let escaped_request_id = escape_graphql_string(request_id);
-    let escaped_agent_did = escape_graphql_string(agent_did);
+    let escaped_node_did = escape_graphql_string(node_did);
     let created_at = chrono::Utc::now().to_rfc3339();
 
-    // subagent_depth = 1 but only caused_by_parent_request_id is set;
+    // request_hop = 1 but only caused_by_parent_request_id is set;
     // caused_by_parent_tool_call_id is absent.  This is the coherence
     // violation the validator checks for.
     let mutation = format!(
@@ -402,16 +402,16 @@ async fn insert_incoherent_agent_request(
             create_AgentRequest(input: {{
                 request_id: "{escaped_request_id}",
                 purpose: "normal",
-                agent_did: "{escaped_agent_did}",
+                node_did: "{escaped_node_did}",
                 session_id: "sess-incoherent",
-                behavior_id: "behavior",
+                agent_id: "general",
                 content: "test",
                 lifecycle_state: "pending",
                 backend_id: "",
                 created_at: "{created_at}",
                 retry_count: 0,
                 max_retries: 0,
-                subagent_depth: 1,
+                request_hop: 1,
                 caused_by_parent_request_id: "parent-req-exists"
             }}) {{ _docID }}
         }}"#
@@ -446,14 +446,14 @@ async fn insert_incoherent_agent_request(
 
 async fn insert_agent_request_row(
     node: &defra_node::EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     request_id: &str,
     session_id: &str,
     lifecycle_state: &str,
     created_at: &str,
 ) -> String {
     let request_id = crate::graphql::escape_graphql_string(request_id);
-    let agent_did = crate::graphql::escape_graphql_string(agent_did);
+    let node_did = crate::graphql::escape_graphql_string(node_did);
     let session_id = crate::graphql::escape_graphql_string(session_id);
     let lifecycle_state = crate::graphql::escape_graphql_string(lifecycle_state);
     let created_at = crate::graphql::escape_graphql_string(created_at);
@@ -462,12 +462,12 @@ async fn insert_agent_request_row(
             create_AgentRequest(input: {{
                 request_id: "{request_id}",
                 purpose: "normal",
-                agent_did: "{agent_did}",
+                node_did: "{node_did}",
                 session_id: "{session_id}",
                 retry_parent_request: "",
                 retry_root_request: "{request_id}",
                 superseded_by_request: "",
-                behavior_id: "behavior",
+                agent_id: "general",
                 content: "test",
                 lifecycle_state: "{lifecycle_state}",
                 backend_id: "",
@@ -506,17 +506,17 @@ async fn insert_agent_request_row(
 
 async fn insert_malformed_agent_request_without_request_id(
     node: &defra_node::EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
 ) -> String {
     let mutation = format!(
         r#"mutation {{ create_AgentRequest(input: {{
         purpose: "normal",
-        agent_did: "{}", session_id: "{}", content: "malformed",
+        node_did: "{}", session_id: "{}", content: "malformed",
         lifecycle_state: "pending",
         execution_origin: "interactive", created_at: "2026-03-12T00:00:00Z"
     }}) {{ _docID }} }}"#,
-        crate::graphql::escape_graphql_string(agent_did),
+        crate::graphql::escape_graphql_string(node_did),
         crate::graphql::escape_graphql_string(session_id)
     );
     let response = node.execute(&mutation).await;
@@ -526,8 +526,8 @@ async fn insert_malformed_agent_request_without_request_id(
         response.errors
     );
     let lookup = format!(
-        r#"{{ AgentRequest(filter: {{ agent_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }} }}, limit: 1) {{ _docID }} }}"#,
-        crate::graphql::escape_graphql_string(agent_did),
+        r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }} }}, limit: 1) {{ _docID }} }}"#,
+        crate::graphql::escape_graphql_string(node_did),
         crate::graphql::escape_graphql_string(session_id)
     );
     let response = node.execute(&lookup).await;
@@ -830,10 +830,10 @@ async fn pending_requests_skip_queued_same_session_rows_until_claimable() {
     let node = test_node().await;
     crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
-    let agent_did = "did:key:z-watcher-queue";
+    let node_did = "did:key:z-watcher-queue";
     let active_doc_id = insert_agent_request_row(
         node.as_ref(),
-        agent_did,
+        node_did,
         "req-active",
         "sess-queue",
         "processing",
@@ -842,7 +842,7 @@ async fn pending_requests_skip_queued_same_session_rows_until_claimable() {
     .await;
     insert_agent_request_row(
         node.as_ref(),
-        agent_did,
+        node_did,
         "req-queued",
         "sess-queue",
         "pending",
@@ -851,7 +851,7 @@ async fn pending_requests_skip_queued_same_session_rows_until_claimable() {
     .await;
     insert_agent_request_row(
         node.as_ref(),
-        agent_did,
+        node_did,
         "req-other",
         "sess-other",
         "pending",
@@ -859,7 +859,7 @@ async fn pending_requests_skip_queued_same_session_rows_until_claimable() {
     )
     .await;
 
-    let watcher = DefraWatcher::new(node.clone(), agent_did);
+    let watcher = DefraWatcher::new(node.clone(), node_did);
     let pending = watcher.pending_requests().await.unwrap();
     assert_eq!(
         pending
@@ -885,10 +885,10 @@ async fn pending_requests_include_interrupted_queued_rows_for_terminalization() 
     let node = test_node().await;
     crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
-    let agent_did = "did:key:z-watcher-queued-interrupt";
+    let node_did = "did:key:z-watcher-queued-interrupt";
     insert_agent_request_row(
         node.as_ref(),
-        agent_did,
+        node_did,
         "req-active",
         "sess-queue",
         "processing",
@@ -897,7 +897,7 @@ async fn pending_requests_include_interrupted_queued_rows_for_terminalization() 
     .await;
     let queued_doc_id = insert_agent_request_row(
         node.as_ref(),
-        agent_did,
+        node_did,
         "req-queued-interrupt",
         "sess-queue",
         "pending",
@@ -911,7 +911,7 @@ async fn pending_requests_include_interrupted_queued_rows_for_terminalization() 
     )
     .await;
 
-    let watcher = DefraWatcher::new(node, agent_did);
+    let watcher = DefraWatcher::new(node, node_did);
     let pending = watcher.pending_requests().await.unwrap();
     assert_eq!(
         pending
@@ -927,11 +927,11 @@ async fn pending_requests_quarantines_incoherent_row_without_hiding_valid_work()
     let node = test_node().await;
     crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
-    let agent_did = "did:key:z-watcher-coherence-pending";
-    insert_incoherent_agent_request(node.as_ref(), agent_did, "req-incoherent-pending").await;
+    let node_did = "did:key:z-watcher-coherence-pending";
+    insert_incoherent_agent_request(node.as_ref(), node_did, "req-incoherent-pending").await;
     insert_agent_request_row(
         node.as_ref(),
-        agent_did,
+        node_did,
         "req-valid-pending",
         "sess-incoherent",
         "pending",
@@ -939,7 +939,7 @@ async fn pending_requests_quarantines_incoherent_row_without_hiding_valid_work()
     )
     .await;
 
-    let watcher = DefraWatcher::new(node.clone(), agent_did);
+    let watcher = DefraWatcher::new(node.clone(), node_did);
     let pending = watcher.pending_requests().await.unwrap();
     assert_eq!(
         pending
@@ -962,16 +962,16 @@ async fn pending_requests_quarantines_incoherent_row_without_hiding_valid_work()
 async fn malformed_pending_row_terminalizes_by_doc_id_without_poisoning_valid_row() {
     let node = test_node().await;
     crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let agent_did = "did:key:z-watcher-raw-quarantine";
+    let node_did = "did:key:z-watcher-raw-quarantine";
     let malformed_doc = insert_malformed_agent_request_without_request_id(
         node.as_ref(),
-        agent_did,
+        node_did,
         "sess-malformed-a",
     )
     .await;
     insert_agent_request_row(
         node.as_ref(),
-        agent_did,
+        node_did,
         "req-valid-b",
         "sess-valid-b",
         "pending",
@@ -979,7 +979,7 @@ async fn malformed_pending_row_terminalizes_by_doc_id_without_poisoning_valid_ro
     )
     .await;
 
-    let watcher = DefraWatcher::new(node.clone(), agent_did);
+    let watcher = DefraWatcher::new(node.clone(), node_did);
     let pending = watcher.pending_requests().await.unwrap();
     assert_eq!(
         pending
@@ -998,13 +998,13 @@ async fn incoherent_live_row_still_blocks_a_second_same_session_claim() {
     let node = test_node().await;
     crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
-    let agent_did = "did:key:z-watcher-coherence-active";
+    let node_did = "did:key:z-watcher-coherence-active";
     let incoherent_doc_id =
-        insert_incoherent_agent_request(node.as_ref(), agent_did, "req-incoherent-active").await;
+        insert_incoherent_agent_request(node.as_ref(), node_did, "req-incoherent-active").await;
     set_request_processing(node.as_ref(), &incoherent_doc_id).await;
     insert_agent_request_row(
         node.as_ref(),
-        agent_did,
+        node_did,
         "req-valid-pending",
         "sess-incoherent",
         "pending",
@@ -1012,20 +1012,20 @@ async fn incoherent_live_row_still_blocks_a_second_same_session_claim() {
     )
     .await;
 
-    let watcher = DefraWatcher::new(node, agent_did);
+    let watcher = DefraWatcher::new(node, node_did);
     assert!(watcher.pending_requests().await.unwrap().is_empty());
 }
 
 #[tokio::test]
-async fn try_fetch_request_terminalizes_incoherent_subagent_linkage() {
+async fn try_fetch_request_terminalizes_incoherent_parent_linkage() {
     let node = test_node().await;
     crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
-    let agent_did = "did:key:z-watcher-coherence-fetch";
+    let node_did = "did:key:z-watcher-coherence-fetch";
     let doc_id =
-        insert_incoherent_agent_request(node.as_ref(), agent_did, "req-incoherent-fetch").await;
+        insert_incoherent_agent_request(node.as_ref(), node_did, "req-incoherent-fetch").await;
 
-    let watcher = DefraWatcher::new(node.clone(), agent_did);
+    let watcher = DefraWatcher::new(node.clone(), node_did);
     let result = watcher.try_fetch_request(&doc_id).await.unwrap();
     assert!(result.is_none());
     let terminal = request_terminal_fields(node.as_ref(), "req-incoherent-fetch").await;
@@ -1035,22 +1035,22 @@ async fn try_fetch_request_terminalizes_incoherent_subagent_linkage() {
 }
 
 #[tokio::test]
-async fn pending_requests_are_scoped_by_principal_without_host_identity() {
+async fn pending_requests_are_scoped_by_node_did_without_host_identity() {
     let node = test_node().await;
     crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let agent_did = "did:key:z-watcher-workspace-owner";
+    let node_did = "did:key:z-watcher-workspace-owner";
     let now = "2026-08-21T00:00:00Z";
     let mutation = format!(
         r#"mutation {{
             create_AgentRequest(input: {{
                 request_id: "req-owned",
                 purpose: "normal",
-                agent_did: "{agent_did}",
+                node_did: "{node_did}",
                 session_id: "sess-owned",
                 retry_parent_request: "",
                 retry_root_request: "req-owned",
                 superseded_by_request: "",
-                behavior_id: "behavior",
+                agent_id: "general",
                 content: "test",
                 lifecycle_state: "pending",
                 backend_id: "",
@@ -1058,7 +1058,7 @@ async fn pending_requests_are_scoped_by_principal_without_host_identity() {
                 retry_count: 0,
                 max_retries: 0,
                 workspace_id: "ws-1",
-                workspace_owner_agent_did: "{agent_did}",
+                workspace_owner_node_did: "{node_did}",
                 workspace_authority: "readWrite"
             }}) {{ _docID }}
         }}"#
@@ -1068,7 +1068,7 @@ async fn pending_requests_are_scoped_by_principal_without_host_identity() {
 
     let foreign = DefraWatcher::new(node.clone(), "did:key:foreign");
     assert!(foreign.pending_requests().await.unwrap().is_empty());
-    let owner = DefraWatcher::new(node, agent_did);
+    let owner = DefraWatcher::new(node, node_did);
     let pending = owner.pending_requests().await.unwrap();
     assert_eq!(
         pending
@@ -1078,23 +1078,23 @@ async fn pending_requests_are_scoped_by_principal_without_host_identity() {
         vec!["req-owned"]
     );
     assert_eq!(
-        pending[0].workspace_owner_agent_did.as_deref(),
-        Some(agent_did)
+        pending[0].workspace_owner_node_did.as_deref(),
+        Some(node_did)
     );
     let continuation = crate::lifecycle::queue::prepare_goal_continuation(
         &pending[0],
-        "behavior".to_string(),
+        "general".to_string(),
         "goal-workspace-owner",
         "continue",
         1,
         false,
         "2026-08-21T00:00:01Z",
-        pending[0].subagent_depth,
+        pending[0].request_hop,
     )
     .expect("workspace-bound parent produces a coherent goal continuation");
     assert_eq!(
-        continuation.workspace_owner_agent_did.as_deref(),
-        Some(agent_did)
+        continuation.workspace_owner_node_did.as_deref(),
+        Some(node_did)
     );
 }
 
@@ -1103,12 +1103,12 @@ fn canonical_request_row_with_depth(depth: i64) -> gents_protocol::row::AgentReq
         doc_id: Some("doc-depth".to_string()),
         request_id: "req-depth".to_string(),
         purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
-        agent_did: Some("did:key:z-depth".to_string()),
+        node_did: Some("did:key:z-depth".to_string()),
         session_id: Some("session-depth".to_string()),
-        behavior_id: Some("behavior".to_string()),
+        agent_id: Some("general".to_string()),
         content: Some("depth test".to_string()),
         created_at: Some("2026-09-04T00:00:00Z".to_string()),
-        subagent_depth: Some(depth),
+        request_hop: Some(depth),
         ..Default::default()
     }
 }
@@ -1118,7 +1118,7 @@ fn canonical_request_conversion_rejects_negative_or_overflowing_depth() {
     for depth in [-1, i64::MAX] {
         let error = AgentRequest::try_from(canonical_request_row_with_depth(depth))
             .expect_err("invalid schema-width conversion must fail");
-        assert!(error.to_string().contains("subagent_depth"), "{error:#}");
+        assert!(error.to_string().contains("request_hop"), "{error:#}");
     }
 }
 
@@ -1129,9 +1129,9 @@ fn canonical_request_row_with_lease_secs(
         doc_id: Some("doc-lease".to_string()),
         request_id: "req-lease".to_string(),
         purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
-        agent_did: Some("did:key:z-lease".to_string()),
+        node_did: Some("did:key:z-lease".to_string()),
         session_id: Some("session-lease".to_string()),
-        behavior_id: Some("behavior".to_string()),
+        agent_id: Some("general".to_string()),
         content: Some("lease test".to_string()),
         created_at: Some("2026-09-04T00:00:00Z".to_string()),
         execution_lease_secs: lease_secs,
@@ -1169,7 +1169,7 @@ async fn later_request_cannot_overtake_delivered_native_session_head() {
 
     let node = test_node().await;
     crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let agent_did = "did:key:z-watcher-requeue";
+    let node_did = "did:key:z-watcher-requeue";
     let session = "sess-requeue";
     let second = "2026-09-27T19:47:28Z";
     let continuation_id = "goal-cont-00000000000000000003-requeue";
@@ -1177,14 +1177,14 @@ async fn later_request_cannot_overtake_delivered_native_session_head() {
     let deliver = Duration::from_secs(5);
     let continuation_doc = insert_agent_request_row(
         node.as_ref(),
-        agent_did,
+        node_did,
         continuation_id,
         session,
         "pending",
         second,
     )
     .await;
-    let mut watcher = DefraWatcher::new(node.clone(), agent_did);
+    let mut watcher = DefraWatcher::new(node.clone(), node_did);
     let continuation = tokio::time::timeout(deliver, watcher.next_request())
         .await
         .expect("first delivery")
@@ -1192,20 +1192,12 @@ async fn later_request_cannot_overtake_delivered_native_session_head() {
         .expect("pending scan");
     assert_eq!(continuation.request_id, continuation_id);
 
-    insert_agent_request_row(
-        node.as_ref(),
-        agent_did,
-        wake_id,
-        session,
-        "pending",
-        second,
-    )
-    .await;
+    insert_agent_request_row(node.as_ref(), node_did, wake_id, session, "pending", second).await;
     assert!(wake_id < continuation_id);
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         node.clone(),
-        "behavior",
-        agent_did,
+        "general",
+        node_did,
         continuation,
         60,
         ExecutionOrigin::Interactive,

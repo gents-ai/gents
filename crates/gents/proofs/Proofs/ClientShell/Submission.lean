@@ -6,23 +6,23 @@ composer adds only its own emptiness (`PresentationAgreement.adaptLocalDraft`),
 so the shell's decision does not change with each keystroke. -/
 structure SubmitContext where
   clientAvailable   : Bool
-  requestedBehavior : Option BehaviorId
+  requestedAgent : Option AgentId
   deriving Repr
 
-def behaviorMismatch
+def agentMismatch
     (store : LocalStore) (sid : SessionId)
-    (requested : Option BehaviorId) : Bool :=
-  match requested, (store.find sid).bind (·.behaviorId) with
+    (requested : Option AgentId) : Bool :=
+  match requested, (store.find sid).bind (·.agentId) with
   | some r, some e => decide (r ≠ e)
   | _, _           => false
 
 inductive SendBlockedReason where
   | clientOffline
-  | agentNotSelected
+  | nodeNotSelected
   | composerEmpty
   | mutationInFlight
   | awaitingObservation
-  | sessionBehaviorMismatch
+  | sessionAgentMismatch
   | sessionAbsent
   | inconsistentObservation
   | workflowBlocked
@@ -46,7 +46,7 @@ def SendDecision.admits : SendDecision → Bool
 def projectSendDecision
     (s : ShellState) (store : LocalStore) (ctx : SubmitContext) : SendDecision :=
   if ¬ ctx.clientAvailable then .blocked .clientOffline
-  else if s.selection.agent.isNone then .blocked .agentNotSelected
+  else if s.selection.node.isNone then .blocked .nodeNotSelected
   else match s.workflow with
     | .submitting _ _ => .blocked .mutationInFlight
     | .awaiting _ _                 => .blocked .awaitingObservation
@@ -59,8 +59,8 @@ def projectSendDecision
         | none     =>
           .blocked .sessionAbsent
         | some obs =>
-          if behaviorMismatch store sid ctx.requestedBehavior then
-            .blocked .sessionBehaviorMismatch
+          if agentMismatch store sid ctx.requestedAgent then
+            .blocked .sessionAgentMismatch
           else
             match obs.latestObservedRequest, obs.latestTurn with
             | none,   none   => .ready
@@ -82,16 +82,16 @@ theorem nonterminal_turn_queues
     (s : ShellState) (store : LocalStore) (ctx : SubmitContext)
     (sid : SessionId) (obs : SessionObservation) (req : RequestId) (turn : ClientTurnState)
     (hclient : ctx.clientAvailable = true)
-    (hagent : s.selection.agent.isSome = true)
+    (hnode : s.selection.node.isSome = true)
     (hw : s.workflow = .idle)
     (hsel : s.selection.session = some sid)
     (hfind : store.find sid = some obs)
-    (hbehavior : behaviorMismatch store sid ctx.requestedBehavior = false)
+    (hagent_match : agentMismatch store sid ctx.requestedAgent = false)
     (hreq : obs.latestObservedRequest = some req)
     (hturn : obs.latestTurn = some turn)
     (hrunning : turn.isTerminal = false) :
     projectSendDecision s store ctx = .queue turn := by
-  have hagent' : s.selection.agent.isNone = false := by
-    cases h : s.selection.agent <;> simp_all
-  simp [projectSendDecision, hclient, hagent', hw, hsel, hfind, hbehavior, hreq, hturn,
+  have hnode' : s.selection.node.isNone = false := by
+    cases h : s.selection.node <;> simp_all
+  simp [projectSendDecision, hclient, hnode', hw, hsel, hfind, hagent_match, hreq, hturn,
     hrunning]

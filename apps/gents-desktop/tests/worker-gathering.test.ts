@@ -13,7 +13,7 @@ const call = (presentation: RenderedToolCallView["presentation"]) =>
   }) as RenderedToolCallView;
 
 const worker = (action: string, name: string, sessionId: string | null = null) =>
-  call({ kind: "subagent", action, name, sessionId, description: null, output: null });
+  call({ kind: "agent", action, name, sessionId, description: null, output: null });
 
 const read = (target: string) =>
   call({

@@ -70,17 +70,17 @@ export function InferencePanel({
   const { changeConfig } = useApp().actions;
   const base = {
     name: "agent" as const,
-    agentDid: deployment.agentDid,
+    nodeDid: deployment.nodeDid,
     section: "inference",
   };
   const models = {
     name: "agent" as const,
-    agentDid: deployment.agentDid,
+    nodeDid: deployment.nodeDid,
     section: "profiles",
   };
-  const { accounts, reload } = useAccounts(deployment.agentDid);
+  const { accounts, reload } = useAccounts(deployment.nodeDid);
   const [acting, setActing] = useState<AccountAction | null>(null);
-  const providerUsage = useProviderUsage(deployment.agentDid);
+  const providerUsage = useProviderUsage(deployment.nodeDid);
   const usageOf = (backendId: string) =>
     providerUsage.usage.find((u) => u.backendId === backendId);
   const catalog = useSetupCatalog();
@@ -93,7 +93,7 @@ export function InferencePanel({
         initialStep="inference"
         purpose="add-backend"
         provider={adding}
-        agentDid={deployment.agentDid}
+        nodeDid={deployment.nodeDid}
         onCancel={() => setAdding(null)}
         onDone={() => {
           /* back to the catalog: the new backend's row now offers Add profile */
@@ -185,7 +185,7 @@ export function InferencePanel({
                     onChange: (enabled) =>
                       setEnabled(
                         changeConfig,
-                        deployment.agentDid,
+                        deployment.nodeDid,
                         "InferenceBackend",
                         b.backendId,
                         enabled,
@@ -198,7 +198,7 @@ export function InferencePanel({
                       : () =>
                           changeConfig("deleteBackendConfig", {
                             backendId: b.backendId,
-                            agentDid: deployment.agentDid,
+                            nodeDid: deployment.nodeDid,
                           })
                   }
                   warning={dependentsWarning(deployment, "backend", b.backendId)}

@@ -25,7 +25,7 @@ structure DurableReductionCase where
   deriving Repr
 
 private def key (requestDocId turnIndex ordinal : Nat) : ReductionKey :=
-  { agentDid := 7, sessionId := 11, requestDocId, turnIndex, ordinal }
+  { nodeDid := 7, sessionId := 11, requestDocId, turnIndex, ordinal }
 
 private def fact (checkpoint claimCommit : Nat) (pairClosed : Bool) : Fact :=
   { claimCommit

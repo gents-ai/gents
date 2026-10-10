@@ -143,7 +143,7 @@ mod tests {
             "init",
             "--store-key-custody",
             "file",
-            "--agent-name",
+            "--node-name",
             "pluginner",
             "--home",
             home.path().to_str().unwrap(),

@@ -31,12 +31,12 @@ use std::time::Duration;
 
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
-use gents::{AgentIdentity, DocumentRuntimeOptions, Gents, ToolCeiling};
+use gents::{DocumentRuntimeOptions, Gents, NodeIdentity, ToolCeiling};
 use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::support::fixtures::{bind_default_behavior_backend, test_identity};
+use crate::support::fixtures::{bind_default_agent_backend, test_identity};
 use crate::support::mock_endpoint::MockModelEndpoint;
 use crate::support::snapshots::{fetch_runtime_snapshot, is_routed_ready_after, RuntimeSnapshot};
 use crate::support::test_db;
@@ -63,20 +63,20 @@ async fn create_task(
     node: &EmbeddedNode,
     owner: &str,
     task_id: &str,
-    behavior_id: &str,
+    agent_id: &str,
     prompt_template: &str,
 ) {
     let escaped_owner = escape_graphql_string(owner);
     let escaped_task_id = escape_graphql_string(task_id);
-    let escaped_behavior_id = escape_graphql_string(behavior_id);
+    let escaped_agent_id = escape_graphql_string(agent_id);
     let escaped_prompt_template = escape_graphql_string(prompt_template);
     let mutation = format!(
         r#"mutation {{
             create_Task(input: {{
-                agent_did: "{escaped_owner}",
+                node_did: "{escaped_owner}",
                 task_id: "{escaped_task_id}",
                 display_name: "{escaped_task_id}",
-                behavior_id: "{escaped_behavior_id}",
+                agent_id: "{escaped_agent_id}",
                 prompt_template: "{escaped_prompt_template}",
                 enabled: true
             }}) {{ _docID }}
@@ -109,14 +109,14 @@ async fn create_event_trigger_with_filter(
         r#"mutation {{
             create_EventSource(input: {{
                 event_source_id: "{escaped_trigger_id}",
-                agent_did: "{escaped_owner}",
+                node_did: "{escaped_owner}",
                 source_collection: "{escaped_source_collection}",
                 event_kind: "{escaped_event_kind}",
                 filter: "{escaped_filter}"
             }}) {{ _docID }}
             create_Trigger(input: {{
                 trigger_id: "{escaped_trigger_id}",
-                agent_did: "{escaped_owner}",
+                node_did: "{escaped_owner}",
                 task_id: "{escaped_task_id}",
                 source: {{ kind: "event", event_source_id: "{escaped_trigger_id}" }},
                 enabled: true,
@@ -135,7 +135,7 @@ async fn create_event_trigger_with_filter(
 
 async fn wait_for_runtime_snapshot<F>(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     predicate: F,
 ) -> RuntimeSnapshot
 where
@@ -144,7 +144,7 @@ where
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     let mut last = None;
     loop {
-        if let Some(snapshot) = fetch_runtime_snapshot(node, agent_did).await {
+        if let Some(snapshot) = fetch_runtime_snapshot(node, node_did).await {
             if predicate(&snapshot) {
                 return snapshot;
             }
@@ -152,7 +152,7 @@ where
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "timed out waiting for runtime snapshot for {agent_did}; last seen: {last:?}"
+            "timed out waiting for runtime snapshot for {node_did}; last seen: {last:?}"
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
@@ -313,7 +313,7 @@ async fn event_trigger_fires_on_source_doc_create_end_to_end() {
 
     let identity = Arc::new(test_identity("event-trigger-e2e"));
     let mock_endpoint = MockModelEndpoint::start("default").unwrap();
-    bind_default_behavior_backend(
+    bind_default_agent_backend(
         db.node.as_ref(),
         identity.did(),
         "backend-event-trigger-e2e",
@@ -321,7 +321,7 @@ async fn event_trigger_fires_on_source_doc_create_end_to_end() {
     )
     .await;
 
-    let agent = Gents::from_default_behavior_documents(
+    let agent = Gents::from_default_agent_documents(
         db.node.clone(),
         identity,
         DocumentRuntimeOptions {
@@ -331,14 +331,14 @@ async fn event_trigger_fires_on_source_doc_create_end_to_end() {
     )
     .await
     .unwrap();
-    let agent_did = agent.agent_did().to_string();
-    let default_behavior_id = agent.default_behavior_id().to_string();
+    let node_did = agent.node_did().to_string();
+    let default_agent_id = agent.default_agent_id().to_string();
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
 
-    let startup = wait_for_runtime_snapshot(db.node.as_ref(), &agent_did, |snapshot| {
-        is_routed_ready_after(snapshot, 0) && snapshot.default_behavior_id == default_behavior_id
+    let startup = wait_for_runtime_snapshot(db.node.as_ref(), &node_did, |snapshot| {
+        is_routed_ready_after(snapshot, 0) && snapshot.default_agent_id == default_agent_id
     })
     .await;
     let initial_generation = startup.active_generation;
@@ -350,15 +350,15 @@ async fn event_trigger_fires_on_source_doc_create_end_to_end() {
 
     create_task(
         db.node.as_ref(),
-        &agent_did,
+        &node_did,
         TASK_ID,
-        &default_behavior_id,
+        &default_agent_id,
         PROMPT_TEMPLATE,
     )
     .await;
     create_event_trigger_with_filter(
         db.node.as_ref(),
-        &agent_did,
+        &node_did,
         TRIGGER_ID,
         TASK_ID,
         "WebhookEvent",
@@ -367,9 +367,9 @@ async fn event_trigger_fires_on_source_doc_create_end_to_end() {
     )
     .await;
 
-    let reconciled = wait_for_runtime_snapshot(db.node.as_ref(), &agent_did, |snapshot| {
+    let reconciled = wait_for_runtime_snapshot(db.node.as_ref(), &node_did, |snapshot| {
         is_routed_ready_after(snapshot, initial_generation)
-            && snapshot.default_behavior_id == default_behavior_id
+            && snapshot.default_agent_id == default_agent_id
     })
     .await;
     assert!(
@@ -382,7 +382,7 @@ async fn event_trigger_fires_on_source_doc_create_end_to_end() {
     // its cursor at the journal head. Events written before that seed are historical.
     let cursor_query = format!(
         r#"{{ EventSourceCursor(filter: {{owner_did: {{_eq: "{}"}}, source_collection: {{_eq: "WebhookEvent"}}}}) {{consumer}} }}"#,
-        escape_graphql_string(&agent_did),
+        escape_graphql_string(&node_did),
     );
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     loop {

@@ -174,5 +174,50 @@ theorem prefix_sibling_rejected (base sibling : String) (tail : List String)
     ¬ contains ⟨"/", [base]⟩ ⟨"/", sibling :: tail⟩ := by
   simp [contains, h]
 
+/-!
+## Root-selection admission
+
+The root-selection contracts belong to the root-admission owner so conformance
+and canonical root consumers reference this namespace directly.
+-/
+
+/-- Root-selection contract. A blank root may inherit the
+runtime default only when the operator has not authored explicit workspace-root
+policy. If there is neither policy nor a process ceiling (an empty publication),
+a successfully resolved authored root is its own narrowing. Under explicit
+policy, a request must select an admitted root so omission cannot widen to the
+process ceiling. The host execution owner resolves again before use; this
+admission contract does not claim TOCTOU safety. -/
+abbrev rootSelectionOk
+    (policyConfigured : Bool)
+    (published : Finset CanonicalPath)
+    (blank : Bool)
+    (resolved : Option CanonicalPath) : Prop :=
+  (blank = true ∧ policyConfigured = false) ∨
+    (blank = false ∧ policyConfigured = false ∧ published = ∅ ∧ resolved.isSome) ∨
+    admitted published resolved
+
+/-- Root-patch contract: `none` is an omitted edit, `some none` a clear and
+`some (some r)` a set. Omission preserves the stored value but must re-admit it
+against current policy, so a stale, blank or revoked stored root cannot bypass
+the gate; rootless Tools (`storedRootRequired = false`) gain no filesystem
+authority and do not fail an unrelated edit. Clear is allowed only without
+explicit policy, and set follows the create rule. -/
+abbrev rootEditSelectionOk
+    (policyConfigured : Bool)
+    (published : Finset CanonicalPath)
+    (storedRoot : String)
+    (resolvedStored : Option CanonicalPath)
+    (storedRootRequired : Bool)
+    (update : Option (Option String))
+    (resolved : Option CanonicalPath) : Prop :=
+  match update with
+  | none =>
+      storedRootRequired = false ∨
+        rootSelectionOk policyConfigured published (storedRoot.trim == "") resolvedStored
+  | some none => policyConfigured = false
+  | some (some root) =>
+      rootSelectionOk policyConfigured published (root.trim == "") resolved
+
 end RootAdmission
 end PeerRegistryDiscovery

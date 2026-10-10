@@ -8,13 +8,12 @@ use gents::config_client::{
 };
 use gents::document_config::{BackendAuth, BackendModelCatalog};
 use gents::{
-    list_agent_behaviors, list_inference_profile_records, load_inference_profile, Collection,
+    list_agents, list_inference_profile_records, load_inference_profile, Collection,
     InferenceBackend, InferenceProfile, ReasoningEffort,
 };
 use gents_codex_protocol as codex;
 use gents_protocol::row::{
-    project_behavior_readiness_summary, BehaviorReadinessUnavailableReason,
-    ProjectedBehaviorReadinessSummary,
+    project_node_readiness_summary, AgentReadinessUnavailableReason, ProjectedNodeReadinessSummary,
 };
 use serde_json::{json, Value};
 
@@ -59,7 +58,7 @@ pub(super) async fn apply_config_writes(
                 .await;
             }
         };
-        apply_model_to_bound_behavior(state, &selection).await?;
+        apply_model_to_bound_agent(state, &selection).await?;
     }
     send_typed_json_result::<codex::ConfigWriteResponse>(
         outbound,
@@ -74,15 +73,15 @@ pub(super) async fn apply_config_writes(
     .await
 }
 
-/// The behavior the Codex shim binds to plus the canonical inference profile it
-/// selects. `AgentBehavior` carries `inference_profile_id` only — backend,
-/// model, and effort choices live on the profile, never as behavior copies.
-pub(super) struct BoundBehavior {
+/// The agent the Codex shim binds to plus the canonical inference profile it
+/// selects. `Agent` carries `inference_profile_id` only — backend,
+/// model, and effort choices live on the profile, never as agent copies.
+pub(super) struct BoundAgent {
     pub(super) inference_profile: InferenceProfile,
 }
 
-/// One backend enabled for this principal plus its discovered model catalog in
-/// the exact credential scope this principal may use. `catalog` is absent until
+/// One backend enabled for this node plus its discovered model catalog in
+/// the exact credential scope this node may use. `catalog` is absent until
 /// a successful discovery has been observed; absence is never invented into
 /// synthetic model entries.
 pub(super) struct AvailableBackend {
@@ -90,105 +89,92 @@ pub(super) struct AvailableBackend {
     pub(super) catalog: Option<BackendModelCatalog>,
 }
 
-async fn load_bound_behavior_document(state: &ShimState) -> Result<gents::AgentBehaviorDocument> {
-    let agent_did = state.agent_did.as_ref();
-    let behavior_id = state.behavior_id.as_ref();
-    let raw =
-        ConfigAccess::transact_local(state.node.as_ref(), None, "codex.bound_behavior", |txn| {
-            Box::pin(async move {
-                read_desired_state_record_in_txn(
-                    txn,
-                    Collection::AgentBehavior,
-                    agent_did,
-                    behavior_id,
-                )
+async fn load_bound_agent_document(state: &ShimState) -> Result<gents::AgentDocument> {
+    let node_did = state.node_did.as_ref();
+    let agent_id = state.agent_id.as_ref();
+    let raw = ConfigAccess::transact_local(state.node.as_ref(), None, "codex.bound_agent", |txn| {
+        Box::pin(async move {
+            read_desired_state_record_in_txn(txn, Collection::Agent, node_did, agent_id)
                 .await?
                 .map(|(_, value)| value)
-                .ok_or_else(|| {
-                    anyhow::anyhow!("bound AgentBehavior {behavior_id:?} missing for {agent_did:?}")
-                })
-            })
+                .ok_or_else(|| anyhow::anyhow!("bound Agent {agent_id:?} missing for {node_did:?}"))
         })
-        .await?;
+    })
+    .await?;
     // Full canonical decode: `deny_unknown_fields` makes malformed
     // configuration a hard error instead of a silently half-filled document.
-    let behavior: gents::AgentBehaviorDocument = serde_json::from_value(raw)
-        .with_context(|| format!("decoding bound AgentBehavior {behavior_id:?}"))?;
-    Ok(behavior)
+    let agent: gents::AgentDocument = serde_json::from_value(raw)
+        .with_context(|| format!("decoding bound Agent {agent_id:?}"))?;
+    Ok(agent)
 }
 
-pub(super) async fn load_bound_behavior(state: &ShimState) -> Result<BoundBehavior> {
-    let behavior = load_bound_behavior_document(state).await?;
-    let agent_did = state.agent_did.as_ref();
-    let inference_profile = load_inference_profile(
-        state.node.as_ref(),
-        agent_did,
-        &behavior.inference_profile_id,
-    )
-    .await?
-    .ok_or_else(|| {
-        anyhow::anyhow!(
-            "bound inference profile {:?} missing for {agent_did:?}",
-            behavior.inference_profile_id
-        )
-    })?;
+pub(super) async fn load_bound_agent(state: &ShimState) -> Result<BoundAgent> {
+    let agent = load_bound_agent_document(state).await?;
+    let node_did = state.node_did.as_ref();
+    let inference_profile =
+        load_inference_profile(state.node.as_ref(), node_did, &agent.inference_profile_id)
+            .await?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "bound inference profile {:?} missing for {node_did:?}",
+                    agent.inference_profile_id
+                )
+            })?;
     inference_profile
         .validate()
         .context("bound inference profile is invalid")?;
-    Ok(BoundBehavior { inference_profile })
+    Ok(BoundAgent { inference_profile })
 }
 
 pub(super) async fn available_model_backends(state: &ShimState) -> Result<Vec<AvailableBackend>> {
     // The model list is a *configuration* surface — pick a backend/profile to
-    // bind a behavior to — not an admission decision, so it starts from the
+    // bind a agent to — not an admission decision, so it starts from the
     // document's configured intent (`enabled` backends, as before #1332)
     // and must keep working before this runtime has published any
     // readiness at all (fresh stores, config-only sessions, a backend that
-    // has no behavior bound to it yet). It only drops a backend on an
+    // has no agent bound to it yet). It only drops a backend on an
     // *explicit* readiness veto; `fleet_slots.rs`/`healthz` are the
-    // admission-reporting surfaces and keep their fail-closed behavior.
-    // Backends are scoped to the exact bound principal; another principal's
+    // admission-reporting surfaces and keep their fail-closed agent.
+    // Backends are scoped to the exact bound node; another node's
     // backend is never selectable here.
-    let agent_did = state.agent_did.as_ref();
-    let mut backends = list_enabled_backends_for_agent(state.node.as_ref(), agent_did)
+    let node_did = state.node_did.as_ref();
+    let mut backends = list_enabled_backends_for_agent(state.node.as_ref(), node_did)
         .await
         .context("listing enabled inference backends")?;
 
-    let behaviors = list_agent_behaviors(state.node.as_ref(), agent_did)
+    let agents = list_agents(state.node.as_ref(), node_did)
         .await
-        .context("listing agent behaviors for model selection")?;
-    let profiles = list_inference_profile_records(state.node.as_ref(), agent_did)
+        .context("listing agents for model selection")?;
+    let profiles = list_inference_profile_records(state.node.as_ref(), node_did)
         .await
         .context("listing inference profiles for model selection")?;
     let profile_backend: std::collections::BTreeMap<&str, &str> = profiles
         .iter()
         .map(|(_, profile)| (profile.profile_id.as_str(), profile.backend_id.as_str()))
         .collect();
-    // A behavior binds to a backend only through its selected inference
-    // profile; behaviors whose profile is unresolvable attribute to no backend.
-    let bindings = behaviors
+    // An agent binds to a backend only through its selected inference
+    // profile; agents whose profile is unresolvable attribute to no backend.
+    let bindings = agents
         .iter()
-        .filter_map(|behavior| {
+        .filter_map(|agent| {
             profile_backend
-                .get(behavior.inference_profile_id.as_str())
-                .map(|backend_id| (behavior.behavior_id.clone(), (*backend_id).to_string()))
+                .get(agent.inference_profile_id.as_str())
+                .map(|backend_id| (agent.agent_id.clone(), (*backend_id).to_string()))
         })
         .collect::<Vec<_>>();
 
-    let readiness_row = crate::commands::status::load_behavior_readiness(
+    let readiness_row = crate::commands::status::load_node_readiness(
         &ConfigAccess::Local(state.node.clone()),
-        agent_did,
+        node_did,
     )
     .await
-    .context("loading behavior readiness for model selection")?;
-    let observed_at = chrono::Utc::now();
+    .context("loading agent readiness for model selection")?;
     backends.retain(|backend| {
         !backend_vetoed_by_readiness(
             &backend.backend_id,
             &bindings,
             readiness_row.as_ref(),
-            agent_did,
-            observed_at,
+            node_did,
         )
     });
     backends.sort_by(|left, right| left.backend_id.cmp(&right.backend_id));
@@ -196,13 +182,13 @@ pub(super) async fn available_model_backends(state: &ShimState) -> Result<Vec<Av
     let mut available = Vec::with_capacity(backends.len());
     for backend in backends {
         // Exact authentication scope: shared credentials observe the backend's
-        // shared (anonymous) catalog; principal OAuth observes only this
-        // principal's catalog. One principal never inherits another's
+        // shared (anonymous) catalog; node OAuth observes only this
+        // node's catalog. One node never inherits another's
         // advertised list.
         let credential_scope =
-            matches!(backend.auth, BackendAuth::PrincipalOAuth { .. }).then_some(agent_did);
+            matches!(backend.auth, BackendAuth::NodeOAuth { .. }).then_some(node_did);
         let catalog =
-            lookup_backend_observation(state.node.as_ref(), agent_did, &backend.backend_id)
+            lookup_backend_observation(state.node.as_ref(), node_did, &backend.backend_id)
                 .await
                 .with_context(|| {
                     format!(
@@ -224,52 +210,47 @@ pub(super) async fn available_model_backends(state: &ShimState) -> Result<Vec<Av
 
 /// Whether the readiness projection *explicitly* vetoes `backend_id` — never
 /// a "we don't know" signal. True only when a readiness row exists for this
-/// agent and every behavior currently bound to `backend_id` through its
+/// agent and every agent currently bound to `backend_id` through its
 /// inference profile is reported `Unavailable` with a backend-related reason
 /// (`BackendDisabled` or `BackendTemporarilyUnavailable`). No readiness row,
-/// no behaviors bound yet, or at least one bound behavior that's `Ready` or
+/// no agents bound yet, or at least one bound agent that's `Ready` or
 /// unavailable for an unrelated reason — all read as "not vetoed."
 fn backend_vetoed_by_readiness(
     backend_id: &str,
     bindings: &[(String, String)],
-    readiness_row: Option<&gents_protocol::row::AgentBehaviorReadinessRow>,
-    agent_did: &str,
-    observed_at: chrono::DateTime<chrono::Utc>,
+    readiness_row: Option<&gents_protocol::row::NodeReadinessRow>,
+    node_did: &str,
 ) -> bool {
     let Some(readiness_row) = readiness_row else {
         return false;
     };
-    let summary =
-        match project_behavior_readiness_summary(Some(readiness_row), agent_did, observed_at) {
-            ProjectedBehaviorReadinessSummary::Observed(summary) => summary,
-            ProjectedBehaviorReadinessSummary::Unknown(_) => return false,
-        };
+    let summary = match project_node_readiness_summary(Some(readiness_row), node_did) {
+        ProjectedNodeReadinessSummary::Observed(summary) => summary,
+        ProjectedNodeReadinessSummary::Unknown(_) => return false,
+    };
 
-    let bound_behavior_ids = bindings
+    let bound_agent_ids = bindings
         .iter()
         .filter(|(_, binding_backend_id)| binding_backend_id == backend_id)
-        .map(|(behavior_id, _)| behavior_id.as_str())
+        .map(|(agent_id, _)| agent_id.as_str())
         .collect::<Vec<_>>();
 
-    if bound_behavior_ids.is_empty() {
+    if bound_agent_ids.is_empty() {
         return false;
     }
 
-    bound_behavior_ids.into_iter().all(|behavior_id| {
+    bound_agent_ids.into_iter().all(|agent_id| {
         matches!(
-            summary.unavailable_behaviors.get(behavior_id),
+            summary.unavailable_agents.get(agent_id),
             Some(
-                BehaviorReadinessUnavailableReason::BackendDisabled
-                    | BehaviorReadinessUnavailableReason::BackendTemporarilyUnavailable
+                AgentReadinessUnavailableReason::BackendDisabled
+                    | AgentReadinessUnavailableReason::BackendTemporarilyUnavailable
             )
         )
     })
 }
 
-pub(super) fn model_list_entries(
-    backends: &[AvailableBackend],
-    bound: &BoundBehavior,
-) -> Vec<Value> {
+pub(super) fn model_list_entries(backends: &[AvailableBackend], bound: &BoundAgent) -> Vec<Value> {
     let mut entries = backends
         .iter()
         .filter_map(|available| {
@@ -349,7 +330,7 @@ async fn resolve_model_selection(
     state: &ShimState,
     requested_model: &str,
 ) -> Result<ModelSelection> {
-    let bound = load_bound_behavior(state).await?;
+    let bound = load_bound_agent(state).await?;
     select_advertised_model(
         &available_model_backends(state).await?,
         &bound.inference_profile.backend_id,
@@ -394,7 +375,7 @@ fn select_advertised_model(
     }
     anyhow::ensure!(
         !matches.is_empty(),
-        "no backend advertises model {requested_model:?} in this principal's credential scope"
+        "no backend advertises model {requested_model:?} in this node's credential scope"
     );
     anyhow::ensure!(
         matches.len() == 1,
@@ -407,23 +388,20 @@ fn select_advertised_model(
     })
 }
 
-async fn apply_model_to_bound_behavior(
-    state: &ShimState,
-    selection: &ModelSelection,
-) -> Result<()> {
+async fn apply_model_to_bound_agent(state: &ShimState, selection: &ModelSelection) -> Result<()> {
     let access = ConfigAccess::Graphql(state.graphql.clone());
-    apply_model_to_bound_behavior_with_access(state, selection, &access).await
+    apply_model_to_bound_agent_with_access(state, selection, &access).await
 }
 
-async fn apply_model_to_bound_behavior_with_access(
+async fn apply_model_to_bound_agent_with_access(
     state: &ShimState,
     selection: &ModelSelection,
     access: &ConfigAccess,
 ) -> Result<()> {
     apply_model_selection(
         access,
-        state.agent_did.as_ref(),
-        state.behavior_id.as_ref(),
+        state.node_did.as_ref(),
+        state.agent_id.as_ref(),
         selection,
     )
     .await
@@ -432,7 +410,7 @@ async fn apply_model_to_bound_behavior_with_access(
 async fn apply_model_selection(
     access: &ConfigAccess,
     owner: &str,
-    behavior_id: &str,
+    agent_id: &str,
     selection: &ModelSelection,
 ) -> Result<()> {
     let new_profile_id = uuid::Uuid::new_v4().to_string();
@@ -440,36 +418,31 @@ async fn apply_model_selection(
         .transact("codex.model_selection", |txn| {
             let new_profile_id = &new_profile_id;
             Box::pin(async move {
-                let (_, value) = read_desired_state_record_in_txn(
-                    txn,
-                    Collection::AgentBehavior,
-                    owner,
-                    behavior_id,
-                )
-                .await?
-                .context("bound behavior does not exist for this principal")?;
-                let mut behavior: gents::AgentBehaviorDocument = serde_json::from_value(value)?;
-                anyhow::ensure!(behavior.enabled, "bound behavior is disabled");
+                let (_, value) =
+                    read_desired_state_record_in_txn(txn, Collection::Agent, owner, agent_id)
+                        .await?
+                        .context("bound agent does not exist for this node")?;
+                let mut agent: gents::AgentDocument = serde_json::from_value(value)?;
+                anyhow::ensure!(agent.enabled, "bound agent is disabled");
                 let (_, value) = read_desired_state_record_in_txn(
                     txn,
                     Collection::InferenceProfile,
                     owner,
-                    &behavior.inference_profile_id,
+                    &agent.inference_profile_id,
                 )
                 .await?
-                .context("bound inference profile does not exist for this principal")?;
+                .context("bound inference profile does not exist for this node")?;
                 let mut profile: InferenceProfile = serde_json::from_value(value)?;
                 let backend = load_inference_backend_in_txn(txn, owner, &selection.backend_id)
                     .await?
-                    .context("selected backend does not exist for this principal")?;
+                    .context("selected backend does not exist for this node")?;
                 backend.validate()?;
                 anyhow::ensure!(backend.enabled, "selected backend is disabled");
                 let observation =
                     lookup_backend_observation_in_txn(txn, owner, &selection.backend_id)
                         .await?
                         .context("selected backend has no discovery observation")?;
-                let scope =
-                    matches!(backend.auth, BackendAuth::PrincipalOAuth { .. }).then_some(owner);
+                let scope = matches!(backend.auth, BackendAuth::NodeOAuth { .. }).then_some(owner);
                 let catalog = observation
                     .catalog_for(scope)?
                     .context("selected backend has no catalog in this credential scope")?;
@@ -494,15 +467,15 @@ async fn apply_model_selection(
                 {
                     return Ok(());
                 }
-                // Copy the current controls; changing this behavior must not mutate a shared profile.
+                // Copy the current controls; changing this agent must not mutate a shared profile.
                 profile.profile_id = new_profile_id.clone();
                 profile.backend_id = selection.backend_id.clone();
                 profile.model_name = selection.model_name.clone();
-                behavior.inference_profile_id = profile.profile_id.clone();
+                agent.inference_profile_id = profile.profile_id.clone();
                 let plan = DesiredStateApplyPlan::new(
                     [
                         (Collection::InferenceProfile, serde_json::to_value(profile)?),
-                        (Collection::AgentBehavior, serde_json::to_value(behavior)?),
+                        (Collection::Agent, serde_json::to_value(agent)?),
                     ]
                     .into_iter()
                     .map(|(collection, value)| DesiredStateApplyDocument {
@@ -522,7 +495,7 @@ async fn apply_model_selection(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config_writes::write_agent_behavior_document;
+    use crate::config_writes::write_agent_document;
     use gents::config_client::{
         write_inference_backend_document, write_inference_profile_document,
     };
@@ -530,16 +503,16 @@ mod tests {
     use gents::document_config::AdvertisedModel;
     use gents::{record_model_catalog_in_txn, BackendProviderKind};
     use gents_protocol::row::{
-        AgentBehaviorReadinessRow, BehaviorReadinessEntry, BehaviorReadinessProcessState,
-        BehaviorReadinessSnapshot, BehaviorReadinessState, BehaviorReadinessUnavailableReason,
-        BEHAVIOR_READINESS_FORMAT_VERSION,
+        AgentReadinessEntry, AgentReadinessState, AgentReadinessUnavailableReason,
+        NodeReadinessProcessState, NodeReadinessRow, NodeReadinessSnapshot,
+        NODE_READINESS_FORMAT_VERSION,
     };
     use std::sync::Arc;
 
-    fn behavior(behavior_id: &str, profile_id: &str) -> gents::AgentBehaviorDocument {
-        gents::AgentBehaviorDocument {
-            behavior_id: behavior_id.to_string(),
-            agent_did: "did:test:codex-shim".to_string(),
+    fn agent(agent_id: &str, profile_id: &str) -> gents::AgentDocument {
+        gents::AgentDocument {
+            agent_id: agent_id.to_string(),
+            node_did: "did:test:codex-shim".to_string(),
             display_name: None,
             description: None,
             context_id: None,
@@ -552,7 +525,7 @@ mod tests {
 
     fn backend(backend_id: &str) -> InferenceBackend {
         InferenceBackend {
-            agent_did: "did:test:codex-shim".to_string(),
+            node_did: "did:test:codex-shim".to_string(),
             backend_id: backend_id.to_string(),
             name: "Backend A".to_string(),
             provider_kind: BackendProviderKind::OpenAiCompatible,
@@ -570,7 +543,7 @@ mod tests {
 
     fn profile(profile_id: &str, model_name: &str) -> InferenceProfile {
         InferenceProfile {
-            agent_did: "did:test:codex-shim".to_string(),
+            node_did: "did:test:codex-shim".to_string(),
             profile_id: profile_id.to_string(),
             display_name: None,
             description: None,
@@ -597,32 +570,32 @@ mod tests {
     }
 
     fn readiness_row(
-        agent_did: &str,
-        default_behavior_id: &str,
+        node_did: &str,
+        default_agent_id: &str,
         entries: Vec<(&str, bool)>,
         updated_at: &str,
-    ) -> AgentBehaviorReadinessRow {
-        AgentBehaviorReadinessRow {
-            agent_did: agent_did.to_string(),
-            snapshot_json: serde_json::to_string(&BehaviorReadinessSnapshot {
-                format_version: BEHAVIOR_READINESS_FORMAT_VERSION,
-                process_state: BehaviorReadinessProcessState::Ready,
+    ) -> NodeReadinessRow {
+        NodeReadinessRow {
+            node_did: node_did.to_string(),
+            snapshot_json: serde_json::to_string(&NodeReadinessSnapshot {
+                format_version: NODE_READINESS_FORMAT_VERSION,
+                process_state: NodeReadinessProcessState::Ready,
                 active_generation: 1,
                 router_generation: 1,
-                default_behavior_id: default_behavior_id.to_string(),
-                behaviors: entries
+                default_agent_id: default_agent_id.to_string(),
+                agents: entries
                     .into_iter()
-                    .map(|(behavior_id, ready)| BehaviorReadinessEntry {
-                        behavior_id: behavior_id.to_string(),
+                    .map(|(agent_id, ready)| AgentReadinessEntry {
+                        agent_id: agent_id.to_string(),
                         state: if ready {
-                            BehaviorReadinessState::Ready
+                            AgentReadinessState::Ready
                         } else {
-                            BehaviorReadinessState::Unavailable
+                            AgentReadinessState::Unavailable
                         },
                         reason: if ready {
                             None
                         } else {
-                            Some(BehaviorReadinessUnavailableReason::BackendTemporarilyUnavailable)
+                            Some(AgentReadinessUnavailableReason::BackendTemporarilyUnavailable)
                         },
                     })
                     .collect(),
@@ -633,91 +606,84 @@ mod tests {
     }
 
     #[test]
-    fn backend_vetoed_when_every_bound_behavior_is_explicitly_vetoed() {
+    fn backend_vetoed_when_every_bound_agent_is_explicitly_vetoed() {
         // `available_model_backends` starts from `list_enabled_backends`, so
         // this exercises the case that matters: the `InferenceBackend`
         // document itself would read enabled+healthy, but this runtime's
         // local prober vetoed it — that veto only ever reaches the readiness
         // projection (#640; measured health is never persisted to the
         // document).
-        let agent_did = "did:test:codex-shim";
+        let node_did = "did:test:codex-shim";
         let bindings = vec![("default".to_string(), "backend-a".to_string())];
         let row = readiness_row(
-            agent_did,
+            node_did,
             "default",
             vec![("default", false)],
             "2026-09-03T11:59:50Z",
         );
-        let observed_at = "2026-09-03T12:00:00Z".parse().unwrap();
 
         assert!(
-            backend_vetoed_by_readiness("backend-a", &bindings, Some(&row), agent_did, observed_at),
+            backend_vetoed_by_readiness("backend-a", &bindings, Some(&row), node_did),
             "a backend the local prober vetoed via readiness must not be offered for \
              selection even though the InferenceBackend document itself would read healthy"
         );
     }
 
     #[test]
-    fn backend_not_vetoed_when_bound_behavior_is_ready() {
-        let agent_did = "did:test:codex-shim";
+    fn backend_not_vetoed_when_bound_agent_is_ready() {
+        let node_did = "did:test:codex-shim";
         let bindings = vec![("default".to_string(), "backend-a".to_string())];
         let row = readiness_row(
-            agent_did,
+            node_did,
             "default",
             vec![("default", true)],
             "2026-09-03T11:59:50Z",
         );
-        let observed_at = "2026-09-03T12:00:00Z".parse().unwrap();
 
         assert!(!backend_vetoed_by_readiness(
             "backend-a",
             &bindings,
             Some(&row),
-            agent_did,
-            observed_at
+            node_did,
         ));
     }
 
     #[test]
     fn missing_readiness_row_leaves_configured_backend_offered() {
         // The model list is a configuration surface (choose a backend/profile
-        // to configure a behavior with) and must work before this runtime has
+        // to configure a agent with) and must work before this runtime has
         // published any readiness at all — a fresh store, a config-only
         // session. Absence of a readiness row is not a veto.
-        let agent_did = "did:test:codex-shim";
+        let node_did = "did:test:codex-shim";
         let bindings = vec![("default".to_string(), "backend-a".to_string())];
-        let observed_at = "2026-09-03T12:00:00Z".parse().unwrap();
 
         assert!(!backend_vetoed_by_readiness(
             "backend-a",
             &bindings,
             None,
-            agent_did,
-            observed_at
+            node_did,
         ));
     }
 
     #[test]
-    fn backend_with_no_bound_behaviors_is_not_vetoed() {
-        // A brand-new backend with no `AgentBehavior` bound to it yet (the
+    fn backend_with_no_bound_agents_is_not_vetoed() {
+        // A brand-new backend with no `Agent` bound to it yet (the
         // exact shape of a backend just created for configuration) has
         // nothing in the readiness projection to veto it with.
-        let agent_did = "did:test:codex-shim";
+        let node_did = "did:test:codex-shim";
         let bindings = vec![("default".to_string(), "backend-a".to_string())];
         let row = readiness_row(
-            agent_did,
+            node_did,
             "default",
             vec![("default", true)],
             "2026-09-03T11:59:50Z",
         );
-        let observed_at = "2026-09-03T12:00:00Z".parse().unwrap();
 
         assert!(!backend_vetoed_by_readiness(
             "backend-b",
             &bindings,
             Some(&row),
-            agent_did,
-            observed_at
+            node_did,
         ));
     }
 
@@ -728,7 +694,7 @@ mod tests {
     #[test]
     fn model_list_entries_advertise_discovered_models_and_efforts() {
         let catalog = BackendModelCatalog {
-            agent_did: None,
+            node_did: None,
             observed_at: "2026-09-03T12:00:00Z".to_string(),
             models: vec![
                 AdvertisedModel {
@@ -753,7 +719,7 @@ mod tests {
             backend: backend("backend-a"),
             catalog: Some(catalog),
         };
-        let bound = BoundBehavior {
+        let bound = BoundAgent {
             inference_profile: profile("profile-x", "model-x"),
         };
 
@@ -809,7 +775,7 @@ mod tests {
                     txn,
                     backend,
                     BackendModelCatalog {
-                        agent_did: None,
+                        node_did: None,
                         observed_at: chrono::Utc::now().to_rfc3339(),
                         models,
                     },
@@ -822,15 +788,15 @@ mod tests {
         backend
     }
 
-    /// Single owner (#1331 successor): `apply_model_to_bound_behavior` must
+    /// Single owner (#1331 successor): `apply_model_to_bound_agent` must
     /// reject a profile whose backend does not advertise the profile's model
     /// through the scoped catalog — not just trust
     /// `resolve_model_selection`'s own match.
     #[tokio::test]
-    async fn apply_model_to_bound_behavior_rejects_an_unadvertised_model() {
+    async fn apply_model_to_bound_agent_rejects_an_unadvertised_model() {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         gents::ensure_runtime_schemas(&node).await.unwrap();
-        let agent_did = "did:test:codex-shim";
+        let node_did = "did:test:codex-shim";
         let access = ConfigAccess::Local(node.clone());
         // Publication admits a profile only against its backend's catalog, so
         // the unadvertised profile is published while its model is listed and
@@ -850,9 +816,9 @@ mod tests {
         write_inference_profile_document(&access, &profile("profile-x", "model-x"))
             .await
             .expect("seed advertised profile");
-        write_agent_behavior_document(&access, &behavior("default", "profile-x"))
+        write_agent_document(&access, &agent("default", "profile-x"))
             .await
-            .expect("seed behavior");
+            .expect("seed agent");
         seed_backend_with_catalog(&access, node.as_ref(), vec![advertised("model-x")]).await;
 
         let selection = ModelSelection {
@@ -860,7 +826,7 @@ mod tests {
             model_name: "not-advertised".into(),
         };
 
-        let error = apply_model_selection(&access, agent_did, "default", &selection)
+        let error = apply_model_selection(&access, node_did, "default", &selection)
             .await
             .expect_err("an unadvertised model must be rejected");
         // `{:#}` (anyhow's alternate Display) walks the full context chain;
@@ -873,12 +839,12 @@ mod tests {
 
     /// The mirror-image happy path: a genuinely-advertised profile commits,
     /// selecting `inference_profile_id` only — no backend/model copies on the
-    /// behavior.
+    /// agent.
     #[tokio::test]
-    async fn apply_model_to_bound_behavior_accepts_an_advertised_model() {
+    async fn apply_model_to_bound_agent_accepts_an_advertised_model() {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         gents::ensure_runtime_schemas(&node).await.unwrap();
-        let agent_did = "did:test:codex-shim";
+        let node_did = "did:test:codex-shim";
         let access = ConfigAccess::Local(node.clone());
         seed_backend_with_catalog(
             &access,
@@ -893,26 +859,26 @@ mod tests {
         write_inference_profile_document(&access, &profile("profile-y", "model-y"))
             .await
             .expect("seed advertised profile-y");
-        write_agent_behavior_document(&access, &behavior("default", "profile-x"))
+        write_agent_document(&access, &agent("default", "profile-x"))
             .await
-            .expect("seed behavior");
+            .expect("seed agent");
 
         let selection = ModelSelection {
             backend_id: "backend-a".into(),
             model_name: "model-y".into(),
         };
 
-        apply_model_selection(&access, agent_did, "default", &selection)
+        apply_model_selection(&access, node_did, "default", &selection)
             .await
             .expect("an advertised profile must pass validation and commit");
-        let updated = gents::load_agent_behavior(node.as_ref(), "default")
+        let updated = gents::load_agent(node.as_ref(), "default")
             .await
-            .expect("reload behavior")
-            .expect("behavior remains present");
+            .expect("reload agent")
+            .expect("agent remains present");
         assert_ne!(updated.inference_profile_id, "profile-y");
         assert_ne!(updated.inference_profile_id, "profile-x");
         let selected =
-            gents::load_inference_profile(node.as_ref(), agent_did, &updated.inference_profile_id)
+            gents::load_inference_profile(node.as_ref(), node_did, &updated.inference_profile_id)
                 .await
                 .expect("reload profile")
                 .expect("selected profile remains present");
@@ -930,7 +896,7 @@ mod tests {
         let make = |id: &str, names: &[&str]| AvailableBackend {
             backend: backend(id),
             catalog: Some(BackendModelCatalog {
-                agent_did: None,
+                node_did: None,
                 observed_at: "2026-09-03T12:00:00Z".into(),
                 models: names.iter().map(|name| advertised(name)).collect(),
             }),
@@ -975,11 +941,11 @@ mod tests {
             [
                 (
                     Collection::InferenceSampling,
-                    json!({"agent_did":owner,"sampling_id":"sample","temperature":0.4}),
+                    json!({"node_did":owner,"sampling_id":"sample","temperature":0.4}),
                 ),
                 (
                     Collection::InferenceExecution,
-                    json!({"agent_did":owner,"execution_id":"exec","max_turns":1000}),
+                    json!({"node_did":owner,"execution_id":"exec","max_turns":1000}),
                 ),
             ]
             .into_iter()
@@ -1013,7 +979,7 @@ mod tests {
             .await
             .unwrap();
         for name in ["selected", "neighbor"] {
-            write_agent_behavior_document(&access, &behavior(name, "shared"))
+            write_agent_document(&access, &agent(name, "shared"))
                 .await
                 .unwrap();
         }
@@ -1024,10 +990,7 @@ mod tests {
         apply_model_selection(&access, owner, "selected", &selection)
             .await
             .unwrap();
-        let selected = gents::load_agent_behavior(&node, "selected")
-            .await
-            .unwrap()
-            .unwrap();
+        let selected = gents::load_agent(&node, "selected").await.unwrap().unwrap();
         assert_ne!(selected.inference_profile_id, "shared");
         assert_ne!(selected.inference_profile_id, "other-policy");
         let new_profile =
@@ -1047,7 +1010,7 @@ mod tests {
             original
         );
         assert_eq!(
-            gents::load_agent_behavior(&node, "neighbor")
+            gents::load_agent(&node, "neighbor")
                 .await
                 .unwrap()
                 .unwrap()
@@ -1069,16 +1032,13 @@ mod tests {
             before
         );
         assert_eq!(
-            gents::load_agent_behavior(&node, "selected")
-                .await
-                .unwrap()
-                .unwrap(),
+            gents::load_agent(&node, "selected").await.unwrap().unwrap(),
             selected
         );
         // A retained dangling reference must fail the shared publication transaction
-        // without leaving an orphan copied profile or changing the behavior binding.
+        // without leaving an orphan copied profile or changing the agent binding.
         let escaped = gents::graphql::escape_graphql_string(&selected.inference_profile_id);
-        let response = node.execute(&format!(r#"mutation {{ update_InferenceProfile(filter: {{agent_did: {{_eq: "did:test:codex-shim"}}, profile_id: {{_eq: "{escaped}"}}}}, input: {{sampling_id:"missing"}}) {{_docID}} }}"#)).await;
+        let response = node.execute(&format!(r#"mutation {{ update_InferenceProfile(filter: {{node_did: {{_eq: "did:test:codex-shim"}}, profile_id: {{_eq: "{escaped}"}}}}, input: {{sampling_id:"missing"}}) {{_docID}} }}"#)).await;
         assert!(!response.has_errors(), "{:?}", response.errors);
         assert!(apply_model_selection(
             &access,
@@ -1099,10 +1059,7 @@ mod tests {
             before
         );
         assert_eq!(
-            gents::load_agent_behavior(&node, "selected")
-                .await
-                .unwrap()
-                .unwrap(),
+            gents::load_agent(&node, "selected").await.unwrap().unwrap(),
             selected
         );
         // Restore the actual retained profile through the common owner for the next case.
@@ -1125,10 +1082,7 @@ mod tests {
             before
         );
         assert_eq!(
-            gents::load_agent_behavior(&node, "selected")
-                .await
-                .unwrap()
-                .unwrap(),
+            gents::load_agent(&node, "selected").await.unwrap().unwrap(),
             selected
         );
     }
@@ -1140,13 +1094,13 @@ mod tests {
         write_inference_backend_document(&access, &backend("same"))
             .await
             .unwrap();
-        let response = node.execute(r#"mutation { create_InferenceBackend(input: {agent_did:"did:test:foreign",backend_id:"same",name:"Foreign",provider_kind:"OpenAiCompatible",endpoint:"http://127.0.0.1:1",enabled:true,auth:{kind:"invalid"}}) {_docID} }"#).await;
+        let response = node.execute(r#"mutation { create_InferenceBackend(input: {node_did:"did:test:foreign",backend_id:"same",name:"Foreign",provider_kind:"OpenAiCompatible",endpoint:"http://127.0.0.1:1",enabled:true,auth:{kind:"invalid"}}) {_docID} }"#).await;
         assert!(!response.has_errors(), "{:?}", response.errors);
         let own = list_enabled_backends_for_agent(&node, "did:test:codex-shim")
             .await
             .unwrap();
         assert_eq!(own.len(), 1);
-        assert_eq!(own[0].agent_did, "did:test:codex-shim");
+        assert_eq!(own[0].node_did, "did:test:codex-shim");
         assert!(list_enabled_backends_for_agent(&node, "did:test:foreign")
             .await
             .is_err());

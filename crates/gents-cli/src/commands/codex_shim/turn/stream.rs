@@ -123,7 +123,7 @@ impl TurnStreamOptions {
         }
     }
 
-    pub(in crate::commands::codex_shim) fn resumed_subagent(baseline_turn: codex::Turn) -> Self {
+    pub(in crate::commands::codex_shim) fn resumed_caused(baseline_turn: codex::Turn) -> Self {
         Self {
             baseline_turn: Some(baseline_turn),
             follow_steering: false,
@@ -131,7 +131,7 @@ impl TurnStreamOptions {
         }
     }
 
-    pub(in crate::commands::codex_shim) fn fresh_subagent() -> Self {
+    pub(in crate::commands::codex_shim) fn fresh_caused() -> Self {
         Self {
             baseline_turn: None,
             follow_steering: false,
@@ -234,7 +234,7 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
         let request_row = requests.first();
         for row in requests.iter() {
             anyhow::ensure!(
-                row.get("agent_did").and_then(Value::as_str) == Some(current.agent_did.as_str())
+                row.get("node_did").and_then(Value::as_str) == Some(current.node_did.as_str())
                     && row.get("requester_did").and_then(Value::as_str)
                         == current.requester_did.as_deref()
                     && row.get("session_id").and_then(Value::as_str)
@@ -398,7 +398,7 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
             let tool = match hydrate_gents_tool_call_progress(
                 &ConfigAccess::Local(state.node.clone()),
                 row,
-                &current.agent_did,
+                &current.node_did,
                 &current.session_id,
                 current.requester_did.as_deref(),
                 &current.request_doc_id,
@@ -1114,11 +1114,11 @@ async fn send_thread_token_usage_update(
     let total_usage = submitted_token_usage(state, request, None).await?;
     let model_context_window = load_bound_context_window(
         state.node.as_ref(),
-        &request.agent_did,
+        &request.node_did,
         request
-            .behavior_id
+            .agent_id
             .as_deref()
-            .context("committed request missing behavior")?,
+            .context("committed request missing agent")?,
     )
     .await?;
     send_notification(
@@ -1198,7 +1198,7 @@ async fn cancel_pending_steering_request(
     if let Err(error) = gents::interrupt_request_by_doc_id(
         state.node.as_ref(),
         &request.request_doc_id,
-        &state.agent_did,
+        &state.node_did,
         Some(state.local_requester_did()),
     )
     .await
@@ -1221,10 +1221,10 @@ async fn steering_input_for_request(
         return Ok(input);
     }
     let physical = gents::graphql::escape_graphql_string(request_doc_id);
-    let owner = gents::graphql::escape_graphql_string(state.agent_did.as_ref());
+    let owner = gents::graphql::escape_graphql_string(state.node_did.as_ref());
     let logical = gents::graphql::escape_graphql_string(request_id);
     let query = format!(
-        r#"{{ AgentRequest(filter: {{_docID: {{_eq: "{physical}"}}, agent_did: {{_eq: "{owner}"}}, requester_did: {{_eq: "{owner}"}}, request_id: {{_eq: "{logical}"}}}}, limit: 2) {{content}} }}"#
+        r#"{{ AgentRequest(filter: {{_docID: {{_eq: "{physical}"}}, node_did: {{_eq: "{owner}"}}, requester_did: {{_eq: "{owner}"}}, request_id: {{_eq: "{logical}"}}}}, limit: 2) {{content}} }}"#
     );
     let response = query_node_json(state.node.as_ref(), &query).await?;
     let rows = response
@@ -1314,8 +1314,8 @@ mod tests {
             node,
             background_execution_registry: gents::BackgroundExecutionRegistry::default(),
             graphql: gents::config_client::GraphqlEndpoint::anonymous("http://127.0.0.1/graphql"),
-            agent_did: Arc::from("did:test:reasoning"),
-            behavior_id: Arc::from("reasoning"),
+            node_did: Arc::from("did:test:reasoning"),
+            agent_id: Arc::from("reasoning"),
             id_counter: Arc::new(AtomicU64::new(1)),
             timeout: Duration::from_secs(5),
             poll_interval: Duration::from_millis(10),

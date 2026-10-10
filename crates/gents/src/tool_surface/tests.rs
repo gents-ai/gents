@@ -6,14 +6,14 @@ fn temp_root(name: &str) -> PathBuf {
     path
 }
 
-fn fingerprint_test_config(root: PathBuf, lsp_config: Option<String>) -> BehaviorToolConfig {
+fn fingerprint_test_config(root: PathBuf, lsp_config: Option<String>) -> AgentToolSurfaceConfig {
     let enable_lsp = lsp_config.is_some();
     let file_tools = if enable_lsp {
         FileToolMode::ReadWrite
     } else {
         FileToolMode::Off
     };
-    BehaviorToolConfig::from_selection(
+    AgentToolSurfaceConfig::from_selection(
         "fingerprint",
         ResolvedToolSelection {
             file_tools,
@@ -28,7 +28,7 @@ fn fingerprint_test_config(root: PathBuf, lsp_config: Option<String>) -> Behavio
 }
 
 #[test]
-fn behavior_and_effective_surface_fingerprints_include_lsp_configuration() {
+fn agent_and_effective_surface_fingerprints_include_lsp_configuration() {
     let root = temp_root("gents-fingerprint-lsp-tools");
     let baseline = fingerprint_test_config(root.clone(), Some("{}".to_string()));
     let configured = fingerprint_test_config(root, Some(r#"{"format_on_write":true}"#.to_string()));
@@ -37,16 +37,16 @@ fn behavior_and_effective_surface_fingerprints_include_lsp_configuration() {
     assert_ne!(
         format!(
             "{:?}",
-            baseline.resolve_with_subagent_tools_for_runtime_availability(
+            baseline.resolve_with_agent_tools_for_runtime_availability(
                 RuntimeToolAvailability::all(),
-                SubagentToolConfig::default(),
+                AgentToolConfig::default(),
             )
         ),
         format!(
             "{:?}",
-            configured.resolve_with_subagent_tools_for_runtime_availability(
+            configured.resolve_with_agent_tools_for_runtime_availability(
                 RuntimeToolAvailability::all(),
-                SubagentToolConfig::default(),
+                AgentToolConfig::default(),
             )
         ),
     );
@@ -58,7 +58,7 @@ fn selection_file_tool_root_clamps_within_operator_root() {
     let scoped_root = operator_root.join("bench").join("results");
     std::fs::create_dir_all(&scoped_root).unwrap();
 
-    let config = BehaviorToolConfig::from_selection(
+    let config = AgentToolSurfaceConfig::from_selection(
         "ops",
         ResolvedToolSelection {
             file_tools: FileToolMode::ReadWrite,
@@ -143,7 +143,7 @@ fn build_tools_does_not_bake_a_per_request_workspace_root() {
     let operator_root = temp_root("gents-operator-workspace-overlay");
     let selection_root = operator_root.join("repo");
     std::fs::create_dir_all(&selection_root).unwrap();
-    let config = BehaviorToolConfig::from_selection(
+    let config = AgentToolSurfaceConfig::from_selection(
         "ops",
         ResolvedToolSelection {
             file_tools: FileToolMode::ReadWrite,
@@ -217,7 +217,7 @@ fn build_tools_does_not_bake_a_per_request_workspace_root() {
 fn command_timeout_ceiling_reaches_selected_bash_tool() {
     let operator_root = temp_root("gents-command-timeout-root");
     let ceiling = ToolCeiling::readonly_at(&operator_root).with_command_timeout_secs(120);
-    let config = BehaviorToolConfig::from_selection(
+    let config = AgentToolSurfaceConfig::from_selection(
         "classifier",
         ResolvedToolSelection {
             file_tools: FileToolMode::Off,
@@ -278,7 +278,7 @@ fn command_timeout_max_ceiling_reaches_selected_bash_tool() {
     let ceiling = ToolCeiling::readonly_at(&operator_root)
         .with_command_timeout_secs(600)
         .with_command_timeout_max_secs(3_600);
-    let config = BehaviorToolConfig::from_selection(
+    let config = AgentToolSurfaceConfig::from_selection(
         "classifier",
         ResolvedToolSelection {
             file_tools: FileToolMode::Off,
@@ -338,7 +338,7 @@ fn selection_file_tool_root_rejects_escape_outside_operator_root() {
     let operator_root = temp_root("gents-operator-root");
     let outside_root = temp_root("gents-outside-root");
 
-    let error = BehaviorToolConfig::from_selection(
+    let error = AgentToolSurfaceConfig::from_selection(
         "ops",
         ResolvedToolSelection {
             file_tools: FileToolMode::ReadOnly,
@@ -397,7 +397,7 @@ fn readonly_selection_file_tool_root_rejects_escape_outside_operator_root() {
     let operator_root = temp_root("gents-operator-root");
     let outside_root = temp_root("gents-outside-root");
 
-    let error = BehaviorToolConfig::from_selection(
+    let error = AgentToolSurfaceConfig::from_selection(
         "ops",
         ResolvedToolSelection {
             file_tools: FileToolMode::ReadOnly,
@@ -456,7 +456,7 @@ fn downgraded_off_selection_ignores_stale_file_tool_root() {
     let stale_root =
         std::env::temp_dir().join(format!("gents-stale-root-{}", uuid::Uuid::new_v4()));
 
-    let config = BehaviorToolConfig::from_selection(
+    let config = AgentToolSurfaceConfig::from_selection(
         "ops",
         ResolvedToolSelection {
             file_tools: FileToolMode::ReadOnly,
@@ -510,7 +510,7 @@ fn downgraded_off_selection_ignores_stale_file_tool_root() {
 
 #[test]
 fn readonly_ceiling_clamps_unrestricted_background_bash_to_registered_tool() {
-    let config = BehaviorToolConfig::from_selection(
+    let config = AgentToolSurfaceConfig::from_selection(
         "ops",
         ResolvedToolSelection {
             file_tools: FileToolMode::ReadWrite,
@@ -568,7 +568,7 @@ fn readonly_ceiling_clamps_unrestricted_background_bash_to_registered_tool() {
 fn selection_without_root_inherits_operator_root() {
     let operator_root = temp_root("gents-operator-root");
 
-    let config = BehaviorToolConfig::from_selection(
+    let config = AgentToolSurfaceConfig::from_selection(
         "ops",
         ResolvedToolSelection {
             file_tools: FileToolMode::ReadWrite,
@@ -636,7 +636,7 @@ fn selection_without_root_inherits_operator_root() {
 fn selection_cli_tools_require_ceiling_entries() {
     let operator_root = temp_root("gents-operator-root");
 
-    let config = BehaviorToolConfig::from_selection(
+    let config = AgentToolSurfaceConfig::from_selection(
         "ops",
         ResolvedToolSelection {
             file_tools: FileToolMode::Off,
@@ -701,7 +701,7 @@ fn selection_cli_tools_expose_only_ceiling_entries() {
         "Search files with ripgrep",
     ));
 
-    let config = BehaviorToolConfig::from_selection(
+    let config = AgentToolSurfaceConfig::from_selection(
         "ops",
         ResolvedToolSelection {
             file_tools: FileToolMode::Off,
@@ -765,7 +765,7 @@ fn selection_cli_tools_expose_only_ceiling_entries() {
 
 #[test]
 fn selection_mcp_service_allowlist_is_deduped() {
-    let config = BehaviorToolConfig::from_selection(
+    let config = AgentToolSurfaceConfig::from_selection(
         "ops",
         ResolvedToolSelection {
             file_tools: FileToolMode::Off,
@@ -827,11 +827,11 @@ fn selection_mcp_service_allowlist_is_deduped() {
 async fn required_mcp_service_needs_agent_scoped_measured_availability() {
     let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    let agent_did = "did:key:required-mcp-test";
+    let node_did = "did:key:required-mcp-test";
     let registry = r#"mutation {
         create_ToolServiceRegistry(input: {
             service_id: "research"
-            agent_did: "did:key:required-mcp-test"
+            node_did: "did:key:required-mcp-test"
             hostname: null
             tailscale_ip: null
             lan_ip: "127.0.0.1"
@@ -843,7 +843,7 @@ async fn required_mcp_service_needs_agent_scoped_measured_availability() {
     let response = node.execute(registry).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
 
-    let config = BehaviorToolConfig::from_selection(
+    let config = AgentToolSurfaceConfig::from_selection(
         "investigator",
         ResolvedToolSelection {
             enable_meta_tools: true,
@@ -867,16 +867,16 @@ async fn required_mcp_service_needs_agent_scoped_measured_availability() {
     .unwrap();
     let active = std::collections::HashSet::from(["investigator".to_string()]);
     let error = config
-        .resolve_with_available_subagent_targets(&node, agent_did, &active, &Default::default())
+        .resolve_with_available_agent_targets(&node, node_did, &active, &Default::default())
         .await
-        .expect_err("missing health measurement must quarantine the behavior");
+        .expect_err("missing health measurement must quarantine the agent");
     assert!(error.to_string().contains("not measured available"));
 
     let health = format!(
         r#"mutation {{
             create_ToolServiceHealthState(input: {{
                 service_id: "research"
-                agent_did: "{agent_did}"
+                node_did: "{node_did}"
                 endpoint: "http://127.0.0.1:9213/mcp"
                 status: "healthy"
                 tool_count: 2
@@ -886,22 +886,22 @@ async fn required_mcp_service_needs_agent_scoped_measured_availability() {
     let response = node.execute(&health).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
     let surface = config
-        .resolve_with_available_subagent_targets(&node, agent_did, &active, &Default::default())
+        .resolve_with_available_agent_targets(&node, node_did, &active, &Default::default())
         .await
-        .expect("healthy required service makes the behavior resolvable");
+        .expect("healthy required service makes the agent resolvable");
     assert!(surface.includes_meta_tools());
     assert_eq!(surface.allowed_mcp_service_ids(), &["research".to_string()]);
 
     let changed_endpoint = r#"mutation {
         update_ToolServiceRegistry(
-            filter: { service_id: { _eq: "research" }, agent_did: { _eq: "did:key:required-mcp-test" } }
+            filter: { service_id: { _eq: "research" }, node_did: { _eq: "did:key:required-mcp-test" } }
             input: { mcp_port: 9214 }
         ) { _docID }
     }"#;
     let response = node.execute(changed_endpoint).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
     let error = config
-        .resolve_with_available_subagent_targets(&node, agent_did, &active, &Default::default())
+        .resolve_with_available_agent_targets(&node, node_did, &active, &Default::default())
         .await
         .expect_err("health for an old endpoint must not satisfy current registry config");
     assert!(error.to_string().contains("not measured available"));
@@ -909,7 +909,7 @@ async fn required_mcp_service_needs_agent_scoped_measured_availability() {
 
 #[test]
 fn background_tool_allowlist_registers_r6_tools() {
-    let config = BehaviorToolConfig::from_selection(
+    let config = AgentToolSurfaceConfig::from_selection(
         "ops",
         ResolvedToolSelection {
             file_tools: FileToolMode::ReadOnly,
@@ -968,7 +968,7 @@ fn background_tool_allowlist_registers_r6_tools() {
 
 #[test]
 fn background_tool_allowlist_rejects_non_backgroundable_tools() {
-    let error = BehaviorToolConfig::from_selection(
+    let error = AgentToolSurfaceConfig::from_selection(
         "ops",
         ResolvedToolSelection {
             file_tools: FileToolMode::ReadOnly,
@@ -1032,7 +1032,7 @@ fn selection_file_tool_root_rejects_symlink_escape_for_missing_child() {
     let symlink_path = operator_root.join("link-out");
     std::os::unix::fs::symlink(&outside_root, &symlink_path).unwrap();
 
-    let error = BehaviorToolConfig::from_selection(
+    let error = AgentToolSurfaceConfig::from_selection(
         "ops",
         ResolvedToolSelection {
             file_tools: FileToolMode::ReadWrite,
@@ -1091,7 +1091,7 @@ async fn defra_query_tool_gated_by_selection() {
     let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
     crate::ensure_runtime_schemas(&node).await.unwrap();
 
-    let enabled = BehaviorToolConfig::from_selection(
+    let enabled = AgentToolSurfaceConfig::from_selection(
         "ops",
         ResolvedToolSelection {
             enable_defra_query: true,
@@ -1106,7 +1106,7 @@ async fn defra_query_tool_gated_by_selection() {
     .unwrap();
     assert!(enabled.tool_names().contains(&"query".to_string()));
 
-    let disabled = BehaviorToolConfig::from_selection(
+    let disabled = AgentToolSurfaceConfig::from_selection(
         "ops",
         ResolvedToolSelection {
             enable_defra_query: false,
@@ -1127,7 +1127,7 @@ async fn context_budget_tool_gated_by_selection() {
     let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
     crate::ensure_runtime_schemas(&node).await.unwrap();
 
-    let enabled = BehaviorToolConfig::from_selection(
+    let enabled = AgentToolSurfaceConfig::from_selection(
         "ops",
         ResolvedToolSelection {
             enable_context_budget: true,
@@ -1142,7 +1142,7 @@ async fn context_budget_tool_gated_by_selection() {
     .unwrap();
     assert!(enabled.tool_names().contains(&"context_budget".to_string()));
 
-    let disabled = BehaviorToolConfig::from_selection(
+    let disabled = AgentToolSurfaceConfig::from_selection(
         "ops",
         ResolvedToolSelection {
             enable_context_budget: false,
@@ -1174,7 +1174,7 @@ async fn write_tools_register_under_declared_names() {
         .await
         .unwrap();
 
-    let surface = BehaviorToolConfig::from_selection(
+    let surface = AgentToolSurfaceConfig::from_selection(
         "ops",
         ResolvedToolSelection {
             enable_defra_query: false,
@@ -1232,7 +1232,7 @@ async fn write_tool_whose_count_field_resolves_no_schema_is_refused_at_registrat
         .await
         .unwrap();
 
-    let surface = BehaviorToolConfig::from_selection(
+    let surface = AgentToolSurfaceConfig::from_selection(
         "ops",
         ResolvedToolSelection {
             enable_defra_query: false,
@@ -1281,7 +1281,7 @@ async fn plugin_only_bindings_are_captured_for_trigger_execution() {
 
     let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    let selected = BehaviorToolConfig::from_selection(
+    let selected = AgentToolSurfaceConfig::from_selection(
         "evidence",
         ResolvedToolSelection {
             plugin_tools: vec![PluginToolRef {
@@ -1327,7 +1327,7 @@ async fn mailbox_surface_registers_stamped_tool_and_captures_owner_lineage() {
     let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
     crate::ensure_runtime_schemas(&node).await.unwrap();
 
-    let granted = BehaviorToolConfig::from_selection(
+    let granted = AgentToolSurfaceConfig::from_selection(
         "ops",
         ResolvedToolSelection {
             enable_defra_query: false,
@@ -1345,7 +1345,7 @@ async fn mailbox_surface_registers_stamped_tool_and_captures_owner_lineage() {
         .tool_names()
         .contains(&crate::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME.to_string()));
     assert!(granted.source_fill_fields().contains("requester_did"));
-    let runtime = ToolRuntimeContext::oneshot_with_agent_did(
+    let runtime = ToolRuntimeContext::oneshot_with_node_did(
         std::sync::Arc::new(node),
         "did:key:z-test-agent",
     );
@@ -1354,10 +1354,10 @@ async fn mailbox_surface_registers_stamped_tool_and_captures_owner_lineage() {
         .iter()
         .any(|tool| tool.name() == crate::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME));
 
-    let without_grant = BehaviorToolConfig::meta_only()
+    let without_grant = AgentToolSurfaceConfig::meta_only()
         .resolve(
             runtime.node.as_ref(),
-            &runtime.agent_did,
+            &runtime.node_did,
             &Default::default(),
         )
         .await
@@ -1376,11 +1376,11 @@ async fn query_tool_is_advertised_and_registered() {
     let identity = std::sync::Arc::new(
         crate::identity::KeyIdentity::load_or_create(keys.path().join("query.key"), None).unwrap(),
     );
-    let agent_did = crate::identity::AgentIdentity::did(&*identity).to_owned();
+    let node_did = crate::identity::NodeIdentity::did(&*identity).to_owned();
     let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
     crate::ensure_runtime_schemas(&node).await.unwrap();
 
-    let surface = BehaviorToolConfig::from_selection(
+    let surface = AgentToolSurfaceConfig::from_selection(
         "ops",
         ResolvedToolSelection {
             enable_defra_query: false,
@@ -1401,7 +1401,7 @@ async fn query_tool_is_advertised_and_registered() {
         Vec::new(),
     )
     .unwrap()
-    .resolve(&node, &agent_did, &Default::default())
+    .resolve(&node, &node_did, &Default::default())
     .await
     .unwrap();
 
@@ -1416,12 +1416,12 @@ async fn query_tool_is_advertised_and_registered() {
     );
 
     let mut runtime =
-        ToolRuntimeContext::oneshot_with_agent_did(std::sync::Arc::new(node), agent_did);
+        ToolRuntimeContext::oneshot_with_node_did(std::sync::Arc::new(node), node_did);
     let error = match surface.build_tools(&runtime).await {
-        Ok(_) => panic!("query requires its principal identity"),
+        Ok(_) => panic!("query requires its node identity"),
         Err(error) => error,
     };
-    assert!(error.to_string().contains("principal identity"));
+    assert!(error.to_string().contains("node identity"));
     runtime.identity = Some(identity);
     let built = surface.build_tools(&runtime).await.unwrap();
     assert!(built
@@ -1433,14 +1433,14 @@ async fn query_tool_is_advertised_and_registered() {
 fn document_tool_config_expands_linked_datastore_surfaces() {
     use crate::document_config::{DatastoreToolSurfaceDocument, QueryToolDecl, SurfaceToolDecl};
 
-    let agent_did = "did:key:zToolExplainSurface";
+    let node_did = "did:key:zToolExplainSurface";
     let selection = tools_document(serde_json::json!({
-        "agent_did": agent_did, "datastore": {"datastore_tool_surface_ids":["research-reads"]}
+        "node_did": node_did, "datastore": {"datastore_tool_surface_ids":["research-reads"]}
     }));
     let surfaces = vec![DatastoreToolSurfaceDocument {
         surface_id: "research-reads".to_string(),
         tags: Vec::new(),
-        agent_did: agent_did.to_string(),
+        node_did: node_did.to_string(),
         display_name: None,
         enabled: true,
         entries: Some(vec![SurfaceToolDecl::Query(QueryToolDecl {
@@ -1453,7 +1453,7 @@ fn document_tool_config_expands_linked_datastore_surfaces() {
         created_at: None,
     }];
 
-    let missing = BehaviorToolConfig::from_tools_document(
+    let missing = AgentToolSurfaceConfig::from_tools_document(
         "reporter",
         &selection,
         &ToolCeiling::meta_only(),
@@ -1464,7 +1464,7 @@ fn document_tool_config_expands_linked_datastore_surfaces() {
         .to_string()
         .contains("missing same-agent DatastoreToolSurface"));
 
-    let config = BehaviorToolConfig::from_tools_document_with_surfaces(
+    let config = AgentToolSurfaceConfig::from_tools_document_with_surfaces(
         "reporter",
         &selection,
         &surfaces,
@@ -1474,7 +1474,7 @@ fn document_tool_config_expands_linked_datastore_surfaces() {
     )
     .unwrap();
     let explanation =
-        config.explain_with_runtime(false, agent_did, &std::collections::HashSet::new());
+        config.explain_with_runtime(false, node_did, &std::collections::HashSet::new());
     assert_eq!(
         explanation.tool_names,
         vec![
@@ -1488,7 +1488,7 @@ fn document_tool_config_expands_linked_datastore_surfaces() {
 fn malformed_write_tool_is_rejected_during_configuration() {
     use crate::document_config::WriteToolDecl;
 
-    let error = BehaviorToolConfig::from_selection(
+    let error = AgentToolSurfaceConfig::from_selection(
         "ops",
         ResolvedToolSelection {
             write_tools: vec![WriteToolDecl {
@@ -1512,7 +1512,7 @@ fn malformed_write_tool_is_rejected_during_configuration() {
 fn write_tool_colliding_with_builtin_is_rejected_during_configuration() {
     use crate::document_config::{WriteToolDecl, WriteToolField};
 
-    let error = BehaviorToolConfig::from_selection(
+    let error = AgentToolSurfaceConfig::from_selection(
         "ops",
         ResolvedToolSelection {
             enable_defra_query: false,
@@ -1541,8 +1541,8 @@ fn write_tool_colliding_with_builtin_is_rejected_during_configuration() {
 fn memory_tool_defaults_disabled() {
     assert!(!ResolvedToolSelection::default().enable_memory);
     assert!(ResolvedToolSelection::default().enable_session_history_tool);
-    assert!(!BehaviorToolConfig::meta_only().goal_creation_requested());
-    assert!(!BehaviorToolConfig::meta_only()
+    assert!(!AgentToolSurfaceConfig::meta_only().goal_creation_requested());
+    assert!(!AgentToolSurfaceConfig::meta_only()
         .static_policy()
         .include_goal_creation());
 }
@@ -1551,7 +1551,7 @@ fn memory_tool_defaults_disabled() {
 async fn explicitly_disabling_goal_tools_removes_them_from_names_and_runtime() {
     let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    let surface = BehaviorToolConfig::from_selection(
+    let surface = AgentToolSurfaceConfig::from_selection(
         "benchmark",
         ResolvedToolSelection {
             enable_meta_tools: true,
@@ -1588,7 +1588,7 @@ async fn explicitly_disabling_goal_tools_removes_them_from_names_and_runtime() {
 async fn goal_tools_are_independent_from_generic_meta_tools() {
     let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    let surface = BehaviorToolConfig::from_selection(
+    let surface = AgentToolSurfaceConfig::from_selection(
         "durable",
         ResolvedToolSelection {
             enable_meta_tools: false,
@@ -1617,7 +1617,7 @@ async fn goal_creation_requires_its_separate_capability() {
     let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
 
-    let without_create = BehaviorToolConfig::from_selection(
+    let without_create = AgentToolSurfaceConfig::from_selection(
         "durable",
         ResolvedToolSelection {
             enable_goal_tools: true,
@@ -1635,7 +1635,7 @@ async fn goal_creation_requires_its_separate_capability() {
         .tool_names()
         .contains(&crate::goal::CREATE_GOAL_TOOL_NAME.to_string()));
 
-    let with_create = BehaviorToolConfig::from_selection(
+    let with_create = AgentToolSurfaceConfig::from_selection(
         "durable",
         ResolvedToolSelection {
             enable_goal_tools: true,
@@ -1669,7 +1669,7 @@ async fn operator_ceiling_can_deny_goal_creation_only() {
     let mut ceiling_policy = ToolPolicySurface::runtime_all();
     ceiling_policy.goal_create = false;
     let ceiling = ToolCeiling::meta_only().with_policy(ceiling_policy);
-    let surface = BehaviorToolConfig::from_selection(
+    let surface = AgentToolSurfaceConfig::from_selection(
         "durable",
         ResolvedToolSelection {
             enable_goal_tools: true,
@@ -1698,7 +1698,7 @@ async fn operator_ceiling_denies_all_goal_mutation_when_base_capability_is_off()
     let mut ceiling_policy = ToolPolicySurface::runtime_all();
     ceiling_policy.goal_tools = false;
     let ceiling = ToolCeiling::meta_only().with_policy(ceiling_policy);
-    let surface = BehaviorToolConfig::from_selection(
+    let surface = AgentToolSurfaceConfig::from_selection(
         "durable",
         ResolvedToolSelection {
             enable_goal_tools: true,
@@ -1727,15 +1727,15 @@ async fn operator_ceiling_denies_all_goal_mutation_when_base_capability_is_off()
 fn defra_query_deny_all_collection_scope_gates_tool_off() {
     use super::policy::{EndpointScope, ToolPolicySurface};
 
-    // Behavior permits collection `a`; ceiling permits only `b`. The disjoint
+    // Agent permits collection `a`; ceiling permits only `b`. The disjoint
     // `Only ∩ Only` meet yields `Only(∅)` — a deny-all the projection must not
     // collapse into allow-all (the `Only(∅) ≠ All` trap).
-    let mut behavior = ToolPolicySurface::runtime_all();
-    behavior.defra_collections = EndpointScope::<String, ()>::only_units(["a".to_string()]);
+    let mut agent = ToolPolicySurface::runtime_all();
+    agent.defra_collections = EndpointScope::<String, ()>::only_units(["a".to_string()]);
     let mut ceiling = ToolPolicySurface::runtime_all();
     ceiling.defra_collections = EndpointScope::<String, ()>::only_units(["b".to_string()]);
 
-    let effective = behavior.meet(&ceiling);
+    let effective = agent.meet(&ceiling);
     assert!(
         effective.defra_collections.is_deny_all(),
         "disjoint collection scopes must meet to Only(empty) = deny-all"
@@ -1751,11 +1751,11 @@ fn defra_query_deny_all_collection_scope_gates_tool_off() {
         "deny-all and all both project to an empty list; the gate is what distinguishes them"
     );
 
-    // Sanity: an All ceiling leaves the behavior's own allowlist intact and the
+    // Sanity: an All ceiling leaves the agent's own allowlist intact and the
     // tool surfaced.
     let mut all_ceiling = ToolPolicySurface::runtime_all();
     all_ceiling.defra_collections = EndpointScope::all();
-    let permissive = behavior.meet(&all_ceiling);
+    let permissive = agent.meet(&all_ceiling);
     assert!(permissive.include_defra_query());
     assert_eq!(
         permissive.defra_query_collections_for_runtime(),
@@ -1893,7 +1893,7 @@ fn absent_groups_grant_nothing_and_goal_controls_are_independent() {
     assert!(independent.enable_goal_creation);
     assert!(
         serde_json::from_value::<crate::document_config::Tools>(serde_json::json!({
-            "tools_id":"legacy", "agent_did":"did:test:test", "tool_policy_version":"v1"
+            "tools_id":"legacy", "node_did":"did:test:test", "tool_policy_version":"v1"
         }))
         .is_err()
     );
@@ -1904,7 +1904,7 @@ async fn session_history_tool_follows_selection() {
     let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
     crate::ensure_runtime_schemas(&node).await.unwrap();
 
-    let disabled = BehaviorToolConfig::from_selection(
+    let disabled = AgentToolSurfaceConfig::from_selection(
         "ops",
         ResolvedToolSelection {
             enable_session_history_tool: false,
@@ -1926,7 +1926,7 @@ async fn session_history_tool_follows_selection() {
         .tool_names()
         .contains(&crate::toolset::SESSION_HISTORY_TOOL_NAME.to_string()));
 
-    let enabled = BehaviorToolConfig::from_selection(
+    let enabled = AgentToolSurfaceConfig::from_selection(
         "ops",
         ResolvedToolSelection {
             enable_session_history_tool: true,
@@ -1950,7 +1950,7 @@ fn tools_document(mut value: serde_json::Value) -> crate::document_config::Tools
         .entry("tools_id")
         .or_insert(serde_json::json!("test-tools"));
     fields
-        .entry("agent_did")
+        .entry("node_did")
         .or_insert(serde_json::json!("did:test:test"));
     serde_json::from_value(value).unwrap()
 }
@@ -1994,7 +1994,7 @@ async fn tool_construction_rechecks_current_workspace_root_policy() {
 
     let mut document = preset_tools_document("runtime-root", "ReadOnly", "Off", false, false);
     document.host.as_mut().unwrap().root = Some(selected_text.clone());
-    let config = BehaviorToolConfig::from_tools_document(
+    let config = AgentToolSurfaceConfig::from_tools_document(
         "runtime-root",
         &document,
         &ToolCeiling::readonly_at(ceiling.path()),
@@ -2051,7 +2051,7 @@ async fn normal_load_rejects_active_blank_root_under_explicit_policy_without_cei
         .as_ref()
         .and_then(|host| host.root.as_ref())
         .is_none());
-    let config = BehaviorToolConfig::from_tools_document(
+    let config = AgentToolSurfaceConfig::from_tools_document(
         "legacy-blank-root",
         &document,
         &ToolCeiling::readonly(),
@@ -2191,7 +2191,7 @@ fn explain_init_package_document_matrix_resolves_expected_surfaces() {
     ];
 
     for case in cases {
-        let config = BehaviorToolConfig::from_tools_document(
+        let config = AgentToolSurfaceConfig::from_tools_document(
             case.name,
             &case.selection,
             &case.ceiling,
@@ -2238,23 +2238,23 @@ fn explain_init_package_document_matrix_resolves_expected_surfaces() {
 }
 
 #[test]
-fn explain_complex_document_combination_filters_subagents_and_groups_surface() {
-    let own_agent_did = "did:test:local";
+fn explain_complex_document_combination_filters_agents_and_groups_surface() {
+    let own_node_did = "did:test:local";
     let selection = tools_document(serde_json::json!({
-        "agent_did":own_agent_did,
+        "node_did":own_node_did,
         "host":{"files":{"mode":"ReadOnly"},"bash":{"mode":"ReadOnly","background_enabled":true}},
         "remote":{"services":[
             {"mcp_service_id":"registry","tool_names":["read"]},
             {"mcp_service_id":"observability","tool_names":["query"]}]},
-        "subagents":{"target_ids":["worker","inactive","remote"],"enabled":true},
+        "agents":{"target_ids":["worker","inactive","remote"],"enabled":true},
         "built_ins":{"enable_memory":true,"enable_context_budget":true},
         "datastore":{"enable_defra_query":true,"defra_query_collections":["AgentRequest","AgentResponse"]}
     }));
-    let targets: Vec<crate::document_config::SubagentTargetDocument> = [
-        ("worker", own_agent_did, "worker", "local worker"),
+    let targets: Vec<crate::document_config::AgentTargetDocument> = [
+        ("worker", own_node_did, "worker", "local worker"),
         (
             "inactive",
-            own_agent_did,
+            own_node_did,
             "inactive",
             "inactive local worker",
         ),
@@ -2266,24 +2266,24 @@ fn explain_complex_document_combination_filters_subagents_and_groups_surface() {
         ),
     ]
     .into_iter()
-    .map(|(name, destination, behavior, description)| {
+    .map(|(name, destination, agent, description)| {
         serde_json::from_value(serde_json::json!({
-            "target_id":name,"agent_did":own_agent_did,"target_agent_did":destination,
-            "behavior_id":behavior,"name":name,"description":description
+            "target_id":name,"node_did":own_node_did,"target_node_did":destination,
+            "agent_id":agent,"name":name,"description":description
         }))
         .unwrap()
     })
     .collect();
     let ceiling = ToolCeiling::readonly_at(temp_root("gents-complex-package-root"));
-    let mut subagents = SubagentToolConfig::from_document(&selection).unwrap();
-    subagents.targets = targets.clone();
+    let mut agents = AgentToolConfig::from_document(&selection).unwrap();
+    agents.targets = targets.clone();
     let mut resolved = ResolvedToolSelection::from_document(&selection).unwrap();
     resolved.backgroundable_tool_names = vec!["bash".into()];
-    let config = BehaviorToolConfig::from_selection_with_subagent_tools(
+    let config = AgentToolSurfaceConfig::from_selection_with_agent_tools(
         "complex",
         resolved,
         &ceiling,
-        subagents,
+        agents,
         Vec::new(),
     )
     .unwrap();
@@ -2292,14 +2292,14 @@ fn explain_complex_document_combination_filters_subagents_and_groups_surface() {
         &["observability".to_string(), "registry".to_string()]
     );
 
-    let active_behavior_ids = std::collections::HashSet::from(["worker".to_string()]);
-    let surface = config.resolve_with_available_subagent_targets_for_mcp_presence(
+    let active_agent_ids = std::collections::HashSet::from(["worker".to_string()]);
+    let surface = config.resolve_with_available_agent_targets_for_mcp_presence(
         true,
-        own_agent_did,
-        &active_behavior_ids,
+        own_node_did,
+        &active_agent_ids,
     );
     assert_eq!(
-        resolve_subagent_target_descriptions(&surface),
+        resolve_agent_target_descriptions(&surface),
         vec![
             ("worker".to_string(), "local worker".to_string()),
             ("remote".to_string(), "remote worker".to_string())
@@ -2330,7 +2330,7 @@ fn explain_complex_document_combination_filters_subagents_and_groups_surface() {
     ));
     assert!(explanation_category_contains(
         &explanation.included,
-        "subagent",
+        "agent",
         "agent_new"
     ));
     assert!(explanation_category_contains(
@@ -2366,7 +2366,7 @@ fn explain_complex_document_combination_filters_subagents_and_groups_surface() {
 
 #[test]
 fn explain_default_surface_calls_out_builtin_reads_and_defra_query_scope() {
-    let config = BehaviorToolConfig::from_selection(
+    let config = AgentToolSurfaceConfig::from_selection(
         "ops",
         ResolvedToolSelection::default(),
         &ToolCeiling::meta_only(),
@@ -2414,7 +2414,7 @@ fn category_complete_ceiling_clamps_builtin_reads() {
     ceiling_policy.defra_query = false;
     ceiling_policy.defra_collections = EndpointScope::None;
 
-    let config = BehaviorToolConfig::from_selection(
+    let config = AgentToolSurfaceConfig::from_selection(
         "ops",
         ResolvedToolSelection::default(),
         &ToolCeiling::meta_only().with_policy(ceiling_policy),
@@ -2439,7 +2439,7 @@ fn category_complete_ceiling_clamps_builtin_reads() {
 
 #[test]
 fn explain_mcp_empty_allowlist_denies_all_services_when_online() {
-    let config = BehaviorToolConfig::from_selection(
+    let config = AgentToolSurfaceConfig::from_selection(
         "ops",
         ResolvedToolSelection {
             enable_meta_tools: true,
@@ -2475,7 +2475,7 @@ async fn memory_tool_requires_selection_opt_in() {
     let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
     crate::ensure_runtime_schemas(&node).await.unwrap();
 
-    let disabled = BehaviorToolConfig::from_selection(
+    let disabled = AgentToolSurfaceConfig::from_selection(
         "ops",
         ResolvedToolSelection {
             enable_memory: false,
@@ -2492,7 +2492,7 @@ async fn memory_tool_requires_selection_opt_in() {
         .tool_names()
         .contains(&crate::toolset::MEMORY_TOOL_NAME.to_string()));
 
-    let enabled = BehaviorToolConfig::from_selection(
+    let enabled = AgentToolSurfaceConfig::from_selection(
         "ops",
         ResolvedToolSelection {
             enable_memory: true,
@@ -2519,7 +2519,7 @@ async fn defra_query_is_off_by_default() {
     crate::ensure_runtime_schemas(&node).await.unwrap();
 
     // Programmatic default surface.
-    let default_surface = BehaviorToolConfig::from_selection(
+    let default_surface = AgentToolSurfaceConfig::from_selection(
         "ops",
         ResolvedToolSelection::default(),
         &ToolCeiling::meta_only(),
@@ -2544,7 +2544,7 @@ async fn defra_query_is_off_by_default() {
     );
 
     // The meta-only baseline excludes it too.
-    let meta_only = BehaviorToolConfig::meta_only()
+    let meta_only = AgentToolSurfaceConfig::meta_only()
         .resolve(&node, "did:key:z-test-agent", &Default::default())
         .await
         .unwrap();
@@ -2564,7 +2564,7 @@ async fn agent_config_alias_expands_to_config_scope() {
     let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
     crate::ensure_runtime_schemas(&node).await.unwrap();
 
-    let surface = BehaviorToolConfig::from_selection(
+    let surface = AgentToolSurfaceConfig::from_selection(
         "ops",
         ResolvedToolSelection {
             enable_defra_query: true,
@@ -2580,7 +2580,7 @@ async fn agent_config_alias_expands_to_config_scope() {
     .unwrap();
 
     assert!(surface.tool_names().contains(&"query".to_string()));
-    for allowed in ["AgentBehavior", "Tools", "Schedule", "AgentContext"] {
+    for allowed in ["Agent", "Tools", "Schedule", "AgentContext"] {
         assert!(
             surface.defra_query_scope.ensure_allowed(allowed).is_ok(),
             "{allowed} must be readable under the agent-config preset"
@@ -2608,7 +2608,7 @@ fn eth_query_tools_advertise_when_selection_has_resolved_queries() {
         rpc_timeout: std::time::Duration::from_secs(30),
         methods: vec!["eth_chainId".to_string(), "eth_blockNumber".to_string()],
     };
-    let config = BehaviorToolConfig::from_selection(
+    let config = AgentToolSurfaceConfig::from_selection(
         "ops",
         ResolvedToolSelection {
             eth_queries: vec![query],
@@ -2631,15 +2631,15 @@ fn eth_query_tools_advertise_when_selection_has_resolved_queries() {
 
 #[test]
 fn explain_expands_eth_tool_ids_from_documents() {
-    let agent_did = "did:key:zExplainEth";
+    let node_did = "did:key:zExplainEth";
     let selection = tools_document(
-        serde_json::json!({"agent_did":agent_did,"integrations":{"eth_tool_ids":["base-read"]}}),
+        serde_json::json!({"node_did":node_did,"integrations":{"eth_tool_ids":["base-read"]}}),
     );
     let eth_tools = vec![crate::document_config::EthToolDocument {
         tool_id: "base-read".to_string(),
         tags: Vec::new(),
         rpc_timeout_secs: None,
-        agent_did: agent_did.to_string(),
+        node_did: node_did.to_string(),
         display_name: Some("base".to_string()),
         enabled: true,
         chain_id: Some(8453),
@@ -2652,7 +2652,7 @@ fn explain_expands_eth_tool_ids_from_documents() {
         key_binding_id: None,
         created_at: None,
     }];
-    let missing = BehaviorToolConfig::from_tools_document(
+    let missing = AgentToolSurfaceConfig::from_tools_document(
         "ops",
         &selection,
         &ToolCeiling::meta_only(),
@@ -2661,7 +2661,7 @@ fn explain_expands_eth_tool_ids_from_documents() {
     .unwrap_err();
     assert!(missing.to_string().contains("missing EthTool"));
 
-    let config = BehaviorToolConfig::from_tools_document_with_surfaces(
+    let config = AgentToolSurfaceConfig::from_tools_document_with_surfaces(
         "ops",
         &selection,
         &[],
@@ -2671,7 +2671,7 @@ fn explain_expands_eth_tool_ids_from_documents() {
     )
     .unwrap();
     let explanation =
-        config.explain_with_runtime(false, agent_did, &std::collections::HashSet::new());
+        config.explain_with_runtime(false, node_did, &std::collections::HashSet::new());
     assert!(
         explanation
             .tool_names
@@ -2699,9 +2699,13 @@ fn artifact_selection_preserves_effect_only_after_bash_and_operator_ceilings() {
         } else {
             ToolCeiling::readwrite(&root)
         };
-        let config =
-            BehaviorToolConfig::from_selection("artifact-test", selection, &ceiling, Vec::new())
-                .unwrap();
+        let config = AgentToolSurfaceConfig::from_selection(
+            "artifact-test",
+            selection,
+            &ceiling,
+            Vec::new(),
+        )
+        .unwrap();
         assert_eq!(config.static_policy().bash.execution_mode, expected);
         assert_eq!(
             config.static_policy().bash.network_mode,
@@ -2746,7 +2750,7 @@ fn flat_presentation_explanation_matches_selected_names_and_ceiling() {
     let mut ceiling_policy =
         ToolPolicySurface::ceiling_with_host_modes(FileToolMode::Off, BashMode::Off);
     ceiling_policy.mcp_services = EndpointScope::<String, ()>::only_units(["selected".to_string()]);
-    let config = BehaviorToolConfig::from_tools_document(
+    let config = AgentToolSurfaceConfig::from_tools_document(
         "flat",
         &document,
         &ToolCeiling::meta_only().with_policy(ceiling_policy),
@@ -2777,16 +2781,23 @@ async fn configured_command_output_caps_bound_bash_and_cli_results() {
         .with_cli_tool(cli_tool("sh", "/bin/sh", "shell"))
         .with_cli_tool(cli_tool("sh_default", "/bin/sh", "shell"));
     let tools: crate::document_config::Tools = serde_json::from_value(serde_json::json!({
-        "tools_id": "capped", "agent_did": "did:key:example",
+        "tools_id": "capped", "node_did": "did:key:example",
         "host": {
             "bash": {"mode": "Unrestricted", "max_output_chars": 10},
             "cli": [{"name": "sh", "max_output_chars": 12}, {"name": "sh_default"}]
         }
     }))
     .unwrap();
-    let config =
-        BehaviorToolConfig::from_tools_documents("capped", &tools, &[], &[], &[], &ceiling, vec![])
-            .unwrap();
+    let config = AgentToolSurfaceConfig::from_tools_documents(
+        "capped",
+        &tools,
+        &[],
+        &[],
+        &[],
+        &ceiling,
+        vec![],
+    )
+    .unwrap();
     let cli_caps = config
         .host_tools()
         .native_tools()
@@ -2853,13 +2864,17 @@ async fn configured_command_output_caps_bound_bash_and_cli_results() {
 #[test]
 fn plugin_tools_come_from_the_tools_document_and_are_named_after_the_plugin() {
     let selection = ResolvedToolSelection::from_document(&tools_document(serde_json::json!({
-        "agent_did": "did:key:zPlugins",
+        "node_did": "did:key:zPlugins",
         "integrations": {"plugins": [{"plugin": "team/lint_diff"}]},
     })))
     .unwrap();
-    let config =
-        BehaviorToolConfig::from_selection("ops", selection, &ToolCeiling::meta_only(), Vec::new())
-            .unwrap();
+    let config = AgentToolSurfaceConfig::from_selection(
+        "ops",
+        selection,
+        &ToolCeiling::meta_only(),
+        Vec::new(),
+    )
+    .unwrap();
     assert!(config
         .static_policy()
         .plugin_tools
@@ -2873,12 +2888,12 @@ fn plugin_tools_come_from_the_tools_document_and_are_named_after_the_plugin() {
 #[test]
 fn a_tools_document_naming_two_plugins_the_same_is_refused() {
     let tools = tools_document(serde_json::json!({
-        "agent_did": "did:key:zPlugins",
+        "node_did": "did:key:zPlugins",
         "integrations": {"plugins": [{"plugin": "a/lint"}, {"plugin": "b/lint"}]},
     }));
     assert!(tools.validate().is_err());
     let tools = tools_document(serde_json::json!({
-        "agent_did": "did:key:zPlugins",
+        "node_did": "did:key:zPlugins",
         "integrations": {"plugins": [{"plugin": "a/lint", "digest": "sha256:nope"}]},
     }));
     assert!(tools.validate().is_err());
@@ -2894,7 +2909,7 @@ fn configured_tool_timeouts_reach_built_tools_within_host_ceilings() {
         .with_cli_tool(cli_tool("rg", "/usr/bin/rg", "search"))
         .with_cli_tool(cli_tool("jq", "/usr/bin/jq", "json"));
     let tools: crate::document_config::Tools = serde_json::from_value(serde_json::json!({
-        "tools_id": "timed", "agent_did": "did:key:example",
+        "tools_id": "timed", "node_did": "did:key:example",
         "host": {
             "files": {"mode": "ReadOnly"},
             "bash": {"mode": "Unrestricted", "background_enabled": true,
@@ -2910,9 +2925,16 @@ fn configured_tool_timeouts_reach_built_tools_within_host_ceilings() {
         "integrations": {"lsp": {"timeout_secs": 40, "max_timeout_secs": 90}}
     }))
     .unwrap();
-    let config =
-        BehaviorToolConfig::from_tools_documents("timed", &tools, &[], &[], &[], &ceiling, vec![])
-            .unwrap();
+    let config = AgentToolSurfaceConfig::from_tools_documents(
+        "timed",
+        &tools,
+        &[],
+        &[],
+        &[],
+        &ceiling,
+        vec![],
+    )
+    .unwrap();
 
     // Authored bash values take effect; the maximum is clamped to the host's 900s.
     let bash = config
@@ -2955,9 +2977,9 @@ fn configured_tool_timeouts_reach_built_tools_within_host_ceilings() {
         (60, 600)
     );
 
-    let surface = config.resolve_with_subagent_tools_for_runtime_availability(
+    let surface = config.resolve_with_agent_tools_for_runtime_availability(
         RuntimeToolAvailability::for_mcp_presence(true),
-        SubagentToolConfig::default(),
+        AgentToolConfig::default(),
     );
     let lsp = surface.lsp_config().expect("lsp selected").action_timeout;
     assert_eq!((lsp.default.as_secs(), lsp.maximum.as_secs()), (40, 90));
@@ -2972,13 +2994,20 @@ fn unconfigured_tool_timeouts_keep_host_defaults() {
         .with_command_timeout_secs(200)
         .with_cli_tool(cli_tool("git", "/usr/bin/git", "git"));
     let tools: crate::document_config::Tools = serde_json::from_value(serde_json::json!({
-        "tools_id": "plain", "agent_did": "did:key:example",
+        "tools_id": "plain", "node_did": "did:key:example",
         "host": {"bash": {"mode": "ReadOnly"}, "cli": [{"name": "git"}]}
     }))
     .unwrap();
-    let config =
-        BehaviorToolConfig::from_tools_documents("plain", &tools, &[], &[], &[], &ceiling, vec![])
-            .unwrap();
+    let config = AgentToolSurfaceConfig::from_tools_documents(
+        "plain",
+        &tools,
+        &[],
+        &[],
+        &[],
+        &ceiling,
+        vec![],
+    )
+    .unwrap();
     let timeouts = config
         .host_tools()
         .native_tools()
@@ -3006,12 +3035,12 @@ async fn bash_schema_advertises_the_configured_background_lifetime() {
     let ceiling = ToolCeiling::readwrite(root);
     for (lifetime, expected) in [(Some(90), 90), (None, 36_000)] {
         let tools: crate::document_config::Tools = serde_json::from_value(serde_json::json!({
-            "tools_id": "timed", "agent_did": "did:key:example",
+            "tools_id": "timed", "node_did": "did:key:example",
             "host": {"bash": {"mode": "Unrestricted", "background_enabled": true,
                 "background_timeout_secs": lifetime}}
         }))
         .unwrap();
-        let config = BehaviorToolConfig::from_tools_documents(
+        let config = AgentToolSurfaceConfig::from_tools_documents(
             "timed",
             &tools,
             &[],
@@ -3046,14 +3075,21 @@ async fn configured_file_limits_reach_file_tools_as_default_and_maximum() {
     }
     let ceiling = ToolCeiling::readwrite(root);
     let tools: crate::document_config::Tools = serde_json::from_value(serde_json::json!({
-        "tools_id": "files", "agent_did": "did:key:example",
+        "tools_id": "files", "node_did": "did:key:example",
         "host": {"files": {"mode": "ReadOnly", "max_read_chars": 10,
             "max_list_entries": 3, "max_matches": 2}}
     }))
     .unwrap();
-    let config =
-        BehaviorToolConfig::from_tools_documents("files", &tools, &[], &[], &[], &ceiling, vec![])
-            .unwrap();
+    let config = AgentToolSurfaceConfig::from_tools_documents(
+        "files",
+        &tools,
+        &[],
+        &[],
+        &[],
+        &ceiling,
+        vec![],
+    )
+    .unwrap();
     let limits = config
         .host_tools()
         .native_tools()
@@ -3097,11 +3133,11 @@ async fn configured_file_limits_reach_file_tools_as_default_and_maximum() {
     }
 
     let unconfigured: crate::document_config::Tools = serde_json::from_value(serde_json::json!({
-        "tools_id": "files", "agent_did": "did:key:example",
+        "tools_id": "files", "node_did": "did:key:example",
         "host": {"files": {"mode": "ReadOnly"}}
     }))
     .unwrap();
-    let config = BehaviorToolConfig::from_tools_documents(
+    let config = AgentToolSurfaceConfig::from_tools_documents(
         "files",
         &unconfigured,
         &[],
@@ -3120,10 +3156,10 @@ async fn configured_file_limits_reach_file_tools_as_default_and_maximum() {
 }
 
 #[test]
-fn meta_only_behavior_does_not_grant_p2p_authority() {
-    let config = BehaviorToolConfig::meta_only();
+fn meta_only_agent_does_not_grant_p2p_authority() {
+    let config = AgentToolSurfaceConfig::meta_only();
     let surface =
-        config.resolve_with_subagent_tools_for_mcp_presence(false, SubagentToolConfig::default());
+        config.resolve_with_agent_tools_for_mcp_presence(false, AgentToolConfig::default());
     assert!(!surface
         .tool_names()
         .contains(&crate::p2p_tool::P2P_TOOL_NAME.to_owned()));
@@ -3135,7 +3171,7 @@ fn meta_only_behavior_does_not_grant_p2p_authority() {
 #[test]
 fn effective_surface_fingerprint_preserves_p2p_mutation_and_collection_scope() {
     let make = |mutations, collections| {
-        BehaviorToolConfig::from_selection(
+        AgentToolSurfaceConfig::from_selection(
             "p2p",
             ResolvedToolSelection {
                 enable_p2p_tool: true,
@@ -3147,7 +3183,7 @@ fn effective_surface_fingerprint_preserves_p2p_mutation_and_collection_scope() {
             Vec::new(),
         )
         .unwrap()
-        .resolve_with_subagent_tools_for_mcp_presence(false, SubagentToolConfig::default())
+        .resolve_with_agent_tools_for_mcp_presence(false, AgentToolConfig::default())
     };
     let read = make(false, vec!["DeploymentNote".into()]);
     let mutate = make(true, vec!["DeploymentNote".into()]);
@@ -3162,7 +3198,7 @@ fn application_write_is_exactly_granted_and_narrowed_by_the_existing_endpoint_me
         application_write_collections: vec!["Shipment".into()],
         ..Default::default()
     };
-    let policy = ToolPolicySurface::from_selection(&grant, &SubagentToolConfig::default());
+    let policy = ToolPolicySurface::from_selection(&grant, &AgentToolConfig::default());
     assert_eq!(
         policy.application_write_collections_for_runtime(&["Shipment".into(), "Other".into()]),
         vec!["Shipment"]
@@ -3174,14 +3210,14 @@ fn application_write_is_exactly_granted_and_narrowed_by_the_existing_endpoint_me
     };
     let narrowed = policy.meet(&ToolPolicySurface::from_selection(
         &other,
-        &SubagentToolConfig::default(),
+        &AgentToolConfig::default(),
     ));
     assert!(narrowed
         .application_write_collections_for_runtime(&grant.application_write_collections)
         .is_empty());
     let empty = ToolPolicySurface::from_selection(
         &ResolvedToolSelection::default(),
-        &SubagentToolConfig::default(),
+        &AgentToolConfig::default(),
     );
     assert!(empty
         .application_write_collections_for_runtime(&grant.application_write_collections)

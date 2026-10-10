@@ -5,14 +5,14 @@ use gents::{DefraWatcher, Watcher, TERMINAL_REDRIVE_CAP};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 
 const CONVERGENCE_CREATED_AT: &str = "2026-03-23T00:00:00Z";
-const OWNER_DID: &str = AGENT_DID;
+const OWNER_DID: &str = NODE_DID;
 const FOREIGN_DID: &str = "did:test:foreign-owner";
 const REQUESTER_DID: &str = "did:test:requester";
 
 #[derive(Debug, Deserialize)]
 struct ConvergenceRow {
     lifecycle_state: RequestLifecycleState,
-    agent_did: String,
+    node_did: String,
     failure_reason: Option<String>,
     terminalized_at: Option<String>,
     terminal_redrive_attempts: Option<i64>,
@@ -22,14 +22,14 @@ async fn create_owned_request(
     node: &EmbeddedNode,
     request_id: &str,
     session_id: &str,
-    agent_did: &str,
+    node_did: &str,
     lifecycle_state: &str,
 ) -> String {
     create_owned_request_with_times(
         node,
         request_id,
         session_id,
-        agent_did,
+        node_did,
         lifecycle_state,
         CONVERGENCE_CREATED_AT,
         CONVERGENCE_CREATED_AT,
@@ -39,7 +39,7 @@ async fn create_owned_request(
 
 async fn seed_owned_request_projection(node: &EmbeddedNode, session_id: &str, request_id: &str) {
     let mut session = support::session_document(session_id, AGENT_NAME, CONVERGENCE_CREATED_AT);
-    session.agent_did = OWNER_DID.into();
+    session.node_did = OWNER_DID.into();
     support::create_session_document(node, &session).await;
     support::seed_session_observation_from_request(node, session_id, request_id, "hello").await;
 }
@@ -49,7 +49,7 @@ async fn create_owned_request_with_times(
     node: &EmbeddedNode,
     request_id: &str,
     session_id: &str,
-    agent_did: &str,
+    node_did: &str,
     lifecycle_state: &str,
     created_at: &str,
     terminalized_at: &str,
@@ -58,7 +58,7 @@ async fn create_owned_request_with_times(
         node,
         request_id,
         session_id,
-        agent_did,
+        node_did,
         lifecycle_state,
         created_at,
         terminalized_at,
@@ -72,7 +72,7 @@ async fn create_routed_owned_request_with_times(
     node: &EmbeddedNode,
     request_id: &str,
     session_id: &str,
-    agent_did: &str,
+    node_did: &str,
     lifecycle_state: &str,
     created_at: &str,
     terminalized_at: &str,
@@ -81,7 +81,7 @@ async fn create_routed_owned_request_with_times(
         node,
         request_id,
         session_id,
-        agent_did,
+        node_did,
         lifecycle_state,
         created_at,
         terminalized_at,
@@ -95,7 +95,7 @@ async fn create_owned_request_with_times_and_requester(
     node: &EmbeddedNode,
     request_id: &str,
     session_id: &str,
-    agent_did: &str,
+    node_did: &str,
     lifecycle_state: &str,
     created_at: &str,
     terminalized_at: &str,
@@ -104,7 +104,7 @@ async fn create_owned_request_with_times_and_requester(
     let is_terminal = RequestLifecycleState::is_terminal_str(Some(lifecycle_state));
     let escaped_request_id = escape_graphql_string(request_id);
     let escaped_session_id = escape_graphql_string(session_id);
-    let escaped_agent_did = escape_graphql_string(agent_did);
+    let escaped_node_did = escape_graphql_string(node_did);
     let escaped_lifecycle_state = escape_graphql_string(lifecycle_state);
     let escaped_created_at = escape_graphql_string(created_at);
     let escaped_terminalized_at = escape_graphql_string(terminalized_at);
@@ -131,9 +131,9 @@ async fn create_owned_request_with_times_and_requester(
             create_AgentRequest(input: {{
                 request_id: "{escaped_request_id}",
                 purpose: "normal",
-                agent_did: "{escaped_agent_did}",
+                node_did: "{escaped_node_did}",
                 {requester_field}
-                behavior_id: "{AGENT_NAME}",
+                agent_id: "{AGENT_NAME}",
                 session_id: "{escaped_session_id}",
                 retry_parent_request: "",
                 retry_root_request: "{escaped_request_id}",
@@ -145,7 +145,7 @@ async fn create_owned_request_with_times_and_requester(
                 created_at: "{escaped_created_at}",
                 retry_count: 0,
                 max_retries: {max_retries},
-                subagent_depth: 0
+                request_hop: 0
                 {terminal_fields}
                 {execution_fields}
             }}) {{ _docID }}
@@ -172,7 +172,7 @@ async fn create_owned_request_with_times_and_requester(
 #[derive(Debug, Deserialize)]
 struct QueueConvergenceRow {
     lifecycle_state: RequestLifecycleState,
-    agent_did: String,
+    node_did: String,
     superseded_by_request: Option<String>,
 }
 
@@ -186,14 +186,14 @@ async fn create_queue_request(
     node: &EmbeddedNode,
     request_id: &str,
     session_id: &str,
-    agent_did: &str,
+    node_did: &str,
     execution_origin: &str,
     input: &str,
     created_at: &str,
 ) -> String {
     let escaped_request_id = escape_graphql_string(request_id);
     let escaped_session_id = escape_graphql_string(session_id);
-    let escaped_agent_did = escape_graphql_string(agent_did);
+    let escaped_node_did = escape_graphql_string(node_did);
     let escaped_execution_origin = escape_graphql_string(execution_origin);
     let input = serde_json::from_str::<Value>(input).expect("request input JSON");
     let input =
@@ -204,8 +204,8 @@ async fn create_queue_request(
             create_AgentRequest(input: {{
                 request_id: "{escaped_request_id}",
                 purpose: "normal",
-                agent_did: "{escaped_agent_did}",
-                behavior_id: "{AGENT_NAME}",
+                node_did: "{escaped_node_did}",
+                agent_id: "{AGENT_NAME}",
                 session_id: "{escaped_session_id}",
                 retry_parent_request: "",
                 retry_root_request: "{escaped_request_id}",
@@ -218,7 +218,7 @@ async fn create_queue_request(
                 created_at: "{escaped_created_at}",
                 retry_count: 0,
                 max_retries: {max_retries},
-                subagent_depth: 0
+                request_hop: 0
             }}) {{ _docID }}
         }}"#,
         max_retries = gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
@@ -246,7 +246,7 @@ async fn fetch_queue_convergence_row(node: &EmbeddedNode, request_id: &str) -> Q
         r#"{{
             AgentRequest(filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }}, limit: 1) {{
                 lifecycle_state
-                agent_did
+                node_did
                 superseded_by_request
             }}
         }}"#
@@ -260,7 +260,7 @@ async fn fetch_convergence_row(node: &EmbeddedNode, request_id: &str) -> Converg
         r#"{{
             AgentRequest(filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }}, limit: 1) {{
                 lifecycle_state
-                agent_did
+                node_did
                 failure_reason
                 terminalized_at
                 terminal_redrive_attempts
@@ -334,7 +334,7 @@ pub(super) async fn single_claimer_watcher_never_claims_foreign_replica() {
     let claimed = watcher.try_fetch_request(&own_doc).await.unwrap();
     let claimed = claimed.expect("own pending request must be claimable (guards a vacuous filter)");
     assert_eq!(
-        claimed.agent_did, OWNER_DID,
+        claimed.node_did, OWNER_DID,
         "the claimable request must be the owner's own"
     );
 }
@@ -397,7 +397,7 @@ pub(super) async fn terminal_convergence_redrive_reasserts_unconverged_terminal(
     assert_eq!(owned.terminal_redrive_attempts, Some(1));
     assert!(owned.terminalized_at.is_some());
     let foreign = fetch_convergence_row(&db.node, "convergence-foreign-failed").await;
-    assert_eq!(foreign.agent_did, FOREIGN_DID);
+    assert_eq!(foreign.node_did, FOREIGN_DID);
     assert_eq!(foreign.lifecycle_state, RequestLifecycleState::Failed);
 
     for _ in 1..TERMINAL_REDRIVE_CAP {
@@ -682,7 +682,7 @@ pub(super) async fn reconcile_coalesce_never_supersedes_foreign_replica() {
 
     let foreign = fetch_queue_convergence_row(&db.node, "convergence-coalesce-foreign").await;
     assert_eq!(
-        foreign.agent_did, FOREIGN_DID,
+        foreign.node_did, FOREIGN_DID,
         "foreign replica ownership unchanged"
     );
     assert_eq!(
@@ -746,7 +746,7 @@ pub(super) async fn drain_wakeups_never_interrupts_foreign_replica() {
     assert_eq!(owner.lifecycle_state, RequestLifecycleState::Interrupted);
 
     let foreign = fetch_queue_convergence_row(&db.node, "convergence-drain-foreign").await;
-    assert_eq!(foreign.agent_did, FOREIGN_DID);
+    assert_eq!(foreign.node_did, FOREIGN_DID);
     assert_eq!(
         foreign.lifecycle_state,
         RequestLifecycleState::Pending,

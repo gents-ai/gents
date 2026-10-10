@@ -11,7 +11,6 @@ pub mod enrollment_store;
 pub mod error_class;
 mod graphql_helpers;
 pub mod intervals;
-pub mod persona_requests;
 pub mod policy;
 pub mod profiles;
 pub mod registry;
@@ -43,10 +42,6 @@ pub use enrollment_store::{
     GraphqlEnrollmentStore, PendingEnrollment,
 };
 pub use error_class::{classify_remote_admin_error, PairingErrorClass};
-pub use persona_requests::{
-    reconcile_persona_tick, run_persona_request_reconciler, GraphqlPersonaRequestStore,
-    PersonaRequestStore, PersonaTickOutcome,
-};
 pub use policy::{
     client_route_collections, client_route_direction, client_route_id, desired_route_is_applied,
     resolve_template_filters, ClientRouteIdentity, PairingDirection, TransportEndpoint,
@@ -63,8 +58,8 @@ pub use templates::{
     builtin_templates, combine_filters, compare_client_replicated_schema, decode_pairing_filters,
     equality_filter, filter_conditions, read_client_replicated_schema, resolve_template,
     scope_filter, single_string_eq, to_replication_filters, Delivery, DidSource, FilterPredicate,
-    PairingFilters, Scope, ScopeTemplate, AGENT_DIRECTORY_COLLECTION, CLIENT_COLLECTIONS,
-    CLIENT_TEMPLATE, CLIENT_TO_RUNTIME_COLLECTIONS,
+    PairingFilters, Scope, ScopeTemplate, CLIENT_COLLECTIONS, CLIENT_TEMPLATE,
+    CLIENT_TO_RUNTIME_COLLECTIONS, NODE_DIRECTORY_COLLECTION,
 };
 pub use trait_def::{
     RemoteP2pAdmin, RemoteP2pAdminError, RemoteP2pAdminResult, RemoteP2pDocument, RemoteReplicator,

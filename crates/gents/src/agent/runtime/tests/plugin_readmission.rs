@@ -1,3 +1,5 @@
+use crate::identity::NodeIdentity;
+
 use super::support::*;
 use super::*;
 
@@ -6,24 +8,24 @@ use std::sync::Arc;
 // Detects a deadlock; not a latency assertion.
 const READINESS_DEADLOCK_GUARD: Duration = Duration::from_secs(30);
 
-async fn wait_for_behavior_state(
+async fn wait_for_agent_state(
     node: &defra_node::EmbeddedNode,
-    agent_did: &str,
-    behavior_id: &str,
-    state: BehaviorReadinessState,
-    reason: Option<BehaviorReadinessUnavailableReason>,
-) -> BehaviorReadinessSnapshot {
+    node_did: &str,
+    agent_id: &str,
+    state: AgentReadinessState,
+    reason: Option<AgentReadinessUnavailableReason>,
+) -> NodeReadinessSnapshot {
     let deadline = tokio::time::Instant::now() + READINESS_DEADLOCK_GUARD;
     loop {
-        let readiness = fetch_behavior_readiness(node, agent_did).await;
-        if readiness.behaviors.iter().any(|entry| {
-            entry.behavior_id == behavior_id && entry.state == state && entry.reason == reason
+        let readiness = fetch_node_readiness(node, node_did).await;
+        if readiness.agents.iter().any(|entry| {
+            entry.agent_id == agent_id && entry.state == state && entry.reason == reason
         }) {
             return readiness;
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "timed out waiting for {behavior_id} to reach {state:?}/{reason:?}; last readiness: {readiness:?}"
+            "timed out waiting for {agent_id} to reach {state:?}/{reason:?}; last readiness: {readiness:?}"
         );
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
@@ -57,17 +59,17 @@ fn install_fixture_plugin(plugin_home: &std::path::Path) -> crate::pack::PackIde
     )
 }
 
-/// #2338 end to end: a behavior whose Tools document names a missing plugin
+/// #2338 end to end: a agent_config whose Tools document names a missing plugin
 /// burns its build budget and is demoted; installing that plugin mid-run —
 /// the plugin store, then the plugin-store record every install path writes
 /// — re-admits it on the next reconcile.
 #[tokio::test]
-async fn demoted_behavior_is_readmitted_when_its_named_plugin_installs_midrun() {
+async fn demoted_agent_is_readmitted_when_its_named_plugin_installs_midrun() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("plugin-readmission"));
     let endpoint = MockModelEndpoint::start("default").unwrap();
-    bind_default_behavior_backend(
+    bind_default_agent_backend(
         node.as_ref(),
         identity.did(),
         "backend-plugin-readmit",
@@ -75,7 +77,7 @@ async fn demoted_behavior_is_readmitted_when_its_named_plugin_installs_midrun() 
     )
     .await;
     let plugin_home = tempfile::tempdir().unwrap();
-    let agent = crate::Gents::from_default_behavior_documents(
+    let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity.clone(),
         crate::agent::DocumentRuntimeOptions {
@@ -91,15 +93,15 @@ async fn demoted_behavior_is_readmitted_when_its_named_plugin_installs_midrun() 
     )
     .await
     .unwrap();
-    let agent_did = identity.did().to_string();
-    let behavior_id = agent.default_behavior_id().to_string();
+    let node_did = identity.did().to_string();
+    let agent_id = agent.default_agent_id().to_string();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let run = tokio::spawn(agent.run(shutdown_rx));
-    wait_for_runtime_process_state(node.as_ref(), &agent_did, "ready").await;
+    wait_for_runtime_process_state(node.as_ref(), &node_did, "ready").await;
 
     let tools: Tools = serde_json::from_value(serde_json::json!({
-        "tools_id": format!("{behavior_id}:tools"),
-        "agent_did": agent_did,
+        "tools_id": format!("{agent_id}:tools"),
+        "node_did": node_did,
         "integrations": {"plugins": [{"plugin": "fixture/list_files"}]},
     }))
     .unwrap();
@@ -109,24 +111,24 @@ async fn demoted_behavior_is_readmitted_when_its_named_plugin_installs_midrun() 
     )
     .await
     .unwrap();
-    let demoted = wait_for_behavior_state(
+    let demoted = wait_for_agent_state(
         node.as_ref(),
-        &agent_did,
-        &behavior_id,
-        BehaviorReadinessState::Unavailable,
-        Some(BehaviorReadinessUnavailableReason::ExecutorStartFailed),
+        &node_did,
+        &agent_id,
+        AgentReadinessState::Unavailable,
+        Some(AgentReadinessUnavailableReason::ExecutorStartFailed),
     )
     .await;
     assert_eq!(
         demoted.process_state,
-        BehaviorReadinessProcessState::Ready,
-        "a demoted behavior degrades readiness without stopping the process"
+        NodeReadinessProcessState::Ready,
+        "a demoted Agent degrades readiness without stopping the process"
     );
 
     let pack = install_fixture_plugin(plugin_home.path());
     crate::pack::record_plugin_store_change(
         &crate::config_client::ConfigAccess::Local(node.clone()),
-        &agent_did,
+        &node_did,
         plugin_home.path(),
         &pack.coordinate,
         Some(&pack),
@@ -134,11 +136,11 @@ async fn demoted_behavior_is_readmitted_when_its_named_plugin_installs_midrun() 
     .await
     .unwrap();
 
-    let readmitted = wait_for_behavior_state(
+    let readmitted = wait_for_agent_state(
         node.as_ref(),
-        &agent_did,
-        &behavior_id,
-        BehaviorReadinessState::Ready,
+        &node_did,
+        &agent_id,
+        AgentReadinessState::Ready,
         None,
     )
     .await;

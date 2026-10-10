@@ -24,15 +24,15 @@ use gents::document_config::{IntegrationTools, Tools};
 use gents::graphql::escape_graphql_string;
 use gents::{
     address_from_secret, attestation_payload, binding_storage_key, encode_attestation,
-    generate_secp256k1_secret, upsert_chain_key_binding, AgentIdentity, ChainKeyBindingDocument,
-    ChainKeyMaterialStore, DocumentRuntimeOptions, Gents, KeyringChainKeyStore, ToolCeiling,
-    KEY_BACKEND_KEYRING,
+    generate_secp256k1_secret, upsert_chain_key_binding, ChainKeyBindingDocument,
+    ChainKeyMaterialStore, DocumentRuntimeOptions, Gents, KeyringChainKeyStore, NodeIdentity,
+    ToolCeiling, KEY_BACKEND_KEYRING,
 };
 use serde_json::{json, Value};
 use tokio::process::{Child, Command};
 
 use crate::eth_tool_live::{bind_eth_target, fetch_tool_calls, live_enabled};
-use crate::support::fixtures::{configure_behavior_tools, test_identity};
+use crate::support::fixtures::{configure_agent_tools, test_identity};
 use crate::support::interrupt::{create_runtime_request, wait_for_runtime_ready, BootedAgent};
 use crate::support::live_inference::{live_target, wait_for_request_terminal};
 use crate::support::test_db;
@@ -372,7 +372,7 @@ async fn start_local_chain() -> LocalChain {
     panic!("could not start a local Anvil or Hardhat JSON-RPC on 127.0.0.1")
 }
 
-async fn provision_key(node: &EmbeddedNode, identity: &dyn AgentIdentity) -> ProvisionedKey {
+async fn provision_key(node: &EmbeddedNode, identity: &dyn NodeIdentity) -> ProvisionedKey {
     let principal_did = identity.did().to_string();
     let binding_id = format!("{BINDING_PREFIX}-{}", uuid::Uuid::new_v4());
     let secret = generate_secp256k1_secret();
@@ -406,7 +406,7 @@ async fn provision_key(node: &EmbeddedNode, identity: &dyn AgentIdentity) -> Pro
         node,
         &ChainKeyBindingDocument {
             binding_id: binding_id.clone(),
-            agent_did: principal_did,
+            node_did: principal_did,
             address: address.clone(),
             key_backend: Some(KEY_BACKEND_KEYRING.to_string()),
             attestation: Some(encode_attestation(&signature)),
@@ -434,7 +434,7 @@ fn graphql_string_list(values: &[String]) -> String {
 
 async fn create_write_eth_tool(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     rpc_url: &str,
     chain_id: u64,
     binding_id: &str,
@@ -480,14 +480,14 @@ async fn create_write_eth_tool(
         "eth_call".to_string(),
     ]);
     let tool_id = escape_graphql_string(TOOL_ID);
-    let agent_did = escape_graphql_string(agent_did);
+    let node_did = escape_graphql_string(node_did);
     let rpc_url = escape_graphql_string(rpc_url);
     let binding_id = escape_graphql_string(binding_id);
     let mutation = format!(
         r#"mutation {{
             create_EthTool(input: {{
                 tool_id: "{tool_id}",
-                agent_did: "{agent_did}",
+                node_did: "{node_did}",
                 display_name: "Local Hardhat",
                 enabled: true,
                 chain_id: {chain_id},
@@ -600,8 +600,8 @@ async fn eth_tool_live_model_writes_on_local_chain() {
     );
 
     let db = test_db("eth-tool-write-live").await;
-    let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity("eth-tool-write-live"));
-    let (agent_did, behavior_id) = bind_eth_target(
+    let identity: Arc<dyn NodeIdentity> = Arc::new(test_identity("eth-tool-write-live"));
+    let (node_did, agent_id) = bind_eth_target(
         db.node.as_ref(),
         identity.as_ref(),
         &target,
@@ -645,7 +645,7 @@ async fn eth_tool_live_model_writes_on_local_chain() {
 
     create_write_eth_tool(
         db.node.as_ref(),
-        &agent_did,
+        &node_did,
         &chain.rpc_url,
         chain.chain_id,
         &key.binding_id,
@@ -653,14 +653,14 @@ async fn eth_tool_live_model_writes_on_local_chain() {
     )
     .await;
 
-    configure_behavior_tools(
+    configure_agent_tools(
         db.node.as_ref(),
-        &agent_did,
-        &behavior_id,
+        &node_did,
+        &agent_id,
         None,
         Tools {
             tools_id: "eth-write-live-tools".to_string(),
-            agent_did: agent_did.clone(),
+            node_did: node_did.clone(),
             integrations: Some(IntegrationTools {
                 eth_tool_ids: Some(vec![TOOL_ID.to_string()]),
                 ..Default::default()
@@ -671,7 +671,7 @@ async fn eth_tool_live_model_writes_on_local_chain() {
     )
     .await;
 
-    let agent = Gents::from_default_behavior_documents(
+    let agent = Gents::from_default_agent_documents(
         db.node.clone(),
         Arc::clone(&identity),
         DocumentRuntimeOptions {
@@ -683,14 +683,14 @@ async fn eth_tool_live_model_writes_on_local_chain() {
     .expect("boot agent");
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
-    wait_for_runtime_ready(db.node.as_ref(), &agent_did).await;
-    let _booted = BootedAgent::new(shutdown_tx, handle, agent_did.clone());
+    wait_for_runtime_ready(db.node.as_ref(), &node_did).await;
+    let _booted = BootedAgent::new(shutdown_tx, handle, node_did.clone());
 
     let transfer_id = "eth-write-live-transfer-1";
     create_runtime_request(
         db.node.as_ref(),
-        &agent_did,
-        &behavior_id,
+        &node_did,
+        &agent_id,
         transfer_id,
         "eth-write-live-session-1",
         &format!(
@@ -729,8 +729,8 @@ async fn eth_tool_live_model_writes_on_local_chain() {
     let increment_id = "eth-write-live-increment-1";
     create_runtime_request(
         db.node.as_ref(),
-        &agent_did,
-        &behavior_id,
+        &node_did,
+        &agent_id,
         increment_id,
         "eth-write-live-session-2",
         "Call the counter_increment tool with no arguments. Then call counter_number and report the value. Then stop.",
@@ -766,7 +766,7 @@ async fn eth_tool_live_model_writes_on_local_chain() {
         "Counter.number must be 1 after increment, got {number_hex}"
     );
 
-    let submissions = fetch_submissions(db.node.as_ref(), &agent_did).await;
+    let submissions = fetch_submissions(db.node.as_ref(), &node_did).await;
     let confirmed = submissions
         .iter()
         .filter(|row| row.get("status").and_then(Value::as_str) == Some("confirmed_success"))

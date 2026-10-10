@@ -4,7 +4,7 @@ use crate::support::fixtures::test_identity;
 use crate::support::interrupt::create_runtime_request;
 use crate::support::live_inference::*;
 use crate::support::test_db;
-use gents::AgentIdentity;
+use gents::NodeIdentity;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -15,9 +15,9 @@ async fn target_backend_probes_healthy_and_completes() {
     target.assert_reachable().await;
 
     let db = test_db("steward-loop-live-smoke").await;
-    let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity("steward-loop-live-smoke"));
+    let identity: Arc<dyn NodeIdentity> = Arc::new(test_identity("steward-loop-live-smoke"));
 
-    let (agent_did, behavior_id) = bind_target(db.node.as_ref(), identity.as_ref(), &target).await;
+    let (node_did, agent_id) = bind_target(db.node.as_ref(), identity.as_ref(), &target).await;
 
     let agent = boot_live_agent(&db, identity)
         .await
@@ -28,8 +28,8 @@ async fn target_backend_probes_healthy_and_completes() {
     let started = std::time::Instant::now();
     create_runtime_request(
         db.node.as_ref(),
-        &agent_did,
-        &behavior_id,
+        &node_did,
+        &agent_id,
         request_id,
         session_id,
         "Reply with the single word: ok",

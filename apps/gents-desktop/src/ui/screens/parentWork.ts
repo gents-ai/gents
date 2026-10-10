@@ -9,7 +9,7 @@ import type {
   SessionSummary,
 } from "@source-inc/gents-desktop-client";
 import { useSelectedNode } from "@/hooks/useClient";
-import { behaviorName } from "./behavior";
+import { agentName } from "./behavior";
 import { scopeKey, summariesByScope, useListedScopes } from "./workers";
 
 export type Sender = {
@@ -17,7 +17,7 @@ export type Sender = {
   /* the sending session as the runtime lists it; null when it is not listed
      on this deployment */
   summary: SessionSummary | null;
-  behaviorName: string | null;
+  agentName: string | null;
 };
 
 export type ParentWork = {
@@ -38,7 +38,7 @@ export const NO_PARENT: ParentWork = {
 export function useParentWork(provenance: SessionProvenanceView | null): ParentWork {
   const deployment = useSelectedNode();
   const sessions = useListedScopes(
-    deployment?.agentDid,
+    deployment?.nodeDid,
     provenance
       ? [
           ...(provenance.startedBy ? [scopeKey(provenance.startedBy)] : []),
@@ -54,7 +54,7 @@ export function useParentWork(provenance: SessionProvenanceView | null): ParentW
       return {
         sessionId: link.sessionId,
         summary,
-        behaviorName: summary ? behaviorName(summary.behaviorId, deployment) : null,
+        agentName: summary ? agentName(summary.agentId, deployment) : null,
       };
     };
     const byRequest = new Map(

@@ -39,12 +39,12 @@ pub(crate) fn goal_continuation_identity(
 /// Prepare the existing continuation DTO without reads, signing, or publication.
 /// `hop` is the session's current hop (Lean `CausalHop` session current hop),
 /// which the transaction owner reads alongside the rest of the session.
-/// Transaction owners resolve behavior and time before staging this request.
+/// Transaction owners resolve the agent and time before staging this request.
 /// Original issuance facts are signed typed input; goal/parent identities stay
 /// on the signed request lineage (trigger edge and parent linkage).
 pub(crate) fn prepare_goal_continuation(
     parent: &AgentRequest,
-    behavior_id: String,
+    agent_id: String,
     goal_id: &str,
     content: &str,
     continuation_sequence: i64,
@@ -71,14 +71,14 @@ pub(crate) fn prepare_goal_continuation(
     };
     let admission =
         gents_protocol::request_admission::AgentRequestAdmissionRecord::runtime_local_control(
-            &parent.agent_did,
+            &parent.node_did,
             &parent.request_id,
         );
     let identity = RequestIdentity {
         requester_did: parent.requester_did.clone(),
         request_id: continuation.request_id,
-        agent_did: parent.agent_did.clone(),
-        behavior_id,
+        node_did: parent.node_did.clone(),
+        agent_id,
         session_id: parent.session_id.clone(),
         content: content.to_string(),
         execution_origin: ExecutionOrigin::Scheduled,
@@ -95,11 +95,11 @@ pub(crate) fn prepare_goal_continuation(
         },
         workspace: Some(WorkspaceLineage {
             workspace_id: parent.workspace_id.clone(),
-            workspace_owner_agent_did: parent.workspace_owner_agent_did.clone(),
+            workspace_owner_node_did: parent.workspace_owner_node_did.clone(),
             workspace_authority: parent.workspace_authority.clone(),
             workspace_seal_hash: parent.workspace_seal_hash.clone(),
         }),
-        subagent: Some(ParentLink {
+        parent: Some(ParentLink {
             depth: hop,
             parent_request_id: parent.request_id.clone(),
             parent_request_doc_id: parent.doc_id.clone(),
@@ -116,11 +116,11 @@ pub(crate) fn prepare_goal_continuation(
     build_request(spec)
 }
 
-/// Resolve the behavior for a goal continuation from its required parent
+/// Resolve the agent for a goal continuation from its required parent
 /// selection. The parent request is the sole authority for this choice.
-pub(crate) async fn goal_continuation_behavior(
+pub(crate) async fn goal_continuation_agent(
     _txn: &crate::config_client::ConfigApplyTxn<'_>,
     parent: &AgentRequest,
 ) -> Result<String> {
-    parent_behavior_id(parent)
+    parent_agent_id(parent)
 }

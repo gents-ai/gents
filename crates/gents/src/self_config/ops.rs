@@ -4,7 +4,7 @@
 //! tools: every write is a transactional read-modify-write on one owned
 //! document, merged through the Lean-fenced patch layer
 //! (`config_client::patch`), validated wholesale, and executed under the
-//! agent DID so DefraDB ACP is the authorization boundary. A future MCP
+//! node DID so DefraDB ACP is the authorization boundary. A future MCP
 //! surface wraps this same core with a DID from the incoming call.
 
 use std::sync::Arc;
@@ -28,28 +28,28 @@ use crate::tool_surface::SelfConfigProcessCeiling;
 use crate::toolset::CommandNetworkMode;
 
 #[derive(Debug, thiserror::Error)]
-#[error("no owned {} with ID {id:?}. This is a document ID, not a behavior name. List this resource to find its exact IDs; behavior get shows a role's selected Context, Tools and profile", target.collection_name())]
+#[error("no owned {} with ID {id:?}. This is a document ID, not an agent name. List this resource to find its exact IDs; agent get shows a role's selected Context, Tools and profile", target.collection_name())]
 pub(super) struct MissingConfigDocument {
     pub target: SelfConfigTarget,
     pub id: String,
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(super) struct MissingBehavior {
-    pub behavior_id: String,
-    /// Behavior IDs whose slug or display name equals the requested ID
+pub(super) struct MissingAgent {
+    pub agent_id: String,
+    /// Agent IDs whose slug or display name equals the requested ID
     /// ignoring case. Never resolved implicitly: display names are mutable
     /// and not unique.
     pub suggestions: Vec<String>,
 }
 
-impl std::fmt::Display for MissingBehavior {
+impl std::fmt::Display for MissingAgent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "unknown behavior_id {:?}; ", self.behavior_id)?;
+        write!(f, "unknown agent_id {:?}; ", self.agent_id)?;
         match self.suggestions.as_slice() {
             [] => write!(
                 f,
-                "copy an exact ID from [\"behavior\",\"list\"] (behavior create returns \"<DID>:<slug>\")"
+                "copy an exact ID from [\"agent\",\"list\"] (agent create returns \"<DID>:<slug>\")"
             ),
             [only] => write!(f, "did you mean {only:?}?"),
             several => write!(f, "did you mean one of {several:?}?"),
@@ -65,13 +65,13 @@ pub const EFFECT_TIMING_NOTE: &str = "Committed changes are picked up by the run
      the resulting generation swap; the current turn keeps its existing \
      configuration.";
 
-/// Self-configuration executor for one behavior of one agent.
+/// Self-configuration executor for one agent of one node.
 #[derive(Clone)]
 pub struct SelfConfigCore {
     node: Arc<EmbeddedNode>,
-    agent_did: String,
-    behavior_id: String,
-    lockout_behavior_id: String,
+    node_did: String,
+    agent_id: String,
+    lockout_agent_id: String,
     no_lockout: bool,
     process_ceiling: SelfConfigProcessCeiling,
     held_grants: OperatorGrants,
@@ -86,10 +86,10 @@ pub struct PatchOutcome {
     pub collection: &'static str,
     /// The target document's logical ID.
     pub target_id: String,
-    /// The behavior the command targeted. A command without an explicit
-    /// behavior targets the invoking one, so the receipt names it rather than
+    /// The agent the command targeted. A command without an explicit
+    /// agent targets the invoking one, so the receipt names it rather than
     /// leaving that default implicit.
-    pub behavior_id: String,
+    pub agent_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub connection: Option<Value>,
     pub created: bool,
@@ -100,16 +100,16 @@ pub struct PatchOutcome {
 
 pub(super) fn target_destination(document: &Map<String, Value>, owner: &str) -> Value {
     json!({
-        "kind": if document.get("target_agent_did").and_then(Value::as_str) == Some(owner) { "local" } else { "remote" },
-        "target_agent_did": document.get("target_agent_did"),
-        "behavior_id": document.get("behavior_id"),
+        "kind": if document.get("target_node_did").and_then(Value::as_str) == Some(owner) { "local" } else { "remote" },
+        "target_node_did": document.get("target_node_did"),
+        "agent_id": document.get("agent_id"),
         "runtime_verified": false
     })
 }
 
 fn connection_view(
     target: SelfConfigTarget,
-    anchor: &BehaviorAnchor,
+    anchor: &AgentAnchor,
     document: &Map<String, Value>,
     owner: &str,
 ) -> Option<Value> {
@@ -118,28 +118,28 @@ fn connection_view(
             let selected_id = anchor.ref_id("inference_profile_id");
             let profile_id = document.get("profile_id")?.as_str()?;
             let selected = selected_id.as_deref() == Some(profile_id);
-            let mut view = json!({"behavior_id": anchor.doc.get("behavior_id"), "selected_profile_id": selected_id, "selected": selected});
+            let mut view = json!({"agent_id": anchor.doc.get("agent_id"), "selected_profile_id": selected_id, "selected": selected});
             if !selected {
-                view["select_with"] = json!({"argv":["behavior","update"],"target_id":anchor.doc.get("behavior_id"),"set":{"inference_profile_id":profile_id}});
+                view["select_with"] = json!({"argv":["agent","update"],"target_id":anchor.doc.get("agent_id"),"set":{"inference_profile_id":profile_id}});
             }
             Some(view)
         }
-        SelfConfigTarget::SubagentTarget => Some(target_destination(document, owner)),
+        SelfConfigTarget::AgentTarget => Some(target_destination(document, owner)),
         _ => None,
     }
 }
 
-/// Behavior anchor loaded fresh per call, so a prior `config behavior` edit
+/// Agent anchor loaded fresh per call, so a prior `config agent` edit
 /// re-pointing `context_id`/`inference_profile_id` is
 /// honored by the next call.
-pub(crate) struct BehaviorAnchor {
+pub(crate) struct AgentAnchor {
     pub(crate) doc: Map<String, Value>,
     pub(crate) context: Map<String, Value>,
     pub(crate) profile: Map<String, Value>,
     pub(crate) execution: Map<String, Value>,
 }
 
-impl BehaviorAnchor {
+impl AgentAnchor {
     pub(crate) fn ref_id(&self, field: &str) -> Option<String> {
         self.doc
             .get(field)
@@ -153,18 +153,18 @@ impl BehaviorAnchor {
 }
 
 impl SelfConfigCore {
-    pub fn new(node: Arc<EmbeddedNode>, agent_did: String, behavior_id: String) -> Result<Self> {
-        if agent_did.trim().is_empty() {
-            bail!("self-config requires a non-empty agent DID (fail closed)");
+    pub fn new(node: Arc<EmbeddedNode>, node_did: String, agent_id: String) -> Result<Self> {
+        if node_did.trim().is_empty() {
+            bail!("self-config requires a non-empty node DID (fail closed)");
         }
-        if behavior_id.trim().is_empty() {
-            bail!("self-config requires a non-empty behavior id (fail closed)");
+        if agent_id.trim().is_empty() {
+            bail!("self-config requires a non-empty agent id (fail closed)");
         }
         Ok(Self {
             node,
-            agent_did,
-            lockout_behavior_id: behavior_id.clone(),
-            behavior_id,
+            node_did,
+            lockout_agent_id: agent_id.clone(),
+            agent_id,
             no_lockout: false,
             process_ceiling: SelfConfigProcessCeiling::default(),
             held_grants: OperatorGrants::default(),
@@ -188,12 +188,12 @@ impl SelfConfigCore {
         &self.held_grants
     }
 
-    /// Preserve the invoking behavior as the recoverability anchor while a
-    /// catalog-authorized command targets a sibling behavior. Candidate reads
+    /// Preserve the invoking agent as the recoverability anchor while a
+    /// catalog-authorized command targets a sibling agent. Candidate reads
     /// still incorporate a shared document being patched, so edits to shared
     /// inference configuration cannot indirectly lock out the invoker.
-    pub(crate) fn with_lockout_behavior_id(mut self, behavior_id: String) -> Self {
-        self.lockout_behavior_id = behavior_id;
+    pub(crate) fn with_lockout_agent_id(mut self, agent_id: String) -> Self {
+        self.lockout_agent_id = agent_id;
         self
     }
 
@@ -209,12 +209,16 @@ impl SelfConfigCore {
         &self.process_ceiling
     }
 
-    pub fn agent_did(&self) -> &str {
-        &self.agent_did
+    pub fn node_did(&self) -> &str {
+        &self.node_did
     }
 
-    pub fn behavior_id(&self) -> &str {
-        &self.behavior_id
+    pub fn agent_id(&self) -> &str {
+        &self.agent_id
+    }
+
+    pub(crate) fn node_handle(&self) -> Arc<EmbeddedNode> {
+        self.node.clone()
     }
 
     pub(crate) fn node(&self) -> &EmbeddedNode {
@@ -222,57 +226,50 @@ impl SelfConfigCore {
     }
 
     pub(crate) fn identity(&self) -> Result<Did> {
-        Did::new(self.agent_did.clone())
-            .map_err(|error| anyhow!("agent DID is not ACP-addressable: {error}"))
+        Did::new(self.node_did.clone())
+            .map_err(|error| anyhow!("node DID is not ACP-addressable: {error}"))
     }
 
-    /// Load and ownership-check the behavior anchor inside the transaction.
-    pub(crate) async fn load_behavior_anchor(
-        &self,
-        txn: &ConfigApplyTxn<'_>,
-    ) -> Result<BehaviorAnchor> {
-        let Some((_doc_id, doc)) = read_owned_doc(
-            txn,
-            SelfConfigTarget::AgentBehavior,
-            &self.agent_did,
-            &self.behavior_id,
-        )
-        .await?
+    /// Load and ownership-check the agent anchor inside the transaction.
+    pub(crate) async fn load_agent_anchor(&self, txn: &ConfigApplyTxn<'_>) -> Result<AgentAnchor> {
+        let Some((_doc_id, doc)) =
+            read_owned_doc(txn, SelfConfigTarget::Agent, &self.node_did, &self.agent_id).await?
         else {
-            return Err(MissingBehavior {
-                behavior_id: self.behavior_id.clone(),
+            return Err(MissingAgent {
+                agent_id: self.agent_id.clone(),
                 suggestions: Vec::new(),
             }
             .into());
         };
-        let owner = doc.get("agent_did").and_then(Value::as_str).unwrap_or("");
-        if owner != self.agent_did {
+        let owner = doc.get("node_did").and_then(Value::as_str).unwrap_or("");
+        if owner != self.node_did {
             bail!(
-                "behavior {} is owned by {owner:?}, not this agent — self-config is self only",
-                self.behavior_id
+                "agent {} is owned by {owner:?}, not this node — self-config is self only",
+                self.agent_id
             );
         }
-        let context_id = doc
-            .get("context_id")
-            .and_then(Value::as_str)
-            .context("behavior context is missing")?;
+        let context = match doc.get("context_id").and_then(Value::as_str) {
+            Some(context_id) => {
+                read_owned_doc(
+                    txn,
+                    SelfConfigTarget::AgentContext,
+                    &self.node_did,
+                    context_id,
+                )
+                .await?
+                .context("context not found")?
+                .1
+            }
+            None => Map::new(),
+        };
         let profile_id = doc
             .get("inference_profile_id")
             .and_then(Value::as_str)
-            .context("behavior inference profile is missing")?;
-        let context = read_owned_doc(
-            txn,
-            SelfConfigTarget::AgentContext,
-            &self.agent_did,
-            context_id,
-        )
-        .await?
-        .context("context not found")?
-        .1;
+            .context("agent inference profile is missing")?;
         let profile = read_owned_doc(
             txn,
             SelfConfigTarget::InferenceProfile,
-            &self.agent_did,
+            &self.node_did,
             profile_id,
         )
         .await?
@@ -283,7 +280,7 @@ impl SelfConfigCore {
                 read_owned_doc(
                     txn,
                     SelfConfigTarget::InferenceExecution,
-                    &self.agent_did,
+                    &self.node_did,
                     id,
                 )
                 .await?
@@ -292,7 +289,7 @@ impl SelfConfigCore {
             }
             None => Map::new(),
         };
-        Ok(BehaviorAnchor {
+        Ok(AgentAnchor {
             doc,
             context,
             profile,
@@ -303,7 +300,7 @@ impl SelfConfigCore {
     /// The write operation: load owned doc → merge patch → validate → publish
     /// the canonical candidate through the common desired-state owner → commit; abort wholesale on any failure.
     ///
-    /// `resolve_unique` maps the behavior anchor to the target document's
+    /// `resolve_unique` maps the agent anchor to the target document's
     /// unique value (e.g. `tools_id` for the tools category).
     /// `allow_create` permits upsert-create (automation only); `on_create`
     /// injects identity/link fields the patch surface deliberately excludes.
@@ -337,10 +334,28 @@ impl SelfConfigCore {
         txn: &ConfigApplyTxn<'_>,
         request: &ApplyRequest<'_>,
     ) -> Result<PatchOutcome> {
-        let anchor = self.load_behavior_anchor(txn).await?;
+        let anchor = self.load_agent_anchor(txn).await?;
+        if self.agent_id != self.lockout_agent_id
+            && matches!(
+                request.target,
+                SelfConfigTarget::Agent | SelfConfigTarget::AgentContext | SelfConfigTarget::Tools
+            )
+        {
+            anyhow::ensure!(
+                !anchor
+                    .doc
+                    .get("tags")
+                    .and_then(Value::as_array)
+                    .is_some_and(|tags| tags
+                        .iter()
+                        .any(|tag| tag.as_str() == Some(super::ENGINEER_AGENT_TAG))),
+                "protected agent cannot be edited through sibling configuration"
+            );
+        }
+
         let unique_value = (request.resolve_unique)(&anchor)?;
 
-        let stored = read_owned_doc(txn, request.target, &self.agent_did, &unique_value).await?;
+        let stored = read_owned_doc(txn, request.target, &self.node_did, &unique_value).await?;
         let (_doc_id, stored_doc, creating) = match stored {
             Some(_) if request.require_create => bail!(
                 "{} {unique_value:?} already exists; use update with its exact ID",
@@ -374,7 +389,7 @@ impl SelfConfigCore {
         .await?;
 
         if self.no_lockout && request.guard_selected_chain {
-            if self.lockout_behavior_id == self.behavior_id {
+            if self.lockout_agent_id == self.agent_id {
                 (request.guard)(&anchor, &stored_doc, &merged)?;
             }
             self.guard_candidate_chain(txn, request.target, &merged)
@@ -384,15 +399,15 @@ impl SelfConfigCore {
         let changed = safe_diff(request.target, &stored_doc, &merged);
         let plan = replacement_plan(request.target, &merged)?;
         apply_desired_state_plan(txn, &plan).await?;
-        let doc_id = read_owned_doc(txn, request.target, &self.agent_did, &unique_value)
+        let doc_id = read_owned_doc(txn, request.target, &self.node_did, &unique_value)
             .await?
             .context("published config is missing")?
             .0;
 
         Ok(PatchOutcome {
             collection: request.target.collection_name(),
-            behavior_id: self.behavior_id.clone(),
-            connection: connection_view(request.target, &anchor, &merged, &self.agent_did),
+            agent_id: self.agent_id.clone(),
+            connection: connection_view(request.target, &anchor, &merged, &self.node_did),
             target_id: unique_value,
             doc_id: Some(doc_id),
             created: creating,
@@ -401,10 +416,10 @@ impl SelfConfigCore {
             effect: if request.target == SelfConfigTarget::DatastoreToolSurface {
                 "Install its collection schemas before selecting this surface. Read tools get, then add its ID to set.datastore.datastore_tool_surface_ids, preserving existing selections. Tools apply after reconciliation to later requests."
             } else if creating && request.target == SelfConfigTarget::InferenceProfile {
-                "Creating a profile does not select it for a behavior. To use it, call behavior update with set.inference_profile_id equal to this target_id. Selecting it preserves the previous profile and its settings. The selection applies to later requests after reconciliation."
+                "Creating a profile does not select it for an agent. To use it, call agent update with set.inference_profile_id equal to this target_id. Selecting it preserves the previous profile and its settings. The selection applies to later requests after reconciliation."
             } else if request.target == SelfConfigTarget::Tools
-                && request.patch.iter().any(|(field, _)| field == "subagents")
-                && merged.get("subagents").is_some_and(|group| {
+                && request.patch.iter().any(|(field, _)| field == "agents")
+                && merged.get("agents").is_some_and(|group| {
                     group.get("enabled").and_then(Value::as_bool) != Some(true)
                         && group
                             .get("target_ids")
@@ -412,7 +427,7 @@ impl SelfConfigCore {
                             .is_some_and(|ids| !ids.is_empty())
                 })
             {
-                "Selected targets are inactive: subagents.enabled is not true. To enable delegation, call tools update with options.behavior set to this behavior_id and set.subagents containing enabled:true plus the existing target_ids. Tools apply after reconciliation to later requests."
+                "Selected targets are inactive: agents.enabled is not true. To enable delegation, call tools update with options.agent set to this agent_id and set.agents containing enabled:true plus the existing target_ids. Tools apply after reconciliation to later requests."
             } else {
                 EFFECT_TIMING_NOTE
             },
@@ -425,26 +440,26 @@ impl SelfConfigCore {
         target: SelfConfigTarget,
         merged: &Map<String, Value>,
     ) -> Result<()> {
-        let behavior = candidate_doc(
+        let agent = candidate_doc(
             txn,
-            self.agent_did(),
-            SelfConfigTarget::AgentBehavior,
-            &self.lockout_behavior_id,
+            self.node_did(),
+            SelfConfigTarget::Agent,
+            &self.lockout_agent_id,
             target,
             merged,
         )
         .await?;
         anyhow::ensure!(
-            behavior.get("enabled").and_then(Value::as_bool) != Some(false),
-            "no-lockout: behavior disabled"
+            agent.get("enabled").and_then(Value::as_bool) != Some(false),
+            "no-lockout: agent disabled"
         );
-        let context_id = behavior
+        let context_id = agent
             .get("context_id")
             .and_then(Value::as_str)
-            .context("no-lockout: Behavior.context_id is missing; preserve the current Context selection or select an existing Context")?;
+            .context("no-lockout: Agent.context_id is missing; preserve the current Context selection or select an existing Context")?;
         let context = candidate_doc(
             txn,
-            self.agent_did(),
+            self.node_did(),
             SelfConfigTarget::AgentContext,
             context_id,
             target,
@@ -457,7 +472,7 @@ impl SelfConfigCore {
             .with_context(|| format!("no-lockout: Context {context_id:?} has no tools_id; select existing Tools that preserve your config access"))?;
         let tools = candidate_doc(
             txn,
-            self.agent_did(),
+            self.node_did(),
             SelfConfigTarget::Tools,
             tools_id,
             target,
@@ -465,15 +480,15 @@ impl SelfConfigCore {
         )
         .await?;
         guard_tools_keep_control(&self.stored_lockout_tools(txn).await?, &tools)?;
-        let profile_id = behavior
+        let profile_id = agent
             .get("inference_profile_id")
             .and_then(Value::as_str)
             .context(
-                "no-lockout: Behavior.inference_profile_id is missing; select an existing profile",
+                "no-lockout: Agent.inference_profile_id is missing; select an existing profile",
             )?;
         let profile = candidate_doc(
             txn,
-            self.agent_did(),
+            self.node_did(),
             SelfConfigTarget::InferenceProfile,
             profile_id,
             target,
@@ -486,7 +501,7 @@ impl SelfConfigCore {
             .context("no-lockout: backend missing")?;
         let backend = candidate_doc(
             txn,
-            self.agent_did(),
+            self.node_did(),
             SelfConfigTarget::InferenceBackend,
             backend_id,
             target,
@@ -502,29 +517,21 @@ impl SelfConfigCore {
 
     /// The invoker's Tools as committed, before this candidate.
     async fn stored_lockout_tools(&self, txn: &ConfigApplyTxn<'_>) -> Result<Map<String, Value>> {
-        let owner = self.agent_did();
+        let owner = self.node_did();
         let read = |target, id: String| async move {
             read_owned_doc(txn, target, owner, &id)
                 .await?
                 .map(|(_, doc)| doc)
                 .context("no-lockout: stored reference chain is incomplete")
         };
-        let behavior = read(
-            SelfConfigTarget::AgentBehavior,
-            self.lockout_behavior_id.clone(),
-        )
-        .await?;
+        let agent = read(SelfConfigTarget::Agent, self.lockout_agent_id.clone()).await?;
         let field = |doc: &Map<String, Value>, name: &str| {
             doc.get(name)
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned)
                 .with_context(|| format!("no-lockout: stored {name} missing"))
         };
-        let context = read(
-            SelfConfigTarget::AgentContext,
-            field(&behavior, "context_id")?,
-        )
-        .await?;
+        let context = read(SelfConfigTarget::AgentContext, field(&agent, "context_id")?).await?;
         read(SelfConfigTarget::Tools, field(&context, "tools_id")?).await
     }
 
@@ -549,9 +556,27 @@ impl SelfConfigCore {
         txn: &ConfigApplyTxn<'_>,
         request: &ApplyRequest<'_>,
     ) -> Result<PatchOutcome> {
-        let anchor = self.load_behavior_anchor(txn).await?;
+        let anchor = self.load_agent_anchor(txn).await?;
+        if self.agent_id != self.lockout_agent_id
+            && matches!(
+                request.target,
+                SelfConfigTarget::Agent | SelfConfigTarget::AgentContext | SelfConfigTarget::Tools
+            )
+        {
+            anyhow::ensure!(
+                !anchor
+                    .doc
+                    .get("tags")
+                    .and_then(Value::as_array)
+                    .is_some_and(|tags| tags
+                        .iter()
+                        .any(|tag| tag.as_str() == Some(super::ENGINEER_AGENT_TAG))),
+                "protected agent cannot be edited through sibling configuration"
+            );
+        }
+
         let unique_value = (request.resolve_unique)(&anchor)?;
-        let stored = read_owned_doc(txn, request.target, &self.agent_did, &unique_value).await?;
+        let stored = read_owned_doc(txn, request.target, &self.node_did, &unique_value).await?;
         let (stored_doc, creating) = match stored {
             Some(_) if request.require_create => bail!(
                 "{} {unique_value:?} already exists; use update with its exact ID",
@@ -582,7 +607,7 @@ impl SelfConfigCore {
         )
         .await?;
         if self.no_lockout && request.guard_selected_chain {
-            if self.lockout_behavior_id == self.behavior_id {
+            if self.lockout_agent_id == self.agent_id {
                 (request.guard)(&anchor, &stored_doc, &merged)?;
             }
             self.guard_candidate_chain(txn, request.target, &merged)
@@ -591,9 +616,9 @@ impl SelfConfigCore {
         validate_desired_state_plan(txn, &replacement_plan(request.target, &merged)?).await?;
         Ok(PatchOutcome {
             collection: request.target.collection_name(),
-            behavior_id: self.behavior_id.clone(),
+            agent_id: self.agent_id.clone(),
             changed: safe_diff(request.target, &stored_doc, &merged),
-            connection: connection_view(request.target, &anchor, &merged, &self.agent_did),
+            connection: connection_view(request.target, &anchor, &merged, &self.node_did),
             target_id: unique_value,
             doc_id: None,
             created: creating,
@@ -639,7 +664,7 @@ pub fn apply_tool_grant_selection(
 pub fn validate_tool_network_selection(network_mode: Option<CommandNetworkMode>) -> Result<()> {
     anyhow::ensure!(
         network_mode.is_none_or(|mode| mode == CommandNetworkMode::Disabled),
-        "config behavior tools may only narrow network_mode to disabled"
+        "config agent tools may only narrow network_mode to disabled"
     );
     Ok(())
 }
@@ -653,14 +678,14 @@ pub(crate) struct ApplyRequest<'a> {
     pub(crate) allow_create: bool,
     pub(crate) require_create: bool,
     pub(crate) guard_selected_chain: bool,
-    pub(crate) resolve_unique: Box<dyn Fn(&BehaviorAnchor) -> Result<String> + Send + Sync + 'a>,
+    pub(crate) resolve_unique: Box<dyn Fn(&AgentAnchor) -> Result<String> + Send + Sync + 'a>,
     pub(crate) on_create:
         Box<dyn Fn(&str, &mut Map<String, Value>) -> Result<()> + Send + Sync + 'a>,
     pub(crate) normalize: NormalizeFn<'a>,
     pub(crate) validate: ValidateFn<'a>,
     /// Invoker-only no-lockout slice over (stored, candidate) target documents.
     pub(crate) guard: Box<
-        dyn Fn(&BehaviorAnchor, &Map<String, Value>, &Map<String, Value>) -> Result<()>
+        dyn Fn(&AgentAnchor, &Map<String, Value>, &Map<String, Value>) -> Result<()>
             + Send
             + Sync
             + 'a,
@@ -670,7 +695,7 @@ pub(crate) struct ApplyRequest<'a> {
 pub(crate) type ValidateFn<'a> = Box<
     dyn for<'b> Fn(
             &'b ConfigApplyTxn<'b>,
-            &'b BehaviorAnchor,
+            &'b AgentAnchor,
             &'b Map<String, Value>,
             &'b Map<String, Value>,
         ) -> futures::future::BoxFuture<'b, Result<()>>
@@ -682,7 +707,7 @@ pub(crate) type ValidateFn<'a> = Box<
 pub(crate) type NormalizeFn<'a> = Box<
     dyn for<'b> Fn(
             &'b ConfigApplyTxn<'b>,
-            &'b BehaviorAnchor,
+            &'b AgentAnchor,
             &'b Map<String, Value>,
             &'b mut Map<String, Value>,
         ) -> futures::future::BoxFuture<'b, Result<()>>
@@ -733,29 +758,28 @@ pub(crate) fn decode_merged<T: serde::de::DeserializeOwned>(
     })
 }
 
-/// Lean `SelfConfig.keepsReach`: the invoking behavior stays enabled and keeps
-/// the Setup tag it had, which routes persona-request protection and desktop
+/// Lean `SelfConfig.keepsReach`: the invoking agent stays enabled and keeps
+/// the Engineer tag it had, which routes agent-request protection and desktop
 /// reachability to the Engineer.
-pub fn guard_behavior_keeps_reach(
+pub fn guard_agent_keeps_reach(
     stored: &Map<String, Value>,
     candidate: &Map<String, Value>,
 ) -> Result<()> {
-    let setup_tag = |doc: &Map<String, Value>| {
+    let engineer_tag = |doc: &Map<String, Value>| {
         doc.get("tags")
             .and_then(Value::as_array)
             .is_some_and(|tags| {
-                tags.iter().any(|tag| {
-                    tag.as_str() == Some(crate::agent::persona_ops::SETUP_STEWARD_BEHAVIOR_TAG)
-                })
+                tags.iter()
+                    .any(|tag| tag.as_str() == Some(crate::self_config::ENGINEER_AGENT_TAG))
             })
     };
     anyhow::ensure!(
         candidate.get("enabled").and_then(Value::as_bool) != Some(false),
-        "no-lockout guard: behavior must remain enabled"
+        "no-lockout guard: agent must remain enabled"
     );
     anyhow::ensure!(
-        !setup_tag(stored) || setup_tag(candidate),
-        "no-lockout guard: the Setup tag must remain on the configurator"
+        !engineer_tag(stored) || engineer_tag(candidate),
+        "no-lockout guard: the Engineer tag must remain on the configurator"
     );
     Ok(())
 }
@@ -774,7 +798,7 @@ pub fn guard_tools_keep_control(
         [
             config.enable_self_config.unwrap_or(false),
             tools
-                .subagents
+                .agents
                 .and_then(|agents| agents.enabled)
                 .unwrap_or(false),
             config.self_config_no_lockout.unwrap_or(false),
@@ -862,7 +886,7 @@ pub fn guard_tools_keep_grants(
     Ok(())
 }
 
-/// Lean `SelfConfig.reselectionKeepsGrants`: the Tools a Context or Behavior
+/// Lean `SelfConfig.reselectionKeepsGrants`: the Tools a Context or Agent
 /// newly selects are bounded like a Tools write from the previously selected
 /// Tools; with no previous selection (a new Context, a clone's copy) like a
 /// Tools write over a document with no grant. Selecting no Tools carries no
@@ -879,7 +903,7 @@ pub fn reselection_keeps_grants(
 }
 
 /// The native side of Lean `SelfConfig.chainKeepsGrants`: resolve the Tools a
-/// Context or Behavior selected before and selects after this write, through
+/// Context or Agent selected before and selects after this write, through
 /// owner-scoped reads in the write's own transaction, and decide through
 /// [`reselection_keeps_grants`]. An unchanged selection passes without reads
 /// (Lean `chain_unchanged_selection_keeps_grants`); a reference to a missing
@@ -894,7 +918,7 @@ pub(crate) async fn guard_reselection_keeps_grants_in_txn(
 ) -> Result<()> {
     let field = match target {
         SelfConfigTarget::AgentContext => "tools_id",
-        SelfConfigTarget::AgentBehavior => "context_id",
+        SelfConfigTarget::Agent => "context_id",
         _ => return Ok(()),
     };
     let selected = |doc: &Map<String, Value>| {
@@ -908,7 +932,7 @@ pub(crate) async fn guard_reselection_keeps_grants_in_txn(
     if before == after {
         return Ok(());
     }
-    let owner = core.agent_did();
+    let owner = core.node_did();
     let before_tools = selected_tools_in_txn(txn, owner, target, before.as_deref()).await?;
     let after_tools = selected_tools_in_txn(txn, owner, target, after.as_deref()).await?;
     reselection_keeps_grants(core.held_grants(), before_tools.as_ref(), after_tools.as_ref())
@@ -963,27 +987,8 @@ async fn context_tools_in_txn(
     }
 }
 
-/// The Tools document a stored Behavior's chain selects, if any.
-pub(crate) async fn behavior_tools_in_txn(
-    txn: &ConfigApplyTxn<'_>,
-    owner: &str,
-    behavior_id: &str,
-) -> Result<Option<Map<String, Value>>> {
-    let Some((_, behavior)) =
-        read_owned_doc(txn, SelfConfigTarget::AgentBehavior, owner, behavior_id).await?
-    else {
-        return Ok(None);
-    };
-    match behavior.get("context_id").and_then(Value::as_str) {
-        Some(context_id) if !context_id.is_empty() => {
-            context_tools_in_txn(txn, owner, context_id).await
-        }
-        _ => Ok(None),
-    }
-}
-
 /// Lean `SelfConfig.authGuard`: the model may not introduce or change a raw
-/// API key, and a principal-OAuth candidate keeps the stored account reference
+/// API key, and a node-OAuth candidate keeps the stored account reference
 /// (none for a non-OAuth backend). A stored or candidate `auth` that does not
 /// decode is rejected.
 pub fn guard_backend_auth(
@@ -1001,9 +1006,9 @@ pub fn guard_backend_auth(
             "raw API keys are operator-managed; select an environment or OAuth reference"
         );
     }
-    if let BackendAuth::PrincipalOAuth { account_ref } = &candidate {
+    if let BackendAuth::NodeOAuth { account_ref } = &candidate {
         let stored_ref = match &stored {
-            BackendAuth::PrincipalOAuth { account_ref } => account_ref.as_ref(),
+            BackendAuth::NodeOAuth { account_ref } => account_ref.as_ref(),
             _ => None,
         };
         anyhow::ensure!(
@@ -1021,7 +1026,7 @@ pub fn guard_backend_choice(
     next: &crate::InferenceBackend,
     default_account: Option<&str>,
 ) -> Result<()> {
-    let BackendAuth::PrincipalOAuth { account_ref } = &next.auth else {
+    let BackendAuth::NodeOAuth { account_ref } = &next.auth else {
         return Ok(());
     };
     let allowed = match current {
@@ -1058,27 +1063,27 @@ pub(crate) async fn guard_backend_choice_in_txn(
         .await?
         .with_context(|| format!("InferenceBackend {next_backend_id:?} not found"))?;
     let default_account = match (&next.auth, next.provider_kind.oauth_provider()) {
-        (BackendAuth::PrincipalOAuth { .. }, Some(provider)) => {
+        (BackendAuth::NodeOAuth { .. }, Some(provider)) => {
             crate::oauth_credential::provider_default_account_ref(txn, owner, provider).await?
         }
         _ => None,
     };
     guard_backend_choice(current.as_ref(), &next, default_account.as_deref())
 }
-/// Compaction summaries run on the compaction's profile, else the behavior's
-/// (`CompactionConfig::inference_profile_id`). A behavior `context_id` or a
+/// Compaction summaries run on the compaction's profile, else the agent's
+/// (`CompactionConfig::inference_profile_id`). An agent `context_id` or a
 /// context `compaction_id` edit that moves that backend is a pick too.
 pub(crate) async fn guard_compaction_choice_in_txn(
     txn: &ConfigApplyTxn<'_>,
     target: SelfConfigTarget,
-    anchor: &BehaviorAnchor,
+    anchor: &AgentAnchor,
     stored: &Map<String, Value>,
     merged: &Map<String, Value>,
 ) -> Result<()> {
     let field = |doc: &Map<String, Value>, name: &str| {
         doc.get(name).and_then(Value::as_str).map(ToOwned::to_owned)
     };
-    let owner = field(&anchor.doc, "agent_did").context("behavior is missing agent_did")?;
+    let owner = field(&anchor.doc, "node_did").context("agent is missing node_did")?;
     let read = |collection: SelfConfigTarget, id: Option<String>, name: &'static str| {
         let owner = owner.clone();
         async move {
@@ -1098,7 +1103,7 @@ pub(crate) async fn guard_compaction_choice_in_txn(
                 (field(merged, "compaction_id"), profile),
             )
         }
-        SelfConfigTarget::AgentBehavior => {
+        SelfConfigTarget::Agent => {
             let context = |doc: &Map<String, Value>| {
                 read(
                     SelfConfigTarget::AgentContext,
@@ -1130,7 +1135,7 @@ pub(crate) async fn guard_compaction_choice_in_txn(
         )
         .await?
         .or(profile)
-        .context("behavior inference profile is missing")?;
+        .context("agent inference profile is missing")?;
         profile_backend_id(txn, &owner, &profile).await
     };
     let (current, next) = (backend(current).await?, backend(next).await?);
@@ -1198,7 +1203,7 @@ async fn candidate_doc(
     }
     Ok(read_owned_doc(txn, wanted, owner, id)
         .await?
-        .with_context(|| format!("candidate chain references missing {} {id:?}; inspect the role with behavior get, then select an existing document or create this dependency before selecting it", wanted.collection_name()))?
+        .with_context(|| format!("candidate chain references missing {} {id:?}; inspect the role with agent get, then select an existing document or create this dependency before selecting it", wanted.collection_name()))?
         .1)
 }
 fn safe_diff(

@@ -277,7 +277,7 @@ struct FanInEvidence {
 
 #[derive(Debug, Clone, Deserialize)]
 struct BackgroundCompletionExpectation {
-    min_completed_subagent_requests: usize,
+    min_completed_caused_requests: usize,
     min_completed_wakes: usize,
     min_acknowledged_notifications: usize,
     #[serde(default)]
@@ -288,8 +288,8 @@ struct BackgroundCompletionExpectation {
 
 #[derive(Debug, Clone)]
 struct BackgroundCompletionEvidence {
-    completed_subagent_request_ids: Vec<String>,
-    failed_subagent_request_ids: Vec<String>,
+    completed_caused_request_ids: Vec<String>,
+    failed_caused_request_ids: Vec<String>,
     completed_wake_request_ids: Vec<String>,
     pending_notifications: usize,
     acknowledged_notifications: usize,
@@ -299,7 +299,7 @@ struct BackgroundCompletionEvidence {
 
 impl BackgroundCompletionEvidence {
     fn satisfies(&self, expected: &BackgroundCompletionExpectation) -> bool {
-        self.completed_subagent_request_ids.len() >= expected.min_completed_subagent_requests
+        self.completed_caused_request_ids.len() >= expected.min_completed_caused_requests
             && self.completed_wake_request_ids.len() >= expected.min_completed_wakes
             && self.acknowledged_notifications >= expected.min_acknowledged_notifications
             && self.pending_notifications <= expected.max_pending_notifications
@@ -436,7 +436,7 @@ fn load_pack_config_with(
     gents::pack::decode_pack_config(
         value,
         Some(&gents::pack::PackInstallOptions {
-            agent_did: VALIDATION_OWNER.into(),
+            node_did: VALIDATION_OWNER.into(),
         }),
         lookup,
         &|_, _, reference| read_pack_sidecar(pack, reference),
@@ -472,7 +472,7 @@ fn scenario_config(manifest: &ScenarioManifest) -> Result<&gents::document_confi
         .context("scenario canonical configuration was not loaded")
 }
 
-/// A Task goal declaration is controller-provisioned, so its behavior needs
+/// A Task goal declaration is controller-provisioned, so its agent needs
 /// only the goal lifecycle tools. Model-facing goal creation must stay off:
 /// granting it would add unrelated authority and make provisioning ownership
 /// ambiguous.
@@ -500,12 +500,12 @@ fn validate_task_goal_declarations(manifest: &ScenarioManifest) -> Result<()> {
             }
         }
 
-        let behavior = config
-            .agent_behaviors
+        let agent = config
+            .agents
             .iter()
-            .find(|behavior| behavior.behavior_id == task.behavior_id)
-            .with_context(|| format!("Task {} references a missing behavior", task.task_id))?;
-        let context = behavior
+            .find(|agent| agent.agent_id == task.agent_id)
+            .with_context(|| format!("Task {} references a missing agent", task.task_id))?;
+        let context = agent
             .context_id
             .as_deref()
             .and_then(|id| {
@@ -514,7 +514,7 @@ fn validate_task_goal_declarations(manifest: &ScenarioManifest) -> Result<()> {
                     .iter()
                     .find(|context| context.context_id == id)
             })
-            .with_context(|| format!("Task {} behavior has no context", task.task_id))?;
+            .with_context(|| format!("Task {} agent has no context", task.task_id))?;
         let tools = context
             .tools_id
             .as_deref()
@@ -551,7 +551,7 @@ fn validate_task_goal_declarations(manifest: &ScenarioManifest) -> Result<()> {
 /// Keep model instructions coupled to the exact tools exposed by the pack.
 ///
 /// A config can be structurally valid while asking the model to call a stale
-/// tool name. These contracts follow Task -> Behavior -> Context -> Tools ->
+/// tool name. These contracts follow Task -> Agent -> Context -> Tools ->
 /// DatastoreToolSurface and require the exact advertised name to occur in the
 /// task or system prompt. Surface collections must also exist in `schemas/`.
 fn validate_prompt_tool_contracts(pack: &Path, manifest: &ScenarioManifest) -> Result<()> {
@@ -573,13 +573,13 @@ fn validate_prompt_tool_contracts(pack: &Path, manifest: &ScenarioManifest) -> R
             .iter()
             .find(|task| task.task_id == contract.task_id)
             .with_context(|| format!("missing Task {}", contract.task_id))?;
-        let behavior_id = task.behavior_id.as_str();
-        let behavior = config
-            .agent_behaviors
+        let agent_id = task.agent_id.as_str();
+        let agent = config
+            .agents
             .iter()
-            .find(|behavior| behavior.behavior_id == behavior_id)
-            .with_context(|| format!("missing AgentBehavior {behavior_id}"))?;
-        let context = behavior
+            .find(|agent| agent.agent_id == agent_id)
+            .with_context(|| format!("missing Agent {agent_id}"))?;
+        let context = agent
             .context_id
             .as_deref()
             .and_then(|id| {
@@ -588,7 +588,7 @@ fn validate_prompt_tool_contracts(pack: &Path, manifest: &ScenarioManifest) -> R
                     .iter()
                     .find(|context| context.context_id == id)
             })
-            .with_context(|| format!("AgentBehavior {behavior_id} has no context"))?;
+            .with_context(|| format!("Agent {agent_id} has no context"))?;
         let tools = context
             .tools_id
             .as_deref()
@@ -694,7 +694,7 @@ fn validate_prompt_tool_contracts(pack: &Path, manifest: &ScenarioManifest) -> R
         for tool_name in &contract.required_tool_names {
             if !advertised.contains(tool_name) {
                 bail!(
-                    "task {} requires tool {tool_name}, but behavior {behavior_id} does not advertise it",
+                    "task {} requires tool {tool_name}, but agent {agent_id} does not advertise it",
                     contract.task_id
                 );
             }
@@ -708,7 +708,7 @@ fn validate_prompt_tool_contracts(pack: &Path, manifest: &ScenarioManifest) -> R
         for collection in &contract.required_query_collections {
             if !query_collections.contains(collection.as_str()) {
                 bail!(
-                    "task {} asks defra_query for {collection}, but behavior {behavior_id} cannot query it",
+                    "task {} asks defra_query for {collection}, but agent {agent_id} cannot query it",
                     contract.task_id
                 );
             }
@@ -945,7 +945,7 @@ fn validate_manifest(manifest: &ScenarioManifest) -> Result<()> {
         }
     }
     if let Some(expected) = &manifest.expect.background_completion {
-        if expected.min_completed_subagent_requests == 0
+        if expected.min_completed_caused_requests == 0
             || expected.min_completed_wakes == 0
             || expected.min_acknowledged_notifications == 0
         {
@@ -978,7 +978,7 @@ struct GraphDependencyInstall<'a> {
     bin: &'a Path,
     home: &'a Path,
     registry: Option<&'a str>,
-    agent_did: &'a str,
+    node_did: &'a str,
     inference_profile_id: &'a str,
     grant_authority: bool,
 }
@@ -999,8 +999,8 @@ async fn install_graph_dependencies(
             package.clone(),
             "--home".to_owned(),
             path_arg(ctx.home),
-            "--agent-did".to_owned(),
-            ctx.agent_did.to_owned(),
+            "--node-did".to_owned(),
+            ctx.node_did.to_owned(),
             "--output".to_owned(),
             "json".to_owned(),
         ];
@@ -1103,7 +1103,7 @@ fn resolve_pack_tool_root(
 /// documents.
 ///
 /// Both signals are strictly later than "serving": the event source only
-/// starts observing once the behaviors behind the triggers are runnable,
+/// starts observing once the agents behind the triggers are runnable,
 /// which needs the pack's backend probed. The per-collection messages are
 /// emitted just before the subscription is opened, so treating either one as
 /// the go-signal can race the first seed. Seeding earlier is silently dropped
@@ -1122,7 +1122,7 @@ async fn wait_for_event_source(log: &Path, collection: &str, deadline: Duration)
         "timed out after {}s waiting for the event source to observe {collection} \
          and open its global Update subscription. \
          The pack's backend may still be unprobed — check {} for \
-         'behavior unavailable after runtime reconcile'.",
+         'agent unavailable after runtime reconcile'.",
         deadline.as_secs(),
         log.display()
     )
@@ -1892,7 +1892,7 @@ async fn verify_stage_provenance(
         r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{
             _docID
             request_id
-            agent_did
+            node_did
             requester_did
             session_id
             lifecycle_state
@@ -2572,7 +2572,7 @@ async fn verify_fan_in(
     graphql: &GraphqlEndpoint,
     expected: &FanInExpectation,
     correlation: &str,
-    agent_did: &str,
+    node_did: &str,
 ) -> Result<Option<FanInEvidence>> {
     for collection in [
         &expected.member_collection,
@@ -2708,12 +2708,12 @@ async fn verify_fan_in(
 
     let request_query = format!(
         r#"{{ AgentRequest(filter: {{
-            agent_did: {{ _eq: "{}" }},
+            node_did: {{ _eq: "{}" }},
             caused_by_trigger_id: {{ _eq: "{}" }},
             caused_by_trigger_kind: {{ _eq: "event" }},
             caused_by_correlation: {{ _eq: "{}" }}
         }}) {{ request_id }} }}"#,
-        escape_graphql_string(agent_did),
+        escape_graphql_string(node_did),
         escape_graphql_string(&expected.consumer_trigger_id),
         escaped_correlation,
     );
@@ -2858,12 +2858,12 @@ async fn verify_fan_in(
 
         let final_request_query = format!(
             r#"{{ AgentRequest(filter: {{
-                agent_did: {{ _eq: "{}" }},
+                node_did: {{ _eq: "{}" }},
                 caused_by_trigger_id: {{ _eq: "{}" }},
                 caused_by_trigger_kind: {{ _eq: "event" }},
                 caused_by_correlation: {{ _eq: "{}" }}
             }}) {{ request_id }} }}"#,
-            escape_graphql_string(agent_did),
+            escape_graphql_string(node_did),
             escape_graphql_string(&verification.final_consumer_trigger_id),
             escaped_correlation,
         );
@@ -3017,7 +3017,7 @@ async fn load_background_completion_evidence(
     bin: &Path,
     home: &Path,
     graphql: &GraphqlEndpoint,
-    agent_did: &str,
+    node_did: &str,
 ) -> Result<BackgroundCompletionEvidence> {
     let status = run_cli_json(
         bin,
@@ -3027,8 +3027,8 @@ async fn load_background_completion_evidence(
             path_arg(home),
             "--graphql".to_string(),
             graphql.to_string(),
-            "--agent-did".to_string(),
-            agent_did.to_string(),
+            "--node-did".to_string(),
+            node_did.to_string(),
         ],
     )
     .await
@@ -3049,15 +3049,15 @@ async fn load_background_completion_evidence(
 
     let query = format!(
         r#"{{
-            AgentRequest(filter: {{ agent_did: {{ _eq: "{}" }} }}) {{
-                request_id lifecycle_state execution_origin subagent_depth input
+            AgentRequest(filter: {{ node_did: {{ _eq: "{}" }} }}) {{
+                request_id lifecycle_state execution_origin request_hop input
             }}
         }}"#,
-        escape_graphql_string(agent_did),
+        escape_graphql_string(node_did),
     );
     let rows = graphql_rows(graphql, "AgentRequest", &query).await?;
-    let mut completed_subagent_request_ids = Vec::new();
-    let mut failed_subagent_request_ids = Vec::new();
+    let mut completed_caused_request_ids = Vec::new();
+    let mut failed_caused_request_ids = Vec::new();
     let mut completed_wake_request_ids = Vec::new();
     for row in rows {
         let request_id = row
@@ -3068,20 +3068,20 @@ async fn load_background_completion_evidence(
             .get("lifecycle_state")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        let subagent_depth = row
-            .get("subagent_depth")
+        let request_hop = row
+            .get("request_hop")
             .and_then(Value::as_u64)
             .unwrap_or_default();
-        if subagent_depth > 0 {
+        if request_hop > 0 {
             match RequestLifecycleState::parse_opt(Some(lifecycle_state)) {
                 Some(RequestLifecycleState::Completed) => {
-                    completed_subagent_request_ids.push(request_id.to_string())
+                    completed_caused_request_ids.push(request_id.to_string())
                 }
                 Some(
                     RequestLifecycleState::Failed
                     | RequestLifecycleState::Dead
                     | RequestLifecycleState::Interrupted,
-                ) => failed_subagent_request_ids.push(request_id.to_string()),
+                ) => failed_caused_request_ids.push(request_id.to_string()),
                 _ => {}
             }
         }
@@ -3101,13 +3101,13 @@ async fn load_background_completion_evidence(
             completed_wake_request_ids.push(request_id.to_string());
         }
     }
-    completed_subagent_request_ids.sort();
-    failed_subagent_request_ids.sort();
+    completed_caused_request_ids.sort();
+    failed_caused_request_ids.sort();
     completed_wake_request_ids.sort();
 
     Ok(BackgroundCompletionEvidence {
-        completed_subagent_request_ids,
-        failed_subagent_request_ids,
+        completed_caused_request_ids,
+        failed_caused_request_ids,
         completed_wake_request_ids,
         pending_notifications: usize_field(&diagnostics, "/pending_notifications")?,
         acknowledged_notifications: usize_field(&diagnostics, "/acknowledged_notifications")?,
@@ -3120,14 +3120,14 @@ async fn await_background_completion(
     bin: &Path,
     home: &Path,
     graphql: &GraphqlEndpoint,
-    agent_did: &str,
+    node_did: &str,
     expected: &BackgroundCompletionExpectation,
     deadline: Duration,
 ) -> Result<BackgroundCompletionEvidence> {
     let started = Instant::now();
     let mut last = None;
     loop {
-        match load_background_completion_evidence(bin, home, graphql, agent_did).await {
+        match load_background_completion_evidence(bin, home, graphql, node_did).await {
             Ok(evidence) => {
                 if evidence.stranded_notifications > expected.max_stranded_notifications {
                     bail!(
@@ -3137,15 +3137,15 @@ async fn await_background_completion(
                         evidence.diagnostics
                     );
                 }
-                if evidence.failed_subagent_request_ids.len()
-                    + evidence.completed_subagent_request_ids.len()
-                    >= expected.min_completed_subagent_requests
-                    && evidence.completed_subagent_request_ids.len()
-                        < expected.min_completed_subagent_requests
+                if evidence.failed_caused_request_ids.len()
+                    + evidence.completed_caused_request_ids.len()
+                    >= expected.min_completed_caused_requests
+                    && evidence.completed_caused_request_ids.len()
+                        < expected.min_completed_caused_requests
                 {
                     bail!(
-                        "background subagents terminalized unsuccessfully: {:?}",
-                        evidence.failed_subagent_request_ids
+                        "background agents terminalized unsuccessfully: {:?}",
+                        evidence.failed_caused_request_ids
                     );
                 }
                 if evidence.satisfies(expected) {
@@ -3291,12 +3291,12 @@ pub(crate) async fn init_pack(args: PackInitArgs) -> Result<()> {
     )
     .await?;
     allow_scenario_folders(&pack, &manifest, &home)?;
-    let agent_did = init
-        .get("agent_did")
+    let node_did = init
+        .get("node_did")
         .and_then(Value::as_str)
         .unwrap_or("unknown");
     println!(
-        "initialized pack {} at {} ({agent_did})",
+        "initialized pack {} at {} ({node_did})",
         manifest.name,
         home.display()
     );
@@ -3438,30 +3438,30 @@ pub(crate) async fn run(args: PackRunArgs) -> Result<()> {
     .await?;
     // `gents init --dangerously-overwrite` empties the home, store included.
     pre_store_with_packs(&home, &args.with_pack)?;
-    let agent_did = init
-        .get("agent_did")
+    let node_did = init
+        .get("node_did")
         .and_then(Value::as_str)
-        .context("init did not return agent_did")?
+        .context("init did not return node_did")?
         .to_string();
     let inference_profile_id = init
         .get("inference_profile_id")
         .and_then(Value::as_str)
         .context("init did not return inference_profile_id")?
         .to_string();
-    let default_behavior_id = init
-        .get("default_behavior_id")
+    let default_agent_id = init
+        .get("default_agent_id")
         .and_then(Value::as_str)
         .filter(|id| !id.trim().is_empty())
-        .context("init did not return default_behavior_id")?;
+        .context("init did not return default_agent_id")?;
     // Scenario homes are initialized with exactly one profile. Bind every
     // declared role explicitly so the scenario remains deterministic without
     // weakening the ordinary multi-slot install contract.
     let staged_pack = stage_scenario_pack(
         &pack,
         &distribution,
-        &agent_did,
+        &node_did,
         &inference_profile_id,
-        default_behavior_id,
+        default_agent_id,
     )?;
 
     for allowed in allow_scenario_folders(&pack, &manifest, &home)? {
@@ -3478,13 +3478,13 @@ pub(crate) async fn run(args: PackRunArgs) -> Result<()> {
 
     // Dependencies install before the node applies the scenario pack, so the
     // pack's documents may name theirs and their plugins are on the host
-    // when the behaviors that call them start.
+    // when the agents that call them start.
     install_graph_dependencies(
         &GraphDependencyInstall {
             bin: &bin,
             home: &home,
             registry: args.registry.as_deref(),
-            agent_did: &agent_did,
+            node_did: &node_did,
             inference_profile_id: &inference_profile_id,
             grant_authority: args.grant_authority,
         },
@@ -3510,7 +3510,7 @@ pub(crate) async fn run(args: PackRunArgs) -> Result<()> {
             Duration::from_secs(manifest.await_timeout_secs),
         )
         .await?;
-        wait_runtime_ready(&graphql, &agent_did, &mut server).await?;
+        wait_runtime_ready(&graphql, &node_did, &mut server).await?;
         println!(
             "runtime  ready; waiting for {} event source collection(s)…",
             observed_collections.len()
@@ -3557,13 +3557,15 @@ pub(crate) async fn run(args: PackRunArgs) -> Result<()> {
 
         let background_completion = match &manifest.expect.background_completion {
             Some(expected) => {
-                println!("background waiting for durable subagent completion acknowledgement…");
+                println!(
+                    "background waiting for durable caused-request completion acknowledgement…"
+                );
                 Some(
                     await_background_completion(
                         &bin,
                         &home,
                         &graphql,
-                        &agent_did,
+                        &node_did,
                         expected,
                         Duration::from_secs(manifest.await_timeout_secs),
                     )
@@ -3577,7 +3579,7 @@ pub(crate) async fn run(args: PackRunArgs) -> Result<()> {
         for collection in manifest.expect.collection_counts.keys() {
             counts.insert(collection.clone(), count_rows(&graphql, collection).await);
         }
-        let signer_identity = gents::identity::commit_signer_identity_for_did(&agent_did)?;
+        let signer_identity = gents::identity::commit_signer_identity_for_did(&node_did)?;
         let provenance = if manifest.expect.signed_provenance {
             let mut evidence = Vec::with_capacity(stages.len());
             for stage in &stages {
@@ -3611,7 +3613,7 @@ pub(crate) async fn run(args: PackRunArgs) -> Result<()> {
         .await
         .context("verifying durable source edges")?;
         let fan_in = match manifest.expect.fan_in.as_ref() {
-            Some(expected) => verify_fan_in(&graphql, expected, &job_id, &agent_did).await?,
+            Some(expected) => verify_fan_in(&graphql, expected, &job_id, &node_did).await?,
             None => None,
         };
         let mut projection_requests = stages.clone();
@@ -3708,7 +3710,7 @@ pub(crate) async fn run(args: PackRunArgs) -> Result<()> {
     let meta = json!({
         "pack": manifest.name,
         "job_id": job_id,
-        "agent_did": agent_did,
+        "node_did": node_did,
         "endpoint": manifest.init.inference_url,
         "model": manifest.init.model_name,
         "elapsed_secs": elapsed.as_secs(),
@@ -3720,8 +3722,8 @@ pub(crate) async fn run(args: PackRunArgs) -> Result<()> {
             "caused_by_source_doc_id": s.caused_by_source_doc_id,
         })).collect::<Vec<_>>(),
         "background_completion": background_completion.as_ref().map(|evidence| json!({
-            "completed_subagent_request_ids": evidence.completed_subagent_request_ids,
-            "failed_subagent_request_ids": evidence.failed_subagent_request_ids,
+            "completed_caused_request_ids": evidence.completed_caused_request_ids,
+            "failed_caused_request_ids": evidence.failed_caused_request_ids,
             "completed_wake_request_ids": evidence.completed_wake_request_ids,
             "pending_notifications": evidence.pending_notifications,
             "acknowledged_notifications": evidence.acknowledged_notifications,
@@ -3790,7 +3792,7 @@ pub(crate) async fn run(args: PackRunArgs) -> Result<()> {
     if let Some(evidence) = &background_completion {
         println!(
             "  background   {} child request(s), {} wake(s), {} acknowledged, {} pending, {} stranded",
-            evidence.completed_subagent_request_ids.len(),
+            evidence.completed_caused_request_ids.len(),
             evidence.completed_wake_request_ids.len(),
             evidence.acknowledged_notifications,
             evidence.pending_notifications,
@@ -3842,14 +3844,14 @@ fn spawn_server_with_pack(
 fn stage_scenario_pack(
     pack: &Path,
     distribution: &gents::pack::PackManifest,
-    agent_did: &str,
+    node_did: &str,
     inference_profile_id: &str,
-    initialized_default_behavior_id: &str,
+    initialized_default_agent_id: &str,
 ) -> Result<tempfile::TempDir> {
     let (mut authored, mut report) = crate::desired_state::load_manifest_root(pack);
     if authored.is_none() {
         (authored, report) =
-            crate::desired_state::load_manifest_root_for_owner(pack, Some(agent_did));
+            crate::desired_state::load_manifest_root_for_owner(pack, Some(node_did));
     }
     anyhow::ensure!(
         authored.is_some(),
@@ -3857,8 +3859,8 @@ fn stage_scenario_pack(
         report.errors
     );
     let mut authored = authored.expect("checked scenario pack configuration");
-    super::super::config::binding::rebind_manifest_to_agent(&mut authored, agent_did, true)?;
-    authored.agent_principal.default_behavior_id = Some(initialized_default_behavior_id.to_owned());
+    super::super::config::binding::rebind_manifest_to_node(&mut authored, node_did, true)?;
+    authored.node.default_agent_id = Some(initialized_default_agent_id.to_owned());
     let bindings = distribution
         .metadata
         .inference_slots
@@ -4065,14 +4067,14 @@ mod tests {
         assert!(report.errors.is_empty(), "{:?}", report.errors);
         let config = config.unwrap();
         assert_eq!(
-            config.agent_principal.default_behavior_id.as_deref(),
+            config.node.default_agent_id.as_deref(),
             Some("did:key:scenario-owner:default"),
         );
         assert!(config
-            .agent_behaviors
+            .agents
             .iter()
-            .all(|behavior| behavior.inference_profile_id == "default-profile"));
-        assert!(config.agent_behaviors.iter().all(|behavior| behavior
+            .all(|agent| agent.inference_profile_id == "default-profile"));
+        assert!(config.agents.iter().all(|agent| agent
             .tags
             .contains(&"gents:pack:documents_fixture".to_owned())));
         assert!(config.inference_profiles.is_empty());
@@ -4080,7 +4082,7 @@ mod tests {
     }
 
     #[test]
-    fn scenario_refuses_a_pack_that_selects_the_default_behavior() {
+    fn scenario_refuses_a_pack_that_selects_the_default_agent() {
         let pack = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../gents/tests/fixtures/packs/documents_fixture");
         let distribution = read_distribution_manifest(&pack).unwrap();
@@ -4100,7 +4102,7 @@ mod tests {
         let config_path = authored_pack.path().join("pack_config.json");
         let mut config: Value =
             serde_json::from_slice(&std::fs::read(&config_path).unwrap()).unwrap();
-        config["agent_principal"]["default_behavior_id"] = json!("fixture-worker");
+        config["node"]["default_agent_id"] = json!("fixture-worker");
         std::fs::write(&config_path, serde_json::to_vec(&config).unwrap()).unwrap();
 
         let error = format!(
@@ -4108,7 +4110,7 @@ mod tests {
             validate_scenario_defaults(authored_pack.path()).unwrap_err()
         );
         assert!(
-            error.contains("must not choose the default behavior"),
+            error.contains("must not choose the default agent"),
             "{error}"
         );
     }
@@ -4213,7 +4215,7 @@ mod tests {
     #[test]
     fn post_apply_server_marker_is_required_before_pack_mutations() {
         assert!(!server_ready_marker(
-            "gents ready runnable_behaviors=1 unavailable_behaviors=0"
+            "gents ready runnable_agents=1 unavailable_agents=0"
         ));
         assert!(server_ready_marker(
             "gents server is running local-only. Press Ctrl-C to stop."
@@ -4302,7 +4304,7 @@ mod tests {
     #[test]
     fn ignores_unrelated_lines() {
         assert!(!observes_collection(
-            "gents behavior started behavior_id=exp-stage1",
+            "gents agent started agent_id=exp-stage1",
             "ExperimentJob"
         ));
     }
@@ -4658,15 +4660,15 @@ mod tests {
     #[test]
     fn background_completion_expectation_requires_the_whole_delivery_path() {
         let expected = BackgroundCompletionExpectation {
-            min_completed_subagent_requests: 2,
+            min_completed_caused_requests: 2,
             min_completed_wakes: 1,
             min_acknowledged_notifications: 2,
             max_pending_notifications: 0,
             max_stranded_notifications: 0,
         };
         let complete = BackgroundCompletionEvidence {
-            completed_subagent_request_ids: vec!["child-1".into(), "child-2".into()],
-            failed_subagent_request_ids: Vec::new(),
+            completed_caused_request_ids: vec!["child-1".into(), "child-2".into()],
+            failed_caused_request_ids: Vec::new(),
             completed_wake_request_ids: vec!["wake-1".into()],
             pending_notifications: 0,
             acknowledged_notifications: 2,

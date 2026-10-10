@@ -49,7 +49,7 @@ impl DefraSessionHook {
         };
         let outcome = match create_goal_for_session(
             &self.node,
-            &self.agent_did,
+            &self.node_did,
             &session_id,
             &parsed.objective,
             parsed.token_budget,
@@ -110,10 +110,10 @@ impl DefraSessionHook {
         let result = if serde_json::from_str::<GetGoalArgs>(args).is_err() {
             super::helpers::json_string(json!({"error": "get_goal expects an empty object"}))
         } else if let Some(mut goal) =
-            load_canonical_goal(&self.node, &self.agent_did, &session_id).await?
+            load_canonical_goal(&self.node, &self.node_did, &session_id).await?
         {
             refresh_goal_usage(&self.node, &goal).await?;
-            goal = load_canonical_goal(&self.node, &self.agent_did, &session_id)
+            goal = load_canonical_goal(&self.node, &self.node_did, &session_id)
                 .await?
                 .unwrap_or(goal);
             crate::tool_output::render(
@@ -165,8 +165,7 @@ impl DefraSessionHook {
                     .await;
             }
         };
-        let Some(goal) = load_canonical_goal(&self.node, &self.agent_did, &session_id).await?
-        else {
+        let Some(goal) = load_canonical_goal(&self.node, &self.node_did, &session_id).await? else {
             let result = super::helpers::json_string(
                 json!({"error": "the current session has no durable goal"}),
             );

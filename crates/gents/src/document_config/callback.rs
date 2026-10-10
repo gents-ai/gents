@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct Callback {
     pub callback_id: String,
-    pub agent_did: String,
+    pub node_did: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub display_name: Option<String>,
@@ -97,7 +97,7 @@ pub enum BuiltInCallback {
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct CallbackBinding {
     pub binding_id: String,
-    pub agent_did: String,
+    pub node_did: String,
     pub event_source_id: String,
     pub callback_id: String,
     /// Exact source field names projected for this invocation. Empty passes no
@@ -134,7 +134,7 @@ pub struct CallbackBinding {
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct CallbackModule {
     pub module_id: String,
-    pub agent_did: String,
+    pub node_did: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub abi_version: Option<i64>,

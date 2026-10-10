@@ -83,7 +83,7 @@ structure QueueEntry where
   orders every requester's requests; this is that request's own authority. -/
   requester : Option Nat := none
   /-- Abstract identity of the request-scoped execution settings the admission
-  carries besides its content: behavior, working directory, selected skills
+  carries besides its content: agent, working directory, selected skills
   and workspace binding. Equal values run under the same configuration. -/
   turnContext : Nat := 0
   deriving DecidableEq, Repr

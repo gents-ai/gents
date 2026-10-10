@@ -29,9 +29,9 @@ use projection::{project_bootstrap_summary, project_client_snapshot, SnapshotGra
 #[derive(Debug, serde::Deserialize)]
 struct StoredInitConfigView {
     #[serde(default)]
-    agent_name: Option<String>,
+    node_name: Option<String>,
     #[serde(default)]
-    agent_did: Option<String>,
+    node_did: Option<String>,
     #[serde(default)]
     tool_ceiling: Option<String>,
     #[serde(default)]
@@ -60,7 +60,7 @@ pub(crate) fn to_hydration_view(
         && rejection_detail.as_deref() == Some(SESSION_OWNERSHIP_MISMATCH);
     SessionHydrationView {
         session_id: progress.session_id.clone(),
-        agent_did: progress.agent_did.clone(),
+        node_did: progress.node_did.clone(),
         phase: if ownership_refused {
             "unreadable".to_string()
         } else {
@@ -78,18 +78,18 @@ pub(crate) fn to_hydration_view(
 }
 
 const UNREADABLE_OWNERSHIP_REASON: &str =
-    "The agent reports that this session belongs to another requester, so this client cannot read it.";
+    "The node reports that this session belongs to another requester, so this client cannot read it.";
 
 /// A session whose replicated header already shows this client cannot read
 /// it. No hydration request is made for it (`SessionHydration.canStart`).
 pub(crate) fn unreadable_hydration_view(
     session_id: &str,
-    agent_did: &str,
+    node_did: &str,
     reason: &str,
 ) -> SessionHydrationView {
     SessionHydrationView {
         session_id: session_id.to_string(),
-        agent_did: agent_did.to_string(),
+        node_did: node_did.to_string(),
         phase: "unreadable".to_string(),
         merged_count: 0,
         covered_count: 0,
@@ -136,10 +136,10 @@ pub(crate) fn system_time_rfc3339(value: Option<SystemTime>) -> Option<String> {
 }
 
 pub async fn build_bootstrap_summary() -> Result<DesktopBootstrapSummary, String> {
-    let agent_home = gents_desktop_core::local_runtime::default_agent_home()
+    let node_home = gents_desktop_core::local_runtime::default_node_home()
         .map_err(|error| error.to_string())?;
     let desktop_paths = DesktopPaths::discover().map_err(|error| error.to_string())?;
-    let full = build_bootstrap_summary_raw(&desktop_paths, Some(agent_home.as_path())).await?;
+    let full = build_bootstrap_summary_raw(&desktop_paths, Some(node_home.as_path())).await?;
     Ok(project_bootstrap_summary(full, SnapshotGrants::all()))
 }
 
@@ -147,31 +147,31 @@ pub async fn build_bootstrap_summary_for_policy(
     policy: &ResolvedBridgePolicy,
 ) -> Result<DesktopBootstrapSummary, String> {
     let full =
-        build_bootstrap_summary_raw(&policy.desktop_paths, policy.agent_home.as_deref()).await?;
+        build_bootstrap_summary_raw(&policy.desktop_paths, policy.node_home.as_deref()).await?;
     Ok(project_bootstrap_summary(full, policy.snapshot_grants))
 }
 
 async fn build_bootstrap_summary_raw(
     desktop_paths: &DesktopPaths,
-    agent_home: Option<&Path>,
+    node_home: Option<&Path>,
 ) -> Result<DesktopBootstrapSummary, String> {
     let peer_records = load_peer_records(&desktop_paths.peer_directory_path())
         .await
         .map_err(|error| error.to_string())?;
-    let init = agent_home.and_then(read_stored_init_config);
-    let agent_home_display = agent_home
+    let init = node_home.and_then(read_stored_init_config);
+    let node_home_display = node_home
         .map(|p| p.display().to_string())
         .unwrap_or_default();
-    let agent_home_exists = agent_home.map(|p| p.exists()).unwrap_or(false);
+    let node_home_exists = node_home.map(|p| p.exists()).unwrap_or(false);
 
     Ok(DesktopBootstrapSummary {
-        default_agent_home: agent_home_display,
-        init_agent_name: init
+        default_node_home: node_home_display,
+        init_node_name: init
             .as_ref()
-            .and_then(|config| normalize_optional(config.agent_name.as_deref())),
-        init_agent_did: init
+            .and_then(|config| normalize_optional(config.node_name.as_deref())),
+        init_node_did: init
             .as_ref()
-            .and_then(|config| normalize_optional(config.agent_did.as_deref())),
+            .and_then(|config| normalize_optional(config.node_did.as_deref())),
         init_tool_ceiling: init
             .as_ref()
             .and_then(|config| normalize_optional(config.tool_ceiling.as_deref())),
@@ -182,7 +182,7 @@ async fn build_bootstrap_summary_raw(
         peer_directory_path: desktop_paths.peer_directory_path().display().to_string(),
         node_data_dir: desktop_paths.node_data_dir().display().to_string(),
         diagnostics_hint: crate::logging::diagnostics_hint(desktop_paths.root()),
-        agent_home_exists,
+        node_home_exists,
         desktop_home_exists: desktop_paths.root().exists(),
         peer_directory_exists: desktop_paths.peer_directory_path().exists(),
         client_state_exists: desktop_paths.client_state_exists(),
@@ -191,7 +191,7 @@ async fn build_bootstrap_summary_raw(
             .map(|peer| SavedPeerView {
                 peer_id: peer.peer_id.clone(),
                 label: peer.label.clone(),
-                agent_did: peer.agent_did.clone(),
+                node_did: peer.node_did.clone(),
                 addr: peer.addr.clone(),
                 source: peer.source.clone(),
                 graphql: peer.graphql.clone(),
@@ -200,8 +200,8 @@ async fn build_bootstrap_summary_raw(
     })
 }
 
-fn read_stored_init_config(agent_home: &std::path::Path) -> Option<StoredInitConfigView> {
-    let bytes = std::fs::read(agent_home.join("init.json")).ok()?;
+fn read_stored_init_config(node_home: &std::path::Path) -> Option<StoredInitConfigView> {
+    let bytes = std::fs::read(node_home.join("init.json")).ok()?;
     serde_json::from_slice(&bytes).ok()
 }
 
@@ -209,7 +209,7 @@ fn read_stored_init_config(agent_home: &std::path::Path) -> Option<StoredInitCon
 mod runtime_tasks;
 #[cfg(test)]
 use runtime_tasks::{recent_runs_for_task_views, session_summaries, task_run_history};
-use runtime_tasks::{request_matches_agent, source_matches_agent};
+use runtime_tasks::{request_matches_node, source_matches_node};
 
 #[path = "snapshot/runtime.rs"]
 mod runtime;
@@ -226,11 +226,11 @@ pub use session::attach_last_request_context;
 pub use session::build_session_live_delta;
 #[cfg(test)]
 pub(crate) use session::build_session_live_delta_from_store;
-pub use session::build_session_snapshot_for_agent_with_transcript;
+pub use session::build_session_snapshot_for_node_with_transcript;
 #[cfg(test)]
 pub use session::build_session_snapshot_from_store;
 #[cfg(test)]
-pub use session::build_session_snapshot_from_store_for_agent;
+pub use session::build_session_snapshot_from_store_for_node;
 
 pub async fn build_client_snapshot_with_grants(
     core: Option<&Arc<ClientCore>>,
@@ -239,13 +239,13 @@ pub async fn build_client_snapshot_with_grants(
 ) -> Result<DesktopClientSnapshot, String> {
     let bootstrap = match policy {
         Some(policy) => {
-            build_bootstrap_summary_raw(&policy.desktop_paths, policy.agent_home.as_deref()).await?
+            build_bootstrap_summary_raw(&policy.desktop_paths, policy.node_home.as_deref()).await?
         }
         None => {
-            let agent_home = gents_desktop_core::local_runtime::default_agent_home()
+            let node_home = gents_desktop_core::local_runtime::default_node_home()
                 .map_err(|error| error.to_string())?;
             let desktop_paths = DesktopPaths::discover().map_err(|error| error.to_string())?;
-            build_bootstrap_summary_raw(&desktop_paths, Some(agent_home.as_path())).await?
+            build_bootstrap_summary_raw(&desktop_paths, Some(node_home.as_path())).await?
         }
     };
     let client = match core {

@@ -1,4 +1,4 @@
-/* A call that started or messaged another session — a subagent — or ran a
+/* A call that started or messaged another session — a worker — or ran a
    background process, as a row in the transcript's activity block: what the
    agent asked, the receipt, and where that work is now. Replaces the plain
    tool step for those calls. The words come from the contract's own
@@ -7,8 +7,8 @@ import { type ReactNode } from "react";
 import { ArrowUpRight, Ban, CircleCheck, CircleX } from "lucide-react";
 import type { RenderedToolCallView } from "@source-inc/gents-desktop-client";
 import { Spinner } from "@gents/ui/components/spinner";
-import { BehaviorAvatar } from "./parts";
-import { behaviorName } from "./behavior";
+import { AgentInitials } from "./parts";
+import { agentName } from "./behavior";
 import { useExclusiveStep } from "@gents/ui/conversation";
 import {
   Collapsible,
@@ -22,7 +22,7 @@ import { ToolBody } from "./tool-views";
 import { duration } from "./tool-summary";
 import { useMinute, when } from "./time";
 import { isLive } from "@/lib/live";
-import { scopeKey, type Reached, type Subagent, type Workers } from "./workers";
+import { scopeKey, type Reached, type Worker, type Workers } from "./workers";
 import { RequestStop } from "./WorkerActions";
 
 type Tone = "running" | "done" | "failed" | "stopped" | "unknown";
@@ -43,7 +43,7 @@ export function workerNow(
   now: number,
 ): { tone: Tone; text: string; detail?: string | null } {
   const failure = firstLine(
-    tool.presentation.kind === "subagent" ? tool.presentation.output : null,
+    tool.presentation.kind === "agent" ? tool.presentation.output : null,
   );
   const state = reached?.request.lifecycleState ?? null;
   if (!state) {
@@ -212,7 +212,7 @@ function Row({
 export function isWorkerStep(tool: RenderedToolCallView) {
   const p = tool.presentation;
   return (
-    (p.kind === "subagent" && p.action !== "list") ||
+    (p.kind === "agent" && p.action !== "list") ||
     (p.kind === "process" && tool.awaitMode === "background")
   );
 }
@@ -255,18 +255,18 @@ export function WorkerStep({
       </Row>
     );
   }
-  if (p.kind !== "subagent") return null;
+  if (p.kind !== "agent") return null;
   const reached = workers.byToolCall(tool);
   const summary = reached?.summary ?? null;
   const name = summary?.title ?? p.name ?? "a session";
   const sessionId = reached?.request.sessionId ?? p.sessionId ?? null;
   /* the same mark the session list uses, so a session looks like itself
-     wherever it appears. One with no summary has no behavior to wear, and
+     wherever it appears. One with no summary has no agent to wear, and
      keeps the tone's glyph. */
-  const behaviorId = summary?.behaviorId ?? null;
-  const mark = behaviorId ? (
-    <BehaviorAvatar
-      name={behaviorName(behaviorId, deployment)}
+  const agentId = summary?.agentId ?? null;
+  const mark = agentId ? (
+    <AgentInitials
+      name={agentName(agentId, deployment)}
       className="size-4 text-[8px]"
     />
   ) : undefined;
@@ -296,10 +296,10 @@ export function WorkerStep({
   return (
     <Row
       tone={now.tone}
-      /* an agent_new whose session this one began is a subagent; any other
+      /* an agent_new whose session this one began is a worker; any other
          call only sent a message */
       verb={
-        p.action === "start" && (!reached || reached.subagent) ? "Started" : "Messaged"
+        p.action === "start" && (!reached || reached.worker) ? "Started" : "Messaged"
       }
       mark={mark}
       name={name}
@@ -308,9 +308,9 @@ export function WorkerStep({
       sessionId={sessionId}
       /* agent_interrupt's rule (gents::session_message::agent_interrupt_allowed):
          only the session that started a session may stop it, so only a
-         subagent's row offers Stop */
+         worker's row offers Stop */
       menu={
-        <RequestStop name={name} request={reached?.subagent ? reached.request : null} />
+        <RequestStop name={name} request={reached?.worker ? reached.request : null} />
       }
     >
       <ToolBody tool={tool} />
@@ -318,33 +318,29 @@ export function WorkerStep({
   );
 }
 
-const subagentName = (subagent: Subagent | null) =>
-  subagent?.summary?.title ?? "a subagent";
+const workerName = (worker: Worker | null) => worker?.summary?.title ?? "a worker";
 
 /* The sessions this one started, each as the session it is: where it got
    to and a way in. Stopping is a row's business: it names the call. */
-export function SubagentList({ workers }: { workers: Workers }) {
+export function WorkerList({ workers }: { workers: Workers }) {
   const deployment = useSelectedNode();
   if (workers.all.length === 0) return null;
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-      <span>Subagents</span>
-      {workers.all.map((subagent) => {
-        const name = subagentName(subagent);
-        const behaviorId = subagent.summary?.behaviorId ?? null;
-        const state = subagent.summary?.turnState ?? null;
+      <span>Workers</span>
+      {workers.all.map((worker) => {
+        const name = workerName(worker);
+        const agentId = worker.summary?.agentId ?? null;
+        const state = worker.summary?.turnState ?? null;
         return (
-          <span
-            key={scopeKey(subagent.link)}
-            className="flex min-w-0 items-center gap-1"
-          >
+          <span key={scopeKey(worker.link)} className="flex min-w-0 items-center gap-1">
             <a
-              href={href({ name: "session", sessionId: subagent.sessionId })}
+              href={href({ name: "session", sessionId: worker.sessionId })}
               className="flex min-w-0 items-center gap-1 hover:text-foreground hover:underline"
             >
-              {behaviorId && (
-                <BehaviorAvatar
-                  name={behaviorName(behaviorId, deployment)}
+              {agentId && (
+                <AgentInitials
+                  name={agentName(agentId, deployment)}
                   className="size-4 text-[8px]"
                 />
               )}

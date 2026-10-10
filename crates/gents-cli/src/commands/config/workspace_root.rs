@@ -10,7 +10,7 @@ use crate::config_writes::ConfigAccess;
 use crate::request_helpers::resolve_dual_id;
 use crate::{extract_mutation_doc_id, print_json, resolve_config_access};
 
-// Operator-local allowed-root ceiling used by persona enrollment. This is not
+// Operator-local allowed-root ceiling used by agent configuration. This is not
 // pack configuration: Tools.host.root selects a path but does not grant authority.
 
 pub(super) async fn workspace_root_list(args: ConfigListArgs) -> Result<()> {

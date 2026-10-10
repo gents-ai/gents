@@ -1,12 +1,12 @@
-//! Versioned starter recipes for authoring ordinary behavior configuration.
+//! Versioned starter recipes for authoring ordinary agent configuration.
 //!
 //! Recipes are a catalog and rendering aid only. A resolved recipe contains a
 //! literal system prompt and a canonical [`Tools`] proposal; it does not become
-//! a durable runtime selector or bypass the existing behavior materializer.
-//! Consumers must keep direct, open-ended behavior authoring available without
+//! a durable runtime selector or bypass the existing agent materializer.
+//! Consumers must keep direct, open-ended agent authoring available without
 //! selecting a recipe. When a recipe is useful, its editable output goes through
 //! the same preview, admission, and materialization path as a hand-authored
-//! behavior. Recipe identifiers and provenance must never drive runtime
+//! agent. Recipe identifiers and provenance must never drive runtime
 //! selection, automatic upgrades, or replacement of later user edits.
 
 use std::fmt;
@@ -58,7 +58,7 @@ const CUSTOM_INPUTS: &[StarterRecipeInputSpec] = &[
         key: "custom_goal",
         kind: StarterRecipeInputKind::Text,
         required: true,
-        description: "The outcome this behavior should pursue.",
+        description: "The outcome this agent should pursue.",
     },
     StarterRecipeInputSpec {
         key: "custom_success_criteria",
@@ -107,7 +107,7 @@ const CATALOG: &[StarterRecipeDefinition] = &[
         id: StarterRecipeId::Custom,
         version: 1,
         display_name: "Custom",
-        summary: "Create a bounded behavior from an explicit role, goal, and success criteria.",
+        summary: "Create a bounded agent from an explicit role, goal, and success criteria.",
         inputs: CUSTOM_INPUTS,
         prompt_asset: CUSTOM_PROMPT,
     },
@@ -115,8 +115,8 @@ const CATALOG: &[StarterRecipeDefinition] = &[
 
 /// Stable identifier for an optional starter draft.
 ///
-/// This value is authoring provenance, not a required behavior kind or runtime
-/// selector. Generic behavior creation must not require one.
+/// This value is authoring provenance, not a required agent kind or runtime
+/// selector. Generic agent creation must not require one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum StarterRecipeId {
     Coding,
@@ -260,16 +260,16 @@ pub fn starter_recipe(id: StarterRecipeId) -> &'static StarterRecipeDefinition {
 }
 
 /// Resolve an optional recipe without mutating configuration. The caller
-/// supplies the canonical identity fields that the existing behavior
+/// supplies the canonical identity fields that the existing agent
 /// materializer owns. The returned draft must use the same canonical
 /// preview/admission/materialization path as directly authored configuration.
 pub fn resolve_starter_recipe(
     id: StarterRecipeId,
-    agent_did: &str,
+    node_did: &str,
     tools_id: &str,
     input: &StarterRecipeRenderInput,
 ) -> Result<ResolvedStarterRecipe> {
-    validate_identity_field("agent_did", agent_did)?;
+    validate_identity_field("node_did", node_did)?;
     validate_identity_field("tools_id", tools_id)?;
     validate_guided_concerns(&input.guided_concerns)?;
 
@@ -283,7 +283,7 @@ pub fn resolve_starter_recipe(
             (
                 prompt,
                 workspace_tools(
-                    agent_did,
+                    node_did,
                     tools_id,
                     definition.display_name,
                     root,
@@ -300,7 +300,7 @@ pub fn resolve_starter_recipe(
             (
                 prompt,
                 workspace_tools(
-                    agent_did,
+                    node_did,
                     tools_id,
                     definition.display_name,
                     root,
@@ -329,20 +329,20 @@ pub fn resolve_starter_recipe(
                 render_prompt_asset(definition.prompt_asset, &[("source_scope", source_scope)])?;
             let tools = match root {
                 Some(root) => workspace_tools(
-                    agent_did,
+                    node_did,
                     tools_id,
                     definition.display_name,
                     Some(root),
                     FileToolMode::ReadOnly,
                     None,
                 ),
-                None => empty_tools(agent_did, tools_id, definition.display_name),
+                None => empty_tools(node_did, tools_id, definition.display_name),
             };
             (prompt, tools)
         }
         StarterRecipeId::GeneralAssistant => (
             render_prompt_asset(definition.prompt_asset, &[])?,
-            empty_tools(agent_did, tools_id, definition.display_name),
+            empty_tools(node_did, tools_id, definition.display_name),
         ),
         StarterRecipeId::Custom => {
             let role = required_text(id, "custom_role", input.custom_role.as_deref())?;
@@ -361,7 +361,7 @@ pub fn resolve_starter_recipe(
                         ("success_criteria", quote_for_prompt(success)?),
                     ],
                 )?,
-                empty_tools(agent_did, tools_id, definition.display_name),
+                empty_tools(node_did, tools_id, definition.display_name),
             )
         }
     };
@@ -387,7 +387,7 @@ pub fn resolve_starter_recipe(
 }
 
 fn workspace_tools(
-    agent_did: &str,
+    node_did: &str,
     tools_id: &str,
     display_name: &str,
     root: Option<String>,
@@ -396,7 +396,7 @@ fn workspace_tools(
 ) -> Tools {
     Tools {
         tools_id: tools_id.to_owned(),
-        agent_did: agent_did.to_owned(),
+        node_did: node_did.to_owned(),
         display_name: Some(format!("{display_name} starter tools")),
         host: Some(HostTools {
             root,
@@ -416,10 +416,10 @@ fn workspace_tools(
     }
 }
 
-fn empty_tools(agent_did: &str, tools_id: &str, display_name: &str) -> Tools {
+fn empty_tools(node_did: &str, tools_id: &str, display_name: &str) -> Tools {
     Tools {
         tools_id: tools_id.to_owned(),
-        agent_did: agent_did.to_owned(),
+        node_did: node_did.to_owned(),
         display_name: Some(format!("{display_name} starter tools")),
         ..Tools::default()
     }
@@ -436,7 +436,7 @@ fn resolved_scope(scope: &StarterWorkspaceScope) -> Result<(Option<String>, Stri
     match scope {
         StarterWorkspaceScope::ManagedRuntimeRoot => Ok((
             None,
-            "the managed runtime's effective root (no narrower behavior root is configured)"
+            "the managed runtime's effective root (no narrower agent root is configured)"
                 .to_owned(),
         )),
         StarterWorkspaceScope::ExplicitRoot { root } => {

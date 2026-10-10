@@ -4,13 +4,13 @@ import { expect } from "vitest";
 
 import App from "../src/App";
 import { setTimingForTests } from "../src/hooks/timing";
-import { navigate } from "../src/ui/lib/router";
+import { navigate, pathFor } from "../src/ui/lib/router";
 import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
 import { type DesktopClientUpdatedListenerFactory } from "@source-inc/gents-desktop-client";
 
 export type TauriDriverChatRequest = {
-  agentDid: string;
-  behaviorId?: string | null;
+  nodeDid: string;
+  agentId?: string | null;
   sessionId?: string | null;
   content: string;
 };
@@ -60,6 +60,27 @@ export function renderTauriAppDriverWithBridge(
     />,
   );
 
+  let configurationPath: string | null = null;
+  const configurationLink = () => {
+    const links = screen.getAllByRole("link");
+    const link = configurationPath
+      ? links.find((candidate) => candidate.getAttribute("href") === configurationPath)
+      : (screen.queryByTestId("working-node") ??
+        screen.queryAllByRole("link", { name: / configuration$/i })[0]);
+    if (!link) throw new Error("Selected node configuration link is missing");
+    return link;
+  };
+  const revealConfiguration = async () => {
+    if (
+      screen.queryByTestId("working-node") ||
+      screen.queryByRole("link", { name: / configuration$/i })
+    ) {
+      return false;
+    }
+    await user.click(screen.getByRole("button", { name: "Menu" }));
+    return true;
+  };
+
   return {
     bridge,
     user,
@@ -73,7 +94,7 @@ export function renderTauriAppDriverWithBridge(
       return screen.getByTestId(`session-${sessionId}`);
     },
     configButton() {
-      return screen.getAllByRole("link", { name: / configuration$/i })[0];
+      return configurationLink();
     },
     chatButton() {
       const sessionId =
@@ -93,7 +114,7 @@ export function renderTauriAppDriverWithBridge(
     configSectionTab(tabId: string) {
       const labels: Record<string, string> = {
         agent: "Agent",
-        behaviors: "Behaviors",
+        agents: "Agents",
         skills: "Skills",
         profiles: "Providers",
         tools: "Tools",
@@ -108,18 +129,6 @@ export function renderTauriAppDriverWithBridge(
       return screen.getAllByRole("link", {
         name: new RegExp(`^${label}(?:\\s+\\d+)?$`, "i"),
       })[0];
-    },
-    behaviorKey() {
-      return screen.getByTestId("behavior-id") as HTMLInputElement;
-    },
-    behaviorSystemPrompt() {
-      return screen.getByTestId("behavior-system-prompt") as HTMLTextAreaElement;
-    },
-    behaviorSaveButton() {
-      return screen.getByTestId("behavior-save");
-    },
-    behaviorSaveStatus() {
-      return screen.getByText("Saved", { selector: ".config-editor .chip" });
     },
     contextSystemPrompt() {
       return screen.getByRole("textbox", {
@@ -141,18 +150,36 @@ export function renderTauriAppDriverWithBridge(
     async ready() {
       await waitFor(() => {
         expect(screen.getByTestId("app-shell")).toBeInTheDocument();
-        if (firstPeerId) {
-          expect(
-            screen.getAllByRole("link", { name: / configuration$/i })[0],
-          ).toBeInTheDocument();
-        }
       });
+      if (firstPeerId) {
+        const snapshot = await bridge.adapter.fetchDesktopSnapshot();
+        const node = snapshot.client?.deployments.find(
+          (deployment) => deployment.peerId === firstPeerId,
+        );
+        expect(node, "expected selected node deployment").toBeDefined();
+        configurationPath = pathFor({
+          name: "agent",
+          nodeDid: node!.nodeDid,
+          section: "agent",
+        });
+        const opened = await revealConfiguration();
+        await waitFor(() => {
+          expect(configurationLink()).toBeInTheDocument();
+        });
+        if (opened) {
+          await user.keyboard("{Escape}");
+          await waitFor(() => {
+            expect(screen.queryByTestId("working-node")).not.toBeInTheDocument();
+          });
+        }
+      }
     },
     async openChat() {
       const sessionId = bridge.sendResults?.at(-1)?.sessionId;
       if (sessionId) {
         navigate({ name: "session", sessionId });
       } else {
+        await revealConfiguration();
         await user.click(this.chatButton());
       }
       await waitFor(() => {
@@ -169,7 +196,15 @@ export function renderTauriAppDriverWithBridge(
       }
       await user.click(button);
     },
+    async openNodes() {
+      await revealConfiguration();
+      await user.click(screen.getByRole("link", { name: /^Nodes(?:\s+\d+)?$/i }));
+      await waitFor(() => {
+        expect(screen.getByTestId("agents-screen")).toBeInTheDocument();
+      });
+    },
     async openConfig() {
+      await revealConfiguration();
       await user.click(this.configButton());
     },
     async openConfigSection(tabId: string) {
@@ -212,20 +247,8 @@ export function renderTauriAppDriverWithBridge(
         await user.click(checkbox);
       }
     },
-    async editBehaviorKey() {
-      await user.click(screen.getByTestId("behavior-edit-key"));
-    },
-    async replaceBehaviorKey(value: string) {
-      fireEvent.change(this.behaviorKey(), { target: { value } });
-    },
-    async replaceBehaviorSystemPrompt(value: string) {
-      fireEvent.change(this.behaviorSystemPrompt(), { target: { value } });
-    },
     async replaceContextSystemPrompt(value: string) {
       fireEvent.change(this.contextSystemPrompt(), { target: { value } });
-    },
-    async saveBehaviorConfig() {
-      await user.click(this.behaviorSaveButton());
     },
     async pressEnter() {
       const button = this.sendButton();

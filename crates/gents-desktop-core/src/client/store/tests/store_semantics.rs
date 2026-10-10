@@ -6,7 +6,7 @@ fn goal_row(goal_id: &str, created_at: &str, status: &str) -> GoalRow {
     serde_json::from_value(serde_json::json!({
         "goal_id": goal_id,
         "session_id": "session-1",
-        "agent_did": "did:agent:1",
+        "node_did": "did:node:1",
         "status": status,
         "created_at": created_at
     }))
@@ -23,7 +23,7 @@ fn schedule_row(
 ) -> Schedule {
     Schedule {
         schedule_id: schedule_id.to_string(),
-        agent_did: "did:agent:1".to_string(),
+        node_did: "did:node:1".to_string(),
         display_name: None,
         cadence: gents::document_config::ScheduleCadence::Interval { interval_secs: 300 },
         created_at: None,
@@ -39,7 +39,7 @@ fn trigger(
 ) -> Trigger {
     Trigger {
         session_id_template: None,
-        agent_did: "did:agent:1".to_string(),
+        node_did: "did:node:1".to_string(),
         trigger_id: trigger_id.to_string(),
         display_name: None,
         description: None,
@@ -70,14 +70,14 @@ fn trigger_observation(
     }
 }
 
-fn task_row(task_id: &str, behavior_id: &str) -> Task {
+fn task_row(task_id: &str, agent_id: &str) -> Task {
     Task {
         emit_outcome: false,
         task_id: task_id.to_string(),
-        agent_did: "did:agent:1".to_string(),
+        node_did: "did:node:1".to_string(),
         display_name: None,
         description: None,
-        behavior_id: behavior_id.to_string(),
+        agent_id: agent_id.to_string(),
         prompt_template: "run".to_string(),
         goal_objective_template: None,
         goal_token_budget: None,
@@ -100,8 +100,8 @@ fn request_row(
         "_docID": request_id,
         "request_id": request_id,
         "purpose": "normal",
-        "agent_did": "did:agent:1",
-        "behavior_id": "default",
+        "node_did": "did:node:1",
+        "agent_id": "default",
         "session_id": "session-1",
         "content": "turn",
         "lifecycle_state": lifecycle_state,
@@ -126,9 +126,9 @@ fn generated_title_selection_keeps_only_the_normal_public_head() {
             .iter()
             .find(|case| case["name"] == name)
             .expect("modeled title selection");
-        let agent = case["agent"].as_u64().expect("modeled agent");
+        let node = case["node"].as_u64().expect("modeled node");
         let session = case["session"].as_u64().expect("modeled session");
-        let agent_did = format!("did:model:{agent}");
+        let node_did = format!("did:model:{node}");
         let session_id = format!("session-{session}");
         let requests = case["requests"]
             .as_array()
@@ -151,9 +151,9 @@ fn generated_title_selection_keeps_only_the_normal_public_head() {
                     "_docID": format!("doc-{}", row["doc_id"].as_u64().unwrap()),
                     "request_id": format!("request-{}", row["request_id"].as_u64().unwrap()),
                     "purpose": purpose,
-                    "agent_did": format!("did:model:{}", scope["agent"].as_u64().unwrap()),
+                    "node_did": format!("did:model:{}", scope["node"].as_u64().unwrap()),
                     "requester_did": requester_did,
-                    "behavior_id": format!("behavior-{}", row["behavior"].as_u64().unwrap()),
+                    "agent_id": format!("agent-{}", row["agent"].as_u64().unwrap()),
                     "session_id": format!("session-{}", scope["session"].as_u64().unwrap()),
                     "content": "modeled request",
                     "lifecycle_state": row["state"],
@@ -171,7 +171,7 @@ fn generated_title_selection_keeps_only_the_normal_public_head() {
             .as_u64()
             .map(|id| format!("request-{id}"));
         assert_eq!(
-            store.latest_request_id_for_session_for_agent(&session_id, &agent_did),
+            store.latest_request_id_for_session_for_node(&session_id, &node_did),
             expected,
             "{name}: public head differs from the Lean owner"
         );
@@ -219,9 +219,9 @@ fn session_pointer_requires_the_observed_physical_request() {
         let store = ClientStore::from_rows(ClientStoreRows {
             sessions: vec![AgentSession {
                 session_id: "session-1".to_string(),
-                agent_did: "did:agent:1".to_string(),
+                node_did: "did:node:1".to_string(),
                 requester_did: None,
-                behavior_id: "default".to_string(),
+                agent_id: "default".to_string(),
                 created_at: "2026-04-21T12:00:00Z".into(),
                 closed_at: None,
                 title: None,
@@ -248,12 +248,12 @@ fn session_pointer_requires_the_observed_physical_request() {
         );
         assert_eq!(
             store
-                .latest_request_id_for_session_for_agent("session-1", "did:agent:1")
+                .latest_request_id_for_session_for_node("session-1", "did:node:1")
                 .as_deref(),
             expected_request_id
         );
         assert_eq!(
-            store.derive_turn_for_agent("session-1", "did:agent:1"),
+            store.derive_turn_for_node("session-1", "did:node:1"),
             expected_turn,
             "only the exact observed document may supply turn state: {doc_id:?}"
         );
@@ -312,7 +312,7 @@ fn recent_runs_empty_when_no_triggers() {
 }
 
 #[test]
-fn source_agent_dids_round_trip_with_rows() {
+fn source_node_dids_round_trip_with_rows() {
     let store = ClientStore::from_rows(ClientStoreRows {
         tasks: vec![task_row("task-1", "default")],
         schedules: vec![schedule_row("schedule-1", "task-1", None, None, None, None)],
@@ -323,24 +323,24 @@ fn source_agent_dids_round_trip_with_rows() {
                 event_source_id: "source-1".to_string(),
             },
         )],
-        task_source_agent_dids: vec![Some("did:test:mini-1".to_string())],
-        schedule_source_agent_dids: vec![Some("did:test:mini-1".to_string())],
-        trigger_source_agent_dids: vec![Some("did:test:mini-1".to_string())],
+        task_source_node_dids: vec![Some("did:test:mini-1".to_string())],
+        schedule_source_node_dids: vec![Some("did:test:mini-1".to_string())],
+        trigger_source_node_dids: vec![Some("did:test:mini-1".to_string())],
         ..ClientStoreRows::default()
     });
 
     let restored = ClientStore::from_rows(store.to_rows());
 
     assert_eq!(
-        restored.task_source_agent_dids,
+        restored.task_source_node_dids,
         vec![Some("did:test:mini-1".to_string())]
     );
     assert_eq!(
-        restored.schedule_source_agent_dids,
+        restored.schedule_source_node_dids,
         vec![Some("did:test:mini-1".to_string())]
     );
     assert_eq!(
-        restored.trigger_source_agent_dids,
+        restored.trigger_source_node_dids,
         vec![Some("did:test:mini-1".to_string())]
     );
 }
@@ -388,7 +388,7 @@ mod session_turn {
             purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
             doc_id: Some(format!("doc-{id}")),
             request_id: id.into(),
-            agent_did: Some("did:agent:1".into()),
+            node_did: Some("did:agent:1".into()),
             session_id: Some("session-1".into()),
             content: Some(format!("{id} text")),
             lifecycle_state: Some(state),
@@ -436,7 +436,7 @@ mod session_turn {
             Some("running")
         );
         assert_eq!(
-            store.derive_turn_for_agent("session-1", "did:agent:1"),
+            store.derive_turn_for_node("session-1", "did:agent:1"),
             Some(ClientTurnState::Running)
         );
     }

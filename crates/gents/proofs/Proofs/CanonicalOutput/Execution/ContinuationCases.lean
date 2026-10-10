@@ -55,7 +55,7 @@ def wakeContinuationTrace : Option Bool := do
   pure (gateCommitted == { composed.execution with
       gateOwner := some 1, gateSchedule := { held.gateSchedule with phase := .releasable },
       queue := queued.queue } &&
-    gateCommitted.queue.scope.agent == queued.queue.scope.agent &&
+    gateCommitted.queue.scope.node == queued.queue.scope.node &&
     gateCommitted.queue.sessionId == queued.queue.sessionId &&
     gateCommitted.queue.scope.requester == queued.queue.scope.requester &&
     gateCommitted.queue.active == queued.queue.active &&
@@ -133,7 +133,7 @@ def restartNotification : MessageEnvelope :=
 
 def restartBinding (context : ToolExecution.ToolCallContext)
     (registered : Bool := false) : RestartRecovery.RestartBinding :=
-  { document := 600, agent := 1, session := 1
+  { document := 600, node := 1, session := 1
     observation := restartObservation context registered
     renderedReason := "interrupted_on_restart"
     notification := restartNotification

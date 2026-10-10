@@ -37,7 +37,7 @@ impl ServerConfig {
 #[derive(Debug, Clone)]
 pub struct ProvisionOptions {
     pub home: PathBuf,
-    pub agent_name: String,
+    pub node_name: String,
     pub tool_ceiling: ManagedToolCeiling,
     pub tool_root: Option<PathBuf>,
     /// Custody of a new home's store key; tests request a file key.
@@ -86,11 +86,11 @@ async fn ensure_standard_home_inner(options: ProvisionOptions) -> Result<()> {
         "init".to_string(),
         "--home".to_string(),
         options.home.display().to_string(),
-        "--agent-name".to_string(),
-        options.agent_name,
+        "--node-name".to_string(),
+        options.node_name,
         "--tool-package".to_string(),
         tool_package.to_string(),
-        "--setup-steward".to_string(),
+        "--engineer".to_string(),
         "--inference-url".to_string(),
         crate::DEFAULT_INIT_ENDPOINT.to_string(),
     ];
@@ -159,8 +159,8 @@ mod tests {
             temp.path(),
             &crate::shared::StoredInitConfig {
                 home: temp.path().display().to_string(),
-                agent_name: "Forge".to_string(),
-                agent_did: "did:key:zPreserved".to_string(),
+                node_name: "Forge".to_string(),
+                node_did: "did:key:zPreserved".to_string(),
                 key_path: Some(temp.path().join("agent.key").display().to_string()),
                 identity_backend: None,
                 keychain_label: None,
@@ -175,7 +175,7 @@ mod tests {
 
         ensure_standard_home_inner(ProvisionOptions {
             home: temp.path().to_path_buf(),
-            agent_name: "A different ignored name".to_string(),
+            node_name: "A different ignored name".to_string(),
             tool_ceiling: ManagedToolCeiling::Readonly,
             tool_root: Some(second_root.clone()),
             store_key_custody: gents::store_key::StoreKeyCustodyChoice::File,
@@ -184,8 +184,8 @@ mod tests {
         .unwrap();
 
         let stored = crate::read_init_config(temp.path()).unwrap().unwrap();
-        assert_eq!(stored.agent_name, "Forge");
-        assert_eq!(stored.agent_did, "did:key:zPreserved");
+        assert_eq!(stored.node_name, "Forge");
+        assert_eq!(stored.node_did, "did:key:zPreserved");
         assert_eq!(stored.tool_ceiling, ManagedToolCeiling::Readonly);
         assert_eq!(stored.tool_root.as_deref(), second_root.to_str());
     }

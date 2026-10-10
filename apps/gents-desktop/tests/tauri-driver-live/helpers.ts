@@ -45,9 +45,9 @@ export function expectCompletedSession(label: string, session: DesktopSessionSna
   expect(session.turnState, sessionDiagnosticMessage(label, session)).toBe("completed");
 }
 
-export async function waitForBehaviorConfig(
+export async function waitForAgentConfig(
   runner: LiveBridgeRunner,
-  behaviorId: string,
+  agentId: string,
   expectedDisplayName: string,
   expectedSystemPrompt: string,
   previousGeneration: number,
@@ -56,18 +56,18 @@ export async function waitForBehaviorConfig(
     async () => {
       const snapshot = await runner.fetchSnapshot();
       const deployment = snapshot.client?.deployments[0];
-      const behavior = deployment?.behaviors.find(
-        (candidate) => candidate.behaviorId === behaviorId,
+      const agent = deployment?.agents.find(
+        (candidate) => candidate.agentId === agentId,
       );
-      expect(behavior?.displayName).toBe(expectedDisplayName);
+      expect(agent?.displayName).toBe(expectedDisplayName);
       const context = deployment?.contexts.find(
-        (candidate) => candidate.context_id === behavior?.contextId,
+        (candidate) => candidate.context_id === agent?.contextId,
       );
       expect(context?.system_prompt).toBe(expectedSystemPrompt);
       // Saving acknowledges durable configuration, not activation. The runtime
       // deliberately debounces updates and keeps the previous generation usable.
       // Observe the existing publication/router owners before testing new input.
-      const readiness = deployment?.behaviorReadiness;
+      const readiness = deployment?.nodeReadiness;
       expect(deployment?.runtime?.lastReconcileError).toBeFalsy();
       expect(deployment?.runtime?.reconcilePhase).toBe("idle");
       expect(readiness?.activeGeneration).toBeGreaterThan(previousGeneration);
@@ -84,7 +84,7 @@ export async function waitForConfigFlowDocuments(
     profileId: string;
     toolServiceId: string;
     toolsId: string;
-    behaviorId: string;
+    agentId: string;
     taskId: string;
     scheduleId: string;
     eventSourceId: string;
@@ -117,14 +117,14 @@ export async function waitForConfigFlowDocuments(
         (candidate) => candidate.tools_id === expected.toolsId,
       );
       expect(context?.context_id).toBeDefined();
-      const behavior = deployment?.behaviors.find(
-        (candidate) => candidate.behaviorId === expected.behaviorId,
+      const agent = deployment?.agents.find(
+        (candidate) => candidate.agentId === expected.agentId,
       );
-      expect(behavior?.inferenceProfileId).toBe(expected.profileId);
+      expect(agent?.inferenceProfileId).toBe(expected.profileId);
       const task = deployment?.tasks.find(
         (candidate) => candidate.taskId === expected.taskId,
       );
-      expect(task?.behaviorId).toBe(expected.behaviorId);
+      expect(task?.agentId).toBe(expected.agentId);
       const schedule = deployment?.schedules.find(
         (candidate) => candidate.schedule_id === expected.scheduleId,
       );

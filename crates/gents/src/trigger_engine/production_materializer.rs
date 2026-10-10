@@ -13,7 +13,7 @@
 //! * `supersede_active_runtime_requests_for_trigger` transitions every matching
 //!   active runtime request to `lifecycle_state = superseded`.
 //!
-//! Behavior lookup happens against a `watch::Receiver<Arc<ActiveRuntimeSnapshot>>`
+//! Agent lookup happens against a `watch::Receiver<Arc<ActiveRuntimeSnapshot>>`
 //! so the materializer always sees the latest resolved snapshot without
 //! needing to re-query the DB at fire time.
 
@@ -52,37 +52,37 @@ impl ProductionMaterializer {
 
     fn runtime_actor(&self) -> Result<::identity::Did> {
         let snapshot = self.snapshot_rx.borrow();
-        let principal = snapshot
-            .principal
+        let node = snapshot
+            .node
             .as_ref()
-            .context("active runtime snapshot has no principal ACP actor")?;
-        ::identity::Did::new(principal.identity.did().to_owned())
-            .context("runtime principal DID is not ACP-addressable")
+            .context("active runtime snapshot has no node ACP actor")?;
+        ::identity::Did::new(node.identity.did().to_owned())
+            .context("runtime node DID is not ACP-addressable")
     }
 
-    fn resolve_behavior(&self, task: &ResolvedTask) -> Result<(String, String, u64, String)> {
+    fn resolve_agent(&self, task: &ResolvedTask) -> Result<(String, String, u64, String)> {
         let snapshot = self.snapshot_rx.borrow().clone();
-        let behavior = snapshot.behavior(&task.behavior_id).ok_or_else(|| {
+        let agent = snapshot.agent(&task.agent_id).ok_or_else(|| {
             let reason = snapshot
-                .unavailable_public_message(&task.behavior_id)
+                .unavailable_public_message(&task.agent_id)
                 .map(ToOwned::to_owned)
-                .unwrap_or_else(|| format!("behavior {} is not loaded", task.behavior_id));
-            anyhow!("resolving behavior for task {}: {reason}", task.task_id)
+                .unwrap_or_else(|| format!("agent {} is not loaded", task.agent_id));
+            anyhow!("resolving agent for task {}: {reason}", task.task_id)
         })?;
-        let backend_id = behavior
+        let backend_id = agent
             .backend_id
             .as_deref()
             .map(str::to_owned)
             .ok_or_else(|| {
                 anyhow!(
-                    "behavior {} has no backend binding; scheduled fires require a backend",
-                    behavior.behavior_id
+                    "agent {} has no backend binding; scheduled fires require a backend",
+                    agent.agent_id
                 )
             })?;
         Ok((
-            behavior.behavior_id.clone(),
-            behavior.agent_did().to_string(),
-            behavior.deadline_duration.as_secs(),
+            agent.agent_id.clone(),
+            agent.node_did().to_string(),
+            agent.deadline_duration.as_secs(),
             backend_id,
         ))
     }
@@ -90,25 +90,25 @@ impl ProductionMaterializer {
 
 pub(crate) async fn recover_workspace_binding_pending_requests(
     node: &EmbeddedNode,
-    principal_did: &str,
+    node_did: &str,
 ) -> Result<usize> {
     let query = format!(
         r#"{{
             AgentRequest(filter: {{
                 lifecycle_state: {{ _eq: "{workspace_binding_pending}" }},
-                agent_did: {{ _eq: "{principal}" }}
+                node_did: {{ _eq: "{node}" }}
             }}) {{
                 _docID
                 request_id
-                agent_did
+                node_did
                 workspace_id
-                workspace_owner_agent_did
+                workspace_owner_node_did
                 workspace_authority
                 workspace_seal_hash
             }}
         }}"#,
         workspace_binding_pending = RequestLifecycleState::WorkspaceBindingPending.as_str(),
-        principal = escape_graphql_string(principal_did),
+        node = escape_graphql_string(node_did),
     );
     let response = graphql_with_transaction_retry(
         node,
@@ -123,13 +123,13 @@ pub(crate) async fn recover_workspace_binding_pending_requests(
             .doc_id
             .as_deref()
             .context("workspace-binding-pending AgentRequest is missing _docID")?;
-        let agent_did = request
-            .agent_did
+        let node_did = request
+            .node_did
             .as_deref()
-            .context("workspace-binding-pending AgentRequest is missing agent_did")?;
+            .context("workspace-binding-pending AgentRequest is missing node_did")?;
         let lineage = WorkspaceLineage {
-            workspace_owner_agent_did: Some(request.workspace_owner_agent_did.clone().context(
-                "workspace-binding-pending AgentRequest is missing workspace_owner_agent_did",
+            workspace_owner_node_did: Some(request.workspace_owner_node_did.clone().context(
+                "workspace-binding-pending AgentRequest is missing workspace_owner_node_did",
             )?),
             workspace_id: Some(
                 request
@@ -146,7 +146,7 @@ pub(crate) async fn recover_workspace_binding_pending_requests(
             node,
             &request.request_id,
             request_doc_id,
-            agent_did,
+            node_did,
             &lineage,
         )
         .await
@@ -230,7 +230,7 @@ impl MaterializerHandle for ProductionMaterializer {
         let prepared_ids =
             prepared_ids.map(|(request, session)| (request.to_owned(), session.to_owned()));
         let delivery = delivery.cloned();
-        let resolved = self.resolve_behavior(task);
+        let resolved = self.resolve_agent(task);
         let runtime_actor = self.runtime_actor();
         let node = self.node.clone();
         let task_id = task.task_id.clone();
@@ -249,7 +249,7 @@ impl MaterializerHandle for ProductionMaterializer {
         let execution_origin = execution_origin_for_trigger_kind(trigger_kind);
 
         Box::pin(async move {
-            let (behavior_name, behavior_did, _deadline_secs, _backend_id) = resolved?;
+            let (agent_id, node_did, _deadline_secs, _backend_id) = resolved?;
             let runtime_actor = runtime_actor?;
             crate::lifecycle::TriggerExecutionContext::parse(trigger_context.as_deref())?;
             let explicit = WorkspaceLineage::from_trigger_context(trigger_context.as_deref())?;
@@ -259,7 +259,7 @@ impl MaterializerHandle for ProductionMaterializer {
                         node.as_ref(),
                         trigger,
                         correlation.as_deref(),
-                        &behavior_did,
+                        &node_did,
                         source_doc_id.as_deref(),
                         &explicit,
                     )
@@ -268,7 +268,7 @@ impl MaterializerHandle for ProductionMaterializer {
                 None => None,
             };
             let mut workspace = graph.map(|resolved| resolved.lineage).unwrap_or(explicit);
-            crate::workspace::stamp_workspace_lineage(node.as_ref(), &behavior_did, &mut workspace)
+            crate::workspace::stamp_workspace_lineage(node.as_ref(), &node_did, &mut workspace)
                 .await?;
             workspace.require_authority_if_workspace_id()?;
             let lineage = TriggerLineage {
@@ -290,7 +290,7 @@ impl MaterializerHandle for ProductionMaterializer {
                 {
                     crate::session::load_session_requester_scope(
                         node.as_ref(),
-                        &behavior_did,
+                        &node_did,
                         &fire.session_id,
                     )
                     .await?
@@ -303,7 +303,7 @@ impl MaterializerHandle for ProductionMaterializer {
                     &fire.fire_key
                 };
                 let create = build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title(
-                    &behavior_did, &behavior_name, &rendered_prompt, execution_origin, lineage,
+                    &node_did, &agent_id, &rendered_prompt, execution_origin, lineage,
                     Some(&title), workspace_ref, &fire.request_id, &fire.session_id,
                     Some(retry_key), session_scope.as_deref(), trigger_doc_id.as_deref(),
                 ).await?;
@@ -317,15 +317,12 @@ impl MaterializerHandle for ProductionMaterializer {
                 duplicate = admission.duplicate;
                 (admission.request, title)
             } else if let Some(objective) = rendered_goal_objective.as_deref() {
-                let identity = crate::goal::task_goal_fire_identity(
-                    &behavior_did,
-                    &task_id,
-                    &durable_fire_key,
-                );
+                let identity =
+                    crate::goal::task_goal_fire_identity(&node_did, &task_id, &durable_fire_key);
                 let conversation_title = task_goal_session_title(&task_label, &identity.retry_key);
                 let create = build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title(
-                    &behavior_did,
-                    &behavior_name,
+                    &node_did,
+                    &agent_id,
                     &rendered_prompt,
                     execution_origin,
                     lineage,
@@ -341,7 +338,7 @@ impl MaterializerHandle for ProductionMaterializer {
                 let enqueued = crate::goal::submit_goal_backed_request_local(
                     node.as_ref(),
                     runtime_actor,
-                    &behavior_did,
+                    &node_did,
                     &identity.session_id,
                     objective,
                     goal_token_budget,
@@ -369,8 +366,8 @@ impl MaterializerHandle for ProductionMaterializer {
                     write_pending_agent_request_with_lineage_workspace_and_conversation_title(
                         node.as_ref(),
                         runtime_actor,
-                        &behavior_did,
-                        &behavior_name,
+                        &node_did,
+                        &agent_id,
                         &rendered_prompt,
                         execution_origin,
                         lineage,
@@ -389,7 +386,7 @@ impl MaterializerHandle for ProductionMaterializer {
                     node.as_ref(),
                     &enqueued.request_id,
                     &enqueued.doc_id,
-                    &behavior_did,
+                    &node_did,
                     &workspace,
                 )
                 .await?;
@@ -422,7 +419,7 @@ impl MaterializerHandle for ProductionMaterializer {
         correlation: Option<&str>,
     ) -> Pin<Box<dyn std::future::Future<Output = Result<Option<String>>> + Send + '_>> {
         let node = self.node.clone();
-        let resolved = self.resolve_behavior(task);
+        let resolved = self.resolve_agent(task);
         let trigger_id = trigger_id.to_owned();
         let correlation = correlation.map(str::to_owned);
         Box::pin(async move {
@@ -439,12 +436,12 @@ impl MaterializerHandle for ProductionMaterializer {
 
     fn has_active_runtime_request_for_trigger(
         &self,
-        agent_did: &str,
+        node_did: &str,
         trigger_id: &str,
         excluded_request_id: Option<&str>,
     ) -> Pin<Box<dyn std::future::Future<Output = Result<bool>> + Send + '_>> {
         let node = self.node.clone();
-        let escaped_agent_did = escape_graphql_string(agent_did);
+        let escaped_node_did = escape_graphql_string(node_did);
         let escaped_trigger_id = escape_graphql_string(trigger_id);
         let request_exclusion_filter = excluded_request_id
             .map(escape_graphql_string)
@@ -472,13 +469,13 @@ impl MaterializerHandle for ProductionMaterializer {
                 r#"query {{
                     AgentRequest(
                         filter: {{
-                            agent_did: {{ _eq: "{agent_did}" }},
+                            node_did: {{ _eq: "{node_did}" }},
                             caused_by_trigger_id: {{ _eq: "{trigger_id}" }}{request_exclusion_filter},
                             lifecycle_state: {{ _in: {active_runtime_states} }}
                         }}
                     ) {{ _docID request_id lifecycle_state deadline }}
                 }}"#,
-                agent_did = escaped_agent_did,
+                node_did = escaped_node_did,
                 trigger_id = escaped_trigger_id,
                 request_exclusion_filter = request_exclusion_filter,
             );
@@ -497,13 +494,13 @@ impl MaterializerHandle for ProductionMaterializer {
 
     fn supersede_active_runtime_requests_for_trigger(
         &self,
-        agent_did: &str,
+        node_did: &str,
         trigger_id: &str,
         excluded_request_id: Option<&str>,
     ) -> Pin<Box<dyn std::future::Future<Output = Result<usize>> + Send + '_>> {
         let node = self.node.clone();
-        let owner = agent_did.to_owned();
-        let escaped_agent_did = escape_graphql_string(agent_did);
+        let owner = node_did.to_owned();
+        let escaped_node_did = escape_graphql_string(node_did);
         let escaped_trigger_id = escape_graphql_string(trigger_id);
         let request_exclusion_filter = excluded_request_id
             .map(escape_graphql_string)
@@ -516,7 +513,7 @@ impl MaterializerHandle for ProductionMaterializer {
                 r#"mutation {{
                     update_AgentRequest(
                         filter: {{
-                            agent_did: {{ _eq: "{agent_did}" }},
+                            node_did: {{ _eq: "{node_did}" }},
                             caused_by_trigger_id: {{ _eq: "{trigger_id}" }}{request_exclusion_filter},
                             lifecycle_state: {{ _eq: "pending" }}
                         }},
@@ -527,7 +524,7 @@ impl MaterializerHandle for ProductionMaterializer {
                         }}
                     ) {{ _docID request_id }}
                 }}"#,
-                agent_did = escaped_agent_did,
+                node_did = escaped_node_did,
                 trigger_id = escaped_trigger_id,
                 request_exclusion_filter = request_exclusion_filter,
             );
@@ -580,10 +577,10 @@ impl MaterializerHandle for ProductionMaterializer {
             ]);
             let query = format!(
                 r#"{{ AgentRequest(filter: {{
-                agent_did: {{ _eq: "{escaped_agent_did}" }},
+                node_did: {{ _eq: "{escaped_node_did}" }},
                 caused_by_trigger_id: {{ _eq: "{escaped_trigger_id}" }}{request_exclusion_filter},
                 lifecycle_state: {{ _in: {active} }}
-            }}) {{ _docID request_id agent_did requester_did behavior_id session_id lifecycle_state
+            }}) {{ _docID request_id node_did requester_did agent_id session_id lifecycle_state
                 execution_generation execution_lease_expires_at
             }} }}"#
             );
@@ -623,7 +620,7 @@ impl MaterializerHandle for ProductionMaterializer {
             );
             if count > 0 {
                 tracing::info!(
-                    agent_did = %escaped_agent_did,
+                    node_did = %escaped_node_did,
                     trigger_id = %escaped_trigger_id,
                     count,
                     "superseded active runtime AgentRequests for trigger"
@@ -654,7 +651,7 @@ impl MaterializerHandle for ProductionMaterializer {
                     let request_id = identity.request_id();
                     anyhow::ensure!(receipt["request_id"].as_str() == Some(request_id.as_str()), "event receipt request identity mismatch");
                     let result = txn.execute(&format!(
-                        "{{ AgentRequest(filter: {{agent_did: {{_eq: \"{}\"}}, request_id: {{_eq: \"{}\"}}}}, limit: 2) {{_docID}} }}",
+                        "{{ AgentRequest(filter: {{node_did: {{_eq: \"{}\"}}, request_id: {{_eq: \"{}\"}}}}, limit: 2) {{_docID}} }}",
                         escape_graphql_string(&identity.owner_did), escape_graphql_string(&request_id),
                     )).await?;
                     anyhow::ensure!(result["data"]["AgentRequest"].as_array().is_some_and(|rows| rows.len() == 1), "event receipt has no unique admitted request");
@@ -670,23 +667,23 @@ impl MaterializerHandle for ProductionMaterializer {
         durable_fire_key: &str,
     ) -> Pin<Box<dyn std::future::Future<Output = Result<Option<String>>> + Send + '_>> {
         let node = self.node.clone();
-        let resolved = self.resolve_behavior(task);
+        let resolved = self.resolve_agent(task);
         let task_id = task.task_id.clone();
         let durable_fire_key = durable_fire_key.to_string();
         Box::pin(async move {
-            let (behavior_id, agent_did, _, _) = resolved?;
+            let (agent_id, node_did, _, _) = resolved?;
             let identity =
-                crate::goal::task_goal_fire_identity(&agent_did, &task_id, &durable_fire_key);
+                crate::goal::task_goal_fire_identity(&node_did, &task_id, &durable_fire_key);
             let expected = crate::goal::TaskGoalRequestBinding {
-                agent_did: agent_did.clone(),
-                behavior_id,
+                node_did: node_did.clone(),
+                agent_id,
                 session_id: identity.session_id,
                 request_id: identity.request_id,
                 retry_key: identity.retry_key,
             };
             let query = format!(
                 r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 2) {{
-                    request_id agent_did behavior_id session_id retry_key
+                    request_id node_did agent_id session_id retry_key
                 }} }}"#,
                 escape_graphql_string(&expected.request_id),
             );
@@ -731,13 +728,13 @@ impl MaterializerHandle for ProductionMaterializer {
 
     fn has_materialized_group_request(
         &self,
-        agent_did: &str,
+        node_did: &str,
         trigger_id: &str,
         durable_fire_key: &str,
     ) -> Pin<Box<dyn std::future::Future<Output = Result<bool>> + Send + '_>> {
         let node = self.node.clone();
-        let owner = agent_did.to_string();
-        let agent_did = escape_graphql_string(agent_did);
+        let owner = node_did.to_string();
+        let node_did = escape_graphql_string(node_did);
         let trigger_id = escape_graphql_string(trigger_id);
         let durable_fire_key = durable_fire_key.to_owned();
         Box::pin(async move {
@@ -745,7 +742,7 @@ impl MaterializerHandle for ProductionMaterializer {
                 r#"query {{
                     AgentRequest(
                         filter: {{
-                            agent_did: {{ _eq: "{agent_did}" }},
+                            node_did: {{ _eq: "{node_did}" }},
                             caused_by_trigger_id: {{ _eq: "{trigger_id}" }}
                         }}
                     ) {{ _docID request_id retry_key }}

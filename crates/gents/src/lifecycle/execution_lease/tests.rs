@@ -4,7 +4,7 @@ use std::{sync::Arc, time::Duration};
 struct LeaseTestIdentity;
 
 #[async_trait::async_trait]
-impl crate::identity::AgentIdentity for LeaseTestIdentity {
+impl crate::identity::NodeIdentity for LeaseTestIdentity {
     fn did(&self) -> &str {
         "did:test:execution-lease"
     }
@@ -30,7 +30,7 @@ async fn test_node() -> (Arc<EmbeddedNode>, tempfile::TempDir) {
             .unwrap(),
     );
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    crate::test_support::install_test_behavior(&node, "did:test:execution-lease", "general").await;
+    crate::test_support::install_test_agent(&node, "did:test:execution-lease", "general").await;
     (node, dir)
 }
 
@@ -83,7 +83,7 @@ async fn owner(node: &Arc<EmbeddedNode>) -> RequestLifecycle {
 
 async fn request_row(node: &EmbeddedNode, doc_id: &str) -> AgentRequestRow {
     let result = node.execute(&format!(
-        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ _docID request_id agent_did lifecycle_state execution_generation execution_lease_expires_at terminal_output terminalized_at failure_reason }} }}"#,
+        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ _docID request_id node_did lifecycle_state execution_generation execution_lease_expires_at terminal_output terminalized_at failure_reason }} }}"#,
         escape_graphql_string(doc_id),
     )).await;
     assert!(!result.has_errors(), "{:?}", result.errors);
@@ -225,7 +225,7 @@ async fn owned_stream_appends_do_not_renew_execution_lease() {
     let mut lifecycle = claimed_owner(&node).await;
     let request = lifecycle.request().clone();
     let writer =
-        crate::streaming::DefraStreamWriter::new(node.clone(), &request.agent_did, Duration::ZERO);
+        crate::streaming::DefraStreamWriter::new(node.clone(), &request.node_did, Duration::ZERO);
     lifecycle.begin_owned_execution(&writer).await.unwrap();
     let doc_id = lifecycle.request().doc_id.clone();
     let initial = lease_tuple(&request_row(&node, &request.doc_id).await);
@@ -415,7 +415,7 @@ async fn racing_owned_begins_commit_one_processing_transition_without_renewal() 
     let (node, _dir) = test_node().await;
     let mut lifecycle = claimed_owner(&node).await;
     let before = request_row(&node, &lifecycle.request.doc_id).await;
-    let mut competitor = RequestLifecycle::new_with_agent_did(
+    let mut competitor = RequestLifecycle::new_with_node_did(
         node.clone(),
         "general",
         "did:test:execution-lease",
@@ -494,7 +494,7 @@ async fn recover_observed_execution(
     // The canonical recovery coordinator re-observes its fence inside the
     // transaction; verify that this exact observed generation was the winner.
     let agent = row
-        .agent_did
+        .node_did
         .as_deref()
         .context("observed request missing agent")?;
     let before_generation = row.execution_generation.as_deref();
@@ -708,7 +708,7 @@ async fn dead_revocation_accounts_tools_without_reading_corrupt_delivery_payload
     let running = accepted.next().unwrap();
     let mut running_lifecycle = ToolCallLifecycle::from_accepted(
         node.clone(),
-        lifecycle.request().agent_did.clone(),
+        lifecycle.request().node_did.clone(),
         lifecycle.request().requester_did.clone(),
         running.clone(),
         Utc::now() + chrono::Duration::minutes(5),
@@ -723,7 +723,7 @@ async fn dead_revocation_accounts_tools_without_reading_corrupt_delivery_payload
     let now = Utc::now().to_rfc3339();
     let payload = "durable-but-corrupt";
     let segment = OutputSegment {
-        agent_did: lifecycle.request().agent_did.clone(),
+        node_did: lifecycle.request().node_did.clone(),
         requester_did: lifecycle.request().requester_did.clone(),
         session_id: lifecycle.request().session_id.clone(),
         request_doc_id: request_doc_id.clone(),
@@ -769,7 +769,7 @@ async fn dead_revocation_accounts_tools_without_reading_corrupt_delivery_payload
     let delivery = TranscriptMessage {
         message_key: "corrupt-running-delivery".into(),
         session_id: lifecycle.request().session_id.clone(),
-        agent_did: "did:test:execution-lease".into(),
+        node_did: "did:test:execution-lease".into(),
         requester_did: None,
         request_doc_id: Some(request_doc_id.clone()),
         publication: MessagePublication::ToolDelivery {

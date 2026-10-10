@@ -7,9 +7,9 @@ use crate::agent::p2p_reconcile::{
     single_string_eq,
 };
 
-pub(super) fn desired_row(template: Option<&str>, agent_did: Option<&str>) -> PairingStateRow {
+pub(super) fn desired_row(template: Option<&str>, node_did: Option<&str>) -> PairingStateRow {
     PairingStateRow {
-        agent_did: agent_did.map(str::to_string),
+        node_did: node_did.map(str::to_string),
         collections: None,
         replicator_addresses: Some(vec!["addr1".into()]),
         template: template.map(str::to_string),
@@ -54,7 +54,7 @@ fn replicate_template_resolves_to_subscription_without_filter() {
     .expect("template resolves")
     .expect("some desired layer");
 
-    assert!(desired.collections.contains("AgentBehavior"));
+    assert!(desired.collections.contains("Agent"));
     assert_eq!(desired.collections, desired.replicator_collections);
     assert!(
         desired.replicator_filter.is_empty(),
@@ -79,12 +79,12 @@ fn missing_and_unknown_templates_are_rejected() {
 }
 
 #[test]
-fn subagent_coordinator_template_filters_only_addressed_requests() {
+fn agent_target_caller_template_filters_only_addressed_requests() {
     let desired = desired_from_pairing_row(
-        desired_row(Some("subagent-coordinator"), Some("did:key:host")),
+        desired_row(Some("agent-target-caller"), Some("did:key:host")),
         "did:key:coord",
     )
-    .expect("subagent coordinator template resolves")
+    .expect("agent-target coordinator template resolves")
     .expect("some desired layer");
 
     assert!(desired.collections.is_empty());
@@ -95,17 +95,17 @@ fn subagent_coordinator_template_filters_only_addressed_requests() {
             .replicator_filter
             .get("AgentRequest")
             .and_then(single_string_eq),
-        Some(("agent_did", "did:key:host"))
+        Some(("node_did", "did:key:host"))
     );
 }
 
 #[test]
-fn subagent_host_template_filters_return_projection_to_requester() {
+fn agent_target_host_template_filters_return_projection_to_requester() {
     let desired = desired_from_pairing_row(
-        desired_row(Some("subagent-host"), Some("did:key:coord")),
+        desired_row(Some("agent-target-host"), Some("did:key:coord")),
         "did:key:host",
     )
-    .expect("subagent host template resolves")
+    .expect("agent-target host template resolves")
     .expect("some desired layer");
 
     assert!(desired.collections.is_empty());
@@ -134,7 +134,7 @@ fn app_collections_on_control_plane_path_soft_skips() {
     // never an empty-collection replicator.
     let out = desired_from_pairing_row(
         PairingStateRow {
-            agent_did: Some("did:key:peer".to_string()),
+            node_did: Some("did:key:peer".to_string()),
             collections: None,
             replicator_addresses: Some(vec!["addr-b".to_string()]),
             template: Some("app-collections".to_string()),
@@ -153,7 +153,7 @@ fn app_collections_on_control_plane_path_soft_skips() {
 fn app_collections_row_resolves_row_collections_as_subscription_and_replicator() {
     let signed_endpoint = EnrollmentEndpointEntry {
         peer_id: "peer-b".to_string(),
-        agent_did: "did:key:peer-b".to_string(),
+        node_did: "did:key:peer-b".to_string(),
         address: "/ip4/127.0.0.1/tcp/4001/p2p/peer-b".to_string(),
         desired_id: "peer-b".to_string(),
         request_digest: "digest".to_string(),
@@ -162,7 +162,7 @@ fn app_collections_row_resolves_row_collections_as_subscription_and_replicator()
     };
     let layer = data_plane_desired_from_pairing_row(
         PairingStateRow {
-            agent_did: Some("did:key:self".to_string()),
+            node_did: Some("did:key:self".to_string()),
             collections: Some(vec!["ChangeProposed".to_string()]),
             replicator_addresses: None,
             template: Some("app-collections".to_string()),
@@ -186,7 +186,7 @@ fn app_collections_row_resolves_row_collections_as_subscription_and_replicator()
 fn app_collections_empty_collections_soft_skips() {
     let signed_endpoint = EnrollmentEndpointEntry {
         peer_id: "peer-b".to_string(),
-        agent_did: "did:key:peer-b".to_string(),
+        node_did: "did:key:peer-b".to_string(),
         address: "/ip4/127.0.0.1/tcp/4001/p2p/peer-b".to_string(),
         desired_id: "peer-b".to_string(),
         request_digest: "digest".to_string(),
@@ -195,7 +195,7 @@ fn app_collections_empty_collections_soft_skips() {
     };
     let out = data_plane_desired_from_pairing_row(
         PairingStateRow {
-            agent_did: Some("did:key:self".to_string()),
+            node_did: Some("did:key:self".to_string()),
             collections: Some(vec!["   ".to_string()]),
             replicator_addresses: None,
             template: Some("app-collections".to_string()),
@@ -211,14 +211,14 @@ fn app_collections_empty_collections_soft_skips() {
     );
 }
 
-/// Residual (documented, not softened in #657): a foreign `agent_did` on a
+/// Residual (documented, not softened in #657): a foreign `node_did` on a
 /// data-plane row still hard-fails the whole peer load (`desired_read_failed`),
 /// including a co-existing control pairing. Security refusal, not soft-skip.
 #[test]
-fn foreign_agent_did_still_hard_fails_whole_peer_load() {
+fn foreign_node_did_still_hard_fails_whole_peer_load() {
     let signed_endpoint = EnrollmentEndpointEntry {
         peer_id: "peer-b".to_string(),
-        agent_did: "did:key:peer-b".to_string(),
+        node_did: "did:key:peer-b".to_string(),
         address: "/ip4/127.0.0.1/tcp/4001/p2p/peer-b".to_string(),
         desired_id: "peer-b".to_string(),
         request_digest: "digest".to_string(),
@@ -227,7 +227,7 @@ fn foreign_agent_did_still_hard_fails_whole_peer_load() {
     };
     let err = data_plane_desired_from_pairing_row(
         PairingStateRow {
-            agent_did: Some("did:key:someone-else".to_string()),
+            node_did: Some("did:key:someone-else".to_string()),
             collections: Some(vec!["ChangeProposed".to_string()]),
             replicator_addresses: None,
             template: Some("app-collections".to_string()),
@@ -236,7 +236,7 @@ fn foreign_agent_did_still_hard_fails_whole_peer_load() {
         &signed_endpoint,
         "did:key:self",
     )
-    .expect_err("foreign agent_did must hard-fail, not soft-skip");
+    .expect_err("foreign node_did must hard-fail, not soft-skip");
     let msg = format!("{err:#}");
     assert!(
         msg.contains("foreign") || msg.contains("someone-else") || msg.contains("refusing"),

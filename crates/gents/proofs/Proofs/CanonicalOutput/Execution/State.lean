@@ -28,7 +28,7 @@ namespace Handover
 structure PhysicalRequestAdmission where
   document : DocId
   entry : SessionQueue.QueueEntry
-  agent : Nat
+  node : Nat
   session : SessionId
   requester : Option Nat
   authenticated : Bool
@@ -49,7 +49,7 @@ structure TitleBinding where
   logicalRequest : RequestId
   parentPhysical : DocId
   parentLogical : RequestId
-  agent : Nat
+  node : Nat
   session : SessionId
   authenticated : Bool
   deriving DecidableEq, Repr
@@ -135,7 +135,7 @@ its physical document binding. Logical `entry.requestId` is never substituted
 for `wakeDocument`. -/
 structure WakeDocumentBinding where
   entry : SessionQueue.QueueEntry
-  agent : Nat
+  node : Nat
   session : SessionId
   notificationMessageId : Transcript.MessageId
   notificationSequence : Transcript.Sequence
@@ -147,9 +147,9 @@ structure World where
   requestId : DocId
   sessionId : SessionId
   purpose : RequestPurpose
-  /-- Authenticated principal supplied by existing DID/ACP ownership at the
+  /-- Authenticated nodeDid supplied by existing DID/ACP ownership at the
   local gate. It is not inferred from a source. -/
-  principal : Nat
+  nodeDid : Nat
   lease : RequestExecutionLease.World Generation
   segments : List Segment
   messages : List MessageEnvelope
@@ -162,7 +162,7 @@ structure World where
   gateOwner : Option Nat := none
   gateSchedule : StorageWriteGate.State := ⟨.released, true, false⟩
   queue : SessionQueue.SessionQueueState :=
-    { scope := { agent := 0, session := 0, requester := none }
+    { scope := { node := 0, session := 0, requester := none }
     , active := none, pending := [], terminal := ∅ }
   claimed : Option Handover.ClaimedBinding := none
   retry : CompletionRetry.State :=

@@ -33,7 +33,7 @@ export async function persistInferenceBackend({
     throw new Error(targets.error ?? "Inference target binding is unavailable");
   }
   await onPatchConfigComponents({
-    agentDid: deployment.agentDid,
+    nodeDid: deployment.nodeDid,
     patches: [
       {
         collection: "InferenceBackend",

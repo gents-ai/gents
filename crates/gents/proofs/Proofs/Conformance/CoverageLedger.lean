@@ -523,7 +523,7 @@ def caseCoverage : List CoverageEntry :=
   [ tagged (consumerCoverage
       "root_admission_cases"
       "RootAdmissionCases"
-      "conformance::persona_request::generated_root_admission_cases_drive_production_root_policy")
+      "conformance::root_admission::generated_root_admission_cases_drive_production_root_policy")
       "apply-reconcile" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "pairing_reconcile_cases"
@@ -605,7 +605,7 @@ def caseCoverage : List CoverageEntry :=
       "trigger_cases"
       "TriggerDispatch"
       "trigger_engine::tests::trigger_engine_dispatch_matches_lean_generated_contract_cases"
-      "Dispatch decisions exercise the production engine. Existing materializer tests cover correlation scope, retry exclusion and live-execution supersession. Cross-principal isolation and expired-claim deadline/grace cases still need direct materializer observations. A booted schedule-kind error-writeback observation is also outstanding.")
+      "Dispatch decisions exercise the production engine. Existing materializer tests cover correlation scope, retry exclusion and live-execution supersession. Cross-node isolation and expired-claim deadline/grace cases still need direct materializer observations. A booted schedule-kind error-writeback observation is also outstanding.")
       "triggers" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "trigger_cases"
@@ -826,8 +826,8 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerWithFollowUp
       "readiness_publication_cases"
       "ReadinessPublicationCases"
-      "behavior_readiness_publisher::tests::generated_readiness_publication_traces_write_only_semantic_changes"
-      "The native consumer drives semantic state changes and idle time through a controlled writer. Durable DefraDB publication and host/process failure behavior are not exercised by this writer fixture.")
+      "node_readiness_publisher::tests::generated_readiness_publication_traces_write_only_semantic_changes"
+      "Pending the node readiness publisher rename (L3). The native consumer drives semantic state changes and idle time through a controlled writer. Durable DefraDB publication and host/process failure behavior are not exercised by this writer fixture.")
       "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (followUpCoverage
       "apply_reconcile_cases"
@@ -898,7 +898,22 @@ def caseCoverage : List CoverageEntry :=
       "self_config_cases"
       "SelfConfigCases"
       "conformance::generated_self_config_cases_fence_patch_merge"
-      "Covers production patch admissibility and accepted merges, replays every Tools row through the always-on operator-grant guard (guard_tools_keep_grants) and every Context and Behavior row, clone rows included, through reselection_keeps_grants, and replays guarded rows through the production Tools/Behavior no-lockout guards, the Backend auth fence and the Profile account choice fence. Reference validation and unchanged stored state after rejection require the shared configuration transaction owner.")
+      "Covers production patch admissibility and accepted merges, replays every Tools row through the always-on operator-grant guard (guard_tools_keep_grants) and every Context and Agent row, clone rows included, through reselection_keeps_grants, and replays guarded rows through the production Tools/Agent no-lockout guards, the Backend auth fence and the Profile account choice fence. Reference validation and unchanged stored state after rejection require the shared configuration transaction owner.")
+      "self-config" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "agent_decision_cases"
+      "AgentDecisionCases"
+      "conformance::self_config::generated_agent_decision_cases_drive_production_agent_admission")
+      "self-config" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "agent_materialization_cases"
+      "AgentMaterializationCases"
+      "conformance::self_config::generated_agent_materialization_cases_drive_production_agent_materialization")
+      "self-config" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "sibling_tools_cases"
+      "SiblingToolsCases"
+      "conformance::self_config::generated_sibling_tools_cases_drive_production_tools_selection")
       "self-config" [Surface.agentFacing]
   , tagged (consumerWithFollowUp
       "session_recovery_cases"
@@ -1052,10 +1067,11 @@ def caseCoverage : List CoverageEntry :=
       "ClientSessionTurnCases"
       "gents_desktop_bridge::snapshot::tests::session_state::session_snapshot_binds_generated_session_turn_cases")
       "client-shell" [Surface.operatorUi]
-  , tagged (consumerCoverage
-      "client_behavior_readiness_cases"
-      "ClientBehaviorReadinessCases"
-      "conformance::client_runtime::generated_behavior_readiness_cases_drive_the_production_projector")
+  , tagged (consumerWithFollowUp
+      "client_agent_readiness_cases"
+      "ClientAgentReadinessCases"
+      "conformance::client_runtime::generated_agent_readiness_cases_drive_the_production_projector"
+      "Pending: L2 renames the consumer test and L3 the production projector it drives.")
       "runtime-reconcile" [Surface.operatorUi]
   , tagged (consumerCoverage
       "live_overlay_cases"
@@ -1220,9 +1236,14 @@ def caseCoverage : List CoverageEntry :=
       "agent::loop_stream::tests::generated_repeated_tool_failure_cases_drive_owned_loop")
       "completion-retry" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "self_config_selection_cases"
+      "SelfConfigSelectionCases"
+      "conformance::self_config::generated_self_config_selection_cases_drive_production_tools_selection")
+      "self-config" [Surface.agentFacing]
+  , tagged (consumerCoverage
       "plugin_resource_cases"
       "PluginModelSlotCases"
-      "pack::tests::generated_plugin_model_slots_require_optional_behavior_free_declarations")
+      "pack::tests::generated_plugin_model_slots_require_optional_agent_free_declarations")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
       "plugin_resource_cases"
@@ -1439,8 +1460,8 @@ def caseCoverage : List CoverageEntry :=
       "Exercises the canonical persisted-attempt projector, followed by test-local phase/status mapping. Drive the gents-cli Codex shim mapping and local-interrupt override before claiming end-to-end shim projection coverage.")
       "codex-shim" [Surface.runtimeInternal]
   , tagged (followUpCoverage
-      "codex_shim_behavior_selection_cases"
-      "CodexShimBehaviorSelectionCases"
+      "codex_shim_agent_selection_cases"
+      "CodexShimAgentSelectionCases"
       "The conformance suite's copied mappings and fixture-field assertions do not exercise the gents-cli Codex shim owner. Route these generated inputs through its production projection before claiming adapter coverage.")
       "codex-shim" [Surface.api, Surface.runtimeInternal]
   , tagged (followUpCoverage
@@ -1487,7 +1508,7 @@ def caseCoverage : List CoverageEntry :=
       "identity_permission_cases"
       "IdentityPermissionCases"
       "conformance::identity::resolved_identity_permission_cases_drive_defra_acp"
-      "Checks native Defra ACP after explicit principal resolution. Unknown-owner and same-owner-collision selector rejection require the canonical registry owner; no test-local ID map remains.")
+      "Checks native Defra ACP after explicit node resolution. Unknown-owner and same-owner-collision selector rejection require the canonical registry owner; no test-local ID map remains.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "identity_permission_cases"
@@ -1497,7 +1518,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (followUpCoverage
       "identity_contracts"
       "IdentityContracts"
-      "Route through the canonical principal-scoped registry and exercise rejection before permission checks. The removed synthetic global-ID map did not exercise runtime routing.")
+      "Route through the canonical node-scoped registry and exercise rejection before permission checks. The removed synthetic global-ID map did not exercise runtime routing.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (followUpCoverage
       "canonical_worker_capacity_cases"
@@ -1884,12 +1905,12 @@ def caseCoverage : List CoverageEntry :=
   , tagged (followUpCoverage
       "workspace_cases"
       "WorkspaceCases"
-      "Replay these cases through the production Workspace lifecycle owner after its canonical principal fields migrate; the deleted test-local state table was not implementation coverage.")
+      "Replay these cases through the production Workspace lifecycle owner after its canonical node fields migrate; the deleted test-local state table was not implementation coverage.")
       "isolated-workspaces" [Surface.runtimeInternal]
   , tagged (followUpCoverage
       "workspace_binding_cases"
       "WorkspaceBindingCases"
-      "Replay these cases through the production Workspace binding admission owner after principal-field migration; do not restore the deleted test-local binding predicate.")
+      "Replay these cases through the production Workspace binding admission owner after node-field migration; do not restore the deleted test-local binding predicate.")
       "isolated-workspaces" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "callback_cases"
@@ -1909,8 +1930,8 @@ def caseCoverage : List CoverageEntry :=
       "isolated-workspaces" [Surface.runtimeInternal]
 
   , tagged (consumerWithFollowUp "runtime_cases" "RuntimeReconcileCases"
-      "agent::runtime::tests::behavior_resolution::explicit_behavior_resolution_matches_lean_binding_cases"
-      "Exercises explicit request/session behavior binding. Readiness, atomic admission and generation lifetime remain router-owner obligations.")
+      "agent::runtime::tests::agent_resolution::explicit_agent_resolution_matches_lean_binding_cases"
+      "Pending the L3 test rename. Exercises explicit request/session agent binding. Readiness, atomic admission and generation lifetime remain router-owner obligations.")
       "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp "request_input_cases" "RequestInputCases"
       "conformance::request_input::lean_request_inputs_decode_without_losing_explicit_issuance_facts"
@@ -1961,11 +1982,6 @@ def followUpHookCoverage : List CoverageEntry :=
       "PromptAssembly.Template.assembled_preamble_literal"
       "The existing slot assembler preserves resolved context instructions literally; task_binding_preserves_context confines invocation substitutions to the task slot. Task render_determined proves dependency on declared task variables. The next layers must fence this model through the real provider-input serializer; slot content preservation alone is not a wire-format proof.")
       "prompt-assembly" []
-  , tagged (followUpCoverage
-      "follow_up_hook"
-      "PeerRegistryDiscovery.PersonaRequest.default_disable_rejected"
-      "Incomplete binding (#1737): persona admission cases are not generated from PersonaRequest.lean. The default-disable row in conformance::persona_request::admission_matrix_mirrors_lean_admits is hand-written against decide_persona_request; generating the admission matrix from the Lean opOk owner replaces it.")
-      "apply-reconcile" [Surface.agentFacing]
   ]
 
 def followUpHookIds : List String :=

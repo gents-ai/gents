@@ -206,7 +206,7 @@
     "admission": {
       "boundary": "SessionQueue.latchInterruptScoped",
       "disposition": "routed",
-      "reason": "First interruption drains observed physical wake identities in its transaction. Replay does not rescan. An unobserved concurrent pre-latch completion may survive; post-latch completions and notification facts are preserved. Explicit subagent cascade cancellation is a separate owner and is not constrained by this foreground-interrupt cutoff."
+      "reason": "First interruption drains observed physical wake identities in its transaction. Replay does not rescan. An unobserved concurrent pre-latch completion may survive; post-latch completions and notification facts are preserved. Explicit agent-request cancellation is a separate owner and is not constrained by this foreground-interrupt cutoff."
     }
   },
   {

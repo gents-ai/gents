@@ -58,19 +58,19 @@ pub(in crate::commands::codex_shim) async fn set_codex_thread_name(
         Box::pin(async move {
             let row = gents::session::load_agent_session_row_in_txn(
                 txn,
-                &state.agent_did,
+                &state.node_did,
                 thread_id,
                 Some(state.local_requester_did()),
             )
             .await?
             .context("thread session vanished during rename")?;
             anyhow::ensure!(
-                row.session.behavior_id == state.behavior_id.as_ref(),
-                "thread behavior changed during rename"
+                row.session.agent_id == state.agent_id.as_ref(),
+                "thread agent changed during rename"
             );
             gents::session::apply_title_in_txn(
                 txn,
-                &state.agent_did,
+                &state.node_did,
                 Some(state.local_requester_did()),
                 thread_id,
                 (!name.is_empty()).then_some(name),

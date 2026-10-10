@@ -3,7 +3,7 @@
 /**
  * Document-layer view of an `EthTool` row.
  */
-export type EthToolDocument = { tool_id: string, agent_did: string, display_name?: string | null, enabled?: boolean | null, chain_id?: number | null, rpc_url?: string | null,
+export type EthToolDocument = { tool_id: string, node_did: string, display_name?: string | null, enabled?: boolean | null, chain_id?: number | null, rpc_url?: string | null,
 /**
  * Per-RPC HTTP timeout; unset retains the current 30s default.
  * The enclosing tool-call deadline can shorten it.

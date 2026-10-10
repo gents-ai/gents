@@ -25,7 +25,7 @@ impl ConfigCommandTool {
             .unwrap_or_default();
         anyhow::ensure!(
             mode != crate::tool_surface::FileToolMode::Off,
-            "skill import requires effective file read permission on the invoking behavior"
+            "skill import requires effective file read permission on the invoking agent"
         );
         let root = effective
             .pointer("/runtime_effective/effective/root")
@@ -35,7 +35,7 @@ impl ConfigCommandTool {
         let document = crate::skills::import::load_skill_source(
             std::path::Path::new(&argv[2]),
             &argv[1],
-            &self.agent_did,
+            &self.node_did,
             |path| context.resolve_path(path.to_str().context("skill path must be UTF-8")?),
         )?;
         let target = SelfConfigTarget::Skill;
@@ -53,13 +53,13 @@ impl ConfigCommandTool {
         let skill_id = argv[1].clone();
         request.resolve_unique = Box::new(move |_| Ok(skill_id.clone()));
         // Imports create an explicit new identity. Never overwrite an existing
-        // skill that may be referenced by Setup or another working behavior.
+        // skill that may be referenced by Engineer or another working agent.
         request.allow_create = true;
         request.require_create = true;
-        let owner = self.agent_did.clone();
+        let owner = self.node_did.clone();
         request.on_create = Box::new(move |id, doc| {
             doc.insert("skill_id".into(), json!(id));
-            doc.insert("agent_did".into(), json!(owner));
+            doc.insert("node_did".into(), json!(owner));
             Ok(())
         });
         self.patch(

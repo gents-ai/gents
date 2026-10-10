@@ -10,7 +10,7 @@ async fn title_transitions_preserve_session_and_request_observation() {
         .await
         .unwrap();
     let response = node.execute(r#"mutation { create_AgentSession(input: {
-            session_id: "title-session", agent_did: "owner", behavior_id: "behavior",
+            session_id: "title-session", node_did: "owner", agent_id: "agent",
             created_at: "2026-01-01T00:00:00Z", closed_at: "2026-01-02T00:00:00Z",
             title: {text: "task title", source: "task"}, tags: ["important"],
             provenance: {task_id: "task"},
@@ -109,7 +109,7 @@ async fn title_transitions_preserve_session_and_request_observation() {
     );
 
     let response = node.execute(r#"mutation { create_AgentSession(input: {
-            session_id: "generated-title-session", agent_did: "owner", behavior_id: "behavior",
+            session_id: "generated-title-session", node_did: "owner", agent_id: "agent",
             created_at: "2026-01-01T00:00:00Z", closed_at: "2026-01-02T00:00:00Z",
             title: {text: "New session", source: "placeholder"}, tags: ["important"],
             provenance: {task_id: "task"},
@@ -213,8 +213,8 @@ fn model_session(value: &serde_json::Value) -> gents_protocol::session::AgentSes
         })
     };
     serde_json::from_value(serde_json::json!({
-            "session_id": model_id(&value["scope"]["session"]), "agent_did": model_id(&value["scope"]["agent"]),
-            "requester_did": model_id(&value["scope"]["requester"]), "behavior_id": model_id(&value["behavior"]),
+            "session_id": model_id(&value["scope"]["session"]), "node_did": model_id(&value["scope"]["node"]),
+            "requester_did": model_id(&value["scope"]["requester"]), "agent_id": model_id(&value["agent"]),
             "created_at": model_time(&value["created_at"]), "closed_at": model_time(&value["closed_at"]),
             "title": value["title"], "tags": value["tags"], "provenance": provenance, "observation": observation,
         })).unwrap()
@@ -262,7 +262,7 @@ async fn generated_user_title_cases_drive_the_shared_session_owner() {
                 Box::pin(async move {
                     apply_title_in_txn(
                         txn,
-                        &before.agent_did,
+                        &before.node_did,
                         before.requester_did.as_deref(),
                         &before.session_id,
                         title,
@@ -277,7 +277,7 @@ async fn generated_user_title_cases_drive_the_shared_session_owner() {
         .unwrap();
         let after = load_agent_session(
             &node,
-            &before.agent_did,
+            &before.node_did,
             &before.session_id,
             before.requester_did.as_deref(),
         )

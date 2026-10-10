@@ -11,8 +11,8 @@
         "collection": "AgentSession",
         "document": {
           "session_id": "eval-session-template-routing-destination",
-          "agent_did": "$trial",
-          "behavior_id": "engineer",
+          "node_did": "$trial",
+          "agent_id": "engineer",
           "created_at": "2026-01-01T00:00:00Z",
           "requester_did": "$trial"
         }
@@ -81,7 +81,7 @@
                 "target_key": "task_id",
                 "expect": [
                   {
-                    "field": "behavior_id",
+                    "field": "agent_id",
                     "matches": "(^|:)engineer$"
                   },
                   {
@@ -140,7 +140,7 @@
           "name": "trigger_config",
           "collection": "Trigger",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
@@ -158,7 +158,7 @@
           "name": "eventsource_config",
           "collection": "EventSource",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
@@ -173,13 +173,13 @@
           "name": "task_config",
           "collection": "Task",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             }
           },
           "fields": [
             "task_id",
-            "behavior_id",
+            "agent_id",
             "prompt_template",
             "emit_outcome",
             "enabled"
@@ -324,7 +324,7 @@
           "name": "completed_requests",
           "collection": "AgentRequest",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             },
             "caused_by_trigger_id": {
@@ -350,7 +350,7 @@
           "name": "rendered_request",
           "collection": "AgentRequest",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             },
             "caused_by_trigger_id": {

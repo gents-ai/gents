@@ -1,5 +1,6 @@
 import Proofs.SelfConfig.Theorems
 import Proofs.SelfConfig.Auth
+import Proofs.SelfConfig.AgentDecision
 
 namespace SelfConfig.ContractCases
 
@@ -16,7 +17,7 @@ structure CaseRow where
   held : Grants := Grants.bot
   /-- Tools documents by `tools_id`, for chain and clone rows. -/
   tools : List (FieldValue × List (FieldKey × FieldValue)) := []
-  /-- `context_id` to its `tools_id` (`none` selects no Tools), for Behavior rows. -/
+  /-- `context_id` to its `tools_id` (`none` selects no Tools), for Agent rows. -/
   contexts : List (FieldValue × Option FieldValue) := []
   /-- Backends a profile row can select: (`backend_id` JSON text, provider
   kind, auth JSON text). -/
@@ -51,25 +52,25 @@ def decodeControl (doc : Doc) : Option Control := do
         some (true, true, true)
     | none => some (false, false, true)
     | _ => none
-  let agents ← match doc "subagents" with
+  let agents ← match doc "agents" with
     | some "{\"enabled\":true}" => some true
     | some "{\"enabled\":false}" => some false
     | none => some false
     | _ => none
   pure { selfConfig, agents, noLockout, toolsAuthority }
 
-/-- Fixture decoder for the behavior values used below. -/
+/-- Fixture decoder for the agent values used below. -/
 def decodeReach (doc : Doc) : Option Reach := do
   let enabled ← match doc "enabled" with
     | some "true" | none => some true
     | some "false" => some false
     | _ => none
-  let setupTag ← match doc "tags" with
-    | some "[\"gents:setup-steward\"]" => some true
-    | some "[\"gents:setup-steward\",\"ui:engineer\"]" => some true
+  let engineerTag ← match doc "tags" with
+    | some "[\"gents:engineer\"]" => some true
+    | some "[\"gents:engineer\",\"ui:engineer\"]" => some true
     | some "[]" | some "[\"ui:engineer\"]" | none => some false
     | _ => none
-  pure { enabled, setupTag }
+  pure { enabled, engineerTag }
 
 /-- Fixture decoder for the operator grants carried by the `self_config` values
 below; every other value, and an absent group, carries none. Production
@@ -85,18 +86,18 @@ def decodeGrants (doc : Doc) : Option Grants :=
 /-- Fixture decoder for the exact backend auth texts used below. -/
 def decodeAuthText : String → Option Configuration.BackendAuth
   | "{\"kind\":\"environment\",\"variable\":\"KEY\"}" => some (.environment "KEY")
-  | "{\"kind\":\"principal_oauth\"}" => some (.principalOAuth none)
-  | "{\"kind\":\"principal_oauth\",\"account_ref\":\"a1\"}" => some (.principalOAuth (some "a1"))
-  | "{\"kind\":\"principal_oauth\",\"account_ref\":\"a2\"}" => some (.principalOAuth (some "a2"))
-  | "{\"kind\":\"principal_oauth\",\"account_ref\":\"g2\"}" => some (.principalOAuth (some "g2"))
+  | "{\"kind\":\"node_oauth\"}" => some (.nodeOAuth none)
+  | "{\"kind\":\"node_oauth\",\"account_ref\":\"a1\"}" => some (.nodeOAuth (some "a1"))
+  | "{\"kind\":\"node_oauth\",\"account_ref\":\"a2\"}" => some (.nodeOAuth (some "a2"))
+  | "{\"kind\":\"node_oauth\",\"account_ref\":\"g2\"}" => some (.nodeOAuth (some "g2"))
   | _ => none
 
 def decodeAuth (doc : Doc) : Option Configuration.BackendAuth :=
   (doc "auth").bind decodeAuthText
 
-/-- The invoker-only no-lockout slice for Tools and Behavior targets. -/
+/-- The invoker-only no-lockout slice for Tools and Agent targets. -/
 def lockoutGuard (t : Target) (stored : Doc) : Doc → Bool :=
-  if t = .agentBehavior then keepsReach decodeReach stored
+  if t = .agent then keepsReach decodeReach stored
   else keepsControl decodeControl stored
 
 def rowBackendOf (r : CaseRow) (id : String) : Option (String × Configuration.BackendAuth) :=
@@ -109,31 +110,30 @@ def plainTools : List (FieldKey × FieldValue) :=
 def grantedTools : List (FieldKey × FieldValue) :=
   [("self_config", "{\"enable_self_config\":true,\"enable_pack_install\":true}")]
 
-/-- The Tools document a Context or Behavior selects, through the row's tables. -/
+/-- The Tools document a Context or Agent selects, through the row's tables. -/
 def rowResolve (r : CaseRow) : Doc → Option Doc :=
   let tools (id : FieldValue) : Option Doc :=
     (r.tools.find? (·.1 == id)).map (fun entry => Doc.ofList entry.2)
   match r.target with
   | .agentContext => fun doc => (doc "tools_id").bind tools
-  | .agentBehavior => fun doc =>
+  | .agent => fun doc =>
       ((doc "context_id").bind fun context =>
         (r.contexts.find? (·.1 == context)).bind (·.2)).bind tools
   | _ => fun _ => none
 
 /-- The always-on operator-grant slice. It is not part of the guarded
 dispatch: the native owner runs it on every Tools write from the shared validate
-slot, on every Context or Behavior write whose Tools selection changes
-(`guard_reselection_keeps_grants_in_txn`), and on a clone when its request is
-authored or previewed (`clone_keeps_grants_in_txn`), not on the Behavior write
-that later publishes it. -/
+slot, on every Context or Agent write whose Tools selection changes
+(`guard_reselection_keeps_grants_in_txn`), and on a direct clone in the same transaction that validates and publishes
+its candidate (`clone_keeps_grants_in_txn`). -/
 def grantGuard (r : CaseRow) (stored : Doc) : Doc → Bool :=
   match r.target with
   | .tools => keepsGrants decodeGrants r.held stored
-  | .agentContext | .agentBehavior => chainKeepsGrants decodeGrants r.held (rowResolve r) stored
+  | .agentContext | .agent => chainKeepsGrants decodeGrants r.held (rowResolve r) stored
   | _ => fun _ => true
 
-/-- Every Tools, Context and Behavior row replays the always-on grant slice. A guarded row also
-replays its target's typed guard: the no-lockout slice for Tools and Behavior,
+/-- Every Tools, Context and Agent row replays the always-on grant slice. A guarded row also
+replays its target's typed guard: the no-lockout slice for Tools and Agent,
 the auth fence for Backend and the account choice fence for Profile (default
 = the original account), which Rust enforces in `validate` on every model
 write rather than only under no-lockout. -/
@@ -192,11 +192,11 @@ def buildWitness (r : CaseRow) : CaseWitness :=
 /-- Values are decoded group values abstracted as strings; nested validation
 is supplied to `step`, using the same owner as ordinary configuration. -/
 def examples : List (Target × FieldKey × FieldValue) :=
-  [ (.agentBehavior, "context_id", "context-1")
+  [ (.agent, "context_id", "context-1")
   , (.agentContext, "system_prompt", "You are concise.")
   , (.compaction, "threshold", "0.75")
   , (.tools, "host", "{\"root\":\"/workspace\"}")
-  , (.subagentTarget, "behavior_id", "gatekeeper")
+  , (.agentTarget, "agent_id", "gatekeeper")
   , (.skill, "instructions", "Read the checklist before reviewing.")
   , (.datastoreToolSurface, "entries", "[{tool_name: submit_job, collection: Job}]")
   , (.inferenceProfile, "model_name", "model-1")
@@ -213,32 +213,32 @@ def examples : List (Target × FieldKey × FieldValue) :=
 def examplesToRows : List CaseRow := examples.map fun (t, k, v) =>
   { name := t.collectionName ++ "_configured_field_accepted"
   , target := t, guarded := false, validates := true
-  , doc := [(t.uniqueField, "doc-1"), ("agent_did", "did:key:agent-a")]
+  , doc := [(t.uniqueField, "doc-1"), ("node_did", "did:key:node-a")]
   , patch := [(k, some v)] }
 
 /-- One provider with two accounts, another with its original and a second
 account, and one account-free backend. -/
 def profileBackends : List (String × String × String) :=
-  [ ("\"chat-a1\"", "ChatGptCodex", "{\"kind\":\"principal_oauth\",\"account_ref\":\"a1\"}")
-  , ("\"chat-a1-alt\"", "ChatGptCodex", "{\"kind\":\"principal_oauth\",\"account_ref\":\"a1\"}")
-  , ("\"chat-a2\"", "ChatGptCodex", "{\"kind\":\"principal_oauth\",\"account_ref\":\"a2\"}")
-  , ("\"grok-original\"", "XaiGrokOAuth", "{\"kind\":\"principal_oauth\"}")
-  , ("\"grok-g2\"", "XaiGrokOAuth", "{\"kind\":\"principal_oauth\",\"account_ref\":\"g2\"}")
+  [ ("\"chat-a1\"", "ChatGptCodex", "{\"kind\":\"node_oauth\",\"account_ref\":\"a1\"}")
+  , ("\"chat-a1-alt\"", "ChatGptCodex", "{\"kind\":\"node_oauth\",\"account_ref\":\"a1\"}")
+  , ("\"chat-a2\"", "ChatGptCodex", "{\"kind\":\"node_oauth\",\"account_ref\":\"a2\"}")
+  , ("\"grok-original\"", "XaiGrokOAuth", "{\"kind\":\"node_oauth\"}")
+  , ("\"grok-g2\"", "XaiGrokOAuth", "{\"kind\":\"node_oauth\",\"account_ref\":\"g2\"}")
   , ("\"local\"", "OpenAiCompatible", "{\"kind\":\"environment\",\"variable\":\"KEY\"}") ]
 
 def scenarios : List CaseRow := examplesToRows ++
-  [ { name := "behavior_owner_patch_rejected"
-    , target := .agentBehavior, guarded := false, validates := true
-    , doc := [("agent_did", "did:key:agent-a")]
-    , patch := [("agent_did", some "did:key:agent-b")] }
-  , { name := "behavior_invalid_reference_rejected"
-    , target := .agentBehavior, guarded := false, validates := false
+  [ { name := "agent_owner_patch_rejected"
+    , target := .agent, guarded := false, validates := true
+    , doc := [("node_did", "did:key:node-a")]
+    , patch := [("node_did", some "did:key:node-b")] }
+  , { name := "agent_invalid_reference_rejected"
+    , target := .agent, guarded := false, validates := false
     , doc := [("context_id", "context-1")]
     , patch := [("context_id", some "missing-context")] }
   , { name := "datastore_owner_patch_rejected"
     , target := .datastoreToolSurface, guarded := false, validates := true
-    , doc := [("surface_id", "jobs"), ("agent_did", "did:key:agent-a")]
-    , patch := [("agent_did", some "did:key:agent-b")] }
+    , doc := [("surface_id", "jobs"), ("node_did", "did:key:node-a")]
+    , patch := [("node_did", some "did:key:node-b")] }
   , { name := "datastore_invalid_entries_rejected"
     , target := .datastoreToolSurface, guarded := false, validates := false
     , doc := [("surface_id", "jobs"), ("entries", "valid")]
@@ -263,17 +263,17 @@ def scenarios : List CaseRow := examplesToRows ++
   , { name := "tools_guarded_agents_enable_accepted"
     , target := .tools, guarded := true, validates := true
     , doc := [("self_config", "{\"enable_self_config\":true}")]
-    , patch := [("subagents", some "{\"enabled\":true}")] }
+    , patch := [("agents", some "{\"enabled\":true}")] }
   , { name := "tools_guarded_agents_removal_rejected"
     , target := .tools, guarded := true, validates := true
     , doc := [("self_config", "{\"enable_self_config\":true}"),
-              ("subagents", "{\"enabled\":true}")]
-    , patch := [("subagents", some "{\"enabled\":false}")] }
+              ("agents", "{\"enabled\":true}")]
+    , patch := [("agents", some "{\"enabled\":false}")] }
   , { name := "tools_guarded_agents_clear_rejected"
     , target := .tools, guarded := true, validates := true
     , doc := [("self_config", "{\"enable_self_config\":true}"),
-              ("subagents", "{\"enabled\":true}")]
-    , patch := [("subagents", none)] }
+              ("agents", "{\"enabled\":true}")]
+    , patch := [("agents", none)] }
   , { name := "tools_guarded_self_config_clear_rejected"
     , target := .tools, guarded := true, validates := true
     , doc := [("self_config", "{\"enable_self_config\":true}")]
@@ -293,21 +293,21 @@ def scenarios : List CaseRow := examplesToRows ++
     , doc := [("self_config", "{\"enable_self_config\":true,\"self_config_no_lockout\":true}")]
     , patch := [("self_config",
         some "{\"enable_self_config\":true,\"self_config_no_lockout\":true,\"self_config_categories\":[\"tools\"]}")] }
-  , { name := "behavior_guarded_self_disable_rejected"
-    , target := .agentBehavior, guarded := true, validates := true
-    , doc := [("behavior_id", "default"), ("tags", "[\"gents:setup-steward\"]")]
+  , { name := "agent_guarded_self_disable_rejected"
+    , target := .agent, guarded := true, validates := true
+    , doc := [("agent_id", "default"), ("tags", "[\"gents:engineer\"]")]
     , patch := [("enabled", some "false")] }
-  , { name := "behavior_guarded_setup_tag_removal_rejected"
-    , target := .agentBehavior, guarded := true, validates := true
-    , doc := [("behavior_id", "default"), ("tags", "[\"gents:setup-steward\"]")]
+  , { name := "agent_guarded_engineer_tag_removal_rejected"
+    , target := .agent, guarded := true, validates := true
+    , doc := [("agent_id", "default"), ("tags", "[\"gents:engineer\"]")]
     , patch := [("tags", some "[\"ui:engineer\"]")] }
-  , { name := "behavior_guarded_tag_addition_accepted"
-    , target := .agentBehavior, guarded := true, validates := true
-    , doc := [("behavior_id", "default"), ("tags", "[\"gents:setup-steward\"]")]
-    , patch := [("tags", some "[\"gents:setup-steward\",\"ui:engineer\"]")] }
+  , { name := "agent_guarded_tag_addition_accepted"
+    , target := .agent, guarded := true, validates := true
+    , doc := [("agent_id", "default"), ("tags", "[\"gents:engineer\"]")]
+    , patch := [("tags", some "[\"gents:engineer\",\"ui:engineer\"]")] }
   , { name := "task_targeting_invoker_unguarded_accepted"
     , target := .task, guarded := false, validates := true
-    , doc := [("task_id", "engineer-inbox"), ("behavior_id", "default")]
+    , doc := [("task_id", "engineer-inbox"), ("agent_id", "default")]
     , patch := [("prompt_template", some "Review {{ doc.outcome }}")] }
   , { name := "backend_observation_patch_rejected"
     , target := .inferenceBackend, guarded := false, validates := true
@@ -315,27 +315,27 @@ def scenarios : List CaseRow := examplesToRows ++
     , patch := [("probe_status", some "healthy")] }
   , { name := "backend_oauth_account_change_rejected"
     , target := .inferenceBackend, guarded := true, validates := true
-    , doc := [("auth", "{\"kind\":\"principal_oauth\",\"account_ref\":\"a1\"}")]
-    , patch := [("auth", some "{\"kind\":\"principal_oauth\",\"account_ref\":\"a2\"}")] }
+    , doc := [("auth", "{\"kind\":\"node_oauth\",\"account_ref\":\"a1\"}")]
+    , patch := [("auth", some "{\"kind\":\"node_oauth\",\"account_ref\":\"a2\"}")] }
   , { name := "backend_oauth_reference_set_rejected"
     , target := .inferenceBackend, guarded := true, validates := true
     , doc := [("auth", "{\"kind\":\"environment\",\"variable\":\"KEY\"}")]
-    , patch := [("auth", some "{\"kind\":\"principal_oauth\",\"account_ref\":\"a1\"}")] }
+    , patch := [("auth", some "{\"kind\":\"node_oauth\",\"account_ref\":\"a1\"}")] }
   , { name := "backend_oauth_reference_dropped_rejected"
     , target := .inferenceBackend, guarded := true, validates := true
-    , doc := [("auth", "{\"kind\":\"principal_oauth\",\"account_ref\":\"a1\"}")]
-    , patch := [("auth", some "{\"kind\":\"principal_oauth\"}")] }
+    , doc := [("auth", "{\"kind\":\"node_oauth\",\"account_ref\":\"a1\"}")]
+    , patch := [("auth", some "{\"kind\":\"node_oauth\"}")] }
   , { name := "backend_oauth_original_introduce_accepted"
     , target := .inferenceBackend, guarded := true, validates := true
     , doc := [("auth", "{\"kind\":\"environment\",\"variable\":\"KEY\"}")]
-    , patch := [("auth", some "{\"kind\":\"principal_oauth\"}")] }
+    , patch := [("auth", some "{\"kind\":\"node_oauth\"}")] }
   , { name := "backend_oauth_endpoint_edit_accepted"
     , target := .inferenceBackend, guarded := true, validates := true
-    , doc := [("auth", "{\"kind\":\"principal_oauth\",\"account_ref\":\"a1\"}")]
+    , doc := [("auth", "{\"kind\":\"node_oauth\",\"account_ref\":\"a1\"}")]
     , patch := [("endpoint", some "\"http://127.0.0.1:2/v1\"")] }
   , { name := "backend_oauth_to_environment_accepted"
     , target := .inferenceBackend, guarded := true, validates := true
-    , doc := [("auth", "{\"kind\":\"principal_oauth\",\"account_ref\":\"a1\"}")]
+    , doc := [("auth", "{\"kind\":\"node_oauth\",\"account_ref\":\"a1\"}")]
     , patch := [("auth", some "{\"kind\":\"environment\",\"variable\":\"KEY\"}")] }
   , { name := "profile_keep_backend_model_edit_accepted"
     , target := .inferenceProfile, guarded := true, validates := true
@@ -395,7 +395,7 @@ def scenarios : List CaseRow := examplesToRows ++
   , { name := "tools_grant_unrelated_edit_on_granted_tools_accepted"
     , target := .tools, guarded := false, validates := true
     , doc := [("self_config", "{\"enable_self_config\":true,\"enable_pack_install\":true}")]
-    , patch := [("subagents", some "{\"enabled\":true}")] }
+    , patch := [("agents", some "{\"enabled\":true}")] }
   , { name := "tools_grant_narrowing_accepted"
     , target := .tools, guarded := false, validates := true
     , doc := [("self_config", "{\"enable_self_config\":true,\"enable_pack_install\":true}")]
@@ -436,40 +436,40 @@ def scenarios : List CaseRow := examplesToRows ++
     , doc := [("context_id", "ctx-new")]
     , patch := [("tools_id", some "granted")]
     , tools := [("granted", grantedTools)] }
-  , { name := "behavior_grant_reselect_without_held_rejected"
-    , target := .agentBehavior, guarded := false, validates := true
-    , doc := [("behavior_id", "worker"), ("context_id", "ctx-plain")]
+  , { name := "agent_grant_reselect_without_held_rejected"
+    , target := .agent, guarded := false, validates := true
+    , doc := [("agent_id", "worker"), ("context_id", "ctx-plain")]
     , patch := [("context_id", some "ctx-granted")]
     , contexts := [("ctx-plain", some "plain"), ("ctx-granted", some "granted")]
     , tools := [("plain", plainTools), ("granted", grantedTools)] }
-  , { name := "behavior_reselect_away_from_granted_tools_accepted"
-    , target := .agentBehavior, guarded := false, validates := true
-    , doc := [("behavior_id", "worker"), ("context_id", "ctx-granted")]
+  , { name := "agent_reselect_away_from_granted_tools_accepted"
+    , target := .agent, guarded := false, validates := true
+    , doc := [("agent_id", "worker"), ("context_id", "ctx-granted")]
     , patch := [("context_id", some "ctx-plain")]
     , contexts := [("ctx-plain", some "plain"), ("ctx-granted", some "granted")]
     , tools := [("plain", plainTools), ("granted", grantedTools)] }
   , { name := "clone_granted_source_without_held_rejected"
-    , target := .agentBehavior, guarded := false, validates := true
-    , doc := [("behavior_id", "copy")]
+    , target := .agent, guarded := false, validates := true
+    , doc := [("agent_id", "copy")]
     , patch := [("context_id", some "ctx-granted")]
     , contexts := [("ctx-granted", some "granted")]
     , tools := [("granted", grantedTools)] }
   , { name := "clone_granted_source_with_held_accepted"
-    , target := .agentBehavior, guarded := false, validates := true
+    , target := .agent, guarded := false, validates := true
     , held := { Grants.bot with packInstall := true }
-    , doc := [("behavior_id", "copy")]
+    , doc := [("agent_id", "copy")]
     , patch := [("context_id", some "ctx-granted")]
     , contexts := [("ctx-granted", some "granted")]
     , tools := [("granted", grantedTools)] }
   , { name := "clone_plain_source_without_held_accepted"
-    , target := .agentBehavior, guarded := false, validates := true
-    , doc := [("behavior_id", "copy")]
+    , target := .agent, guarded := false, validates := true
+    , doc := [("agent_id", "copy")]
     , patch := [("context_id", some "ctx-plain")]
     , contexts := [("ctx-plain", some "plain")]
     , tools := [("plain", plainTools)] }
   , { name := "clone_source_without_tools_accepted"
-    , target := .agentBehavior, guarded := false, validates := true
-    , doc := [("behavior_id", "copy")]
+    , target := .agent, guarded := false, validates := true
+    , doc := [("agent_id", "copy")]
     , patch := [("context_id", some "ctx-bare")]
     , contexts := [("ctx-bare", none)] }
   ]
@@ -510,14 +510,201 @@ theorem self_config_cases_cover_reselection :
         && w.selectedBefore.isSome && w.selectedAfter.isSome && !w.accepted)
       && selfConfigCases.any (fun w => decide (w.row.target = .agentContext)
         && w.selectedBefore.isNone && w.selectedAfter.isSome && !w.accepted)
-      && selfConfigCases.any (fun w => decide (w.row.target = .agentBehavior)
+      && selfConfigCases.any (fun w => decide (w.row.target = .agent)
         && w.selectedBefore.isSome && !w.accepted)
-      && selfConfigCases.any (fun w => decide (w.row.target = .agentBehavior)
+      && selfConfigCases.any (fun w => decide (w.row.target = .agent)
         && w.selectedBefore.isNone && w.selectedAfter.isSome && !w.accepted)
       && selfConfigCases.any (fun w =>
         w.selectedBefore.isNone && w.selectedAfter.isSome && w.accepted)
       && selfConfigCases.any (fun w => w.selectedBefore.isSome && w.selectedAfter.isSome
         && w.accepted && !w.row.held.packInstall)) = true := by
+  native_decide
+
+def publishedProfiles : List String := ["fast", "deep"]
+
+structure AgentDecisionRow where
+  name : String
+  catalog : AgentCatalog
+  profiles : List String := publishedProfiles
+  operation : AgentOperation
+  target : String
+  makeDefault : Bool := false
+  deriving Repr
+
+structure AgentDecisionWitness where
+  row : AgentDecisionRow
+  accepted : Bool
+  deriving Repr
+
+def agentCatalog : AgentCatalog :=
+  { agents := [("default", true), ("engineer", true), ("worker", true), ("idle", false)]
+  , protectedIds := ["engineer"]
+  , defaultId := some "default" }
+
+def emptyAgentCatalog : AgentCatalog :=
+  { agents := [], protectedIds := [], defaultId := none }
+
+def freshCreate : AgentCreateInput :=
+  { name := "reviewer", systemPrompt := "Review diffs.", profile := "fast" }
+
+/-- Rows cover the catalog decision for every operation and each create-input
+and edit-field predicate; verdicts come from `agentOperationAdmitted`. -/
+def agentDecisionScenarios : List AgentDecisionRow :=
+  [ { name := "agent_default_disable_rejected"
+    , catalog := agentCatalog, operation := .disable, target := "default" }
+  , { name := "agent_protected_edit_rejected"
+    , catalog := agentCatalog, operation := .edit { profile := some (.set "deep") }
+    , target := "engineer" }
+  , { name := "agent_protected_disable_rejected"
+    , catalog := agentCatalog, operation := .disable, target := "engineer" }
+  , { name := "agent_non_default_disable_accepted"
+    , catalog := agentCatalog, operation := .disable, target := "worker" }
+  , { name := "agent_disable_while_designating_default_rejected"
+    , catalog := agentCatalog, operation := .disable, target := "worker", makeDefault := true }
+  , { name := "agent_unprotected_edit_accepted"
+    , catalog := agentCatalog, operation := .edit { profile := some (.set "deep") }
+    , target := "worker" }
+  , { name := "agent_edit_missing_rejected"
+    , catalog := agentCatalog, operation := .edit { profile := some (.set "deep") }
+    , target := "ghost" }
+  , { name := "agent_edit_omitted_fields_accepted"
+    , catalog := agentCatalog, operation := .edit {}, target := "worker" }
+  , { name := "agent_edit_name_only_without_profile_accepted"
+    , catalog := agentCatalog, operation := .edit { name := some (.set "Worker") }
+    , target := "worker" }
+  , { name := "agent_edit_name_clear_accepted"
+    , catalog := agentCatalog, operation := .edit { name := some .clear }, target := "worker" }
+  , { name := "agent_edit_blank_name_rejected"
+    , catalog := agentCatalog, operation := .edit { name := some (.set "") }
+    , target := "worker" }
+  , { name := "agent_edit_blank_prompt_rejected"
+    , catalog := agentCatalog, operation := .edit { systemPrompt := some (.set "  ") }
+    , target := "worker" }
+  , { name := "agent_edit_profile_clear_rejected"
+    , catalog := agentCatalog, operation := .edit { profile := some .clear }
+    , target := "worker" }
+  , { name := "agent_edit_unpublished_profile_rejected"
+    , catalog := agentCatalog, operation := .edit { profile := some (.set "ghost") }
+    , target := "worker" }
+  , { name := "agent_create_fresh_id_accepted"
+    , catalog := agentCatalog, operation := .create freshCreate, target := "reviewer" }
+  , { name := "agent_create_existing_id_rejected"
+    , catalog := agentCatalog, operation := .create freshCreate, target := "worker" }
+  , { name := "agent_create_blank_profile_rejected"
+    , catalog := agentCatalog, operation := .create { freshCreate with profile := " " }
+    , target := "reviewer" }
+  , { name := "agent_create_unpublished_profile_rejected"
+    , catalog := agentCatalog, operation := .create { freshCreate with profile := "ghost" }
+    , target := "reviewer" }
+  , { name := "agent_create_fresh_without_prompt_rejected"
+    , catalog := agentCatalog, operation := .create { freshCreate with systemPrompt := " " }
+    , target := "reviewer" }
+  , { name := "agent_create_fresh_empty_prompt_empty_catalog_rejected"
+    , catalog := emptyAgentCatalog, profiles := ["fast"]
+    , operation := .create { name := "worker", systemPrompt := "", profile := "fast" }
+    , target := "worker" }
+  , { name := "agent_create_clone_inherits_prompt_accepted"
+    , catalog := agentCatalog
+    , operation := .create { freshCreate with systemPrompt := "", profile := "deep"
+                                            , cloneFrom := "worker" }
+    , target := "reviewer" }
+  , { name := "agent_create_clone_disabled_source_rejected"
+    , catalog := agentCatalog
+    , operation := .create { freshCreate with systemPrompt := "", profile := "deep"
+                                            , cloneFrom := "idle" }
+    , target := "reviewer" } ]
+
+def agentDecisionCases : List AgentDecisionWitness :=
+  agentDecisionScenarios.map fun r =>
+    { row := r
+    , accepted := agentOperationAdmitted r.profiles r.catalog r.operation r.target
+        r.makeDefault }
+
+/-- Regression expectations, checked against model execution. -/
+theorem agent_decision_cases_regressions :
+    (agentDecisionCases.filter (·.accepted)).map (·.row.name) =
+      ["agent_non_default_disable_accepted", "agent_unprotected_edit_accepted",
+       "agent_edit_omitted_fields_accepted",
+       "agent_edit_name_only_without_profile_accepted", "agent_edit_name_clear_accepted",
+       "agent_create_fresh_id_accepted", "agent_create_clone_inherits_prompt_accepted"] := by
+  native_decide
+
+/-! ## Materialization through the admission owner -/
+
+/-- The documents of one candidate registry under a single owning node. Lean
+builds the `Registry` from this list form and the emitter serializes the same
+lists, so a consumer constructs its documents from the emitted inputs. -/
+structure CandidateFixture where
+  nodeDid : String
+  agents : List (String × Configuration.Agent)
+  contexts : List (String × Configuration.Context)
+  profiles : List (String × Configuration.SelectedModel)
+  backends : List (String × Configuration.Backend)
+
+def CandidateFixture.registry (f : CandidateFixture) : Configuration.Registry :=
+  { tasks := fun _ _ => none
+  , agents := fun scope id =>
+      if scope = f.nodeDid then (f.agents.lookup id).map (⟨f.nodeDid, ·⟩) else none
+  , contexts := fun scope id =>
+      if scope = f.nodeDid then (f.contexts.lookup id).map (⟨f.nodeDid, ·⟩) else none
+  , profiles := fun scope id =>
+      if scope = f.nodeDid then (f.profiles.lookup id).map (⟨f.nodeDid, ·⟩) else none
+  , backends := fun scope id =>
+      if scope = f.nodeDid then (f.backends.lookup id).map (⟨f.nodeDid, ·⟩) else none }
+
+/-- One node owning an enabled `worker` Agent with no context and the `fast`
+profile on an enabled backend, so canonical resolution succeeds for `worker`.
+Candidate construction is separate from create-input admission: the create
+input never supplies the candidate's context. -/
+def workerFixture : CandidateFixture :=
+  { nodeDid := "node"
+  , agents := [("worker", { contextId := none, profileId := "fast", enabled := true })]
+  , contexts := []
+  , profiles := [("fast", { backendId := "local", model := "m", effort := none })]
+  , backends := [("local", { enabled := true })] }
+
+def workerCandidate : Configuration.Registry := workerFixture.registry
+
+structure AgentMaterializationRow where
+  name : String
+  decision : AgentDecisionRow
+
+def agentMaterializationScenarios : List AgentMaterializationRow :=
+  [ { name := "materialize_fresh_create_without_prompt_nothing"
+    , decision :=
+        { name := "", catalog := emptyAgentCatalog, profiles := ["fast"]
+        , operation := .create { name := "worker", systemPrompt := "", profile := "fast" }
+        , target := "worker" } }
+  , { name := "materialize_fresh_create_with_prompt_session"
+    , decision :=
+        { name := "", catalog := emptyAgentCatalog, profiles := ["fast"]
+        , operation := .create { name := "worker", systemPrompt := "Work.", profile := "fast" }
+        , target := "worker" } }
+  , { name := "materialize_edit_profile_clear_nothing"
+    , decision :=
+        { name := "", catalog := agentCatalog, operation := .edit { profile := some .clear }
+        , target := "worker" } }
+  , { name := "materialize_edit_name_only_session"
+    , decision :=
+        { name := "", catalog := agentCatalog, operation := .edit { name := some (.set "W") }
+        , target := "worker" } }
+  , { name := "materialize_disable_nothing"
+    , decision :=
+        { name := "", catalog := agentCatalog, operation := .disable, target := "worker" } } ]
+
+def agentMaterializationCases : List (String × Option Configuration.ResolvedSessionConfig) :=
+  agentMaterializationScenarios.map fun r =>
+    (r.name, materializedAgent r.decision.profiles r.decision.catalog r.decision.operation
+      r.decision.target r.decision.makeDefault workerCandidate workerFixture.nodeDid)
+
+/-- Regression expectations, checked against model execution. The rejected
+fresh create resolves canonically (absent context is permitted) yet
+materializes nothing. -/
+theorem agent_materialization_cases_regressions :
+    (agentMaterializationCases.filter (·.2.isSome)).map (·.1) =
+      ["materialize_fresh_create_with_prompt_session",
+       "materialize_edit_name_only_session"] ∧
+    (Configuration.resolveAgent workerCandidate workerFixture.nodeDid "worker").toOption.isSome = true := by
   native_decide
 
 end SelfConfig.ContractCases

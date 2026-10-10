@@ -1,5 +1,5 @@
 use super::*;
-use crate::identity::AgentIdentity;
+use crate::identity::NodeIdentity;
 use crate::llm::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
 
 struct PendingTool;
@@ -55,7 +55,7 @@ async fn finish_owned_request(hook: &DefraSessionHook, request_id: &str) {
             .clone()
     };
     let session_id = hook.session_id().await.expect("owned session");
-    let agent_did = hook.agent_did.clone();
+    let node_did = hook.node_did.clone();
     let requester_did = hook.active_requester_did().await;
     let headers = crate::config_client::ConfigAccess::transact_local(
         hook.node.as_ref(),
@@ -64,13 +64,13 @@ async fn finish_owned_request(hook: &DefraSessionHook, request_id: &str) {
         |txn| {
             let request_doc_id = request_doc_id.clone();
             let session_id = session_id.clone();
-            let agent_did = agent_did.clone();
+            let node_did = node_did.clone();
             let requester_did = requester_did.clone();
             Box::pin(async move {
                 crate::session::load_request_headers_in_txn(
                     txn,
                     &session_id,
-                    &agent_did,
+                    &node_did,
                     requester_did.as_deref(),
                     &request_doc_id,
                 )
@@ -130,19 +130,15 @@ async fn generated_wait_observer_interrupt_preserves_background_process() {
             .unwrap(),
     );
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    crate::test_support::install_test_behavior(&node, identity.did(), "general").await;
+    crate::test_support::install_test_agent(&node, identity.did(), "general").await;
     let executions = BackgroundExecutionRegistry::default();
-    let hook = DefraSessionHook::with_identity(
-        node.clone(),
-        "general",
-        identity.did(),
-        FailurePolicy::default(),
-    )
-    .with_background_tool_registry(BackgroundToolRegistry::from_tools(
-        vec![Box::new(PendingTool)],
-        &["slow_tool".into()],
-    ))
-    .with_background_execution_registry(executions.clone());
+    let hook =
+        DefraSessionHook::with_identity(node.clone(), identity.did(), FailurePolicy::default())
+            .with_background_tool_registry(BackgroundToolRegistry::from_tools(
+                vec![Box::new(PendingTool)],
+                &["slow_tool".into()],
+            ))
+            .with_background_execution_registry(executions.clone());
     hook.on_completion_call(&user_text_message("observe background work"), &[])
         .await;
     let session_id = hook.session_id().await.unwrap();
@@ -200,7 +196,7 @@ async fn generated_wait_observer_interrupt_preserves_background_process() {
     let persisted = crate::tool_call_lifecycle::query::load_tool_call_result(
         &crate::config_client::ConfigAccess::Local(node.clone()),
         wait_row["_docID"].as_str().expect("physical wait call"),
-        &hook.agent_did,
+        &hook.node_did,
         &session_id,
         hook.active_requester_did().await.as_deref(),
     )
@@ -258,30 +254,24 @@ async fn run_process_control_scope(requester_did: Option<&str>) {
     );
     crate::ensure_runtime_schemas(&node).await.unwrap();
     for did in [owner_did, foreign_did] {
-        crate::test_support::install_test_behavior(&node, did, "general").await;
+        crate::test_support::install_test_agent(&node, did, "general").await;
     }
 
     let executions = BackgroundExecutionRegistry::default();
-    let owner = DefraSessionHook::with_identity(
-        node.clone(),
-        "general",
-        owner_did,
-        FailurePolicy::default(),
-    )
-    .with_background_tool_registry(BackgroundToolRegistry::from_tools(
-        vec![Box::new(PendingTool)],
-        &["slow_tool".into()],
-    ))
-    .with_background_execution_registry(executions.clone());
+    let owner = DefraSessionHook::with_identity(node.clone(), owner_did, FailurePolicy::default())
+        .with_background_tool_registry(BackgroundToolRegistry::from_tools(
+            vec![Box::new(PendingTool)],
+            &["slow_tool".into()],
+        ))
+        .with_background_execution_registry(executions.clone());
     owner
         .on_completion_call(&user_text_message("run scoped background work"), &[])
         .await;
     let session_id = owner.session_id().await.unwrap();
     for did in [owner_did, foreign_did] {
-        crate::session::ensure_session_with_behavior_id_and_requester_did(
+        crate::session::ensure_session_with_agent_id_and_requester_did(
             &node,
             &session_id,
-            "general",
             did,
             "general",
             requester_did,
@@ -292,7 +282,6 @@ async fn run_process_control_scope(requester_did: Option<&str>) {
     let foreign = DefraSessionHook::resume_with_identity_policy(
         node.clone(),
         &session_id,
-        "general",
         foreign_did,
         requester_did,
         FailurePolicy::default(),
@@ -352,7 +341,7 @@ async fn run_process_control_scope(requester_did: Option<&str>) {
         .to_owned();
     let row = fetch_tool_call_row(&node, &session_id, &tool_call_id).await;
     assert_eq!(row["request_id"], owner_request);
-    assert_eq!(row["agent_did"], owner_did);
+    assert_eq!(row["node_did"], owner_did);
     assert_eq!(row["requester_did"].as_str(), requester_did);
     assert_eq!(row["lifecycle_state"], "running");
     assert_eq!(row["await_mode"], "background");
@@ -394,15 +383,17 @@ async fn run_process_control_scope(requester_did: Option<&str>) {
     assert_eq!(foreign_read["failure_class"], "tool_not_allowed");
     let foreign_read_row = fetch_tool_call_row(&node, &session_id, "foreign-read").await;
     assert_eq!(foreign_read_row["request_id"], foreign_request);
-    assert_eq!(foreign_read_row["agent_did"], foreign_did);
+    assert_eq!(foreign_read_row["node_did"], foreign_did);
     assert_eq!(foreign_read_row["requester_did"].as_str(), requester_did);
     for name in ["wait_process", "cancel_process"] {
         let denial = invoke(&foreign, &format!("foreign-{name}"), name, &args).await;
         assert_eq!(denial["ok"], false, "{name}: {denial}");
-        assert!(denial["message"]
-            .as_str()
-            .is_some_and(|message| message.contains("not manageable by this session principal")),
-            "{name}: {denial}");
+        assert!(
+            denial["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("not manageable by this session")),
+            "{name}: {denial}"
+        );
     }
     let denied = crate::tool_control::cancel_session_background_process(
         node.clone(),

@@ -32,8 +32,8 @@ use crate::eval::runner::executor::{CaptureResult, StageEvidence};
 ///   exactly one source row. Optional
 ///   `via` hops follow more references before testing. `reported_fields` requires
 ///   non-null target values in the final assistant message (ignoring case).
-/// - `agents`: `{behaviors, contexts, tools, expect: [{behavior_id, category?,
-///   behavior: [...], context: [...], tools: [...]}]}`: the behavior exists,
+/// - `agents`: `{agents, contexts, tools, expect: [{agent_id, category?,
+///   agent: [...], context: [...], tools: [...]}]}`: the agent exists,
 ///   and each expectation holds on it, on the Context it selects and on the
 ///   Tools that Context selects. Optional `datastore` follows selected surfaces,
 ///   comparing exact create/query collection sets. `caller_fields` requires model-
@@ -41,10 +41,10 @@ use crate::eval::runner::executor::{CaptureResult, StageEvidence};
 ///   fields or runtime fills; `query_fields` requires returned columns;
 ///   `lookup_by` requires queries usable with
 ///   that key alone. `called_create`/`called_query` require successful calls to
-///   the selected tools. Optional `delegates` checks the exact local behavior set
-///   reached through selected subagent targets. Both reject unresolved references.
-///   With `source_match`, `behavior_id` names a role rather than a stored ID:
-///   the selector must identify one behavior, distinct from other named roles.
+///   the selected tools. Optional `delegates` checks the exact set of the
+///   local node's agents reached through selected agent targets. Both reject unresolved references.
+///   With `source_match`, `agent_id` names a role rather than a stored ID:
+///   the selector must identify one agent, distinct from other named roles.
 ///   Delegate expectations resolve those role names to the selected stored IDs.
 /// - `templates`: `[{capture, key, id, fields: [field], allowed: [name],
 ///   category?}]`: every `{{ doc.NAME }}` in each present template field of
@@ -56,9 +56,9 @@ use crate::eval::runner::executor::{CaptureResult, StageEvidence};
 ///
 /// An expectation is `captured_fields_match`'s: `{field, equals | contains |
 /// matches}`, `field` a dotted path; a JSON string along the path is read as
-/// the JSON it holds, and a missing path reads as `null`. A row's `id` (and a
-/// behavior's) matches its stored ID exactly or as the `<scope>:<id>` suffix a
-/// principal-scoped behavior ID carries. `raw.activity` counts the stage's tool calls, failed
+/// the JSON it holds, and a missing path reads as `null`. A row's `id` (and an
+/// agent's) matches its stored ID exactly or as the `<scope>:<id>` suffix a
+/// node-scoped agent ID carries. `raw.activity` counts the stage's tool calls, failed
 /// tool calls and inference calls.
 pub struct CrewSpecMatch;
 
@@ -152,7 +152,7 @@ struct LinkHop {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Agents {
-    behaviors: String,
+    agents: String,
     contexts: String,
     tools: String,
     expect: Vec<AgentSpec>,
@@ -161,13 +161,13 @@ struct Agents {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct AgentSpec {
-    behavior_id: String,
+    agent_id: String,
     #[serde(default)]
     source_match: Option<Expectation>,
     #[serde(default)]
     category: Option<String>,
     #[serde(default)]
-    behavior: Vec<Expectation>,
+    agent: Vec<Expectation>,
     #[serde(default)]
     context: Vec<Expectation>,
     #[serde(default)]
@@ -204,7 +204,7 @@ struct DatastoreSpec {
 #[serde(deny_unknown_fields)]
 struct DelegateSpec {
     targets: String,
-    behaviors: BTreeSet<String>,
+    agents: BTreeSet<String>,
 }
 
 #[derive(Deserialize)]
@@ -248,7 +248,7 @@ fn lookup(row: &Value, field: &str) -> Value {
     current
 }
 
-/// Whether a stored ID is the declared one. Behavior IDs a principal creates
+/// Whether a stored ID is the declared one. Agent IDs a node creates
 /// are stored scoped to it (`<DID>:<id>`), so a declared `id` also matches a
 /// stored ID ending in `:<id>`; an exact match wins.
 fn is_id(stored: &str, id: &str) -> bool {
@@ -350,7 +350,7 @@ impl Check for CrewSpecMatch {
     }
 
     fn version(&self) -> &'static str {
-        "7"
+        "8"
     }
 
     fn describe(&self) -> CheckDescription {
@@ -372,7 +372,7 @@ impl Check for CrewSpecMatch {
         CheckDescription {
             name: self.name().into(),
             version: self.version().into(),
-            summary: "Scores the fraction of a declared configuration's requirements that the captured home holds: captures present, keyed rows and their fields, each behavior's Context and Tools, template fields against each source collection, and ids named in a receipt. raw.categories breaks the score down; raw.activity counts tool and inference calls.".into(),
+            summary: "Scores the fraction of a declared configuration's requirements that the captured home holds: captures present, keyed rows and their fields, each agent's Context and Tools, template fields against each source collection, and ids named in a receipt. raw.categories breaks the score down; raw.activity counts tool and inference calls.".into(),
             params_schema: json!({
                 "type": "object",
                 "properties": {
@@ -414,26 +414,26 @@ impl Check for CrewSpecMatch {
                     "agents": {
                         "type": "object",
                         "properties": {
-                            "behaviors": {"type": "string"}, "contexts": {"type": "string"},
+                            "agents": {"type": "string"}, "contexts": {"type": "string"},
                             "tools": {"type": "string"},
                             "expect": {"type": "array", "items": {
                                 "type": "object",
                                 "properties": {
-                                    "behavior_id": {"type": "string"}, "category": category,
+                                    "agent_id": {"type": "string"}, "category": category,
                                     "source_match": expectation,
-                                    "behavior": expectations, "context": expectations,
+                                    "agent": expectations, "context": expectations,
                                     "tools": expectations,
                                     "datastore": {"type":"object", "properties": {
                                         "surfaces":{"type":"string"}, "create":strings, "query":strings, "caller_fields":{"type":"object", "additionalProperties":strings}, "required_fields":{"type":"object", "additionalProperties":strings}, "query_fields":{"type":"object", "additionalProperties":strings}, "lookup_by":{"type":"string"}, "called_create":strings, "called_query":strings
                                     }, "required":["surfaces","create","query"], "additionalProperties":false},
                                     "delegates": {"type":"object", "properties": {
-                                        "targets":{"type":"string"}, "behaviors":strings
-                                    }, "required":["targets","behaviors"], "additionalProperties":false}
+                                        "targets":{"type":"string"}, "agents":strings
+                                    }, "required":["targets","agents"], "additionalProperties":false}
                                 },
-                                "required": ["behavior_id"], "additionalProperties": false
+                                "required": ["agent_id"], "additionalProperties": false
                             }}
                         },
-                        "required": ["behaviors", "contexts", "tools", "expect"],
+                        "required": ["agents", "contexts", "tools", "expect"],
                         "additionalProperties": false
                     },
                     "templates": {"type": "array", "items": {
@@ -598,19 +598,19 @@ impl Check for CrewSpecMatch {
                 );
             }
         }
-        if let Some(agents) = params.agents {
-            let behaviors = rows(&agents.behaviors).unwrap_or_default();
-            let contexts = rows(&agents.contexts).unwrap_or_default();
-            let tools = rows(&agents.tools).unwrap_or_default();
+        if let Some(agent_spec) = params.agents {
+            let agents = rows(&agent_spec.agents).unwrap_or_default();
+            let contexts = rows(&agent_spec.contexts).unwrap_or_default();
+            let tools = rows(&agent_spec.tools).unwrap_or_default();
             let mut roles = BTreeMap::new();
             let mut selected = Vec::new();
-            for mut spec in agents.expect {
-                let behavior = if let Some(selector) = spec.source_match.take() {
+            for mut spec in agent_spec.expect {
+                let agent = if let Some(selector) = spec.source_match.take() {
                     let (field, matcher) = match test(selector) {
                         Ok(test) => test,
                         Err(detail) => return grader("bad_params", detail),
                     };
-                    let mut matches = behaviors.iter().filter(|row| {
+                    let mut matches = agents.iter().filter(|row| {
                         field
                             .resolve(|path| Some(lookup(row, path)))
                             .is_some_and(|actual| matcher.holds(&actual))
@@ -622,16 +622,16 @@ impl Check for CrewSpecMatch {
                         None
                     };
                     let id = unique
-                        .and_then(|row| row.get("behavior_id"))
+                        .and_then(|row| row.get("agent_id"))
                         .and_then(Value::as_str);
-                    if roles.insert(spec.behavior_id.clone(), id).is_some() {
-                        return grader("bad_params", "duplicate named behavior role");
+                    if roles.insert(spec.agent_id.clone(), id).is_some() {
+                        return grader("bad_params", "duplicate named agent role");
                     }
                     unique
                 } else {
-                    find(behaviors, "behavior_id", &spec.behavior_id)
+                    find(agents, "agent_id", &spec.agent_id)
                 };
-                selected.push((spec, behavior));
+                selected.push((spec, agent));
             }
             let mut counts = BTreeMap::new();
             for id in roles.values().flatten() {
@@ -642,18 +642,17 @@ impl Check for CrewSpecMatch {
                     *id = None;
                 }
             }
-            for (spec, behavior) in selected {
-                let behavior =
-                    behavior.filter(|_| roles.get(&spec.behavior_id).is_none_or(Option::is_some));
+            for (spec, agent) in selected {
+                let agent = agent.filter(|_| roles.get(&spec.agent_id).is_none_or(Option::is_some));
                 let category = spec.category.as_deref();
-                let (behavior_tests, context_tests, tools_tests) =
-                    match (tests(spec.behavior), tests(spec.context), tests(spec.tools)) {
+                let (agent_tests, context_tests, tools_tests) =
+                    match (tests(spec.agent), tests(spec.context), tests(spec.tools)) {
                         (Ok(b), Ok(c), Ok(t)) => (b, c, t),
                         (Err(detail), _, _) | (_, Err(detail), _) | (_, _, Err(detail)) => {
                             return grader("bad_params", detail)
                         }
                     };
-                let context = behavior
+                let context = agent
                     .and_then(|row| row.get("context_id").and_then(Value::as_str))
                     .and_then(|id| find(contexts, "context_id", id));
                 let no_tools = json!({});
@@ -665,16 +664,9 @@ impl Check for CrewSpecMatch {
                             .filter(|row| row.get("tools_id").is_some_and(Value::is_null))
                             .map(|_| &no_tools)
                     });
-                let id = &spec.behavior_id;
-                tally.record(category, behavior.is_some(), || {
-                    format!("behavior {id} absent")
-                });
-                tally.expectations(
-                    category,
-                    &format!("behavior {id}"),
-                    behavior,
-                    &behavior_tests,
-                );
+                let id = &spec.agent_id;
+                tally.record(category, agent.is_some(), || format!("agent {id} absent"));
+                tally.expectations(category, &format!("agent {id}"), agent, &agent_tests);
                 tally.expectations(category, &format!("{id} context"), context, &context_tests);
                 tally.expectations(category, &format!("{id} tools"), tools_row, &tools_tests);
                 if let Some(expected) = spec.datastore {
@@ -792,13 +784,13 @@ impl Check for CrewSpecMatch {
                     });
                 }
                 if let Some(expected) = spec.delegates {
-                    let selected = tools_row.map(|t| lookup(t, "subagents.target_ids"));
+                    let selected = tools_row.map(|t| lookup(t, "agents.target_ids"));
                     let enabled =
-                        tools_row.map(|t| lookup(t, "subagents.enabled")) == Some(json!(true));
+                        tools_row.map(|t| lookup(t, "agents.enabled")) == Some(json!(true));
                     let mut actual = BTreeSet::new();
                     let mut valid = enabled
                         && expected
-                            .behaviors
+                            .agents
                             .iter()
                             .all(|name| roles.get(name).is_none_or(Option::is_some));
                     if let Some(Value::Array(ids)) = selected {
@@ -808,27 +800,24 @@ impl Check for CrewSpecMatch {
                                     .and_then(|rows| find(rows, "target_id", reference))
                             });
                             valid &= target.is_some_and(|t| {
-                                t.get("agent_did").and_then(Value::as_str).is_some()
-                                    && t.get("target_agent_did") == t.get("agent_did")
+                                t.get("node_did").and_then(Value::as_str).is_some()
+                                    && t.get("target_node_did") == t.get("node_did")
                             });
-                            if let Some(behavior) = target
-                                .and_then(|t| t.get("behavior_id"))
+                            if let Some(agent) = target
+                                .and_then(|t| t.get("agent_id"))
                                 .and_then(Value::as_str)
                             {
                                 if let Some(name) =
-                                    expected
-                                        .behaviors
-                                        .iter()
-                                        .find(|name| match roles.get(*name) {
-                                            Some(Some(id)) => behavior == *id,
-                                            Some(None) => false,
-                                            None => is_id(behavior, name),
-                                        })
+                                    expected.agents.iter().find(|name| match roles.get(*name) {
+                                        Some(Some(id)) => agent == *id,
+                                        Some(None) => false,
+                                        None => is_id(agent, name),
+                                    })
                                 {
                                     actual.insert(name.clone());
                                 } else {
                                     valid = false;
-                                    actual.insert(behavior.to_string());
+                                    actual.insert(agent.to_string());
                                 }
                             } else {
                                 valid = false;
@@ -837,8 +826,8 @@ impl Check for CrewSpecMatch {
                     } else {
                         valid = false;
                     }
-                    tally.record(category, valid && actual == expected.behaviors, || {
-                        format!("{id} selected delegates {actual:?}; expected {:?}; references valid: {valid}", expected.behaviors)
+                    tally.record(category, valid && actual == expected.agents, || {
+                        format!("{id} selected delegates {actual:?}; expected {:?}; references valid: {valid}", expected.agents)
                     });
                 }
             }
@@ -969,9 +958,9 @@ mod tests {
     fn home() -> StageEvidence {
         stage(&[
             (
-                "behaviors",
+                "agents",
                 vec![
-                    json!({"behavior_id": "worker-a", "context_id": "c1", "inference_profile_id": "glm-a"}),
+                    json!({"agent_id": "worker-a", "context_id": "c1", "inference_profile_id": "glm-a"}),
                 ],
             ),
             (
@@ -983,7 +972,7 @@ mod tests {
             (
                 "tools",
                 vec![
-                    json!({"tools_id": "t1", "host": "{\"files\":{\"mode\":\"ReadWrite\"}}", "subagents": {"enabled": false}}),
+                    json!({"tools_id": "t1", "host": "{\"files\":{\"mode\":\"ReadWrite\"}}", "agents": {"enabled": false}}),
                 ],
             ),
             (
@@ -1005,11 +994,11 @@ mod tests {
             "present": [{"capture": "c_assignment", "category": "collections"}, {"capture": "c_result", "category": "collections"}],
             "rows": [{"capture": "tasks", "key": "task_id", "id": "work-a", "category": "emit_outcome",
                       "expect": [{"field": "emit_outcome", "equals": true}]}],
-            "agents": {"behaviors": "behaviors", "contexts": "contexts", "tools": "tools", "expect": [
-                {"behavior_id": "worker-a", "category": "least_privilege",
-                 "behavior": [{"field": "inference_profile_id", "equals": "glm-a"}],
+            "agents": {"agents": "agents", "contexts": "contexts", "tools": "tools", "expect": [
+                {"agent_id": "worker-a", "category": "least_privilege",
+                 "agent": [{"field": "inference_profile_id", "equals": "glm-a"}],
                  "context": [{"field": "system_prompt", "contains": "GLM worker"}],
-                 "tools": [{"field": "host.files.mode", "equals": "ReadWrite"}, {"field": "subagents.enabled", "equals": false}]}
+                 "tools": [{"field": "host.files.mode", "equals": "ReadWrite"}, {"field": "agents.enabled", "equals": false}]}
             ]},
             "templates": [{"capture": "tasks", "key": "task_id", "id": "work-a", "fields": ["prompt_template"], "allowed": ["shard_id"]}],
             "receipt": {"capture": "mailbox", "fields": ["title", "payload"], "ids": ["worker-a", "work-a", "work-b"]}
@@ -1019,8 +1008,8 @@ mod tests {
     #[test]
     fn multiple_hops_require_the_connected_limit_and_the_reported_model() {
         let params = json!({"links":[
-            {"capture":"behaviors","key":"behavior_id","id":"engineer","field":"inference_profile_id","target_capture":"profiles","target_key":"profile_id","reported_fields":["model_name"]},
-            {"capture":"behaviors","key":"behavior_id","id":"engineer","field":"inference_profile_id","target_capture":"profiles","target_key":"profile_id","via":[{"field":"execution_id","target_capture":"executions","target_key":"execution_id"}],"expect":[{"field":"max_turns","equals":30}]}
+            {"capture":"agents","key":"agent_id","id":"engineer","field":"inference_profile_id","target_capture":"profiles","target_key":"profile_id","reported_fields":["model_name"]},
+            {"capture":"agents","key":"agent_id","id":"engineer","field":"inference_profile_id","target_capture":"profiles","target_key":"profile_id","via":[{"field":"execution_id","target_capture":"executions","target_key":"execution_id"}],"expect":[{"field":"max_turns","equals":30}]}
         ]});
         assert!(
             jsonschema::validator_for(&CrewSpecMatch.describe().params_schema)
@@ -1030,8 +1019,8 @@ mod tests {
         let make = |execution: &str, report: &str| {
             let mut e = stage(&[
                 (
-                    "behaviors",
-                    vec![json!({"behavior_id":"engineer","inference_profile_id":"chosen"})],
+                    "agents",
+                    vec![json!({"agent_id":"engineer","inference_profile_id":"chosen"})],
                 ),
                 (
                     "profiles",
@@ -1072,7 +1061,7 @@ mod tests {
 
     #[test]
     fn reverse_reference_hops_do_not_accept_a_disconnected_task() {
-        let params = json!({"links":[{"capture":"sources","key":"source_collection","id":"Note","field":"event_source_id","target_capture":"triggers","target_key":"source.event_source_id","via":[{"field":"task_id","target_capture":"tasks","target_key":"task_id"}],"expect":[{"field":"behavior_id","equals":"reviewer"}]}]});
+        let params = json!({"links":[{"capture":"sources","key":"source_collection","id":"Note","field":"event_source_id","target_capture":"triggers","target_key":"source.event_source_id","via":[{"field":"task_id","target_capture":"tasks","target_key":"task_id"}],"expect":[{"field":"agent_id","equals":"reviewer"}]}]});
         for (bound, score) in [("wanted", 10000), ("decoy", 5000)] {
             let e = stage(&[
                 (
@@ -1086,8 +1075,8 @@ mod tests {
                 (
                     "tasks",
                     vec![
-                        json!({"task_id":"wanted","behavior_id":"reviewer"}),
-                        json!({"task_id":"decoy","behavior_id":"writer"}),
+                        json!({"task_id":"wanted","agent_id":"reviewer"}),
+                        json!({"task_id":"decoy","agent_id":"writer"}),
                     ],
                 ),
             ]);
@@ -1097,7 +1086,7 @@ mod tests {
 
     #[test]
     fn completion_record_requires_a_write_path_for_its_metadata() {
-        let params = json!({"agents":{"behaviors":"behaviors","contexts":"contexts","tools":"tools","expect":[{"behavior_id":"worker-a","datastore":{"surfaces":"surfaces","create":["Result"],"query":[],"required_fields":{"Result":["handoff_id"]}}}]}});
+        let params = json!({"agents":{"agents":"agents","contexts":"contexts","tools":"tools","expect":[{"agent_id":"worker-a","datastore":{"surfaces":"surfaces","create":["Result"],"query":[],"required_fields":{"Result":["handoff_id"]}}}]}});
         assert!(
             jsonschema::validator_for(&CrewSpecMatch.describe().params_schema)
                 .unwrap()
@@ -1116,7 +1105,7 @@ mod tests {
             evidence.captures.insert("tools".into(), CaptureResult::Documents { rows: vec![json!({"tools_id":"t1","datastore":{"datastore_tool_surface_ids":["results"]}})] });
             let mut fields = vec![json!({"name":"text","required":true})];
             fields.extend(field);
-            evidence.captures.insert("surfaces".into(), CaptureResult::Documents { rows: vec![json!({"surface_id":"results","agent_did":"did:x","enabled":true,"entries":[{"tool_name":"write_result","collection":"Result","description":"Record the result","fields":fields}]})] });
+            evidence.captures.insert("surfaces".into(), CaptureResult::Documents { rows: vec![json!({"surface_id":"results","node_did":"did:x","enabled":true,"entries":[{"tool_name":"write_result","collection":"Result","description":"Record the result","fields":fields}]})] });
             let verdict = CrewSpecMatch.evaluate(&params, &evidence);
             assert_eq!(verdict.score_bp == Some(10000), met, "{}", verdict.raw);
             if !met {
@@ -1151,7 +1140,7 @@ mod tests {
 
     #[test]
     fn selected_profile_label_uses_its_id_only_when_the_name_is_null() {
-        let params = json!({"links":[{"capture":"behaviors","key":"behavior_id","id":"engineer","field":"inference_profile_id","target_capture":"profiles","target_key":"profile_id","expect":[{"field":"display_name","fallback_field":"profile_id","equals":"Research"}]}]});
+        let params = json!({"links":[{"capture":"agents","key":"agent_id","id":"engineer","field":"inference_profile_id","target_capture":"profiles","target_key":"profile_id","expect":[{"field":"display_name","fallback_field":"profile_id","equals":"Research"}]}]});
         for (profile, met) in [
             (json!({"profile_id":"Research"}), true),
             (json!({"profile_id":"Research","display_name":null}), true),
@@ -1163,8 +1152,8 @@ mod tests {
         ] {
             let evidence = stage(&[
                 (
-                    "behaviors",
-                    vec![json!({"behavior_id":"engineer","inference_profile_id":"Research"})],
+                    "agents",
+                    vec![json!({"agent_id":"engineer","inference_profile_id":"Research"})],
                 ),
                 (
                     "profiles",
@@ -1186,11 +1175,11 @@ mod tests {
 
     #[test]
     fn selected_datastore_contract_rejects_runtime_keys_decoys_and_missing_calls() {
-        let params = json!({"agents":{"behaviors":"behaviors","contexts":"contexts","tools":"tools","expect":[{"behavior_id":"worker-a","datastore":{"surfaces":"surfaces","create":["Result"],"query":["Result"],"caller_fields":{"Result":["correlation","result"]},"query_fields":{"Result":["correlation","result"]},"lookup_by":"correlation","called_create":["Result"],"called_query":["Result"]}}]}});
+        let params = json!({"agents":{"agents":"agents","contexts":"contexts","tools":"tools","expect":[{"agent_id":"worker-a","datastore":{"surfaces":"surfaces","create":["Result"],"query":["Result"],"caller_fields":{"Result":["correlation","result"]},"query_fields":{"Result":["correlation","result"]},"lookup_by":"correlation","called_create":["Result"],"called_query":["Result"]}}]}});
         let mut e = home();
         let tool =
             json!({"tools_id":"t1","datastore":{"datastore_tool_surface_ids":["arbitrary-id"]}});
-        let surface = json!({"_docID":"physical-surface","surface_id":"arbitrary-id","agent_did":"did:x","entries":[{"kind":"create","tool_name":"save_result","collection":"Result","description":"Save the caller's result","fields":[{"name":"correlation","required":true},{"name":"result","required":true}]},{"kind":"query","tool_name":"find_result","collection":"Result","description":"Find results by the caller's key","fields":["correlation","result"],"filter_fields":[{"name":"correlation"}]}]});
+        let surface = json!({"_docID":"physical-surface","surface_id":"arbitrary-id","node_did":"did:x","entries":[{"kind":"create","tool_name":"save_result","collection":"Result","description":"Save the caller's result","fields":[{"name":"correlation","required":true},{"name":"result","required":true}]},{"kind":"query","tool_name":"find_result","collection":"Result","description":"Find results by the caller's key","fields":["correlation","result"],"filter_fields":[{"name":"correlation"}]}]});
         e.captures.insert(
             "tools".into(),
             CaptureResult::Documents {
@@ -1283,9 +1272,9 @@ mod tests {
 
     #[test]
     fn named_roles_follow_actual_ids_and_reject_ambiguous_or_wrong_grants() {
-        let params = json!({"agents":{"behaviors":"behaviors","contexts":"contexts","tools":"tools","expect":[
-            {"behavior_id":"coordinator","source_match":{"field":"display_name","matches":"(?i)\\bcoordinator\\b"},"delegates":{"targets":"targets","behaviors":["reviewer"]}},
-            {"behavior_id":"reviewer","source_match":{"field":"display_name","matches":"(?i)\\breviewer\\b"},"tools":[{"field":"host.bash.mode","equals":"Off"}]}
+        let params = json!({"agents":{"agents":"agents","contexts":"contexts","tools":"tools","expect":[
+            {"agent_id":"coordinator","source_match":{"field":"display_name","matches":"(?i)\\bcoordinator\\b"},"delegates":{"targets":"targets","agents":["reviewer"]}},
+            {"agent_id":"reviewer","source_match":{"field":"display_name","matches":"(?i)\\breviewer\\b"},"tools":[{"field":"host.bash.mode","equals":"Off"}]}
         ]}});
         assert!(
             jsonschema::validator_for(&CrewSpecMatch.describe().params_schema)
@@ -1294,10 +1283,10 @@ mod tests {
         );
         let good = stage(&[
             (
-                "behaviors",
+                "agents",
                 vec![
-                    json!({"behavior_id":"did:x:desk-coordinator","display_name":"Research desk Coordinator","context_id":"c"}),
-                    json!({"behavior_id":"did:x:random-42","display_name":"Research desk Reviewer","context_id":"r"}),
+                    json!({"agent_id":"did:x:desk-coordinator","display_name":"Research desk Coordinator","context_id":"c"}),
+                    json!({"agent_id":"did:x:random-42","display_name":"Research desk Reviewer","context_id":"r"}),
                 ],
             ),
             (
@@ -1310,14 +1299,14 @@ mod tests {
             (
                 "tools",
                 vec![
-                    json!({"tools_id":"ct","subagents":{"enabled":true,"target_ids":["review-route"]}}),
+                    json!({"tools_id":"ct","agents":{"enabled":true,"target_ids":["review-route"]}}),
                     json!({"tools_id":"rt","host":{"bash":{"mode":"Off"}}}),
                 ],
             ),
             (
                 "targets",
                 vec![
-                    json!({"target_id":"review-route","agent_did":"did:x","target_agent_did":"did:x","behavior_id":"did:x:random-42"}),
+                    json!({"target_id":"review-route","node_did":"did:x","target_node_did":"did:x","agent_id":"did:x:random-42"}),
                 ],
             ),
         ]);
@@ -1326,19 +1315,18 @@ mod tests {
             let mut bad = good.clone();
             let capture = match mutation {
                 0..=2 => "targets",
-                3..=5 => "behaviors",
+                3..=5 => "agents",
                 _ => "tools",
             };
             let CaptureResult::Documents { rows } = bad.captures.get_mut(capture).unwrap() else {
                 unreachable!()
             };
             match mutation {
-                0 => rows[0]["behavior_id"] = json!("reviewer"),
-                1 => rows[0]["target_agent_did"] = json!("did:foreign"),
-                2 => rows[0]["behavior_id"] = json!("did:x:desk-coordinator"),
-                3 => rows.push(
-                    json!({"behavior_id":"another","display_name":"Reviewer","context_id":"r"}),
-                ),
+                0 => rows[0]["agent_id"] = json!("reviewer"),
+                1 => rows[0]["target_node_did"] = json!("did:foreign"),
+                2 => rows[0]["agent_id"] = json!("did:x:desk-coordinator"),
+                3 => rows
+                    .push(json!({"agent_id":"another","display_name":"Reviewer","context_id":"r"})),
                 4 => {
                     rows.pop();
                 }
@@ -1359,15 +1347,22 @@ mod tests {
 
     #[test]
     fn delegates_follow_selected_targets_and_reject_foreign_or_extra_grants() {
-        let params = json!({"agents":{"behaviors":"behaviors","contexts":"contexts","tools":"tools","expect":[{"behavior_id":"worker-a","delegates":{"targets":"targets","behaviors":["reviewer"]}}]}});
+        let params = json!({"agents":{"agents":"agents","contexts":"contexts","tools":"tools","expect":[{"agent_id":"worker-a","delegates":{"targets":"targets","agents":["reviewer"]}}]}});
         for (selected, owner, score) in [
             ("right", "did:x", 10000),
             ("wrong", "did:x", 5000),
             ("right", "did:other", 5000),
         ] {
             let mut e = home();
-            e.captures.insert("tools".into(),CaptureResult::Documents{rows:vec![json!({"tools_id":"t1","subagents":{"enabled":true,"target_ids":[selected]}})]});
-            e.captures.insert("targets".into(),CaptureResult::Documents{rows:vec![json!({"target_id":"right","agent_did":"did:x","target_agent_did":owner,"behavior_id":"scope:reviewer"}),json!({"target_id":"wrong","agent_did":"did:x","target_agent_did":"did:x","behavior_id":"scope:writer"})]});
+            e.captures.insert(
+                "tools".into(),
+                CaptureResult::Documents {
+                    rows: vec![
+                        json!({"tools_id":"t1","agents":{"enabled":true,"target_ids":[selected]}}),
+                    ],
+                },
+            );
+            e.captures.insert("targets".into(),CaptureResult::Documents{rows:vec![json!({"target_id":"right","node_did":"did:x","target_node_did":owner,"agent_id":"scope:reviewer"}),json!({"target_id":"wrong","node_did":"did:x","target_node_did":"did:x","agent_id":"scope:writer"})]});
             assert_eq!(CrewSpecMatch.evaluate(&params, &e).score_bp, Some(score));
         }
     }
@@ -1406,7 +1401,7 @@ mod tests {
 
     #[test]
     fn source_match_follows_one_role_and_rejects_ambiguity_and_decoys() {
-        let params = json!({"links":[{"capture":"behaviors","source_match":{"field":"display_name","matches":"(?i)^(code )?reviewer$"},"field":"inference_profile_id","target_capture":"profiles","target_key":"profile_id","expect":[{"field":"max_turns","equals":30}]}]});
+        let params = json!({"links":[{"capture":"agents","source_match":{"field":"display_name","matches":"(?i)^(code )?reviewer$"},"field":"inference_profile_id","target_capture":"profiles","target_key":"profile_id","expect":[{"field":"max_turns","equals":30}]}]});
         assert!(
             jsonschema::validator_for(&CrewSpecMatch.describe().params_schema)
                 .unwrap()
@@ -1418,14 +1413,14 @@ mod tests {
             ("Writer", "right", false, 0),
             ("Reviewer", "right", true, 0),
         ] {
-            let mut behaviors = vec![
-                json!({"behavior_id":"unpredictable-id","display_name":name,"inference_profile_id":selected}),
+            let mut agents = vec![
+                json!({"agent_id":"unpredictable-id","display_name":name,"inference_profile_id":selected}),
             ];
             if duplicate {
-                behaviors.push(behaviors[0].clone());
+                agents.push(agents[0].clone());
             }
             let evidence = stage(&[
-                ("behaviors", behaviors),
+                ("agents", agents),
                 (
                     "profiles",
                     vec![
@@ -1443,7 +1438,7 @@ mod tests {
 
     #[test]
     fn null_tools_selection_has_no_grants_but_a_dangling_reference_fails() {
-        let params = json!({"agents":{"behaviors":"behaviors","contexts":"contexts","tools":"tools","expect":[{"behavior_id":"planner","tools":[{"field":"host.bash.mode","matches":"^(Off|null)$"},{"field":"subagents.enabled","matches":"^(false|null)$"}]}]}});
+        let params = json!({"agents":{"agents":"agents","contexts":"contexts","tools":"tools","expect":[{"agent_id":"planner","tools":[{"field":"host.bash.mode","matches":"^(Off|null)$"},{"field":"agents.enabled","matches":"^(false|null)$"}]}]}});
         for (context, expected) in [
             (json!({"context_id":"c","tools_id":null}), 10000),
             (json!({"context_id":"c","tools_id":"missing"}), 3333),
@@ -1451,8 +1446,8 @@ mod tests {
         ] {
             let evidence = stage(&[
                 (
-                    "behaviors",
-                    vec![json!({"behavior_id":"planner","context_id":"c"})],
+                    "agents",
+                    vec![json!({"agent_id":"planner","context_id":"c"})],
                 ),
                 ("contexts", vec![context]),
                 ("tools", vec![]),
@@ -1500,12 +1495,11 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_behavior_fails_its_whole_chain() {
+    fn a_missing_agent_fails_its_whole_chain() {
         let mut evidence = home();
-        evidence.captures.insert(
-            "behaviors".into(),
-            CaptureResult::Documents { rows: vec![] },
-        );
+        evidence
+            .captures
+            .insert("agents".into(), CaptureResult::Documents { rows: vec![] });
         let verdict = CrewSpecMatch.evaluate(&params(), &evidence);
         assert_eq!(
             verdict.raw["categories"]["least_privilege"],
@@ -1514,12 +1508,12 @@ mod tests {
     }
 
     #[test]
-    fn a_principal_scoped_behavior_id_matches_its_declared_id() {
+    fn a_node_scoped_agent_id_matches_its_declared_id() {
         let mut evidence = home();
         evidence.captures.insert(
-            "behaviors".into(),
+            "agents".into(),
             CaptureResult::Documents {
-                rows: vec![json!({"behavior_id": "did:key:z6Mk:worker-a", "context_id": "c1", "inference_profile_id": "glm-a"})],
+                rows: vec![json!({"agent_id": "did:key:z6Mk:worker-a", "context_id": "c1", "inference_profile_id": "glm-a"})],
             },
         );
         let verdict = CrewSpecMatch.evaluate(&params(), &evidence);
@@ -1546,8 +1540,8 @@ mod tests {
 
     #[test]
     fn an_absent_field_reads_as_null() {
-        let row = json!({"subagents": {"target_ids": []}});
-        assert_eq!(lookup(&row, "subagents.enabled"), Value::Null);
+        let row = json!({"agents": {"target_ids": []}});
+        assert_eq!(lookup(&row, "agents.enabled"), Value::Null);
         assert_eq!(lookup(&row, "host.files.mode"), Value::Null);
     }
 

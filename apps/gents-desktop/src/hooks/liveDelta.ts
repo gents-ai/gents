@@ -27,7 +27,7 @@ export function sessionLiveDeltaRequest(
   const reasoning = live?.reasoning ?? "";
   return {
     sessionId: session.sessionId,
-    agentDid: session.agentDid,
+    nodeDid: session.nodeDid,
     requestId,
     baseLiveCursor: session.liveCursor,
     baseContentByteLen: utf8.encode(content).byteLength,

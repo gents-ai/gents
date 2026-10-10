@@ -12,7 +12,7 @@ use crate::cli::args::{
     GoalStatusArg,
 };
 use crate::cli::output_format::OutputFormat;
-use crate::{print_json, resolve_agent_did, resolve_config_access};
+use crate::{print_json, resolve_config_access, resolve_node_did};
 
 pub(crate) async fn dispatch(command: GoalCommand) -> Result<()> {
     match command {
@@ -27,8 +27,8 @@ pub(crate) async fn dispatch(command: GoalCommand) -> Result<()> {
 async fn goal_show(args: GoalShowArgs) -> Result<()> {
     args.output
         .ensure_supported("goal show", &[OutputFormat::Json])?;
-    let (access, agent_did) = access_and_did(&args.scope).await?;
-    print_json(&goal_show_value(&access, &agent_did, &args.scope.session, Utc::now()).await?)
+    let (access, node_did) = access_and_did(&args.scope).await?;
+    print_json(&goal_show_value(&access, &node_did, &args.scope.session, Utc::now()).await?)
 }
 
 /// `goal show`'s JSON: the Goal's snapshot, the operator's
@@ -36,16 +36,16 @@ async fn goal_show(args: GoalShowArgs) -> Result<()> {
 /// the operator can act, `blocked`.
 async fn goal_show_value(
     access: &ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     now: chrono::DateTime<Utc>,
 ) -> Result<serde_json::Value> {
-    let goal = load_goal(access, agent_did, session_id)
+    let goal = load_goal(access, node_did, session_id)
         .await?
         .with_context(|| format!("no durable goal for session {session_id}"))?;
     let mut value = serde_json::to_value(GoalSnapshot::from_document(&goal, now))?;
     value["auto_resume_at_reset"] = goal.auto_resume_at_reset.unwrap_or(false).into();
-    let blocked = gents::blocked_turn::blocked_goal_turn(access, agent_did, session_id)
+    let blocked = gents::blocked_turn::blocked_goal_turn(access, node_did, session_id)
         .await
         .unwrap_or_else(|error| {
             tracing::warn!(session_id, error = %format!("{error:#}"), "blocked turn unreadable");
@@ -58,13 +58,13 @@ async fn goal_show_value(
 async fn goal_set(args: GoalSetArgs) -> Result<()> {
     args.output
         .ensure_supported("goal set", &[OutputFormat::Json])?;
-    let (access, agent_did) = access_and_did(&args.scope).await?;
-    print_json(&goal_set_value(&access, &agent_did, &args).await?)
+    let (access, node_did) = access_and_did(&args.scope).await?;
+    print_json(&goal_set_value(&access, &node_did, &args).await?)
 }
 
 async fn goal_set_value(
     access: &ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
     args: &GoalSetArgs,
 ) -> Result<serde_json::Value> {
     let status = args.status.map(GoalStatus::from);
@@ -75,7 +75,7 @@ async fn goal_set_value(
     };
     let goal = set_goal_from_access(
         access,
-        agent_did,
+        node_did,
         &args.scope.session,
         args.objective.as_deref(),
         status,
@@ -92,13 +92,13 @@ async fn goal_set_value(
 async fn goal_resume(args: GoalResumeArgs) -> Result<()> {
     args.output
         .ensure_supported("goal resume-request", &[OutputFormat::Json])?;
-    let (access, agent_did) = access_and_did(&args.scope).await?;
-    crate::request_helpers::ensure_local_request_signer(args.scope.home.as_deref(), &agent_did)?;
-    let identity = gents::identity::RegisteredIdentity::from_registered_did(&agent_did, None)?;
+    let (access, node_did) = access_and_did(&args.scope).await?;
+    crate::request_helpers::ensure_local_request_signer(args.scope.home.as_deref(), &node_did)?;
+    let identity = gents::identity::RegisteredIdentity::from_registered_did(&node_did, None)?;
     let receipt = gents::goal::resume_goal_request(
         &access,
         &identity,
-        &agent_did,
+        &node_did,
         &args.scope.session,
         &args.from,
     )
@@ -109,12 +109,12 @@ async fn goal_resume(args: GoalResumeArgs) -> Result<()> {
 async fn goal_resume_on(args: GoalResumeOnArgs) -> Result<()> {
     args.output
         .ensure_supported("goal resume-on", &[OutputFormat::Json])?;
-    let (access, agent_did) = access_and_did(&args.scope).await?;
-    crate::request_helpers::ensure_local_request_signer(args.scope.home.as_deref(), &agent_did)?;
-    let identity = gents::identity::RegisteredIdentity::from_registered_did(&agent_did, None)?;
+    let (access, node_did) = access_and_did(&args.scope).await?;
+    crate::request_helpers::ensure_local_request_signer(args.scope.home.as_deref(), &node_did)?;
+    let identity = gents::identity::RegisteredIdentity::from_registered_did(&node_did, None)?;
     let backend_id = crate::commands::config::profile::backend_for_account(
         &access,
-        &agent_did,
+        &node_did,
         &args.account,
         args.provider.as_deref(),
     )
@@ -123,14 +123,12 @@ async fn goal_resume_on(args: GoalResumeOnArgs) -> Result<()> {
     let receipt = gents::goal::resume_goal_on_account(
         &access,
         &identity,
-        &agent_did,
+        &node_did,
         &args.scope.session,
         &args.from,
         &backend_id,
         args.with_compaction,
-        &|profile| {
-            crate::commands::config::profile::bound_slots(home, graphql, &agent_did, profile)
-        },
+        &|profile| crate::commands::config::profile::bound_slots(home, graphql, &node_did, profile),
     )
     .await?;
     print_json(&serde_json::to_value(receipt)?)
@@ -139,18 +137,18 @@ async fn goal_resume_on(args: GoalResumeOnArgs) -> Result<()> {
 async fn goal_clear(args: GoalShowArgs) -> Result<()> {
     args.output
         .ensure_supported("goal clear", &[OutputFormat::Json])?;
-    let (access, agent_did) = access_and_did(&args.scope).await?;
-    let goal = load_goal(&access, &agent_did, &args.scope.session)
+    let (access, node_did) = access_and_did(&args.scope).await?;
+    let goal = load_goal(&access, &node_did, &args.scope.session)
         .await?
         .with_context(|| format!("no durable goal for session {}", args.scope.session))?;
     let deleted = match &*access {
         ConfigAccess::Local(node) => {
-            delete_goals_for_session(node, &agent_did, &args.scope.session).await? > 0
+            delete_goals_for_session(node, &node_did, &args.scope.session).await? > 0
         }
         ConfigAccess::Graphql(_) => {
-            let agent_did = escape_graphql_string(&agent_did);
+            let node_did = escape_graphql_string(&node_did);
             let session_id = escape_graphql_string(&args.scope.session);
-            let agent_did_ref = &agent_did;
+            let node_did_ref = &node_did;
             let session_id_ref = &session_id;
             access
                 .transact("cli.goal.clear", move |txn| {
@@ -159,7 +157,7 @@ async fn goal_clear(args: GoalShowArgs) -> Result<()> {
                             .execute(&format!(
                                 r#"mutation {{
                         delete_Goal(filter: {{
-                            agent_did: {{ _eq: "{agent_did_ref}" }},
+                            node_did: {{ _eq: "{node_did_ref}" }},
                             session_id: {{ _eq: "{session_id_ref}" }}
                         }}) {{ _docID }}
                     }}"#
@@ -168,7 +166,7 @@ async fn goal_clear(args: GoalShowArgs) -> Result<()> {
                         txn.execute(&format!(
                             r#"mutation {{
                         delete_GoalCreationClaim(filter: {{
-                            agent_did: {{ _eq: "{agent_did_ref}" }},
+                            node_did: {{ _eq: "{node_did_ref}" }},
                             session_id: {{ _eq: "{session_id_ref}" }}
                         }}) {{ _docID }}
                     }}"#
@@ -194,30 +192,30 @@ async fn goal_clear(args: GoalShowArgs) -> Result<()> {
 }
 
 async fn access_and_did(scope: &GoalScopeArgs) -> Result<(crate::CommandAccess, String)> {
-    let agent_did = resolve_agent_did(scope.home.as_deref(), scope.agent_did.as_deref())
-        .context("resolving goal owner agent_did")?;
+    let node_did = resolve_node_did(scope.home.as_deref(), scope.node_did.as_deref())
+        .context("resolving goal owner node_did")?;
     let (access, _) = resolve_config_access(scope.home.as_deref(), scope.graphql.as_deref())
         .await
         .context("resolving durable-goal access")?;
-    Ok((access, agent_did))
+    Ok((access, node_did))
 }
 
 async fn load_goal(
     access: &ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
 ) -> Result<Option<GoalDocument>> {
     if let ConfigAccess::Local(node) = access {
-        return load_canonical_goal(node, agent_did, session_id).await;
+        return load_canonical_goal(node, node_did, session_id).await;
     }
-    let agent_did = escape_graphql_string(agent_did);
+    let node_did = escape_graphql_string(node_did);
     let session_id = escape_graphql_string(session_id);
     let response = access
         .execute(&format!(
             r#"{{
                 Goal(
                     filter: {{
-                        agent_did: {{ _eq: "{agent_did}" }},
+                        node_did: {{ _eq: "{node_did}" }},
                         session_id: {{ _eq: "{session_id}" }}
                     }},
                     order: [{{ created_at: ASC }}, {{ goal_id: ASC }}]
@@ -268,14 +266,12 @@ mod tests {
                 .unwrap(),
         );
         gents::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-        gents::ensure_agent_principal(node.as_ref(), DID)
-            .await
-            .unwrap();
+        gents::ensure_node(node.as_ref(), DID).await.unwrap();
         let access = ConfigAccess::Local(node);
         let backend = serde_json::from_value(serde_json::json!({
-            "agent_did": DID, "backend_id": "claude", "name": "Claude",
+            "node_did": DID, "backend_id": "claude", "name": "Claude",
             "provider_kind": "ClaudeCliSubscription", "endpoint": "claude-cli://subscription",
-            "auth": {"kind": "principal_oauth"},
+            "auth": {"kind": "node_oauth"},
         }))
         .unwrap();
         gents::config_client::write_inference_backend_document(&access, &backend)
@@ -322,13 +318,13 @@ mod tests {
                 &format!(
                     r#"mutation {{
                         create_AgentRequest(input: {{
-                            request_id: "request-limited" purpose: "normal" agent_did: "{DID}"
-                            behavior_id: "general" session_id: "session-limited" content: "run"
+                            request_id: "request-limited" purpose: "normal" node_did: "{DID}"
+                            agent_id: "general" session_id: "session-limited" content: "run"
                             lifecycle_state: "failed" failure_reason: "{failure}" created_at: "{at}"
                         }}) {{ _docID }}
                         create_InferenceCall(input: {{
                             call_id: "call-limited" request_id: "request-limited" call_seq: 1
-                            backend_id: "claude" behavior_id: "general" agent_did: "{DID}"
+                            backend_id: "claude" agent_id: "general" node_did: "{DID}"
                             call_kind: "inference" attempt: 1 call_state: "failed"
                             failure_reason: "{failure}"
                             queued_at: "{at}" started_at: "{at}" ended_at: "{at}"
@@ -413,14 +409,12 @@ mod tests {
                 .unwrap(),
         );
         gents::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-        gents::ensure_agent_principal(node.as_ref(), DID)
-            .await
-            .unwrap();
+        gents::ensure_node(node.as_ref(), DID).await.unwrap();
         let access = ConfigAccess::Local(node);
         let backend = serde_json::from_value(serde_json::json!({
-            "agent_did": DID, "backend_id": "claude", "name": "Claude",
+            "node_did": DID, "backend_id": "claude", "name": "Claude",
             "provider_kind": "ClaudeCliSubscription", "endpoint": "claude-cli://subscription",
-            "auth": {"kind": "principal_oauth"},
+            "auth": {"kind": "node_oauth"},
         }))
         .unwrap();
         gents::config_client::write_inference_backend_document(&access, &backend)

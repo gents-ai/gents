@@ -191,8 +191,8 @@ struct ToolRuntimeScope {
     correlation: Option<String>,
     source_fields: std::collections::BTreeMap<String, String>,
     requester_did: Option<String>,
-    agent_did: Option<String>,
-    behavior_id: Option<String>,
+    node_did: Option<String>,
+    agent_id: Option<String>,
     request_id: Option<String>,
 }
 
@@ -207,16 +207,16 @@ pub struct CurrentToolRuntimeContext {
     pub correlation: Option<String>,
     pub source_fields: std::collections::BTreeMap<String, String>,
     pub requester_did: Option<String>,
-    pub agent_did: Option<String>,
-    pub behavior_id: Option<String>,
+    pub node_did: Option<String>,
+    pub agent_id: Option<String>,
     pub request_id: Option<String>,
 }
 
 #[derive(Clone, Default)]
 struct ToolRequestIdentityScope {
     requester_did: Option<String>,
-    agent_did: Option<String>,
-    behavior_id: Option<String>,
+    node_did: Option<String>,
+    agent_id: Option<String>,
     request_id: Option<String>,
 }
 
@@ -240,8 +240,8 @@ fn current_request_identity() -> ToolRequestIdentityScope {
             TOOL_RUNTIME_SCOPE
                 .try_with(|scope| ToolRequestIdentityScope {
                     requester_did: scope.requester_did.clone(),
-                    agent_did: scope.agent_did.clone(),
-                    behavior_id: scope.behavior_id.clone(),
+                    node_did: scope.node_did.clone(),
+                    agent_id: scope.agent_id.clone(),
                     request_id: scope.request_id.clone(),
                 })
                 .ok()
@@ -251,8 +251,8 @@ fn current_request_identity() -> ToolRequestIdentityScope {
 
 pub async fn scope_tool_request_identity<F, T>(
     requester_did: Option<String>,
-    agent_did: Option<String>,
-    behavior_id: Option<String>,
+    node_did: Option<String>,
+    agent_id: Option<String>,
     request_id: Option<String>,
     future: F,
 ) -> T
@@ -263,8 +263,8 @@ where
         .scope(
             ToolRequestIdentityScope {
                 requester_did: normalized_identity(requester_did),
-                agent_did: normalized_identity(agent_did),
-                behavior_id: normalized_identity(behavior_id),
+                node_did: normalized_identity(node_did),
+                agent_id: normalized_identity(agent_id),
                 request_id: normalized_identity(request_id),
             },
             future,
@@ -341,8 +341,8 @@ where
                     .map(|scope| scope.source_fields)
                     .unwrap_or_default(),
                 requester_did: identity.requester_did,
-                agent_did: identity.agent_did,
-                behavior_id: identity.behavior_id,
+                node_did: identity.node_did,
+                agent_id: identity.agent_id,
                 request_id: identity.request_id,
             },
             future,
@@ -384,8 +384,8 @@ where
                 correlation,
                 source_fields,
                 requester_did: identity.requester_did,
-                agent_did: identity.agent_did,
-                behavior_id: identity.behavior_id,
+                node_did: identity.node_did,
+                agent_id: identity.agent_id,
                 request_id: identity.request_id,
             },
             future,
@@ -455,8 +455,8 @@ pub fn current_tool_runtime_context() -> Option<CurrentToolRuntimeContext> {
             .map(str::to_owned),
             source_fields: scope.source_fields,
             requester_did: scope.requester_did,
-            agent_did: scope.agent_did,
-            behavior_id: scope.behavior_id,
+            node_did: scope.node_did,
+            agent_id: scope.agent_id,
             request_id: scope.request_id,
         })
 }
@@ -747,7 +747,7 @@ mod tests {
 
     /// Issue #997: tool output is untrusted arbitrary text. A SUCCESSFUL call
     /// whose output looks like an internal failure — a log tail, a source
-    /// listing, an MCP/subagent relay quoting an error, or a DELIBERATE
+    /// listing, an MCP/agent relay quoting an error, or a DELIBERATE
     /// forgery of the retired `__gents_tool_lifecycle__:` sentinel itself —
     /// classifies `Completed` with the text verbatim. Under the sentinel
     /// encoding the last two forgeries below fabricated a `failed` lifecycle

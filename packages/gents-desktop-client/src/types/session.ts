@@ -28,8 +28,8 @@ export type RunTimelineEventView = { kind: string } & Record<string, unknown>;
 export type RequestTimelineView = {
   request_id: string;
   session_id?: string | null;
-  agent_did?: string | null;
-  behavior_id?: string | null;
+  node_did?: string | null;
+  agent_id?: string | null;
   child_request_ids?: string[];
   events: RunTimelineEventView[];
 };

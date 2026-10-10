@@ -4,14 +4,14 @@ use anyhow::Context;
 /// Injective key for a sequence within one canonical session scope.
 /// Explicit caller-owned keys keep their own vocabulary (steering, receipts).
 pub fn sequence_message_key(
-    agent_did: &str,
+    node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
     sequence: u32,
 ) -> String {
     format!(
         "message:{}",
-        serde_json::to_string(&(agent_did, session_id, requester_did, sequence))
+        serde_json::to_string(&(node_did, session_id, requester_did, sequence))
             .expect("session scope serializes")
     )
 }
@@ -19,23 +19,23 @@ pub fn sequence_message_key(
 pub async fn load_history(
     node: &EmbeddedNode,
     session_id: &str,
-    agent_did: &str,
+    node_did: &str,
     requester_did: Option<&str>,
 ) -> Result<Vec<Message>> {
-    load_history_through_sequence(node, session_id, agent_did, requester_did, None).await
+    load_history_through_sequence(node, session_id, node_did, requester_did, None).await
 }
 
 pub(crate) async fn load_history_through_sequence(
     node: &EmbeddedNode,
     session_id: &str,
-    agent_did: &str,
+    node_did: &str,
     requester_did: Option<&str>,
     through_sequence: Option<u32>,
 ) -> Result<Vec<Message>> {
     Ok(load_sequenced_history_projection(
         node,
         session_id,
-        agent_did,
+        node_did,
         requester_did,
         through_sequence,
         None,
@@ -57,7 +57,7 @@ pub(crate) async fn load_sequenced_history_for_request(
     super::output::load_sequenced_messages(
         node,
         &request.session_id,
-        &request.agent_did,
+        &request.node_did,
         request.requester_did.as_deref(),
         through_sequence,
         after_sequence,
@@ -82,7 +82,7 @@ pub(crate) async fn retry_has_published_input(
         );
         let parent = crate::graphql::escape_graphql_string(&parent_id);
         let scope = super::query::session_scope_filter(
-            &request.agent_did,
+            &request.node_did,
             &request.session_id,
             request.requester_did.as_deref(),
         );
@@ -92,7 +92,7 @@ pub(crate) async fn retry_has_published_input(
         let query = format!(
             r#"{{
             AgentRequest(filter: {{ _docID: {{ _eq: "{parent}" }} }}, limit: 2) {{
-                _docID agent_did requester_did session_id lifecycle_state retry_parent_request_doc_id
+                _docID node_did requester_did session_id lifecycle_state retry_parent_request_doc_id
             }}
             AgentMessage(filter: {{ {scope}, message_key: {{ _eq: "{key}" }} }}, limit: 2) {{ _docID }}
             AgentToolCall(filter: {{ request_doc_id: {{ _eq: "{parent}" }},
@@ -112,7 +112,7 @@ pub(crate) async fn retry_has_published_input(
             .context("retry parent query omitted rows")?;
         anyhow::ensure!(
             parents.len() == 1
-                && parents[0]["agent_did"].as_str() == Some(request.agent_did.as_str())
+                && parents[0]["node_did"].as_str() == Some(request.node_did.as_str())
                 && matches!(
                     parents[0]["lifecycle_state"].as_str(),
                     Some("failed" | "dead")
@@ -154,7 +154,7 @@ pub(crate) async fn retry_has_published_input(
 pub(super) async fn load_history_projection(
     node: &EmbeddedNode,
     session_id: &str,
-    agent_did: &str,
+    node_did: &str,
     requester_did: Option<&str>,
     through_sequence: Option<u32>,
     current_input_request_doc_id: Option<&str>,
@@ -162,7 +162,7 @@ pub(super) async fn load_history_projection(
     Ok(load_sequenced_history_projection(
         node,
         session_id,
-        agent_did,
+        node_did,
         requester_did,
         through_sequence,
         None,
@@ -177,7 +177,7 @@ pub(super) async fn load_history_projection(
 pub(crate) async fn load_sequenced_history_projection(
     node: &EmbeddedNode,
     session_id: &str,
-    agent_did: &str,
+    node_did: &str,
     requester_did: Option<&str>,
     through_sequence: Option<u32>,
     after_sequence: Option<u32>,
@@ -186,7 +186,7 @@ pub(crate) async fn load_sequenced_history_projection(
     let history = super::output::load_sequenced_messages(
         node,
         session_id,
-        agent_did,
+        node_did,
         requester_did,
         through_sequence,
         after_sequence,

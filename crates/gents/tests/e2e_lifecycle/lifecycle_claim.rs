@@ -6,7 +6,7 @@ use gents_protocol::row::AgentRequestRow;
 
 use crate::support::{
     create_request, create_request_with_valid_until, first_row, set_interrupt_requested_at,
-    test_db, AGENT_DID, AGENT_NAME,
+    test_db, AGENT_NAME, NODE_DID,
 };
 
 type StatusRow = AgentRequestRow;
@@ -29,7 +29,7 @@ async fn claim_queues_when_earlier_processing_request_exists() {
     };
 
     let mut lifecycle =
-        RequestLifecycle::new_with_agent_did(db.node.clone(), AGENT_NAME, AGENT_DID, request, 300);
+        RequestLifecycle::new_with_node_did(db.node.clone(), AGENT_NAME, NODE_DID, request, 300);
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Queued);
 
     let resp = db
@@ -85,7 +85,7 @@ async fn queued_request_interrupt_wins_before_queue_block() {
     };
 
     let mut lifecycle =
-        RequestLifecycle::new_with_agent_did(db.node.clone(), AGENT_NAME, AGENT_DID, request, 300);
+        RequestLifecycle::new_with_node_did(db.node.clone(), AGENT_NAME, NODE_DID, request, 300);
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Interrupted);
 
     let resp = db
@@ -144,7 +144,7 @@ async fn queued_request_valid_until_wins_before_queue_block() {
     };
 
     let mut lifecycle =
-        RequestLifecycle::new_with_agent_did(db.node.clone(), AGENT_NAME, AGENT_DID, request, 300);
+        RequestLifecycle::new_with_node_did(db.node.clone(), AGENT_NAME, NODE_DID, request, 300);
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Expired);
 
     let resp = db
@@ -178,10 +178,10 @@ async fn same_timestamp_queue_order_uses_request_id_tie_break() {
             created_at.into(),
         )
     };
-    let mut second_lifecycle = RequestLifecycle::new_with_agent_did(
+    let mut second_lifecycle = RequestLifecycle::new_with_node_did(
         db.node.clone(),
         AGENT_NAME,
-        AGENT_DID,
+        NODE_DID,
         second_request,
         300,
     );
@@ -194,10 +194,10 @@ async fn same_timestamp_queue_order_uses_request_id_tie_break() {
         content: "first".into(),
         ..crate::support::build_request(first_doc_id, "req-a".into(), session_id, created_at.into())
     };
-    let mut first_lifecycle = RequestLifecycle::new_with_agent_did(
+    let mut first_lifecycle = RequestLifecycle::new_with_node_did(
         db.node.clone(),
         AGENT_NAME,
-        AGENT_DID,
+        NODE_DID,
         first_request,
         300,
     );
@@ -207,24 +207,24 @@ async fn same_timestamp_queue_order_uses_request_id_tie_break() {
     );
 }
 #[tokio::test]
-async fn claim_rejects_a_behavior_change_without_mutating_the_session() {
-    let db = test_db("lifecycle-behavior-pin").await;
+async fn claim_rejects_an_agent_change_without_mutating_the_session() {
+    let db = test_db("lifecycle-agent-pin").await;
     let mutation = format!(
         r#"mutation {{
             session: create_AgentSession(input: {{
                 session_id: "session-pinned",
-                agent_did: "{AGENT_DID}",
-                behavior_id: "general",
+                node_did: "{NODE_DID}",
+                agent_id: "general",
                 created_at: "2026-03-23T00:00:00Z"
             }}) {{ _docID }}
             request: create_AgentRequest(input: {{
                 request_id: "req-switch",
                 purpose: "normal",
-                agent_did: "{AGENT_DID}",
-                behavior_id: "code",
+                node_did: "{NODE_DID}",
+                agent_id: "code",
                 session_id: "session-pinned",
                 retry_root_request: "req-switch",
-                content: "switch behavior",
+                content: "switch agent",
                 lifecycle_state: "pending",
                 execution_origin: "interactive",
                 created_at: "2026-03-23T00:00:01Z",
@@ -247,18 +247,15 @@ async fn claim_rejects_a_behavior_change_without_mutating_the_session() {
         "AgentRequest",
     )
     .doc_id;
-    let request = DefraWatcher::new(db.node.clone(), AGENT_DID)
+    let request = DefraWatcher::new(db.node.clone(), NODE_DID)
         .try_fetch_request(&doc_id)
         .await
         .unwrap()
         .expect("pending request");
     let mut lifecycle =
-        RequestLifecycle::new_with_agent_did(db.node.clone(), AGENT_NAME, AGENT_DID, request, 300);
-    let error = lifecycle
-        .claim()
-        .await
-        .expect_err("behavior switch must fail");
-    assert!(error.to_string().contains("pinned to behavior general"));
+        RequestLifecycle::new_with_node_did(db.node.clone(), AGENT_NAME, NODE_DID, request, 300);
+    let error = lifecycle.claim().await.expect_err("agent switch must fail");
+    assert!(error.to_string().contains("pinned to agent general"));
 
     let request = db
         .node
@@ -281,7 +278,7 @@ async fn claim_rejects_a_behavior_change_without_mutating_the_session() {
         .node
         .execute(
             r#"{
-                AgentSession(filter: { session_id: { _eq: "session-pinned" } }) { behavior_id }
+                AgentSession(filter: { session_id: { _eq: "session-pinned" } }) { agent_id }
             }"#,
         )
         .await;
@@ -293,9 +290,7 @@ async fn claim_rejects_a_behavior_change_without_mutating_the_session() {
         .expect("session rows");
     assert_eq!(rows.len(), 1);
     assert_eq!(
-        rows[0]
-            .get("behavior_id")
-            .and_then(serde_json::Value::as_str),
+        rows[0].get("agent_id").and_then(serde_json::Value::as_str),
         Some("general")
     );
 }
@@ -312,8 +307,8 @@ async fn claim_synthesizes_deadline_when_request_deadline_is_invalid() {
             create_AgentRequest(input: {{
                 request_id: "{request_id}",
                 purpose: "normal",
-                agent_did: "{AGENT_DID}",
-                behavior_id: "{AGENT_NAME}",
+                node_did: "{NODE_DID}",
+                agent_id: "{AGENT_NAME}",
                 session_id: "{escaped_session_id}",
                 retry_parent_request: "",
                 retry_root_request: "{request_id}",
@@ -351,7 +346,7 @@ async fn claim_synthesizes_deadline_when_request_deadline_is_invalid() {
         "AgentRequest",
     )
     .doc_id;
-    let watcher = DefraWatcher::new(db.node.clone(), AGENT_DID);
+    let watcher = DefraWatcher::new(db.node.clone(), NODE_DID);
     let request = watcher
         .try_fetch_request(&doc_id)
         .await
@@ -361,7 +356,7 @@ async fn claim_synthesizes_deadline_when_request_deadline_is_invalid() {
 
     let before_claim = chrono::Utc::now();
     let mut lifecycle =
-        RequestLifecycle::new_with_agent_did(db.node.clone(), AGENT_NAME, AGENT_DID, request, 120);
+        RequestLifecycle::new_with_node_did(db.node.clone(), AGENT_NAME, NODE_DID, request, 120);
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
     let after_claim = chrono::Utc::now();
 

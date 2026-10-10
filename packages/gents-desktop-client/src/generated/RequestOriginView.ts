@@ -4,4 +4,4 @@
  * What put a request's content into the session, when not the person
  * (`gents::lifecycle::request_origin`).
  */
-export type RequestOriginView = { "kind": "sessionMessage", senderAgentDid: string | null, senderSessionId: string | null, senderRequestId: string | null, } | { "kind": "trigger", triggerId: string, triggerKind: string | null, } | { "kind": "goalContinuation", goalId: string | null, sequence: number | null, } | { "kind": "backgroundCompletion" };
+export type RequestOriginView = { "kind": "sessionMessage", senderNodeDid: string | null, senderSessionId: string | null, senderRequestId: string | null, } | { "kind": "trigger", triggerId: string, triggerKind: string | null, } | { "kind": "goalContinuation", goalId: string | null, sequence: number | null, } | { "kind": "backgroundCompletion" };

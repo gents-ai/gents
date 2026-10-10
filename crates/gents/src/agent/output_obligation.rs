@@ -51,7 +51,7 @@ struct CompletedWriteRow {
 struct CompletedWriteIdentity {
     #[serde(rename = "_docID")]
     doc_id: String,
-    agent_did: String,
+    node_did: String,
     requester_did: Option<String>,
     session_id: String,
     request_doc_id: String,
@@ -86,9 +86,9 @@ impl OutputObligationGate {
         let mut triggered = request.has_automated_trigger_lineage();
         if request.caused_by_trigger_kind.as_deref() == Some(crate::goal::GOAL_TRIGGER_KIND) {
             let query = format!(
-                r#"{{ AgentRequest(filter: {{ agent_did: {{ _eq: "{}" }},
+                r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{}" }},
                     session_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
-                escape_graphql_string(&request.agent_did),
+                escape_graphql_string(&request.node_did),
                 escape_graphql_string(&request.session_id),
                 crate::request_admission::SIGNED_REQUEST_FIELDS,
             );
@@ -107,7 +107,7 @@ impl OutputObligationGate {
                     .context("output obligation ancestry query omitted requests")?,
             )?;
             let members = crate::goal::authenticated_goal_request_members(
-                &request.agent_did,
+                &request.node_did,
                 &request.session_id,
                 &request.doc_id,
                 &rows,
@@ -142,7 +142,7 @@ impl OutputObligationGate {
                         lifecycle_state: {{ _eq: "completed" }}
                     }}
                 ) {{
-                    _docID agent_did requester_did session_id request_doc_id
+                    _docID node_did requester_did session_id request_doc_id
                     tool_name
                 }}
             }}"#,
@@ -186,20 +186,20 @@ impl OutputObligationGate {
             }
             let request = &requests[&row.request_doc_id];
             anyhow::ensure!(
-                request.agent_did == row.agent_did
+                request.node_did == row.node_did
                     && request.session_id == row.session_id
                     && request.requester_did == row.requester_did,
                 "completed output write crossed its physical request ownership scope"
             );
             let scope = (
-                row.agent_did.clone(),
+                row.node_did.clone(),
                 row.session_id.clone(),
                 row.requester_did.clone(),
             );
             if !sessions.contains_key(&scope) {
                 let calls = crate::run_timeline_fetch::load_session_tool_calls(
                     &access,
-                    &row.agent_did,
+                    &row.node_did,
                     &row.session_id,
                     row.requester_did.as_deref(),
                 )
@@ -319,7 +319,7 @@ fn expected_write_count(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::identity::AgentIdentity;
+    use crate::identity::NodeIdentity;
 
     #[test]
     fn trigger_scope_follows_automated_trigger_lineage() {
@@ -395,10 +395,10 @@ mod tests {
             serde_json::from_value(data.data.unwrap()["AgentRequest"][0].clone()).unwrap();
         let request = crate::watcher::AgentRequest::try_from(row).unwrap();
 
-        let mut lifecycle = RequestLifecycle::new_with_agent_did(
+        let mut lifecycle = RequestLifecycle::new_with_node_did(
             node.clone(),
             "general",
-            &request.agent_did,
+            &request.node_did,
             request.clone(),
             60,
         );
@@ -465,7 +465,7 @@ mod tests {
 
         let mut tool = crate::tool_call_lifecycle::ToolCallLifecycle::from_accepted(
             node.clone(),
-            lifecycle.request().agent_did.clone(),
+            lifecycle.request().node_did.clone(),
             lifecycle.request().requester_did.clone(),
             accepted,
             lifecycle
@@ -579,7 +579,7 @@ mod tests {
         let accepted = published.accepted_tools.pop().unwrap();
         let mut tool = crate::tool_call_lifecycle::ToolCallLifecycle::from_accepted(
             node.clone(),
-            lifecycle.request().agent_did.clone(),
+            lifecycle.request().node_did.clone(),
             lifecycle.request().requester_did.clone(),
             accepted,
             lifecycle
@@ -613,10 +613,10 @@ mod tests {
         let initial = gate.unmet().await.unwrap();
         assert_eq!(initial.len(), 1);
         assert_eq!(initial[0].expected_writes, None);
-        let mut lifecycle = crate::lifecycle::RequestLifecycle::new_with_agent_did(
+        let mut lifecycle = crate::lifecycle::RequestLifecycle::new_with_node_did(
             node.clone(),
             "general",
-            &request.agent_did,
+            &request.node_did,
             request.clone(),
             60,
         );
@@ -676,10 +676,10 @@ mod tests {
                 },
             }],
         );
-        let mut lifecycle = crate::lifecycle::RequestLifecycle::new_with_agent_did(
+        let mut lifecycle = crate::lifecycle::RequestLifecycle::new_with_node_did(
             node.clone(),
             "general",
-            &request.agent_did,
+            &request.node_did,
             request.clone(),
             60,
         );

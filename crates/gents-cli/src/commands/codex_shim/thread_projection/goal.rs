@@ -22,7 +22,7 @@ pub(in crate::commands::codex_shim) async fn set_codex_thread_goal(
     let status = params.status.map(codex_status_to_goal_status);
     let goal = set_goal(
         state.node.as_ref(),
-        state.agent_did.as_ref(),
+        state.node_did.as_ref(),
         &params.thread_id,
         params.objective.as_deref(),
         status,
@@ -43,7 +43,7 @@ pub(in crate::commands::codex_shim) async fn get_codex_thread_goal(
         return Ok(None);
     }
     let Some(goal) =
-        load_canonical_goal(state.node.as_ref(), state.agent_did.as_ref(), thread_id).await?
+        load_canonical_goal(state.node.as_ref(), state.node_did.as_ref(), thread_id).await?
     else {
         return Ok(None);
     };
@@ -61,7 +61,7 @@ pub(in crate::commands::codex_shim) async fn clear_codex_thread_goal(
         return Ok(false);
     }
     Ok(
-        delete_goals_for_session(state.node.as_ref(), state.agent_did.as_ref(), thread_id).await?
+        delete_goals_for_session(state.node.as_ref(), state.node_did.as_ref(), thread_id).await?
             > 0,
     )
 }
@@ -70,7 +70,7 @@ async fn enrich(state: &ShimState, mut goal: GoalDocument) -> Result<codex::Thre
     refresh_goal_usage(state.node.as_ref(), &goal).await?;
     goal = load_canonical_goal(
         state.node.as_ref(),
-        state.agent_did.as_ref(),
+        state.node_did.as_ref(),
         &goal.session_id,
     )
     .await?

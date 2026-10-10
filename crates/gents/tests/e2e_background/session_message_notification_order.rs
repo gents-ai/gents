@@ -3,23 +3,21 @@ use std::time::Duration;
 
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
-use gents::{AgentIdentity, DocumentRuntimeOptions, Gents, ToolCeiling};
+use gents::{DocumentRuntimeOptions, Gents, NodeIdentity, ToolCeiling};
 use serde_json::json;
 
 use crate::support::accepted_turn::{
     boot_prepared_accepted_turn, prepare_accepted_turn, AcceptedTurnSpec,
 };
-use crate::support::fixtures::{
-    bind_behavior_backend, configure_subagent_behavior, subagent_target,
-};
+use crate::support::fixtures::{agent_target, bind_agent_backend, configure_child_agent};
 use crate::support::interrupt::{create_runtime_request, wait_for_runtime_ready, BootedAgent};
 use crate::support::streaming_backend::{
     MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse, StreamScript,
 };
 use crate::support::{test_db, TestDb};
 
-const PARENT_BEHAVIOR_ID: &str = "e2e-session-order-parent";
-const CHILD_BEHAVIOR_ID: &str = "e2e-session-order-child";
+const PARENT_AGENT_ID: &str = "e2e-session-order-parent";
+const CHILD_AGENT_ID: &str = "e2e-session-order-child";
 const BACKEND_ID: &str = "e2e-session-order-backend";
 const MODEL: &str = "e2e-session-order-model";
 const RESUME_BACKEND_ID: &str = "e2e-session-order-resume-backend";
@@ -36,26 +34,26 @@ struct TranscriptRow {
 }
 
 async fn configure_session_chain(db: &TestDb) {
-    let agent_did = db.node_identity.did().to_string();
-    configure_subagent_behavior(
+    let node_did = db.node_identity.did().to_string();
+    configure_child_agent(
         db.node.as_ref(),
-        &agent_did,
-        CHILD_BEHAVIOR_ID,
+        &node_did,
+        CHILD_AGENT_ID,
         "e2e-session-order-child-tools",
         Vec::new(),
         false,
     )
     .await;
-    configure_subagent_behavior(
+    configure_child_agent(
         db.node.as_ref(),
-        &agent_did,
-        PARENT_BEHAVIOR_ID,
+        &node_did,
+        PARENT_AGENT_ID,
         "e2e-session-order-parent-tools",
-        vec![subagent_target(
-            &agent_did,
-            CHILD_BEHAVIOR_ID,
-            &agent_did,
-            CHILD_BEHAVIOR_ID,
+        vec![agent_target(
+            &node_did,
+            CHILD_AGENT_ID,
+            &node_did,
+            CHILD_AGENT_ID,
         )],
         true,
     )
@@ -64,7 +62,7 @@ async fn configure_session_chain(db: &TestDb) {
 
 /// Every message of the session in sequence order, reconstructed through the
 /// canonical message owner.
-async fn session_transcript(node: &EmbeddedNode, agent_did: &str) -> Vec<TranscriptRow> {
+async fn session_transcript(node: &EmbeddedNode, node_did: &str) -> Vec<TranscriptRow> {
     let session_id = escape_graphql_string(SESSION_ID);
     let response = node
         .execute(&format!(
@@ -90,8 +88,8 @@ async fn session_transcript(node: &EmbeddedNode, agent_did: &str) -> Vec<Transcr
         let (header, message) = gents::session::load_canonical_message_from_node(
             node,
             &header_id,
-            agent_did,
-            Some(agent_did),
+            node_did,
+            Some(node_did),
         )
         .await
         .unwrap_or_else(|error| panic!("reconstruct message {header_id}: {error:#}"));
@@ -103,9 +101,9 @@ async fn session_transcript(node: &EmbeddedNode, agent_did: &str) -> Vec<Transcr
     rows
 }
 
-async fn wait_for_transcript_marker(node: &EmbeddedNode, agent_did: &str, marker: &str) {
+async fn wait_for_transcript_marker(node: &EmbeddedNode, node_did: &str, marker: &str) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-    while !session_transcript(node, agent_did)
+    while !session_transcript(node, node_did)
         .await
         .iter()
         .any(|row| row.content.contains(marker))
@@ -125,7 +123,7 @@ async fn wait_for_transcript_marker(node: &EmbeddedNode, agent_did: &str, marker
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn resumed_prompt_sorts_after_an_observer_appended_notification() {
     let db = test_db("e2e-session-order").await;
-    let agent_did = db.node_identity.did().to_string();
+    let node_did = db.node_identity.did().to_string();
     configure_session_chain(&db).await;
 
     let prepared = prepare_accepted_turn(
@@ -133,28 +131,28 @@ async fn resumed_prompt_sorts_after_an_observer_appended_notification() {
         AcceptedTurnSpec {
             backend_id: BACKEND_ID,
             model: MODEL,
-            parent_behavior_id: PARENT_BEHAVIOR_ID,
-            configured_behavior_ids: &[PARENT_BEHAVIOR_ID, CHILD_BEHAVIOR_ID],
+            parent_agent_id: PARENT_AGENT_ID,
+            configured_agent_ids: &[PARENT_AGENT_ID, CHILD_AGENT_ID],
             request_id: "e2e-session-order-request",
             session_id: SESSION_ID,
             prompt: PARENT_PROMPT,
             accepted_chunks: vec![StreamChunk::tool_call(
                 "e2e-session-order-tool-call",
                 gents::toolset::AGENT_NEW_TOOL_NAME,
-                json!({ "agent": CHILD_BEHAVIOR_ID, "prompt": CHILD_PROMPT }).to_string(),
+                json!({ "agent": CHILD_AGENT_ID, "prompt": CHILD_PROMPT }).to_string(),
             )],
             child_plans: vec![StreamPlan::new(
                 CHILD_PROMPT,
                 vec![StreamResponse::completes(CHILD_PROMPT, [CHILD_ANSWER])],
             )],
             valid_until: None,
-            subagent_depth: Some(0),
+            request_hop: Some(0),
             request_setup: None,
         },
     )
     .await;
-    let identity: Arc<dyn AgentIdentity> = db.node_identity.clone();
-    let agent = Gents::from_default_behavior_documents(
+    let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
+    let agent = Gents::from_default_agent_documents(
         db.node.clone(),
         identity,
         DocumentRuntimeOptions {
@@ -165,7 +163,7 @@ async fn resumed_prompt_sorts_after_an_observer_appended_notification() {
     .await
     .expect("build first runtime");
     let first = boot_prepared_accepted_turn(&db, prepared, agent).await;
-    wait_for_transcript_marker(db.node.as_ref(), &agent_did, CHILD_ANSWER).await;
+    wait_for_transcript_marker(db.node.as_ref(), &node_did, CHILD_ANSWER).await;
     first.shutdown().await;
 
     let resume_backend = MockStreamingBackend::start(
@@ -173,10 +171,10 @@ async fn resumed_prompt_sorts_after_an_observer_appended_notification() {
         vec![StreamScript::completes(RESUMED_PROMPT, ["resumed"])],
     )
     .expect("start resume backend");
-    bind_behavior_backend(
+    bind_agent_backend(
         db.node.as_ref(),
         db.node_identity.did(),
-        PARENT_BEHAVIOR_ID,
+        PARENT_AGENT_ID,
         RESUME_BACKEND_ID,
         resume_backend.endpoint(),
         RESUME_MODEL,
@@ -184,15 +182,15 @@ async fn resumed_prompt_sorts_after_an_observer_appended_notification() {
     .await;
     create_runtime_request(
         db.node.as_ref(),
-        &agent_did,
-        PARENT_BEHAVIOR_ID,
+        &node_did,
+        PARENT_AGENT_ID,
         "e2e-session-order-resume-request",
         SESSION_ID,
         RESUMED_PROMPT,
     )
     .await;
-    let identity: Arc<dyn AgentIdentity> = db.node_identity.clone();
-    let agent = Gents::from_default_behavior_documents(
+    let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
+    let agent = Gents::from_default_agent_documents(
         db.node.clone(),
         identity,
         DocumentRuntimeOptions {
@@ -204,12 +202,12 @@ async fn resumed_prompt_sorts_after_an_observer_appended_notification() {
     .expect("build resumed runtime");
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
-    wait_for_runtime_ready(db.node.as_ref(), &agent_did).await;
-    let resumed = BootedAgent::new(shutdown_tx, handle, agent_did.clone());
-    wait_for_transcript_marker(db.node.as_ref(), &agent_did, RESUMED_PROMPT).await;
+    wait_for_runtime_ready(db.node.as_ref(), &node_did).await;
+    let resumed = BootedAgent::new(shutdown_tx, handle, node_did.clone());
+    wait_for_transcript_marker(db.node.as_ref(), &node_did, RESUMED_PROMPT).await;
     resumed.shutdown().await;
 
-    let transcript = session_transcript(db.node.as_ref(), &agent_did).await;
+    let transcript = session_transcript(db.node.as_ref(), &node_did).await;
     let notification = transcript
         .iter()
         .find(|row| row.content.contains(CHILD_ANSWER))

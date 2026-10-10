@@ -5,7 +5,7 @@ import type { SurfaceContext } from "@/app/surfaces";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { href } from "@/lib/router";
 import { nodeOfSession } from "@/lib/nodes";
-import { NodeBehaviorStack } from "./NodeBehaviorStack";
+import { NodeAgentStack } from "./NodeBehaviorStack";
 import { SessionStatus } from "./SessionStatus";
 import { Age } from "./time";
 import { useFleet, workersOfId } from "../hooks/useFleet";
@@ -29,9 +29,9 @@ export function WorkersSurface({ sessionId }: SurfaceContext) {
               >
                 <SessionStatus turnState={w.turnState} />
                 <span className="truncate">{w.title ?? "Untitled"}</span>
-                <NodeBehaviorStack
+                <NodeAgentStack
                   nodeDid={nodeOfSession(w)}
-                  behaviorId={w.behaviorId}
+                  agentId={w.agentId}
                   size="sm"
                 />
                 <span className="w-8 text-right text-xs text-muted-foreground">

@@ -21,12 +21,12 @@ function openFor(scope: Locator, label: string) {
     .first();
 }
 
-/* a behavior's profile in one sheet, and that profile's backend in a second */
+/* an agent's profile in one sheet, and that profile's backend in a second */
 async function stackTwoSheets(page: Page) {
   await page.setViewportSize({ width: 1280, height: 520 });
   await gotoHarness(page);
   await openConfig(page);
-  await openConfigSection(page, /^Behaviors\b/);
+  await openConfigSection(page, /^Agents\b/);
   await page
     .getByRole("link", { name: /^Ops\b/ })
     .first()

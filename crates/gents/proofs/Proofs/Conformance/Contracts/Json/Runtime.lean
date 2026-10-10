@@ -19,9 +19,9 @@ def readinessPublicationCasesJson : String :=
 
 def runtimeReconcileCaseJson (witness : RuntimeReconcileCase) : String :=
   "{"
-    ++ "\"requested_behavior\":" ++ jsonOptionalNat witness.requestedBehavior ++ ","
-    ++ "\"pre_default_behavior\":" ++ toString witness.preDefaultBehavior ++ ","
-    ++ "\"pre_session_behavior\":" ++ jsonOptionalNat witness.preSessionBehavior ++ ","
+    ++ "\"requested_agent\":" ++ jsonOptionalNat witness.requestedAgent ++ ","
+    ++ "\"pre_default_agent\":" ++ toString witness.preDefaultAgent ++ ","
+    ++ "\"pre_session_agent\":" ++ jsonOptionalNat witness.preSessionAgent ++ ","
     ++ "\"pre_runnable\":" ++ jsonArray (witness.preRunnable.map toString) ++ ","
     ++ "\"name\":" ++ jsonString witness.name ++ ","
     ++ "\"action\":" ++ jsonString witness.action ++ ","
@@ -42,11 +42,11 @@ def runtimeReconcileCaseJson (witness : RuntimeReconcileCase) : String :=
     ++ "\"tracked_session_id\":" ++ toString witness.trackedSessionId ++ ","
     ++ "\"tracked_request_generation\":" ++ toString witness.trackedRequestGeneration ++ ","
     ++ "\"tracked_request_session\":" ++ toString witness.trackedRequestSession ++ ","
-    ++ "\"tracked_request_behavior\":" ++ toString witness.trackedRequestBehavior ++ ","
-    ++ "\"tracked_session_behavior\":" ++ toString witness.trackedSessionBehavior
+    ++ "\"tracked_request_agent\":" ++ toString witness.trackedRequestAgent ++ ","
+    ++ "\"tracked_session_agent\":" ++ toString witness.trackedSessionAgent
     ++ "}"
 
-def clientBehaviorReadinessCaseJson (witness : ClientBehaviorReadinessCase) : String :=
+def clientAgentReadinessCaseJson (witness : ClientAgentReadinessCase) : String :=
   "{"
     ++ "\"name\":" ++ jsonString witness.name ++ ","
     ++ "\"observation_present\":" ++ boolString witness.observationPresent ++ ","
@@ -141,8 +141,8 @@ def sessionRecoveryCaseJson (witness : SessionRecoveryCase) : String :=
     ++ "\"post_latest_id\":" ++ toString witness.postLatestId ++ ","
     ++ "\"pre_session_id\":" ++ toString witness.preSessionId ++ ","
     ++ "\"post_session_id\":" ++ toString witness.postSessionId ++ ","
-    ++ "\"pre_behavior_id\":" ++ toString witness.preBehaviorId ++ ","
-    ++ "\"post_behavior_id\":" ++ toString witness.postBehaviorId ++ ","
+    ++ "\"pre_agent_id\":" ++ toString witness.preAgentId ++ ","
+    ++ "\"post_agent_id\":" ++ toString witness.postAgentId ++ ","
     ++ "\"pre_request_count\":" ++ toString witness.preRequestCount ++ ","
     ++ "\"post_request_count\":" ++ toString witness.postRequestCount ++ ","
     ++ "\"pre_retry_count\":" ++ toString witness.preRetryCount ++ ","
@@ -287,7 +287,7 @@ def startupReadinessCases : List StartupReadinessCase :=
     , blocksReady := false
     , requiresRestart := false
     }
-  , { witness := "startup_readiness.retirement_releases_a_pending_behavior"
+  , { witness := "startup_readiness.retirement_releases_a_pending_agent"
     , leanTheorems :=
         [ "RuntimeReconcile.StartupReadiness.retire_releases"
         , "RuntimeReconcile.StartupReadiness.retire_never_claims_ready"

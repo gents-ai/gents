@@ -5,7 +5,7 @@ use gents::defra_node::EmbeddedNode;
 use gents::document_config::BackendAuth;
 use gents::{ensure_runtime_schemas, BackendProviderKind};
 
-use crate::support::fixtures::test_behavior;
+use crate::support::fixtures::{bind_agent_backend, test_agent};
 
 #[tokio::test]
 #[ignore = "hits the live OpenRouter API and requires OPENROUTER_API_KEY"]
@@ -17,15 +17,25 @@ async fn live_openrouter_oneshot_succeeds() -> Result<()> {
 
     let node = Arc::new(EmbeddedNode::builder().build().await?);
     ensure_runtime_schemas(node.as_ref()).await?;
-    let mut behavior = test_behavior("openrouter-live", "backend-openrouter-live", None);
-    behavior.backend_provider_kind = BackendProviderKind::OpenRouter;
-    behavior.backend_endpoint = "https://openrouter.ai/api/v1".to_string();
-    behavior.backend_auth = BackendAuth::ApiKey { key: api_key };
-    behavior.model_name = model_name;
+    let mut agent = test_agent("openrouter-live", "backend-openrouter-live", None);
+    agent.backend_provider_kind = BackendProviderKind::OpenRouter;
+    agent.backend_endpoint = "https://openrouter.ai/api/v1".to_string();
+    agent.backend_auth = BackendAuth::ApiKey { key: api_key };
+    agent.model_name = model_name;
+
+    bind_agent_backend(
+        node.as_ref(),
+        agent.node_did(),
+        &agent.agent_id,
+        agent.backend_id.as_deref().expect("configured backend"),
+        &agent.backend_endpoint,
+        &agent.model_name,
+    )
+    .await;
 
     let result = gents::run_openai_oneshot(
         node,
-        &behavior,
+        &agent,
         "Reply with exactly the word READY and nothing else.",
     )
     .await?;

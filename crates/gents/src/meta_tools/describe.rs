@@ -970,7 +970,7 @@ mod tests {
             health: ServiceHealthMap::new(),
             local_hostname: "studio-1".to_string(),
             local_subnet: None,
-            agent_did: "did:key:z-test-agent".to_string(),
+            node_did: "did:key:z-test-agent".to_string(),
             allowed_mcp_service_ids: vec!["x-data".to_string()],
             remote_tools: super::super::tests::remote_selection(&["x-data"], &["search_posts"]),
         });
@@ -1004,7 +1004,7 @@ mod tests {
             health: ServiceHealthMap::new(),
             local_hostname: "studio-1".to_string(),
             local_subnet: None,
-            agent_did: "did:key:z-test-agent".to_string(),
+            node_did: "did:key:z-test-agent".to_string(),
             allowed_mcp_service_ids: vec!["missing-service".to_string()],
             remote_tools: super::super::tests::remote_selection(
                 &["missing-service"],

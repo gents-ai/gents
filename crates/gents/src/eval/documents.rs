@@ -28,7 +28,7 @@ pub struct DefinitionRef {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SubjectRef {
     pub pack_digest: String,
-    pub behavior_id: String,
+    pub agent_id: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -111,8 +111,8 @@ pub struct TrialIdentity {
     pub trial_index: u32,
     /// A resumed trial is a new row with `attempt + 1`.
     pub attempt: u32,
-    pub trial_agent_did: String,
-    /// With `trial_agent_did`, the durable evidence reference.
+    pub trial_node_did: String,
+    /// With `trial_node_did`, the durable evidence reference.
     pub session_id: String,
     pub seed: i64,
     /// A locator only. Never identity.
@@ -298,7 +298,7 @@ pub async fn create_run(
         "EvalRun",
         json!({
             "run_id": run_id,
-            "owner_agent_did": owner,
+            "owner_node_did": owner,
             "evaluator_did": evaluator_did,
             "origin": serde_json::to_value(origin)?,
             "created_at": created_at,
@@ -325,7 +325,7 @@ pub async fn load_run(
         access,
         "eval.load_run",
         format!(
-            r#"{{ EvalRun(filter: {{ owner_agent_did: {{ _eq: "{owner}" }}, run_id: {{ _eq: "{run_id}" }} }}) {{ run_id owner_agent_did evaluator_did origin created_at invalidated }} }}"#,
+            r#"{{ EvalRun(filter: {{ owner_node_did: {{ _eq: "{owner}" }}, run_id: {{ _eq: "{run_id}" }} }}) {{ run_id owner_node_did evaluator_did origin created_at invalidated }} }}"#,
             owner = escape_graphql_string(owner),
             run_id = escape_graphql_string(run_id),
         ),
@@ -337,9 +337,9 @@ pub async fn load_run(
         .map(|row| {
             Ok(RunRecord {
                 run_id: row["run_id"].as_str().context("run_id")?.into(),
-                owner: row["owner_agent_did"]
+                owner: row["owner_node_did"]
                     .as_str()
-                    .context("owner_agent_did")?
+                    .context("owner_node_did")?
                     .into(),
                 evaluator_did: row["evaluator_did"]
                     .as_str()
@@ -371,7 +371,7 @@ pub async fn invalidate_run(
     reason: &str,
 ) -> Result<()> {
     let filter = format!(
-        r#"owner_agent_did: {{ _eq: "{owner}" }}, run_id: {{ _eq: "{run_id}" }}"#,
+        r#"owner_node_did: {{ _eq: "{owner}" }}, run_id: {{ _eq: "{run_id}" }}"#,
         owner = escape_graphql_string(owner),
         run_id = escape_graphql_string(run_id),
     );
@@ -421,13 +421,13 @@ pub async fn create_trial(
         "EvalTrial",
         json!({
             "trial_id": identity.trial_id,
-            "owner_agent_did": owner,
+            "owner_node_did": owner,
             "run_id": identity.run_id,
             "cell_id": identity.cell_id,
             "case_id": identity.case_id,
             "trial_index": identity.trial_index,
             "attempt": identity.attempt,
-            "trial_agent_did": identity.trial_agent_did,
+            "trial_node_did": identity.trial_node_did,
             "session_id": identity.session_id,
             "seed": identity.seed,
             "home_hint": identity.home_hint,
@@ -446,7 +446,7 @@ pub async fn complete_trial(
     completion: &TrialCompletion,
 ) -> Result<()> {
     let filter = format!(
-        r#"owner_agent_did: {{ _eq: "{owner}" }}, trial_id: {{ _eq: "{trial_id}" }}"#,
+        r#"owner_node_did: {{ _eq: "{owner}" }}, trial_id: {{ _eq: "{trial_id}" }}"#,
         owner = escape_graphql_string(owner),
         trial_id = escape_graphql_string(trial_id),
     );
@@ -490,7 +490,7 @@ pub async fn load_trials(
         access,
         "eval.load_trials",
         format!(
-            r#"{{ EvalTrial(filter: {{ owner_agent_did: {{ _eq: "{owner}" }}, run_id: {{ _eq: "{run_id}" }} }}) {{ trial_id run_id cell_id case_id trial_index attempt trial_agent_did session_id seed home_hint created_at completion }} }}"#,
+            r#"{{ EvalTrial(filter: {{ owner_node_did: {{ _eq: "{owner}" }}, run_id: {{ _eq: "{run_id}" }} }}) {{ trial_id run_id cell_id case_id trial_index attempt trial_node_did session_id seed home_hint created_at completion }} }}"#,
             owner = escape_graphql_string(owner),
             run_id = escape_graphql_string(run_id),
         ),
@@ -509,7 +509,7 @@ pub async fn load_trials(
                     case_id: text("case_id"),
                     trial_index: row["trial_index"].as_u64().unwrap_or_default() as u32,
                     attempt: row["attempt"].as_u64().unwrap_or_default() as u32,
-                    trial_agent_did: text("trial_agent_did"),
+                    trial_node_did: text("trial_node_did"),
                     session_id: text("session_id"),
                     seed: row["seed"].as_i64().unwrap_or_default(),
                     home_hint: row["home_hint"].as_str().map(str::to_owned),
@@ -559,7 +559,7 @@ pub async fn append_verdict(
         "EvalVerdict",
         json!({
             "verdict_id": draft.verdict_id,
-            "owner_agent_did": owner,
+            "owner_node_did": owner,
             "run_id": draft.run_id,
             "trial_id": draft.trial_id,
             "stage_id": draft.stage_id,
@@ -588,7 +588,7 @@ pub async fn load_verdicts(
         access,
         "eval.load_verdicts",
         format!(
-            r#"{{ EvalVerdict(filter: {{ owner_agent_did: {{ _eq: "{owner}" }}, run_id: {{ _eq: "{run_id}" }} }}) {{ verdict_id run_id trial_id stage_id check check_version tier outcome_kind provider_reason score_bp weight raw feedback regrade_of }} }}"#,
+            r#"{{ EvalVerdict(filter: {{ owner_node_did: {{ _eq: "{owner}" }}, run_id: {{ _eq: "{run_id}" }} }}) {{ verdict_id run_id trial_id stage_id check check_version tier outcome_kind provider_reason score_bp weight raw feedback regrade_of }} }}"#,
             owner = escape_graphql_string(owner),
             run_id = escape_graphql_string(run_id),
         ),
@@ -664,7 +664,7 @@ mod tests {
                 label: "baseline".into(),
                 subject: SubjectRef {
                     pack_digest: "sha256:pack".into(),
-                    behavior_id: "monitor".into(),
+                    agent_id: "monitor".into(),
                 },
                 inference_profile_id: "local".into(),
             }],
@@ -691,7 +691,7 @@ mod tests {
             case_id: "disk-warning".into(),
             trial_index: 0,
             attempt: 0,
-            trial_agent_did: "did:key:trial".into(),
+            trial_node_did: "did:key:trial".into(),
             session_id: format!("session-{trial_id}"),
             seed: 1000,
             home_hint: Some("/tmp/trial".into()),
@@ -1017,7 +1017,7 @@ mod tests {
             "EvalVerdict",
             serde_json::json!({
                 "verdict_id": "v-bogus",
-                "owner_agent_did": OWNER,
+                "owner_node_did": OWNER,
                 "run_id": "r4",
                 "trial_id": "t",
                 "stage_id": "check",

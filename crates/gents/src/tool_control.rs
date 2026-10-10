@@ -31,7 +31,7 @@ pub enum CancelBackgroundToolCallOutcome {
 pub async fn cancel_session_background_process(
     node: Arc<EmbeddedNode>,
     executions: &BackgroundExecutionRegistry,
-    agent_did: &str,
+    node_did: &str,
     requester_did: Option<&str>,
     session_id: &str,
     tool_call_id: &str,
@@ -43,12 +43,12 @@ pub async fn cancel_session_background_process(
     let scope = crate::background_tools::ProcessControlScope {
         request_id: String::new(),
         session_id: session_id.into(),
-        agent_did: agent_did.into(),
+        node_did: node_did.into(),
         requester_did: requester_did.map(str::to_owned),
     };
     if !scope.authorizes(
         lifecycle.session_id(),
-        lifecycle.agent_did(),
+        lifecycle.node_did(),
         lifecycle.requester_did(),
     ) || lifecycle.is_session_message()
     {
@@ -185,13 +185,13 @@ mod tests {
         node: &Arc<EmbeddedNode>,
         request_id: &str,
         session_id: &str,
-        agent_did: &str,
+        node_did: &str,
     ) -> RequestLifecycle {
         let now = crate::graphql::escape_graphql_string(&chrono::Utc::now().to_rfc3339());
         let request_id = crate::graphql::escape_graphql_string(request_id);
         let session_id = crate::graphql::escape_graphql_string(session_id);
-        let agent_did = crate::graphql::escape_graphql_string(agent_did);
-        let created = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", purpose: "normal", agent_did: "{agent_did}", behavior_id: "general", session_id: "{session_id}", retry_parent_request: "", retry_root_request: "{request_id}", superseded_by_request: "", content: "cancel fixture", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "{now}", retry_count: 0, max_retries: 3, subagent_depth: 0 }}) {{ _docID }} }}"#)).await;
+        let node_did = crate::graphql::escape_graphql_string(node_did);
+        let created = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", purpose: "normal", node_did: "{node_did}", agent_id: "general", session_id: "{session_id}", retry_parent_request: "", retry_root_request: "{request_id}", superseded_by_request: "", content: "cancel fixture", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "{now}", retry_count: 0, max_retries: 3, request_hop: 0 }}) {{ _docID }} }}"#)).await;
         assert!(!created.has_errors(), "{:#?}", created.errors);
         let row = node.execute(&format!(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ {} }} }}"#,
@@ -201,10 +201,10 @@ mod tests {
             crate::graphql::first_row(&row, "AgentRequest")
                 .unwrap()
                 .unwrap();
-        let mut lifecycle = RequestLifecycle::new_with_agent_did(
+        let mut lifecycle = RequestLifecycle::new_with_node_did(
             node.clone(),
             "general",
-            &agent_did,
+            &node_did,
             row.try_into().unwrap(),
             60,
         );
@@ -227,9 +227,9 @@ mod tests {
         );
         ensure_runtime_schemas(&node).await.unwrap();
 
-        let agent_did = "did:test:test";
-        let mut request = claimed_request(&node, "request-cancel", "session-1", agent_did).await;
-        let writer = DefraStreamWriter::new(node.clone(), agent_did, Duration::from_millis(1));
+        let node_did = "did:test:test";
+        let mut request = claimed_request(&node, "request-cancel", "session-1", node_did).await;
+        let writer = DefraStreamWriter::new(node.clone(), node_did, Duration::from_millis(1));
         request.begin_owned_execution(&writer).await.unwrap();
         writer
             .start_provider_attempt(
@@ -272,7 +272,7 @@ mod tests {
             let id = accepted.id.clone();
             let mut lifecycle = ToolCallLifecycle::from_accepted(
                 node.clone(),
-                agent_did.to_string(),
+                node_did.to_string(),
                 None,
                 accepted,
                 deadline,
@@ -299,7 +299,7 @@ mod tests {
         let denied = cancel_session_background_process(
             node.clone(),
             &registry,
-            agent_did,
+            node_did,
             Some("foreign"),
             "session-1",
             "cancel-native-tool",
@@ -315,7 +315,7 @@ mod tests {
         let outcome = cancel_session_background_process(
             node.clone(),
             &registry,
-            agent_did,
+            node_did,
             None,
             "session-1",
             "cancel-native-tool",
@@ -441,7 +441,7 @@ mod tests {
     #[tokio::test]
     async fn owned_cancel_persists_custom_completion_reason_for_redrive() {
         use crate::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT;
-        use crate::identity::AgentIdentity;
+        use crate::identity::NodeIdentity;
         use crate::SIGNED_REQUEST_FIELDS;
 
         let data_path = std::env::temp_dir().join(format!(
@@ -462,12 +462,12 @@ mod tests {
                 .unwrap(),
         );
         ensure_runtime_schemas(&node).await.unwrap();
-        crate::test_support::install_test_behavior(&node, identity.did(), "general").await;
+        crate::test_support::install_test_agent(&node, identity.did(), "general").await;
 
-        let agent_did = identity.did().to_string();
+        let node_did = identity.did().to_string();
         let mut request =
-            claimed_request(&node, "request-custom", "session-custom", &agent_did).await;
-        let writer = DefraStreamWriter::new(node.clone(), &agent_did, Duration::from_millis(1));
+            claimed_request(&node, "request-custom", "session-custom", &node_did).await;
+        let writer = DefraStreamWriter::new(node.clone(), &node_did, Duration::from_millis(1));
         request.begin_owned_execution(&writer).await.unwrap();
         writer
             .start_provider_attempt(
@@ -500,7 +500,7 @@ mod tests {
             .expect("claimed request deadline");
         let mut lifecycle = ToolCallLifecycle::from_accepted(
             node.clone(),
-            agent_did.clone(),
+            node_did.clone(),
             None,
             accepted,
             deadline,
@@ -518,7 +518,7 @@ mod tests {
         );
 
         let row_response = node.execute(
-            r#"{ AgentToolCall(filter: { tool_call_id: { _eq: "custom-native-tool" } }, limit: 1) { _docID status lifecycle_state cancel_cause request_id request_doc_id session_id agent_did } }"#,
+            r#"{ AgentToolCall(filter: { tool_call_id: { _eq: "custom-native-tool" } }, limit: 1) { _docID status lifecycle_state cancel_cause request_id request_doc_id session_id node_did } }"#,
         ).await;
         assert!(!row_response.has_errors(), "{:#?}", row_response.errors);
         let row = crate::graphql::first_row::<serde_json::Value>(&row_response, "AgentToolCall")
@@ -546,7 +546,7 @@ mod tests {
         // Redrive: recovery must converge the notification + wake side effects
         // exactly once for this row.
         let report =
-            ToolCallLifecycle::reconcile_background_completion_side_effects(&node, &agent_did)
+            ToolCallLifecycle::reconcile_background_completion_side_effects(&node, &node_did)
                 .await
                 .unwrap();
         assert_eq!(
@@ -559,7 +559,7 @@ mod tests {
         let message_key = format!("background-completion-notification:{tool_doc_id}:tool");
         let message_key = crate::graphql::escape_graphql_string(&message_key);
         let notification_response = node.execute(&format!(
-            r#"{{ AgentMessage(filter: {{ message_key: {{ _eq: "{message_key}" }} }}, limit: 2) {{ message_key session_id agent_did requester_did role }} }}"#
+            r#"{{ AgentMessage(filter: {{ message_key: {{ _eq: "{message_key}" }} }}, limit: 2) {{ message_key session_id node_did requester_did role }} }}"#
         )).await;
         assert!(
             !notification_response.has_errors(),
@@ -576,7 +576,7 @@ mod tests {
         );
         let notification = &notifications[0];
         assert_eq!(notification["session_id"].as_str(), Some("session-custom"));
-        assert_eq!(notification["agent_did"].as_str(), Some(agent_did.as_str()));
+        assert_eq!(notification["node_did"].as_str(), Some(node_did.as_str()));
         assert!(notification["requester_did"].is_null());
         assert_eq!(notification["role"].as_str(), Some("user"));
 
@@ -585,14 +585,14 @@ mod tests {
         // registered runtime principal, plus the runtime-source lineage back to
         // the parent request.
         let escaped_session = crate::graphql::escape_graphql_string("session-custom");
-        let escaped_agent = crate::graphql::escape_graphql_string(&agent_did);
+        let escaped_agent = crate::graphql::escape_graphql_string(&node_did);
         let wake_response = node
             .execute(&format!(
                 r#"{{
                 AgentRequest(
                     filter: {{
                         session_id: {{ _eq: "{escaped_session}" }},
-                        agent_did: {{ _eq: "{escaped_agent}" }},
+                        node_did: {{ _eq: "{escaped_agent}" }},
                         execution_origin: {{ _eq: "scheduled" }}
                     }},
                     limit: 2
@@ -611,7 +611,7 @@ mod tests {
         let wake = &wakes[0];
         assert_eq!(
             wake["admission_signer_did"].as_str(),
-            Some(agent_did.as_str())
+            Some(node_did.as_str())
         );
         assert!(
             !wake["admission_signature"]
@@ -620,16 +620,13 @@ mod tests {
                 .is_empty(),
             "wake request must be signed by the registered runtime principal"
         );
-        assert_eq!(
-            wake["runtime_issuer_did"].as_str(),
-            Some(agent_did.as_str())
-        );
+        assert_eq!(wake["runtime_issuer_did"].as_str(), Some(node_did.as_str()));
         assert_eq!(
             wake["runtime_source_request_id"].as_str(),
             Some("request-custom")
         );
         assert_eq!(wake["runtime_source_kind"].as_str(), Some("local-control"));
-        assert_eq!(wake["behavior_id"].as_str(), Some("general"));
+        assert_eq!(wake["agent_id"].as_str(), Some("general"));
         assert_eq!(
             wake["content"].as_str(),
             Some(BACKGROUND_COMPLETION_WAKE_PROMPT)

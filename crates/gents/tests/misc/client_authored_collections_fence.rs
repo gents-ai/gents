@@ -12,8 +12,8 @@
 //! The load-bearing property is "a client store fresh-applies this
 //! collection's SDL and replicates documents in it", not strict client
 //! authorship: some rows in these collections are minted server-side
-//! (`AgentBehaviorReadiness` is written by the runtime owner, and the
-//! `AgentDirectoryEntry` rule filters on the home DID), but they
+//! (`NodeReadiness` is written by the runtime owner, and the
+//! `NodeDirectoryEntry` rule filters on the home DID), but they
 //! replicate through client stores all the same, and a client store can
 //! only merge a collection whose fresh-applied version identity matches the
 //! server's.
@@ -22,7 +22,7 @@
 //! - The `machine` `ScopeTemplate`'s `PerCollection` rules
 //!   (`crates/gents/src/agent/p2p_reconcile/templates.rs`): the collections
 //!   replicated per-pairing to client devices. Collections the template
-//!   lists but leaves unfiltered (`AgentBehavior`, `Tools`, ...) are
+//!   lists but leaves unfiltered (`Agent`, `Tools`, ...) are
 //!   deliberately shared config pushed identically to every peer, not part
 //!   of the client-authored plane, and excluded.
 //! - Enrollment protocol collections use their own exact owner-scoped direct
@@ -72,15 +72,8 @@ fn machine_template_push_set_matches_client_authored_collections_guard() {
     let expected: BTreeSet<&str> = CLIENT_AUTHORED_COLLECTIONS.iter().copied().collect();
 
     assert!(
-        !rules
-            .iter()
-            .any(|rule| rule.collection == gents_protocol::schemas::PERSONA_CONFIG_REQUEST_NAME),
-        "PersonaConfigRequest must stay off the broad machine template"
-    );
-    assert!(
-        client_route_collections(PairingDirection::ClientToRuntime)
-            .contains(&gents_protocol::schemas::PERSONA_CONFIG_REQUEST_NAME),
-        "PersonaConfigRequest must use the exact enrolled client route"
+        !actual.contains("PersonaConfigRequest"),
+        "retired persona requests must not replicate"
     );
 
     assert_eq!(

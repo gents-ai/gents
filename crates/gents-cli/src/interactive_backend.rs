@@ -260,7 +260,7 @@ mod tests {
             dangerously_overwrite: false,
             reset: false,
             identity_only: false,
-            agent_name: "test-agent".to_string(),
+            node_name: "test-agent".to_string(),
             key_path: None,
             identity_backend: IdentityBackendArg::File,
             keychain_label: None,
@@ -280,7 +280,7 @@ mod tests {
             write_tools: false,
             yolo: false,
             tool_package: None,
-            setup_steward: false,
+            engineer: false,
             tool_root: None,
             enable_memory: false,
             disable_defra_query: false,
@@ -328,7 +328,7 @@ mod tests {
     #[test]
     fn selection_overwrites_backend_fields_only() {
         let mut args = bare_init_args();
-        args.agent_name = "keep-me".to_string();
+        args.node_name = "keep-me".to_string();
         args.enable_memory = true;
         BackendSelection {
             inference_url: None,
@@ -343,7 +343,7 @@ mod tests {
         assert_eq!(args.model_name.as_deref(), Some("gpt-5.4-mini"));
         assert_eq!(args.api_key.as_deref(), Some("sk-test"));
         assert_eq!(args.inference_endpoint, None);
-        assert_eq!(args.agent_name, "keep-me");
+        assert_eq!(args.node_name, "keep-me");
         assert!(args.enable_memory);
     }
 

@@ -3,10 +3,10 @@ mod wait_observation;
 
 use super::*;
 use crate::config_client::ConfigApplyTxn;
-use crate::identity::{AgentIdentity, RegisteredIdentity};
+use crate::identity::{NodeIdentity, RegisteredIdentity};
 use crate::lifecycle::materialize::{sign_request, RequestSigner};
 use crate::lifecycle::queue::{
-    goal_continuation_behavior, goal_continuation_identity, prepare_goal_continuation,
+    goal_continuation_agent, goal_continuation_identity, prepare_goal_continuation,
 };
 use crate::request_admission::{verify_runtime_local_control_receipt, SIGNED_REQUEST_FIELDS};
 use gents_protocol::row::AgentRequestRow;
@@ -18,7 +18,7 @@ pub(crate) async fn publish_claimed_continuation(
     content: &str,
     wrapup: bool,
 ) -> Result<Option<GoalResumeReceipt>> {
-    let identity = RegisteredIdentity::from_registered_did(&observed.agent_did, None)?;
+    let identity = RegisteredIdentity::from_registered_did(&observed.node_did, None)?;
     let identity = &identity;
     let stopped = std::sync::Mutex::new(None);
     let stopped_ref = &stopped;
@@ -57,7 +57,7 @@ pub(crate) async fn publish_claimed_continuation(
 /// Stop only the observed claim while its parent is still the idle session
 /// head. Publication writes the same Goal row, so a conflicting child commit
 /// retries this transaction and must pass these observations again.
-pub(crate) async fn stop_claimed_continuation_for_unavailable_behavior(
+pub(crate) async fn stop_claimed_continuation_for_unavailable_agent(
     node: &EmbeddedNode,
     observed: &GoalDocument,
     parent_request_id: &str,
@@ -68,7 +68,7 @@ pub(crate) async fn stop_claimed_continuation_for_unavailable_behavior(
         None,
         "goal.stop_unavailable_claimed_continuation",
         |txn| Box::pin(async move {
-            let Some(goal) = load_canonical_goal_in_txn(txn, &observed.agent_did, &observed.session_id).await? else {
+            let Some(goal) = load_canonical_goal_in_txn(txn, &observed.node_did, &observed.session_id).await? else {
                 return Ok(false);
             };
             if goal.doc_id != observed.doc_id || goal.status != observed.status
@@ -76,16 +76,16 @@ pub(crate) async fn stop_claimed_continuation_for_unavailable_behavior(
                 || goal.last_continued_from_request_id != observed.last_continued_from_request_id
                 || goal.last_continued_from_request_id.as_deref() != Some(parent_request_id)
                 || gate_claimed_goal_continuation(
-                    GoalBehaviorObservation::Unavailable, true, false,
+                    GoalAgentObservation::Unavailable, true, false,
                     &goal.state().context("goal has an unknown status")?,
                 ) != GoalClaimedDecision::Stop
             {
                 return Ok(false);
             }
-            let did = escape_graphql_string(&goal.agent_did);
+            let did = escape_graphql_string(&goal.node_did);
             let session = escape_graphql_string(&goal.session_id);
             let response = txn.execute(&format!(r#"{{ AgentRequest(filter: {{
-                agent_did: {{ _eq: "{did}" }}, session_id: {{ _eq: "{session}" }}
+                node_did: {{ _eq: "{did}" }}, session_id: {{ _eq: "{session}" }}
             }}, order: [{{ created_at: DESC }}, {{ request_id: DESC }}]) {{ {SIGNED_REQUEST_FIELDS} }} }}"#)).await?;
             let requests: Vec<AgentRequestRow> = serde_json::from_value(
                 response.pointer("/data/AgentRequest").cloned()
@@ -115,7 +115,7 @@ type StoppedReason = std::sync::Mutex<Option<String>>;
 
 async fn stage_claimed_continuation(
     txn: &ConfigApplyTxn<'_>,
-    identity: &dyn AgentIdentity,
+    identity: &dyn NodeIdentity,
     observed: &GoalDocument,
     parent_request_id: &str,
     content: &str,
@@ -125,23 +125,23 @@ async fn stage_claimed_continuation(
     // A conflicted attempt's stop never committed.
     *stopped.lock().unwrap_or_else(|poison| poison.into_inner()) = None;
     anyhow::ensure!(
-        identity.did() == observed.agent_did,
+        identity.did() == observed.node_did,
         "claimed publication requires the goal owner's signing identity"
     );
     let Some(goal) =
-        load_canonical_goal_in_txn(txn, &observed.agent_did, &observed.session_id).await?
+        load_canonical_goal_in_txn(txn, &observed.node_did, &observed.session_id).await?
     else {
         return Ok(None);
     };
     if goal.doc_id != observed.doc_id {
         return Ok(None);
     }
-    let did = escape_graphql_string(&goal.agent_did);
+    let did = escape_graphql_string(&goal.node_did);
     let session = escape_graphql_string(&goal.session_id);
     let response = txn
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{
-        agent_did: {{ _eq: "{did}" }}, session_id: {{ _eq: "{session}" }}
+        node_did: {{ _eq: "{did}" }}, session_id: {{ _eq: "{session}" }}
     }}, order: [{{ created_at: DESC }}, {{ request_id: DESC }}]) {{ {SIGNED_REQUEST_FIELDS} }} }}"#
         ))
         .await?;
@@ -161,7 +161,7 @@ async fn stage_claimed_continuation(
     );
     let parent_row = parents[0];
     let parent = crate::watcher::AgentRequest::try_from(parent_row.clone())?;
-    let behavior = goal_continuation_behavior(txn, &parent).await?;
+    let behavior = goal_continuation_agent(txn, &parent).await?;
     let sequence = observed.continuation_sequence();
     let now = Utc::now();
     let created_at = now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
@@ -183,11 +183,11 @@ async fn stage_claimed_continuation(
     // and its rows cannot reproduce the set the first publication read.
     let session_hop = match children.first() {
         Some(child) => child
-            .subagent_depth
+            .request_hop
             .and_then(|hop| u32::try_from(hop).ok())
             .context("claimed continuation receipt lacks its hop")?,
         None => {
-            crate::session::load_session_current_hop_in_txn(txn, &goal.agent_did, &goal.session_id)
+            crate::session::load_session_current_hop_in_txn(txn, &goal.node_did, &goal.session_id)
                 .await?
         }
     };
@@ -206,9 +206,9 @@ async fn stage_claimed_continuation(
     if let Some(child) = children.first() {
         verify_runtime_local_control_receipt(
             child,
-            &goal.agent_did,
+            &goal.node_did,
             parent_request_id,
-            parent.requester_did.as_deref().unwrap_or(&goal.agent_did),
+            parent.requester_did.as_deref().unwrap_or(&goal.node_did),
         )?;
         let actual: GoalBackedRequestFingerprint =
             serde_json::from_value(serde_json::to_value(child)?)?;
@@ -252,7 +252,7 @@ async fn stage_claimed_continuation(
             .doc_id
             .as_deref()
             .context("goal predecessor lacks physical document identity")?,
-        &goal.agent_did,
+        &goal.node_did,
         &goal.session_id,
         parent_row.requester_did.as_deref(),
     )
@@ -304,7 +304,7 @@ async fn stage_claimed_continuation(
     let response = txn
         .execute(&format!(
             r#"mutation {{ update_Goal(filter: {{
-        _docID: {{ _eq: "{doc_id}" }}, agent_did: {{ _eq: "{did}" }},
+        _docID: {{ _eq: "{doc_id}" }}, node_did: {{ _eq: "{did}" }},
         status: {{ _eq: "{status}" }}, continuation_sequence: {{ _eq: {sequence} }},
         last_continued_from_request_id: {{ _eq: "{parent_id}" }}
     }}, input: {{ updated_at: "{timestamp}" }}) {{ _docID }} }}"#
@@ -368,13 +368,13 @@ async fn stop_claimed_continuation_in_txn(
         return Ok(None);
     };
     let doc_id = escape_graphql_string(&goal.doc_id);
-    let did = escape_graphql_string(&goal.agent_did);
+    let did = escape_graphql_string(&goal.node_did);
     let status = escape_graphql_string(&goal.status);
     let parent_id = escape_graphql_string(parent_request_id);
     let response = txn
         .execute(&format!(
             r#"mutation {{ update_Goal(filter: {{
-        _docID: {{ _eq: "{doc_id}" }}, agent_did: {{ _eq: "{did}" }},
+        _docID: {{ _eq: "{doc_id}" }}, node_did: {{ _eq: "{did}" }},
         status: {{ _eq: "{status}" }}, continuation_sequence: {{ _eq: {sequence} }},
         last_continued_from_request_id: {{ _eq: "{parent_id}" }}
     }}, input: {{ {fields} }}) {{ _docID }} }}"#

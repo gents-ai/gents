@@ -1,9 +1,9 @@
 use super::*;
-use crate::goal::{gate_claimed_goal_continuation, set_goal, GoalBehaviorObservation};
+use crate::goal::{gate_claimed_goal_continuation, set_goal, GoalAgentObservation};
 use crate::support::{test_db, TestDb};
-use gents_protocol::row::{
-    BehaviorReadinessEntry, BehaviorReadinessProcessState, BehaviorReadinessSnapshot,
-    BehaviorReadinessState, BehaviorReadinessUnavailableReason, BEHAVIOR_READINESS_FORMAT_VERSION,
+use gents_protocol::node_readiness::{
+    AgentReadinessEntry, AgentReadinessState, AgentReadinessUnavailableReason,
+    NodeReadinessProcessState, NodeReadinessSnapshot, NODE_READINESS_FORMAT_VERSION,
 };
 use serde_json::{json, Value};
 
@@ -26,21 +26,21 @@ fn recovery_projection(goal: &GoalDocument) -> Value {
 fn source(db: &TestDb) -> GoalSource {
     let (_, rx) = watch::channel(Arc::new(ActiveRuntimeSnapshot {
         generation: 1,
-        principal: None,
+        node: None,
         local_did: db.node_identity.did().to_owned(),
-        default_behavior_id: BEHAVIOR.to_owned(),
-        behaviors: Default::default(),
+        default_agent_id: BEHAVIOR.to_owned(),
+        agents: Default::default(),
         tool_surfaces: Default::default(),
         backend_admission_configs: Default::default(),
-        unavailable_behaviors: Default::default(),
+        unavailable_agents: Default::default(),
         active_schedules: Default::default(),
         unavailable_schedules: Default::default(),
         active_event_triggers: Default::default(),
         unavailable_event_triggers: Default::default(),
         active_tasks: Default::default(),
         dispatchers: Default::default(),
-        behavior_executor_capacities: Default::default(),
-        behavior_executor_queue_capacities: Default::default(),
+        agent_executor_capacities: Default::default(),
+        agent_executor_queue_capacities: Default::default(),
     }));
     GoalSource::new(rx, db.node.clone(), CancellationToken::new())
 }
@@ -55,8 +55,8 @@ async fn load_goal(db: &TestDb) -> GoalDocument {
 async fn child_count(db: &TestDb, goal: &GoalDocument, parent: &str) -> usize {
     let response = graphql_with_transaction_retry(
         &db.node,
-        &format!(r#"{{ AgentRequest(filter: {{agent_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}, caused_by_trigger_kind: {{_eq: "goal"}}, caused_by_trigger_id: {{_eq: "{}"}}, caused_by_parent_request_id: {{_eq: "{}"}}}}) {{_docID}} }}"#,
-            escape_graphql_string(&goal.agent_did), escape_graphql_string(&goal.session_id),
+        &format!(r#"{{ AgentRequest(filter: {{node_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}, caused_by_trigger_kind: {{_eq: "goal"}}, caused_by_trigger_id: {{_eq: "{}"}}, caused_by_parent_request_id: {{_eq: "{}"}}}}) {{_docID}} }}"#,
+            escape_graphql_string(&goal.node_did), escape_graphql_string(&goal.session_id),
             escape_graphql_string(&goal.goal_id), escape_graphql_string(parent)),
         "count claimed readiness children",
     ).await.unwrap();
@@ -67,11 +67,10 @@ async fn child_count(db: &TestDb, goal: &GoalDocument, parent: &str) -> usize {
 }
 
 async fn install_claim(db: &TestDb, before: &Value) -> GoalDocument {
-    crate::test_support::install_test_behavior(&db.node, db.node_identity.did(), BEHAVIOR).await;
-    crate::session::ensure_session_with_behavior_id_and_requester_did(
+    crate::test_support::install_test_agent(&db.node, db.node_identity.did(), BEHAVIOR).await;
+    crate::session::ensure_session_with_agent_id_and_requester_did(
         &db.node,
         SESSION,
-        BEHAVIOR,
         db.node_identity.did(),
         BEHAVIOR,
         Some(db.node_identity.did()),
@@ -84,8 +83,8 @@ async fn install_claim(db: &TestDb, before: &Value) -> GoalDocument {
         crate::lifecycle::RequestIdentity {
             requester_did: Some(db.node_identity.did().to_owned()),
             request_id: parent.to_owned(),
-            agent_did: db.node_identity.did().to_owned(),
-            behavior_id: BEHAVIOR.to_owned(),
+            node_did: db.node_identity.did().to_owned(),
+            agent_id: BEHAVIOR.to_owned(),
             session_id: SESSION.to_owned(),
             content: "original goal attempt".to_owned(),
             execution_origin: crate::lifecycle::ExecutionOrigin::Interactive,
@@ -151,39 +150,39 @@ async fn publish_readiness(
     newer_than_terminal: bool,
 ) {
     let unavailable = match observation {
-        "unavailable" => Some(BehaviorReadinessUnavailableReason::RuntimeConfigurationInvalid),
+        "unavailable" => Some(AgentReadinessUnavailableReason::RuntimeConfigurationInvalid),
         "backend_recovering" => {
-            Some(BehaviorReadinessUnavailableReason::BackendTemporarilyUnavailable)
+            Some(AgentReadinessUnavailableReason::BackendTemporarilyUnavailable)
         }
         _ => None,
     };
-    let snapshot = BehaviorReadinessSnapshot {
-        format_version: BEHAVIOR_READINESS_FORMAT_VERSION,
+    let snapshot = NodeReadinessSnapshot {
+        format_version: NODE_READINESS_FORMAT_VERSION,
         process_state: if observation == "unknown" {
-            BehaviorReadinessProcessState::Recovering
+            NodeReadinessProcessState::Recovering
         } else {
-            BehaviorReadinessProcessState::Ready
+            NodeReadinessProcessState::Ready
         },
         active_generation: 1,
         router_generation: 1,
-        default_behavior_id: if observation == "unassigned" {
+        default_agent_id: if observation == "unassigned" {
             "other-assigned-behavior".to_owned()
         } else {
             BEHAVIOR.to_owned()
         },
-        behaviors: if observation == "unassigned" {
-            vec![BehaviorReadinessEntry {
-                behavior_id: "other-assigned-behavior".to_owned(),
-                state: BehaviorReadinessState::Ready,
+        agents: if observation == "unassigned" {
+            vec![AgentReadinessEntry {
+                agent_id: "other-assigned-behavior".to_owned(),
+                state: AgentReadinessState::Ready,
                 reason: None,
             }]
         } else {
-            vec![BehaviorReadinessEntry {
-                behavior_id: BEHAVIOR.to_owned(),
+            vec![AgentReadinessEntry {
+                agent_id: BEHAVIOR.to_owned(),
                 state: if unavailable.is_some() {
-                    BehaviorReadinessState::Unavailable
+                    AgentReadinessState::Unavailable
                 } else {
-                    BehaviorReadinessState::Ready
+                    AgentReadinessState::Ready
                 },
                 reason: unavailable,
             }]
@@ -201,8 +200,8 @@ async fn publish_readiness(
         &db.node,
         "goal.claimed_readiness_test_observation",
         &format!(
-            r#"mutation {{ upsert_AgentBehaviorReadiness(filter: {{agent_did: {{_eq: "{did}"}}}},
-            add: {{agent_did: "{did}", snapshot_json: "{payload}", updated_at: "{at}"}},
+            r#"mutation {{ upsert_NodeReadiness(filter: {{node_did: {{_eq: "{did}"}}}},
+            add: {{node_did: "{did}", snapshot_json: "{payload}", updated_at: "{at}"}},
             update: {{snapshot_json: "{payload}", updated_at: "{at}"}}) {{_docID}} }}"#,
         ),
     )
@@ -210,8 +209,8 @@ async fn publish_readiness(
     .unwrap();
     let phase = if settled { "idle" } else { "applying" };
     crate::ConfigAccess::write_local(&db.node, "goal.claimed_readiness_test_reconcile", &format!(
-        r#"mutation {{ upsert_AgentRuntime(filter: {{agent_did: {{_eq: "{did}"}}}},
-            add: {{agent_did: "{did}", reconcile_phase: "{phase}", last_reconcile_result: "applied"}},
+        r#"mutation {{ upsert_NodeRuntime(filter: {{node_did: {{_eq: "{did}"}}}},
+            add: {{node_did: "{did}", reconcile_phase: "{phase}", last_reconcile_result: "applied"}},
             update: {{reconcile_phase: "{phase}", last_reconcile_result: "applied"}}) {{_docID}} }}"#,
     )).await.unwrap();
 }
@@ -230,13 +229,13 @@ async fn generated_claimed_readiness_cases_drive_goal_source() {
         let settled = case["settled"].as_bool().unwrap();
         let child_exists = case["child_exists"].as_bool().unwrap();
         let native_observation = match observation {
-            "ready" => GoalBehaviorObservation::Ready {
+            "ready" => GoalAgentObservation::Ready {
                 newer_than_terminal: case["newer_than_terminal"].as_bool().unwrap(),
             },
-            "backend_recovering" => GoalBehaviorObservation::BackendRecovering,
-            "unavailable" => GoalBehaviorObservation::Unavailable,
-            "unassigned" => GoalBehaviorObservation::Unassigned,
-            "unknown" => GoalBehaviorObservation::Unknown,
+            "backend_recovering" => GoalAgentObservation::BackendRecovering,
+            "unavailable" => GoalAgentObservation::Unavailable,
+            "unassigned" => GoalAgentObservation::Unassigned,
+            "unknown" => GoalAgentObservation::Unknown,
             _ => unreachable!(),
         };
         let decision = gate_claimed_goal_continuation(
@@ -347,7 +346,7 @@ async fn generated_claimed_readiness_cases_drive_goal_source() {
         );
         if child_exists {
             assert!(
-                !stop_claimed_continuation_for_unavailable_behavior(
+                !stop_claimed_continuation_for_unavailable_agent(
                     &db.node,
                     &before,
                     parent,
@@ -378,7 +377,7 @@ async fn readiness_stop_rejects_a_replaced_claim_epoch() {
     let parent = stale.last_continued_from_request_id.as_deref().unwrap();
     assert!(claim_continuation(&db.node, &stale, parent).await.unwrap());
     let current = load_goal(&db).await;
-    assert!(!stop_claimed_continuation_for_unavailable_behavior(
+    assert!(!stop_claimed_continuation_for_unavailable_agent(
         &db.node,
         &stale,
         parent,

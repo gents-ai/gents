@@ -13,9 +13,9 @@ use lean_vocab_test::{
 fn session(requester_did: Option<&str>) -> AgentSession {
     AgentSession {
         session_id: "session-1".into(),
-        agent_did: "did:test:amy".into(),
+        node_did: "did:test:amy".into(),
         requester_did: requester_did.map(str::to_owned),
-        behavior_id: "amy-default".into(),
+        agent_id: "amy-default".into(),
         created_at: "2026-04-21T12:00:00Z".into(),
         closed_at: None,
         title: Some(SessionTitle {
@@ -41,8 +41,8 @@ fn request(id: &str, state: RequestLifecycleState) -> AgentRequestRow {
         purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
         doc_id: Some(id.into()),
         request_id: id.into(),
-        agent_did: Some("did:test:amy".into()),
-        behavior_id: Some("amy-default".into()),
+        node_did: Some("did:test:amy".into()),
+        agent_id: Some("amy-default".into()),
         session_id: Some("session-1".into()),
         content: Some(format!("{id} prompt")),
         lifecycle_state: Some(state),
@@ -73,7 +73,7 @@ fn request_state_for_turn(turn_state: Option<&str>) -> RequestLifecycleState {
     }
 }
 
-const CONTRACT_AGENT: &str = "did:test:contract-agent";
+const CONTRACT_NODE: &str = "did:test:contract-agent";
 
 fn lean_requester(id: usize) -> Option<String> {
     (id != 1).then(|| format!("did:test:requester-{id}"))
@@ -102,9 +102,9 @@ fn lean_session_rows(
                 purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
                 doc_id: Some(format!("doc-{}", row.doc)),
                 request_id: contract_request_id(row.request),
-                agent_did: Some(CONTRACT_AGENT.into()),
+                node_did: Some(CONTRACT_NODE.into()),
                 requester_did: lean_requester(row.requester),
-                behavior_id: Some("contract-behavior".into()),
+                agent_id: Some("contract-agent".into()),
                 session_id: Some(session_id.into()),
                 content: Some(format!("input {}", row.request)),
                 lifecycle_state: Some(lifecycle),
@@ -142,9 +142,9 @@ fn contract_session(
 ) -> AgentSession {
     AgentSession {
         session_id: session_id.into(),
-        agent_did: CONTRACT_AGENT.into(),
+        node_did: CONTRACT_NODE.into(),
         requester_did,
-        behavior_id: "contract-behavior".into(),
+        agent_id: "contract-agent".into(),
         created_at: "2026-04-21T12:00:00Z".into(),
         closed_at: None,
         title: None,
@@ -173,8 +173,8 @@ fn client_shell_contract_store(case: &lean_vocab_test::LeanClientShellCase) -> C
                 purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
                 doc_id: Some(contract_request_id(id)),
                 request_id: contract_request_id(id),
-                agent_did: Some(CONTRACT_AGENT.into()),
-                behavior_id: Some("contract-behavior".into()),
+                node_did: Some(CONTRACT_NODE.into()),
+                agent_id: Some("contract-agent".into()),
                 session_id: Some(session_id.clone()),
                 content: Some("contract prompt".into()),
                 lifecycle_state: Some(request_state_for_turn(
@@ -267,7 +267,7 @@ fn session_snapshot_projects_durable_goal_state() {
         goal_id: "goal-1".into(),
         creation_key: None,
         session_id: "session-1".into(),
-        agent_did: "did:test:amy".into(),
+        node_did: "did:test:amy".into(),
         objective: Some("Ship the durable controller".into()),
         tags: Vec::new(),
         status: Some("active".into()),
@@ -288,7 +288,7 @@ fn session_snapshot_projects_durable_goal_state() {
         created_at: None,
         updated_at: None,
     };
-    let snapshot = build_session_snapshot_from_store_for_agent(
+    let snapshot = build_session_snapshot_from_store_for_node(
         &ClientStore::from_rows(ClientStoreRows {
             sessions: vec![session(None)],
             goals: vec![goal],
@@ -337,7 +337,7 @@ fn requester_scope_does_not_cross_canonical_output_facts() {
         sessions: vec![session(None), session(Some("did:test:other"))],
         ..ClientStoreRows::default()
     };
-    push_canonical_text_message_for_agent(
+    push_canonical_text_message_for_node(
         &mut rows,
         "owner",
         "session-1",
@@ -348,7 +348,7 @@ fn requester_scope_does_not_cross_canonical_output_facts() {
         "did:test:amy",
         None,
     );
-    push_canonical_text_message_for_agent(
+    push_canonical_text_message_for_node(
         &mut rows,
         "other",
         "session-1",
@@ -360,13 +360,9 @@ fn requester_scope_does_not_cross_canonical_output_facts() {
         Some("did:test:other"),
     );
     let store = ClientStore::from_rows(rows);
-    let snapshot = build_session_snapshot_from_store_for_agent(
-        &store,
-        Some("did:test:amy"),
-        "session-1",
-        None,
-    )
-    .expect("snapshot");
+    let snapshot =
+        build_session_snapshot_from_store_for_node(&store, Some("did:test:amy"), "session-1", None)
+            .expect("snapshot");
     assert_eq!(snapshot.messages.len(), 1);
     assert_eq!(snapshot.messages[0].message_key, "owner");
 }
@@ -407,7 +403,7 @@ fn session_snapshot_uses_canonical_session_without_materialized_observation() {
     });
     let snapshot = build_session_snapshot_from_store(&store, "session-1", None).expect("snapshot");
     assert_eq!(snapshot.session_id, "session-1");
-    assert_eq!(snapshot.agent_did.as_deref(), Some("did:test:amy"));
+    assert_eq!(snapshot.node_did.as_deref(), Some("did:test:amy"));
     assert_eq!(snapshot.turn_state.as_deref(), Some("completed"));
 }
 
@@ -447,7 +443,7 @@ fn session_snapshot_does_not_report_unobserved_preferred_request() {
         purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
         doc_id: Some("req-old".into()),
         request_id: "req-old".into(),
-        agent_did: Some("did:test:amy".into()),
+        node_did: Some("did:test:amy".into()),
         session_id: Some("session-1".into()),
         lifecycle_state: Some(RequestLifecycleState::Completed),
         ..Default::default()
@@ -656,7 +652,7 @@ fn session_snapshot_live_overlay_consumes_generated_contract_cases() {
             rows.output_segments.push(OutputSegmentRow {
                 doc_id: format!("{}-open", case.name),
                 segment: OutputSegment {
-                    agent_did: "did:test:amy".into(),
+                    node_did: "did:test:amy".into(),
                     requester_did: None,
                     session_id: "session-1".into(),
                     request_doc_id: "req-2".into(),
@@ -725,7 +721,7 @@ fn session_snapshot_transcript_rendering_consumes_generated_transcript_cases() {
             rows.tool_calls.push(
                 serde_json::from_value(serde_json::json!({
                     "_docID": format!("{}-tool-{index}", case.name),
-                    "agent_did": "did:test:amy",
+                    "node_did": "did:test:amy",
                     "request_doc_id": "req-1",
                     "tool_call_key": format!("{}-tool-{index}", case.name),
                     "session_id": "session-1",
@@ -851,7 +847,7 @@ fn session_snapshot_derives_cancel_causes_from_request_and_tool() {
                 "_docID": "cancelled-tool-doc",
                 "tool_call_key": "cancelled-tool",
                 "tool_call_id": "cancelled-call",
-                "agent_did": "did:test:amy",
+                "node_did": "did:test:amy",
                 "session_id": "session-1",
                 "request_id": "req-2",
                 "request_doc_id": "req-2",
@@ -898,7 +894,7 @@ fn tool_cancel_cause_uses_only_its_physical_request_owner() {
                     "_docID": "cancelled-tool-doc",
                     "tool_call_key": "cancelled-tool",
                     "tool_call_id": "cancelled-call",
-                    "agent_did": "did:test:amy",
+                    "node_did": "did:test:amy",
                     "session_id": "session-1",
                     "request_id": "req-2",
                     "request_doc_id": request_doc_id,

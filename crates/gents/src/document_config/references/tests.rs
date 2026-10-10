@@ -3,10 +3,10 @@ use serde_json::json;
 
 #[test]
 fn candidate_tools_reuse_surface_expansion_and_collision_guards() {
-    let tools = json!({"tools_id":"tools", "agent_did":"owner",
+    let tools = json!({"tools_id":"tools", "node_did":"owner",
         "datastore":{"datastore_tool_surface_ids":["a", "b"]}});
     let surface = |id: &str, name: &str| {
-        json!({"surface_id":id, "agent_did":"owner",
+        json!({"surface_id":id, "node_did":"owner",
         "entries":[{"kind":"query", "tool_name":name, "collection":"Records",
             "fields":["name"], "description":"Read records"}]})
     };
@@ -60,7 +60,7 @@ fn candidate_installation_uses_existing_endpoint_and_path_requirements() {
         ConfigReferences::from_documents("owner", [(collection, value)])
             .and_then(|refs| refs.validate())
     };
-    let service = json!({"service_id":"service", "agent_did":"owner", "hostname":"localhost", "mcp_port":8000});
+    let service = json!({"service_id":"service", "node_did":"owner", "hostname":"localhost", "mcp_port":8000});
     validate(Collection::ToolServiceRegistry, service.clone()).unwrap();
     for (field, value) in [
         ("mcp_port", json!(null)),
@@ -77,7 +77,7 @@ fn candidate_installation_uses_existing_endpoint_and_path_requirements() {
         valid[address] = json!("host");
         validate(Collection::ToolServiceRegistry, valid).unwrap();
     }
-    let placement = json!({"repository_id":"repo", "agent_did":"owner", "host_path":"./checkout"});
+    let placement = json!({"repository_id":"repo", "node_did":"owner", "host_path":"./checkout"});
     validate(Collection::RepositoryPlacement, placement.clone()).unwrap();
     let mut bad = placement;
     bad["host_path"] = json!(" ");
@@ -86,11 +86,11 @@ fn candidate_installation_uses_existing_endpoint_and_path_requirements() {
 
 #[test]
 fn callback_admission_reuses_projection_and_filter_secret_checks() {
-    let callback = json!({"callback_id":"callback", "agent_did":"owner",
+    let callback = json!({"callback_id":"callback", "node_did":"owner",
         "handler":{"kind":"built_in","emitter":"create_workspace"}});
     let source =
-        json!({"event_source_id":"source", "agent_did":"owner", "source_collection":"Records"});
-    let binding = json!({"binding_id":"binding", "agent_did":"owner",
+        json!({"event_source_id":"source", "node_did":"owner", "source_collection":"Records"});
+    let binding = json!({"binding_id":"binding", "node_did":"owner",
         "callback_id":"callback", "event_source_id":"source", "input_fields":["name"]});
     let validate = |source, binding| {
         ConfigReferences::from_documents(
@@ -127,15 +127,15 @@ fn callback_admission_reuses_projection_and_filter_secret_checks() {
 #[test]
 fn trigger_scope_checks_use_bound_task_and_source_for_both_templates() {
     let base = json!({
-        "agent_principal":{"agent_did":"owner"},
-        "agent_behaviors":[{"agent_did":"owner","behavior_id":"behavior","inference_profile_id":"profile"}],
-        "inference_profiles":[{"agent_did":"owner","profile_id":"profile","backend_id":"backend","model_name":"model"}],
-        "inference_backends":[{"agent_did":"owner","backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible",
+        "node":{"node_did":"owner"},
+        "agents":[{"node_did":"owner","agent_id":"behavior","inference_profile_id":"profile"}],
+        "inference_profiles":[{"node_did":"owner","profile_id":"profile","backend_id":"backend","model_name":"model"}],
+        "inference_backends":[{"node_did":"owner","backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible",
             "endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}],
-        "tasks":[{"agent_did":"owner","task_id":"task","behavior_id":"behavior","prompt_template":"{{ ctx.now }}"}],
-        "schedules":[{"agent_did":"owner","schedule_id":"schedule","cadence":{"kind":"interval","interval_secs":10}}],
-        "event_sources":[{"agent_did":"owner","event_source_id":"event","source_collection":"Records"}],
-        "triggers":[{"agent_did":"owner","trigger_id":"trigger","task_id":"task","source":{"kind":"schedule","schedule_id":"schedule"}}]
+        "tasks":[{"node_did":"owner","task_id":"task","agent_id":"behavior","prompt_template":"{{ ctx.now }}"}],
+        "schedules":[{"node_did":"owner","schedule_id":"schedule","cadence":{"kind":"interval","interval_secs":10}}],
+        "event_sources":[{"node_did":"owner","event_source_id":"event","source_collection":"Records"}],
+        "triggers":[{"node_did":"owner","trigger_id":"trigger","task_id":"task","source":{"kind":"schedule","schedule_id":"schedule"}}]
     });
     let validate = |value| {
         let config = serde_json::from_value::<super::super::PackConfig>(value).unwrap();
@@ -203,12 +203,12 @@ async fn event_args_rejection_rolls_back_the_whole_configuration_plan() {
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let access = ConfigAccess::Local(node);
     let mut config = json!({
-        "agent_principal":{"agent_did":"owner"},
-        "agent_behaviors":[{"agent_did":"owner","behavior_id":"behavior","inference_profile_id":"profile"}],
-        "inference_profiles":[{"agent_did":"owner","profile_id":"profile","backend_id":"backend","model_name":"model"}],
-        "inference_backends":[{"agent_did":"owner","backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}],
-        "tasks":[{"agent_did":"owner","task_id":"task","behavior_id":"behavior","prompt_template":"{{ args.name }}"}],
-        "event_sources":[{"agent_did":"owner","event_source_id":"event","source_collection":"Records"}]
+        "node":{"node_did":"owner"},
+        "agents":[{"node_did":"owner","agent_id":"behavior","inference_profile_id":"profile"}],
+        "inference_profiles":[{"node_did":"owner","profile_id":"profile","backend_id":"backend","model_name":"model"}],
+        "inference_backends":[{"node_did":"owner","backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}],
+        "tasks":[{"node_did":"owner","task_id":"task","agent_id":"behavior","prompt_template":"{{ args.name }}"}],
+        "event_sources":[{"node_did":"owner","event_source_id":"event","source_collection":"Records"}]
     });
     let plan = DesiredStateApplyPlan::from_pack_config(
         &serde_json::from_value::<super::super::PackConfig>(config.clone()).unwrap(),
@@ -222,7 +222,7 @@ async fn event_args_rejection_rolls_back_the_whole_configuration_plan() {
         .await
         .unwrap();
     config["tasks"][0]["prompt_template"] = json!("{{ args.other }}");
-    config["triggers"] = json!([{"agent_did":"owner","trigger_id":"trigger","task_id":"task","source":{"kind":"event","event_source_id":"event"}}]);
+    config["triggers"] = json!([{"node_did":"owner","trigger_id":"trigger","task_id":"task","source":{"kind":"event","event_source_id":"event"}}]);
     let plan = DesiredStateApplyPlan::from_pack_config(
         &serde_json::from_value::<super::super::PackConfig>(config.clone()).unwrap(),
     )

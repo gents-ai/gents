@@ -6,7 +6,7 @@ use crate::types::LinkedSessionView;
 
 fn scope(session_id: &str) -> SessionScope {
     SessionScope {
-        agent_did: OPERATOR.into(),
+        node_did: OPERATOR.into(),
         session_id: session_id.into(),
         requester_did: Some(OPERATOR.into()),
     }
@@ -30,7 +30,7 @@ async fn maps_the_lineage_owner_and_each_call_to_its_caused_request() {
     assert_eq!(
         sessions(&view.started),
         ["sess_child", "sess_peer"],
-        "subagents are the sessions whose stored provenance names this session"
+        "started sessions are the sessions whose stored provenance names this session"
     );
     assert_eq!(
         sessions(&view.sent),
@@ -94,7 +94,7 @@ async fn maps_the_lineage_owner_and_each_call_to_its_caused_request() {
         .iter()
         .find(|call| call.tool_call_id == "tc_peer")
         .unwrap();
-    assert_eq!(peer.caused.agent_did, "did:test:other");
+    assert_eq!(peer.caused.node_did, "did:test:other");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

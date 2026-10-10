@@ -20,7 +20,7 @@ struct GeneratedResumeOnContracts {
 }
 
 /// A `usage_limited` Goal whose latest request (`PARENT`) failed on a limited
-/// call on Claude account A; the behavior's profile is on A, and B is
+/// call on Claude account A; the agent's profile is on A, and B is
 /// another enabled Claude account. `call_failure` is the failed call's text.
 struct Limited {
     f: Fixture,
@@ -70,7 +70,7 @@ impl Limited {
         .await
     }
 
-    /// The behavior's context compacts with `summ`, also on A.
+    /// The agent's context compacts with `summ`, also on A.
     async fn compacts_on_a(&self) {
         self.f.compacts_on(&self.access, &self.a).await;
     }
@@ -132,7 +132,7 @@ async fn resume_on_moves_the_profile_and_publishes_one_child() {
     let switch = receipt.switch.expect("the profile moved");
     assert_eq!(
         switch.headline,
-        format!("Move profile {PROFILE} to label-b (used by 1 behavior)")
+        format!("Move profile {PROFILE} to label-b (used by 1 agent)")
     );
     assert!(receipt.resume.created);
     assert_eq!(receipt.resume.goal_status, GoalStatus::Active);
@@ -378,7 +378,7 @@ async fn resume_on_counts_the_plugin_slots_of_the_moved_profile() {
     let switch = receipt.switch.expect("the profile moved");
     assert_eq!(
         switch.headline,
-        format!("Move profile {PROFILE} to label-b (used by 1 behavior and 1 plugin slot)")
+        format!("Move profile {PROFILE} to label-b (used by 1 agent and 1 plugin slot)")
     );
     assert_eq!(switch.plugin_slots, ["team/ocr"]);
 }

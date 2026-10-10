@@ -169,8 +169,8 @@ pub(crate) struct LeanQueuedSteeringCandidate {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanQueuedSteeringCapture {
-    #[serde(rename = "agentDid")]
-    pub(crate) agent_did: u64,
+    #[serde(rename = "nodeDid")]
+    pub(crate) node_did: u64,
     #[serde(rename = "sessionId")]
     pub(crate) session_id: u64,
     #[serde(rename = "requestDocId")]
@@ -194,49 +194,49 @@ pub(crate) struct LeanQueuedSteeringGuardCase {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub(crate) struct LeanIdentityPrincipal {
+pub(crate) struct LeanIdentityNode {
     pub(crate) did: String,
     pub(crate) enabled: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub(crate) struct LeanIdentityBehavior {
+pub(crate) struct LeanIdentityAgent {
     pub(crate) id: String,
-    pub(crate) principal: String,
+    pub(crate) node: String,
     pub(crate) enabled: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanIdentityStructuralCase {
     pub(crate) name: String,
-    pub(crate) principals: Vec<LeanIdentityPrincipal>,
-    pub(crate) behaviors: Vec<LeanIdentityBehavior>,
+    pub(crate) nodes: Vec<LeanIdentityNode>,
+    pub(crate) agents: Vec<LeanIdentityAgent>,
     pub(crate) well_formed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanIdentityPermissionGrant {
-    pub(crate) principal: String,
+    pub(crate) node: String,
     pub(crate) permission: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanIdentityPermissionCase {
     pub(crate) name: String,
-    pub(crate) principals: Vec<LeanIdentityPrincipal>,
-    pub(crate) behaviors: Vec<LeanIdentityBehavior>,
+    pub(crate) nodes: Vec<LeanIdentityNode>,
+    pub(crate) agents: Vec<LeanIdentityAgent>,
     pub(crate) grants: Vec<LeanIdentityPermissionGrant>,
     pub(crate) permission: String,
     pub(crate) row_owner: String,
-    pub(crate) actor_principal: String,
-    pub(crate) actor_behavior: String,
-    pub(crate) peer_principal: String,
-    pub(crate) peer_behavior: String,
-    pub(crate) expected_actor_principal: Option<String>,
-    pub(crate) expected_peer_principal: Option<String>,
+    pub(crate) actor_node: String,
+    pub(crate) actor_agent: String,
+    pub(crate) peer_node: String,
+    pub(crate) peer_agent: String,
+    pub(crate) expected_actor_node: Option<String>,
+    pub(crate) expected_peer_node: Option<String>,
     pub(crate) expected_actor_allowed: bool,
     pub(crate) expected_peer_allowed: bool,
-    pub(crate) same_principal: bool,
+    pub(crate) same_node: bool,
     pub(crate) expected_decisions_equal: bool,
 }
 

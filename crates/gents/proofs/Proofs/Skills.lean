@@ -25,16 +25,16 @@ structure Skill where
 
 /-- Resolved context selection plus the existing effective tool ceiling. -/
 structure Context where
-  principal : Did
+  node : Did
   ceiling  : Finset ToolId
   skillIds : Finset SkillId
 
 /-- Skills selectable by `b`: explicitly whitelisted by the context, owned by
-the behavior's principal, and enabled. -/
+the agent's node, and enabled. -/
 def select (skills : Finset Skill) (b : Context) : Finset Skill :=
   skills.filter (fun s =>
     s.id ∈ b.skillIds ∧
-    s.owner = b.principal ∧
+    s.owner = b.node ∧
     s.enabled = true)
 
 /-- Selection never exceeds the context whitelist. -/
@@ -65,9 +65,9 @@ theorem empty_whitelist_selects_none (skills : Finset Skill) (b : Context)
 theorem select_subset_skills (skills : Finset Skill) (b : Context) :
     select skills b ⊆ skills := Finset.filter_subset _ _
 
-theorem select_respect_principal (skills : Finset Skill) (b : Context)
+theorem select_respect_node (skills : Finset Skill) (b : Context)
     {s : Skill} (hs : s ∈ select skills b) :
-    s.owner = b.principal ∧ s.enabled = true := by
+    s.owner = b.node ∧ s.enabled = true := by
   unfold select at hs
   rw [Finset.mem_filter] at hs
   exact ⟨hs.2.2.1, hs.2.2.2⟩

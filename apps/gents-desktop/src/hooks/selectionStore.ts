@@ -5,19 +5,19 @@ import { createSelectors, type WithSelectors } from "./createSelectors";
 import { acceptsAsyncResult } from "./observationOrdering";
 
 /** What the person is looking at: a node, a session on it (null for a new
-    one), and the behavior a message goes to. */
+    one), and the agent a message goes to. */
 export type Selection = {
-  agentDid: string | null;
+  nodeDid: string | null;
   sessionId: string | null;
-  behaviorId: string | null;
+  agentId: string | null;
 };
 
 /** A mailbox item opened for a reply: the selection it set up, and the item
     the next message answers. */
 export type MailboxRoute = {
   itemId: string;
-  agentDid: string;
-  behaviorId: string;
+  nodeDid: string;
+  agentId: string;
   sessionId: string | null;
 };
 
@@ -25,7 +25,7 @@ export type SelectionState = Selection & {
   /** held while the selection is still the one the item set up */
   mailboxRoute: MailboxRoute | null;
   /** the node a new session is being composed for, from the new-session
-      screen or a mailbox item; its behavior is the person's, so snapshot
+      screen or a mailbox item; its agent is the person's, so snapshot
       reconciliation leaves it alone */
   composingFor: string | null;
   /** advanced by every navigation: an async result captured under an older
@@ -36,9 +36,9 @@ export type SelectionState = Selection & {
 export type SelectionStore = WithSelectors<StoreApi<SelectionState>>;
 
 const EMPTY: SelectionState = {
-  agentDid: null,
+  nodeDid: null,
   sessionId: null,
-  behaviorId: null,
+  agentId: null,
   mailboxRoute: null,
   composingFor: null,
   intent: 0,
@@ -49,7 +49,7 @@ export function createSelectionStore(initial: Partial<SelectionState> = {}) {
 }
 
 /* A mailbox route lasts while the selection is the one it set up. Checked
-   on every write, so no change of node, session or behavior, from any
+   on every write, so no change of node, session or agent, from any
    source, can carry the item into a message it was not opened for. */
 function commit(store: SelectionStore, next: Partial<SelectionState>) {
   store.setState((state) => {
@@ -57,8 +57,8 @@ function commit(store: SelectionStore, next: Partial<SelectionState>) {
     const route = merged.mailboxRoute;
     const left =
       route !== null &&
-      (route.agentDid !== merged.agentDid ||
-        route.behaviorId !== merged.behaviorId ||
+      (route.nodeDid !== merged.nodeDid ||
+        route.agentId !== merged.agentId ||
         route.sessionId !== merged.sessionId);
     return left ? { ...merged, mailboxRoute: null, composingFor: null } : merged;
   });
@@ -69,15 +69,15 @@ const advanced = (store: SelectionStore) => store.getState().intent + 1;
 /** The selection's changes. Each says whether the person navigated, which
     advances the intent and lets go of a mailbox route. */
 export const selection = {
-  /** another node: its session and behavior start over. Returns whether the
+  /** another node: its session and agent start over. Returns whether the
       node changed, so the caller can drop the session it showed. */
-  selectAgent(store: SelectionStore, agentDid: string | null): boolean {
-    const changed = agentDid !== store.getState().agentDid;
+  selectNode(store: SelectionStore, nodeDid: string | null): boolean {
+    const changed = nodeDid !== store.getState().nodeDid;
     if (changed)
       commit(store, {
-        agentDid,
+        nodeDid,
         sessionId: null,
-        behaviorId: null,
+        agentId: null,
         mailboxRoute: null,
         composingFor: null,
         intent: advanced(store),
@@ -85,12 +85,12 @@ export const selection = {
     return changed;
   },
 
-  /** a session on the selected node, with the behavior it was held under
+  /** a session on the selected node, with the agent it was held under
       when the node lists it */
-  selectSession(store: SelectionStore, sessionId: string, behaviorId?: string | null) {
+  selectSession(store: SelectionStore, sessionId: string, agentId?: string | null) {
     commit(store, {
       sessionId,
-      ...(behaviorId ? { behaviorId } : {}),
+      ...(agentId ? { agentId } : {}),
       mailboxRoute: null,
       composingFor: null,
       intent: advanced(store),
@@ -101,37 +101,37 @@ export const selection = {
       node that is not selected */
   selectSessionOn(
     store: SelectionStore,
-    agentDid: string,
+    nodeDid: string,
     sessionId: string,
-    behaviorId?: string | null,
+    agentId?: string | null,
   ) {
     commit(store, {
-      agentDid,
+      nodeDid,
       sessionId,
-      behaviorId: behaviorId ?? null,
+      agentId: agentId ?? null,
       mailboxRoute: null,
       composingFor: null,
       intent: advanced(store),
     });
   },
 
-  selectBehavior(store: SelectionStore, behaviorId: string | null) {
-    if (behaviorId === store.getState().behaviorId) return;
+  selectAgent(store: SelectionStore, agentId: string | null) {
+    if (agentId === store.getState().agentId) return;
     commit(store, {
-      behaviorId,
+      agentId,
       mailboxRoute: null,
       composingFor: null,
       intent: advanced(store),
     });
   },
 
-  /** the new-session screen for a node and behavior */
-  startNewSession(store: SelectionStore, agentDid: string, behaviorId: string | null) {
+  /** the new-session screen for a node and agent */
+  startNewSession(store: SelectionStore, nodeDid: string, agentId: string | null) {
     commit(store, {
       sessionId: null,
-      behaviorId,
+      agentId,
       mailboxRoute: null,
-      composingFor: agentDid,
+      composingFor: nodeDid,
       intent: advanced(store),
     });
   },
@@ -140,11 +140,11 @@ export const selection = {
       the next message while nothing moves it */
   openMailboxRoute(store: SelectionStore, route: MailboxRoute) {
     commit(store, {
-      agentDid: route.agentDid,
-      behaviorId: route.behaviorId,
+      nodeDid: route.nodeDid,
+      agentId: route.agentId,
       sessionId: route.sessionId,
       mailboxRoute: route,
-      composingFor: route.agentDid,
+      composingFor: route.nodeDid,
     });
   },
 
@@ -168,9 +168,9 @@ export const selection = {
     commit(store, { sessionId });
   },
 
-  /** the behavior a snapshot settles for the selected node; not a navigation */
-  settleBehavior(store: SelectionStore, behaviorId: string | null) {
-    if (behaviorId !== store.getState().behaviorId) commit(store, { behaviorId });
+  /** the agent a snapshot settles for the selected node; not a navigation */
+  settleAgent(store: SelectionStore, agentId: string | null) {
+    if (agentId !== store.getState().agentId) commit(store, { agentId });
   },
 
   /** a navigation that changes no selection, such as opening a mailbox item

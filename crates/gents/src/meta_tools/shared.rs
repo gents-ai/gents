@@ -16,7 +16,7 @@ pub struct MetaToolContext {
     pub health: ServiceHealthMap,
     pub local_hostname: String,
     pub local_subnet: Option<String>,
-    pub agent_did: String,
+    pub node_did: String,
     pub allowed_mcp_service_ids: Vec<String>,
     pub remote_tools: crate::document_config::RemoteTools,
 }
@@ -65,7 +65,7 @@ impl MetaToolContext {
             self.mcp_pool.list_tools_with_limits(
                 service_id,
                 &service.endpoint,
-                service.outbound_agent_did(self),
+                service.outbound_node_did(self),
                 connect,
                 discovery,
             ),
@@ -280,7 +280,7 @@ impl StructuredToolError {
             failure_class: "tool_not_allowed",
             path: "/service_id".to_string(),
             message: format!(
-                "tool '{requested_tool_name}' on service '{service_id}' is not selected for this behavior; allowed services: {}",
+                "tool '{requested_tool_name}' on service '{service_id}' is not selected for this agent; allowed services: {}",
                 allowed_mcp_service_ids.join(", ")
             ),
             retryable: false,
@@ -313,12 +313,12 @@ impl StructuredToolError {
 
 pub(super) struct ResolvedMcpService {
     pub(super) endpoint: String,
-    pub(super) send_agent_did: bool,
+    pub(super) send_node_did: bool,
 }
 
 impl ResolvedMcpService {
-    pub(super) fn outbound_agent_did<'a>(&self, ctx: &'a MetaToolContext) -> Option<&'a str> {
-        self.send_agent_did.then_some(ctx.agent_did.as_str())
+    pub(super) fn outbound_node_did<'a>(&self, ctx: &'a MetaToolContext) -> Option<&'a str> {
+        self.send_node_did.then_some(ctx.node_did.as_str())
     }
 }
 
@@ -326,7 +326,7 @@ pub(super) async fn lookup_service(
     ctx: &MetaToolContext,
     service_id: &str,
 ) -> anyhow::Result<ResolvedMcpService> {
-    let entry = crate::registry::configured_mcp_services(&ctx.node, &ctx.agent_did)
+    let entry = crate::registry::configured_mcp_services(&ctx.node, &ctx.node_did)
         .await?
         .into_iter()
         .find(|service| service.service_id == service_id && service.enabled)
@@ -364,7 +364,7 @@ pub(super) fn resolve_service(
             hostname,
             subnet,
         ),
-        send_agent_did: entry.send_agent_did,
+        send_node_did: entry.send_node_did,
     })
 }
 

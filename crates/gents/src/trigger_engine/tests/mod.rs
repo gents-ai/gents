@@ -13,11 +13,11 @@ use tokio::sync::{mpsc, watch, Notify};
 use tokio_util::sync::CancellationToken;
 
 use super::*;
-use crate::config::{ResolvedBehavior, SamplingConfig};
+use crate::config::{ResolvedAgent, SamplingConfig};
 use crate::document_config::load_trigger_next_run_at;
 use crate::ensure_runtime_schemas;
 use crate::graphql::escape_graphql_string;
-use crate::identity::{KeyIdentity, RuntimePrincipal};
+use crate::identity::{KeyIdentity, RuntimeNode};
 use crate::lean_vocab_test::{
     assert_lean_to_defradb_vocabulary_matches, lean_event_group_case_count, lean_event_group_cases,
     lean_trigger_dispatch_case_count, lean_trigger_dispatch_cases, LeanTriggerDispatchCase,
@@ -27,7 +27,7 @@ use crate::runtime_snapshot::{
     ActiveRuntimeSnapshot, ConcurrencyMode, ResolvedEventTrigger, ResolvedRuntimeSnapshot,
     ResolvedSchedule, ResolvedTask, ScheduleCadence,
 };
-use crate::tool_surface::BehaviorToolConfig;
+use crate::tool_surface::AgentToolSurfaceConfig;
 use crate::trigger_engine::event_source::EventSource;
 use crate::trigger_engine::manual_source::ManualSource;
 use crate::trigger_engine::production_materializer::{
@@ -61,21 +61,21 @@ fn remove_except<K: Clone + Eq + std::hash::Hash>(
     removed
 }
 
-/// Build a minimal `Arc<RuntimePrincipal>` for tests that need to satisfy the
-/// principal invariant enforced by `ResolvedRuntimeSnapshot::activate`'s
+/// Build a minimal `Arc<RuntimeNode>` for tests that need to satisfy the
+/// node identity invariant enforced by `ResolvedRuntimeSnapshot::activate`'s
 /// `debug_assert!`. Does not exercise signing.
-fn stub_principal() -> Arc<crate::identity::RuntimePrincipal> {
-    let identity: Arc<dyn crate::identity::AgentIdentity> = Arc::new(
+fn stub_principal() -> Arc<crate::identity::RuntimeNode> {
+    let identity: Arc<dyn crate::identity::NodeIdentity> = Arc::new(
         KeyIdentity::load_or_create(
             std::env::temp_dir().join(format!("stub-principal-{}.key", uuid::Uuid::new_v4())),
             None,
         )
         .unwrap(),
     );
-    Arc::new(crate::identity::RuntimePrincipal {
-        agent_did: identity.did().to_string(),
+    Arc::new(crate::identity::RuntimeNode {
+        node_did: identity.did().to_string(),
         identity,
-        default_behavior_id: String::new(),
+        default_agent_id: String::new(),
         display_name: None,
         enabled: true,
     })
@@ -245,9 +245,9 @@ impl SpyMaterializer {
         });
     }
 
-    fn mark_group_materialized(&self, agent_did: &str, trigger_id: &str, durable_fire_key: &str) {
+    fn mark_group_materialized(&self, node_did: &str, trigger_id: &str, durable_fire_key: &str) {
         self.group_markers.lock().unwrap().insert((
-            agent_did.to_string(),
+            node_did.to_string(),
             trigger_id.to_string(),
             durable_fire_key.to_string(),
         ));
@@ -255,8 +255,8 @@ impl SpyMaterializer {
 
     /// Mirror the production invariant that a successful group materialization
     /// immediately makes the AgentRequest visible as the durable group marker.
-    fn persist_materialized_group_markers(&self, agent_did: &str) {
-        *self.persist_group_markers_for_did.lock().unwrap() = Some(agent_did.to_string());
+    fn persist_materialized_group_markers(&self, node_did: &str) {
+        *self.persist_group_markers_for_did.lock().unwrap() = Some(node_did.to_string());
     }
 }
 
@@ -323,11 +323,11 @@ impl MaterializerHandle for SpyMaterializer {
                 .unwrap()
                 .push(rendered_goal_objective);
             source_doc_ids.lock().unwrap().push(source_doc_id);
-            if let (Some(agent_did), Some(trigger_id)) = (marker_did, marker_trigger_id) {
+            if let (Some(node_did), Some(trigger_id)) = (marker_did, marker_trigger_id) {
                 group_markers
                     .lock()
                     .unwrap()
-                    .insert((agent_did, trigger_id, marker_fire_key));
+                    .insert((node_did, trigger_id, marker_fire_key));
             }
             if let (true, Some(key)) = (track_materialized_nonterminal, nonterminal_key) {
                 nonterminal_for
@@ -343,13 +343,13 @@ impl MaterializerHandle for SpyMaterializer {
 
     fn has_active_runtime_request_for_trigger(
         &self,
-        agent_did: &str,
+        node_did: &str,
         trigger_id: &str,
         excluded_request_id: Option<&str>,
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<bool>> + Send + '_>> {
         let set = self.nonterminal_for.clone();
         let dids = self.gate_dids.clone();
-        let owner = agent_did.to_owned();
+        let owner = node_did.to_owned();
         let trigger = trigger_id.to_owned();
         let excluded = excluded_request_id.map(str::to_owned);
         Box::pin(async move {
@@ -363,7 +363,7 @@ impl MaterializerHandle for SpyMaterializer {
     }
     fn supersede_active_runtime_requests_for_trigger(
         &self,
-        agent_did: &str,
+        node_did: &str,
         trigger_id: &str,
         excluded_request_id: Option<&str>,
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<usize>> + Send + '_>> {
@@ -371,7 +371,7 @@ impl MaterializerHandle for SpyMaterializer {
         let dids = self.supersede_dids.clone();
         let calls = self.supersede_calls.clone();
         let removed_ids = self.superseded_request_ids.clone();
-        let owner = agent_did.to_owned();
+        let owner = node_did.to_owned();
         let trigger = trigger_id.to_owned();
         let excluded = excluded_request_id.map(str::to_owned);
         Box::pin(async move {
@@ -407,13 +407,13 @@ impl MaterializerHandle for SpyMaterializer {
 
     fn has_materialized_group_request(
         &self,
-        agent_did: &str,
+        node_did: &str,
         trigger_id: &str,
         durable_fire_key: &str,
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<bool>> + Send + '_>> {
         let markers = self.group_markers.clone();
         let key = (
-            agent_did.to_string(),
+            node_did.to_string(),
             trigger_id.to_string(),
             durable_fire_key.to_string(),
         );
@@ -427,11 +427,11 @@ impl MaterializerHandle for SpyMaterializer {
 fn snapshot_with_schedules(
     schedules: HashMap<String, ResolvedSchedule>,
 ) -> Arc<ActiveRuntimeSnapshot> {
-    // The "general" behavior must resolve: the concurrency gate scopes
-    // serial/latestOnly coordination by the behavior's agent DID (#605).
+    // The "general" agent must resolve: the concurrency gate scopes
+    // serial/latestOnly coordination by the agent's node DID (#605).
     let resolved = ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
         "general".to_string(),
-        vec![integration_test_behavior("general")],
+        vec![integration_test_agent("general")],
         HashMap::new(),
         HashMap::new(),
         HashMap::new(),
@@ -440,7 +440,7 @@ fn snapshot_with_schedules(
         schedules,
         ..Default::default()
     })
-    .with_principal(stub_principal());
+    .with_node(stub_principal());
     Arc::new(resolved.activate(1, HashMap::new()))
 }
 
@@ -449,7 +449,7 @@ fn resolved_task(prompt_template: &str) -> ResolvedTask {
         emit_outcome: false,
         task_id: "t1".to_string(),
         name: None,
-        behavior_id: "general".to_string(),
+        agent_id: "general".to_string(),
         prompt_template: prompt_template.to_string(),
         goal_objective_template: None,
         goal_token_budget: None,
@@ -555,7 +555,7 @@ fn snapshot_from_trigger_contract(
         .collect();
     let resolved = ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
         "general".to_string(),
-        vec![integration_test_behavior("general")],
+        vec![integration_test_agent("general")],
         HashMap::new(),
         HashMap::new(),
         HashMap::new(),
@@ -565,34 +565,34 @@ fn snapshot_from_trigger_contract(
         event_triggers: active_event_triggers,
         ..Default::default()
     })
-    .with_principal(stub_principal());
+    .with_node(stub_principal());
     Arc::new(resolved.activate(1, HashMap::new()))
 }
 
-/// Build a minimal `ResolvedBehavior` suitable for the production materializer
-/// integration test. The behavior has a backend binding (required — the
-/// materializer rejects tasks whose behavior is not backend-bound) but does
+/// Build a minimal `ResolvedAgent` suitable for the production materializer
+/// integration test. The agent has a backend binding (required — the
+/// materializer rejects tasks whose agent is not backend-bound) but does
 /// not drive any inference: the integration test asserts lineage on the
 /// persisted `AgentRequest` doc only, not execution.
-fn integration_test_behavior(behavior_name: &str) -> Arc<ResolvedBehavior> {
-    let identity: Arc<dyn crate::identity::AgentIdentity> = Arc::new(
+fn integration_test_agent(behavior_name: &str) -> Arc<ResolvedAgent> {
+    let identity: Arc<dyn crate::identity::NodeIdentity> = Arc::new(
         KeyIdentity::load_or_create(
             std::env::temp_dir().join(format!("{behavior_name}-{}.key", uuid::Uuid::new_v4())),
             None,
         )
         .unwrap(),
     );
-    let principal = Arc::new(RuntimePrincipal {
-        agent_did: identity.did().to_string(),
+    let principal = Arc::new(RuntimeNode {
+        node_did: identity.did().to_string(),
         identity,
-        default_behavior_id: String::new(),
+        default_agent_id: String::new(),
         display_name: None,
         enabled: true,
     });
-    Arc::new(ResolvedBehavior {
+    Arc::new(ResolvedAgent {
         skills: Vec::new(),
-        behavior_id: behavior_name.to_string(),
-        principal,
+        agent_id: behavior_name.to_string(),
+        node: principal,
         backend_id: Some("backend-it".to_string()),
         backend_provider_kind: BackendProviderKind::OpenAiCompatible,
         openai_wire_api: crate::OpenAiWireApi::ChatCompletions,
@@ -605,7 +605,7 @@ fn integration_test_behavior(behavior_name: &str) -> Arc<ResolvedBehavior> {
         max_turns: crate::config::DEFAULT_MAX_TURNS,
         max_turns_provenance: crate::config::MaxTurnsProvenance::Default,
         system_prompt: String::new(),
-        tools: BehaviorToolConfig::default(),
+        tools: AgentToolSurfaceConfig::default(),
         compaction: None,
         compaction_inference: None,
         max_total_tokens: None,
@@ -622,17 +622,17 @@ fn integration_test_behavior(behavior_name: &str) -> Arc<ResolvedBehavior> {
     })
 }
 
-/// Build an `ActiveRuntimeSnapshot` containing the given behavior as loaded
+/// Build an `ActiveRuntimeSnapshot` containing the given agent as loaded
 /// and the supplied active schedules. Used by the integration test below to
-/// hand the ProductionMaterializer a snapshot where `behavior_id` resolution
+/// hand the ProductionMaterializer a snapshot where `agent_id` resolution
 /// succeeds.
-fn snapshot_with_behavior_and_schedules(
-    behavior: Arc<ResolvedBehavior>,
+fn snapshot_with_agent_and_schedules(
+    behavior: Arc<ResolvedAgent>,
     schedules: HashMap<String, ResolvedSchedule>,
 ) -> Arc<ActiveRuntimeSnapshot> {
-    let principal = behavior.principal.clone();
+    let principal = behavior.node.clone();
     let resolved = ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
-        behavior.behavior_id.clone(),
+        behavior.agent_id.clone(),
         vec![behavior],
         HashMap::new(),
         HashMap::new(),
@@ -642,7 +642,7 @@ fn snapshot_with_behavior_and_schedules(
         schedules,
         ..Default::default()
     })
-    .with_principal(principal);
+    .with_node(principal);
     Arc::new(resolved.activate(1, HashMap::new()))
 }
 

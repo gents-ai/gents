@@ -146,9 +146,7 @@ test.describe("first-run install", () => {
     await expect(page.getByTestId("setup-screen")).toBeVisible();
     await expect(page.getByRole("heading", { name: "Let’s get set up" })).toBeVisible();
 
-    await expect(page.getByRole("textbox", { name: "Agent name" })).toHaveValue(
-      "Forge",
-    );
+    await expect(page.getByRole("textbox", { name: "Node name" })).toHaveValue("Forge");
     await expect(page.getByRole("combobox", { name: "Tool ceiling" })).toContainText(
       "Read / write",
     );
@@ -238,7 +236,7 @@ test.describe("first-run install", () => {
     page,
   }) => {
     await gotoHarness(page, "empty-fleet");
-    await page.getByRole("textbox", { name: "Agent name" }).fill("Read-only helper");
+    await page.getByRole("textbox", { name: "Node name" }).fill("Read-only helper");
     await page.getByRole("combobox", { name: "Tool ceiling" }).click();
     await page.getByRole("option", { name: "Read only" }).click();
     await page
@@ -250,7 +248,7 @@ test.describe("first-run install", () => {
     await expect(
       page.getByRole("textbox", { name: "Tool root", exact: true }),
     ).toHaveCount(0);
-    await page.getByRole("radio", { name: /Local agent/ }).click();
+    await page.getByRole("radio", { name: /Local node/ }).click();
     await expect(
       page.getByRole("textbox", { name: "Tool root", exact: true }),
     ).toHaveValue("/tmp/my workspace");
@@ -273,7 +271,7 @@ test.describe("first-run install", () => {
       .getByRole("textbox", { name: "Server address" })
       .fill("https://agent.example.net:8787");
     await expect(page.getByRole("button", { name: "Request access" })).toBeEnabled();
-    await page.getByRole("radio", { name: /Local agent/ }).click();
+    await page.getByRole("radio", { name: /Local node/ }).click();
     await page.getByRole("radio", { name: /Remote connect/ }).click();
     await expect(page.getByRole("textbox", { name: "Server address" })).toHaveValue(
       "https://agent.example.net:8787",

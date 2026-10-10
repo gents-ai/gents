@@ -12,7 +12,7 @@ use gents_protocol::output::{
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 
-use crate::identity::AgentIdentity;
+use crate::identity::NodeIdentity;
 
 use crate::lean_vocab_test::{
     CanonicalExecutionAdapter, ExecutionFuture, LeanAuxiliaryKind,
@@ -166,7 +166,7 @@ fn auxiliary_publication_candidate(
 
 async fn create_signed_fixture_request(
     node: &EmbeddedNode,
-    identity: &dyn AgentIdentity,
+    identity: &dyn NodeIdentity,
     spec: crate::lifecycle::RequestSpec,
 ) -> Result<crate::watcher::AgentRequest> {
     let create = crate::lifecycle::build_signed_request(
@@ -188,7 +188,7 @@ async fn create_signed_fixture_request(
 
 async fn claim_fixture_request(
     node: Arc<EmbeddedNode>,
-    principal: &str,
+    node_did: &str,
     request: crate::watcher::AgentRequest,
     duration: u64,
     generation: String,
@@ -196,10 +196,10 @@ async fn claim_fixture_request(
     processing: bool,
 ) -> Result<()> {
     let request_doc_id = request.doc_id.clone();
-    let mut lifecycle = crate::lifecycle::RequestLifecycle::new_with_agent_did(
+    let mut lifecycle = crate::lifecycle::RequestLifecycle::new_with_node_did(
         node.clone(),
         "general",
-        principal,
+        node_did,
         request,
         duration,
     );
@@ -236,7 +236,7 @@ pub(crate) struct NativeCanonicalExecution {
     transcript_session_id: u64,
     next_sequence: u64,
     session_id: String,
-    principal: String,
+    node_did: String,
     title_parent: Option<(u64, String)>,
     segments: Vec<LeanCanonicalSegment>,
     messages: Vec<LeanCanonicalMessage<LeanPayloadSpec>>,
@@ -392,9 +392,9 @@ impl NativeCanonicalExecution {
         let mut tool = crate::tool_call_lifecycle::ToolCallLifecycle::load_by_doc_id(
             self.node.clone(),
             &physical,
-            &self.principal,
+            &self.node_did,
             &self.session_id,
-            Some(&self.principal),
+            Some(&self.node_did),
         )
         .await?
         .context("modeled tool disappeared before atomic completion")?;
@@ -488,8 +488,8 @@ impl NativeCanonicalExecution {
             crate::interrupt::interrupt_request_by_doc_id(
                 &self.node,
                 &self.request_doc_id,
-                &self.principal,
-                Some(&self.principal),
+                &self.node_did,
+                Some(&self.node_did),
             )
             .await?;
         }
@@ -1266,8 +1266,8 @@ impl NativeCanonicalExecution {
         let compaction = crate::session::load_prompt_compaction_state(
             &self.node,
             &self.session_id,
-            &self.principal,
-            Some(&self.principal),
+            &self.node_did,
+            Some(&self.node_did),
             None,
         )
         .await?;
@@ -1366,11 +1366,11 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                     anyhow::ensure!(
                         binding.authenticated
                             && binding.physical_request == seed.request_id
-                            && binding.agent == seed.principal
+                            && binding.node == seed.node_did
                             && binding.session == seed.session_id
                             && binding.parent_physical != binding.physical_request
                             && binding.parent_logical != binding.logical_request,
-                        "modeled title binding does not name its exact request/session/principal"
+                        "modeled title binding does not name its exact request/session/node DID"
                     );
                     Some(binding)
                 }
@@ -1381,19 +1381,19 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
             );
             let initial_session_id = format!("lean-session-{}", seed.session_id);
             let key_dir = tempfile::tempdir().context("native fixture identity directory")?;
-            let identity: Arc<dyn AgentIdentity> = Arc::new(crate::KeyIdentity::load_or_create(
+            let identity: Arc<dyn NodeIdentity> = Arc::new(crate::KeyIdentity::load_or_create(
                 key_dir.path().join("agent.key"),
                 None,
             )?);
-            let principal = identity.did().to_owned();
+            let node_did = identity.did().to_owned();
             let node = Arc::new(EmbeddedNode::builder().build().await?);
             crate::ensure_runtime_schemas(&node).await?;
-            crate::test_support::install_test_behavior(&node, &principal, "general").await;
+            crate::test_support::install_test_agent(&node, &node_did, "general").await;
             let request_identity = |logical_id: String| crate::lifecycle::RequestIdentity {
                 requester_did: None,
                 request_id: logical_id,
-                agent_did: principal.clone(),
-                behavior_id: "general".to_owned(),
+                node_did: node_did.clone(),
+                agent_id: "general".to_owned(),
                 session_id: initial_session_id.clone(),
                 content: "lean native execution".to_owned(),
                 execution_origin: crate::lifecycle::ExecutionOrigin::Interactive,
@@ -1407,7 +1407,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                         gents_protocol::request_admission::RequestPurpose::Normal,
                         request_identity(format!("lean-request-{}", binding.parent_logical)),
                         gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
-                            &principal,
+                            &node_did,
                         ),
                     ),
                 )
@@ -1423,7 +1423,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                 let generation = "native-title-parent";
                 claim_fixture_request(
                     node.clone(),
-                    &principal,
+                    &node_did,
                     verified,
                     duration,
                     generation.to_owned(),
@@ -1454,10 +1454,10 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                 None => crate::lifecycle::RequestSpec::new(
                     gents_protocol::request_admission::RequestPurpose::Normal,
                     request_identity(request_id.clone()),
-                    gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&principal),
+                    gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&node_did),
                 ),
                 Some(parent) => crate::lifecycle::RequestSpec {
-                    subagent: Some(crate::lifecycle::ParentLink {
+                    parent: Some(crate::lifecycle::ParentLink {
                         parent_request_id: parent.request_id.clone(),
                         parent_request_doc_id: parent.doc_id.clone(),
                         ..Default::default()
@@ -1466,7 +1466,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                         gents_protocol::request_admission::RequestPurpose::TitleAudit,
                         request_identity(request_id.clone()),
                         gents_protocol::request_admission::AgentRequestAdmissionRecord::runtime_local_control(
-                            &principal, &parent.request_id,
+                            &node_did, &parent.request_id,
                         ),
                     )
                 },
@@ -1513,7 +1513,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
             .map_err(anyhow::Error::from)?;
             claim_fixture_request(
                 node.clone(),
-                &principal,
+                &node_did,
                 verified,
                 duration,
                 symbolic_generation(generation),
@@ -1552,10 +1552,10 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                 );
             }
             let scoped_session = node.execute(&format!(
-                r#"{{ AgentSession(filter: {{ session_id: {{ _eq: "{}" }}, agent_did: {{ _eq: "{}" }}, requester_did: {{ _eq: "{}" }} }}, limit: 2) {{ session_id agent_did requester_did behavior_id created_at observation }} }}"#,
+                r#"{{ AgentSession(filter: {{ session_id: {{ _eq: "{}" }}, node_did: {{ _eq: "{}" }}, requester_did: {{ _eq: "{}" }} }}, limit: 2) {{ session_id node_did requester_did agent_id created_at observation }} }}"#,
                 crate::graphql::escape_graphql_string(&session_id),
-                crate::graphql::escape_graphql_string(&principal),
-                crate::graphql::escape_graphql_string(&principal),
+                crate::graphql::escape_graphql_string(&node_did),
+                crate::graphql::escape_graphql_string(&node_did),
             )).await;
             anyhow::ensure!(
                 !scoped_session.has_errors(),
@@ -1569,9 +1569,9 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
             };
             anyhow::ensure!(
                 session.session_id == session_id
-                    && session.agent_did == principal
-                    && session.requester_did.as_deref() == Some(principal.as_str())
-                    && session.behavior_id == "general"
+                    && session.node_did == node_did
+                    && session.requester_did.as_deref() == Some(node_did.as_str())
+                    && session.agent_id == "general"
                     && session
                         .observation
                         .as_ref()
@@ -1598,7 +1598,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                 transcript_session_id: seed.transcript_session_id,
                 next_sequence: seed.next_sequence,
                 session_id,
-                principal,
+                node_did,
                 title_parent: title_binding
                     .zip(parent.as_ref())
                     .map(|(binding, parent)| (binding.parent_physical, parent.doc_id.clone())),
@@ -1699,9 +1699,9 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                     let tool = crate::tool_call_lifecycle::ToolCallLifecycle::load_by_doc_id(
                         native.node.clone(),
                         &physical,
-                        &native.principal,
+                        &native.node_did,
                         &native.session_id,
-                        Some(&native.principal),
+                        Some(&native.node_did),
                     )
                     .await?
                     .context("accepted physical tool disappeared before output append")?;
@@ -1826,9 +1826,9 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                     let mut tool = crate::tool_call_lifecycle::ToolCallLifecycle::load_by_doc_id(
                         native.node.clone(),
                         &physical,
-                        &native.principal,
+                        &native.node_did,
                         &native.session_id,
-                        Some(&native.principal),
+                        Some(&native.node_did),
                     )
                     .await?
                     .context("accepted physical tool disappeared before dispatch")?;
@@ -1948,9 +1948,9 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                     let mut parent = crate::tool_call_lifecycle::ToolCallLifecycle::load_by_doc_id(
                         Arc::clone(&native.node),
                         &physical_parent,
-                        &native.principal,
+                        &native.node_did,
                         &native.session_id,
-                        Some(&native.principal),
+                        Some(&native.node_did),
                     )
                     .await?
                     .context("spawned admission parent disappeared")?;
@@ -2421,8 +2421,8 @@ impl NativeCanonicalExecution {
         let (stored_header, stored_native) = crate::session::load_canonical_message_from_node(
             &self.node,
             &published.message_doc_id,
-            &self.principal,
-            Some(&self.principal),
+            &self.node_did,
+            Some(&self.node_did),
         )
         .await?;
         anyhow::ensure!(
@@ -2622,8 +2622,8 @@ impl NativeCanonicalExecution {
         Ok(TranscriptMessage {
             message_key: message.key.clone(),
             session_id: self.session_id.clone(),
-            agent_did: self.principal.clone(),
-            requester_did: Some(self.principal.clone()),
+            node_did: self.node_did.clone(),
+            requester_did: Some(self.node_did.clone()),
             request_doc_id: Some(self.request_doc_id.clone()),
             publication: match message.header.publication {
                 LeanMessagePublication::RequestExecution { .. } => {
@@ -2766,8 +2766,8 @@ impl NativeCanonicalExecution {
             })
             .collect::<Result<Vec<_>>>()?;
         Ok(gents_protocol::output::OutputSegment {
-            agent_did: self.principal.clone(),
-            requester_did: Some(self.principal.clone()),
+            node_did: self.node_did.clone(),
+            requester_did: Some(self.node_did.clone()),
             session_id: self.session_id.clone(),
             request_doc_id: request_doc_id.clone(),
             source: gents_protocol::output::OutputSource::ProviderTurn {
@@ -2864,8 +2864,8 @@ impl NativeCanonicalExecution {
             .transpose()?
             .unwrap_or_default();
         Ok(gents_protocol::output::OutputSegment {
-            agent_did: self.principal.clone(),
-            requester_did: Some(self.principal.clone()),
+            node_did: self.node_did.clone(),
+            requester_did: Some(self.node_did.clone()),
             session_id: self.session_id.clone(),
             request_doc_id: self.request_doc_id.clone(),
             source: gents_protocol::output::OutputSource::ToolCall {
@@ -3033,9 +3033,9 @@ async fn generated_tool_append_rejects_invalid_durable_deadline_without_writing(
     let tool = crate::tool_call_lifecycle::ToolCallLifecycle::load_by_doc_id(
         native.node.clone(),
         &physical,
-        &native.principal,
+        &native.node_did,
         &native.session_id,
-        Some(&native.principal),
+        Some(&native.node_did),
     )
     .await
     .unwrap()
@@ -3431,8 +3431,8 @@ async fn canonical_tool_output_uses_modeled_physical_source_facts() {
             &physical_tool,
             &native.request_doc_id,
             &native.session_id,
-            &native.principal,
-            Some(&native.principal),
+            &native.node_did,
+            Some(&native.node_did),
         )
         .await;
         match &case.expected_payload {

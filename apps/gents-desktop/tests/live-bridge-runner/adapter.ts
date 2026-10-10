@@ -1,10 +1,11 @@
 import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
 import type { BackendHealth } from "@source-inc/gents-desktop-client";
 import type {
-  BehaviorSaveRequest,
+  AgentSaveRequest,
   ChatSendResult,
   DesktopClientSnapshot,
   DesktopOperationsSnapshot,
+  DesktopProbeMcpServiceRequest,
   DesktopSessionSnapshot,
   InferenceDiscoveryResult,
   InferenceModelRecommendation,
@@ -66,7 +67,7 @@ export function createBridgeHttpAdapter(
     deleteBackendConfig: unsupported("deleteBackendConfig"),
     deleteInferenceProfileConfig: unsupported("deleteInferenceProfileConfig"),
     deleteToolServiceConfig: unsupported("deleteToolServiceConfig"),
-    deleteBehaviorConfig: unsupported("deleteBehaviorConfig"),
+    deleteAgentConfig: unsupported("deleteAgentConfig"),
     deleteContextConfig: unsupported("deleteContextConfig"),
     probeInferenceEndpoint: unsupported("probeInferenceEndpoint"),
     codexLogin: unsupported("codexLogin"),
@@ -99,33 +100,33 @@ export function createBridgeHttpAdapter(
       client.postJson<DesktopClientSnapshot>("/desktop/client/start", {}),
     shutdownDesktopClient: async () =>
       client.postJson<DesktopClientSnapshot>("/desktop/client/shutdown", {}),
-    setSelectedAgent: async (agentDid) => {
-      await client.postJson("/desktop/selected-agent", { agentDid });
+    setSelectedNode: async (nodeDid) => {
+      await client.postJson("/desktop/selected-node", { nodeDid });
     },
     fetchPeerStatus: async (peerId) =>
       client.postJson("/desktop/peer/status", { peerId }),
     requestStatusEnrollment: async (serverAddress) =>
       client.postJson("/desktop/peer/enroll-status", { serverAddress }),
-    fetchSessionSnapshot: async (sessionId, agentDid, requestId, timelinePage) =>
+    fetchSessionSnapshot: async (sessionId, nodeDid, requestId, timelinePage) =>
       client.postJson<DesktopSessionSnapshot | null>("/desktop/session/snapshot", {
         sessionId,
-        agentDid: agentDid ?? null,
+        nodeDid: nodeDid ?? null,
         requestId: requestId ?? null,
         timelineLimit: timelinePage?.limit,
         timelineBeforeItemKey: timelinePage?.beforeItemKey ?? null,
       }),
-    retrySessionHydration: async (sessionId, agentDid) => {
+    retrySessionHydration: async (sessionId, nodeDid) => {
       await client.postJson("/desktop/session/hydration/retry", {
         sessionId,
-        agentDid,
+        nodeDid,
       });
     },
     fetchSessionLiveDelta: async (request) =>
       client.postJson<SessionLiveDeltaView>("/desktop/session/live-delta", request),
     sendChatMessage: async (request) => {
       const normalized: TauriDriverChatRequest = {
-        agentDid: request.agentDid,
-        behaviorId: request.behaviorId ?? null,
+        nodeDid: request.nodeDid,
+        agentId: request.agentId ?? null,
         sessionId: request.sessionId ?? null,
         content: request.content,
       };
@@ -140,15 +141,12 @@ export function createBridgeHttpAdapter(
     renameSession: async (request) => {
       await client.postJson("/desktop/session/rename", request);
     },
+    saveNodeConfig: async (request) =>
+      client.postJson<DesktopClientSnapshot>("/desktop/node/save", request),
+    setDefaultAgent: async (request) =>
+      client.postJson<DesktopClientSnapshot>("/desktop/node/default-agent", request),
     saveAgentConfig: async (request) =>
       client.postJson<DesktopClientSnapshot>("/desktop/agent/save", request),
-    setDefaultBehavior: async (request) =>
-      client.postJson<DesktopClientSnapshot>(
-        "/desktop/agent/default-behavior",
-        request,
-      ),
-    saveBehaviorConfig: async (request) =>
-      client.postJson<DesktopClientSnapshot>("/desktop/behavior/save", request),
     saveBackendConfig: async (request) =>
       client.postJson<DesktopClientSnapshot>("/desktop/backend/save", request),
     saveInferenceProfileConfig: async (request) =>
@@ -224,8 +222,11 @@ export function createBridgeHttpAdapter(
       client.getJson<BackendHealth[]>("/desktop/backend-health"),
     listMcpServicesWithHealth: async () =>
       client.getJson<MCPServiceHealthView[]>("/desktop/mcp-health"),
-    probeMcpService: async (serviceId) =>
-      client.postJson<McpServiceProbeResult>("/desktop/mcp/probe", { serviceId }),
+    probeMcpService: async (nodeDid, serviceId) =>
+      client.postJson<McpServiceProbeResult>("/desktop/mcp/probe", {
+        nodeDid,
+        serviceId,
+      } satisfies DesktopProbeMcpServiceRequest),
     fetchOperationsSnapshot: async (request) =>
       client.postJson<DesktopOperationsSnapshot>(
         "/desktop/operations/snapshot",
@@ -240,13 +241,13 @@ export function createFixtureHelpers(runner: {
   postJson: <T>(path: string, body: unknown) => Promise<T>;
 }) {
   return {
-    /** Write a behavior document on the *remote* node.  The write triggers P2P
+    /** Write an agent document on the *remote* node.  The write triggers P2P
      *  replication so the same document becomes visible on the desktop node.
      *  This is the D1/D2 cross-node witness — write-on-A, read-on-B.
      *  Requires GENTS_TAURI_LIVE=1 (enforced server-side). */
-    saveBehaviorConfigOnRemote: async (request: BehaviorSaveRequest) =>
+    saveAgentConfigOnRemote: async (request: AgentSaveRequest) =>
       runner.postJson<{ ok: boolean }>(
-        "/desktop/test-fixture/remote-save-behavior",
+        "/desktop/test-fixture/remote-save-agent",
         request,
       ),
   };

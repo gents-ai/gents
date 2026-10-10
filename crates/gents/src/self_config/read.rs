@@ -1,5 +1,5 @@
-//! Read the canonical config graph under the invoking principal's identity.
-use super::ops::{read_owned_doc, BehaviorAnchor, SelfConfigCore, EFFECT_TIMING_NOTE};
+//! Read the canonical config graph under the invoking node's identity.
+use super::ops::{read_owned_doc, AgentAnchor, SelfConfigCore, EFFECT_TIMING_NOTE};
 use crate::config_client::patch::SelfConfigTarget;
 use crate::config_client::{config_projection, ConfigAccess, ConfigApplyTxn};
 use crate::graphql::escape_graphql_string;
@@ -13,7 +13,7 @@ pub(super) fn execution_settings(document: Option<&Value>) -> Result<Value> {
     use crate::config::*;
     let mut document = document.cloned().unwrap_or_else(|| {
         json!({
-            "agent_did": "", "execution_id": ""
+            "node_did": "", "execution_id": ""
         })
     });
     if let Some(object) = document.as_object_mut() {
@@ -60,7 +60,7 @@ impl SelfConfigCore {
         no_lockout: bool,
         preview: bool,
     ) -> Result<Value> {
-        let anchor = self.load_behavior_anchor(txn).await?;
+        let anchor = self.load_agent_anchor(txn).await?;
         let mut documents = serde_json::Map::new();
         for (target, field) in [
             (SelfConfigTarget::Tools, "tools_id"),
@@ -72,7 +72,7 @@ impl SelfConfigCore {
         ] {
             if let Some(id) = anchor.ref_id(field) {
                 if let Some((_, mut doc)) =
-                    read_owned_doc(txn, target, self.agent_did(), &id).await?
+                    read_owned_doc(txn, target, self.node_did(), &id).await?
                 {
                     if target == SelfConfigTarget::InferenceBackend
                         && doc
@@ -146,7 +146,7 @@ impl SelfConfigCore {
                 .and_then(|host| host.root.as_deref())
                 .filter(|root| !root.trim().is_empty());
             crate::tool_surface::resolve_effective_tool_root(
-                self.behavior_id(),
+                self.agent_id(),
                 configured_root.map(Path::new),
                 process_ceiling.root.as_deref(),
             )?
@@ -165,7 +165,7 @@ impl SelfConfigCore {
                 if let Some((_, skill)) = crate::config_client::read_desired_state_record_in_txn(
                     txn,
                     crate::Collection::Skill,
-                    self.agent_did(),
+                    self.node_did(),
                     id,
                 )
                 .await?
@@ -185,10 +185,10 @@ impl SelfConfigCore {
             SelfConfigTarget::EventSource,
         ] {
             let (fields, _) = config_projection(target.collection(), None)?;
-            let owner = escape_graphql_string(self.agent_did());
+            let owner = escape_graphql_string(self.node_did());
             let response = txn
                 .execute(&format!(
-                    "{{ {}(filter: {{agent_did: {{_eq: \"{owner}\"}}}}) {{ {} }} }}",
+                    "{{ {}(filter: {{node_did: {{_eq: \"{owner}\"}}}}) {{ {} }} }}",
                     target.collection_name(),
                     fields.join(" "),
                 ))
@@ -211,8 +211,8 @@ impl SelfConfigCore {
                 );
                 let include = match target {
                     SelfConfigTarget::Task => {
-                        let owned = row.get("behavior_id").and_then(Value::as_str)
-                            == Some(self.behavior_id());
+                        let owned =
+                            row.get("agent_id").and_then(Value::as_str) == Some(self.agent_id());
                         if owned {
                             task_ids.insert(id.to_owned());
                         }
@@ -249,22 +249,22 @@ impl SelfConfigCore {
             automation.insert(target.collection_name().into(), Value::Array(selected));
         }
         Ok(json!({
-            "agent_did": self.agent_did(), "behavior_id": self.behavior_id(),
-            "behavior": anchor.doc, "context": anchor.context, "inference_profile": anchor.profile,
+            "node_did": self.node_did(), "agent_id": self.agent_id(),
+            "agent": anchor.doc, "context": anchor.context, "inference_profile": anchor.profile,
             "documents": documents, "skills": skills, "automation": automation,
             "execution_settings": execution_settings(documents.get("InferenceExecution"))?,
             "self_config": {"categories": categories, "no_lockout": no_lockout, "preview": preview},
             "tool_grants": {
                 "configured": { "lsp": lsp_selected, "native_graph_tools": graph_selected, "network_mode": configured_network_mode },
                 "confirmed_by": "canonical Tools selection decoded from durable configuration",
-                "activation": "Applies after reconciliation to later dispatched requests. Tool registration and successful execution must be tested in the working behavior.",
+                "activation": "Applies after reconciliation to later dispatched requests. Tool registration and successful execution must be tested in the working agent.",
                 "lsp_readiness": "Selection does not prove a language server is installed, started, or indexed.",
                 "graph_readiness": "Selection does not install a pack or grant graph caller admission. Use native list_graphs/run_graph on this node; do not adopt another runtime home or rebuild a CLI.",
             },
             "runtime_effective": {
-                "meaning": "behavior_narrowing is saved permission; effective also applies this process's ceiling. Save lasting role restrictions in Tools even when this process already blocks access. Use tools edit with options.behavior to select the role.",
+                "meaning": "agent_narrowing is saved permission; effective also applies this process's ceiling. Save lasting role restrictions in Tools even when this process already blocks access. Use tools edit with options.agent to select the role.",
                 "process_ceiling": process_ceiling,
-                "behavior_narrowing": {
+                "agent_narrowing": {
                     "requested_file_mode": requested_file_mode,
                     "requested_bash_mode": requested_bash_mode,
                     "configured_root": configured_root,
@@ -285,14 +285,14 @@ impl SelfConfigCore {
     pub(crate) async fn task_owned(
         &self,
         txn: &ConfigApplyTxn<'_>,
-        _anchor: &BehaviorAnchor,
+        _anchor: &AgentAnchor,
         task_id: &str,
     ) -> Result<bool> {
         Ok(
-            read_owned_doc(txn, SelfConfigTarget::Task, self.agent_did(), task_id)
+            read_owned_doc(txn, SelfConfigTarget::Task, self.node_did(), task_id)
                 .await?
                 .is_some_and(|(_, task)| {
-                    task.get("behavior_id").and_then(Value::as_str) == Some(self.behavior_id())
+                    task.get("agent_id").and_then(Value::as_str) == Some(self.agent_id())
                 }),
         )
     }

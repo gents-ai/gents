@@ -86,9 +86,9 @@ pub struct AdapterProjectionEnvelope {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_session_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub source_agent_did: Option<String>,
+    pub source_node_did: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub source_behavior_id: Option<String>,
+    pub source_agent_id: Option<String>,
     pub redaction_mode: ProjectionRedactionMode,
     pub provenance: ProjectionProvenance,
     /// Rendered-request capture metadata for the projected request — the
@@ -262,9 +262,9 @@ pub enum OpenAiCodexTraceItem {
         #[serde(skip_serializing_if = "Option::is_none")]
         status: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        agent_did: Option<String>,
+        node_did: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        behavior_id: Option<String>,
+        agent_id: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         parent_request_id: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -322,9 +322,9 @@ pub struct LangGraphNode {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub agent_did: Option<String>,
+    pub node_did: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub behavior_id: Option<String>,
+    pub agent_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_request_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -371,9 +371,9 @@ pub struct MultiAgentTaskProjection {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MultiAgentParticipant {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub agent_did: Option<String>,
+    pub node_did: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub behavior_id: Option<String>,
+    pub agent_id: Option<String>,
     pub role: String,
 }
 
@@ -395,9 +395,9 @@ pub struct MultiAgentDelegation {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_tool_call_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub agent_did: Option<String>,
+    pub node_did: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub behavior_id: Option<String>,
+    pub agent_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -449,7 +449,7 @@ pub fn build_external_adapter_projection(
             for node in &mut projection.nodes {
                 node.content = redact_option(node.content.as_deref(), context);
                 node.reasoning = redact_option(node.reasoning.as_deref(), context);
-                node.agent_did = redact_option(node.agent_did.as_deref(), context);
+                node.node_did = redact_option(node.node_did.as_deref(), context);
             }
             AdapterProjection::LangGraphStateHistory(projection)
         }
@@ -458,16 +458,16 @@ pub fn build_external_adapter_projection(
             for participant in &mapping.participants {
                 push_participant(
                     &mut participants,
-                    redact_option(participant.agent_did.as_deref(), context),
-                    participant.behavior_id.clone(),
+                    redact_option(participant.node_did.as_deref(), context),
+                    participant.agent_id.clone(),
                     &participant.role,
                 );
             }
             if participants.is_empty() {
                 push_participant(
                     &mut participants,
-                    redact_option(view.request.agent_did.as_deref(), context),
-                    view.request.behavior_id.clone(),
+                    redact_option(view.request.node_did.as_deref(), context),
+                    view.request.agent_id.clone(),
                     "owner",
                 );
             }
@@ -487,7 +487,7 @@ pub fn build_external_adapter_projection(
                         MultiAgentMessage {
                             id: message.capture_message_label.clone(),
                             request_id: message.request_id.clone(),
-                            role: presented_role_label(presented.role).to_string(),
+                            role: message.source_role.clone(),
                             content: redact_str(&presented.body_markdown, context),
                             reasoning: redact_option(
                                 presented.reasoning_markdown.as_deref(),
@@ -504,8 +504,8 @@ pub fn build_external_adapter_projection(
                             parent_request_id: request.caused_by_parent_request_id.clone()?,
                             child_request_id: request.request_id.clone(),
                             parent_tool_call_id: request.caused_by_parent_tool_call_id.clone(),
-                            agent_did: redact_option(request.agent_did.as_deref(), context),
-                            behavior_id: request.behavior_id.clone(),
+                            node_did: redact_option(request.node_did.as_deref(), context),
+                            agent_id: request.agent_id.clone(),
                             status: request
                                 .lifecycle_state
                                 .map(|state| state.as_str().to_string()),
@@ -539,8 +539,8 @@ pub fn build_external_adapter_projection(
         // not canonical physical document identities.
         source_request_doc_id: None,
         source_session_id: view.request.session_id.clone(),
-        source_agent_did: redact_option(view.request.agent_did.as_deref(), context),
-        source_behavior_id: view.request.behavior_id.clone(),
+        source_node_did: redact_option(view.request.node_did.as_deref(), context),
+        source_agent_id: view.request.agent_id.clone(),
         redaction_mode: context.redaction_mode,
         provenance: ProjectionProvenance {
             runtime: "gents".to_string(),
@@ -566,8 +566,8 @@ pub fn build_adapter_projection(
         source_request_id: timeline.request_id.clone(),
         source_request_doc_id: timeline.request_doc_id.clone(),
         source_session_id: timeline.session_id.clone(),
-        source_agent_did: timeline.agent_did.clone(),
-        source_behavior_id: timeline.behavior_id.clone(),
+        source_node_did: timeline.node_did.clone(),
+        source_agent_id: timeline.agent_id.clone(),
         redaction_mode: context.redaction_mode,
         provenance: ProjectionProvenance {
             runtime: "gents".to_string(),
@@ -801,9 +801,9 @@ pub fn adapter_projection_jsonl_records(
                     "multi_agent_participant",
                     records.len(),
                     participant
-                        .agent_did
+                        .node_did
                         .clone()
-                        .or_else(|| participant.behavior_id.clone())
+                        .or_else(|| participant.agent_id.clone())
                         .unwrap_or_else(|| participant.role.clone()),
                     serde_json::to_value(participant).unwrap_or(Value::Null),
                 ));
@@ -918,8 +918,8 @@ pub fn adapter_projection_eval_jsonl_records(
                     OpenAiCodexTraceItem::Request {
                         id,
                         status,
-                        agent_did,
-                        behavior_id,
+                        node_did,
+                        agent_id,
                         parent_request_id,
                         parent_tool_call_id,
                         input,
@@ -935,8 +935,8 @@ pub fn adapter_projection_eval_jsonl_records(
                             status: status.clone(),
                             metadata: metadata([
                                 ("timestamp", timestamp.clone()),
-                                ("agent_did", agent_did.clone()),
-                                ("behavior_id", behavior_id.clone()),
+                                ("node_did", node_did.clone()),
+                                ("agent_id", agent_id.clone()),
                                 ("parent_request_id", parent_request_id.clone()),
                                 ("parent_tool_call_id", parent_tool_call_id.clone()),
                             ]),
@@ -1029,8 +1029,8 @@ pub fn adapter_projection_eval_jsonl_records(
                         metadata: metadata([
                             ("kind", Some(node.kind.clone())),
                             ("request_id", node.request_id.clone()),
-                            ("agent_did", node.agent_did.clone()),
-                            ("behavior_id", node.behavior_id.clone()),
+                            ("node_did", node.node_did.clone()),
+                            ("agent_id", node.agent_id.clone()),
                             ("parent_request_id", node.parent_request_id.clone()),
                             ("parent_tool_call_id", node.parent_tool_call_id.clone()),
                         ]),
@@ -1080,15 +1080,15 @@ pub fn adapter_projection_eval_jsonl_records(
                     "participant",
                     "multi_agent_participant",
                     participant
-                        .agent_did
+                        .node_did
                         .as_deref()
-                        .or(participant.behavior_id.as_deref())
+                        .or(participant.agent_id.as_deref())
                         .unwrap_or(participant.role.as_str()),
                     EvalRecordFields {
                         role: Some(participant.role.clone()),
                         metadata: metadata([
-                            ("agent_did", participant.agent_did.clone()),
-                            ("behavior_id", participant.behavior_id.clone()),
+                            ("node_did", participant.node_did.clone()),
+                            ("agent_id", participant.agent_id.clone()),
                         ]),
                         ..EvalRecordFields::default()
                     },
@@ -1128,8 +1128,8 @@ pub fn adapter_projection_eval_jsonl_records(
                                 "parent_tool_call_id",
                                 delegation.parent_tool_call_id.clone(),
                             ),
-                            ("agent_did", delegation.agent_did.clone()),
-                            ("behavior_id", delegation.behavior_id.clone()),
+                            ("node_did", delegation.node_did.clone()),
+                            ("agent_id", delegation.agent_id.clone()),
                         ]),
                         ..EvalRecordFields::default()
                     },
@@ -1225,8 +1225,8 @@ pub fn adapter_projection_json_schema(kind: AdapterProjectionKind) -> Value {
             "source_request_id": string_schema(),
             "source_request_doc_id": optional_string_schema(),
             "source_session_id": optional_string_schema(),
-            "source_agent_did": optional_string_schema(),
-            "source_behavior_id": optional_string_schema(),
+            "source_node_did": optional_string_schema(),
+            "source_agent_id": optional_string_schema(),
             "redaction_mode": redaction_mode_schema(),
             "provenance": provenance_schema(),
             "rendered_captures": rendered_captures_schema(),
@@ -1443,8 +1443,8 @@ fn openai_codex_projection_schema() -> Value {
                                 "type": { "const": "request" },
                                 "id": string_schema(),
                                 "status": optional_string_schema(),
-                                "agent_did": optional_string_schema(),
-                                "behavior_id": optional_string_schema(),
+                                "node_did": optional_string_schema(),
+                                "agent_id": optional_string_schema(),
                                 "parent_request_id": optional_string_schema(),
                                 "parent_tool_call_id": optional_string_schema(),
                                 "input": optional_string_schema(),
@@ -1513,8 +1513,8 @@ fn langgraph_projection_schema() -> Value {
                         "id": string_schema(),
                         "kind": string_schema(),
                         "request_id": optional_string_schema(),
-                        "agent_did": optional_string_schema(),
-                        "behavior_id": optional_string_schema(),
+                        "node_did": optional_string_schema(),
+                        "agent_id": optional_string_schema(),
                         "parent_request_id": optional_string_schema(),
                         "parent_tool_call_id": optional_string_schema(),
                         "status": optional_string_schema(),
@@ -1571,8 +1571,8 @@ fn multi_agent_projection_schema() -> Value {
                     "additionalProperties": false,
                     "required": ["role"],
                     "properties": {
-                        "agent_did": optional_string_schema(),
-                        "behavior_id": optional_string_schema(),
+                        "node_did": optional_string_schema(),
+                        "agent_id": optional_string_schema(),
                         "role": string_schema()
                     }
                 }
@@ -1602,8 +1602,8 @@ fn multi_agent_projection_schema() -> Value {
                         "parent_request_id": string_schema(),
                         "child_request_id": string_schema(),
                         "parent_tool_call_id": optional_string_schema(),
-                        "agent_did": optional_string_schema(),
-                        "behavior_id": optional_string_schema(),
+                        "node_did": optional_string_schema(),
+                        "agent_id": optional_string_schema(),
                         "status": optional_string_schema(),
                         "input": optional_string_schema()
                     }
@@ -1875,20 +1875,20 @@ fn validate_multi_agent_projection(
             &participant.role,
         );
         if participant
-            .agent_did
+            .node_did
             .as_deref()
             .unwrap_or("")
             .trim()
             .is_empty()
             && participant
-                .behavior_id
+                .agent_id
                 .as_deref()
                 .unwrap_or("")
                 .trim()
                 .is_empty()
         {
             violations.push(format!(
-                "participants[{index}] must include agent_did or behavior_id"
+                "participants[{index}] must include node_did or agent_id"
             ));
         }
     }
@@ -1956,8 +1956,8 @@ fn build_openai_codex_run_trace(
                 items.push(OpenAiCodexTraceItem::Request {
                     id: event.request_id.clone(),
                     status: event.lifecycle_state.clone(),
-                    agent_did: event.agent_did.clone(),
-                    behavior_id: event.behavior_id.clone(),
+                    node_did: event.node_did.clone(),
+                    agent_id: event.agent_id.clone(),
                     parent_request_id: event.parent_request_id.clone(),
                     parent_tool_call_id: event.parent_tool_call_id.clone(),
                     input: timeline_request_input(timeline, event, context),
@@ -2025,8 +2025,8 @@ fn build_langgraph_state_history(
     let mut values = BTreeMap::from([
         ("request_id".to_string(), json!(timeline.request_id)),
         ("session_id".to_string(), json!(timeline.session_id)),
-        ("agent_did".to_string(), json!(timeline.agent_did)),
-        ("behavior_id".to_string(), json!(timeline.behavior_id)),
+        ("node_did".to_string(), json!(timeline.node_did)),
+        ("agent_id".to_string(), json!(timeline.agent_id)),
         (
             "status".to_string(),
             json!(timeline.request.lifecycle_state),
@@ -2042,8 +2042,8 @@ fn build_langgraph_state_history(
             node_id,
             kind,
             request_id,
-            agent_did,
-            behavior_id,
+            node_did,
+            agent_id,
             parent_request_id,
             parent_tool_call_id,
             status,
@@ -2069,8 +2069,8 @@ fn build_langgraph_state_history(
                 format!("request:{}", event.request_id),
                 "request".to_string(),
                 Some(event.request_id.clone()),
-                event.agent_did.clone(),
-                event.behavior_id.clone(),
+                event.node_did.clone(),
+                event.agent_id.clone(),
                 event.parent_request_id.clone(),
                 event.parent_tool_call_id.clone(),
                 event.lifecycle_state.clone(),
@@ -2132,7 +2132,7 @@ fn build_langgraph_state_history(
                 format!("goal_transition:{}", event.commit_cid),
                 "goal_transition".to_string(),
                 None,
-                Some(event.agent_did.clone()),
+                Some(event.node_did.clone()),
                 None,
                 None,
                 None,
@@ -2154,8 +2154,8 @@ fn build_langgraph_state_history(
                 id: node_id.clone(),
                 kind,
                 request_id,
-                agent_did,
-                behavior_id,
+                node_did,
+                agent_id,
                 parent_request_id,
                 parent_tool_call_id,
                 status,
@@ -2231,8 +2231,8 @@ fn build_multi_agent_task(
     let mut participants = Vec::new();
     push_participant(
         &mut participants,
-        timeline.agent_did.clone(),
-        timeline.behavior_id.clone(),
+        timeline.node_did.clone(),
+        timeline.agent_id.clone(),
         "owner",
     );
     let mut messages = Vec::new();
@@ -2244,8 +2244,8 @@ fn build_multi_agent_task(
             RunTimelineEvent::Request(request) => {
                 push_participant(
                     &mut participants,
-                    request.agent_did.clone(),
-                    request.behavior_id.clone(),
+                    request.node_did.clone(),
+                    request.agent_id.clone(),
                     if request.request_id == timeline.request_id {
                         "owner"
                     } else {
@@ -2258,8 +2258,8 @@ fn build_multi_agent_task(
                             parent_request_id: parent_request_id.to_string(),
                             child_request_id: request.request_id.clone(),
                             parent_tool_call_id: request.parent_tool_call_id.clone(),
-                            agent_did: request.agent_did.clone(),
-                            behavior_id: request.behavior_id.clone(),
+                            node_did: request.node_did.clone(),
+                            agent_id: request.agent_id.clone(),
                             status: request.lifecycle_state.clone(),
                             input: redact_option(request.content.as_deref(), context),
                         });
@@ -2362,23 +2362,23 @@ fn nonempty_str(value: Option<&str>) -> Option<&str> {
 
 fn push_participant(
     participants: &mut Vec<MultiAgentParticipant>,
-    agent_did: Option<String>,
-    behavior_id: Option<String>,
+    node_did: Option<String>,
+    agent_id: Option<String>,
     role: &str,
 ) {
-    if agent_did.is_none() && behavior_id.is_none() {
+    if node_did.is_none() && agent_id.is_none() {
         return;
     }
     if participants.iter().any(|participant| {
-        participant.agent_did == agent_did
-            && participant.behavior_id == behavior_id
+        participant.node_did == node_did
+            && participant.agent_id == agent_id
             && participant.role == role
     }) {
         return;
     }
     participants.push(MultiAgentParticipant {
-        agent_did,
-        behavior_id,
+        node_did,
+        agent_id,
         role: role.to_string(),
     });
 }

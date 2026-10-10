@@ -6,15 +6,15 @@ use anyhow::{Context, Result};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-fn canonical_config(agent_did: &str) -> Value {
+fn canonical_config(node_did: &str) -> Value {
     json!({
-        "agent_principal": {
-            "agent_did": agent_did,
-            "default_behavior_id": "default",
+        "node": {
+            "node_did": node_did,
+            "default_agent_id": "default",
             "enabled": true
         },
-        "agent_behaviors": [{
-            "behavior_id": "default",
+        "agents": [{
+            "agent_id": "default",
             "context_id": "default-context",
             "inference_profile_id": "default-profile",
             "enabled": true
@@ -57,8 +57,8 @@ async fn config_validate_accepts_canonical_config() -> Result<()> {
     let home = tempdir.path().join("home");
     let root = tempdir.path().join("config");
     fs::create_dir_all(&home)?;
-    let agent_did = format!("did:key:z{}", Uuid::new_v4().simple());
-    write_config(&root, &canonical_config(&agent_did))?;
+    let node_did = format!("did:key:z{}", Uuid::new_v4().simple());
+    write_config(&root, &canonical_config(&node_did))?;
 
     let output = run_cli_json(
         &home,
@@ -66,7 +66,7 @@ async fn config_validate_accepts_canonical_config() -> Result<()> {
     )?;
     assert_eq!(output["status"], "validated");
     assert_eq!(output["ok"], true);
-    assert_eq!(output["agent_did"], agent_did);
+    assert_eq!(output["node_did"], node_did);
     assert_eq!(output["counts"]["contexts"], 1);
     assert_eq!(output["counts"]["tools"], 1);
     assert_eq!(output["counts"]["triggers"], 0);
@@ -116,8 +116,8 @@ async fn config_validate_bind_home_force_rebinds_local_owner() -> Result<()> {
     let home = tempdir.path().join("home");
     let root = tempdir.path().join("config");
     fs::create_dir_all(&home)?;
-    let init = run_init_json(&home, &["--agent-name", "validate-home"])?;
-    let home_did = agent_did_from_init(&init)?;
+    let init = run_init_json(&home, &["--node-name", "validate-home"])?;
+    let home_did = node_did_from_init(&init)?;
     write_config(&root, &canonical_config("did:key:source"))?;
 
     let output = run_cli_json(
@@ -127,12 +127,12 @@ async fn config_validate_bind_home_force_rebinds_local_owner() -> Result<()> {
             "validate",
             "--root",
             root.to_str().unwrap(),
-            "--bind-agent-did",
+            "--bind-node-did",
             "home",
             "--force-rebind-concrete-did",
         ],
     )?;
     assert_eq!(output["ok"], true);
-    assert_eq!(output["agent_did"], home_did);
+    assert_eq!(output["node_did"], home_did);
     Ok(())
 }

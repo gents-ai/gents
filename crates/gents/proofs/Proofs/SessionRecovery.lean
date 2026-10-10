@@ -30,7 +30,7 @@ end SessionRetry
 
 structure SessionState where
   sessionId : SessionId
-  behaviorId : BehaviorId
+  agentId : AgentId
   requestIds : Finset RequestId
   ctx : RequestId → SessionRetry.Request
   latest : RequestId
@@ -84,7 +84,7 @@ The source configuration and bounded retry counter come from that parent, while
 execution deadline assignment stays with the later claim owner. -/
 theorem reissue_publishes_successor {pre post : SessionState} {failedId newId : RequestId}
     (h : step? pre (.reissueFailed failedId newId) = some post) :
-    post.sessionId = pre.sessionId ∧ post.behaviorId = pre.behaviorId ∧
+    post.sessionId = pre.sessionId ∧ post.agentId = pre.agentId ∧
     post.latest = newId ∧ newId ∈ post.requestIds ∧ failedId ∈ post.requestIds ∧
     (post.ctx newId).state = .pending ∧ (post.ctx newId).admission = .released ∧
     (post.ctx newId).deadline = none ∧
@@ -123,12 +123,12 @@ theorem reissue_preserves_unrelated_request {pre post : SessionState} {failedId 
 under exact requester scope and physical parent identity, not cached UI state. -/
 def retryFromRows? (pre : SessionState) (session : AgentSession.Document)
     (rows : List AgentSession.RequestFact) (parentDoc failedId newId : Nat) : Option SessionState :=
-  match AgentSession.latest rows session.scope.agent session.scope.session
+  match AgentSession.latest rows session.scope.node session.scope.session
       (some session.scope.requester) with
   | none => none
   | some parent =>
     if parent.observed.docId = parentDoc ∧ parent.observed.requestId = failedId ∧
-        parent.behavior = session.behavior ∧ pre.behaviorId = session.behavior ∧
+        parent.agent = session.agent ∧ pre.agentId = session.agent ∧
         pre.sessionId = session.scope.session ∧ parent.observed.state = (pre.ctx failedId).state ∧
         rows.all (fun row => row.observed.requestId != newId) then
       step? { pre with latest := parent.observed.requestId } (.reissueFailed failedId newId)

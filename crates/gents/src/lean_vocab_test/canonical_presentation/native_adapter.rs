@@ -204,7 +204,7 @@ fn segment(value: &LeanCanonicalSegment) -> Result<OutputSegment> {
         ),
     };
     Ok(OutputSegment {
-        agent_did: "did:example:lean".into(),
+        node_did: "did:example:lean".into(),
         requester_did: None,
         session_id: "lean-session-1".into(),
         request_doc_id: request_id(value.coordinate.request),
@@ -411,7 +411,7 @@ fn message(value: &LeanCanonicalMessage<LeanPayloadSpec>) -> Result<TranscriptMe
     let converted = TranscriptMessage {
         message_key: value.key.clone(),
         session_id: session_id(value.header.session),
-        agent_did: "did:example:lean".into(),
+        node_did: "did:example:lean".into(),
         requester_did: None,
         request_doc_id: value.header.request.map(request_id),
         publication,

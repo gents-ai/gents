@@ -255,7 +255,7 @@ pub(super) async fn trial(
             gents::eval::runner::embedded::inspect_retained_requests(
                 &ctx.runs_dir(),
                 &gents::eval::runner::TrialLocator {
-                    trial_agent_did: latest.trial_agent_did.clone(),
+                    trial_node_did: latest.trial_node_did.clone(),
                     session_id: latest.session_id.clone(),
                     home_hint: latest.home_hint.clone(),
                 },
@@ -492,7 +492,7 @@ mod tests {
         let did = home.did().to_owned();
         let prompt = "Inspect the original \"request\"\nwithout another model turn.";
         ConfigAccess::write_local(&home.node, "eval.cli.test.retained_request", &format!(
-            r#"mutation {{ create_AgentRequest(input: {{ request_id: "child", purpose: "normal", agent_did: "{}", session_id: "child-session", content: "{}", lifecycle_state: "completed", retry_root_request: "root", caused_by_parent_request_id: "parent", caused_by_parent_tool_call_id: "tool", caused_by_source_doc_id: "source", created_at: "2026-01-01T00:00:00Z" }}) {{ _docID }} }}"#,
+            r#"mutation {{ create_AgentRequest(input: {{ request_id: "child", purpose: "normal", node_did: "{}", session_id: "child-session", content: "{}", lifecycle_state: "completed", retry_root_request: "root", caused_by_parent_request_id: "parent", caused_by_parent_tool_call_id: "tool", caused_by_source_doc_id: "source", created_at: "2026-01-01T00:00:00Z" }}) {{ _docID }} }}"#,
             escape_graphql_string(&did), escape_graphql_string(prompt),
         )).await.unwrap();
         home.node.shutdown().await;
@@ -504,7 +504,7 @@ mod tests {
             vec![serde_json::json!({})],
         );
         evidence.locator = TrialLocator {
-            trial_agent_did: did.clone(),
+            trial_node_did: did.clone(),
             session_id: "session".into(),
             home_hint: Some("retained".into()),
         };
@@ -541,7 +541,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(json["requests"][0]["content"], prompt);
-        assert_eq!(json["requests"][0]["agent_did"], did);
+        assert_eq!(json["requests"][0]["node_did"], did);
         assert_eq!(json["requests"][0]["retry_root_request"], "root");
         assert_eq!(json["requests"][0]["caused_by_parent_request_id"], "parent");
         assert_eq!(json["requests"][0]["caused_by_source_doc_id"], "source");

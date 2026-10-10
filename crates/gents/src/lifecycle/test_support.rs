@@ -1,10 +1,9 @@
 //! Shared fixture for the `#[1336]` pinning tests (`lifecycle::materialize`,
-//! `lifecycle::queue`, `lifecycle::background_wake_recovery`,
-//! `tool_call_lifecycle::subagent_request`): one fixed Ed25519 identity so
-//! every pinning test signs with the same registered DID and therefore
-//! produces the same signature bytes for the same payload.
+//! `lifecycle::queue`, `lifecycle::background_wake_recovery`): one fixed
+//! Ed25519 identity so every pinning test signs with the same registered DID
+//! and therefore produces the same signature bytes for the same payload.
 
-use crate::identity::AgentIdentity;
+use crate::identity::NodeIdentity;
 
 /// Raw 64-byte (seed || public key) Ed25519 identity material, captured
 /// once so every pinning test signs with the same registered DID.

@@ -21,7 +21,7 @@ pub(super) fn session_contexts(data: &Value) -> Option<Vec<SessionContextUsage>>
         sessions
             .entry(scope.clone())
             .or_insert_with(|| SessionContextUsage {
-                agent_did: scope.0.clone(),
+                node_did: scope.0.clone(),
                 session_id: scope.1.clone(),
                 requester_did: scope.2.clone(),
                 ..Default::default()
@@ -46,7 +46,7 @@ pub(super) fn session_contexts(data: &Value) -> Option<Vec<SessionContextUsage>>
         else {
             continue;
         };
-        if call["agent_did"].as_str() != Some(owner.0.as_str()) {
+        if call["node_did"].as_str() != Some(owner.0.as_str()) {
             continue;
         }
         let session = sessions.get_mut(owner)?;
@@ -77,7 +77,7 @@ pub(super) fn session_contexts(data: &Value) -> Option<Vec<SessionContextUsage>>
 }
 
 fn scope(row: &Value) -> Option<(String, String, Option<String>)> {
-    let agent = row.get("agent_did")?.as_str()?;
+    let agent = row.get("node_did")?.as_str()?;
     let session = row.get("session_id")?.as_str()?;
     if agent.is_empty() || session.is_empty() {
         return None;
@@ -98,16 +98,16 @@ mod tests {
     fn context_joins_physical_requests_keeps_sessions_separate_and_preserves_unknowns() {
         let mut data = json!({
             "AgentRequest":[
-                {"_docID":"a","agent_did":"owner","session_id":"s","requester_did":null},
-                {"_docID":"b","agent_did":"owner","session_id":"s","requester_did":"remote"}],
+                {"_docID":"a","node_did":"owner","session_id":"s","requester_did":null},
+                {"_docID":"b","node_did":"owner","session_id":"s","requester_did":"remote"}],
             "InferenceCall":[
-                {"call_id":"last","request_doc_id":"a","agent_did":"owner","call_kind":"inference","queued_at":"2","prompt_tokens":null},
-                {"call_id":"first","request_doc_id":"a","agent_did":"owner","call_kind":"inference","queued_at":"1","prompt_tokens":800},
-                {"call_id":"compact","request_doc_id":"a","agent_did":"owner","call_kind":"compaction","queued_at":"3","prompt_tokens":9000},
-                {"call_id":"foreign","request_doc_id":"a","agent_did":"other","call_kind":"inference","queued_at":"4","prompt_tokens":9000},
-                {"call_id":"b","request_doc_id":"b","agent_did":"owner","call_kind":"inference","queued_at":"1","prompt_tokens":20}],
-            "CompactionEntry":[{"agent_did":"owner","session_id":"s","requester_did":null}],
-            "ProviderContextReduction":[{"agent_did":"owner","session_id":"s","requester_did":"remote"}]
+                {"call_id":"last","request_doc_id":"a","node_did":"owner","call_kind":"inference","queued_at":"2","prompt_tokens":null},
+                {"call_id":"first","request_doc_id":"a","node_did":"owner","call_kind":"inference","queued_at":"1","prompt_tokens":800},
+                {"call_id":"compact","request_doc_id":"a","node_did":"owner","call_kind":"compaction","queued_at":"3","prompt_tokens":9000},
+                {"call_id":"foreign","request_doc_id":"a","node_did":"other","call_kind":"inference","queued_at":"4","prompt_tokens":9000},
+                {"call_id":"b","request_doc_id":"b","node_did":"owner","call_kind":"inference","queued_at":"1","prompt_tokens":20}],
+            "CompactionEntry":[{"node_did":"owner","session_id":"s","requester_did":null}],
+            "ProviderContextReduction":[{"node_did":"owner","session_id":"s","requester_did":"remote"}]
         });
         let sessions = session_contexts(&data).unwrap();
         assert_eq!(sessions.len(), 2);

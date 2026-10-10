@@ -136,7 +136,7 @@ export function AccountDialogs({
         `Another account is already labelled “${label}”. Choose another label.`,
       );
     await actions.renameProviderAccount(
-      deployment.agentDid,
+      deployment.nodeDid,
       account.credentialId,
       label,
     );
@@ -146,10 +146,7 @@ export function AccountDialogs({
     if (!account) return;
     setBusy(true);
     try {
-      await actions.disconnectProviderAccount(
-        deployment.agentDid,
-        account.credentialId,
-      );
+      await actions.disconnectProviderAccount(deployment.nodeDid, account.credentialId);
       toast("Disconnected");
       onClose();
     } catch (error) {
@@ -163,7 +160,7 @@ export function AccountDialogs({
       <RenameDialog
         key={account?.credentialId ?? "none"}
         title="Rename account"
-        description="The label this account goes by on this agent."
+        description="The label this account goes by on this node."
         value={acting?.action === "rename" ? account!.label : null}
         onSave={rename}
         onClose={onClose}
@@ -196,7 +193,7 @@ export function AccountDialogs({
           open={acting?.action === "remove"}
           onOpenChange={(open) => !open && onClose()}
           onDelete={() =>
-            actions.removeProviderAccount(deployment.agentDid, account.credentialId)
+            actions.removeProviderAccount(deployment.nodeDid, account.credentialId)
           }
           warning={warnings?.remove}
         />
@@ -229,7 +226,7 @@ export function AccountRows({
   const signIn = async () => {
     setBusy(true);
     try {
-      await actions.signInToProvider(deployment.agentDid, sub.login);
+      await actions.signInToProvider(deployment.nodeDid, sub.login);
       toast("Signed in");
     } catch (error) {
       toast(`Sign in failed: ${setupErrorMessage(error)}`);
@@ -240,7 +237,7 @@ export function AccountRows({
   const retrySave = async () => {
     setBusy(true);
     try {
-      await actions.retrySaveProviderAccount(deployment.agentDid, sub.provider);
+      await actions.retrySaveProviderAccount(deployment.nodeDid, sub.provider);
       toast("Signed in");
     } catch (error) {
       toast(`Save failed: ${setupErrorMessage(error)}`);
@@ -252,10 +249,7 @@ export function AccountRows({
     if (!account) return;
     setBusy(true);
     try {
-      await actions.disconnectProviderAccount(
-        deployment.agentDid,
-        account.credentialId,
-      );
+      await actions.disconnectProviderAccount(deployment.nodeDid, account.credentialId);
       toast("Disconnected");
       setConfirmingDisconnect(false);
     } catch (error) {

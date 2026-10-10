@@ -31,7 +31,7 @@ const publicComponents: ReactNode[] = [
     activeRequestId={null}
     activityStatus={null}
     approxSerializedBytes={0}
-    behaviorLabel={null}
+    agentLabel={null}
     canSend={false}
     draft=""
     interruptVisible={false}
@@ -50,7 +50,7 @@ const publicComponents: ReactNode[] = [
     onCancel={() => undefined}
     onConfirm={() => undefined}
   />,
-  <RequestTracePanel agentDid="did:key:packed-consumer" api={client.api} />,
+  <RequestTracePanel nodeDid="did:key:packed-consumer" api={client.api} />,
 ];
 
 void FleetDashboard;

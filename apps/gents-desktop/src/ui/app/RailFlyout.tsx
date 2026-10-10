@@ -15,7 +15,7 @@ import { cn } from "@gents/ui/lib/utils";
 import { PortalContainerProvider } from "@gents/ui/lib/portal-container";
 import { href, type Route } from "@/lib/router";
 import type { NavMode } from "@/preferences";
-import { AgentAvatar } from "@/screens/AgentAvatar";
+import { NodeAvatar } from "@/screens/AgentAvatar";
 import { SessionStatus } from "@/screens/SessionStatus";
 import { SyncHealth } from "./SyncHealth";
 import {
@@ -86,7 +86,7 @@ export function NavPanel({
   const syncHealth = useSyncHealth();
   const currentSession = route.name === "session" ? route.sessionId : null;
   const workingCurrent =
-    working !== null && route.name === "agent" && route.agentDid === working.agentDid;
+    working !== null && route.name === "agent" && route.nodeDid === working.nodeDid;
   return (
     <>
       {/* the working node, in the same slot as its avatar on the rail: its
@@ -96,7 +96,7 @@ export function NavPanel({
         <a
           href={href({
             name: "agent",
-            agentDid: working.agentDid,
+            nodeDid: working.nodeDid,
             section: "agent",
           })}
           aria-current={workingCurrent ? "page" : undefined}
@@ -112,8 +112,8 @@ export function NavPanel({
               workingCurrent && "ring-2 ring-ink",
             )}
           >
-            <AgentAvatar
-              name={working.agentPrincipal.displayName ?? working.label}
+            <NodeAvatar
+              name={working.node.displayName ?? working.label}
               className="size-7"
             />
             <span
@@ -126,7 +126,7 @@ export function NavPanel({
           </span>
           <span className="min-w-0 flex-1">
             <span className="block truncate font-heading font-medium text-heading">
-              {working.agentPrincipal.displayName ?? working.label}
+              {working.node.displayName ?? working.label}
             </span>
             <span className="block text-xs text-muted-foreground">
               Local node · Configure

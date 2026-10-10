@@ -28,13 +28,13 @@ impl TranscriptAccess<'_> {
     }
 }
 
-fn scope_filter(agent_did: &str, requester_did: Option<&str>) -> String {
-    let agent_did = escape_graphql_string(agent_did);
+fn scope_filter(node_did: &str, requester_did: Option<&str>) -> String {
+    let node_did = escape_graphql_string(node_did);
     let requester = requester_did
         .map(escape_graphql_string)
         .map(|did| format!("\"{did}\""))
         .unwrap_or_else(|| "null".to_string());
-    format!("agent_did: {{ _eq: \"{agent_did}\" }}, requester_did: {{ _eq: {requester} }}")
+    format!("node_did: {{ _eq: \"{node_did}\" }}, requester_did: {{ _eq: {requester} }}")
 }
 
 fn insert_exact_header(
@@ -68,7 +68,7 @@ fn validate_known_header_identities(
             &observed,
             &[],
             &row.doc_id,
-            &row.message.agent_did,
+            &row.message.node_did,
             row.message.requester_did.as_deref(),
         )
         .map_err(anyhow::Error::new)?;
@@ -114,7 +114,7 @@ async fn load_page_canonical_dependencies(
                 origin_message_doc_id,
             } => Some((
                 origin_message_doc_id.clone(),
-                header.message.agent_did.clone(),
+                header.message.node_did.clone(),
                 header.message.requester_did.clone(),
                 1_usize,
             )),
@@ -125,7 +125,7 @@ async fn load_page_canonical_dependencies(
     let mut query_count = 0_u64;
     let mut queried_rows = 0_usize;
 
-    while let Some((origin_id, agent_did, requester_did, depth)) = pending_origins.pop_front() {
+    while let Some((origin_id, node_did, requester_did, depth)) = pending_origins.pop_front() {
         if known_headers.contains_key(&origin_id) || !queried_headers.insert(origin_id.clone()) {
             continue;
         }
@@ -139,7 +139,7 @@ async fn load_page_canonical_dependencies(
             r#"query DesktopExactForkOrigin {{
   AgentMessage(filter: {{ _docID: {{ _eq: "{origin_id_escaped}" }}, {} }}, limit: 2) {{ {AGENT_MESSAGE_FIELDS} }}
 }}"#,
-            scope_filter(&agent_did, requester_did.as_deref()),
+            scope_filter(&node_did, requester_did.as_deref()),
         );
         let data = access
             .execute(&query, "exact canonical fork origin")
@@ -156,7 +156,7 @@ async fn load_page_canonical_dependencies(
             1 => {
                 let origin = rows.into_iter().next().expect("one row checked");
                 if origin.doc_id != origin_id
-                    || origin.message.agent_did != agent_did
+                    || origin.message.node_did != node_did
                     || origin.message.requester_did != requester_did
                 {
                     bail!("exact canonical fork origin crossed its authorized scope");
@@ -167,7 +167,7 @@ async fn load_page_canonical_dependencies(
                 {
                     pending_origins.push_back((
                         origin_message_doc_id.clone(),
-                        origin.message.agent_did.clone(),
+                        origin.message.node_did.clone(),
                         origin.message.requester_did.clone(),
                         depth.saturating_add(1),
                     ));
@@ -190,7 +190,7 @@ async fn load_page_canonical_dependencies(
                 .map(move |reference| {
                     (
                         reference.close_doc_id.clone(),
-                        header.message.agent_did.clone(),
+                        header.message.node_did.clone(),
                         header.message.requester_did.clone(),
                     )
                 })
@@ -205,9 +205,9 @@ async fn load_page_canonical_dependencies(
     let mut closures = Vec::new();
     let close_scopes = close_scopes.into_iter().collect::<Vec<_>>();
     for batch in close_scopes.chunks(32) {
-        let selections = batch.iter().enumerate().map(|(index, (close_id, agent_did, requester_did))| {
+        let selections = batch.iter().enumerate().map(|(index, (close_id, node_did, requester_did))| {
             let close_id = escape_graphql_string(close_id);
-            format!(r#"closure{index}: AgentOutputSegment(filter: {{ _docID: {{ _eq: "{close_id}" }}, {} }}, limit: 2) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }}"#, scope_filter(agent_did, requester_did.as_deref()))
+            format!(r#"closure{index}: AgentOutputSegment(filter: {{ _docID: {{ _eq: "{close_id}" }}, {} }}, limit: 2) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }}"#, scope_filter(node_did, requester_did.as_deref()))
         }).collect::<Vec<_>>().join("\n");
         let data = access
             .execute(
@@ -216,7 +216,7 @@ async fn load_page_canonical_dependencies(
             )
             .await?;
         query_count += 1;
-        for (index, (close_id, agent_did, requester_did)) in batch.iter().enumerate() {
+        for (index, (close_id, node_did, requester_did)) in batch.iter().enumerate() {
             let rows =
                 parse_canonical_rows(&data, &format!("closure{index}"), decode_output_segment_row)?;
             queried_rows = queried_rows.saturating_add(rows.len());
@@ -225,7 +225,7 @@ async fn load_page_canonical_dependencies(
                 1 => {
                     let closure = rows.into_iter().next().expect("one row checked");
                     if closure.doc_id != *close_id
-                        || closure.segment.agent_did != *agent_did
+                        || closure.segment.node_did != *node_did
                         || closure.segment.requester_did != *requester_did
                     {
                         bail!("exact canonical output closure crossed its authorized scope");
@@ -248,7 +248,7 @@ async fn load_page_canonical_dependencies(
         sources_by_request
             .entry((
                 closure.segment.request_doc_id.clone(),
-                closure.segment.agent_did.clone(),
+                closure.segment.node_did.clone(),
                 closure.segment.requester_did.clone(),
             ))
             .or_insert_with(BTreeSet::new)
@@ -293,7 +293,7 @@ async fn load_page_canonical_dependencies(
             for row in rows {
                 anyhow::ensure!(
                     row.segment.request_doc_id == request_scope.0
-                        && row.segment.agent_did == request_scope.1
+                        && row.segment.node_did == request_scope.1
                         && row.segment.requester_did == request_scope.2,
                     "canonical output source crossed its authorized request scope"
                 );
@@ -316,15 +316,15 @@ pub(super) fn tool_group_cursor_sequence(cursor: &str) -> Option<i64> {
 async fn resolve_transcript_cursor_sequence(
     access: TranscriptAccess<'_>,
     session_id: &str,
-    agent_did: Option<&str>,
+    node_did: Option<&str>,
     requester_did: Option<&str>,
     cursor: &str,
 ) -> Result<i64> {
     if let Some(sequence) = tool_group_cursor_sequence(cursor) {
         let session_id = escape_graphql_string(session_id);
-        let agent_filter = agent_did
+        let node_filter = node_did
             .map(escape_graphql_string)
-            .map(|agent_did| format!(", agent_did: {{ _eq: \"{agent_did}\" }}"))
+            .map(|node_did| format!(", node_did: {{ _eq: \"{node_did}\" }}"))
             .unwrap_or_default();
         let requester_filter = requester_did
             .map(escape_graphql_string)
@@ -333,11 +333,11 @@ async fn resolve_transcript_cursor_sequence(
         let query = format!(
             r#"query DesktopSessionToolCursor {{
   AgentMessage(
-    filter: {{ session_id: {{ _eq: "{session_id}" }}, sequence: {{ _eq: {sequence} }}{agent_filter}{requester_filter} }},
+    filter: {{ session_id: {{ _eq: "{session_id}" }}, sequence: {{ _eq: {sequence} }}{node_filter}{requester_filter} }},
     limit: 1
   ) {{ sequence }}
   AgentToolCall(
-    filter: {{ session_id: {{ _eq: "{session_id}" }}, message_sequence: {{ _eq: {sequence} }}{agent_filter}{requester_filter} }},
+    filter: {{ session_id: {{ _eq: "{session_id}" }}, message_sequence: {{ _eq: {sequence} }}{node_filter}{requester_filter} }},
     limit: 1
   ) {{ sequence: message_sequence }}
 }}"#
@@ -356,9 +356,9 @@ async fn resolve_transcript_cursor_sequence(
     }
     let session_id = escape_graphql_string(session_id);
     let message_key = escape_graphql_string(cursor);
-    let agent_filter = agent_did
+    let node_filter = node_did
         .map(escape_graphql_string)
-        .map(|agent_did| format!(", agent_did: {{ _eq: \"{agent_did}\" }}"))
+        .map(|node_did| format!(", node_did: {{ _eq: \"{node_did}\" }}"))
         .unwrap_or_default();
     let requester_filter = requester_did
         .map(escape_graphql_string)
@@ -369,7 +369,7 @@ async fn resolve_transcript_cursor_sequence(
   AgentMessage(
     filter: {{
       session_id: {{ _eq: "{session_id}" }},
-      message_key: {{ _eq: "{message_key}" }}{agent_filter}{requester_filter}
+      message_key: {{ _eq: "{message_key}" }}{node_filter}{requester_filter}
     }},
     limit: 1
   ) {{ sequence }}
@@ -385,29 +385,30 @@ async fn resolve_transcript_cursor_sequence(
 /// The exact requester scope under which one session's transcript is read.
 ///
 /// Transcript rows carry their session's requester scope, and a desktop
-/// reading an enrolled agent defaults to its own principal. A subagent the
-/// agent spawns for itself is admitted as a `LocalChild`, whose requester is
-/// the agent's own DID, so under the principal its session reads as empty.
-/// Only the agent's operator (its operator GraphQL endpoint, which already
-/// carries full read authority over that runtime) reads such a session under
-/// the session's own scope. Every other session keeps the principal scope, so
-/// sessions requested by other principals are never widened into view.
+/// reading an enrolled node defaults to its own requester scope. A local
+/// child session the node spawns for itself is admitted as a `LocalChild`,
+/// whose requester is the node's own DID, so under the desktop's scope its
+/// session reads as empty. Only the node's operator (its operator GraphQL
+/// endpoint, which already carries full read authority over that runtime)
+/// reads such a session under the session's own scope. Every other session
+/// keeps the desktop's scope, so sessions requested by other requesters are
+/// never widened into view.
 pub fn session_transcript_requester_scope(
     session: Option<&AgentSession>,
-    agent_did: Option<&str>,
-    principal_scope: Option<&str>,
+    node_did: Option<&str>,
+    requester_scope: Option<&str>,
     operator: bool,
 ) -> Option<String> {
-    let agent_own_scope = match (session, agent_did) {
-        (Some(session), Some(agent_did)) => {
-            session.agent_did == agent_did && session.requester_did.as_deref() == Some(agent_did)
+    let node_own_scope = match (session, node_did) {
+        (Some(session), Some(node_did)) => {
+            session.node_did == node_did && session.requester_did.as_deref() == Some(node_did)
         }
         _ => false,
     };
-    if operator && agent_own_scope {
-        return agent_did.map(str::to_owned);
+    if operator && node_own_scope {
+        return node_did.map(str::to_owned);
     }
-    principal_scope.map(str::to_owned)
+    requester_scope.map(str::to_owned)
 }
 
 /// Why this client cannot read a session, or `None` when it can.
@@ -419,20 +420,20 @@ pub fn session_transcript_requester_scope(
 /// (`SessionHydration.canStart`), so it is presented instead of requested.
 pub fn session_unreadable_reason(
     session: &AgentSession,
-    principal_scope: Option<&str>,
+    requester_scope: Option<&str>,
     operator: bool,
 ) -> Option<&'static str> {
     let scope = session_transcript_requester_scope(
         Some(session),
-        Some(&session.agent_did),
-        principal_scope,
+        Some(&session.node_did),
+        requester_scope,
         operator,
     );
     if scope.as_deref() == session.requester_did.as_deref() {
         return None;
     }
     Some(match session.requester_did.as_deref() {
-        Some(requester) if requester == session.agent_did => {
+        Some(requester) if requester == session.node_did => {
             "Started by the agent itself and owned by its node, so this client cannot read it."
         }
         Some(_) => "Started by another requester, so this client cannot read it.",
@@ -448,7 +449,7 @@ pub fn session_unreadable_reason(
 pub async fn load_session_transcript_page(
     node: &EmbeddedNode,
     session_id: &str,
-    agent_did: Option<&str>,
+    node_did: Option<&str>,
     requester_did: Option<&str>,
     before_item_key: Option<&str>,
     requested_limit: Option<usize>,
@@ -456,7 +457,7 @@ pub async fn load_session_transcript_page(
     load_session_transcript_page_with_access(
         TranscriptAccess::Local(node),
         session_id,
-        agent_did,
+        node_did,
         requester_did,
         before_item_key,
         requested_limit,
@@ -467,7 +468,7 @@ pub async fn load_session_transcript_page(
 pub async fn load_session_transcript_page_on(
     access: &gents::config_client::ConfigAccess,
     session_id: &str,
-    agent_did: Option<&str>,
+    node_did: Option<&str>,
     requester_did: Option<&str>,
     before_item_key: Option<&str>,
     requested_limit: Option<usize>,
@@ -475,7 +476,7 @@ pub async fn load_session_transcript_page_on(
     load_session_transcript_page_with_access(
         TranscriptAccess::Config(access),
         session_id,
-        agent_did,
+        node_did,
         requester_did,
         before_item_key,
         requested_limit,
@@ -486,7 +487,7 @@ pub async fn load_session_transcript_page_on(
 async fn load_session_transcript_page_with_access(
     access: TranscriptAccess<'_>,
     session_id: &str,
-    agent_did: Option<&str>,
+    node_did: Option<&str>,
     requester_did: Option<&str>,
     before_item_key: Option<&str>,
     requested_limit: Option<usize>,
@@ -502,21 +503,15 @@ async fn load_session_transcript_page_with_access(
     let tool_call_query_limit = SESSION_TRANSCRIPT_TOOL_CALL_ROW_BUDGET.saturating_add(1);
     let before_sequence = match before_item_key {
         Some(cursor) => Some(
-            resolve_transcript_cursor_sequence(
-                access,
-                session_id,
-                agent_did,
-                requester_did,
-                cursor,
-            )
-            .await?,
+            resolve_transcript_cursor_sequence(access, session_id, node_did, requester_did, cursor)
+                .await?,
         ),
         None => None,
     };
     let escaped_session_id = escape_graphql_string(session_id);
-    let agent_filter = agent_did
+    let node_filter = node_did
         .map(escape_graphql_string)
-        .map(|agent_did| format!(", agent_did: {{ _eq: \"{agent_did}\" }}"))
+        .map(|node_did| format!(", node_did: {{ _eq: \"{node_did}\" }}"))
         .unwrap_or_default();
     let requester_filter = requester_did
         .map(escape_graphql_string)
@@ -531,12 +526,12 @@ async fn load_session_transcript_page_with_access(
     let transcript_query = format!(
         r#"query DesktopSessionTranscriptPage {{
   AgentMessage(
-    filter: {{ session_id: {{ _eq: "{escaped_session_id}" }}{agent_filter}{requester_filter}{message_sequence_filter} }},
+    filter: {{ session_id: {{ _eq: "{escaped_session_id}" }}{node_filter}{requester_filter}{message_sequence_filter} }},
     order: [{{ sequence: DESC }}, {{ message_key: DESC }}],
     limit: {message_query_limit}
   ) {{ {AGENT_MESSAGE_FIELDS} }}
   AgentToolCall(
-    filter: {{ session_id: {{ _eq: "{escaped_session_id}" }}{agent_filter}{requester_filter}{tool_before_sequence_filter} }},
+    filter: {{ session_id: {{ _eq: "{escaped_session_id}" }}{node_filter}{requester_filter}{tool_before_sequence_filter} }},
     order: [{{ message_sequence: DESC }}, {{ tool_call_key: DESC }}],
     limit: {tool_call_query_limit}
   ) {{ {AGENT_TOOL_CALL_FIELDS} }}
@@ -663,13 +658,13 @@ async fn load_session_transcript_page_with_access(
 pub async fn load_session_context_store(
     node: &EmbeddedNode,
     session_id: &str,
-    agent_did: Option<&str>,
+    node_did: Option<&str>,
     requester_did: Option<&str>,
 ) -> Result<ClientStore> {
     load_session_context_store_with_access(
         TranscriptAccess::Local(node),
         session_id,
-        agent_did,
+        node_did,
         requester_did,
     )
     .await
@@ -678,13 +673,13 @@ pub async fn load_session_context_store(
 pub async fn load_session_context_store_on(
     access: &gents::config_client::ConfigAccess,
     session_id: &str,
-    agent_did: Option<&str>,
+    node_did: Option<&str>,
     requester_did: Option<&str>,
 ) -> Result<ClientStore> {
     load_session_context_store_with_access(
         TranscriptAccess::Config(access),
         session_id,
-        agent_did,
+        node_did,
         requester_did,
     )
     .await
@@ -693,7 +688,7 @@ pub async fn load_session_context_store_on(
 async fn load_session_context_store_with_access(
     access: TranscriptAccess<'_>,
     session_id: &str,
-    agent_did: Option<&str>,
+    node_did: Option<&str>,
     requester_did: Option<&str>,
 ) -> Result<ClientStore> {
     let session_id = session_id.trim();
@@ -701,9 +696,9 @@ async fn load_session_context_store_with_access(
         bail!("session context query requires a session id");
     }
     let escaped_session_id = escape_graphql_string(session_id);
-    let agent_filter = agent_did
+    let node_filter = node_did
         .map(escape_graphql_string)
-        .map(|agent_did| format!(", agent_did: {{ _eq: \"{agent_did}\" }}"))
+        .map(|node_did| format!(", node_did: {{ _eq: \"{node_did}\" }}"))
         .unwrap_or_default();
     let requester_filter = requester_did
         .map(escape_graphql_string)
@@ -712,14 +707,14 @@ async fn load_session_context_store_with_access(
     let query = format!(
         r#"query DesktopSessionContext {{
   AgentMessage(
-    filter: {{ session_id: {{ _eq: "{escaped_session_id}" }}{agent_filter}{requester_filter} }},
+    filter: {{ session_id: {{ _eq: "{escaped_session_id}" }}{node_filter}{requester_filter} }},
     order: [{{ sequence: ASC }}, {{ message_key: ASC }}]
   ) {{ {AGENT_MESSAGE_FIELDS} }}
   AgentOutputSegment(
-    filter: {{ session_id: {{ _eq: "{escaped_session_id}" }}{agent_filter}{requester_filter} }}
+    filter: {{ session_id: {{ _eq: "{escaped_session_id}" }}{node_filter}{requester_filter} }}
   ) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }}
   CompactionEntry(
-    filter: {{ session_id: {{ _eq: "{escaped_session_id}" }}{agent_filter} }},
+    filter: {{ session_id: {{ _eq: "{escaped_session_id}" }}{node_filter}{requester_filter} }},
     order: [{{ sequence: ASC }}, {{ compaction_key: ASC }}]
   ) {{ {COMPACTION_ENTRY_FIELDS} }}
 }}"#
@@ -754,7 +749,7 @@ async fn load_session_context_store_with_access(
 pub async fn load_session_diagnostics_store(
     node: &EmbeddedNode,
     session_id: &str,
-    agent_did: Option<&str>,
+    node_did: Option<&str>,
     requester_did: Option<&str>,
 ) -> Result<ClientStore> {
     let session_id = session_id.trim();
@@ -762,9 +757,9 @@ pub async fn load_session_diagnostics_store(
         bail!("session diagnostics query requires a session id");
     }
     let escaped_session_id = escape_graphql_string(session_id);
-    let agent_filter = agent_did
+    let node_filter = node_did
         .map(escape_graphql_string)
-        .map(|agent_did| format!(", agent_did: {{ _eq: \"{agent_did}\" }}"))
+        .map(|node_did| format!(", node_did: {{ _eq: \"{node_did}\" }}"))
         .unwrap_or_default();
     let requester_filter = requester_did
         .map(escape_graphql_string)
@@ -773,15 +768,15 @@ pub async fn load_session_diagnostics_store(
     let query = format!(
         r#"query DesktopSessionDiagnostics {{
   AgentMessage(
-    filter: {{ session_id: {{ _eq: "{escaped_session_id}" }}{agent_filter}{requester_filter} }},
+    filter: {{ session_id: {{ _eq: "{escaped_session_id}" }}{node_filter}{requester_filter} }},
     order: [{{ sequence: ASC }}, {{ message_key: ASC }}]
   ) {{ {AGENT_MESSAGE_FIELDS} }}
   AgentToolCall(
-    filter: {{ session_id: {{ _eq: "{escaped_session_id}" }}{agent_filter}{requester_filter} }},
+    filter: {{ session_id: {{ _eq: "{escaped_session_id}" }}{node_filter}{requester_filter} }},
     order: [{{ message_sequence: ASC }}, {{ tool_call_key: ASC }}]
   ) {{ {AGENT_TOOL_CALL_FIELDS} }}
   AgentOutputSegment(
-    filter: {{ session_id: {{ _eq: "{escaped_session_id}" }}{agent_filter}{requester_filter} }}
+    filter: {{ session_id: {{ _eq: "{escaped_session_id}" }}{node_filter}{requester_filter} }}
   ) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }}
 }}"#
     );
@@ -815,13 +810,48 @@ mod dependency_identity_tests {
         MessagePublication, MessageRole, OutputOutcome, TranscriptMessage,
     };
 
+    #[tokio::test]
+    async fn context_compactions_keep_the_exact_requester_scope() -> Result<()> {
+        let node = EmbeddedNode::builder().build().await?;
+        gents::ensure_runtime_schemas(&node).await?;
+        for (key, owner, requester) in [
+            ("mine", "did:owner", Some("did:requester")),
+            ("another-requester", "did:owner", Some("did:other")),
+            ("no-requester", "did:owner", None),
+            ("another-owner", "did:other", Some("did:requester")),
+        ] {
+            let key = escape_graphql_string(key);
+            let owner = escape_graphql_string(owner);
+            let requester = requester
+                .map(|did| format!("\"{}\"", escape_graphql_string(did)))
+                .unwrap_or_else(|| "null".to_owned());
+            let mutation = format!(
+                "mutation {{ create_CompactionEntry(input: {{ compaction_key: \"{key}\", session_id: \"session\", node_did: \"{owner}\", requester_did: {requester}, sequence: 1, summary: \"retained\" }}) {{ _docID }} }}"
+            );
+            gents::config_client::ConfigAccess::write_local(
+                &node,
+                "test.context.compaction",
+                &mutation,
+            )
+            .await?;
+        }
+        for (requester, expected) in [(Some("did:requester"), "mine"), (None, "no-requester")] {
+            let store =
+                load_session_context_store(&node, "session", Some("did:owner"), requester).await?;
+            assert_eq!(store.compaction_entries.len(), 1);
+            assert_eq!(store.compaction_entries[0].compaction_key, expected);
+        }
+        node.shutdown().await;
+        Ok(())
+    }
+
     fn header(doc_id: &str, message_key: &str, sequence: u32) -> TranscriptMessageRow {
         TranscriptMessageRow {
             doc_id: doc_id.to_string(),
             message: TranscriptMessage {
                 message_key: message_key.to_string(),
                 session_id: "session".to_string(),
-                agent_did: "agent".to_string(),
+                node_did: "agent".to_string(),
                 requester_did: None,
                 request_doc_id: Some("request".to_string()),
                 publication: MessagePublication::RequestExecution {
@@ -866,7 +896,7 @@ mod dependency_identity_tests {
         let segment = OutputSegmentRow {
             doc_id: "segment".to_string(),
             segment: OutputSegment {
-                agent_did: "agent".to_string(),
+                node_did: "agent".to_string(),
                 requester_did: None,
                 session_id: "session".to_string(),
                 request_doc_id: "request".to_string(),

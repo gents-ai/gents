@@ -58,7 +58,7 @@ pub(super) async fn compaction_runtime_reduces_valid_canonical_history() {
     .expect("start mock backend");
     let agent = boot_agent(&db, backend.endpoint()).await;
     let session_id = format!("session-{}", uuid::Uuid::new_v4());
-    seed_bulky_history(db.node.as_ref(), &agent.agent_did, &session_id).await;
+    seed_bulky_history(db.node.as_ref(), &agent.node_did, &session_id).await;
 
     let first = run_request(&db, &agent, &session_id, "first").await;
     assert_eq!(first.lifecycle_state, RequestLifecycleState::Completed);
@@ -119,7 +119,7 @@ async fn run_request(
     let request_id = format!("{suffix}-{}", uuid::Uuid::new_v4());
     let doc_id = create_runtime_request(
         db.node.as_ref(),
-        &agent.agent_did,
+        &agent.node_did,
         AGENT_NAME,
         &request_id,
         session_id,
@@ -129,7 +129,7 @@ async fn run_request(
     wait_for_terminal_request(db.node.as_ref(), &doc_id).await
 }
 
-async fn seed_bulky_history(node: &EmbeddedNode, agent_did: &str, session_id: &str) {
+async fn seed_bulky_history(node: &EmbeddedNode, node_did: &str, session_id: &str) {
     let mut sequence = 0u32;
     for turn in 0..SEEDED_TURNS {
         let payload = "h".repeat(SEEDED_TURN_BYTES);
@@ -139,8 +139,8 @@ async fn seed_bulky_history(node: &EmbeddedNode, agent_did: &str, session_id: &s
         ] {
             crate::support::create_agent_message_in_scope(
                 node,
-                agent_did,
-                Some(agent_did),
+                node_did,
+                Some(node_did),
                 session_id,
                 sequence,
                 role,
@@ -154,8 +154,8 @@ async fn seed_bulky_history(node: &EmbeddedNode, agent_did: &str, session_id: &s
 }
 
 async fn boot_agent(db: &support::TestDb, endpoint: &str) -> BootedAgent {
-    let identity: Arc<dyn gents::AgentIdentity> = Arc::new(test_identity("compaction-gate"));
-    support::fixtures::bind_behavior_backend(
+    let identity: Arc<dyn gents::NodeIdentity> = Arc::new(test_identity("compaction-gate"));
+    support::fixtures::bind_agent_backend(
         db.node.as_ref(),
         identity.did(),
         AGENT_NAME,
@@ -167,9 +167,9 @@ async fn boot_agent(db: &support::TestDb, endpoint: &str) -> BootedAgent {
     let agent = gents::Gents::builder()
         .node(db.node.clone())
         .identity(identity)
-        .default_behavior_id(AGENT_NAME)
+        .default_agent_id(AGENT_NAME)
         .tool_ceiling(gents::ToolCeiling::meta_only())
-        .behavior(AGENT_NAME)
+        .agent(AGENT_NAME)
         .backend_id(BACKEND_ID)
         .model_name(MODEL)
         .stream_batch_ms(0)
@@ -179,11 +179,11 @@ async fn boot_agent(db: &support::TestDb, endpoint: &str) -> BootedAgent {
         .build()
         .await
         .expect("build compaction agent");
-    let agent_did = agent.agent_did().to_string();
+    let node_did = agent.node_did().to_string();
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
-    wait_for_runtime_ready(db.node.as_ref(), &agent_did).await;
-    BootedAgent::new(shutdown_tx, handle, agent_did)
+    wait_for_runtime_ready(db.node.as_ref(), &node_did).await;
+    BootedAgent::new(shutdown_tx, handle, node_did)
 }
 
 async fn wait_for_terminal_request(node: &EmbeddedNode, request_doc_id: &str) -> LifecycleStateRow {

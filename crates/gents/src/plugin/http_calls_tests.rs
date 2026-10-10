@@ -661,7 +661,7 @@ async fn a_round_asking_both_services_is_bad_output() {
     );
     record.declaration.model_slot = Some("slot".into());
     record.model_binding = Some(crate::plugin::model_calls::ModelBinding {
-        agent_did: "did:key:owner".into(),
+        node_did: "did:key:owner".into(),
         profile_id: "p".into(),
     });
     record.granted =

@@ -313,7 +313,7 @@ pub(crate) fn defra_query_mcp_service(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents::AgentIdentity as _;
+    use gents::NodeIdentity as _;
 
     const GRAPHQL: &str = "http://127.0.0.1:1/api/v0/graphql";
 

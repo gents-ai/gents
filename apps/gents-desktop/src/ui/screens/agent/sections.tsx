@@ -3,8 +3,8 @@
    section is linkable, and a section in the sidebar names its group, label
    and mark. A route that has no entry of its own (an older link, or a page
    reached from another section) names the entry it lights up instead.
-   Contexts have no entry: each behavior edits its own instructions and
-   tools, and the Behaviors list links to unused contexts, so the `contexts`
+   Contexts have no entry: each agent edits its own instructions and
+   tools, and the Agents list links to unused contexts, so the `contexts`
    route stays for those links. */
 import type { NodeView } from "../../../hooks/fleetStore";
 import type { ComponentType } from "react";
@@ -24,7 +24,7 @@ import {
 } from "lucide-react";
 import { AgentPanel } from "./AgentPanel";
 import { AllowedFoldersPanel } from "./AllowedFoldersPanel";
-import { BehaviorsPanel } from "./BehaviorsPanel";
+import { AgentsPanel } from "./BehaviorsPanel";
 import { ContextsPanel } from "./ContextsPanel";
 import { EventSourcesPanel } from "./EventSourcesPanel";
 import { InferencePanel } from "./InferencePanel";
@@ -65,15 +65,15 @@ export const SECTIONS: AgentSection[] = [
   { group: "Configure", id: "agent", label: "Agent", icon: Bot, Panel: AgentPanel },
   {
     group: "Configure",
-    id: "behaviors",
-    label: "Behaviors",
+    id: "agents",
+    label: "Agents",
     icon: Workflow,
-    count: (d) => d.behaviors.length,
+    count: (d) => d.agents.length,
     Panel: ({ deployment, item }) => (
-      <BehaviorsPanel deployment={deployment} behaviorId={item} />
+      <AgentsPanel deployment={deployment} agentId={item} />
     ),
   },
-  { id: "contexts", under: "behaviors", Panel: ContextsPanel },
+  { id: "contexts", under: "agents", Panel: ContextsPanel },
   {
     group: "Configure",
     id: "skills",

@@ -17,7 +17,7 @@ export type McpHealthPanelViewProps = {
   loading: boolean;
   error: string | null;
   lastFetchedAt: string | null;
-  probingServiceId: string | null;
+  probingServiceIds: readonly string[];
   probeOutcomes?: Record<string, McpProbeOutcome>;
   onProbe: (serviceId: string) => void;
   onRefresh: () => void;
@@ -28,7 +28,7 @@ export function McpHealthPanelView({
   loading,
   error,
   lastFetchedAt,
-  probingServiceId,
+  probingServiceIds,
   probeOutcomes,
   onProbe,
   onRefresh,
@@ -145,7 +145,7 @@ export function McpHealthPanelView({
         <McpHealthTable
           services={visibleServices}
           expandedId={expandedId}
-          probingServiceId={probingServiceId}
+          probingServiceIds={probingServiceIds}
           probeOutcomes={probeOutcomes}
           onToggle={toggleExpand}
           onRowKeyDown={onRowKeyDown}

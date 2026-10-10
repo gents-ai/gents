@@ -29,8 +29,8 @@ type LocalServerParams = {
 };
 
 /**
- * The one owner of the OS-managed local agent service in this window, shared
- * by startup, the tray, setup and the agent screen. Its status and the wait
+ * The one owner of the OS-managed local node service in this window, shared
+ * by startup, the tray, setup and the node screen. Its status and the wait
  * an operation is in are held once in the store. Operations run one at a
  * time: matching commands share a result, while different inputs queue.
  * Readiness and restore calls retain their individual wait options, so the
@@ -141,20 +141,20 @@ export function createLocalServer({ api, store, client }: LocalServerParams) {
       };
     },
     /** Starts the service, publishing which wait it is in while it starts. */
-    startLocalServer(agentName: string, authority?: ManagedServerAuthorityInput) {
+    startLocalServer(nodeName: string, authority?: ManagedServerAuthorityInput) {
       const start = api.startManagedServer;
-      if (!start) return unavailable("Start Agent");
+      if (!start) return unavailable("Start Node");
       return operate(
         "start",
         () =>
           observeManagedServerOperation(
             api,
-            () => start(agentName, authority),
+            () => start(nodeName, authority),
             publishWait,
           ),
         JSON.stringify([
           "start",
-          agentName,
+          nodeName,
           authority?.toolCeiling,
           authority?.toolRoot,
         ]),
@@ -163,24 +163,24 @@ export function createLocalServer({ api, store, client }: LocalServerParams) {
     /** Stops the service; it stays enabled at login. */
     stopLocalServer() {
       const stop = api.stopManagedServer;
-      if (!stop) return unavailable("Stop Agent");
+      if (!stop) return unavailable("Stop Node");
       return operate("stop", () => stop(false)).then(settled);
     },
     /** Restarts the service with `authority`, publishing its wait. */
-    restartLocalServer(agentName: string, authority: ManagedServerAuthorityInput) {
+    restartLocalServer(nodeName: string, authority: ManagedServerAuthorityInput) {
       const restart = api.restartManagedServer;
-      if (!restart) return unavailable("Restart Agent");
+      if (!restart) return unavailable("Restart Node");
       return operate(
         "restart",
         () =>
           observeManagedServerOperation(
             api,
-            () => restart(agentName, authority),
+            () => restart(nodeName, authority),
             publishWait,
           ),
         JSON.stringify([
           "restart",
-          agentName,
+          nodeName,
           authority.toolCeiling,
           authority.toolRoot,
         ]),
@@ -194,14 +194,14 @@ export function createLocalServer({ api, store, client }: LocalServerParams) {
         settled,
       );
     },
-    /** Commits a new agent to starting at login, as first run does. */
-    commitLocalServerAutoStart(agentName: string) {
+    /** Commits a new node to starting at login, as first run does. */
+    commitLocalServerAutoStart(nodeName: string) {
       const commit = api.commitManagedServerAutoStart;
       if (!commit) return Promise.resolve(store.getState().status);
       return operate(
         "autostart",
-        () => commit(agentName),
-        `commit-autostart:${agentName}`,
+        () => commit(nodeName),
+        `commit-autostart:${nodeName}`,
       ).then(settled);
     },
     /** Waits until the service reports secure background pairing ready. */

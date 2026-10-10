@@ -131,13 +131,13 @@ pub(super) fn cancel_abandoned_steering_request(
 ) {
     let node = state.node.clone();
     let request = request.clone();
-    let agent_did = state.agent_did.clone();
+    let node_did = state.node_did.clone();
     tokio::spawn(async move {
         if let Err(error) = gents::interrupt_request_by_doc_id(
             &node,
             &request.doc_id,
-            agent_did.as_ref(),
-            Some(agent_did.as_ref()),
+            node_did.as_ref(),
+            Some(node_did.as_ref()),
         )
         .await
         {
@@ -152,7 +152,7 @@ pub(super) async fn load_active_codex_turn(
 ) -> Result<Option<ActiveCodexTurn>> {
     let rows = load_thread_request_rows(
         state,
-        &state.agent_did,
+        &state.node_did,
         Some(state.local_requester_did()),
         thread_id,
     )
@@ -167,7 +167,7 @@ pub(super) async fn next_steering_request_after(
 ) -> Result<Option<NextSteeringRequest>> {
     let rows = load_thread_request_rows(
         state,
-        &state.agent_did,
+        &state.node_did,
         Some(state.local_requester_did()),
         thread_id,
     )
@@ -208,7 +208,7 @@ pub(super) async fn steering_request_ids_for_turn_interrupt_cleanup(
 ) -> Result<Vec<(String, String)>> {
     let rows = load_thread_request_rows(
         state,
-        &state.agent_did,
+        &state.node_did,
         Some(state.local_requester_did()),
         thread_id,
     )
@@ -292,7 +292,7 @@ pub(in crate::commands::codex_shim) async fn interrupt_active_turn(
     if let Err(error) = gents::interrupt_request_by_doc_id(
         state.node.as_ref(),
         &active.interrupt_request_doc_id,
-        &state.agent_did,
+        &state.node_did,
         Some(state.local_requester_did()),
     )
     .await
@@ -340,7 +340,7 @@ pub(in crate::commands::codex_shim) async fn interrupt_active_turn(
         if let Err(error) = gents::interrupt_request_by_doc_id(
             state.node.as_ref(),
             &request_doc_id,
-            &state.agent_did,
+            &state.node_did,
             Some(state.local_requester_did()),
         )
         .await
@@ -423,12 +423,12 @@ fn stream_key(thread_id: &str, turn_id: &str) -> String {
 
 async fn load_thread_request_rows(
     state: &ShimState,
-    agent_did: &str,
+    node_did: &str,
     requester_did: Option<&str>,
     thread_id: &str,
 ) -> Result<Vec<AgentRequestRow>> {
     let scope = gents::session::public_request_filter(&gents::session::session_scope_filter(
-        agent_did,
+        node_did,
         thread_id,
         requester_did,
     ));
@@ -437,7 +437,7 @@ async fn load_thread_request_rows(
         Box::pin(async move {
             let response=txn.execute(&format!(r#"{{
                 AgentRequest(filter:{{{scope}}},order:[{{created_at:ASC}},{{request_id:ASC}}]){{
-                    _docID request_id agent_did requester_did session_id behavior_id lifecycle_state superseded_by_request input created_at
+                    _docID request_id node_did requester_did session_id agent_id lifecycle_state superseded_by_request input created_at
                 }}
             }}"#)).await?;
             let values=response.pointer("/data/AgentRequest").and_then(Value::as_array).context("active request query omitted rows")?;
@@ -619,8 +619,8 @@ mod tests {
         let state =
             super::super::super::turn_projection::tests::notification_test_state(temp.path()).await;
         let node = state.node.clone();
-        let agent_did = gents::graphql::escape_graphql_string(state.agent_did.as_ref());
-        let behavior_id = gents::graphql::escape_graphql_string(state.behavior_id.as_ref());
+        let node_did = gents::graphql::escape_graphql_string(state.node_did.as_ref());
+        let agent_id = gents::graphql::escape_graphql_string(state.agent_id.as_ref());
         for (id, purpose, created_at) in [
             ("normal-turn", "normal", "2026-09-25T00:00:00Z"),
             ("title-audit", "title-audit", "2026-09-25T00:00:01Z"),
@@ -629,7 +629,7 @@ mod tests {
             let purpose = gents::graphql::escape_graphql_string(purpose);
             let created_at = gents::graphql::escape_graphql_string(created_at);
             let mutation = format!(
-                r#"mutation {{ create_AgentRequest(input: {{request_id: "{id}", purpose: "{purpose}", session_id: "thread", agent_did: "{agent_did}", requester_did: "{agent_did}", behavior_id: "{behavior_id}", content: "prompt", lifecycle_state: "processing", created_at: "{created_at}"}}) {{_docID}} }}"#
+                r#"mutation {{ create_AgentRequest(input: {{request_id: "{id}", purpose: "{purpose}", session_id: "thread", node_did: "{node_did}", requester_did: "{node_did}", agent_id: "{agent_id}", content: "prompt", lifecycle_state: "processing", created_at: "{created_at}"}}) {{_docID}} }}"#
             );
             gents::config_client::ConfigAccess::write_local(
                 &node,
@@ -650,8 +650,8 @@ mod tests {
         gents::interrupt_request_by_doc_id(
             &node,
             &active.interrupt_request_doc_id,
-            state.agent_did.as_ref(),
-            Some(state.agent_did.as_ref()),
+            state.node_did.as_ref(),
+            Some(state.node_did.as_ref()),
         )
         .await
         .expect("interrupt selected normal turn");

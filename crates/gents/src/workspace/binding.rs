@@ -29,11 +29,11 @@ pub fn admit_workspace_binding(
     release_previous: bool,
 ) -> Result<AdmitBinding> {
     anyhow::ensure!(
-        !candidate.owner_agent_did.trim().is_empty()
+        !candidate.owner_node_did.trim().is_empty()
             && existing
                 .iter()
                 .filter(|binding| binding.workspace_id == workspace_id)
-                .all(|binding| binding.owner_agent_did == candidate.owner_agent_did),
+                .all(|binding| binding.owner_node_did == candidate.owner_node_did),
         "workspace bindings must share their principal owner"
     );
     let authority = WorkspaceAuthority::parse(&candidate.authority)?;
@@ -162,7 +162,7 @@ pub fn new_binding(
     request_id: &str,
     request_doc_id: &str,
     authority: WorkspaceAuthority,
-    owner_agent_did: &str,
+    owner_node_did: &str,
     seal_hash: Option<&str>,
 ) -> WorkspaceBindingDoc {
     WorkspaceBindingDoc {
@@ -171,7 +171,7 @@ pub fn new_binding(
         request_id: request_id.to_string(),
         request_doc_id: request_doc_id.to_string(),
         authority: authority.as_str().to_string(),
-        owner_agent_did: owner_agent_did.to_string(),
+        owner_node_did: owner_node_did.to_string(),
         seal_hash: seal_hash
             .map(str::trim)
             .filter(|value| !value.is_empty())

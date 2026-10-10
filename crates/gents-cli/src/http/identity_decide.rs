@@ -270,7 +270,7 @@ mod tests {
         let namespaced_resource =
             format!("{IDENTITY_PERMISSION_POLICY_ID}:{IDENTITY_PERMISSION_RESOURCE_NAME}");
         for grant in &case.grants {
-            let principal = did_from_lean_case(&grant.principal, case, "grant.principal");
+            let principal = did_from_lean_case(&grant.node, case, "grant.node");
             let tuple = RelationTuple::try_new(
                 principal,
                 READER_RELATION,
@@ -378,8 +378,8 @@ mod tests {
 
         for case in cases {
             // This endpoint forwards an already resolved DID to Defra ACP;
-            // it does not own behavior lookup or ambiguous-key rejection.
-            if case.expected_actor_principal.is_none() || case.expected_peer_principal.is_none() {
+            // it does not own agent_config lookup or ambiguous-key rejection.
+            if case.expected_actor_node.is_none() || case.expected_peer_node.is_none() {
                 continue;
             }
             let defradb_base =
@@ -391,20 +391,12 @@ mod tests {
                 case.row_owner
             );
 
-            let actor = post_identity_decide(
-                runtime_addr,
-                &case.actor_principal,
-                &case.permission,
-                &resource,
-            )
-            .await?;
-            let peer = post_identity_decide(
-                runtime_addr,
-                &case.peer_principal,
-                &case.permission,
-                &resource,
-            )
-            .await?;
+            let actor =
+                post_identity_decide(runtime_addr, &case.actor_node, &case.permission, &resource)
+                    .await?;
+            let peer =
+                post_identity_decide(runtime_addr, &case.peer_node, &case.permission, &resource)
+                    .await?;
 
             assert_eq!(
                 actor.allowed, case.expected_actor_allowed,

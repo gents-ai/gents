@@ -2,10 +2,10 @@ use super::*;
 
 async fn fixture(name: &str) -> (TestDb, AgentRequest) {
     let db = test_db(name).await;
-    let mut parent = parent_request(db.agent_did(), name);
+    let mut parent = parent_request(db.node_did(), name);
     parent.doc_id = insert_raw_queue_request(
         &db.node,
-        db.agent_did(),
+        db.node_did(),
         &parent.request_id,
         name,
         &RequestInput::default(),
@@ -57,7 +57,7 @@ async fn canonical_publication_wakes_whatever_goal_owns_the_session() {
         let gate = super::super::atomic_inputs::background_completion_gate(
             &db.node,
             &parent.session_id,
-            &parent.agent_did,
+            &parent.node_did,
             queue.key.as_deref().unwrap(),
         );
         let held = gate.lock().await;
@@ -77,7 +77,7 @@ async fn canonical_publication_wakes_whatever_goal_owns_the_session() {
         });
         let goal = crate::goal::set_goal(
             &db.node,
-            db.agent_did(),
+            db.node_did(),
             &parent.session_id,
             Some("Goal owns continuation"),
             Some(status),
@@ -100,7 +100,7 @@ async fn canonical_publication_wakes_whatever_goal_owns_the_session() {
             case.name
         );
         assert_eq!(queue_rows(&db.node, &parent.session_id).await.len(), 2);
-        let after = crate::goal::load_canonical_goal(&db.node, db.agent_did(), &parent.session_id)
+        let after = crate::goal::load_canonical_goal(&db.node, db.node_did(), &parent.session_id)
             .await
             .unwrap()
             .unwrap();

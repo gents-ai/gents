@@ -57,7 +57,7 @@ pub enum RequestOriginView {
     /// known only when this replica holds the causing request.
     #[serde(rename_all = "camelCase")]
     SessionMessage {
-        sender_agent_did: Option<String>,
+        sender_node_did: Option<String>,
         sender_session_id: Option<String>,
         sender_request_id: Option<String>,
     },
@@ -205,7 +205,7 @@ pub enum ToolPresentationView {
     /// (`agent_list`). `name` is the addressed target and `session_id` the
     /// session the call started, messaged or interrupted.
     #[serde(rename_all = "camelCase")]
-    Subagent {
+    Agent {
         action: String,
         name: Option<String>,
         session_id: Option<String>,
@@ -548,7 +548,7 @@ pub struct SessionLiveDeltaView {
 #[serde(rename_all = "camelCase")]
 pub struct SessionHydrationView {
     pub session_id: String,
-    pub agent_did: String,
+    pub node_did: String,
     /// idle | requested | serving | complete | failed | unreadable
     pub phase: String,
     pub merged_count: usize,
@@ -569,8 +569,8 @@ pub struct DesktopSessionSnapshot {
     #[ts(optional = nullable)]
     pub live_cursor: Option<String>,
     pub session_id: String,
-    pub agent_did: Option<String>,
-    pub behavior_id: Option<String>,
+    pub node_did: Option<String>,
+    pub agent_id: Option<String>,
     pub title: Option<String>,
     pub preview_text: Option<String>,
     pub status: Option<String>,

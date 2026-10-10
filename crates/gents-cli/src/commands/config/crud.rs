@@ -22,9 +22,9 @@ pub(super) const BACKEND_SPEC: ConfigDocumentSpec = ConfigDocumentSpec {
     collection: Collection::InferenceBackend,
 };
 
-pub(super) const BEHAVIOR_SPEC: ConfigDocumentSpec = ConfigDocumentSpec {
-    noun: "behavior",
-    collection: Collection::AgentBehavior,
+pub(super) const AGENT_SPEC: ConfigDocumentSpec = ConfigDocumentSpec {
+    noun: "agent",
+    collection: Collection::Agent,
 };
 
 pub(super) const TOOLS_SPEC: ConfigDocumentSpec = ConfigDocumentSpec {
@@ -56,7 +56,7 @@ pub(super) async fn config_list(spec: ConfigDocumentSpec, args: ConfigListArgs) 
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref())
         .await
         .with_context(|| format!("resolving access for config {} list", spec.noun))?;
-    let agent_did = super::binding::resolve_target_agent_did(
+    let node_did = super::binding::resolve_target_node_did(
         None,
         None,
         args.home.as_deref(),
@@ -64,7 +64,7 @@ pub(super) async fn config_list(spec: ConfigDocumentSpec, args: ConfigListArgs) 
         Some(&access),
     )
     .await?;
-    let mut rows = query_collection(&access, spec, &agent_did, None).await?;
+    let mut rows = query_collection(&access, spec, &node_did, None).await?;
     sort_rows(&mut rows, spec.collection.unique_field());
 
     match args.output.ensure_supported(
@@ -89,7 +89,7 @@ pub(super) async fn config_show(spec: ConfigDocumentSpec, args: ConfigShowArgs) 
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref())
         .await
         .with_context(|| format!("resolving access for config {} show", spec.noun))?;
-    let agent_did = super::binding::resolve_target_agent_did(
+    let node_did = super::binding::resolve_target_node_did(
         None,
         None,
         args.home.as_deref(),
@@ -97,10 +97,10 @@ pub(super) async fn config_show(spec: ConfigDocumentSpec, args: ConfigShowArgs) 
         Some(&access),
     )
     .await?;
-    let row = load_one(&access, spec, &agent_did, &id).await?;
+    let row = load_one(&access, spec, &node_did, &id).await?;
     if spec.collection == Collection::InferenceProfile {
         if let Some(warning) =
-            super::profile::profile_effort_warning(&access, &agent_did, &row).await
+            super::profile::profile_effort_warning(&access, &node_did, &row).await
         {
             eprintln!("warning: {warning}");
         }
@@ -153,12 +153,12 @@ pub(super) async fn config_rm(spec: ConfigDocumentSpec, args: ConfigShowArgs) ->
     }
 
     let collection = spec.collection;
-    let agent_did = &live.agent_principal.agent_did;
+    let node_did = &live.node.node_did;
     let id_ref = &id;
     let deleted = access
         .transact("cli.config.delete", move |txn| {
             Box::pin(async move {
-                apply_delete_collection(txn, collection, agent_did, std::slice::from_ref(id_ref))
+                apply_delete_collection(txn, collection, node_did, std::slice::from_ref(id_ref))
                     .await
             })
         })
@@ -189,9 +189,9 @@ async fn live_manifest_for_delete(
     home: Option<&std::path::Path>,
     graphql: Option<&str>,
 ) -> Result<desired_state::DesiredStateManifest> {
-    let agent_did =
-        super::binding::resolve_target_agent_did(None, None, home, graphql, Some(access)).await?;
-    let bundle = crate::build_config_export_bundle(access, &agent_did).await?;
+    let node_did =
+        super::binding::resolve_target_node_did(None, None, home, graphql, Some(access)).await?;
+    let bundle = crate::build_config_export_bundle(access, &node_did).await?;
     let docs = bundle.docs_for_collection(spec.collection)?;
     anyhow::ensure!(
         docs.iter().any(|row| row
@@ -206,12 +206,12 @@ async fn live_manifest_for_delete(
 pub(super) async fn query_collection(
     access: &ConfigAccess,
     spec: ConfigDocumentSpec,
-    agent_did: &str,
+    node_did: &str,
     id: Option<&str>,
 ) -> Result<Vec<Value>> {
     let mut filter = format!(
-        r#"agent_did: {{ _eq: "{}" }}"#,
-        escape_graphql_string(agent_did)
+        r#"node_did: {{ _eq: "{}" }}"#,
+        escape_graphql_string(node_did)
     );
     if let Some(id) = id {
         filter.push_str(&format!(
@@ -231,7 +231,7 @@ pub(super) async fn query_collection(
     let mut ids = std::collections::BTreeSet::new();
     for row in &rows {
         anyhow::ensure!(
-            row.get("agent_did").and_then(Value::as_str) == Some(agent_did),
+            row.get("node_did").and_then(Value::as_str) == Some(node_did),
             "configuration query returned a foreign owner"
         );
         let row_id = row
@@ -256,16 +256,16 @@ pub(super) async fn query_collection(
 pub(super) async fn load_one(
     access: &ConfigAccess,
     spec: ConfigDocumentSpec,
-    agent_did: &str,
+    node_did: &str,
     id: &str,
 ) -> Result<Value> {
-    query_collection(access, spec, agent_did, Some(id))
+    query_collection(access, spec, node_did, Some(id))
         .await?
         .into_iter()
         .next()
         .with_context(|| {
             format!(
-                "not found: {} {agent_did:?}/{id:?}",
+                "not found: {} {node_did:?}/{id:?}",
                 spec.collection.graphql_type()
             )
         })
@@ -278,7 +278,7 @@ fn remove_target(
 ) -> Result<()> {
     let key = collection
         .dir_name()
-        .context("principal deletion is not a config document removal")?;
+        .context("node deletion is not a config document removal")?;
     let mut encoded = serde_json::to_value(&*manifest)?;
     if let Some(rows) = encoded.get_mut(key).and_then(Value::as_array_mut) {
         rows.retain(|row| row.get(collection.unique_field()).and_then(Value::as_str) != Some(id));
@@ -384,8 +384,8 @@ mod tests {
         let access = ConfigAccess::Local(node.clone());
         for owner in ["owner-a", "owner-b"] {
             let config = serde_json::from_value(json!({
-                "agent_principal":{"agent_did":owner},
-                "tools":[{"agent_did":owner,"tools_id":"same","display_name":owner,
+                "node":{"node_did":owner},
+                "tools":[{"node_did":owner,"tools_id":"same","display_name":owner,
                     "host":{"bash":{"allowed_argv_prefixes":[]}}}]
             }))?;
             let plan = DesiredStateApplyPlan::from_pack_config(&config)?;

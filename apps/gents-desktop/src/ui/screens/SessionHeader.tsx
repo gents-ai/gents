@@ -43,10 +43,10 @@ export function ParentLine({ work }: { work: ParentWork }) {
    run that arrived overnight looked like one a person had asked for. */
 export function StartedByAutomation({
   summary,
-  agentDid,
+  nodeDid,
 }: {
   summary: SessionSummary;
-  agentDid: string | null;
+  nodeDid: string | null;
 }) {
   const how =
     summary.triggerKind === "schedule"
@@ -72,11 +72,11 @@ export function StartedByAutomation({
       {/* the task is a thing that exists and can be changed, so the name
          goes to it: reading why a run happened and deciding it should not
          happen again are the same errand */}
-      {agentDid && summary.taskId ? (
+      {nodeDid && summary.taskId ? (
         <a
           href={href({
             name: "agent",
-            agentDid,
+            nodeDid,
             section: "tasks",
             item: summary.taskId,
           })}

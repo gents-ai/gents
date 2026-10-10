@@ -45,7 +45,7 @@ pub fn merge_datastore_tool_surfaces<'a>(
             continue;
         }
         if surface_by_id
-            .insert((surface.agent_did.as_str(), surface_id), surface)
+            .insert((surface.node_did.as_str(), surface_id), surface)
             .is_some()
         {
             bail!("duplicate DatastoreToolSurface {surface_id}");
@@ -78,7 +78,7 @@ pub fn merge_datastore_tool_surfaces<'a>(
             );
         }
         let surface = surface_by_id
-            .get(&(selection.agent_did.as_str(), surface_id))
+            .get(&(selection.node_did.as_str(), surface_id))
             .copied()
             .ok_or_else(|| {
                 anyhow!(
@@ -476,13 +476,13 @@ mod tests {
     #[test]
     fn surface_references_match_exact_owner_and_id() {
         let tools: super::Tools = serde_json::from_value(serde_json::json!({
-            "agent_did": "owner", "tools_id": "tools",
+            "node_did": "owner", "tools_id": "tools",
             "datastore": {"datastore_tool_surface_ids": ["surface"]}
         }))
         .unwrap();
         let surface = |owner: &str, id: &str| {
             serde_json::from_value::<super::DatastoreToolSurfaceDocument>(serde_json::json!({
-                "agent_did": owner, "surface_id": id
+                "node_did": owner, "surface_id": id
             }))
             .unwrap()
         };

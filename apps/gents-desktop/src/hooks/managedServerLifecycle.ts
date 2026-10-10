@@ -63,24 +63,24 @@ async function restoreManagedServerOnce(
   if (status.state === "running" || status.state === "external") {
     return true;
   }
-  // macOS kept an agent enabled at login from launching until the user
+  // macOS kept a node enabled at login from launching until the user
   // allowed it here, so start it as launchd would have, with its stored
-  // authority. A deliberately stopped agent stays stopped.
-  const agentName = status.agentName?.trim();
+  // authority. A deliberately stopped node stays stopped.
+  const nodeName = status.nodeName?.trim();
   const startManagedServer = api.startManagedServer;
   if (
     awaitedApproval &&
     status.autoStart &&
     !signal?.aborted &&
     !status.approvalRequired &&
-    agentName &&
+    nodeName &&
     startManagedServer &&
     (status.state === "stopped" || status.state === "disabled")
   ) {
     try {
       const started = await observeManagedServerOperation(
         api,
-        () => startManagedServer(agentName),
+        () => startManagedServer(nodeName),
         onWait,
       );
       return started.state === "running" || started.state === "external";

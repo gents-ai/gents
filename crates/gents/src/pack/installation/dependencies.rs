@@ -71,7 +71,7 @@ pub(super) async fn claim_in_txn(
     }
     let response = txn
         .execute(&format!(
-            r#"{{ {RECORD}(filter: {{ agent_did: {{ _eq: "{}" }} }}) {{ _docID coordinate required_by explicit }} }}"#,
+            r#"{{ {RECORD}(filter: {{ node_did: {{ _eq: "{}" }} }}) {{ _docID coordinate required_by explicit }} }}"#,
             escape_graphql_string(owner)
         ))
         .await?;
@@ -122,7 +122,7 @@ pub(super) async fn release_in_txn(
 ) -> Result<Vec<RemoveReport>> {
     let response = txn
         .execute(&format!(
-            r#"{{ {RECORD}(filter: {{ agent_did: {{ _eq: "{}" }} }}) {{ _docID coordinate required_by explicit }} }}"#,
+            r#"{{ {RECORD}(filter: {{ node_did: {{ _eq: "{}" }} }}) {{ _docID coordinate required_by explicit }} }}"#,
             escape_graphql_string(owner)
         ))
         .await?;

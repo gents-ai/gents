@@ -23,7 +23,7 @@ use gents_protocol::session::AgentSession;
 /// The exact scope of one session label.
 #[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SessionScope {
-    pub agent_did: String,
+    pub node_did: String,
     pub session_id: String,
     pub requester_did: Option<String>,
 }
@@ -32,7 +32,7 @@ impl SessionScope {
     /// The session a request runs in.
     pub fn of_request(request: &crate::AgentRequest) -> Self {
         Self {
-            agent_did: request.agent_did.clone(),
+            node_did: request.node_did.clone(),
             session_id: request.session_id.clone(),
             requester_did: request.requester_did.clone(),
         }
@@ -40,7 +40,7 @@ impl SessionScope {
 
     fn of_row(row: &Value) -> Option<Self> {
         Some(Self {
-            agent_did: row.get("agent_did")?.as_str()?.to_string(),
+            node_did: row.get("node_did")?.as_str()?.to_string(),
             session_id: row.get("session_id")?.as_str()?.to_string(),
             requester_did: row
                 .get("requester_did")
@@ -72,7 +72,7 @@ pub struct SessionLineage {
     pub received: Vec<SessionLink>,
 }
 
-const SCOPE_FIELDS: &str = "_docID agent_did session_id requester_did";
+const SCOPE_FIELDS: &str = "_docID node_did session_id requester_did";
 
 async fn collection<R: ConfigRead + ?Sized>(
     access: &R,
@@ -111,7 +111,7 @@ fn provenance_parent(session: &AgentSession) -> Option<&str> {
 impl From<&AgentSession> for SessionScope {
     fn from(session: &AgentSession) -> Self {
         Self {
-            agent_did: session.agent_did.clone(),
+            node_did: session.node_did.clone(),
             session_id: session.session_id.clone(),
             requester_did: session.requester_did.clone(),
         }
@@ -181,7 +181,7 @@ pub async fn started_by(
     let own = sessions(
         access,
         &session_scope_filter(
-            &scope.agent_did,
+            &scope.node_did,
             &scope.session_id,
             scope.requester_did.as_deref(),
         ),
@@ -241,7 +241,7 @@ pub async fn caused_requests<'a>(
 /// Every agent-message link of `scope`.
 pub async fn lineage(access: &ConfigAccess, scope: &SessionScope) -> Result<SessionLineage> {
     let own_filter = session_scope_filter(
-        &scope.agent_did,
+        &scope.node_did,
         &scope.session_id,
         scope.requester_did.as_deref(),
     );
@@ -298,7 +298,7 @@ pub async fn lineage(access: &ConfigAccess, scope: &SessionScope) -> Result<Sess
         access,
         &format!(
             r#"requester_did: {{ _eq: "{}" }}"#,
-            escape_graphql_string(&scope.agent_did)
+            escape_graphql_string(&scope.node_did)
         ),
     )
     .await?
@@ -384,7 +384,7 @@ mod tests {
         create(
             node,
             format!(
-                r#"mutation {{ create_AgentRequest(input: {{ purpose: "normal", request_id: "{request_id}", agent_did: "did:test:agent", requester_did: "did:test:agent", behavior_id: "worker", session_id: "{session_id}", {cause} content: "work", lifecycle_state: "completed", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "{created_at}", retry_count: 0, max_retries: 3 }}) {{ _docID }} }}"#
+                r#"mutation {{ create_AgentRequest(input: {{ purpose: "normal", request_id: "{request_id}", node_did: "did:test:node", requester_did: "did:test:node", agent_id: "worker", session_id: "{session_id}", {cause} content: "work", lifecycle_state: "completed", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "{created_at}", retry_count: 0, max_retries: 3 }}) {{ _docID }} }}"#
             ),
             "AgentRequest",
         )
@@ -394,9 +394,9 @@ mod tests {
     async fn seed_session(node: &EmbeddedNode, session_id: &str, parent: Option<&str>) {
         let session = AgentSession {
             session_id: session_id.into(),
-            agent_did: "did:test:agent".into(),
-            requester_did: Some("did:test:agent".into()),
-            behavior_id: "worker".into(),
+            node_did: "did:test:node".into(),
+            requester_did: Some("did:test:node".into()),
+            agent_id: "worker".into(),
             created_at: "2026-09-26T00:00:00Z".into(),
             closed_at: None,
             title: None,
@@ -421,9 +421,9 @@ mod tests {
 
     fn scope(session_id: &str) -> SessionScope {
         SessionScope {
-            agent_did: "did:test:agent".into(),
+            node_did: "did:test:node".into(),
             session_id: session_id.into(),
-            requester_did: Some("did:test:agent".into()),
+            requester_did: Some("did:test:node".into()),
         }
     }
 

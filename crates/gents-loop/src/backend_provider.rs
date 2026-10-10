@@ -19,7 +19,7 @@ pub enum BackendProviderKind {
     #[serde(rename = "XaiGrokOAuth")]
     XaiGrokOAuth,
     /// Claude subscription over Messages HTTP, authenticated with an
-    /// agent-scoped `OAuthCredential` (`claude-subscription`) written by
+    /// node-scoped `OAuthCredential` (`claude-subscription`) written by
     /// `gents claude-login`.
     #[serde(rename = "ClaudeCliSubscription")]
     ClaudeCliSubscription,
@@ -62,9 +62,9 @@ impl BackendProviderKind {
         }
     }
 
-    /// Backends that authenticate with agent-scoped `OAuthCredential` documents
+    /// Backends that authenticate with node-scoped `OAuthCredential` documents
     /// rather than a fleet-global API key. These must not be fleet-probed.
-    pub fn is_agent_scoped_oauth(self) -> bool {
+    pub fn is_node_scoped_oauth(self) -> bool {
         matches!(
             self,
             Self::ChatGptCodex | Self::XaiGrokOAuth | Self::ClaudeCliSubscription

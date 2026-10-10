@@ -7,7 +7,7 @@ fn canonical_header(
     alias: &str,
     key: &str,
     session: &str,
-    agent: &str,
+    node_did: &str,
     requester: Option<&str>,
     sequence: u32,
 ) -> String {
@@ -16,7 +16,7 @@ fn canonical_header(
         .unwrap_or_else(|| "null".into());
     format!(
         r#"{alias}: create_AgentMessage(input: {{
-            message_key: "{key}", session_id: "{session}", agent_did: "{agent}",
+            message_key: "{key}", session_id: "{session}", node_did: "{node_did}",
             requester_did: {requester}, request_doc_id: "request-{session}",
             publication: {{kind: "request_execution", execution_generation: "test-generation"}},
             outcome: "complete", sequence: {sequence}, role: "assistant", blocks: [],
@@ -37,7 +37,7 @@ async fn transcript_pages_bound_canonical_headers_and_keep_stable_cursors() {
                 &format!("m{sequence}"),
                 &format!("paged:{sequence}"),
                 "paged",
-                "did:test:agent",
+                "did:test:node",
                 None,
                 sequence,
             )
@@ -113,8 +113,8 @@ async fn transcript_pages_preserve_acp_scope_and_sequence_cursors() {
             1,
         ),
         canonical_header(
-            "wrong_agent",
-            "scope:wrong-agent",
+            "wrong_node",
+            "scope:wrong-node",
             "shared",
             "did:test:other",
             Some("did:test:local"),
@@ -144,14 +144,14 @@ async fn transcript_pages_preserve_acp_scope_and_sequence_cursors() {
     .expect("scoped page");
     assert_eq!(page.store.transcript_messages.len(), 2);
     assert!(page.store.transcript_messages.iter().all(|row| {
-        row.message.agent_did == "did:test:selected"
+        row.message.node_did == "did:test:selected"
             && row.message.requester_did.as_deref() == Some("did:test:local")
     }));
 
     let equal = [
-        canonical_header("equal_a", "equal:a", "equal", "did:test:agent", None, 3),
-        canonical_header("equal_b", "equal:b", "equal", "did:test:agent", None, 2),
-        canonical_header("equal_old", "equal:old", "equal", "did:test:agent", None, 1),
+        canonical_header("equal_a", "equal:a", "equal", "did:test:node", None, 3),
+        canonical_header("equal_b", "equal:b", "equal", "did:test:node", None, 2),
+        canonical_header("equal_old", "equal:old", "equal", "did:test:node", None, 1),
     ]
     .join("\n");
     let response = node.execute(&format!("mutation {{ {equal} }}")).await;
@@ -184,8 +184,8 @@ async fn transcript_page_rejects_same_session_sequence_twins() {
         .await
         .expect("schemas");
     let twins = [
-        canonical_header("first", "twins:first", "twins", "did:test:agent", None, 2),
-        canonical_header("second", "twins:second", "twins", "did:test:agent", None, 2),
+        canonical_header("first", "twins:first", "twins", "did:test:node", None, 2),
+        canonical_header("second", "twins:second", "twins", "did:test:node", None, 2),
     ]
     .join("\n");
     let response = node.execute(&format!("mutation {{ {twins} }}")).await;
@@ -231,12 +231,12 @@ async fn transcript_pages_bound_tool_groups_without_reintroducing_response_rows(
     assert!(!page.source_exhausted);
 }
 
-fn session_row(session_id: &str, agent: &str, requester: Option<&str>) -> AgentSession {
+fn session_row(session_id: &str, node_did: &str, requester: Option<&str>) -> AgentSession {
     AgentSession {
         session_id: session_id.into(),
-        agent_did: agent.into(),
+        node_did: node_did.into(),
         requester_did: requester.map(str::to_owned),
-        behavior_id: "default".into(),
+        agent_id: "default".into(),
         created_at: "2026-08-25T00:00:00Z".into(),
         closed_at: None,
         title: None,
@@ -247,22 +247,22 @@ fn session_row(session_id: &str, agent: &str, requester: Option<&str>) -> AgentS
 }
 
 #[tokio::test]
-async fn operator_reads_a_local_subagent_session_under_its_own_scope() {
+async fn operator_reads_a_local_child_session_under_its_own_scope() {
     let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
     ensure_runtime_schemas(node.as_ref())
         .await
         .expect("schemas");
-    let agent = "did:test:agent";
+    let node_did = "did:test:node";
     let desktop = "did:test:desktop";
-    // A LocalChild is admitted with the agent's own DID as requester.
+    // A LocalChild is admitted with the node's own DID as requester.
     let headers = [
-        canonical_header("child_a", "child:a", "child", agent, Some(agent), 1),
-        canonical_header("child_b", "child:b", "child", agent, Some(agent), 2),
+        canonical_header("child_a", "child:a", "child", node_did, Some(node_did), 1),
+        canonical_header("child_b", "child:b", "child", node_did, Some(node_did), 2),
         canonical_header(
             "other",
             "other:a",
             "other",
-            agent,
+            node_did,
             Some("did:test:other"),
             1,
         ),
@@ -271,28 +271,29 @@ async fn operator_reads_a_local_subagent_session_under_its_own_scope() {
     let response = node.execute(&format!("mutation {{ {headers} }}")).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
 
-    let principal_page = load_session_transcript_page(
+    let desktop_page = load_session_transcript_page(
         node.as_ref(),
         "child",
-        Some(agent),
+        Some(node_did),
         Some(desktop),
         None,
         None,
     )
     .await
-    .expect("principal-scoped page");
+    .expect("desktop-scoped page");
     assert!(
-        principal_page.store.transcript_messages.is_empty(),
-        "the principal scope cannot see a LocalChild transcript"
+        desktop_page.store.transcript_messages.is_empty(),
+        "the desktop scope cannot see a LocalChild transcript"
     );
 
-    let child = session_row("child", agent, Some(agent));
-    let scope = session_transcript_requester_scope(Some(&child), Some(agent), Some(desktop), true);
-    assert_eq!(scope.as_deref(), Some(agent));
+    let child = session_row("child", node_did, Some(node_did));
+    let scope =
+        session_transcript_requester_scope(Some(&child), Some(node_did), Some(desktop), true);
+    assert_eq!(scope.as_deref(), Some(node_did));
     let page = load_session_transcript_page(
         node.as_ref(),
         "child",
-        Some(agent),
+        Some(node_did),
         scope.as_deref(),
         None,
         None,
@@ -301,59 +302,60 @@ async fn operator_reads_a_local_subagent_session_under_its_own_scope() {
     .expect("child page");
     assert_eq!(page.store.transcript_messages.len(), 2);
 
-    // Without operator authority the principal scope stands.
+    // Without operator authority the desktop scope stands.
     assert_eq!(
-        session_transcript_requester_scope(Some(&child), Some(agent), Some(desktop), false)
+        session_transcript_requester_scope(Some(&child), Some(node_did), Some(desktop), false)
             .as_deref(),
         Some(desktop)
     );
-    // Another principal's session is never widened into view.
-    let other = session_row("other", agent, Some("did:test:other"));
+    // Another requester's session is never widened into view.
+    let other = session_row("other", node_did, Some("did:test:other"));
     assert_eq!(
-        session_transcript_requester_scope(Some(&other), Some(agent), Some(desktop), true)
+        session_transcript_requester_scope(Some(&other), Some(node_did), Some(desktop), true)
             .as_deref(),
         Some(desktop)
     );
-    // A session of a different agent does not borrow this agent's scope.
-    let foreign = session_row("child", "did:test:foreign", Some(agent));
+    // A session of a different node does not borrow this node's scope.
+    let foreign = session_row("child", "did:test:foreign", Some(node_did));
     assert_eq!(
-        session_transcript_requester_scope(Some(&foreign), Some(agent), Some(desktop), true)
+        session_transcript_requester_scope(Some(&foreign), Some(node_did), Some(desktop), true)
             .as_deref(),
         Some(desktop)
     );
-    // The operator's own sessions keep the principal scope.
-    let own = session_row("own", agent, Some(desktop));
+    // The operator's own sessions keep the desktop scope.
+    let own = session_row("own", node_did, Some(desktop));
     assert_eq!(
-        session_transcript_requester_scope(Some(&own), Some(agent), Some(desktop), true).as_deref(),
+        session_transcript_requester_scope(Some(&own), Some(node_did), Some(desktop), true)
+            .as_deref(),
         Some(desktop)
     );
     assert_eq!(
-        session_transcript_requester_scope(None, Some(agent), Some(desktop), true).as_deref(),
+        session_transcript_requester_scope(None, Some(node_did), Some(desktop), true).as_deref(),
         Some(desktop)
     );
 }
 
 #[test]
 fn unreadable_reason_follows_the_exact_read_scope() {
-    let agent = "did:test:agent";
+    let node_did = "did:test:node";
     let desktop = "did:test:desktop";
-    let own = session_row("own", agent, Some(desktop));
+    let own = session_row("own", node_did, Some(desktop));
     assert_eq!(session_unreadable_reason(&own, Some(desktop), false), None);
 
-    let node_owned = session_row("child", agent, Some(agent));
+    let node_owned = session_row("child", node_did, Some(node_did));
     assert_eq!(
         session_unreadable_reason(&node_owned, Some(desktop), true),
         None,
-        "the operator reads the agent's own session under its own scope"
+        "the operator reads the node's own session under its own scope"
     );
     assert!(session_unreadable_reason(&node_owned, Some(desktop), false)
         .is_some_and(|reason| reason.contains("owned by its node")));
 
-    let other = session_row("other", agent, Some("did:test:other"));
+    let other = session_row("other", node_did, Some("did:test:other"));
     assert!(session_unreadable_reason(&other, Some(desktop), true)
         .is_some_and(|reason| reason.contains("another requester")));
 
-    let unscoped = session_row("unscoped", agent, None);
+    let unscoped = session_row("unscoped", node_did, None);
     assert!(session_unreadable_reason(&unscoped, Some(desktop), true).is_some());
     assert_eq!(session_unreadable_reason(&unscoped, None, false), None);
 }
@@ -368,7 +370,7 @@ async fn transcript_payload_page_batches_exact_dependencies_without_reading_othe
     for sequence in 1..=40 {
         let response = ConfigAccess::write_local(&node, "test.payload_page", &format!(r#"mutation {{
             segment: create_AgentOutputSegment(input: {{
-                agent_did: "agent", requester_did: "reader", session_id: "paged-payload",
+                node_did: "node", requester_did: "reader", session_id: "paged-payload",
                 request_doc_id: "request-{sequence}", source: {{kind: "authored", key: "answer"}},
                 writer: {{kind: "request_execution", execution_generation: "generation"}},
                 ordinal: 0, runs: [{{stream: 0, bytes: 1, declaration: {{block_index: 0, part_index: 0, payload: {{kind: "text"}}}}}}],
@@ -382,7 +384,7 @@ async fn transcript_payload_page_batches_exact_dependencies_without_reading_othe
         let close = escape_graphql_string(close);
         ConfigAccess::write_local(&node, "test.payload_page", &format!(r#"mutation {{
             create_AgentMessage(input: {{
-                message_key: "answer-{sequence}", session_id: "paged-payload", agent_did: "agent", requester_did: "reader",
+                message_key: "answer-{sequence}", session_id: "paged-payload", node_did: "node", requester_did: "reader",
                 request_doc_id: "request-{sequence}", publication: {{kind: "request_execution", execution_generation: "generation"}},
                 outcome: "complete", sequence: {sequence}, role: "assistant",
                 blocks: [{{type: "text", text: {{output: {{close_doc_id: "{close}", stream: 0}}, presentation: {{kind: "full"}}}}}}],
@@ -391,13 +393,13 @@ async fn transcript_payload_page_batches_exact_dependencies_without_reading_othe
         }}"#)).await.expect("header");
     }
     ConfigAccess::write_local(&node, "test.unrelated_history", r#"mutation {
-        create_AgentOutputSegment(input: {agent_did:"agent", requester_did:"reader", session_id:"paged-payload",
+        create_AgentOutputSegment(input: {node_did:"node", requester_did:"reader", session_id:"paged-payload",
             request_doc_id:"unreferenced", source:{kind:"not_a_source"}, payload:"must not read"}) { _docID }
     }"#).await.expect("unrelated history");
     let page = load_session_transcript_page(
         &node,
         "paged-payload",
-        Some("agent"),
+        Some("node"),
         Some("reader"),
         None,
         Some(40),
@@ -424,7 +426,7 @@ async fn transcript_payload_page_batches_exact_dependencies_without_reading_othe
     let other = load_session_transcript_page(
         &node,
         "paged-payload",
-        Some("agent"),
+        Some("node"),
         Some("other-reader"),
         None,
         Some(40),

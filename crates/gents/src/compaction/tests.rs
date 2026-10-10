@@ -1957,7 +1957,7 @@ async fn schema_invalid_structured_summary_is_retracted_and_resampled() {
 /// its own capture scope so their rendered-request keys remain distinct.
 #[tokio::test(start_paused = true)]
 async fn the_summarizer_and_its_fallback_arm_distinct_capture_scopes() {
-    use crate::identity::{AgentIdentity, KeyIdentity};
+    use crate::identity::{KeyIdentity, NodeIdentity};
     use crate::rendered_request::scope::{
         armed_labels, scope_request, test_scope, CaptureScopeKind,
     };
@@ -2029,7 +2029,7 @@ async fn the_summarizer_and_its_fallback_arm_distinct_capture_scopes() {
         crate::graphql::first_row(&loaded, "AgentRequest")
             .unwrap()
             .unwrap();
-    let mut lifecycle = crate::lifecycle::RequestLifecycle::new_with_agent_did(
+    let mut lifecycle = crate::lifecycle::RequestLifecycle::new_with_node_did(
         node.clone(),
         "general",
         identity.did(),
@@ -2984,13 +2984,13 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
     // DefraStreamWriter publish each turn through the actual owned providers —
     // authored user headers, accepted provider tool-call turns, and tool-owned
     // result deliveries — instead of an obsolete save_message bypass.
-    let agent_did = "did:test:test";
+    let node_did = "did:test:test";
     let mut lifecycle = {
         let now = crate::graphql::escape_graphql_string(&chrono::Utc::now().to_rfc3339());
         let request_id = crate::graphql::escape_graphql_string("request-compaction-test");
         let session_id = crate::graphql::escape_graphql_string("session-1");
-        let agent_did = crate::graphql::escape_graphql_string(agent_did);
-        let created = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", purpose: "normal", agent_did: "{agent_did}", behavior_id: "general", session_id: "{session_id}", retry_parent_request: "", retry_root_request: "{request_id}", superseded_by_request: "", content: "compaction", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", subagent_depth: 0, failure_reason: "", created_at: "{now}", retry_count: 0, max_retries: 3 }}) {{ _docID }} }}"#)).await;
+        let node_did = crate::graphql::escape_graphql_string(node_did);
+        let created = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", purpose: "normal", node_did: "{node_did}", agent_id: "general", session_id: "{session_id}", retry_parent_request: "", retry_root_request: "{request_id}", superseded_by_request: "", content: "compaction", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", request_hop: 0, failure_reason: "", created_at: "{now}", retry_count: 0, max_retries: 3 }}) {{ _docID }} }}"#)).await;
         assert!(!created.has_errors(), "{:#?}", created.errors);
         let row = node.execute(&format!(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ {} }} }}"#,
@@ -3001,10 +3001,10 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
             crate::graphql::first_row(&row, "AgentRequest")
                 .unwrap()
                 .unwrap();
-        let mut lifecycle = crate::lifecycle::RequestLifecycle::new_with_agent_did(
+        let mut lifecycle = crate::lifecycle::RequestLifecycle::new_with_node_did(
             node.clone(),
             "general",
-            &agent_did,
+            &node_did,
             row.try_into().unwrap(),
             60,
         );
@@ -3016,7 +3016,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
     };
     let writer = crate::streaming::DefraStreamWriter::new(
         node.clone(),
-        agent_did,
+        node_did,
         std::time::Duration::from_millis(1),
     );
     lifecycle.begin_owned_execution(&writer).await.unwrap();
@@ -3073,7 +3073,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
             .expect("claimed request deadline");
         let mut tool = crate::tool_call_lifecycle::ToolCallLifecycle::from_accepted(
             node.clone(),
-            agent_did.to_string(),
+            node_did.to_string(),
             None,
             accepted,
             deadline,
@@ -3101,7 +3101,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
             .unwrap();
     }
 
-    let history = session::load_history(&node, "session-1", agent_did, None)
+    let history = session::load_history(&node, "session-1", node_did, None)
         .await
         .unwrap();
     let durable_before = history.clone();
@@ -3181,7 +3181,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         .collect::<Vec<_>>();
     assert_eq!(resumed_history, result.provider_messages().unwrap());
 
-    let prompt_builder = LayeredPromptBuilder::for_behavior(
+    let prompt_builder = LayeredPromptBuilder::for_agent(
         "Be helpful.",
         "general",
         &["list_files", "read_file", "bash"],

@@ -4,12 +4,12 @@ namespace ApplyReconcile
 
 /-- The candidate is the complete desired snapshot for the install scope,
 including retained installed documents. Lookup/ACP checks precede this boundary.
-Ordinary references resolve to the same agent_did. Explicit foreign capability
-and subagent delegations are not ordinary references and retain their own ACP checks.
-No collection ordering is imposed: subagent reference cycles are legitimate. -/
+Ordinary references resolve to the same node_did. Explicit foreign capability
+and agent-request delegations are not ordinary references and retain their own ACP checks.
+No collection ordering is imposed: agent-request reference cycles are legitimate. -/
 def refsPresent (m : Manifest) (source : DocRef) : Option DesiredFields → Bool
   | none => false
-  | some f => decide (∀ r ∈ f.refs, r.agentDid = source.agentDid ∧ (m.docs r).isSome = true)
+  | some f => decide (∀ r ∈ f.refs, r.nodeDid = source.nodeDid ∧ (m.docs r).isSome = true)
 
 def Manifest.referencesClosed (m : Manifest) : Bool :=
   decide (∀ d ∈ m.support, refsPresent m d (m.docs d) = true)
@@ -26,7 +26,7 @@ def publish (old : LiveState) (candidate : Manifest) : LiveState :=
 theorem closed_lookup_same_owner (m : Manifest) (h : m.referencesClosed = true)
     (d : DocRef) (f : DesiredFields) (hd : m.docs d = some f)
     (r : DocRef) (hr : r ∈ f.refs) :
-    r.agentDid = d.agentDid ∧ m.contains r = true := by
+    r.nodeDid = d.nodeDid ∧ m.contains r = true := by
   have hm : d ∈ m.support := (m.support_iff d).mpr (by simp [hd])
   simp only [Manifest.referencesClosed, decide_eq_true_eq] at h
   have hf := h d hm
@@ -63,7 +63,7 @@ theorem accepted_publication_has_no_dangling_refs (old : LiveState) (m : Manifes
 theorem foreign_reference_rejects (old : LiveState) (m : Manifest)
     (d r : DocRef) (f : DesiredFields)
     (hd : m.docs d = some f) (hr : r ∈ f.refs)
-    (foreign : r.agentDid ≠ d.agentDid) : publish old m = old := by
+    (foreign : r.nodeDid ≠ d.nodeDid) : publish old m = old := by
   apply rejected_publication_unchanged
   cases h : m.referencesClosed with
   | false => rfl

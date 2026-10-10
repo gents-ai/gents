@@ -45,7 +45,7 @@ pub struct CellRequest {
     pub cell_id: String,
     pub label: String,
     pub source: CellSource,
-    pub behavior_id: String,
+    pub agent_id: String,
     pub inference_profile_id: String,
 }
 
@@ -517,7 +517,7 @@ pub(crate) struct LoadedPack {
 /// of a pack's digest: the runner freezes it and the optimizer records it.
 pub(crate) fn load_pack(source: &CellSource, owner: &str) -> Result<LoadedPack> {
     let options = PackInstallOptions {
-        agent_did: owner.to_owned(),
+        node_did: owner.to_owned(),
     };
     let CellSource::Directory(root) = source;
     let manifest: PackManifest = serde_json::from_slice(
@@ -612,13 +612,13 @@ async fn validate_cell(
 
     if !pack
         .config
-        .agent_behaviors
+        .agents
         .iter()
-        .any(|behavior| behavior.behavior_id == cell.behavior_id)
+        .any(|behavior| behavior.agent_id == cell.agent_id)
     {
         return Err(refused(format!(
-            "cell {:?} pack has no behavior {:?}",
-            cell.cell_id, cell.behavior_id
+            "cell {:?} pack has no agent {:?}",
+            cell.cell_id, cell.agent_id
         )));
     }
 
@@ -639,7 +639,7 @@ async fn validate_cell(
                 label: cell.label.clone(),
                 subject: SubjectRef {
                     pack_digest: pack.digest.clone(),
-                    behavior_id: cell.behavior_id.clone(),
+                    agent_id: cell.agent_id.clone(),
                 },
                 inference_profile_id: cell.inference_profile_id.clone(),
             },
@@ -733,9 +733,9 @@ async fn inference_binding(
             None => None,
         };
 
-    if matches!(backend.auth, BackendAuth::PrincipalOAuth { .. }) {
+    if matches!(backend.auth, BackendAuth::NodeOAuth { .. }) {
         return Err(refused(format!(
-            "backend {:?} authenticates with principal_oauth; an eval run must not \
+            "backend {:?} authenticates with node_oauth; an eval run must not \
              spend the launching principal's subscription credential",
             backend.backend_id
         )));
@@ -959,7 +959,7 @@ pub(crate) mod tests {
     use crate::config_client::{
         apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
-    use crate::document_config::ensure_agent_principal;
+    use crate::document_config::ensure_node;
     use crate::eval::invalidate_run;
     use crate::eval::runner::embedded::EmbeddedHome;
 
@@ -977,9 +977,7 @@ pub(crate) mod tests {
         pub(crate) async fn new() -> Self {
             let home = EmbeddedHome::create_temp("freeze").await.unwrap();
             let access = ConfigAccess::Local(home.node.clone());
-            ensure_agent_principal(home.node.as_ref(), OWNER)
-                .await
-                .unwrap();
+            ensure_node(home.node.as_ref(), OWNER).await.unwrap();
             let launching = Self {
                 home,
                 access,
@@ -998,7 +996,7 @@ pub(crate) mod tests {
                     ),
                     (
                         Collection::InferenceSampling,
-                        json!({"agent_did": OWNER, "sampling_id": "sampling", "temperature": 0.0}),
+                        json!({"node_did": OWNER, "sampling_id": "sampling", "temperature": 0.0}),
                     ),
                     (
                         Collection::InferenceProfile,
@@ -1083,7 +1081,7 @@ pub(crate) mod tests {
                     cell_id: "baseline".into(),
                     label: "baseline".into(),
                     source: CellSource::Directory(pack.to_path_buf()),
-                    behavior_id: "monitor".into(),
+                    agent_id: "monitor".into(),
                     inference_profile_id: "local".into(),
                 }],
                 trials_per_case: 2,
@@ -1104,9 +1102,9 @@ pub(crate) mod tests {
     fn definition() -> Value {
         json!({
             "definition_id": "monitor-findings",
-            "agent_did": OWNER,
+            "node_did": OWNER,
             "comparability_version": 1,
-            "subject": {"kind": "behavior", "inference_slots": ["primary"]},
+            "subject": {"kind": "agent", "inference_slots": ["primary"]},
             "cases": [
                 case("disk-warning", "validation"),
                 case("train-case", "train"),
@@ -1166,7 +1164,7 @@ pub(crate) mod tests {
 
     fn backend(backend_id: &str, provider_kind: &str, auth: Value) -> Value {
         json!({
-            "agent_did": OWNER,
+            "node_did": OWNER,
             "backend_id": backend_id,
             "name": "Workstation",
             "provider_kind": provider_kind,
@@ -1177,7 +1175,7 @@ pub(crate) mod tests {
 
     fn profile(profile_id: &str, backend_id: &str, sampling_id: Option<&str>) -> Value {
         json!({
-            "agent_did": OWNER,
+            "node_did": OWNER,
             "profile_id": profile_id,
             "backend_id": backend_id,
             "model_name": "test-model",
@@ -1191,13 +1189,9 @@ pub(crate) mod tests {
     /// The shape of a documents pack: a manifest, a README, the canonical
     /// config bundle and one behavior sidecar holding [`FIXTURE_PROMPT`].
     pub(crate) fn write_fixture_pack(root: &Path, bash_mode: &str) {
-        std::fs::create_dir_all(root.join("agent_behaviors/monitor")).unwrap();
+        std::fs::create_dir_all(root.join("agents/monitor")).unwrap();
         std::fs::write(root.join("README.md"), "# monitor fixture\n").unwrap();
-        std::fs::write(
-            root.join("agent_behaviors/monitor/system_prompt.md"),
-            FIXTURE_PROMPT,
-        )
-        .unwrap();
+        std::fs::write(root.join("agents/monitor/system_prompt.md"), FIXTURE_PROMPT).unwrap();
         let manifest = json!({
             "manifest_version": 1,
             "name": "monitor_fixture",
@@ -1207,14 +1201,14 @@ pub(crate) mod tests {
             "kind": "documents",
             "assets": [
                 "README.md",
-                "agent_behaviors/monitor/system_prompt.md",
+                "agents/monitor/system_prompt.md",
                 "pack_config.json",
             ],
             "config": "pack_config.json",
             "inference_slots": [{
                 "name": "primary",
                 "description": "Runs the monitor behavior.",
-                "behaviors": ["monitor"],
+                "agents": ["monitor"],
             }],
         });
         std::fs::write(
@@ -1223,9 +1217,9 @@ pub(crate) mod tests {
         )
         .unwrap();
         let config = json!({
-            "agent_principal": {},
-            "agent_behaviors": [{
-                "behavior_id": "monitor",
+            "node": {},
+            "agents": [{
+                "agent_id": "monitor",
                 "display_name": "Monitor",
                 "context_id": "monitor-context",
                 "inference_profile_id": "gents:inference-slot:primary",
@@ -1233,7 +1227,7 @@ pub(crate) mod tests {
             "contexts": [{
                 "context_id": "monitor-context",
                 "display_name": "Monitor",
-                "system_prompt": "./agent_behaviors/monitor/system_prompt.md",
+                "system_prompt": "./agents/monitor/system_prompt.md",
                 "tools_id": "monitor-tools",
             }],
             "tools": [{
@@ -1282,7 +1276,7 @@ pub(crate) mod tests {
         assert_eq!(frozen.definition.definition_id, "monitor-findings");
 
         let cell = &frozen.cells[0];
-        assert_eq!(cell.spec.subject.behavior_id, "monitor");
+        assert_eq!(cell.spec.subject.agent_id, "monitor");
         assert!(cell.spec.subject.pack_digest.starts_with("sha256:"));
         assert_eq!(
             frozen.record.origin.cells[0].subject.pack_digest,
@@ -1300,7 +1294,7 @@ pub(crate) mod tests {
         assert!(cell.pack_dir.join("manifest.json").exists());
         assert!(cell
             .pack_dir
-            .join("agent_behaviors/monitor/system_prompt.md")
+            .join("agents/monitor/system_prompt.md")
             .exists());
         assert_eq!(sidecar(&frozen.run_dir)["breaker_threshold"], 5);
 
@@ -1408,7 +1402,7 @@ pub(crate) mod tests {
         let materialized = &frozen.cells[0].pack_dir;
         assert!(materialized.join("manifest.json").exists());
         assert!(materialized
-            .join("agent_behaviors/monitor/system_prompt.md")
+            .join("agents/monitor/system_prompt.md")
             .exists());
         assert!(!materialized.join("scratch.txt").exists());
         assert!(!materialized.join(".git").exists());
@@ -1566,7 +1560,7 @@ pub(crate) mod tests {
                     backend(
                         "subscription",
                         "ClaudeCliSubscription",
-                        json!({"kind": "principal_oauth"}),
+                        json!({"kind": "node_oauth"}),
                     ),
                 ),
                 (
@@ -1582,7 +1576,7 @@ pub(crate) mod tests {
         let error = freeze(&launching.access, &request, Isolation::Embedded)
             .await
             .unwrap_err();
-        assert!(refusal(&error).contains("principal_oauth"), "{error:#}");
+        assert!(refusal(&error).contains("node_oauth"), "{error:#}");
     }
 
     /// A profile's sampling document can be deleted after the profile was
@@ -1595,7 +1589,7 @@ pub(crate) mod tests {
             .install(vec![
                 (
                     Collection::InferenceSampling,
-                    json!({"agent_did": OWNER, "sampling_id": "spare", "temperature": 1.0}),
+                    json!({"node_did": OWNER, "sampling_id": "spare", "temperature": 1.0}),
                 ),
                 (
                     Collection::InferenceProfile,

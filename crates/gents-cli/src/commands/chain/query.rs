@@ -4,17 +4,17 @@ use gents::{eth_tool_by_id_query, EthToolDocument, HttpEthRpc};
 use serde_json::{json, Value};
 
 use crate::cli::args::ChainQueryArgs;
-use crate::{print_json, resolve_agent_did, resolve_config_access};
+use crate::{print_json, resolve_config_access, resolve_node_did};
 
 pub(crate) async fn dispatch(args: ChainQueryArgs) -> Result<()> {
-    let principal = resolve_agent_did(args.access.home.as_deref(), None)?;
+    let principal = resolve_node_did(args.access.home.as_deref(), None)?;
     let (access, _) =
         resolve_config_access(args.access.home.as_deref(), args.access.graphql.as_deref()).await?;
     let doc = load_eth_tool(&access, &principal, &args.tool_id)
         .await?
         .ok_or_else(|| anyhow::anyhow!("EthTool {:?} not found", args.tool_id))?;
-    if doc.agent_did != principal {
-        bail!("EthTool is not owned by the local principal");
+    if doc.node_did != principal {
+        bail!("EthTool is not owned by the local node");
     }
     if !doc.enabled {
         bail!("EthTool {:?} is disabled", args.tool_id);
@@ -71,18 +71,18 @@ fn parse_params(raw: Option<&str>) -> Result<Value> {
 
 async fn load_eth_tool(
     access: &ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
     tool_id: &str,
 ) -> Result<Option<EthToolDocument>> {
     let mut rows = decode_eth_tool_rows(
         &access
-            .execute(&eth_tool_by_id_query(agent_did, tool_id)?)
+            .execute(&eth_tool_by_id_query(node_did, tool_id)?)
             .await?,
     )?;
     anyhow::ensure!(rows.len() <= 1, "duplicate Ethereum tool within principal");
     anyhow::ensure!(
         rows.iter()
-            .all(|row| row.agent_did == agent_did && row.tool_id == tool_id),
+            .all(|row| row.node_did == node_did && row.tool_id == tool_id),
         "Ethereum lookup returned mismatched scoped identity"
     );
     Ok(rows.pop())

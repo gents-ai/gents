@@ -44,7 +44,7 @@ pub(super) async fn connect_accounts_at(f: &Fixture, seconds: i64) {
     execute(
         &f.node,
         &format!(
-            r#"mutation {{ update_OAuthCredential(filter: {{ agent_did: {{ _eq: "{}" }} }}, input: {{ connected_at: "{}" }}) {{ _docID }} }}"#,
+            r#"mutation {{ update_OAuthCredential(filter: {{ node_did: {{ _eq: "{}" }} }}, input: {{ connected_at: "{}" }}) {{ _docID }} }}"#,
             escape_graphql_string(f.identity.did()),
             at(seconds).to_rfc3339()
         ),
@@ -165,7 +165,7 @@ async fn generated_goal_reset_resume_cases_drive_real_transactions() {
             execute(
                 &f.node,
                 &format!(
-                    r#"mutation {{ update_InferenceBackend(filter: {{ agent_did: {{ _eq: "{}" }}, backend_id: {{ _eq: "{}" }} }}, input: {{ enabled: false }}) {{ _docID }} }}"#,
+                    r#"mutation {{ update_InferenceBackend(filter: {{ node_did: {{ _eq: "{}" }}, backend_id: {{ _eq: "{}" }} }}, input: {{ enabled: false }}) {{ _docID }} }}"#,
                     escape_graphql_string(did),
                     escape_graphql_string(&accounts.a)
                 ),

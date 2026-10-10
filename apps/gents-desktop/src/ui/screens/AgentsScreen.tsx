@@ -1,7 +1,7 @@
-/* Agents, the fleet: every deployment this desktop knows. A card per
-   agent from the Fleet design: picture with a status dot, name, how many
+/* Nodes, the fleet: every deployment this desktop knows. A card per
+   node from the Fleet design: picture with a status dot, name, how many
    runs are live, and an overflow menu with what the desktop's fleet row
-   offers (rename the saved label, check the peer, remove). Add agent is
+   offers (rename the saved label, check the peer, remove). Add node is
    the desktop's status enrolment: a server address, a request the
    server's admin approves, then the peer joins. */
 import { memo, useState } from "react";
@@ -38,11 +38,11 @@ import { Input } from "@gents/ui/components/input";
 import { Spinner } from "@gents/ui/components/spinner";
 import { cn } from "@gents/ui/lib/utils";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
-import { inferenceIsConfigured, isLocalAgent } from "@/lib/firstRun";
+import { inferenceIsConfigured, isLocalNode } from "@/lib/firstRun";
 import { href } from "@/lib/router";
 import { isLive } from "@/lib/live";
-import { AgentAvatar } from "./AgentAvatar";
-import { AgentHoverCard } from "./HoverCards";
+import { NodeAvatar } from "./AgentAvatar";
+import { NodeHoverCard } from "./HoverCards";
 import { isWorkingNode } from "@/lib/nodes";
 import { toastFailure } from "@/lib/failure";
 import { useApp } from "@/app/AppContext";
@@ -63,7 +63,7 @@ export function AgentsScreen() {
     label: string;
   } | null>(null);
   const [removing, setRemoving] = useState<{
-    agentDid: string;
+    nodeDid: string;
     peerId: string;
     label: string;
   } | null>(null);
@@ -92,9 +92,9 @@ export function AgentsScreen() {
     <ScrollArea className="h-full" data-testid="agents-screen">
       <div className="mx-auto max-w-page px-6 py-8">
         <div className="flex h-10 items-center justify-between">
-          <h1 className="font-heading text-lg font-medium text-heading">Agents</h1>
+          <h1 className="font-heading text-lg font-medium text-heading">Nodes</h1>
           <Button variant="secondary" size="sm" onClick={() => setAdding(true)}>
-            <Plus /> Add agent
+            <Plus /> Add node
           </Button>
         </div>
         {pending === null && (
@@ -143,7 +143,7 @@ export function AgentsScreen() {
             <ul className="mt-3 grid grid-cols-[minmax(0,1fr)] gap-3">
               {g.nodes.map((d) => (
                 <AgentRow
-                  key={d.agentDid}
+                  key={d.nodeDid}
                   node={d}
                   homeDid={homeDid}
                   onRename={setRenaming}
@@ -158,7 +158,7 @@ export function AgentsScreen() {
       <RenameDialog
         key={renaming?.peerId ?? "none"}
         title="Rename deployment"
-        description="The saved label on this desktop; the agent's own name does not change."
+        description="The saved label on this desktop; the node's own name does not change."
         value={renaming?.label ?? null}
         onSave={async (next) => {
           if (!renaming) return;
@@ -176,7 +176,7 @@ export function AgentsScreen() {
             <AlertDialogTitle>Remove {removing?.label}?</AlertDialogTitle>
             <AlertDialogDescription>
               This forgets the peer and its synchronization route on this desktop. It
-              does not delete the remote agent.
+              does not delete the remote node.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -188,7 +188,7 @@ export function AgentsScreen() {
                 if (!removing) return;
                 setRemovingBusy(true);
                 try {
-                  await removePeer(removing.peerId, removing.agentDid);
+                  await removePeer(removing.peerId, removing.nodeDid);
                   toast("Peer removed");
                   setRemoving(null);
                 } catch (error) {
@@ -239,7 +239,7 @@ function AddAgentDialog({ open, onClose }: { open: boolean; onClose: () => void 
     <Dialog open={open} onOpenChange={(o) => !o && close()}>
       <DialogContent aria-modal="true">
         <DialogHeader>
-          <DialogTitle>Add agent</DialogTitle>
+          <DialogTitle>Add node</DialogTitle>
           <DialogDescription>
             Connect to a Gents server. Its admin approves the enrolment.
           </DialogDescription>
@@ -252,7 +252,7 @@ function AddAgentDialog({ open, onClose }: { open: boolean; onClose: () => void 
           }}
         >
           <label htmlFor="enrol-address" className="text-sm">
-            Agent server
+            Node server
           </label>
           <Input
             id="enrol-address"
@@ -358,10 +358,10 @@ const AgentRow = memo(function AgentRow({
   node: NodeView;
   homeDid: string | null;
   onRename: (peer: { peerId: string; label: string }) => void;
-  onRemove: (peer: { agentDid: string; peerId: string; label: string }) => void;
+  onRemove: (peer: { nodeDid: string; peerId: string; label: string }) => void;
 }) {
   const {
-    actions: { selectAgent, fetchPeerStatus },
+    actions: { selectNode, fetchPeerStatus },
   } = useApp();
   const live = useFleet(
     (s) =>
@@ -371,11 +371,11 @@ const AgentRow = memo(function AgentRow({
   const waiting = useFleet(
     (s) => (s.mailboxOf[nodeKeyOf(d)] ?? []).filter((m) => m.status === "open").length,
   );
-  const name = d.agentPrincipal.displayName ?? d.label;
+  const name = d.node.displayName ?? d.label;
   const online = d.dialSucceeded;
   const config = href({
     name: "agent",
-    agentDid: d.agentDid,
+    nodeDid: d.nodeDid,
     section: "agent",
   });
   const check = async () => {
@@ -390,7 +390,7 @@ const AgentRow = memo(function AgentRow({
   };
   return (
     <li
-      key={d.agentDid}
+      key={d.nodeDid}
       className="flex items-center gap-4 rounded-2xl border border-border/60 bg-raised px-5 py-4 transition-colors hover:border-border hover:bg-accent"
     >
       {/* the row lights up whole, so it is clickable whole: the
@@ -398,16 +398,16 @@ const AgentRow = memo(function AgentRow({
                     than ending where its text does, which left the top and
                     bottom of every row looking live and doing nothing */}
       <a
-        href={href({ name: "sessions", nodeDid: d.agentDid })}
-        onClick={() => selectAgent(d.agentDid)}
+        href={href({ name: "sessions", nodeDid: d.nodeDid })}
+        onClick={() => selectNode(d.nodeDid)}
         aria-label={`${name} sessions`}
         className="-my-4 -ml-5 flex min-w-0 flex-1 items-center gap-3 overflow-hidden py-4 pl-5"
       >
-        <AgentHoverCard deployment={d}>
+        <NodeHoverCard deployment={d}>
           <span className="block shrink-0">
-            <AgentAvatar name={name} className="size-8" />
+            <NodeAvatar name={name} className="size-8" />
           </span>
-        </AgentHoverCard>
+        </NodeHoverCard>
         <span
           className={cn(
             "size-2 shrink-0 rounded-full",
@@ -423,8 +423,8 @@ const AgentRow = memo(function AgentRow({
           <span className="truncate font-heading text-base font-medium text-heading">
             {name}
           </span>
-          {/* the pairing label names a remote node when its principal
-                        does not; the local node's pill already says it */}
+          {/* the pairing label names a remote node when the node's own
+                        name does not; the local node's pill already says it */}
           {!isWorkingNode(d, homeDid) && d.label !== name && (
             <span className="min-w-0 truncate text-xs text-muted-foreground">
               {d.label}
@@ -437,7 +437,7 @@ const AgentRow = memo(function AgentRow({
           )}
         </span>
       </a>
-      {isLocalAgent(d, homeDid) && !inferenceIsConfigured(d) && (
+      {isLocalNode(d, homeDid) && !inferenceIsConfigured(d) && (
         <Button
           size="sm"
           variant="outline"
@@ -446,7 +446,7 @@ const AgentRow = memo(function AgentRow({
             <a
               href={href({
                 name: "agent",
-                agentDid: d.agentDid,
+                nodeDid: d.nodeDid,
                 section: "inference",
               })}
             />
@@ -458,8 +458,8 @@ const AgentRow = memo(function AgentRow({
       )}
       {waiting > 0 && (
         <a
-          href={href({ name: "mailbox", nodeDid: d.agentDid })}
-          onClick={() => selectAgent(d.agentDid)}
+          href={href({ name: "mailbox", nodeDid: d.nodeDid })}
+          onClick={() => selectNode(d.nodeDid)}
           className="flex items-center gap-1.5 rounded-full px-2 py-1 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
           title={`${waiting} item${waiting === 1 ? "" : "s"} need${waiting === 1 ? "s" : ""} your attention`}
         >
@@ -480,7 +480,7 @@ const AgentRow = memo(function AgentRow({
         aria-label={`Configure ${name}`}
         title="Configure"
         nativeButton={false}
-        render={<a href={config} onClick={() => selectAgent(d.agentDid)} />}
+        render={<a href={config} onClick={() => selectNode(d.nodeDid)} />}
       >
         <SlidersHorizontal />
       </Button>
@@ -500,18 +500,18 @@ const AgentRow = memo(function AgentRow({
                 <a
                   href={href({
                     name: "sessions",
-                    nodeDid: d.agentDid,
+                    nodeDid: d.nodeDid,
                   })}
                 />
               }
-              onClick={() => selectAgent(d.agentDid)}
+              onClick={() => selectNode(d.nodeDid)}
             >
               Open sessions
             </DropdownMenuItem>
             <DropdownMenuItem
               nativeButton={false}
               render={<a href={config} />}
-              onClick={() => selectAgent(d.agentDid)}
+              onClick={() => selectNode(d.nodeDid)}
             >
               Configure
             </DropdownMenuItem>
@@ -522,7 +522,7 @@ const AgentRow = memo(function AgentRow({
             </DropdownMenuItem>
             <DropdownMenuItem onClick={() => void check()}>Check peer</DropdownMenuItem>
           </DropdownMenuGroup>
-          {!isLocalAgent(d, homeDid) && (
+          {!isLocalNode(d, homeDid) && (
             <>
               <DropdownMenuSeparator />
               <DropdownMenuGroup>
@@ -530,7 +530,7 @@ const AgentRow = memo(function AgentRow({
                   variant="destructive"
                   onClick={() =>
                     onRemove({
-                      agentDid: d.agentDid,
+                      nodeDid: d.nodeDid,
                       peerId: d.peerId,
                       label: d.label,
                     })

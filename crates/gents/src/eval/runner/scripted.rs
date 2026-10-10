@@ -159,7 +159,7 @@ impl TrialExecutor for ScriptedExecutor {
 
 fn locator(did: &str) -> TrialLocator {
     TrialLocator {
-        trial_agent_did: did.to_string(),
+        trial_node_did: did.to_string(),
         session_id: String::new(),
         home_hint: None,
     }

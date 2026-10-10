@@ -87,12 +87,12 @@ def turnState (row : Row) : ClientTurnState :=
   | .active    => .running
   | .terminal  => if row.foldedInto.isSome then .superseded else .completed
 
-def observe (sid : SessionId) (agent : AgentDid) (behavior : Option BehaviorId)
+def observe (sid : SessionId) (node : NodeDid) (agent : Option AgentId)
     (rows : List Row) (newest : Row) : SessionObservation :=
   let turn := turnOf rows newest
   { sessionId := sid
-  , agentDid := agent
-  , behaviorId := behavior
+  , nodeDid := node
+  , agentId := agent
   , latestObservedRequest := some turn.request
   , latestTurn := some (turnState turn)
   , queuedRequests := (queuedBehind rows turn).map (·.request)

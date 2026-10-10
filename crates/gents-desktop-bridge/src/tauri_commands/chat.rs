@@ -4,7 +4,7 @@ use tauri::State;
 use crate::commands::{rename_session, send_chat_message};
 use crate::snapshot::{
     apply_session_timeline_page_with_query, build_session_live_delta,
-    build_session_snapshot_for_agent_with_transcript,
+    build_session_snapshot_for_node_with_transcript,
 };
 use crate::state::{current_core, DesktopAppState};
 use crate::types::{
@@ -15,7 +15,7 @@ use crate::types::{
 #[tauri::command]
 pub async fn desktop_session_snapshot(
     session_id: String,
-    agent_did: Option<String>,
+    node_did: Option<String>,
     request_id: Option<String>,
     timeline_limit: Option<usize>,
     timeline_before_item_key: Option<String>,
@@ -27,7 +27,7 @@ pub async fn desktop_session_snapshot(
     session_snapshot(
         &core,
         session_id,
-        agent_did,
+        node_did,
         request_id,
         timeline_limit,
         timeline_before_item_key,
@@ -39,39 +39,39 @@ pub async fn desktop_session_snapshot(
 pub(crate) async fn session_snapshot(
     core: &std::sync::Arc<gents_desktop_core::client::ClientCore>,
     session_id: String,
-    agent_did: Option<String>,
+    node_did: Option<String>,
     request_id: Option<String>,
     timeline_limit: Option<usize>,
     timeline_before_item_key: Option<String>,
 ) -> Result<Option<DesktopSessionSnapshot>, BridgeError> {
     let started = std::time::Instant::now();
-    let agent_did = agent_did.or_else(|| {
+    let node_did = node_did.or_else(|| {
         core.store()
             .snapshot()
             .sessions
             .iter()
             .find(|session| session.session_id == session_id)
-            .map(|session| session.agent_did.clone())
+            .map(|session| session.node_did.clone())
     });
     let request_id = request_id.or_else(|| {
         let store = core.store().snapshot();
-        agent_did.as_deref().map_or_else(
+        node_did.as_deref().map_or_else(
             || store.latest_request_id_for_session(&session_id),
-            |agent_did| store.latest_request_id_for_session_for_agent(&session_id, agent_did),
+            |node_did| store.latest_request_id_for_session_for_node(&session_id, node_did),
         )
     });
 
     let hydrate_started = std::time::Instant::now();
-    if let Some(agent_did) = agent_did.as_deref() {
+    if let Some(node_did) = node_did.as_deref() {
         // Its transcript reads as empty here and a hydration request would be
         // refused, so the local header alone answers without any remote read.
         if core
-            .session_unreadable_reason(&session_id, agent_did)
+            .session_unreadable_reason(&session_id, node_did)
             .is_some()
         {
-            return Ok(build_session_snapshot_for_agent_with_transcript(
+            return Ok(build_session_snapshot_for_node_with_transcript(
                 core.as_ref(),
-                Some(agent_did),
+                Some(node_did),
                 &session_id,
                 request_id.as_deref(),
                 None,
@@ -84,12 +84,12 @@ pub(crate) async fn session_snapshot(
             .await);
         }
         if let Err(error) = core
-            .ensure_session_hydration_started(&session_id, agent_did)
+            .ensure_session_hydration_started(&session_id, node_did)
             .await
         {
             tracing::warn!(
                 target: "gents_desktop::chat",
-                agent_did,
+                node_did,
                 session_id = %session_id,
                 error = %error,
                 "session hydration request failed; rendering whatever is already local"
@@ -98,11 +98,11 @@ pub(crate) async fn session_snapshot(
     }
     let hydrate_start_ms = hydrate_started.elapsed().as_millis() as u64;
     let refresh_started = std::time::Instant::now();
-    if let (Some(agent_did), Some(request_id)) = (agent_did.as_deref(), request_id.as_deref()) {
-        if let Err(error) = core.refresh_local_request(agent_did, request_id).await {
+    if let (Some(node_did), Some(request_id)) = (node_did.as_deref(), request_id.as_deref()) {
+        if let Err(error) = core.refresh_local_request(node_did, request_id).await {
             tracing::warn!(
                 target: "gents_desktop::chat",
-                agent_did,
+                node_did,
                 request_id,
                 error = %error,
                 "selected local request refresh failed; returning the last observed session"
@@ -111,25 +111,25 @@ pub(crate) async fn session_snapshot(
     }
     let request_refresh_ms = refresh_started.elapsed().as_millis() as u64;
     let transcript_started = std::time::Instant::now();
-    let principal_scope = agent_did
+    let node_scope = node_did
         .as_deref()
-        .and_then(|agent_did| core.transcript_principal_scope(agent_did));
-    let operator_access = agent_did
+        .and_then(|node_did| core.transcript_node_scope(node_did));
+    let operator_access = node_did
         .as_deref()
-        .and_then(|agent_did| core.operator_graphql(agent_did))
+        .and_then(|node_did| core.operator_graphql(node_did))
         .map(gents::config_client::ConfigAccess::Graphql);
     let requester_scope = {
         let store = core.store().snapshot();
-        let session = agent_did.as_deref().and_then(|agent_did| {
+        let session = node_did.as_deref().and_then(|node_did| {
             store
                 .sessions
                 .iter()
-                .find(|row| row.session_id == session_id && row.agent_did == agent_did)
+                .find(|row| row.session_id == session_id && row.node_did == node_did)
         });
         gents_desktop_core::client::session_transcript_requester_scope(
             session,
-            agent_did.as_deref(),
-            principal_scope.as_deref(),
+            node_did.as_deref(),
+            node_scope.as_deref(),
             operator_access.is_some(),
         )
     };
@@ -139,7 +139,7 @@ pub(crate) async fn session_snapshot(
                 gents_desktop_core::client::load_session_transcript_page_on(
                     access,
                     &session_id,
-                    agent_did.as_deref(),
+                    node_did.as_deref(),
                     requester_scope.as_deref(),
                     timeline_before_item_key.as_deref(),
                     timeline_limit,
@@ -150,7 +150,7 @@ pub(crate) async fn session_snapshot(
                 gents_desktop_core::client::load_session_transcript_page(
                     core.node(),
                     &session_id,
-                    agent_did.as_deref(),
+                    node_did.as_deref(),
                     requester_scope.as_deref(),
                     timeline_before_item_key.as_deref(),
                     timeline_limit,
@@ -168,7 +168,7 @@ pub(crate) async fn session_snapshot(
                 .filter(|row| {
                     row.doc_id.is_some()
                         && row.session_id.as_deref() == Some(session_id.as_str())
-                        && row.agent_did.as_deref() == agent_did.as_deref()
+                        && row.node_did.as_deref() == node_did.as_deref()
                         && row.requester_did.as_deref() == requester_scope.as_deref()
                 })
                 .cloned()
@@ -191,7 +191,7 @@ pub(crate) async fn session_snapshot(
                 let request = request_id.as_deref().and_then(|request_id| {
                     core.store().snapshot().session_tip_request(
                         &session_id,
-                        agent_did.as_deref(),
+                        node_did.as_deref(),
                         requester_scope.as_deref(),
                         request_id,
                     )
@@ -249,9 +249,9 @@ pub(crate) async fn session_snapshot(
     let transcript_page_tip_ms = transcript_started.elapsed().as_millis() as u64;
     let projection_started = std::time::Instant::now();
     let context_store = context_store.map(|tip| transcript_page.store.merge_snapshot(tip));
-    let mut snapshot = build_session_snapshot_for_agent_with_transcript(
+    let mut snapshot = build_session_snapshot_for_node_with_transcript(
         core.as_ref(),
-        agent_did.as_deref(),
+        node_did.as_deref(),
         &session_id,
         request_id.as_deref(),
         Some(&transcript_page.store),
@@ -291,27 +291,25 @@ pub(crate) async fn session_snapshot(
 #[tauri::command]
 pub async fn desktop_session_hydration_retry(
     session_id: String,
-    agent_did: Option<String>,
+    node_did: Option<String>,
     state: State<'_, DesktopAppState>,
 ) -> Result<(), BridgeError> {
     let Some(core) = current_core(&state) else {
         return Err(BridgeError::untyped("desktop client is not running"));
     };
-    let agent_did = agent_did
+    let node_did = node_did
         .or_else(|| {
             core.store()
                 .snapshot()
                 .sessions
                 .iter()
                 .find(|session| session.session_id == session_id)
-                .map(|session| session.agent_did.clone())
+                .map(|session| session.node_did.clone())
         })
         .ok_or_else(|| {
-            BridgeError::untyped(
-                "session hydration retry requires an agent for the selected session",
-            )
+            BridgeError::untyped("session hydration retry requires a node for the selected session")
         })?;
-    core.retry_session_hydration(&session_id, &agent_did)
+    core.retry_session_hydration(&session_id, &node_did)
         .await
         .map_err(|error| BridgeError::untyped(error.to_string()))
 }
@@ -320,7 +318,7 @@ pub async fn desktop_session_hydration_retry(
 #[allow(clippy::too_many_arguments)]
 pub async fn desktop_session_live_delta(
     session_id: String,
-    agent_did: Option<String>,
+    node_did: Option<String>,
     request_id: String,
     base_live_cursor: String,
     base_content_byte_len: usize,
@@ -332,19 +330,19 @@ pub async fn desktop_session_live_delta(
     let Some(core) = current_core(&state) else {
         return Ok(None);
     };
-    let agent_did = agent_did.or_else(|| {
+    let node_did = node_did.or_else(|| {
         core.store()
             .snapshot()
             .sessions
             .iter()
             .find(|session| session.session_id == session_id)
-            .map(|session| session.agent_did.clone())
+            .map(|session| session.node_did.clone())
     });
     Ok(Some(
         build_session_live_delta(
             core.as_ref(),
             &session_id,
-            agent_did.as_deref(),
+            node_did.as_deref(),
             &request_id,
             &base_live_cursor,
             base_content_byte_len,
@@ -395,14 +393,14 @@ pub struct RequestResendResultView {
 #[tauri::command]
 pub async fn desktop_request_resend(
     request_id: String,
-    agent_did: Option<String>,
+    node_did: Option<String>,
     state: State<'_, DesktopAppState>,
 ) -> Result<RequestResendResultView, BridgeError> {
     let Some(core) = current_core(&state) else {
         return Err(BridgeError::untyped("desktop client is not running"));
     };
 
-    let scope = agent_did.or_else(|| core.selected_agent_did());
+    let scope = node_did.or_else(|| core.selected_node_did());
     let submitted = core
         .resend_request_in_scope(&request_id, scope.as_deref())
         .await
@@ -416,14 +414,14 @@ pub async fn desktop_request_resend(
 #[tauri::command]
 pub async fn desktop_request_retry(
     request_id: String,
-    agent_did: Option<String>,
+    node_did: Option<String>,
     state: State<'_, DesktopAppState>,
 ) -> Result<ChatSendResult, BridgeError> {
     let Some(core) = current_core(&state) else {
         return Err(BridgeError::untyped("desktop client is not running"));
     };
 
-    let scope = agent_did.or_else(|| core.selected_agent_did());
+    let scope = node_did.or_else(|| core.selected_node_did());
     let parent = core
         .request_in_scope(&request_id, scope.as_deref())
         .map_err(|error| BridgeError::untyped(error.to_string()))?;
@@ -434,14 +432,14 @@ pub async fn desktop_request_retry(
     Ok(ChatSendResult {
         session_id: submitted.session_id,
         request_id: submitted.request_id,
-        agent_did: submitted.agent_did,
-        behavior_id: submitted.behavior_id,
+        node_did: submitted.node_did,
+        agent_id: submitted.agent_id,
     })
 }
 
 #[tauri::command]
 pub async fn desktop_request_timeline(
-    agent_did: String,
+    node_did: String,
     request_id: String,
     state: State<'_, DesktopAppState>,
 ) -> Result<serde_json::Value, BridgeError> {
@@ -450,7 +448,7 @@ pub async fn desktop_request_timeline(
     };
 
     let timeline = core
-        .request_timeline(&agent_did, &request_id)
+        .request_timeline(&node_did, &request_id)
         .await
         .map_err(|error| BridgeError::untyped(error.to_string()))?;
     serde_json::to_value(&timeline).map_err(|error| BridgeError::untyped(error.to_string()))

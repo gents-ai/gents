@@ -33,8 +33,8 @@ export function createMailboxActions({
       if (!selection.acceptsIntent(store, captured)) return null;
       selection.openMailboxRoute(store, {
         itemId: item.itemId,
-        agentDid: item.targetAgentDid,
-        behaviorId: item.targetBehaviorId,
+        nodeDid: item.targetNodeDid,
+        agentId: item.targetAgentId,
         sessionId: item.sessionId ?? null,
       });
       writeSession(stores.session, null);
@@ -63,8 +63,8 @@ export function createMailboxActions({
   ) {
     try {
       await api.sendChatMessage({
-        agentDid: item.targetAgentDid,
-        behaviorId: item.targetBehaviorId,
+        nodeDid: item.targetNodeDid,
+        agentId: item.targetAgentId,
         sessionId: item.sessionId ?? null,
         content: "",
         causedBySourceDocId: item.itemId,
@@ -82,7 +82,7 @@ export function createMailboxActions({
 
   return {
     /**
-     * Starts the item's reply: selects the node, behavior and session it names
+     * Starts the item's reply: selects the node, agent and session it names
      * and holds the item as the next message's cause. A navigation: if the
      * person moves on before the bridge answers, the result is dropped and
      * null returned. A failure is reported once, then rethrown.

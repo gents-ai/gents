@@ -20,7 +20,7 @@ async fn runtime_state_reset_is_explicit() -> Result<()> {
     run_init_json(
         &home_dir,
         &[
-            "--agent-name",
+            "--node-name",
             &agent_name,
             "--model-name",
             &model_name,
@@ -36,7 +36,7 @@ async fn runtime_state_reset_is_explicit() -> Result<()> {
     let rerun = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
+            "--node-name",
             &agent_name,
             "--model-name",
             &model_name,
@@ -57,7 +57,7 @@ async fn runtime_state_reset_is_explicit() -> Result<()> {
         &home_dir,
         &[
             "--reset",
-            "--agent-name",
+            "--node-name",
             &agent_name,
             "--model-name",
             &model_name,
@@ -113,7 +113,7 @@ async fn reconciled_runtime_sends_generation_two_tools_and_completes_tool_loop()
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
+            "--node-name",
             &agent_name,
             "--model-name",
             &model_name,
@@ -126,10 +126,10 @@ async fn reconciled_runtime_sends_generation_two_tools_and_completes_tool_loop()
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("init output missing tools_id: {init}"))?
         .to_string();
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
     let config_root = tempdir.path().join("config");
     run_cli_text(
         &home_dir,
@@ -140,8 +140,8 @@ async fn reconciled_runtime_sends_generation_two_tools_and_completes_tool_loop()
             config_root.to_str().unwrap(),
             "--graphql",
             &graphql,
-            "--agent-did",
-            &agent_did,
+            "--node-did",
+            &node_did,
         ],
     )?;
     let config_path = config_root.join("pack_config.json");
@@ -180,7 +180,7 @@ async fn reconciled_runtime_sends_generation_two_tools_and_completes_tool_loop()
         .transpose()?
         .unwrap_or_else(|| tools_row["host"].clone());
     assert_eq!(host["files"]["mode"], "ReadOnly");
-    wait_for_runtime_quiescence(&graphql, &agent_did, 2, Duration::from_secs(6)).await?;
+    wait_for_runtime_quiescence(&graphql, &node_did, 2, Duration::from_secs(6)).await?;
 
     let prompt =
         "Use the read_file tool to read notes.txt. Reply with only the token from that file.";
@@ -191,8 +191,8 @@ async fn reconciled_runtime_sends_generation_two_tools_and_completes_tool_loop()
             "submit",
             "--graphql",
             &graphql,
-            "--agent-did",
-            &agent_did,
+            "--node-did",
+            &node_did,
             "--content",
             prompt,
             "--timeout-secs",
@@ -267,12 +267,8 @@ async fn reconciled_runtime_sends_generation_two_tools_and_completes_tool_loop()
         "expected follow-up request to include persisted tool result with token {token}: {tool_result_request}"
     );
 
-    let (_request_id, session_id, behavior_id) =
-        wait_for_request(&graphql, &agent_did, prompt).await?;
-    assert!(
-        !behavior_id.is_empty(),
-        "request should be pinned to a behavior"
-    );
+    let (_request_id, session_id, agent_id) = wait_for_request(&graphql, &node_did, prompt).await?;
+    assert!(!agent_id.is_empty(), "request should be pinned to a agent");
 
     let tool_call = wait_for_tool_call(&graphql, &session_id, "read_file").await?;
     assert_eq!(

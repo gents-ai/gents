@@ -1,5 +1,5 @@
-//! Defra ACP permission owner coverage after behavior resolution. Scoped
-//! behavior selection/ambiguity and catalog well-formedness require a production
+//! Defra ACP permission owner coverage after agent resolution. Scoped
+//! agent selection/ambiguity and catalog well-formedness require a production
 //! resolver; constructing a test-local map cannot establish those contracts.
 use crate::lean_vocab_test::{lean_identity_permission_cases, LeanIdentityPermissionCase};
 use acp::{
@@ -50,9 +50,9 @@ async fn build_local_acp_from_lean_case(
             "case {:?}: grant {:?} targets a different permission than the row under test",
             case.name, grant
         );
-        let principal = did_from_lean_case(&grant.principal, case, "grant.principal");
+        let node = did_from_lean_case(&grant.node, case, "grant.node");
         let tuple = RelationTuple::try_new(
-            principal,
+            node,
             READER_RELATION,
             namespaced_resource.as_str(),
             case.row_owner.as_str(),
@@ -78,20 +78,13 @@ async fn resolved_identity_permission_cases_drive_defra_acp() -> anyhow::Result<
         // Missing/ambiguous selection must be denied before ACP. This test has
         // no production selection operation and therefore makes no assertion
         // about those cases (recorded as gaps in the conformance handoff).
-        if case.expected_actor_principal.is_none() || case.expected_peer_principal.is_none() {
+        if case.expected_actor_node.is_none() || case.expected_peer_node.is_none() {
             continue;
         }
         let acp = build_local_acp_from_lean_case(case).await?;
-        let actor = Identity::Authenticated(did_from_lean_case(
-            &case.actor_principal,
-            case,
-            "actor_principal",
-        ));
-        let peer = Identity::Authenticated(did_from_lean_case(
-            &case.peer_principal,
-            case,
-            "peer_principal",
-        ));
+        let actor =
+            Identity::Authenticated(did_from_lean_case(&case.actor_node, case, "actor_node"));
+        let peer = Identity::Authenticated(did_from_lean_case(&case.peer_node, case, "peer_node"));
         let actor_allowed = acp
             .check_doc_access(
                 &actor,

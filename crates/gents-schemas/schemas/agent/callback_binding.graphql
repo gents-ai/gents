@@ -1,7 +1,7 @@
 # Selects one shared event source and callback. Empty input_fields exposes no data.
-type CallbackBinding @branchable @index(fields: ["agent_did", "binding_id"], unique: true) {
+type CallbackBinding @branchable @index(fields: ["node_did", "binding_id"], unique: true) {
     binding_id: String
-    agent_did: String @index
+    node_did: String @index
     event_source_id: String @index
     callback_id: String @index
     input_fields: [String!]

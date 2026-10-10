@@ -1,12 +1,12 @@
 {
-  "agent_principal": {},
+  "node": {},
   "eval_definitions": [
     {
       "definition_id": "factory-setup",
       "comparability_version": 14,
       "title": "Research desk: complete configuration, no execution",
       "subject": {
-        "kind": "behavior",
+        "kind": "agent",
         "inference_slots": [
           "engineer"
         ],

@@ -29,6 +29,7 @@ import Proofs.Conformance.Contracts.Json.CodexShim
 import Proofs.Conformance.Contracts.Json.Workspace
 import Proofs.Conformance.Contracts.Json.Callback
 import Proofs.Conformance.Contracts.Json.SelfConfig
+import Proofs.Conformance.Contracts.Json.SelfConfigAgent
 import Proofs.Conformance.Contracts.Json.Goal
 import Proofs.Conformance.GoalClaimedReadiness
 import Proofs.Conformance.Contracts.Json.SessionHydration
@@ -245,8 +246,8 @@ def snapshotJson : String :=
       ++ readinessPublicationCasesJson ++ ","
     ++ "\"runtime_reconcile_cases\":"
       ++ jsonArray (runtimeReconcileCases.map runtimeReconcileCaseJson) ++ ","
-    ++ "\"client_behavior_readiness_cases\":"
-      ++ jsonArray (clientBehaviorReadinessCases.map clientBehaviorReadinessCaseJson) ++ ","
+    ++ "\"client_agent_readiness_cases\":"
+      ++ jsonArray (clientAgentReadinessCases.map clientAgentReadinessCaseJson) ++ ","
     ++ "\"apply_reconcile_cases\":"
       ++ ApplyReconcile.ContractCases.applyReconcileCasesJson ++ ","
     ++ "\"eval_outcome_cases\":"
@@ -270,6 +271,14 @@ def snapshotJson : String :=
     ++ "\"schema_publication_cases\":" ++ schemaPublicationCasesJson ++ ","
     ++ "\"self_config_cases\":"
       ++ selfConfigCasesJson ++ ","
+    ++ "\"agent_decision_cases\":"
+      ++ agentDecisionCasesJson ++ ","
+    ++ "\"agent_materialization_cases\":"
+      ++ agentMaterializationCasesJson ++ ","
+    ++ "\"sibling_tools_cases\":"
+      ++ siblingToolsCasesJson ++ ","
+    ++ "\"self_config_selection_cases\":"
+      ++ selfConfigSelectionCasesJson ++ ","
     ++ "\"session_recovery_cases\":"
       ++ jsonArray (sessionRecoveryCases.map sessionRecoveryCaseJson) ++ ","
     ++ "\"inference_slot_accounting_cases\":"
@@ -367,8 +376,8 @@ def snapshotJson : String :=
       ++ codexShimReasoningProjectionCasesJson ++ ","
     ++ "\"codex_shim_thread_status_cases\":"
       ++ codexShimThreadStatusCasesJson ++ ","
-    ++ "\"codex_shim_behavior_selection_cases\":"
-      ++ codexShimBehaviorSelectionCasesJson ++ ","
+    ++ "\"codex_shim_agent_selection_cases\":"
+      ++ codexShimAgentSelectionCasesJson ++ ","
     ++ "\"codex_shim_tool_metadata_cases\":"
       ++ codexShimToolMetadataCasesJson ++ ","
     ++ "\"codex_shim_context_usage_cases\":"
@@ -405,9 +414,9 @@ def snapshotJson : String :=
     ++ "\"tool_timeout_cases\":"
       ++ Conformance.ToolTimeouts.casesJson ++ ","
     ++ "\"scope_collection_rules\":{"
-      ++ "\"subagentCoordinatorRules\":"
-        ++ scopeRulesJson ScopeTemplates.subagentCoordinatorRules
-      ++ ",\"subagentHostRules\":" ++ scopeRulesJson ScopeTemplates.subagentHostRules ++ "},"
+      ++ "\"agentTargetCallerRules\":"
+        ++ scopeRulesJson ScopeTemplates.agentTargetCallerRules
+      ++ ",\"agentTargetHostRules\":" ++ scopeRulesJson ScopeTemplates.agentTargetHostRules ++ "},"
     ++ "\"causal_hop_contract\":"
       ++ Conformance.CausalHopContracts.contractJson ++ ","
     ++ "\"operator_base_freeze_cases\":"

@@ -17,15 +17,15 @@ import { createSelectionStore, useSelection } from "../src/hooks/selectionStore"
 import { createChatActions } from "../src/hooks/chatActions";
 
 const initialDeployment = {
-  agentDid: "agent",
-  agentPrincipal: { defaultBehaviorId: "coding" },
-  behaviors: [
-    { behaviorId: "coding", enabled: true, isDefault: true },
-    { behaviorId: "setup", enabled: true, isDefault: false },
+  nodeDid: "agent",
+  node: { nodeDid: "agent", defaultAgentId: "coding" },
+  agents: [
+    { agentId: "coding", enabled: true, isDefault: true },
+    { agentId: "setup", enabled: true, isDefault: false },
   ],
   sessions: [
-    { sessionId: "first-setup", behaviorId: "setup" },
-    { sessionId: "first-coding", behaviorId: "coding" },
+    { sessionId: "first-setup", agentId: "setup" },
+    { sessionId: "first-coding", agentId: "coding" },
   ],
   mailboxItems: [],
 } as unknown as DeploymentView;
@@ -33,13 +33,13 @@ const initialDeployment = {
 function useHarness(
   deployment: DeploymentView | null,
   initialSession: string | null,
-  initialAgent: string | null = "agent",
+  initialNode: string | null = "agent",
 ) {
   const [stores] = useState(() =>
     shellStores({
       selection: {
-        agentDid: initialAgent,
-        behaviorId: "setup",
+        nodeDid: initialNode,
+        agentId: "setup",
         sessionId: initialSession,
       },
     }),
@@ -54,8 +54,8 @@ function useHarness(
   const current = useSelection(store);
   const sendChatMessage = useRef(
     vi.fn(async () => ({
-      agentDid: "agent",
-      behaviorId: "setup",
+      nodeDid: "agent",
+      agentId: "setup",
       sessionId: "new-setup",
       requestId: "new-request",
     })),
@@ -73,11 +73,11 @@ function useHarness(
       reportFailure: vi.fn(),
     }),
   }));
-  useState(() => reconcileSelection(stores, actions.selectAgent));
+  useState(() => reconcileSelection(stores, actions.selectNode));
   return {
-    agent: current.agentDid,
+    nodeDid: current.nodeDid,
     selected: current.sessionId,
-    behavior: current.behaviorId,
+    agentId: current.agentId,
     store,
     actions,
     route,
@@ -86,32 +86,32 @@ function useHarness(
 }
 
 describe("explicit session selection", () => {
-  it("initializes an empty agent selection through the route owner", () => {
+  it("initializes an empty node selection through the route owner", () => {
     const { result } = renderHook(() =>
       useHarness(initialDeployment, "old-session", null),
     );
-    expect(result.current.agent).toBe("agent");
+    expect(result.current.nodeDid).toBe("agent");
     expect(result.current.selected).toBeNull();
   });
 
-  it("preserves agent and session selection across a temporary missing snapshot", () => {
+  it("preserves node and session selection across a temporary missing snapshot", () => {
     const { result, rerender } = renderHook(
       ({ deployment }) => useHarness(deployment, "first-setup"),
       { initialProps: { deployment: initialDeployment as DeploymentView | null } },
     );
     rerender({ deployment: null });
-    expect(result.current.agent).toBe("agent");
+    expect(result.current.nodeDid).toBe("agent");
     expect(result.current.selected).toBe("first-setup");
   });
-  it("keeps the behavior and an armed mailbox reply across a temporary missing snapshot", () => {
+  it("keeps the agent and an armed mailbox reply across a temporary missing snapshot", () => {
     const { result, rerender } = renderHook(
       ({ deployment }) => useHarness(deployment, null),
       { initialProps: { deployment: initialDeployment as DeploymentView | null } },
     );
     const reply = {
       itemId: "item-1",
-      agentDid: "agent",
-      behaviorId: "setup",
+      nodeDid: "agent",
+      agentId: "setup",
       sessionId: null,
     };
     act(() =>
@@ -119,50 +119,50 @@ describe("explicit session selection", () => {
     );
     /* a read while the client restarts lists no nodes */
     rerender({ deployment: null });
-    expect(result.current.behavior).toBe("setup");
+    expect(result.current.agentId).toBe("setup");
     expect(result.current.store.getState().mailboxRoute).toEqual(reply);
 
     rerender({ deployment: initialDeployment });
-    expect(result.current.behavior).toBe("setup");
+    expect(result.current.agentId).toBe("setup");
     expect(result.current.store.getState().mailboxRoute).toEqual(reply);
   });
 
-  it("uses the principal default instead of a conflicting marked default", () => {
+  it("uses the node default instead of a conflicting marked default", () => {
     const deployment = {
       ...initialDeployment,
-      behaviors: initialDeployment.behaviors.map((behavior) => ({
-        ...behavior,
-        isDefault: behavior.behaviorId === "setup",
+      agents: initialDeployment.agents.map((agent) => ({
+        ...agent,
+        isDefault: agent.agentId === "setup",
       })),
     };
     const { result } = renderHook(() => useHarness(deployment, "first-setup"));
     act(() => result.current.actions.startNewSession());
-    expect(result.current.behavior).toBe("coding");
+    expect(result.current.agentId).toBe("coding");
     expect(result.current.selected).toBeNull();
   });
 
   it("uses the canonical enabled fallback and clears selection when none exists", () => {
     const deployment = {
       ...initialDeployment,
-      agentPrincipal: { ...initialDeployment.agentPrincipal, defaultBehaviorId: null },
-      behaviors: [
-        { ...initialDeployment.behaviors[0], isDefault: false, enabled: false },
-        { ...initialDeployment.behaviors[1], isDefault: false },
+      node: { ...initialDeployment.node, defaultAgentId: null },
+      agents: [
+        { ...initialDeployment.agents[0], isDefault: false, enabled: false },
+        { ...initialDeployment.agents[1], isDefault: false },
       ],
     };
     const { result, rerender } = renderHook(({ value }) => useHarness(value, null), {
       initialProps: { value: deployment },
     });
     act(() => result.current.actions.startNewSession());
-    expect(result.current.behavior).toBe("setup");
-    rerender({ value: { ...deployment, behaviors: [] } });
+    expect(result.current.agentId).toBe("setup");
+    rerender({ value: { ...deployment, agents: [] } });
     act(() => result.current.actions.startNewSession());
-    expect(result.current.behavior).toBeNull();
+    expect(result.current.agentId).toBeNull();
   });
-  it("resets session selection on explicit agent navigation, not observation", () => {
+  it("resets session selection on explicit node navigation, not observation", () => {
     const store = createSelectionStore({
-      agentDid: "agent",
-      behaviorId: "setup",
+      nodeDid: "agent",
+      agentId: "setup",
       sessionId: "first-setup",
     });
     const stores = { ...shellStores(), selection: store };
@@ -170,10 +170,10 @@ describe("explicit session selection", () => {
       sessionId: "first-setup",
     } as DesktopSessionSnapshot);
     const route = createSelectionActions({ stores });
-    route.selectAgent("agent");
+    route.selectNode("agent");
     expect(store.getState().sessionId).toBe("first-setup");
     expect(readSession(stores.session)).not.toBeNull();
-    route.selectAgent("another-agent");
+    route.selectNode("another-node");
     expect(store.getState().sessionId).toBeNull();
     expect(readSession(stores.session)).toBeNull();
   });
@@ -196,8 +196,8 @@ describe("explicit session selection", () => {
     );
     act(() => result.current.actions.startNewSession());
     expect(result.current.selected).toBeNull();
-    act(() => result.current.route.selectBehavior("setup"));
-    expect(result.current.behavior).toBe("setup");
+    act(() => result.current.route.selectAgent("setup"));
+    expect(result.current.agentId).toBe("setup");
     expect(result.current.selected).toBeNull();
     rerender({
       deployment: { ...initialDeployment, sessions: [...initialDeployment.sessions] },
@@ -209,7 +209,7 @@ describe("explicit session selection", () => {
     expect(result.current.sendChatMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: null,
-        behaviorId: "setup",
+        agentId: "setup",
         content: "new Setup chat",
       }),
     );

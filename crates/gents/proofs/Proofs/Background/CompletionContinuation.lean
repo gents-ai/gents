@@ -294,7 +294,7 @@ def canonicalCompletion : TerminalCompletion :=
 
 /-- Executable four-stage acceptance result used by generated conformance
 cases. Any guard drift in terminality, transcript append, wake metadata,
-coalescing, or claim behavior flips this value. -/
+coalescing, or claim agent flips this value. -/
 def canonicalContinuationAccepted : Bool :=
   match appendNotification? canonicalCompletion canonicalWaitReservedTranscript with
   | none => false
@@ -404,18 +404,18 @@ def redriveWakeFromRows?
     (rows : List AgentSession.RequestFact) (parentDoc : Nat) (wake : FailedWake)
     (successor : AgentSession.RequestFact) (preview : String) (now : Time) :
     Option (WakeRequest × AgentSession.Document × List AgentSession.RequestFact) := do
-  let parent ← AgentSession.latest rows session.scope.agent session.scope.session none
+  let parent ← AgentSession.latest rows session.scope.node session.scope.session none
   let next ← redriveWake? wake
   let nextRows := rows ++ [successor]
   if parent.observed.docId = parentDoc ∧ parent.observed.requestId = wake.requestId ∧
       parent.observed.state = wake.ctx.state ∧ parent.scope = session.scope ∧
-      parent.behavior = session.behavior ∧ wake.queueKey = some session.scope.session ∧
-      successor.scope = session.scope ∧ successor.behavior = session.behavior ∧
+      parent.agent = session.agent ∧ wake.queueKey = some session.scope.session ∧
+      successor.scope = session.scope ∧ successor.agent = session.agent ∧
       successor.observed.state = .pending ∧
       rows.all (fun row => row.observed.docId != successor.observed.docId &&
         row.observed.requestId != successor.observed.requestId) ∧
       AgentSession.newer successor parent ∧
-      AgentSession.latest nextRows session.scope.agent session.scope.session none = some successor then
+      AgentSession.latest nextRows session.scope.node session.scope.session none = some successor then
     some (next, AgentSession.advance session nextRows successor preview now, nextRows)
   else none
 
@@ -429,16 +429,16 @@ theorem redrive_publication_has_one_successor
     (post : WakeRequest × AgentSession.Document × List AgentSession.RequestFact)
     (h : redriveWakeFromRows? session rows parentDoc wake successor preview now = some post) :
     post.2.2 = rows ++ [successor] ∧
-    AgentSession.latest post.2.2 session.scope.agent session.scope.session none = some successor ∧
+    AgentSession.latest post.2.2 session.scope.node session.scope.session none = some successor ∧
     post.2.1.observation.bind (·.latest) = some successor.observed ∧
     successor.observed.state = .pending := by
-  cases hp : AgentSession.latest rows session.scope.agent session.scope.session none <;>
+  cases hp : AgentSession.latest rows session.scope.node session.scope.session none <;>
     cases hn : redriveWake? wake <;>
     simp [redriveWakeFromRows?, hp, hn] at h
   obtain ⟨guard, rfl⟩ := h
   obtain ⟨_, _, _, _, _, _, hs, hb, hstate, _, _, hhead⟩ := guard
   have hscoped := AgentSession.latest_exact_of_session_winner
-    (rows ++ [successor]) session.scope.agent session.scope.session successor hhead
+    (rows ++ [successor]) session.scope.node session.scope.session successor hhead
   simp only [hs] at hscoped
   simp [AgentSession.advance, hs, hb, hhead, hscoped, hstate]
 
@@ -451,7 +451,7 @@ theorem redrive_selection_ignores_cached_head
     (observation : Option AgentSession.Observation) :
     (redriveWakeFromRows? { session with observation } rows parentDoc wake successor preview now).isSome =
     (redriveWakeFromRows? session rows parentDoc wake successor preview now).isSome := by
-  cases hp : AgentSession.latest rows session.scope.agent session.scope.session none <;>
+  cases hp : AgentSession.latest rows session.scope.node session.scope.session none <;>
     cases hn : redriveWake? wake <;>
     simp [redriveWakeFromRows?, hp, hn]
   split <;> simp_all

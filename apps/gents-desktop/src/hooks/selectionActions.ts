@@ -1,4 +1,4 @@
-import { selectedBehaviorIdForDeployment } from "@source-inc/gents-desktop-client";
+import { selectedAgentIdForDeployment } from "@source-inc/gents-desktop-client";
 
 import { chat } from "./chatStore";
 import { firstNode, listedSession, nodeOf } from "./fleetStore";
@@ -12,7 +12,7 @@ type SelectionActionParams = {
 };
 
 /**
- * Every way the person moves between nodes, sessions and behaviors. Each
+ * Every way the person moves between nodes, sessions and agents. Each
  * reads the selection and the fleet when it runs, so none holds a stale
  * copy, and each drops the session the screen showed when it no longer
  * applies.
@@ -22,27 +22,27 @@ export function createSelectionActions({ stores }: SelectionActionParams) {
   const fleet = () => stores.fleet.getState();
   const dropSession = () => writeSession(stores.session, null);
 
-  function selectAgent(agentDid: string | null) {
-    if (selection.selectAgent(store, agentDid)) dropSession();
+  function selectNode(nodeDid: string | null) {
+    if (selection.selectNode(store, nodeDid)) dropSession();
   }
 
-  function selectBehavior(behaviorId: string | null) {
-    selection.selectBehavior(store, behaviorId);
+  function selectAgent(agentId: string | null) {
+    selection.selectAgent(store, agentId);
   }
 
   function selectSession(sessionId: string) {
-    const listed = listedSession(fleet(), store.getState().agentDid, sessionId);
-    selection.selectSession(store, sessionId, listed?.behaviorId);
+    const listed = listedSession(fleet(), store.getState().nodeDid, sessionId);
+    selection.selectSession(store, sessionId, listed?.agentId);
     if (!listed) dropSession();
   }
 
-  function startNewSession(behaviorId?: string | null) {
-    const node = nodeOf(fleet(), store.getState().agentDid) ?? firstNode(fleet());
+  function startNewSession(agentId?: string | null) {
+    const node = nodeOf(fleet(), store.getState().nodeDid) ?? firstNode(fleet());
     if (!node) return;
     selection.startNewSession(
       store,
-      node.agentDid,
-      selectedBehaviorIdForDeployment(node, behaviorId ?? null),
+      node.nodeDid,
+      selectedAgentIdForDeployment(node, agentId ?? null),
     );
     dropSession();
     chat.resetWorkflow(stores.chat);
@@ -65,10 +65,10 @@ export function createSelectionActions({ stores }: SelectionActionParams) {
     const owner = nodeKeys.find((key) =>
       sessionsOf[key]?.some((s) => s.sessionId === sessionId),
     );
-    const ownerDid = owner ? nodes[owner]?.agentDid : undefined;
-    if (owner && ownerDid && ownerDid !== state.agentDid) {
+    const ownerDid = owner ? nodes[owner]?.nodeDid : undefined;
+    if (owner && ownerDid && ownerDid !== state.nodeDid) {
       const listed = sessionsOf[owner]?.find((s) => s.sessionId === sessionId);
-      selection.selectSessionOn(store, ownerDid, sessionId, listed?.behaviorId);
+      selection.selectSessionOn(store, ownerDid, sessionId, listed?.agentId);
       dropSession();
       return;
     }
@@ -78,25 +78,25 @@ export function createSelectionActions({ stores }: SelectionActionParams) {
 
   return {
     /**
-     * Selects a node; its session and behavior start over and the session
+     * Selects a node; its session and agent start over and the session
      * shown is dropped. Choosing the node already selected changes nothing,
      * and a snapshot never picks a session for the new node.
      */
-    selectAgent,
+    selectNode,
     /**
-     * Selects the behavior the next message goes to. A navigation: it lets go
+     * Selects the agent the next message goes to. A navigation: it lets go
      * of a mailbox item the message was going to answer.
      */
-    selectBehavior,
+    selectAgent,
     /**
      * Selects a session on the selected node. When the node lists it, the
-     * behavior it was held under comes back with it; when it does not yet, the
+     * agent it was held under comes back with it; when it does not yet, the
      * session shown is dropped until a read finds it.
      */
     selectSession,
     /**
      * Opens the new-session screen on the selected node, or on the first node
-     * while none is selected, with the behavior asked for or the node's
+     * while none is selected, with the agent asked for or the node's
      * default. Drops the session shown and any local workflow.
      */
     startNewSession,

@@ -8,7 +8,7 @@ import type { OpenAiWireApi } from "./OpenAiWireApi.js";
  * Authentication is explicit and must be compatible with the provider adapter.
  * OAuth credentials remain resolved through the invoking principal's DID.
  */
-export type InferenceBackend = { agent_did: string, backend_id: string, name: string, provider_kind: BackendProviderKind, openai_wire_api?: OpenAiWireApi | null, endpoint: string,
+export type InferenceBackend = { node_did: string, backend_id: string, name: string, provider_kind: BackendProviderKind, openai_wire_api?: OpenAiWireApi | null, endpoint: string,
 /**
  * Required explicit choice; missing or invalid credentials never fall back
  * to unauthenticated access. The same selection governs discovery and calls.

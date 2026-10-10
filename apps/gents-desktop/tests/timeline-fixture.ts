@@ -81,8 +81,8 @@ export const sessionSnapshot = (
   session: Partial<DesktopSessionSnapshot> = {},
 ): DesktopSessionSnapshot => ({
   sessionId: "session-1",
-  agentDid: "did:test:agent",
-  behaviorId: null,
+  nodeDid: "did:test:node",
+  agentId: null,
   title: null,
   previewText: null,
   status: null,

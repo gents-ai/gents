@@ -96,7 +96,7 @@ pub(super) const TOOL_META_KIND_ACTIVE_AGENT_MESSAGE: &str = "ActiveAgentMessage
 
 /// Title the pager falls back to when recognizing
 /// `send_subagent_message` without canonical meta.
-pub(super) const SEND_SUBAGENT_MESSAGE_TITLE: &str = "send_subagent_message";
+pub(super) const SEND_ACTIVE_AGENT_MESSAGE_TITLE: &str = "send_subagent_message";
 
 /// Grok pager tool-call kinds, mapped from durable tool names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -219,7 +219,7 @@ pub(super) struct ToolCallRow {
 }
 
 const TOOL_CALL_FIELDS: &str = r#"
-    agent_did requester_did session_id request_id request_doc_id
+    node_did requester_did session_id request_id request_doc_id
     _docID
     tool_call_key
     tool_call_id
@@ -298,7 +298,7 @@ impl ToolCallUpdate {
     #[cfg(test)]
     pub fn is_active_agent_message(&self) -> bool {
         is_active_agent_message_meta(self.meta.as_ref())
-            || self.title == SEND_SUBAGENT_MESSAGE_TITLE
+            || self.title == SEND_ACTIVE_AGENT_MESSAGE_TITLE
     }
 
     /// Render the `tool_call` payload. Optional absent objects
@@ -400,7 +400,7 @@ pub(super) fn suppressed_tool_family(tool_name: &str) -> Option<&'static str> {
 }
 
 /// True when the durable tool name belongs to the `task` family the pager
-/// recognizes for subagent spawns: `task`/`Task` and `agent_new`.
+/// recognizes for agent spawns: `task`/`Task` and `agent_new`.
 /// Every such row projects an object `meta` carrying an explicit
 /// `subagentBackground` boolean sibling.
 pub(super) fn is_task_family(tool_name: &str) -> bool {
@@ -436,7 +436,7 @@ pub(super) fn is_active_agent_message_meta(meta: Option<&Value>) -> bool {
 ///
 /// Bounded and request-id-scoped: the query set is exactly one
 /// `AgentToolCall` query for the rows of this request id under the exact
-/// principal/session/requester scope, followed by one canonical
+/// node/session/requester scope, followed by one canonical
 /// presentation load per projected row through
 /// `gents::tool_call_lifecycle::load_tool_call_presentation` (the owner's
 /// per-call identity chain: canonical arguments, the optional delivered
@@ -450,10 +450,10 @@ pub(super) async fn project_tools(
     node: &Arc<EmbeddedNode>,
     request: &gents_protocol::row::AgentRequestRow,
 ) -> Result<ToolProjection> {
-    let principal = request
-        .agent_did
+    let node_did = request
+        .node_did
         .as_deref()
-        .context("tool request principal missing")?;
+        .context("tool request node missing")?;
     let session_id = request
         .session_id
         .as_deref()
@@ -480,7 +480,7 @@ pub(super) async fn project_tools(
         anyhow::ensure!(
             value["request_doc_id"].as_str() == Some(physical)
                 && value["request_id"].as_str() == Some(request.request_id.as_str())
-                && value["agent_did"].as_str() == Some(principal)
+                && value["node_did"].as_str() == Some(node_did)
                 && value["session_id"].as_str() == Some(session_id)
                 && value.get("requester_did") == Some(&json!(request.requester_did)),
             "tool row has wrong request scope"
@@ -498,7 +498,7 @@ pub(super) async fn project_tools(
         let presentation = load_tool_call_presentation(
             &access,
             &row.doc_id,
-            principal,
+            node_did,
             session_id,
             request.requester_did.as_deref(),
         )
@@ -519,17 +519,17 @@ pub(crate) struct SessionToolResult {
     pub result: Result<Option<String>>,
 }
 
-/// Calls of `tool_name` in this root session (requester is the principal),
+/// Calls of `tool_name` in this root session (requester is the node),
 /// excluding `skip`ped physical identities, each read through the canonical
 /// presentation owner.
 pub(crate) async fn session_tool_results(
     node: &Arc<EmbeddedNode>,
-    principal: &str,
+    node_did: &str,
     session_id: &str,
     tool_name: &str,
     skip: &std::collections::HashSet<String>,
 ) -> Result<Vec<SessionToolResult>> {
-    let scope = gents::session::session_scope_filter(principal, session_id, Some(principal));
+    let scope = gents::session::session_scope_filter(node_did, session_id, Some(node_did));
     let query = format!(
         r#"{{ AgentToolCall(filter: {{ {scope}, tool_name: {{_eq: "{}"}} }}, order: {{started_at: ASC}}) {{ _docID }} }}"#,
         escape_graphql_string(tool_name)
@@ -557,7 +557,7 @@ pub(crate) async fn session_tool_results(
             continue;
         }
         let result =
-            load_tool_call_presentation(&access, &doc_id, principal, session_id, Some(principal))
+            load_tool_call_presentation(&access, &doc_id, node_did, session_id, Some(node_did))
                 .await
                 .map(|presentation| presentation.result)
                 .with_context(|| format!("canonical tool presentation for {doc_id}"));
@@ -862,10 +862,10 @@ fn tool_title(
                 .map_or("", |p| p.arguments.as_str()),
         )
         .as_ref(),
-    ) || tool_name == SEND_SUBAGENT_MESSAGE_TITLE
+    ) || tool_name == SEND_ACTIVE_AGENT_MESSAGE_TITLE
         || tool_name == gents::toolset::AGENT_MESSAGE_TOOL_NAME
     {
-        return SEND_SUBAGENT_MESSAGE_TITLE.to_string();
+        return SEND_ACTIVE_AGENT_MESSAGE_TITLE.to_string();
     }
     if matches!(kind, ToolCallKind::Execute) {
         if let Some(command) = shell_command_from_args(
@@ -1099,10 +1099,7 @@ pub(crate) fn handle_terminal_client_method(method: &str) -> std::result::Result
 
 fn tool_calls_query(request: &gents_protocol::row::AgentRequestRow) -> Result<String> {
     let scope = gents::session::session_scope_filter(
-        request
-            .agent_did
-            .as_deref()
-            .context("tool principal missing")?,
+        request.node_did.as_deref().context("tool node missing")?,
         request
             .session_id
             .as_deref()
@@ -1141,14 +1138,14 @@ mod tests {
         session: &str,
         physical: &str,
     ) -> gents_protocol::row::AgentRequestRow {
-        serde_json::from_value(serde_json::json!({"_docID":physical,"request_id":id,"session_id":session,"agent_did":"did:test:grok-shim","requester_did":"did:test:grok-shim"})).unwrap()
+        serde_json::from_value(serde_json::json!({"_docID":physical,"request_id":id,"session_id":session,"node_did":"did:test:grok-shim","requester_did":"did:test:grok-shim"})).unwrap()
     }
     async fn seed_projection_request(
         node: &EmbeddedNode,
         id: &str,
         session: &str,
     ) -> gents_protocol::row::AgentRequestRow {
-        let response = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{purpose: "normal", request_id: "{}", session_id: "{}", agent_did: "did:test:grok-shim", requester_did: "did:test:grok-shim", behavior_id: "test", content: "test", lifecycle_state: "pending"}}) {{ _docID }} }}"#, escape_graphql_string(id), escape_graphql_string(session))).await;
+        let response = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{purpose: "normal", request_id: "{}", session_id: "{}", node_did: "did:test:grok-shim", requester_did: "did:test:grok-shim", agent_id: "test", content: "test", lifecycle_state: "pending"}}) {{ _docID }} }}"#, escape_graphql_string(id), escape_graphql_string(session))).await;
         ensure_no_errors(&response, "seed projection request").unwrap();
         let physical = gents_protocol::graphql::extract_mutation_doc_id(
             &json!({"data":response.data}),
@@ -1429,7 +1426,7 @@ mod tests {
     }
 
     #[test]
-    fn task_family_rows_always_carry_explicit_subagent_background() {
+    fn task_family_rows_always_carry_explicit_background_meta_flag() {
         // Every recognized task-family row projects an object `meta` with an
         // explicit `subagentBackground` boolean: absent, `foreground`, and
         // unknown persisted await modes are all explicit false; only the
@@ -1506,7 +1503,7 @@ mod tests {
     }
 
     #[test]
-    fn background_await_mode_merges_subagent_background_true_into_meta() {
+    fn background_await_mode_merges_background_true_into_meta() {
         // The exact persisted value `background` => `subagentBackground:
         // true` in the meta envelope; anything else stays foreground.
         let presentations = args_result("doc-Task", r#"{"description":"scout the repo"}"#, None);
@@ -1552,7 +1549,7 @@ mod tests {
     }
 
     #[test]
-    fn send_subagent_message_is_recognized_by_canonical_meta() {
+    fn active_agent_message_is_recognized_by_canonical_meta() {
         let tool_meta = json!({
             "version": TOOL_META_VERSION,
             "kind": TOOL_META_KIND_ACTIVE_AGENT_MESSAGE,
@@ -1575,7 +1572,7 @@ mod tests {
             panic!("first update should be a tool_call");
         };
         assert!(call.is_active_agent_message());
-        assert_eq!(call.title, SEND_SUBAGENT_MESSAGE_TITLE);
+        assert_eq!(call.title, SEND_ACTIVE_AGENT_MESSAGE_TITLE);
         assert_eq!(
             call.raw_input
                 .as_ref()
@@ -1605,7 +1602,7 @@ mod tests {
     }
 
     #[test]
-    fn send_subagent_message_is_recognized_by_title_fallback() {
+    fn active_agent_message_is_recognized_by_title_fallback() {
         let presentations = args_result(
             "doc-send_subagent_message",
             r#"{"subagent_id":"sub-1","text":"hi"}"#,
@@ -1617,7 +1614,7 @@ mod tests {
             panic!("first update should be a tool_call");
         };
         assert!(call.is_active_agent_message());
-        assert_eq!(call.title, SEND_SUBAGENT_MESSAGE_TITLE);
+        assert_eq!(call.title, SEND_ACTIVE_AGENT_MESSAGE_TITLE);
     }
 
     #[test]
@@ -2287,7 +2284,7 @@ mod tests {
         let ordinal = u32::from(existing_prefix.is_some());
         let segments = u32::from(existing_prefix.is_some()) + 1;
         let result_segment = OutputSegment {
-            agent_did: "did:test:grok-shim".into(),
+            node_did: "did:test:grok-shim".into(),
             requester_did: Some("did:test:grok-shim".into()),
             session_id: session_id.into(),
             request_doc_id: request_doc_id.into(),
@@ -2324,7 +2321,7 @@ mod tests {
             &TranscriptMessage {
                 message_key: format!("delivery:{request_id}:{tool_call_id}"),
                 session_id: session_id.into(),
-                agent_did: "did:test:grok-shim".into(),
+                node_did: "did:test:grok-shim".into(),
                 requester_did: Some("did:test:grok-shim".into()),
                 request_doc_id: Some(request_doc_id.into()),
                 publication: MessagePublication::ToolDelivery {
@@ -2376,7 +2373,7 @@ mod tests {
             serde_json::from_value(serde_json::json!({
                 "_docID": request_doc_id,
                 "request_id": request_id,
-                "agent_did": "did:test:grok-shim",
+                "node_did": "did:test:grok-shim",
                 "requester_did": "did:test:grok-shim",
                 "session_id": session_id
             }))
@@ -2787,7 +2784,7 @@ mod tests {
         // The live window: an open `ToolCall`-source output segment on the
         // child's physical document, streamed while the call runs.
         let live_segment = OutputSegment {
-            agent_did: "did:test:grok-shim".into(),
+            node_did: "did:test:grok-shim".into(),
             requester_did: Some("did:test:grok-shim".into()),
             session_id: session_id.into(),
             request_doc_id: request_doc_id.clone().into(),
@@ -2834,7 +2831,7 @@ mod tests {
         insert_segment(
             &node,
             &OutputSegment {
-                agent_did: "did:test:grok-shim".into(),
+                node_did: "did:test:grok-shim".into(),
                 requester_did: Some("did:test:grok-shim".into()),
                 session_id: session_id.into(),
                 request_doc_id: request_doc_id.clone().into(),

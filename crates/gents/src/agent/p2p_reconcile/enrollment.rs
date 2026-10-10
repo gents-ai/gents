@@ -25,7 +25,7 @@ pub struct EnrollmentOffer {
     pub server_peer: String,
     pub server_ticket_peer: String,
     pub resolved_server_did: String,
-    pub owner_agent: String,
+    pub owner_node: String,
     pub profile: String,
     pub schema_compatible: bool,
     pub admin_signed: bool,
@@ -52,7 +52,7 @@ pub struct EnrollmentRequest {
     pub observed_candidate_peer: String,
     pub resolved_candidate_did: String,
     pub candidate_ticket_peer: String,
-    pub owner_agent: String,
+    pub owner_node: String,
     pub profile: String,
     pub client_nonce: String,
     pub issued_at: String,
@@ -72,7 +72,7 @@ impl EnrollmentRequest {
             &self.server_peer,
             &self.candidate_did,
             &self.candidate_peer,
-            &self.owner_agent,
+            &self.owner_node,
             &self.profile,
             &self.client_nonce,
             &self.issued_at,
@@ -95,7 +95,7 @@ pub struct EnrollmentDecision {
     pub admin_did: String,
     pub candidate_did: String,
     pub candidate_peer: String,
-    pub owner_agent: String,
+    pub owner_node: String,
     pub kind: EnrollmentDecisionKind,
     pub authorization_sequence: usize,
     pub authorization_expires_at: String,
@@ -118,7 +118,7 @@ pub struct AuthorizationRevision {
     pub admin_did: String,
     pub member_did: String,
     pub member_peer: String,
-    pub owner_agent: String,
+    pub owner_node: String,
     pub sequence: usize,
     pub authorization_expires_at: String,
     pub kind: AuthorizationRevisionKind,
@@ -133,7 +133,7 @@ pub struct EnrollmentMembership {
     pub network_id: String,
     pub member_did: String,
     pub member_peer: String,
-    pub owner_agent: String,
+    pub owner_node: String,
     pub authorization_sequence: usize,
     pub authorization_expires_at: String,
     pub active: bool,
@@ -170,7 +170,7 @@ pub struct EnrollmentRouteReceipt {
     pub member_did: String,
     pub member_peer: String,
     pub server_peer: String,
-    pub owner_agent: String,
+    pub owner_node: String,
     pub authorization_sequence: usize,
     pub authorization_expires_at: String,
     pub direction: EnrollmentRouteDirection,
@@ -428,7 +428,7 @@ impl EnrollmentState {
             admin_did: request.admin_did.clone(),
             member_did: request.candidate_did.clone(),
             member_peer: request.candidate_peer.clone(),
-            owner_agent: request.owner_agent.clone(),
+            owner_node: request.owner_node.clone(),
             sequence: decision.authorization_sequence,
             authorization_expires_at: decision.authorization_expires_at.clone(),
             kind: AuthorizationRevisionKind::Active,
@@ -447,7 +447,7 @@ impl EnrollmentState {
             network_id: request.network_id.clone(),
             member_did: request.candidate_did.clone(),
             member_peer: request.candidate_peer.clone(),
-            owner_agent: request.owner_agent.clone(),
+            owner_node: request.owner_node.clone(),
             authorization_sequence: decision.authorization_sequence,
             authorization_expires_at: decision.authorization_expires_at.clone(),
             active: true,
@@ -482,7 +482,7 @@ impl EnrollmentState {
             member_did: request.candidate_did.clone(),
             member_peer: request.candidate_peer.clone(),
             server_peer: request.server_peer.clone(),
-            owner_agent: request.owner_agent.clone(),
+            owner_node: request.owner_node.clone(),
             authorization_sequence: decision.authorization_sequence,
             authorization_expires_at: decision.authorization_expires_at.clone(),
             direction: EnrollmentRouteDirection::ClientToServer,
@@ -549,7 +549,7 @@ impl EnrollmentState {
             request_key: request.request_id.clone(),
             peer_id,
             requester_did: request.candidate_did.clone(),
-            agent_did: request.owner_agent.clone(),
+            node_did: request.owner_node.clone(),
             session_id: "session-1".to_string(),
         };
         let mut catalog = HydrationCatalog {
@@ -557,7 +557,7 @@ impl EnrollmentState {
             sessions: BTreeSet::from([SessionOwner {
                 session_id: hydration.session_id.clone(),
                 requester_did: hydration.requester_did.clone(),
-                agent_did: hydration.agent_did.clone(),
+                node_did: hydration.node_did.clone(),
             }]),
             ..HydrationCatalog::default()
         };
@@ -585,7 +585,7 @@ impl EnrollmentState {
                 catalog.applied_pairing_routes.insert(AppliedPairingRoute {
                     peer_id: route.peer.clone(),
                     requester_did: route.requester.clone(),
-                    agent_did: route.agent.clone(),
+                    node_did: route.agent.clone(),
                 });
             }
         }
@@ -653,7 +653,7 @@ impl EnrollmentState {
             && request.network_id == offer.network_id
             && request.admin_did == offer.admin_did
             && request.server_peer == offer.server_peer
-            && request.owner_agent == offer.owner_agent
+            && request.owner_node == offer.owner_node
             && request.profile == offer.profile
     }
 
@@ -688,7 +688,7 @@ impl EnrollmentState {
             && decision.admin_did == request.admin_did
             && decision.candidate_did == request.candidate_did
             && decision.candidate_peer == request.candidate_peer
-            && decision.owner_agent == request.owner_agent
+            && decision.owner_node == request.owner_node
             && decision.signer_did == request.admin_did
             && !decision.authorization_expires_at.is_empty()
     }
@@ -703,7 +703,7 @@ impl EnrollmentState {
             && revision.admin_did == request.admin_did
             && revision.member_did == request.candidate_did
             && revision.member_peer == request.candidate_peer
-            && revision.owner_agent == request.owner_agent
+            && revision.owner_node == request.owner_node
             && revision.signer_did == request.admin_did
             && !revision.authorization_expires_at.is_empty()
     }
@@ -809,7 +809,7 @@ impl EnrollmentState {
             direction,
             peer,
             requester: request.candidate_did.clone(),
-            agent: request.owner_agent.clone(),
+            agent: request.owner_node.clone(),
             profile: request.profile.clone(),
             live: true,
         }

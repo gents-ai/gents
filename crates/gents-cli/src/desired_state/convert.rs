@@ -7,7 +7,7 @@ pub(crate) fn manifest_from_export_bundle(
     bundle: &ConfigExportBundle,
 ) -> Result<DesiredStateManifest> {
     anyhow::ensure!(
-        bundle.agent_did == bundle.config.agent_principal.agent_did,
+        bundle.node_did == bundle.config.node.node_did,
         "export envelope and principal owners differ"
     );
     let encoded = serde_json::to_value(&bundle.config)?;
@@ -22,7 +22,7 @@ pub(crate) fn manifest_from_export_bundle(
         };
         for row in rows {
             anyhow::ensure!(
-                row.get("agent_did").and_then(Value::as_str) == Some(bundle.agent_did.as_str()),
+                row.get("node_did").and_then(Value::as_str) == Some(bundle.node_did.as_str()),
                 "export contains foreign-owned {name}"
             );
         }
@@ -36,7 +36,7 @@ pub(crate) fn export_bundle_from_manifest(
 ) -> Result<super::DesiredApplyBundle> {
     let bundle = ConfigExportBundle {
         format: crate::CONFIG_EXPORT_FORMAT.into(),
-        agent_did: manifest.agent_principal.agent_did.clone(),
+        node_did: manifest.node.node_did.clone(),
         exported_at: chrono::Utc::now().to_rfc3339(),
         access_mode: access_mode.into(),
         config: manifest.clone(),
@@ -51,7 +51,7 @@ mod tests {
     use serde_json::json;
     #[test]
     fn import_preserves_canonical_roots_and_rejects_cross_owner_documents() {
-        let config: DesiredStateManifest = serde_json::from_value(json!({"agent_principal":{"agent_did":"owner"},"contexts":[{"context_id":"context","agent_did":"owner","system_prompt":"literal {{ text }}"}],"tools":[{"tools_id":"unused","agent_did":"owner","remote":{"services":[]}}]})).unwrap();
+        let config: DesiredStateManifest = serde_json::from_value(json!({"node":{"node_did":"owner"},"contexts":[{"context_id":"context","node_did":"owner","system_prompt":"literal {{ text }}"}],"tools":[{"tools_id":"unused","node_did":"owner","remote":{"services":[]}}]})).unwrap();
         let wrapped = export_bundle_from_manifest(&config, "test").unwrap();
         let loaded = manifest_from_export_bundle(wrapped.as_bundle()).unwrap();
         assert_eq!(
@@ -59,10 +59,10 @@ mod tests {
             serde_json::to_value(&config).unwrap()
         );
         let mut foreign = wrapped.as_bundle().clone();
-        foreign.config.tools[0].agent_did = "other".into();
+        foreign.config.tools[0].node_did = "other".into();
         assert!(manifest_from_export_bundle(&foreign).is_err());
         foreign.config = config;
-        foreign.agent_did = "other".into();
+        foreign.node_did = "other".into();
         assert!(manifest_from_export_bundle(&foreign).is_err());
     }
 }

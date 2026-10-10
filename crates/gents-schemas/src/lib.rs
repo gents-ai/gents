@@ -4,24 +4,25 @@
 //! consumers can depend on the agent collection contract without also pulling
 //! in the runtime, protocol, Codex, or DefraDB dependency graph.
 
-pub const AGENT_PRINCIPAL_NAME: &str = "AgentPrincipal";
-pub const AGENT_PRINCIPAL: &str = include_str!("../schemas/agent/agent_principal.graphql");
-pub const AGENT_BEHAVIOR_NAME: &str = "AgentBehavior";
-pub const AGENT_BEHAVIOR: &str = include_str!("../schemas/agent/agent_behavior.graphql");
+pub const NODE_NAME: &str = "Node";
+pub const NODE: &str = include_str!("../schemas/agent/node.graphql");
+pub const AGENT_NAME: &str = "Agent";
+pub const AGENT: &str = include_str!("../schemas/agent/agent.graphql");
 pub const AGENT_CONTEXT_NAME: &str = "AgentContext";
 pub const AGENT_CONTEXT: &str = include_str!("../schemas/agent/agent_context.graphql");
 pub const COMPACTION_CONFIG_NAME: &str = "CompactionConfig";
 pub const COMPACTION_CONFIG: &str = include_str!("../schemas/agent/compaction_config.graphql");
-pub const AGENT_RUNTIME_NAME: &str = "AgentRuntime";
-pub const AGENT_RUNTIME: &str = include_str!("../schemas/agent/agent_runtime.graphql");
-pub const AGENT_BEHAVIOR_READINESS_NAME: &str = "AgentBehaviorReadiness";
-pub const AGENT_BEHAVIOR_READINESS: &str =
-    include_str!("../schemas/agent/agent_behavior_readiness.graphql");
-pub const AGENT_DIRECTORY_ENTRY_NAME: &str = "AgentDirectoryEntry";
-pub const AGENT_DIRECTORY_ENTRY: &str =
-    include_str!("../schemas/agent/agent_directory_entry.graphql");
-pub const AGENT_MEMORY_NAME: &str = "AgentMemory";
-pub const AGENT_MEMORY: &str = include_str!("../schemas/agent/agent_memory.graphql");
+pub const AGENT_TARGET_NAME: &str = "AgentTarget";
+pub const AGENT_TARGET: &str = include_str!("../schemas/agent/agent_target.graphql");
+pub const NODE_RUNTIME_NAME: &str = "NodeRuntime";
+pub const NODE_RUNTIME: &str = include_str!("../schemas/agent/node_runtime.graphql");
+pub const NODE_READINESS_NAME: &str = "NodeReadiness";
+pub const NODE_READINESS: &str = include_str!("../schemas/agent/node_readiness.graphql");
+pub const NODE_DIRECTORY_ENTRY_NAME: &str = "NodeDirectoryEntry";
+pub const NODE_DIRECTORY_ENTRY: &str =
+    include_str!("../schemas/agent/node_directory_entry.graphql");
+pub const NODE_MEMORY_NAME: &str = "NodeMemory";
+pub const NODE_MEMORY: &str = include_str!("../schemas/agent/node_memory.graphql");
 pub const AGENT_REQUEST_NAME: &str = "AgentRequest";
 pub const AGENT_REQUEST: &str = include_str!("../schemas/agent/agent_request.graphql");
 pub const AGENT_MESSAGE_NAME: &str = "AgentMessage";
@@ -88,8 +89,6 @@ pub const FIRE_OUTCOME_NAME: &str = "FireOutcome";
 pub const FIRE_OUTCOME: &str = include_str!("../schemas/agent/fire_outcome.graphql");
 pub const TRIGGER_NAME: &str = "Trigger";
 pub const TRIGGER: &str = include_str!("../schemas/agent/trigger.graphql");
-pub const SUBAGENT_TARGET_NAME: &str = "SubagentTarget";
-pub const SUBAGENT_TARGET: &str = include_str!("../schemas/agent/subagent_target.graphql");
 pub const CALLBACK_NAME: &str = "Callback";
 pub const CALLBACK: &str = include_str!("../schemas/agent/callback.graphql");
 pub const EVENT_SOURCE_NAME: &str = "EventSource";
@@ -135,8 +134,8 @@ pub const PEER_PAIRING_APPLIED: &str =
     include_str!("../schemas/agent/peer_pairing_applied.graphql");
 pub const PEER_REGISTRY_NAME: &str = "PeerRegistry";
 pub const PEER_REGISTRY: &str = include_str!("../schemas/agent/peer_registry.graphql");
-pub const AGENT_NETWORK_NAME: &str = "AgentNetwork";
-pub const AGENT_NETWORK: &str = include_str!("../schemas/agent/agent_network.graphql");
+pub const NETWORK_NAME: &str = "Network";
+pub const NETWORK: &str = include_str!("../schemas/agent/network.graphql");
 pub const PEER_ENDPOINT_NAME: &str = "PeerEndpoint";
 pub const PEER_ENDPOINT: &str = include_str!("../schemas/agent/peer_endpoint.graphql");
 pub const NETWORK_ADMIN_PIN_NAME: &str = "NetworkAdminPin";
@@ -156,23 +155,21 @@ pub const NETWORK_ENROLLMENT_ROUTE_RECEIPT: &str =
 pub const ENROLLMENT_OPERATOR_NONCE_NAME: &str = "EnrollmentOperatorNonce";
 pub const ENROLLMENT_OPERATOR_NONCE: &str =
     include_str!("../schemas/agent/enrollment_operator_nonce.graphql");
-pub const PERSONA_CONFIG_REQUEST_NAME: &str = "PersonaConfigRequest";
-pub const PERSONA_CONFIG_REQUEST: &str =
-    include_str!("../schemas/agent/persona_config_request.graphql");
 pub const SESSION_HYDRATION_REQUEST_NAME: &str = "SessionHydrationRequest";
 pub const SESSION_HYDRATION_REQUEST: &str =
     include_str!("../schemas/agent/session_hydration_request.graphql");
 
 /// Every agent-domain schema in registration order.
 pub const ALL: &[&str] = &[
-    AGENT_PRINCIPAL,
-    AGENT_BEHAVIOR,
+    NODE,
+    AGENT,
     COMPACTION_CONFIG,
     AGENT_CONTEXT,
-    AGENT_RUNTIME,
-    AGENT_BEHAVIOR_READINESS,
-    AGENT_DIRECTORY_ENTRY,
-    AGENT_MEMORY,
+    AGENT_TARGET,
+    NODE_RUNTIME,
+    NODE_READINESS,
+    NODE_DIRECTORY_ENTRY,
+    NODE_MEMORY,
     TOOLS,
     SKILL,
     DATASTORE_TOOL_SURFACE,
@@ -191,7 +188,6 @@ pub const ALL: &[&str] = &[
     EVENT_SOURCE_CURSOR,
     TRIGGER_FIRE,
     FIRE_OUTCOME,
-    SUBAGENT_TARGET,
     CALLBACK_MODULE,
     CALLBACK_BINDING,
     CALLBACK_INVOCATION,
@@ -219,7 +215,7 @@ pub const ALL: &[&str] = &[
     DATA_PLANE_PAIRING_DESIRED,
     PEER_PAIRING_APPLIED,
     PEER_REGISTRY,
-    AGENT_NETWORK,
+    NETWORK,
     PEER_ENDPOINT,
     NETWORK_ADMIN_PIN,
     NETWORK_ENROLLMENT_REQUEST,
@@ -227,7 +223,6 @@ pub const ALL: &[&str] = &[
     NETWORK_AUTHORIZATION_REVISION,
     NETWORK_ENROLLMENT_ROUTE_RECEIPT,
     ENROLLMENT_OPERATOR_NONCE,
-    PERSONA_CONFIG_REQUEST,
     SESSION_HYDRATION_REQUEST,
     EVAL_DEFINITION,
     EVAL_RUN,
@@ -239,14 +234,15 @@ pub const ALL: &[&str] = &[
 
 /// Collection names matching [`ALL`] order.
 pub const ALL_COLLECTION_NAMES: &[&str] = &[
-    AGENT_PRINCIPAL_NAME,
-    AGENT_BEHAVIOR_NAME,
+    NODE_NAME,
+    AGENT_NAME,
     COMPACTION_CONFIG_NAME,
     AGENT_CONTEXT_NAME,
-    AGENT_RUNTIME_NAME,
-    AGENT_BEHAVIOR_READINESS_NAME,
-    AGENT_DIRECTORY_ENTRY_NAME,
-    AGENT_MEMORY_NAME,
+    AGENT_TARGET_NAME,
+    NODE_RUNTIME_NAME,
+    NODE_READINESS_NAME,
+    NODE_DIRECTORY_ENTRY_NAME,
+    NODE_MEMORY_NAME,
     TOOLS_NAME,
     SKILL_NAME,
     DATASTORE_TOOL_SURFACE_NAME,
@@ -265,7 +261,6 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     EVENT_SOURCE_CURSOR_NAME,
     TRIGGER_FIRE_NAME,
     FIRE_OUTCOME_NAME,
-    SUBAGENT_TARGET_NAME,
     CALLBACK_MODULE_NAME,
     CALLBACK_BINDING_NAME,
     CALLBACK_INVOCATION_NAME,
@@ -293,7 +288,7 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     DATA_PLANE_PAIRING_DESIRED_NAME,
     PEER_PAIRING_APPLIED_NAME,
     PEER_REGISTRY_NAME,
-    AGENT_NETWORK_NAME,
+    NETWORK_NAME,
     PEER_ENDPOINT_NAME,
     NETWORK_ADMIN_PIN_NAME,
     NETWORK_ENROLLMENT_REQUEST_NAME,
@@ -301,7 +296,6 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     NETWORK_AUTHORIZATION_REVISION_NAME,
     NETWORK_ENROLLMENT_ROUTE_RECEIPT_NAME,
     ENROLLMENT_OPERATOR_NONCE_NAME,
-    PERSONA_CONFIG_REQUEST_NAME,
     SESSION_HYDRATION_REQUEST_NAME,
     EVAL_DEFINITION_NAME,
     EVAL_RUN_NAME,
@@ -314,13 +308,13 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
 /// Agent-domain collections the desktop bulk-syncs after pairing.
 ///
 /// This is a curated subset of the `@branchable` collections, not a mirror of
-/// the directive: `WorkspaceRoot`, `AgentNetwork`, `PeerEndpoint`,
+/// the directive: `WorkspaceRoot`, `Network`, `PeerEndpoint`,
 /// `RenderedRequest`, `ProviderContextReduction`, and Callback planner/journal
 /// rows (`CallbackModule`, `CallbackBinding`, `CallbackInvocation`) are
 /// branchable but deliberately not bulk-synced.
 pub const BRANCHABLE_COLLECTION_NAMES: &[&str] = &[
-    AGENT_DIRECTORY_ENTRY_NAME,
-    AGENT_MEMORY_NAME,
+    NODE_DIRECTORY_ENTRY_NAME,
+    NODE_MEMORY_NAME,
     AGENT_REQUEST_NAME,
     AGENT_OUTPUT_SEGMENT_NAME,
     AGENT_SESSION_NAME,
@@ -460,7 +454,7 @@ mod tests {
         let immutable_fields = [
             "item_key",
             "requester_did",
-            "agent_did",
+            "node_did",
             "kind",
             "action",
             "source_kind",
@@ -469,8 +463,8 @@ mod tests {
             "request_id",
             "graph_run_id",
             "cause_doc_id",
-            "target_agent_did",
-            "target_behavior_id",
+            "target_node_did",
+            "target_agent_id",
             "expected_collection",
             "parent_item_id",
             "deadline_at",
@@ -518,7 +512,7 @@ mod tests {
             CALLBACK_NAME,
             EVENT_SOURCE_NAME,
             TRIGGER_NAME,
-            SUBAGENT_TARGET_NAME,
+            AGENT_TARGET_NAME,
             CALLBACK_MODULE_NAME,
             CALLBACK_BINDING_NAME,
             CALLBACK_INVOCATION_NAME,
@@ -568,7 +562,7 @@ mod tests {
             CALLBACK_NAME,
             EVENT_SOURCE_NAME,
             TRIGGER_NAME,
-            SUBAGENT_TARGET_NAME,
+            AGENT_TARGET_NAME,
             CALLBACK_MODULE_NAME,
             CALLBACK_BINDING_NAME,
             CALLBACK_INVOCATION_NAME,
@@ -581,7 +575,7 @@ mod tests {
         assert!(AGENT_REQUEST.contains("workspace_id: String @index @immutable"));
         assert!(AGENT_REQUEST.contains("caused_by_trigger_doc_id: String @index @immutable"));
         assert!(AGENT_REQUEST.contains("workspace_authority: String @immutable"));
-        assert!(AGENT_REQUEST.contains("workspace_owner_agent_did: String @index @immutable"));
+        assert!(AGENT_REQUEST.contains("workspace_owner_node_did: String @index @immutable"));
         assert!(EVENT_SOURCE.contains("workspace_authority: String"));
         assert!(CALLBACK_RESULT.contains("work_unit_id: String @index"));
         assert!(WORKSPACE_RECEIPT.contains("caused_by_correlation: String @index @immutable"));

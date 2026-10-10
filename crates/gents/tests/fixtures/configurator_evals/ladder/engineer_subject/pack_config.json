@@ -1,14 +1,14 @@
 {
-  "agent_principal": {},
-  "agent_behaviors": [
+  "node": {},
+  "agents": [
     {
-      "behavior_id": "engineer",
+      "agent_id": "engineer",
       "display_name": "The Engineer",
       "description": "Configures this node through the native config tool.",
       "context_id": "engineer-context",
       "inference_profile_id": "gents:inference-slot:engineer",
       "tags": [
-        "gents:setup-steward"
+        "gents:engineer"
       ]
     }
   ],
@@ -16,7 +16,7 @@
     {
       "context_id": "engineer-context",
       "display_name": "The Engineer",
-      "system_prompt": "./agent_behaviors/engineer/system_prompt.md",
+      "system_prompt": "./agents/engineer/system_prompt.md",
       "tools_id": "engineer-tools"
     }
   ],
@@ -27,10 +27,10 @@
       "self_config": {
         "enable_self_config": true,
         "self_config_categories": [
-          "behavior",
+          "node",
+          "agent",
           "tools",
           "profile",
-          "persona",
           "backend",
           "mcp_service",
           "automation"

@@ -9,8 +9,8 @@ import type {
 import { createSelectors, type WithSelectors } from "./createSelectors";
 
 /** What the bridge says about inference providers, held once for every
-    panel that shows it: each agent's accounts and usage as last read, and
-    the setup catalog. A read replaces its agent's list whole. */
+    panel that shows it: each node's accounts and usage as last read, and
+    the setup catalog. A read replaces its node's list whole. */
 export type ProviderState = {
   accounts: Readonly<Record<string, readonly ProviderAccountView[]>>;
   usage: Readonly<Record<string, readonly BackendUsageView[]>>;
@@ -37,17 +37,13 @@ export function createProviderStore() {
 export const providers = {
   accountsRead(
     store: ProviderStore,
-    agentDid: string,
+    nodeDid: string,
     views: readonly ProviderAccountView[],
   ) {
-    store.setState((state) => ({ accounts: { ...state.accounts, [agentDid]: views } }));
+    store.setState((state) => ({ accounts: { ...state.accounts, [nodeDid]: views } }));
   },
-  usageRead(
-    store: ProviderStore,
-    agentDid: string,
-    views: readonly BackendUsageView[],
-  ) {
-    store.setState((state) => ({ usage: { ...state.usage, [agentDid]: views } }));
+  usageRead(store: ProviderStore, nodeDid: string, views: readonly BackendUsageView[]) {
+    store.setState((state) => ({ usage: { ...state.usage, [nodeDid]: views } }));
   },
   /** Also clears a failure an earlier read left showing. */
   catalogRead(store: ProviderStore, catalog: InferenceSetupCatalog) {

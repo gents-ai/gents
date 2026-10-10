@@ -1,5 +1,7 @@
 use super::*;
-use crate::tool_surface::{BehaviorToolConfig, FileToolMode, ResolvedToolSelection, ToolCeiling};
+use crate::tool_surface::{
+    AgentToolSurfaceConfig, FileToolMode, ResolvedToolSelection, ToolCeiling,
+};
 use crate::toolset::shared::ToolContext;
 use crate::toolset::{CommandConstraints, CommandExecutionMode, CommandNetworkMode};
 
@@ -91,7 +93,7 @@ fn sample_config(
         digest: config_digest(&workspace, &servers, &constraints),
         workspace,
         session_id: session_id.into(),
-        behavior_id: "b1".into(),
+        agent_id: "b1".into(),
         servers,
         constraints,
         format_on_write: false,
@@ -161,8 +163,8 @@ fn tool_surface_includes_lsp_when_policy_allows() {
     selection.file_tool_root = Some(root.path().to_path_buf());
     let ceiling = ToolCeiling::readonly_at(root.path());
     let config =
-        BehaviorToolConfig::from_selection("beh", selection, &ceiling, Vec::new()).unwrap();
-    let surface = config.resolve_with_subagent_tools_for_mcp_presence(false, Default::default());
+        AgentToolSurfaceConfig::from_selection("beh", selection, &ceiling, Vec::new()).unwrap();
+    let surface = config.resolve_with_agent_tools_for_mcp_presence(false, Default::default());
     assert!(surface.tool_names().iter().any(|name| name == "lsp"));
 }
 
@@ -175,8 +177,8 @@ fn tool_surface_omits_lsp_when_disabled() {
     selection.file_tool_root = Some(root.path().to_path_buf());
     let ceiling = ToolCeiling::readonly_at(root.path());
     let config =
-        BehaviorToolConfig::from_selection("beh", selection, &ceiling, Vec::new()).unwrap();
-    let surface = config.resolve_with_subagent_tools_for_mcp_presence(false, Default::default());
+        AgentToolSurfaceConfig::from_selection("beh", selection, &ceiling, Vec::new()).unwrap();
+    let surface = config.resolve_with_agent_tools_for_mcp_presence(false, Default::default());
     assert!(!surface.tool_names().iter().any(|name| name == "lsp"));
 }
 
@@ -470,7 +472,7 @@ async fn workspace_edit_preflights_every_file_before_writing_any_file() {
     );
     let key = PoolKey {
         session_id: "s-atomic-preflight".into(),
-        behavior_id: "b1".into(),
+        agent_id: "b1".into(),
         workspace_root: root.path().to_path_buf(),
         server_name: server.name.clone(),
         config_digest: config.digest.clone(),
@@ -845,7 +847,7 @@ async fn request_cancel_does_not_kill_pooled_server() {
     );
     let key = PoolKey {
         session_id: "s-cancel".into(),
-        behavior_id: "b1".into(),
+        agent_id: "b1".into(),
         workspace_root: root.path().to_path_buf(),
         server_name: "fixture".into(),
         config_digest: config.digest.clone(),
@@ -901,8 +903,8 @@ fn readonly_surface_uses_file_tool_root_not_cwd() {
     selection.file_tool_root = Some(root.path().to_path_buf());
     let ceiling = ToolCeiling::readonly_at(root.path());
     let config =
-        BehaviorToolConfig::from_selection("beh", selection, &ceiling, Vec::new()).unwrap();
-    let surface = config.resolve_with_subagent_tools_for_mcp_presence(false, Default::default());
+        AgentToolSurfaceConfig::from_selection("beh", selection, &ceiling, Vec::new()).unwrap();
+    let surface = config.resolve_with_agent_tools_for_mcp_presence(false, Default::default());
     let lsp = surface.lsp_config().expect("lsp advertised");
     assert_eq!(
         std::fs::canonicalize(&lsp.workspace).unwrap_or(lsp.workspace.clone()),
@@ -996,7 +998,7 @@ async fn simultaneous_first_calls_share_one_process() {
     );
     let key = PoolKey {
         session_id: "s-singleflight".into(),
-        behavior_id: "b1".into(),
+        agent_id: "b1".into(),
         workspace_root: root.path().to_path_buf(),
         server_name: "fixture".into(),
         config_digest: config.digest.clone(),
@@ -1037,7 +1039,7 @@ async fn resolved_executable_path_is_subject_to_command_prefix_policy() {
     config.digest = config_digest(&config.workspace, &config.servers, &config.constraints);
     let key = PoolKey {
         session_id: "s-resolved-prefix".into(),
-        behavior_id: "b1".into(),
+        agent_id: "b1".into(),
         workspace_root: root.path().to_path_buf(),
         server_name: server.name.clone(),
         config_digest: config.digest.clone(),
@@ -1112,7 +1114,7 @@ while True:
     );
     let key = PoolKey {
         session_id: "s-empty-array".into(),
-        behavior_id: "b1".into(),
+        agent_id: "b1".into(),
         workspace_root: root.path().to_path_buf(),
         server_name: server.name.clone(),
         config_digest: config.digest.clone(),
@@ -1169,7 +1171,7 @@ async fn ensure_open_resyncs_when_disk_text_changes_out_of_band() {
     );
     let key = PoolKey {
         session_id: "s-resync".into(),
-        behavior_id: "b1".into(),
+        agent_id: "b1".into(),
         workspace_root: root.path().to_path_buf(),
         server_name: server.name.clone(),
         config_digest: config.digest.clone(),
@@ -1244,7 +1246,7 @@ while True:
     );
     let key = PoolKey {
         session_id: "s-restart".into(),
-        behavior_id: "b1".into(),
+        agent_id: "b1".into(),
         workspace_root: root.path().to_path_buf(),
         server_name: server.name.clone(),
         config_digest: config.digest.clone(),
@@ -1323,7 +1325,7 @@ while True:
     );
     let key = PoolKey {
         session_id: "s-backoff".into(),
-        behavior_id: "b1".into(),
+        agent_id: "b1".into(),
         workspace_root: root.path().to_path_buf(),
         server_name: "fixture".into(),
         config_digest: config.digest.clone(),
@@ -1369,7 +1371,7 @@ async fn idle_sweep_retires_zero_lease_ready_clients() {
     );
     let key = PoolKey {
         session_id: "s-idle".into(),
-        behavior_id: "b1".into(),
+        agent_id: "b1".into(),
         workspace_root: root.path().to_path_buf(),
         server_name: "fixture".into(),
         config_digest: config.digest.clone(),
@@ -1452,7 +1454,7 @@ while True:
     config.format_on_write = true;
     let key = PoolKey {
         session_id: "s-fmt".into(),
-        behavior_id: "b1".into(),
+        agent_id: "b1".into(),
         workspace_root: root.path().to_path_buf(),
         server_name: "fixture".into(),
         config_digest: config.digest.clone(),
@@ -2033,7 +2035,7 @@ while True:
     );
     let key = PoolKey {
         session_id: "s-start-cancel".into(),
-        behavior_id: "b1".into(),
+        agent_id: "b1".into(),
         workspace_root: root.path().to_path_buf(),
         server_name: "fixture".into(),
         config_digest: config.digest.clone(),
@@ -2112,7 +2114,7 @@ while True:
     );
     let key = PoolKey {
         session_id: "s-drop-cancel".into(),
-        behavior_id: "b1".into(),
+        agent_id: "b1".into(),
         workspace_root: root.path().to_path_buf(),
         server_name: "fixture".into(),
         config_digest: config.digest.clone(),
@@ -2348,7 +2350,7 @@ async fn start_client_initializes_with_pool_key_workspace() {
     );
     let key = PoolKey {
         session_id: "s-overlay-root".into(),
-        behavior_id: "b1".into(),
+        agent_id: "b1".into(),
         workspace_root: overlay.path().to_path_buf(),
         server_name: server.name.clone(),
         config_digest: config.digest.clone(),
@@ -2405,7 +2407,7 @@ pub(crate) async fn assert_artifact_scope_denies_lsp_before_pool_or_linter_dispa
     let tool = LspTool::new(config.clone(), pool.clone()).unwrap();
     let key = PoolKey {
         session_id: config.session_id.clone(),
-        behavior_id: config.behavior_id.clone(),
+        agent_id: config.agent_id.clone(),
         workspace_root: source.clone(),
         server_name: server.name.clone(),
         config_digest: config.digest.clone(),

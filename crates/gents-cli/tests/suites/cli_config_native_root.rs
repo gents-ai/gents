@@ -19,7 +19,7 @@ fn validate_accepts_minimal_canonical_config() -> Result<()> {
     let tmp = tempdir()?;
     write_json_file(
         &tmp.path().join("pack_config.json"),
-        &json!({"agent_principal":{"agent_did":"did:key:example"}}),
+        &json!({"node":{"node_did":"did:key:example"}}),
     )?;
     assert_eq!(run_validate(tmp.path())?["ok"], true);
     Ok(())
@@ -42,7 +42,7 @@ fn validate_rejects_missing_canonical_sidecar() -> Result<()> {
     write_json_file(
         &tmp.path().join("pack_config.json"),
         &json!({
-            "agent_principal":{"agent_did":"did:key:example"},
+            "node":{"node_did":"did:key:example"},
             "contexts":[{"context_id":"default-context","system_prompt":"./missing.md"}]
         }),
     )?;
@@ -60,7 +60,7 @@ fn validate_rejects_unknown_canonical_fields() -> Result<()> {
     write_json_file(
         &tmp.path().join("pack_config.json"),
         &json!({
-            "agent_principal":{"agent_did":"did:key:example"},
+            "node":{"node_did":"did:key:example"},
             "unknown_collection":[]
         }),
     )?;

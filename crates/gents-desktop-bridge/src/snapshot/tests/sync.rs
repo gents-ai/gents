@@ -21,7 +21,7 @@ fn t(secs: u64) -> SystemTime {
 fn serving_progress() -> ClientHydrationProgress {
     ClientHydrationProgress {
         session_id: "session-1".into(),
-        agent_did: "did:test:agent".into(),
+        node_did: "did:test:agent".into(),
         phase: ClientHydrationPhase::Serving,
         merged_count: 4,
         covered_count: 3,
@@ -34,7 +34,7 @@ fn serving_progress() -> ClientHydrationProgress {
 fn hydration_view_copies_receiver_counts_exactly() {
     let view = to_hydration_view(&serving_progress(), None);
     assert_eq!(view.session_id, "session-1");
-    assert_eq!(view.agent_did, "did:test:agent");
+    assert_eq!(view.node_did, "did:test:agent");
     assert_eq!(view.phase, "serving");
     assert_eq!(view.merged_count, 4);
     assert_eq!(view.covered_count, 3);

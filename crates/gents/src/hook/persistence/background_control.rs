@@ -26,13 +26,11 @@ impl DefraSessionHook {
         };
         if !caller.authorizes(
             lifecycle.session_id(),
-            lifecycle.agent_did(),
+            lifecycle.node_did(),
             lifecycle.requester_did(),
         ) || lifecycle.await_mode() != AwaitMode::Background
         {
-            anyhow::bail!(
-                "background tool call {tool_call_id} is not manageable by this session principal"
-            );
+            anyhow::bail!("background tool call {tool_call_id} is not manageable by this session");
         }
         Ok(lifecycle)
     }
@@ -64,7 +62,7 @@ impl DefraSessionHook {
             if crate::interrupt::fetch_interrupt_requested_at_scoped(
                 &self.node,
                 &caller.request_id,
-                &caller.agent_did,
+                &caller.node_did,
                 caller.requester_did.as_deref(),
             )
             .await?
@@ -153,7 +151,7 @@ impl DefraSessionHook {
                     .request_doc_id()
                     .context("spawned background result requires request identity")?,
                 lifecycle.session_id(),
-                lifecycle.agent_did(),
+                lifecycle.node_did(),
                 lifecycle.requester_did(),
             )
             .await?
@@ -161,7 +159,7 @@ impl DefraSessionHook {
             let message = load_tool_call_result(
                 &crate::config_client::ConfigAccess::Local(self.node.clone()),
                 tool_doc_id,
-                lifecycle.agent_did(),
+                lifecycle.node_did(),
                 lifecycle.session_id(),
                 lifecycle.requester_did(),
             )

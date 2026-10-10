@@ -31,7 +31,7 @@ impl EvalContext {
     pub(crate) async fn resolve(scope: &EvalScopeArgs) -> Result<Self> {
         let (access, home_dir) =
             crate::resolve_config_access(scope.home.as_deref(), scope.graphql.as_deref()).await?;
-        let owner = crate::resolve_agent_did(Some(&home_dir), None)?;
+        let owner = crate::resolve_node_did(Some(&home_dir), None)?;
         Ok(Self {
             access,
             home_dir,
@@ -609,10 +609,10 @@ mod tests {
             CellArg {
                 cell_id: "base".into(),
                 pack: "monitor".into(),
-                behavior: Some("did:key:z6M:default".into()),
+                agent: Some("did:key:z6M:default".into()),
             }
         );
-        assert_eq!(parse_cell("base=/packs/monitor").unwrap().behavior, None);
+        assert_eq!(parse_cell("base=/packs/monitor").unwrap().agent, None);
         assert!(parse_cell("no-equals").is_err());
         assert!(parse_cell("base=").is_err());
         assert!(parse_cell("base=monitor:").is_err());
@@ -651,7 +651,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(directory.directory(), fixture.pack.as_path());
-        assert_eq!(directory.default_behavior().unwrap(), "monitor");
+        assert_eq!(directory.default_agent().unwrap(), "monitor");
 
         // A name the home's store holds resolves with no network call (the
         // registry here is unroutable) into a materialized directory.
@@ -667,6 +667,6 @@ mod tests {
         .await
         .unwrap();
         assert!(named.directory().join("manifest.json").is_file());
-        assert_eq!(named.default_behavior().unwrap(), "fixture-worker");
+        assert_eq!(named.default_agent().unwrap(), "fixture-worker");
     }
 }

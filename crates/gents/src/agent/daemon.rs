@@ -25,7 +25,7 @@ use crate::agent::worker_capacity::{
     bind_current_claim, current_slot_capacity, scope_request_capacity, WorkerTicket,
 };
 use crate::compaction::{ProviderReductionEngine, ReductionEngine, ReductionOptions};
-use crate::config::ResolvedBehavior;
+use crate::config::ResolvedAgent;
 use crate::hook::FailurePolicy;
 use crate::lifecycle::{ClaimOutcome, RequestLifecycle, RequestTerminalOutcome, TerminalizeResult};
 use crate::prompt::LayeredPromptBuilder;
@@ -91,10 +91,10 @@ async fn finalize_request_failure(
 pub(crate) async fn verify_request_at_claim_boundary(
     verifier: &crate::request_admission::AgentRequestAdmissionVerifier,
     node: Arc<defra_node::EmbeddedNode>,
-    behavior_id: &str,
+    agent_id: &str,
     request: AgentRequest,
 ) -> Option<AgentRequest> {
-    match verifier.verify_fresh(&request, behavior_id).await {
+    match verifier.verify_fresh(&request, agent_id).await {
         Ok(verified) => Some(verified),
         Err(error) if error.is_denied() => {
             let reason = format!("request admission denied: {error:#}");
@@ -104,7 +104,7 @@ pub(crate) async fn verify_request_at_claim_boundary(
                 crate::request_admission::terminalize_pending_request_rejection(
                     node.as_ref(),
                     &request.doc_id,
-                    &request.agent_did,
+                    &request.node_did,
                     &reason,
                     "terminalize_request_admission_rejection",
                 )
@@ -131,9 +131,9 @@ pub(crate) async fn verify_request_at_claim_boundary(
     }
 }
 
-pub(super) struct BehaviorDaemon<M: ProviderModel> {
+pub(super) struct AgentDaemon<M: ProviderModel> {
     node: Arc<defra_node::EmbeddedNode>,
-    behavior: Arc<ResolvedBehavior>,
+    agent_config: Arc<ResolvedAgent>,
     provider_family: Option<String>,
     replay_issuer: Option<gents_loop::claude_messages_body::ReplayIssuer>,
     compaction_provider_family: Option<String>,
@@ -178,10 +178,10 @@ fn title_task_join_result(joined: std::result::Result<Result<()>, JoinError>) ->
     }
 }
 
-impl<M: ProviderModel> BehaviorDaemon<M> {
+impl<M: ProviderModel> AgentDaemon<M> {
     pub(super) fn new(
         node: Arc<defra_node::EmbeddedNode>,
-        behavior: Arc<ResolvedBehavior>,
+        agent_config: Arc<ResolvedAgent>,
         provider_family: Option<String>,
         model: Arc<M>,
         preamble: String,
@@ -199,7 +199,7 @@ impl<M: ProviderModel> BehaviorDaemon<M> {
         request_admission: crate::request_admission::AgentRequestAdmissionVerifier,
     ) -> Result<Self> {
         let mut compaction_config = crate::completion_factory::loop_config(
-            behavior.as_ref(),
+            agent_config.as_ref(),
             preamble.clone(),
             0,
             crate::rendered_request::CaptureScopeKind::Compaction,
@@ -209,11 +209,11 @@ impl<M: ProviderModel> BehaviorDaemon<M> {
             model.clone(),
             compaction_config,
         ));
-        let compaction_options = crate::compaction::reduction_options_for_behavior(&behavior)?;
+        let compaction_options = crate::compaction::reduction_options_for_agent(&agent_config)?;
 
         Ok(Self {
             node,
-            behavior,
+            agent_config,
             provider_family: provider_family.clone(),
             replay_issuer: None,
             compaction_provider_family: provider_family,
@@ -325,27 +325,27 @@ impl<M: ProviderModel> BehaviorDaemon<M> {
         mut shutdown: tokio::sync::watch::Receiver<bool>,
     ) -> Result<()> {
         tracing::info!(
-            behavior_id = %self.behavior.behavior_id,
-            did = %self.behavior.agent_did(),
-            model = %self.behavior.model_name,
-            context_window = self.behavior.context_window,
-            "gents behavior started"
+            agent_id = %self.agent_config.agent_id,
+            did = %self.agent_config.node_did(),
+            model = %self.agent_config.model_name,
+            context_window = self.agent_config.context_window,
+            "gents agent started"
         );
 
         if self
             .runtime_status
             .readiness()
-            .mark_slot_ready(&self.behavior.behavior_id, self.slot_generation)
+            .mark_slot_ready(&self.agent_config.agent_id, self.slot_generation)
             .await?
         {
             self.startup_barrier
-                .mark_behavior_ready(&self.behavior.behavior_id, self.slot_generation)
+                .mark_agent_ready(&self.agent_config.agent_id, self.slot_generation)
                 .await;
         }
         tracing::info!(
-            behavior_id = %self.behavior.behavior_id,
-            did = %self.behavior.agent_did(),
-            "gents behavior executor online"
+            agent_id = %self.agent_config.agent_id,
+            did = %self.agent_config.node_did(),
+            "gents agent executor online"
         );
 
         let mut title_tasks = JoinSet::new();
@@ -357,7 +357,7 @@ impl<M: ProviderModel> BehaviorDaemon<M> {
                 biased;
 
                 _ = shutdown.changed() => {
-                    tracing::info!(behavior_id = %self.behavior.behavior_id, "shutdown signal received");
+                    tracing::info!(agent_id = %self.agent_config.agent_id, "shutdown signal received");
                     break Ok(());
                 }
 
@@ -385,8 +385,8 @@ impl<M: ProviderModel> BehaviorDaemon<M> {
             }
 
             let trace_attrs = RequestTraceAttrs::from_request(&request);
-            let behavior_id = self.behavior.behavior_id.clone();
-            let backend_id = self.behavior.backend_id.clone().unwrap_or_default();
+            let agent_id = self.agent_config.agent_id.clone();
+            let backend_id = self.agent_config.backend_id.clone().unwrap_or_default();
 
             // The slot's fixed workers may be idle or waiting on this shared
             // active semaphore. Dequeue happens first; no idle worker holds
@@ -402,7 +402,7 @@ impl<M: ProviderModel> BehaviorDaemon<M> {
                 match guard {
                     Ok(guard) => Some(guard),
                     Err(error) => {
-                        tracing::warn!(behavior_id, error = %error, "request worker capacity admission stopped");
+                        tracing::warn!(agent_id, error = %error, "request worker capacity admission stopped");
                         break Ok(());
                     }
                 }
@@ -417,9 +417,9 @@ impl<M: ProviderModel> BehaviorDaemon<M> {
                         request_doc_id = %trace_attrs.request_doc_id,
                         request_id = %trace_attrs.request_id,
                         session_id = %trace_attrs.session_id,
-                        agent_did = %trace_attrs.agent_did,
-                        behavior_id = %behavior_id,
-                        requested_behavior_id = %trace_attrs.requested_behavior_id,
+                        node_did = %trace_attrs.node_did,
+                        agent_id = %agent_id,
+                        requested_agent_id = %trace_attrs.requested_agent_id,
                         backend_id = %backend_id,
                         execution_origin = %trace_attrs.execution_origin,
                         persisted_execution_origin = %trace_attrs.execution_origin,
@@ -483,7 +483,7 @@ impl<M: ProviderModel> BehaviorDaemon<M> {
         for candidate in candidates {
             match self
                 .request_admission
-                .verify_fresh(&candidate, &self.behavior.behavior_id)
+                .verify_fresh(&candidate, &self.agent_config.agent_id)
                 .await
             {
                 Ok(verified) => admitted.push(verified.doc_id),
@@ -508,13 +508,13 @@ impl<M: ProviderModel> BehaviorDaemon<M> {
         // durable transcript and recovery state remain in DefraDB.
         let stream_writer = DefraStreamWriter::new(
             self.node.clone(),
-            self.behavior.agent_did(),
-            Duration::from_millis(self.behavior.stream_batch_ms),
+            self.agent_config.node_did(),
+            Duration::from_millis(self.agent_config.stream_batch_ms),
         );
         let Some(request) = verify_request_at_claim_boundary(
             &self.request_admission,
             self.node.clone(),
-            &self.behavior.behavior_id,
+            &self.agent_config.agent_id,
             request,
         )
         .await
@@ -526,15 +526,15 @@ impl<M: ProviderModel> BehaviorDaemon<M> {
                 .expect("fresh request admission requires a canonical execution_origin");
         let mut lifecycle = RequestLifecycle::new_with_execution_binding(
             self.node.clone(),
-            &self.behavior.behavior_id,
-            self.behavior.agent_did(),
+            &self.agent_config.agent_id,
+            self.agent_config.node_did(),
             request.clone(),
-            self.behavior.deadline_duration.as_secs(),
+            self.agent_config.deadline_duration.as_secs(),
             execution_origin,
-            self.behavior.backend_id.clone().unwrap_or_default(),
+            self.agent_config.backend_id.clone().unwrap_or_default(),
         );
-        lifecycle.set_execution_lease_duration(self.behavior.stream_liveness_timeout);
-        lifecycle.set_configured_max_total_tokens(self.behavior.max_total_tokens);
+        lifecycle.set_execution_lease_duration(self.agent_config.stream_liveness_timeout);
+        lifecycle.set_configured_max_total_tokens(self.agent_config.max_total_tokens);
         lifecycle.set_fold_admitted(self.verified_fold_admissions(&request).await);
 
         let claim_result = lifecycle
@@ -543,8 +543,8 @@ impl<M: ProviderModel> BehaviorDaemon<M> {
                 "request.claim",
                 request_id = %request.request_id,
                 session_id = %request.session_id,
-                agent_did = %request.agent_did,
-                behavior_id = %self.behavior.behavior_id,
+                node_did = %request.node_did,
+                agent_id = %self.agent_config.agent_id,
             ))
             .await;
 
@@ -585,7 +585,7 @@ impl<M: ProviderModel> BehaviorDaemon<M> {
                 record_current_claim_outcome("queued");
                 record_current_request_outcome("queued");
                 tracing::info!(
-                    behavior_id = %self.behavior.behavior_id,
+                    agent_id = %self.agent_config.agent_id,
                     request_id = %request.request_id,
                     session_id = %request.session_id,
                     "request queued behind an earlier same-session request"
@@ -596,7 +596,7 @@ impl<M: ProviderModel> BehaviorDaemon<M> {
                 record_current_claim_outcome("interrupted");
                 record_current_request_outcome("interrupted_pre_claim");
                 tracing::info!(
-                    behavior_id = %self.behavior.behavior_id,
+                    agent_id = %self.agent_config.agent_id,
                     request_id = %request.request_id,
                     session_id = %request.session_id,
                     cancellation_source = "pre_claim",
@@ -608,7 +608,7 @@ impl<M: ProviderModel> BehaviorDaemon<M> {
                 record_current_claim_outcome("expired");
                 record_current_request_outcome("expired_pre_claim");
                 tracing::info!(
-                    behavior_id = %self.behavior.behavior_id,
+                    agent_id = %self.agent_config.agent_id,
                     request_id = %request.request_id,
                     session_id = %request.session_id,
                     cancellation_source = "stale_ttl",
@@ -627,7 +627,7 @@ impl<M: ProviderModel> BehaviorDaemon<M> {
                 record_current_failure_class(&error);
                 if deterministic_rejection {
                     tracing::warn!(
-                        behavior_id = %self.behavior.behavior_id,
+                        agent_id = %self.agent_config.agent_id,
                         request_id = %request.request_id,
                         error = %error,
                         "rejecting request with an invalid canonical admission binding"
@@ -636,7 +636,7 @@ impl<M: ProviderModel> BehaviorDaemon<M> {
                         lifecycle.reject_admission(&error.to_string()).await
                     {
                         tracing::error!(
-                            behavior_id = %self.behavior.behavior_id,
+                            agent_id = %self.agent_config.agent_id,
                             request_id = %request.request_id,
                             error = %rejection_error,
                             "failed to persist request admission rejection"
@@ -645,7 +645,7 @@ impl<M: ProviderModel> BehaviorDaemon<M> {
                     return Ok(());
                 }
                 tracing::warn!(
-                    behavior_id = %self.behavior.behavior_id,
+                    agent_id = %self.agent_config.agent_id,
                     request_id = %request.request_id,
                     error = %error,
                     "failed to claim request; leaving it pending for retry"
@@ -654,21 +654,21 @@ impl<M: ProviderModel> BehaviorDaemon<M> {
             }
         }
 
-        let requested_behavior_id = request.behavior_id.as_str();
-        if requested_behavior_id != self.behavior.behavior_id {
+        let requested_agent_id = request.agent_id.as_str();
+        if requested_agent_id != self.agent_config.agent_id {
             let error = anyhow::anyhow!(
-                "request targets behavior {} but runtime is serving behavior {}",
-                requested_behavior_id,
-                self.behavior.behavior_id
+                "request targets agent {} but runtime is serving agent {}",
+                requested_agent_id,
+                self.agent_config.agent_id
             );
-            record_current_request_outcome("rejected_behavior_mismatch");
+            record_current_request_outcome("rejected_agent_mismatch");
             record_current_failure_class(&error);
             tracing::warn!(
-                behavior_id = %self.behavior.behavior_id,
+                agent_id = %self.agent_config.agent_id,
                 request_id = %request.request_id,
                 session_id = %request.session_id,
-                requested_behavior_id = %requested_behavior_id,
-                "rejecting request for unroutable behavior"
+                requested_agent_id = %requested_agent_id,
+                "rejecting request for unroutable agent"
             );
             self.finalize_failure_before_work(
                 &mut lifecycle,
@@ -761,7 +761,7 @@ impl<M: ProviderModel> BehaviorDaemon<M> {
             Err(error) => {
                 record_current_failure_class(&error);
                 tracing::error!(
-                    behavior_id = %self.behavior.behavior_id,
+                    agent_id = %self.agent_config.agent_id,
                     request_id = %request.request_id,
                     error = %format!("{error:#}"),
                     "refusing to run a request whose task hooks cannot be prepared"
@@ -873,7 +873,7 @@ impl<M: ProviderModel> BehaviorDaemon<M> {
         if !cleanup_errors.is_empty() {
             let note = format!("task cleanup hooks failed: {}", cleanup_errors.join(", "));
             tracing::error!(
-                behavior_id = %self.behavior.behavior_id,
+                agent_id = %self.agent_config.agent_id,
                 request_id = %request.request_id,
                 cleanup_errors = %cleanup_errors.join(","),
                 "task cleanup hooks failed"
@@ -933,7 +933,7 @@ impl<M: ProviderModel> BehaviorDaemon<M> {
                     );
                 }
                 tracing::info!(
-                    behavior_id = %self.behavior.behavior_id,
+                    agent_id = %self.agent_config.agent_id,
                     request_id = %request.request_id,
                     session_id = %request.session_id,
                     cancellation_source = "mid_flight",
@@ -994,7 +994,7 @@ impl<M: ProviderModel> BehaviorDaemon<M> {
             .begin(crate::task_hooks::TaskHookRecord {
                 request_doc_id: request.doc_id.clone(),
                 request_id: request.request_id.clone(),
-                agent_did: request.agent_did.clone(),
+                node_did: request.node_did.clone(),
                 cwd: cwd.clone(),
                 root_guard: self.root_execution_guard.clone(),
                 hooks: hooks.clone(),
@@ -1003,8 +1003,8 @@ impl<M: ProviderModel> BehaviorDaemon<M> {
         Ok((hooks, cwd, Some(record)))
     }
 
-    /// Task hooks run from the behavior's host-tools root, revalidated through
-    /// its admission owner, or the runtime cwd when the behavior has none.
+    /// Task hooks run from the agent_config's host-tools root, revalidated through
+    /// its admission owner, or the runtime cwd when the agent_config has none.
     /// Workspace association for hooks remains an open design question, so a
     /// hook never runs inside the request's workspace overlay.
     async fn task_hook_cwd(&self) -> Result<PathBuf> {
@@ -1103,7 +1103,7 @@ impl<M: ProviderModel> BehaviorDaemon<M> {
                 record_current_request_outcome("failed_after_response");
                 record_current_failure_class(&error);
                 tracing::error!(
-                    behavior_id = %self.behavior.behavior_id,
+                    agent_id = %self.agent_config.agent_id,
                     request_id = %request.request_id,
                     error = %error,
                     "request failed after response started"
@@ -1114,7 +1114,7 @@ impl<M: ProviderModel> BehaviorDaemon<M> {
                 record_current_request_outcome("shutdown_drain_failed");
                 record_current_failure_class(&error);
                 tracing::error!(
-                    behavior_id = %self.behavior.behavior_id,
+                    agent_id = %self.agent_config.agent_id,
                     request_id = %request.request_id,
                     error = %error,
                     "graceful shutdown could not confirm provider output retention; leaving durable execution for recovery"
@@ -1129,7 +1129,7 @@ impl<M: ProviderModel> BehaviorDaemon<M> {
                 record_current_request_outcome("failed");
                 record_current_failure_class(&error);
                 tracing::error!(
-                    behavior_id = %self.behavior.behavior_id,
+                    agent_id = %self.agent_config.agent_id,
                     request_id = %request.request_id,
                     error = %error,
                     "request handling failed"

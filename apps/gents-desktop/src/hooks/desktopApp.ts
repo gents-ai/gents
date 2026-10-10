@@ -108,7 +108,7 @@ export function createDesktopApp({
     ...localServer,
     ...createProvenance({ api, stores }),
   };
-  reconcileSelection(stores, actions.selectAgent);
+  reconcileSelection(stores, actions.selectNode);
   /* the composer's drafts, kept apart so a keystroke reaches only it */
   const drafts = createDraftStore();
   return { api, stores, view, drafts, project, trackedRequestId, lifecycle, actions };

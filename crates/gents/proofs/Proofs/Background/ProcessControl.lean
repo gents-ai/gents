@@ -5,9 +5,9 @@ import Proofs.ToolExecution.State
 
 Authorization and bounded-wait semantics for ordinary background tool calls.
 A process handle remains manageable across request turns in the same session,
-but never crosses the session, agent-principal, or requester-principal boundary.
+but never crosses the session, node, or requester boundary.
 When requester identity is unavailable on both requests, absence is the shared
-principal scope. A missing requester on only one side fails closed.
+requester scope. A missing requester on only one side fails closed.
 -/
 
 namespace Background.ProcessControl
@@ -15,28 +15,28 @@ namespace Background.ProcessControl
 structure Scope where
   requestId : String
   sessionId : String
-  agentDid : String
+  nodeDid : String
   requesterDid : Option String
   deriving DecidableEq, Repr
 
 def authorized (caller owner : Scope) : Bool :=
   caller.sessionId == owner.sessionId &&
-  caller.agentDid == owner.agentDid &&
+  caller.nodeDid == owner.nodeDid &&
   caller.requesterDid == owner.requesterDid
 
 theorem owner_authorized (owner : Scope) : authorized owner owner = true := by
   simp [authorized]
 
-theorem same_principal_next_request_authorized
+theorem same_node_next_request_authorized
     (owner : Scope) (nextRequestId : String) :
     authorized { owner with requestId := nextRequestId } owner = true := by
   simp [authorized]
 
 theorem empty_requester_does_not_alias_absent
-    (requestId nextRequestId sessionId agentDid : String) :
+    (requestId nextRequestId sessionId nodeDid : String) :
     authorized
-      { requestId := nextRequestId, sessionId, agentDid, requesterDid := some "" }
-      { requestId, sessionId, agentDid, requesterDid := none } = false := by
+      { requestId := nextRequestId, sessionId, nodeDid, requesterDid := some "" }
+      { requestId, sessionId, nodeDid, requesterDid := none } = false := by
   simp [authorized]
 
 theorem different_session_denied
@@ -46,7 +46,7 @@ theorem different_session_denied
 
 theorem different_agent_denied
     (caller owner : Scope)
-    (hAgent : caller.agentDid ≠ owner.agentDid) :
+    (hAgent : caller.nodeDid ≠ owner.nodeDid) :
     authorized caller owner = false := by
   simp [authorized, hAgent]
 

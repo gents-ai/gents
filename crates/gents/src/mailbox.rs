@@ -38,7 +38,7 @@ pub const MAILBOX_FIELDS: &str = r#"
     _docID
     item_key
     requester_did
-    agent_did
+    node_did
     status
     kind
     action
@@ -51,8 +51,8 @@ pub const MAILBOX_FIELDS: &str = r#"
     request_id
     graph_run_id
     cause_doc_id
-    target_agent_did
-    target_behavior_id
+    target_node_did
+    target_agent_id
     expected_collection
     parent_item_id
     deadline_at
@@ -188,7 +188,7 @@ pub struct MailboxItem {
     pub doc_id: String,
     pub item_key: String,
     pub requester_did: String,
-    pub agent_did: String,
+    pub node_did: String,
     pub status: String,
     pub kind: String,
     pub action: String,
@@ -207,8 +207,8 @@ pub struct MailboxItem {
     pub graph_run_id: Option<String>,
     #[serde(default)]
     pub cause_doc_id: Option<String>,
-    pub target_agent_did: String,
-    pub target_behavior_id: String,
+    pub target_node_did: String,
+    pub target_agent_id: String,
     #[serde(default)]
     pub expected_collection: Option<String>,
     #[serde(default)]
@@ -237,8 +237,8 @@ impl MailboxItem {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MailboxStampContext {
     pub requester_did: String,
-    pub agent_did: String,
-    pub behavior_id: String,
+    pub node_did: String,
+    pub agent_id: String,
     pub session_id: Option<String>,
 }
 
@@ -246,8 +246,8 @@ impl MailboxStampContext {
     fn validate(&self) -> Result<()> {
         for (name, value) in [
             ("requester_did", self.requester_did.as_str()),
-            ("agent_did", self.agent_did.as_str()),
-            ("behavior_id", self.behavior_id.as_str()),
+            ("node_did", self.node_did.as_str()),
+            ("agent_id", self.agent_id.as_str()),
         ] {
             if value.trim().is_empty() {
                 bail!("mailbox stamping requires non-empty {name}");
@@ -524,7 +524,7 @@ async fn stamp_notification(
             create_MailboxItem(input: {{
                 item_key: "{item_key}",
                 requester_did: "{requester_did}",
-                agent_did: "{agent_did}",
+                node_did: "{node_did}",
                 status: "open",
                 kind: "{kind}",
                 action: "{action}",
@@ -537,8 +537,8 @@ async fn stamp_notification(
                 {request_id}
                 {graph_run_id}
                 {cause_doc_id}
-                target_agent_did: "{target_agent_did}",
-                target_behavior_id: "{target_behavior_id}",
+                target_node_did: "{target_node_did}",
+                target_agent_id: "{target_agent_id}",
                 {expected_collection}
                 {parent_item_id}
                 {deadline_at}
@@ -550,7 +550,7 @@ async fn stamp_notification(
         }}"#,
         item_key = escape_graphql_string(&item_key),
         requester_did = escape_graphql_string(&context.requester_did),
-        agent_did = escape_graphql_string(&context.agent_did),
+        node_did = escape_graphql_string(&context.node_did),
         kind = args.kind.as_str(),
         action = args.action.as_str(),
         title = escape_graphql_string(&args.title),
@@ -562,8 +562,8 @@ async fn stamp_notification(
         request_id = optional_string_field("request_id", args.request_id.as_deref()),
         graph_run_id = optional_string_field("graph_run_id", args.graph_run_id.as_deref()),
         cause_doc_id = optional_string_field("cause_doc_id", args.cause_doc_id.as_deref()),
-        target_agent_did = escape_graphql_string(&context.agent_did),
-        target_behavior_id = escape_graphql_string(&context.behavior_id),
+        target_node_did = escape_graphql_string(&context.node_did),
+        target_agent_id = escape_graphql_string(&context.agent_id),
         expected_collection =
             optional_string_field("expected_collection", args.expected_collection.as_deref()),
         parent_item_id = optional_string_field("parent_item_id", args.parent_item_id.as_deref()),
@@ -690,8 +690,8 @@ impl crate::llm::tool::Tool for MailboxCreateTool {
         let request_id = runtime.request_id.context("missing request_id")?;
         let context = MailboxStampContext {
             requester_did: runtime.requester_did.context("missing requester_did")?,
-            agent_did: runtime.agent_did.context("missing agent_did")?,
-            behavior_id: runtime.behavior_id.context("missing behavior_id")?,
+            node_did: runtime.node_did.context("missing node_did")?,
+            agent_id: runtime.agent_id.context("missing agent_id")?,
             session_id: runtime.session_id,
         };
         self.policy.validate()?;
@@ -716,9 +716,9 @@ impl crate::llm::tool::Tool for MailboxCreateTool {
             ),
         };
         let source_id = identity.source_id(
-            &context.agent_did,
+            &context.node_did,
             &context.requester_did,
-            &context.behavior_id,
+            &context.agent_id,
             event_id,
         )?;
         let receipt = stamp_notification(
@@ -1044,7 +1044,7 @@ mod tests {
     use defra_node::EmbeddedNode;
 
     use super::*;
-    use crate::identity::AgentIdentity;
+    use crate::identity::NodeIdentity;
 
     const FIXTURE_CLOSE: &[MailboxCloseCollection] = &[MailboxCloseCollection {
         collection: "MailboxFixture",
@@ -1070,8 +1070,8 @@ mod tests {
     pub(super) fn context(owner: &str) -> MailboxStampContext {
         MailboxStampContext {
             requester_did: owner.into(),
-            agent_did: "did:test:agent".into(),
-            behavior_id: "operator".into(),
+            node_did: "did:test:agent".into(),
+            agent_id: "operator".into(),
             session_id: Some("session-1".into()),
         }
     }
@@ -1144,11 +1144,11 @@ mod tests {
         let duplicate_open = format!(
             r#"mutation {{ create_MailboxItem(input: {{
                 item_key: "graph:wait-1:ask:3", requester_did: "did:test:owner-a",
-                agent_did: "did:test:agent", status: "open", kind: "ask", action: "ack",
+                node_did: "did:test:agent", status: "open", kind: "ask", action: "ack",
                 title: "duplicate", summary: null, payload: null, source_kind: "graph",
                 source_id: "wait-1", session_id: null, request_id: null, graph_run_id: null,
-                cause_doc_id: null, target_agent_did: "did:test:agent",
-                target_behavior_id: "operator", expected_collection: null, parent_item_id: null,
+                cause_doc_id: null, target_node_did: "did:test:agent",
+                target_agent_id: "operator", expected_collection: null, parent_item_id: null,
                 deadline_at: null, created_at: "{}", updated_at: "{}",
                 resolved_at: null, resolved_doc_id: null
             }}) {{ _docID }} }}"#,
@@ -1312,8 +1312,8 @@ mod tests {
         .unwrap();
         let event_child = format!(
             r#"mutation {{ create_AgentRequest(input: {{
-                request_id: "mailbox-observer-child", purpose: "normal", agent_did: "did:test:agent",
-                requester_did: "did:test:owner", behavior_id: "operator",
+                request_id: "mailbox-observer-child", purpose: "normal", node_did: "did:test:agent",
+                requester_did: "did:test:owner", agent_id: "operator",
                 session_id: "session-1", content: "observe",
                 lifecycle_state: "pending", execution_origin: "scheduled",
                 caused_by_trigger_kind: "event", caused_by_source_doc_id: "{}",
@@ -1344,8 +1344,8 @@ mod tests {
             .unwrap();
         let create_request = format!(
             r#"mutation {{ create_AgentRequest(input: {{
-                request_id: "mailbox-request", purpose: "normal", agent_did: "did:test:agent",
-                requester_did: "did:test:owner", behavior_id: "operator",
+                request_id: "mailbox-request", purpose: "normal", node_did: "did:test:agent",
+                requester_did: "did:test:owner", agent_id: "operator",
                 session_id: "session-1", content: "continue",
                 lifecycle_state: "pending", execution_origin: "interactive",
                 caused_by_source_doc_id: "{}", created_at: "{}"
@@ -1372,8 +1372,8 @@ mod tests {
         let unrelated_request = format!(
             r#"mutation {{ create_AgentRequest(input: {{ request_id: "transport-only",
                 purpose: "normal",
-                agent_did: "did:test:agent", requester_did: "did:test:owner",
-                behavior_id: "operator", session_id: "session-1", content: "draft",
+                node_did: "did:test:agent", requester_did: "did:test:owner",
+                agent_id: "operator", session_id: "session-1", content: "draft",
                 caused_by_source_doc_id: "{}", created_at: "{}" }}) {{ _docID }} }}"#,
             escape_graphql_string(&domain_item.doc_id),
             Utc::now().to_rfc3339()
@@ -1417,19 +1417,19 @@ mod tests {
         let hostile = format!(
             r#"mutation {{ create_MailboxItem(input: {{
                 item_key: "graph:hostile:gate:1", requester_did: "did:test:owner",
-                agent_did: "did:test:agent", status: "open", kind: "gate",
+                node_did: "did:test:agent", status: "open", kind: "gate",
                 action: "write_document", title: "hostile", source_kind: "graph",
-                source_id: "hostile", target_agent_did: "did:test:agent",
-                target_behavior_id: "operator", created_at: "{now}", updated_at: "{now}"
+                source_id: "hostile", target_node_did: "did:test:agent",
+                target_agent_id: "operator", created_at: "{now}", updated_at: "{now}"
             }}) {{ _docID }} }}"#
         );
         assert!(!node.execute(&hostile).await.has_errors());
         let undecodable = format!(
             r#"mutation {{ create_MailboxItem(input: {{
                 item_key: "graph:undecodable:gate:1", requester_did: "did:test:owner",
-                agent_did: "did:test:agent", status: "open", kind: "gate",
+                node_did: "did:test:agent", status: "open", kind: "gate",
                 action: "ack", source_kind: "graph", source_id: "undecodable",
-                target_agent_did: "did:test:agent", target_behavior_id: "operator",
+                target_node_did: "did:test:agent", target_agent_id: "operator",
                 created_at: "{now}", updated_at: "{now}"
             }}) {{ _docID }} }}"#
         );

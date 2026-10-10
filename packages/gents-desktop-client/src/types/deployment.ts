@@ -1,11 +1,11 @@
-export type { AgentPrincipalView } from "../generated/AgentPrincipalView.js";
-export type { BehaviorEnvironmentView } from "../generated/BehaviorEnvironmentView.js";
-export type { BehaviorReadinessSourceView } from "../generated/BehaviorReadinessSourceView.js";
-export type { BehaviorReadinessStatusView } from "../generated/BehaviorReadinessStatusView.js";
-export type { BehaviorReadinessUnknownReasonView } from "../generated/BehaviorReadinessUnknownReasonView.js";
-export type { BehaviorReadinessView } from "../generated/BehaviorReadinessView.js";
-export type { BehaviorUnavailableReasonView } from "../generated/BehaviorUnavailableReasonView.js";
-export type { BehaviorView } from "../generated/BehaviorView.js";
+export type { NodeView } from "../generated/NodeView.js";
+export type { AgentEnvironmentView } from "../generated/AgentEnvironmentView.js";
+export type { NodeReadinessSourceView } from "../generated/NodeReadinessSourceView.js";
+export type { AgentReadinessStatusView } from "../generated/AgentReadinessStatusView.js";
+export type { AgentReadinessUnknownReasonView } from "../generated/AgentReadinessUnknownReasonView.js";
+export type { NodeReadinessView } from "../generated/NodeReadinessView.js";
+export type { AgentUnavailableReasonView } from "../generated/AgentUnavailableReasonView.js";
+export type { AgentView } from "../generated/AgentView.js";
 export type { SessionSummary } from "../generated/SessionSummary.js";
 export type { DeploymentView } from "../generated/DeploymentView.js";
 export type { DesktopClientSnapshot } from "../generated/DesktopClientSnapshot.js";
@@ -31,7 +31,7 @@ export type { TaskRunSummaryView } from "../generated/TaskRunSummaryView.js";
 export type { TaskView } from "../generated/TaskView.js";
 
 export type ToolSurfaceExplanationView = {
-  behaviorId: string;
+  agentId: string;
   enabled: boolean;
   contextId?: string | null;
   toolsId?: string | null;

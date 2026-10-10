@@ -16,7 +16,7 @@ use super::selection::CommandOutputLimits;
 use super::timeouts::{effective_bash_foreground, effective_cli_timeout_secs, ToolTimeouts};
 
 pub(super) fn downgrade_file_tools(
-    behavior_name: &str,
+    agent_name: &str,
     requested: FileToolMode,
     ceiling: FileToolMode,
 ) -> FileToolMode {
@@ -25,7 +25,7 @@ pub(super) fn downgrade_file_tools(
     }
 
     tracing::warn!(
-        behavior_id = %behavior_name,
+        agent_id = %agent_name,
         requested = ?requested,
         ceiling = ?ceiling,
         "downgrading file tool mode to fit tool ceiling"
@@ -33,17 +33,13 @@ pub(super) fn downgrade_file_tools(
     ceiling
 }
 
-pub(super) fn downgrade_bash(
-    behavior_name: &str,
-    requested: BashMode,
-    ceiling: BashMode,
-) -> BashMode {
+pub(super) fn downgrade_bash(agent_name: &str, requested: BashMode, ceiling: BashMode) -> BashMode {
     if requested.rank() <= ceiling.rank() {
         return requested;
     }
 
     tracing::warn!(
-        behavior_id = %behavior_name,
+        agent_id = %agent_name,
         requested = ?requested,
         ceiling = ?ceiling,
         "downgrading bash mode to fit tool ceiling"
@@ -53,7 +49,7 @@ pub(super) fn downgrade_bash(
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn build_host_tools(
-    behavior_name: &str,
+    agent_name: &str,
     file_tools: FileToolMode,
     bash: BashMode,
     command_policy: Option<CommandExecutionPolicy>,
@@ -75,7 +71,7 @@ pub(super) fn build_host_tools(
         || !cli_tool_names.is_empty()
         || enable_lsp;
     let effective_root = if needs_file_tool_root {
-        resolve_effective_tool_root(behavior_name, file_tool_root, ceiling.root())?
+        resolve_effective_tool_root(agent_name, file_tool_root, ceiling.root())?
     } else {
         None
     };
@@ -164,7 +160,7 @@ pub(super) fn build_host_tools(
                 builder = builder.cli_tool(tool)
             }
             None => tracing::warn!(
-                behavior_id = %behavior_name,
+                agent_id = %agent_name,
                 cli_tool = %tool_name,
                 "dropping CLI tool not present in tool ceiling"
             ),
@@ -278,7 +274,7 @@ fn apply_effective_bash(
 }
 
 pub(crate) fn resolve_effective_tool_root(
-    behavior_name: &str,
+    agent_name: &str,
     selection_root: Option<&Path>,
     ceiling_root: Option<&Path>,
 ) -> Result<Option<PathBuf>> {
@@ -288,14 +284,14 @@ pub(crate) fn resolve_effective_tool_root(
                 super::root_admission::resolve_admitted_tool_root(selection_root, [ceiling_root])
                     .with_context(|| {
                     format!(
-                        "resolving behavior {behavior_name} file tool root {}",
+                        "resolving agent {agent_name} file tool root {}",
                         selection_root.display()
                     )
                 })?;
             match decision {
                 super::root_admission::RootAdmission::Admitted(root) => Ok(Some(root)),
                 denied @ super::root_admission::RootAdmission::Denied { .. } => Err(anyhow!(
-                    "behavior {behavior_name} file tool root {} escapes operator tool root {}: {}",
+                    "agent {agent_name} file tool root {} escapes operator tool root {}: {}",
                     selection_root.display(),
                     ceiling_root.display(),
                     denied.denial_reason().expect("denied outcome has a reason")
@@ -306,7 +302,7 @@ pub(crate) fn resolve_effective_tool_root(
             super::root_admission::resolve_configured_tool_root(selection_root)
                 .with_context(|| {
                     format!(
-                        "resolving behavior {behavior_name} file tool root {}",
+                        "resolving agent {agent_name} file tool root {}",
                         selection_root.display()
                     )
                 })
@@ -319,16 +315,16 @@ pub(crate) fn resolve_effective_tool_root(
     }
 }
 
-pub(super) fn dedupe_subagent_targets(
-    values: Vec<crate::document_config::SubagentTargetDocument>,
-) -> Vec<crate::document_config::SubagentTargetDocument> {
+pub(super) fn dedupe_agent_targets(
+    values: Vec<crate::document_config::AgentTargetDocument>,
+) -> Vec<crate::document_config::AgentTargetDocument> {
     use std::collections::HashSet;
     let mut seen = HashSet::new();
     let mut deduped = Vec::with_capacity(values.len());
     for target in values {
         if target.name.trim().is_empty()
-            || target.target_agent_did.trim().is_empty()
-            || target.behavior_id.trim().is_empty()
+            || target.target_node_did.trim().is_empty()
+            || target.agent_id.trim().is_empty()
         {
             continue;
         }
@@ -366,7 +362,7 @@ mod tests {
 
     #[test]
     fn no_command_policy_and_unconstrained_ceiling_stays_none() {
-        // Preserve today's behavior: a behavior with no command policy and an
+        // Preserve today's agent: a agent with no command policy and an
         // unconstrained effective bash resolves to no executable policy.
         let out =
             constrain_command_policy_to_effective_bash(None, &top_bash(), BashMode::Unrestricted);
@@ -417,8 +413,8 @@ mod tests {
     }
 
     #[test]
-    fn effective_all_allowed_keeps_the_behavior_base_gate() {
-        // effective allowed = All ⇒ no ceiling narrowing ⇒ keep the behavior's
+    fn effective_all_allowed_keeps_the_agent_base_gate() {
+        // effective allowed = All ⇒ no ceiling narrowing ⇒ keep the agent's
         // own allowed list unchanged.
         let base = CommandExecutionPolicy::write_capable()
             .with_allowed_argv_prefixes(vec![vec!["git".to_string()]]);
@@ -444,9 +440,9 @@ mod tests {
 
 pub(super) async fn enabled_mcp_service_ids(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
 ) -> Result<Vec<String>> {
-    Ok(crate::registry::configured_mcp_services(node, agent_did)
+    Ok(crate::registry::configured_mcp_services(node, node_did)
         .await?
         .into_iter()
         .filter(|service| service.enabled)
@@ -454,7 +450,7 @@ pub(super) async fn enabled_mcp_service_ids(
         .collect())
 }
 
-/// MCP services whose principal registry row is enabled and whose agent-scoped
+/// MCP services whose node registry row is enabled and whose agent-scoped
 /// measured health permits calls, per `ToolServiceHealthState::project`
 /// (the single owner of the classification): `Healthy` and `Stale` remain
 /// callable (the normal health gate warns but proceeds on `Stale`);
@@ -462,13 +458,13 @@ pub(super) async fn enabled_mcp_service_ids(
 /// required-service dependency.
 pub(crate) async fn measured_available_mcp_service_ids(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
 ) -> Result<Vec<String>> {
-    let services = crate::registry::configured_mcp_services(node, agent_did).await?;
+    let services = crate::registry::configured_mcp_services(node, node_did).await?;
     if services.is_empty() {
         return Ok(Vec::new());
     }
-    let query = mcp_health_query(agent_did);
+    let query = mcp_health_query(node_did);
     let response = crate::config_client::ConfigAccess::transact_local(
         node,
         None,
@@ -482,51 +478,51 @@ pub(crate) async fn measured_available_mcp_service_ids(
     let hostname = hostname::get()
         .ok()
         .and_then(|value| value.into_string().ok());
-    project_measured_mcp_services(agent_did, &services, &response, hostname.as_deref())
+    project_measured_mcp_services(node_did, &services, &response, hostname.as_deref())
 }
 
 /// Explain the same measured availability for local or HTTP control-plane
 /// access. A remote server's loopback endpoint is never inferred from the CLI host.
 pub async fn measured_mcp_services_for_access(
     access: &crate::config_client::ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
     services: &[crate::document_config::ToolServiceRegistry],
 ) -> Result<Vec<String>> {
     if services.is_empty() {
         return Ok(Vec::new());
     }
-    let response = access.execute(&mcp_health_query(agent_did)).await?;
+    let response = access.execute(&mcp_health_query(node_did)).await?;
     let hostname = match access {
         crate::config_client::ConfigAccess::Local(_) => hostname::get()
             .ok()
             .and_then(|value| value.into_string().ok()),
         crate::config_client::ConfigAccess::Graphql(_) => None,
     };
-    project_measured_mcp_services(agent_did, services, &response, hostname.as_deref())
+    project_measured_mcp_services(node_did, services, &response, hostname.as_deref())
 }
 
-fn mcp_health_query(agent_did: &str) -> String {
+fn mcp_health_query(node_did: &str) -> String {
     format!(
-        r#"{{ ToolServiceHealthState(filter: {{agent_did: {{_eq: "{}"}}}}) {{ service_id endpoint status }} }}"#,
-        crate::graphql::escape_graphql_string(agent_did)
+        r#"{{ ToolServiceHealthState(filter: {{node_did: {{_eq: "{}"}}}}) {{ service_id endpoint status }} }}"#,
+        crate::graphql::escape_graphql_string(node_did)
     )
 }
 
 fn project_measured_mcp_services(
-    agent_did: &str,
+    node_did: &str,
     services: &[crate::document_config::ToolServiceRegistry],
     response: &serde_json::Value,
     local_hostname: Option<&str>,
 ) -> Result<Vec<String>> {
     anyhow::ensure!(
-        !agent_did.trim().is_empty(),
-        "MCP availability requires principal scope"
+        !node_did.trim().is_empty(),
+        "MCP availability requires node scope"
     );
     let mut expected_endpoints = HashMap::<String, HashSet<String>>::new();
     let mut seen = HashSet::new();
     for service in services {
         anyhow::ensure!(
-            service.agent_did == agent_did,
+            service.node_did == node_did,
             "MCP availability received foreign service"
         );
         anyhow::ensure!(

@@ -29,7 +29,7 @@ pub(crate) async fn remove(args: PackRemoveArgs) -> Result<()> {
     if args.scope.graphql.is_none() {
         if let Some(record) = gents::pack::read_home_install(&home, &coordinate)? {
             anyhow::ensure!(
-                args.scope.agent_did.is_none(),
+                args.scope.node_did.is_none(),
                 "asset and plugins packs are removed locally with --home; identity flags do not apply"
             );
             let removed = remove_home_install(&home, &coordinate, record).await?;

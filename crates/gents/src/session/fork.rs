@@ -29,10 +29,10 @@ use crate::config_client::{ConfigAccess, ConfigApplyTxn};
 pub struct ForkParams<'a> {
     pub source_session_id: &'a str,
     pub fork_at_user_turn: u32,
-    pub caller_agent_did: &'a str,
+    pub caller_node_did: &'a str,
     /// Exact requester scope. None means absent, never every requester.
     pub caller_requester_did: Option<&'a str>,
-    pub target_behavior_id: Option<&'a str>,
+    pub target_agent_id: Option<&'a str>,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -48,14 +48,14 @@ pub struct ForkOutcome {
 pub enum ForkError {
     #[error("fork source not found in caller scope: session_id={0}")]
     ForkSourceNotFound(String),
-    #[error("fork source's principal or requester does not match caller")]
+    #[error("fork source's node or requester does not match caller")]
     ForkNotSameAgent,
     #[error("fork source has an active runtime AgentRequest and is busy")]
     ForkSourceBusy,
     #[error("fork_at_user_turn={0} is out of range (parent has only {1} user messages)")]
     ForkAtUserTurnOutOfRange(u32, u32),
-    #[error("target behavior not found: {0}")]
-    ForkBehaviorNotFound(String),
+    #[error("target agent not found: {0}")]
+    ForkAgentNotFound(String),
     #[error("fork copy step failed: {0}")]
     ForkCopyFailed(#[from] anyhow::Error),
 }
@@ -144,7 +144,7 @@ fn fork_header(
     TranscriptMessage {
         message_key: key,
         session_id: child.to_owned(),
-        agent_did: origin.agent_did.clone(),
+        node_did: origin.node_did.clone(),
         requester_did: origin.requester_did.clone(),
         request_doc_id: None,
         publication: MessagePublication::Fork {
@@ -162,7 +162,7 @@ fn fork_header(
 fn fork_compaction(origin: &Value, child: &str, params: &ForkParams<'_>) -> Result<Value> {
     anyhow::ensure!(
         text(origin, "session_id")? == params.source_session_id
-            && text(origin, "agent_did")? == params.caller_agent_did
+            && text(origin, "node_did")? == params.caller_node_did
             && optional_text(origin, "requester_did")? == params.caller_requester_did,
         "fork compaction crossed exact source scope"
     );
@@ -173,14 +173,14 @@ fn fork_compaction(origin: &Value, child: &str, params: &ForkParams<'_>) -> Resu
         .clone();
     row.remove("_docID");
     row.insert("session_id".into(), json!(child));
-    row.insert("agent_did".into(), json!(params.caller_agent_did));
+    row.insert("node_did".into(), json!(params.caller_node_did));
     row.insert("requester_did".into(), json!(params.caller_requester_did));
     row.insert("request_id".into(), Value::Null);
     row.insert("request_doc_id".into(), Value::Null);
     row.insert(
         "compaction_key".into(),
         json!(compaction_key(
-            params.caller_agent_did,
+            params.caller_node_did,
             child,
             params.caller_requester_did,
             sequence
@@ -207,7 +207,7 @@ async fn fork_in_txn(
 ) -> Result<ForkOutcome> {
     let parent = load_agent_session_row_in_txn(
         txn,
-        params.caller_agent_did,
+        params.caller_node_did,
         params.source_session_id,
         params.caller_requester_did,
     )
@@ -215,26 +215,26 @@ async fn fork_in_txn(
     .ok_or_else(|| ForkError::ForkSourceNotFound(params.source_session_id.to_owned()))?
     .session;
     anyhow::ensure!(
-        parent.agent_did == params.caller_agent_did
+        parent.node_did == params.caller_node_did
             && parent.requester_did.as_deref() == params.caller_requester_did,
         ForkError::ForkNotSameAgent
     );
-    let behavior = params.target_behavior_id.unwrap_or(&parent.behavior_id);
-    let behavior_document = crate::config_client::read_desired_state_document_in_txn(
+    let agent = params.target_agent_id.unwrap_or(&parent.agent_id);
+    let agent_document = crate::config_client::read_desired_state_document_in_txn(
         txn,
-        crate::collection::Collection::AgentBehavior,
-        params.caller_agent_did,
-        behavior,
+        crate::collection::Collection::Agent,
+        params.caller_node_did,
+        agent,
     )
     .await?
-    .ok_or_else(|| ForkError::ForkBehaviorNotFound(behavior.to_owned()))?;
+    .ok_or_else(|| ForkError::ForkAgentNotFound(agent.to_owned()))?;
     anyhow::ensure!(
-        behavior_document["enabled"] == true,
-        "fork target behavior is disabled"
+        agent_document["enabled"] == true,
+        "fork target agent is disabled"
     );
 
     let scope = session_scope_filter(
-        params.caller_agent_did,
+        params.caller_node_did,
         params.source_session_id,
         params.caller_requester_did,
     );
@@ -243,7 +243,7 @@ async fn fork_in_txn(
             r#"{{
                 AgentRequest(filter: {{ {scope} }}) {{ purpose lifecycle_state }}
                 AgentMessage(filter: {{ {scope} }}, order: {{ sequence: ASC }}) {{ {AGENT_MESSAGE_FIELDS} }}
-                CompactionEntry(filter: {{ {scope} }}, order: {{ sequence: ASC }}) {{ _docID compaction_key session_id agent_did requester_did request_id request_doc_id sequence summary files_read files_modified messages_compacted compacted_through_sequence original_tokens compacted_tokens created_at }}
+                CompactionEntry(filter: {{ {scope} }}, order: {{ sequence: ASC }}) {{ _docID compaction_key session_id node_did requester_did request_id request_doc_id sequence summary files_read files_modified messages_compacted compacted_through_sequence original_tokens compacted_tokens created_at }}
             }}"#
         ))
         .await?;
@@ -266,7 +266,7 @@ async fn fork_in_txn(
     for header in &headers {
         anyhow::ensure!(
             header.message.session_id == params.source_session_id
-                && header.message.agent_did == params.caller_agent_did
+                && header.message.node_did == params.caller_node_did
                 && header.message.requester_did.as_deref() == params.caller_requester_did,
             "fork header crossed exact source scope"
         );
@@ -317,7 +317,7 @@ async fn fork_in_txn(
         .map(serde_json::from_value::<CompactionGenerationRow>)
         .collect::<std::result::Result<Vec<_>, _>>()?;
     validate_compaction_chain(
-        params.caller_agent_did,
+        params.caller_node_did,
         params.source_session_id,
         params.caller_requester_did,
         &source_compactions,
@@ -327,7 +327,7 @@ async fn fork_in_txn(
         let (resolved, _) = load_canonical_message_in_txn(
             txn,
             &origin.doc_id,
-            params.caller_agent_did,
+            params.caller_node_did,
             params.caller_requester_did,
         )
         .await?;
@@ -339,7 +339,7 @@ async fn fork_in_txn(
             origin.doc_id.clone(),
             child,
             sequence_message_key(
-                params.caller_agent_did,
+                params.caller_node_did,
                 child,
                 params.caller_requester_did,
                 origin.message.sequence,
@@ -373,7 +373,7 @@ async fn fork_in_txn(
         .map(serde_json::from_value::<CompactionGenerationRow>)
         .collect::<std::result::Result<Vec<_>, _>>()?;
     validate_compaction_chain(
-        params.caller_agent_did,
+        params.caller_node_did,
         child,
         params.caller_requester_did,
         &child_chain,
@@ -386,8 +386,8 @@ async fn fork_in_txn(
         ensure_session_in_txn(
             txn,
             child,
-            params.caller_agent_did,
-            behavior,
+            params.caller_node_did,
+            agent,
             params.caller_requester_did,
             None,
             Some(gents_protocol::session::SessionProvenance {

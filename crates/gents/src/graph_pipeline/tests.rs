@@ -31,7 +31,7 @@ fn capability(
     outputs: Vec<PortSpec>,
 ) -> StageCapability {
     StageCapability {
-        agent_did: "did:key:composer".to_owned(),
+        node_did: "did:key:composer".to_owned(),
         tags: vec![],
         workspace_authority: None,
         capability_id: id.to_owned(),
@@ -64,7 +64,7 @@ fn catalog() -> Vec<StageCapability> {
 
 fn linear_intent() -> GraphIntent {
     GraphIntent {
-        agent_did: "did:key:composer".to_owned(),
+        node_did: "did:key:composer".to_owned(),
         tags: vec![],
         graph_id: "review-pipeline".to_owned(),
         nodes: vec![
@@ -418,7 +418,7 @@ fn package_plan_order_is_canonical_and_configuration_changes_revision_identity()
         },
         PlannedPackageArtifact {
             logical_id: "prepare".to_owned(),
-            collection: crate::Collection::AgentBehavior,
+            collection: crate::Collection::Agent,
             content_digest: format!("sha256:{}", "a".repeat(64)),
         },
     ];

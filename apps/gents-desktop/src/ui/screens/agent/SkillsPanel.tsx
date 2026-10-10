@@ -30,7 +30,7 @@ function SkillEditor({
   const { changeConfig } = useApp().actions;
   const base = {
     name: "agent" as const,
-    agentDid: deployment.agentDid,
+    nodeDid: deployment.nodeDid,
     section: "skills",
   };
   const saved = {
@@ -50,7 +50,7 @@ function SkillEditor({
       changeConfig("saveSkillConfig", {
         document: {
           skill_id: skill.skillId,
-          agent_did: deployment.agentDid,
+          node_did: deployment.nodeDid,
           name: next.name.trim(),
           description: next.description || null,
           instructions: next.instructions,
@@ -126,7 +126,7 @@ function SkillEditor({
         <TagsRow
           id={id("tools")}
           label="Tool dependencies"
-          description="Intersected with the behavior ceiling."
+          description="Intersected with the agent's ceiling."
           value={d.draft.toolRefs}
           onChange={(v) => d.set("toolRefs", v)}
           placeholder="Add a tool"
@@ -160,7 +160,7 @@ function SkillEditor({
         onDelete={() =>
           changeConfig("deleteSkillConfig", {
             skillId: skill.skillId,
-            agentDid: deployment.agentDid,
+            nodeDid: deployment.nodeDid,
           })
         }
       />
@@ -172,7 +172,7 @@ function SkillEditor({
 function skillDocument(deployment: NodeView, s: SkillView) {
   return {
     skill_id: s.skillId,
-    agent_did: deployment.agentDid,
+    node_did: deployment.nodeDid,
     name: s.name ?? undefined,
     description: s.description,
     instructions: s.instructions ?? "",
@@ -196,7 +196,7 @@ export function SkillsPanel({
   const { changeConfig } = useApp().actions;
   const base = {
     name: "agent" as const,
-    agentDid: deployment.agentDid,
+    nodeDid: deployment.nodeDid,
     section: "skills",
   };
   return (
@@ -240,7 +240,7 @@ export function SkillsPanel({
             onDelete={() =>
               changeConfig("deleteSkillConfig", {
                 skillId: s.skillId,
-                agentDid: deployment.agentDid,
+                nodeDid: deployment.nodeDid,
               })
             }
             warning={dependentsWarning(deployment, "skill", s.skillId)}
@@ -248,13 +248,13 @@ export function SkillsPanel({
         ),
       }))}
       createLabel="New skill"
-      empty="No skills yet. A skill is instructions and tool references a behavior can load by name."
+      empty="No skills yet. A skill is instructions and tool references an agent can load by name."
       onCreate={async () => {
         const skillId = newId("skill");
         await changeConfig("saveSkillConfig", {
           document: {
             skill_id: skillId,
-            agent_did: deployment.agentDid,
+            node_did: deployment.nodeDid,
             name: "New skill",
             description: null,
             instructions: "",
@@ -265,7 +265,7 @@ export function SkillsPanel({
         });
         navigate({
           name: "agent",
-          agentDid: deployment.agentDid,
+          nodeDid: deployment.nodeDid,
           section: "skills",
           item: skillId,
         });

@@ -661,7 +661,7 @@ pub(super) async fn owned_test_hook_with_policy(
 }
 
 pub(super) async fn owned_test_hook_with_identity(
-    identity: Arc<dyn crate::AgentIdentity>,
+    identity: Arc<dyn crate::NodeIdentity>,
 ) -> (
     Arc<defra_node::EmbeddedNode>,
     DefraSessionHook,
@@ -672,7 +672,7 @@ pub(super) async fn owned_test_hook_with_identity(
 }
 
 async fn owned_test_hook_with_identity_policy(
-    identity: Option<Arc<dyn crate::AgentIdentity>>,
+    identity: Option<Arc<dyn crate::NodeIdentity>>,
     policy: FailurePolicy,
 ) -> (
     Arc<defra_node::EmbeddedNode>,
@@ -680,10 +680,10 @@ async fn owned_test_hook_with_identity_policy(
     crate::streaming::DefraStreamWriter,
     crate::lifecycle::RequestLifecycle,
 ) {
-    let agent_did = identity
+    let node_did = identity
         .as_ref()
         .map_or("did:test:test", |identity| identity.did());
-    let requester_did = identity.as_ref().map(|_| agent_did);
+    let requester_did = identity.as_ref().map(|_| node_did);
     let data_path = std::env::temp_dir().join(format!("agent-owned-loop-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
         defra_node::EmbeddedNode::builder()
@@ -695,11 +695,10 @@ async fn owned_test_hook_with_identity_policy(
     ensure_runtime_schemas(&node).await.unwrap();
     let session_id = uuid::Uuid::new_v4().to_string();
     let request_id = uuid::Uuid::new_v4().to_string();
-    crate::session::ensure_session_with_behavior_id_and_requester_did(
+    crate::session::ensure_session_with_agent_id_and_requester_did(
         &node,
         &session_id,
-        "general",
-        agent_did,
+        node_did,
         "general",
         requester_did,
     )
@@ -713,15 +712,15 @@ async fn owned_test_hook_with_identity_policy(
                 crate::lifecycle::RequestIdentity {
                     requester_did: requester_did.map(str::to_owned),
                     request_id: request_id.clone(),
-                    agent_did: agent_did.to_owned(),
-                    behavior_id: "general".to_owned(),
+                    node_did: node_did.to_owned(),
+                    agent_id: "general".to_owned(),
                     session_id: session_id.clone(),
                     content: "owned loop test".to_owned(),
                     execution_origin: crate::lifecycle::ExecutionOrigin::Interactive,
                     created_at: now,
                 },
                 gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
-                    agent_did,
+                    node_did,
                 ),
             ),
             crate::lifecycle::RequestSigner::Identity(identity.as_ref()),
@@ -732,7 +731,7 @@ async fn owned_test_hook_with_identity_policy(
         .unwrap()
     } else {
         format!(
-            r#"mutation {{ create_AgentRequest(input: {{ request_id: "{}", purpose: "normal", agent_did: "did:test:test", behavior_id: "general", session_id: "{}", subagent_depth: 0, retry_parent_request: "", retry_root_request: "{}", superseded_by_request: "", content: "owned loop test", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", created_at: "{}", retry_count: 0, max_retries: 3 }}) {{ _docID }} }}"#,
+            r#"mutation {{ create_AgentRequest(input: {{ request_id: "{}", purpose: "normal", node_did: "did:test:test", agent_id: "general", session_id: "{}", request_hop: 0, retry_parent_request: "", retry_root_request: "{}", superseded_by_request: "", content: "owned loop test", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", created_at: "{}", retry_count: 0, max_retries: 3 }}) {{ _docID }} }}"#,
             crate::graphql::escape_graphql_string(&request_id),
             crate::graphql::escape_graphql_string(&session_id),
             crate::graphql::escape_graphql_string(&request_id),
@@ -764,8 +763,7 @@ async fn owned_test_hook_with_identity_policy(
     let hook = DefraSessionHook::resume_with_identity_policy(
         node.clone(),
         &session_id,
-        "general",
-        agent_did,
+        node_did,
         requester_did,
         policy,
     )
@@ -776,10 +774,10 @@ async fn owned_test_hook_with_identity_policy(
         .unwrap();
     hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::seconds(60)))
         .await;
-    let mut lifecycle = crate::lifecycle::RequestLifecycle::new_with_agent_did(
+    let mut lifecycle = crate::lifecycle::RequestLifecycle::new_with_node_did(
         node.clone(),
         "general",
-        agent_did,
+        node_did,
         row.try_into().unwrap(),
         60,
     );
@@ -787,7 +785,7 @@ async fn owned_test_hook_with_identity_policy(
         lifecycle.claim().await.unwrap(),
         crate::lifecycle::ClaimOutcome::Claimed
     );
-    let writer = crate::streaming::DefraStreamWriter::new(node.clone(), agent_did, Duration::ZERO);
+    let writer = crate::streaming::DefraStreamWriter::new(node.clone(), node_did, Duration::ZERO);
     lifecycle.begin_owned_execution(&writer).await.unwrap();
     (node, hook, writer, lifecycle)
 }

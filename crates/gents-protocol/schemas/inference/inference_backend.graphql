@@ -1,6 +1,6 @@
-type InferenceBackend @index(fields: ["agent_did", "backend_id"], unique: true) {
+type InferenceBackend @index(fields: ["node_did", "backend_id"], unique: true) {
     backend_id: String
-    agent_did: String @index
+    node_did: String @index
     name: String @index
     provider_kind: String
     openai_wire_api: String

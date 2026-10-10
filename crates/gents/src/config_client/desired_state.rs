@@ -93,12 +93,12 @@ pub fn config_projection(
 ) -> Result<(&'static [&'static str], Option<Value>)> {
     use crate::document_config::*;
     match collection {
-        Collection::AgentPrincipal => project::<AgentPrincipal>(value),
-        Collection::AgentBehavior => project::<AgentBehavior>(value),
+        Collection::Node => project::<Node>(value),
+        Collection::Agent => project::<Agent>(value),
         Collection::AgentContext => project::<AgentContext>(value),
         Collection::Compaction => project::<CompactionConfig>(value),
         Collection::Tools => project::<Tools>(value),
-        Collection::SubagentTarget => project::<SubagentTargetDocument>(value),
+        Collection::AgentTarget => project::<AgentTargetDocument>(value),
         Collection::Skill => project::<SkillDocument>(value),
         Collection::DatastoreToolSurface => project::<DatastoreToolSurfaceDocument>(value),
         Collection::ChainKeyBinding => project::<ChainKeyBindingDocument>(value),
@@ -145,15 +145,15 @@ fn reference_filter(collection: Collection, owner: &str, id: &str) -> Result<Str
         !owner.trim().is_empty() && !id.trim().is_empty(),
         "configuration reference requires owner and ID"
     );
-    if collection == Collection::AgentPrincipal {
-        anyhow::ensure!(id == owner, "principal reference must match owner");
+    if collection == Collection::Node {
+        anyhow::ensure!(id == owner, "node reference must match owner");
         Ok(format!(
-            r#"{{ agent_did: {{ _eq: "{}" }} }}"#,
+            r#"{{ node_did: {{ _eq: "{}" }} }}"#,
             escape_graphql_string(owner)
         ))
     } else {
         Ok(format!(
-            r#"{{ agent_did: {{ _eq: "{}" }}, {}: {{ _eq: "{}" }} }}"#,
+            r#"{{ node_did: {{ _eq: "{}" }}, {}: {{ _eq: "{}" }} }}"#,
             escape_graphql_string(owner),
             collection.unique_field(),
             escape_graphql_string(id)
@@ -217,8 +217,8 @@ async fn read_records_paged(
             !owner.trim().is_empty() && !id.trim().is_empty(),
             "configuration reference requires owner and ID"
         );
-        if collection == Collection::AgentPrincipal {
-            anyhow::ensure!(*id == owner, "principal reference must match owner");
+        if collection == Collection::Node {
+            anyhow::ensure!(*id == owner, "node reference must match owner");
         }
         unique_ids.insert(*id);
     }
@@ -231,16 +231,16 @@ async fn read_records_paged(
     let unique_field = collection.unique_field();
     let ordered: Vec<&str> = unique_ids.into_iter().collect();
     for page in ordered.chunks(page_size.max(1)) {
-        let filter = if collection == Collection::AgentPrincipal {
-            // The unique field IS `agent_did` here; an `_in` clause on it
+        let filter = if collection == Collection::Node {
+            // The unique field IS `node_did` here; an `_in` clause on it
             // would duplicate the `_eq` key in the same filter object.
             format!(
-                r#"{{ agent_did: {{ _eq: "{}" }} }}"#,
+                r#"{{ node_did: {{ _eq: "{}" }} }}"#,
                 escape_graphql_string(owner)
             )
         } else {
             format!(
-                r#"{{ agent_did: {{ _eq: "{}" }}, {unique_field}: {{ _in: {} }} }}"#,
+                r#"{{ node_did: {{ _eq: "{}" }}, {unique_field}: {{ _in: {} }} }}"#,
                 escape_graphql_string(owner),
                 graphql_string_list_literal(page.iter().copied())
             )
@@ -282,10 +282,10 @@ async fn read_records_paged(
 pub(crate) async fn read_desired_state_document_in_txn(
     txn: &ConfigApplyTxn<'_>,
     collection: Collection,
-    agent_did: &str,
+    node_did: &str,
     unique_value: &str,
 ) -> Result<Option<Value>> {
-    Ok(read_record(txn, collection, agent_did, unique_value)
+    Ok(read_record(txn, collection, node_did, unique_value)
         .await?
         .map(|(_, value)| value))
 }
@@ -343,8 +343,8 @@ pub(crate) async fn validate_desired_state_plan(
             }
             let key = (document.collection, id.to_owned());
             let replacement = if let Some(current) = candidate.get(&key) {
-                if document.collection == Collection::AgentPrincipal {
-                    validate_principal_replacement(current, &document.update)?;
+                if document.collection == Collection::Node {
+                    validate_node_replacement(current, &document.update)?;
                 }
                 &document.update
             } else {
@@ -1049,10 +1049,7 @@ impl DesiredStateApplyPlan {
                     .and_then(Value::as_array)
                     .cloned()
                     .unwrap_or_default(),
-                None => vec![bundle
-                    .get("agent_principal")
-                    .context("pack requires agent_principal")?
-                    .clone()],
+                None => vec![bundle.get("node").context("pack requires node")?.clone()],
             };
             documents.extend(values.into_iter().map(|value| DesiredStateApplyDocument {
                 collection,
@@ -1174,10 +1171,10 @@ impl DesiredStateApplyPlan {
 
 fn document_identity(collection: Collection, value: &Value) -> Result<(&str, &str)> {
     let owner = value
-        .get("agent_did")
+        .get("node_did")
         .and_then(Value::as_str)
         .filter(|v| !v.trim().is_empty())
-        .context("configuration requires agent_did")?;
+        .context("configuration requires node_did")?;
     let id = value
         .get(collection.unique_field())
         .and_then(Value::as_str)
@@ -1238,15 +1235,15 @@ async fn ensure_expectations_hold(
     }
 }
 
-fn validate_principal_replacement(current: &Value, candidate: &Value) -> Result<()> {
-    if let Some(default) = current.get("default_behavior_id").and_then(Value::as_str) {
+fn validate_node_replacement(current: &Value, candidate: &Value) -> Result<()> {
+    if let Some(default) = current.get("default_agent_id").and_then(Value::as_str) {
         anyhow::ensure!(
             candidate
-                .get("default_behavior_id")
+                .get("default_agent_id")
                 .and_then(Value::as_str)
                 .is_some(),
-            "AgentPrincipal replacement would clear default_behavior_id {default:?}; \
-             include the current default or another enabled behavior in the replacement"
+            "Node replacement would clear default_agent_id {default:?}; \
+             include the current default or another enabled agent in the replacement"
         );
     }
     Ok(())
@@ -1276,8 +1273,8 @@ pub async fn apply_desired_state_plan(
             .is_none_or(|(_, current)| current != &document.update);
         let name = document.collection.graphql_type();
         let (mutation, input) = if let Some((doc_id, current)) = existing {
-            if document.collection == Collection::AgentPrincipal {
-                validate_principal_replacement(&current, &document.update)?;
+            if document.collection == Collection::Node {
+                validate_node_replacement(&current, &document.update)?;
             }
             let mut update = document.update.clone();
             if document.collection == Collection::ChainKeyBinding {

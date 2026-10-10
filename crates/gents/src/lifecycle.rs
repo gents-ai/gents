@@ -322,12 +322,12 @@ pub(crate) enum ClaimAdmissionError {
     #[error("session {session_id} requester scope mismatch: {reason}")]
     SessionScopeMismatch { session_id: String, reason: String },
     #[error(
-        "session {session_id} is pinned to behavior {existing_behavior_id} and cannot switch to {requested_behavior_id}"
+        "session {session_id} is pinned to agent {existing_agent_id} and cannot switch to {requested_agent_id}"
     )]
-    SessionBehaviorMismatch {
+    SessionAgentMismatch {
         session_id: String,
-        existing_behavior_id: String,
-        requested_behavior_id: String,
+        existing_agent_id: String,
+        requested_agent_id: String,
     },
 }
 
@@ -352,7 +352,7 @@ pub struct TriggerLineage {
 #[serde(default)]
 pub struct WorkspaceLineage {
     pub workspace_id: Option<String>,
-    pub workspace_owner_agent_did: Option<String>,
+    pub workspace_owner_node_did: Option<String>,
     pub workspace_authority: Option<String>,
     pub workspace_seal_hash: Option<String>,
 }
@@ -365,7 +365,7 @@ pub fn snapshot_workspace_lineage_source_fields(
 ) {
     const SOURCE_KEYS: &[&str] = &[
         "workspace_id",
-        "workspace_owner_agent_did",
+        "workspace_owner_node_did",
         "workspace_authority",
         "work_unit_id",
         "workspace_seal_hash",
@@ -374,7 +374,7 @@ pub fn snapshot_workspace_lineage_source_fields(
     ];
     const BIND_KEYS: &[&str] = &[
         "workspace_id",
-        "workspace_owner_agent_did",
+        "workspace_owner_node_did",
         "workspace_authority",
         "workspace_seal_hash",
         "seal_hash",
@@ -432,7 +432,7 @@ impl WorkspaceLineage {
         };
         Ok(Self {
             workspace_id: field("workspace_id"),
-            workspace_owner_agent_did: field("workspace_owner_agent_did"),
+            workspace_owner_node_did: field("workspace_owner_node_did"),
             workspace_authority: field("workspace_authority"),
             workspace_seal_hash: field("workspace_seal_hash").or_else(|| field("seal_hash")),
         })
@@ -448,7 +448,7 @@ impl WorkspaceLineage {
     pub fn require_authority_if_workspace_id(&self) -> Result<()> {
         gents_protocol::request_admission::validate_workspace_reference(
             self.workspace_id.as_deref(),
-            self.workspace_owner_agent_did.as_deref(),
+            self.workspace_owner_node_did.as_deref(),
             self.workspace_authority.as_deref(),
             self.workspace_seal_hash.as_deref(),
         )
@@ -465,7 +465,7 @@ impl WorkspaceLineage {
         source.require_authority_if_workspace_id()?;
         anyhow::ensure!(
             self.workspace_id == source.workspace_id
-                && self.workspace_owner_agent_did == source.workspace_owner_agent_did
+                && self.workspace_owner_node_did == source.workspace_owner_node_did
                 && self.workspace_seal_hash == source.workspace_seal_hash,
             "workspace reference differs from its authenticated source"
         );
@@ -518,7 +518,7 @@ impl TriggerExecutionContext {
 
 pub struct RequestLifecycle {
     node: Arc<EmbeddedNode>,
-    behavior_id: String,
+    agent_id: String,
     execution_origin: ExecutionOrigin,
     backend_id: String,
     failure_reason: Option<String>,
@@ -663,7 +663,7 @@ mod tests {
     struct MaterializationTestIdentity;
 
     #[async_trait::async_trait]
-    impl crate::identity::AgentIdentity for MaterializationTestIdentity {
+    impl crate::identity::NodeIdentity for MaterializationTestIdentity {
         fn did(&self) -> &str {
             "did:test:test"
         }
@@ -681,7 +681,7 @@ mod tests {
         }
     }
 
-    fn materialization_identity() -> Arc<dyn crate::identity::AgentIdentity> {
+    fn materialization_identity() -> Arc<dyn crate::identity::NodeIdentity> {
         Arc::new(MaterializationTestIdentity)
     }
 
@@ -834,14 +834,14 @@ mod tests {
     fn snapshot_overlays_event_trigger_workspace_authority() {
         let source = serde_json::json!({
             "workspace_id": "ws-1",
-            "workspace_owner_agent_did": "did:key:workspace-owner",
+            "workspace_owner_node_did": "did:key:workspace-owner",
             "seal_hash": "tree-1"
         });
         let mut fields = std::collections::BTreeMap::new();
         snapshot_workspace_lineage_source_fields(&source, &mut fields, Some("readOnly"));
         assert_eq!(fields.get("workspace_id").map(String::as_str), Some("ws-1"));
         assert_eq!(
-            fields.get("workspace_owner_agent_did").map(String::as_str),
+            fields.get("workspace_owner_node_did").map(String::as_str),
             Some("did:key:workspace-owner")
         );
         assert_eq!(
@@ -906,7 +906,7 @@ mod tests {
                 .unwrap(),
         );
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-        crate::test_support::install_test_behavior(node.as_ref(), "did:test:test", "default").await;
+        crate::test_support::install_test_agent(node.as_ref(), "did:test:test", "default").await;
         let mut lifecycle = RequestLifecycle::materialize_claimed_with_execution_binding(
             node.clone(),
             "default",

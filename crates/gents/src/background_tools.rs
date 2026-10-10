@@ -25,13 +25,13 @@ pub(crate) use gents_loop::live_output::{
 
 /// Immutable identity boundary used by `list_processes`, `read_process`,
 /// `wait_process`, and `cancel_process`. A handle is usable on a later request
-/// in the same session when the agent and requester principals still match.
-/// Two absent requester identities are the same anonymous principal scope.
+/// in the same session when the agent and requester DIDs still match.
+/// Two absent requester identities are the same anonymous scope.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ProcessControlScope {
     pub(crate) request_id: String,
     pub(crate) session_id: String,
-    pub(crate) agent_did: String,
+    pub(crate) node_did: String,
     pub(crate) requester_did: Option<String>,
 }
 
@@ -39,11 +39,11 @@ impl ProcessControlScope {
     pub(crate) fn authorizes(
         &self,
         owner_session_id: &str,
-        owner_agent_did: &str,
+        owner_node_did: &str,
         owner_requester_did: Option<&str>,
     ) -> bool {
         self.session_id == owner_session_id
-            && self.agent_did == owner_agent_did
+            && self.node_did == owner_node_did
             && self.requester_did.as_deref() == owner_requester_did
     }
 }
@@ -91,7 +91,7 @@ struct ListBackgroundToolRow {
     tool_name: String,
     request_doc_id: String,
     session_id: String,
-    agent_did: String,
+    node_did: String,
     requester_did: Option<String>,
     await_mode: Option<String>,
     lifecycle_state: Option<String>,
@@ -106,7 +106,7 @@ struct ReadToolOutputRow {
     tool_call_id: String,
     tool_name: String,
     session_id: Option<String>,
-    agent_did: Option<String>,
+    node_did: Option<String>,
     requester_did: Option<String>,
     await_mode: Option<String>,
     lifecycle_state: Option<String>,
@@ -142,7 +142,7 @@ pub(crate) async fn handle_list_background_tools(
                 tool_name
                 request_doc_id
                 session_id
-                agent_did
+                node_did
                 requester_did
                 await_mode
                 lifecycle_state
@@ -160,11 +160,7 @@ pub(crate) async fn handle_list_background_tools(
 
     let mut entries = Vec::new();
     for row in rows {
-        if !caller.authorizes(
-            &row.session_id,
-            &row.agent_did,
-            row.requester_did.as_deref(),
-        ) {
+        if !caller.authorizes(&row.session_id, &row.node_did, row.requester_did.as_deref()) {
             continue;
         }
         if row.await_mode.as_deref() != Some("background") {
@@ -196,7 +192,7 @@ pub(crate) async fn handle_list_background_tools(
             &row.doc_id,
             &row.request_doc_id,
             &row.session_id,
-            &row.agent_did,
+            &row.node_did,
             row.requester_did.as_deref(),
         )
         .await?;
@@ -272,7 +268,7 @@ pub(crate) async fn read_tool_output_slice(
                 tool_name
                 request_doc_id
                 session_id
-                agent_did
+                node_did
                 requester_did
                 await_mode
                 lifecycle_state
@@ -288,7 +284,7 @@ pub(crate) async fn read_tool_output_slice(
     };
     if !caller.authorizes(
         row.session_id.as_deref().unwrap_or_default(),
-        row.agent_did.as_deref().unwrap_or_default(),
+        row.node_did.as_deref().unwrap_or_default(),
         row.requester_did.as_deref(),
     ) {
         return Ok(ReadToolOutputOutcome::NotAuthorized);
@@ -314,7 +310,7 @@ pub(crate) async fn read_tool_output_slice(
         row.session_id
             .as_deref()
             .context("tool output row lacks session binding")?,
-        row.agent_did
+        row.node_did
             .as_deref()
             .context("tool output row lacks agent binding")?,
         row.requester_did.as_deref(),
@@ -346,7 +342,7 @@ pub(crate) async fn canonical_tool_output(
     tool_doc_id: &str,
     request_doc_id: &str,
     session_id: &str,
-    agent_did: &str,
+    node_did: &str,
     requester_did: Option<&str>,
 ) -> Result<String> {
     let response = crate::graphql::graphql_with_transaction_retry(
@@ -362,7 +358,7 @@ pub(crate) async fn canonical_tool_output(
         .and_then(serde_json::Value::as_array)
         .context("canonical tool output query omitted segments")?;
     let rows =
-        decode_scoped_request_output_segments(values, agent_did, Some(session_id), requester_did)?;
+        decode_scoped_request_output_segments(values, node_did, Some(session_id), requester_did)?;
     Ok(canonical_tool_output_from_rows(rows, tool_doc_id, request_doc_id)?.into_text())
 }
 
@@ -385,7 +381,7 @@ pub(crate) async fn observe_canonical_tool_output_with_access(
     tool_doc_id: &str,
     request_doc_id: &str,
     session_id: &str,
-    agent_did: &str,
+    node_did: &str,
     requester_did: Option<&str>,
 ) -> Result<CanonicalToolOutputObservation> {
     let response = access
@@ -396,7 +392,7 @@ pub(crate) async fn observe_canonical_tool_output_with_access(
         .and_then(serde_json::Value::as_array)
         .context("canonical tool output query omitted segments")?;
     let rows =
-        decode_scoped_request_output_segments(values, agent_did, Some(session_id), requester_did)?;
+        decode_scoped_request_output_segments(values, node_did, Some(session_id), requester_did)?;
     canonical_tool_output_from_rows(rows, tool_doc_id, request_doc_id)
 }
 
@@ -644,7 +640,7 @@ mod tests {
     #[test]
     fn canonical_tool_output_requires_a_close_before_finalizing() {
         let segment = gents_protocol::output::OutputSegment {
-            agent_did: "did:test:owner".into(),
+            node_did: "did:test:owner".into(),
             requester_did: None,
             session_id: "session".into(),
             request_doc_id: "request-doc".into(),
@@ -682,7 +678,7 @@ mod tests {
     #[test]
     fn canonical_tool_output_preserves_a_valid_empty_close() {
         let segment = gents_protocol::output::OutputSegment {
-            agent_did: "did:test:owner".into(),
+            node_did: "did:test:owner".into(),
             requester_did: None,
             session_id: "session".into(),
             request_doc_id: "request-doc".into(),
@@ -728,7 +724,7 @@ mod tests {
         let owner = ProcessControlScope {
             request_id: "request-1".to_string(),
             session_id: "session-1".to_string(),
-            agent_did: "did:agent".to_string(),
+            node_did: "did:agent".to_string(),
             requester_did: None,
         };
         let absent_next_turn = ProcessControlScope {
@@ -737,7 +733,7 @@ mod tests {
         };
         assert!(absent_next_turn.authorizes(
             &owner.session_id,
-            &owner.agent_did,
+            &owner.node_did,
             owner.requester_did.as_deref(),
         ));
 
@@ -747,7 +743,7 @@ mod tests {
         };
         assert!(!empty_next_turn.authorizes(
             &owner.session_id,
-            &owner.agent_did,
+            &owner.node_did,
             owner.requester_did.as_deref(),
         ));
     }
@@ -818,7 +814,7 @@ mod tests {
 
     /// Drives the Lean `tool_output_paging_cases` (#937) through the real
     /// `read_retained_output_slice`. The rows are computed from the Lean
-    /// `Subagent.ToolOutput.readSlice` model, so paging drift in either
+    /// `ToolOutput.readSlice` model, so paging drift in either
     /// direction (model or implementation) fails here. ASCII payloads keep
     /// byte and UTF-8 character boundaries identical, so the Rust boundary
     /// snapping is inert for these rows.

@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::support::accepted_turn::{boot_prepared_accepted_turn, AcceptedTurnSpec};
-use crate::support::fixtures::configure_behavior_tools;
+use crate::support::fixtures::configure_agent_tools;
 use crate::support::streaming_backend::StreamChunk;
 use crate::support::{first_row, test_db_in};
 
@@ -45,7 +45,7 @@ struct MessageRow {
 #[derive(Debug, Deserialize, Serialize)]
 struct CrashWorkerReady {
     data_path: std::path::PathBuf,
-    agent_did: String,
+    node_did: String,
     session_id: String,
     tool_call_id: String,
 }
@@ -58,14 +58,14 @@ async fn run_recovery_crash_worker(ready_path: &std::path::Path) {
         .tempdir_in(ready_path.parent().expect("handshake parent"))
         .unwrap();
     let db = test_db_in(data_dir).await;
-    let agent_did = db.node_identity.did().to_string();
-    let behavior_id = "r6-background-recovery";
+    let node_did = db.node_identity.did().to_string();
+    let agent_id = "r6-background-recovery";
     let session_id = "r6-recovery-session";
     let spec = AcceptedTurnSpec {
         backend_id: "r6-recovery-backend",
         model: "test-model",
-        parent_behavior_id: behavior_id,
-        configured_behavior_ids: &[behavior_id],
+        parent_agent_id: agent_id,
+        configured_agent_ids: &[agent_id],
         request_id: "r6-recovery-parent",
         session_id,
         prompt: "start recovery background process",
@@ -76,7 +76,7 @@ async fn run_recovery_crash_worker(ready_path: &std::path::Path) {
         )],
         child_plans: Vec::new(),
         valid_until: None,
-        subagent_depth: None,
+        request_hop: None,
         request_setup: None,
     };
     let prepared = crate::support::accepted_turn::prepare_accepted_turn(&db, spec).await;
@@ -87,14 +87,14 @@ async fn run_recovery_crash_worker(ready_path: &std::path::Path) {
     prepared
         .backend
         .enable_dynamic_followups("start recovery background process");
-    configure_behavior_tools(
+    configure_agent_tools(
         db.node.as_ref(),
-        &agent_did,
-        behavior_id,
+        &node_did,
+        agent_id,
         None,
         gents::document_config::Tools {
-            tools_id: format!("{behavior_id}:tools"),
-            agent_did: agent_did.clone(),
+            tools_id: format!("{agent_id}:tools"),
+            node_did: node_did.clone(),
             host: Some(gents::document_config::HostTools {
                 bash: Some(gents::document_config::BashTools {
                     mode: gents::BashMode::ReadOnly,
@@ -109,8 +109,8 @@ async fn run_recovery_crash_worker(ready_path: &std::path::Path) {
         Vec::new(),
     )
     .await;
-    let identity: std::sync::Arc<dyn gents::AgentIdentity> = db.node_identity.clone();
-    let agent = gents::Gents::from_default_behavior_documents(
+    let identity: std::sync::Arc<dyn gents::NodeIdentity> = db.node_identity.clone();
+    let agent = gents::Gents::from_default_agent_documents(
         db.node.clone(),
         identity,
         gents::DocumentRuntimeOptions {
@@ -147,7 +147,7 @@ async fn run_recovery_crash_worker(ready_path: &std::path::Path) {
     );
     let ready = CrashWorkerReady {
         data_path: db.data_path().to_path_buf(),
-        agent_did,
+        node_did,
         session_id: session_id.to_string(),
         tool_call_id,
     };
@@ -180,7 +180,7 @@ async fn load_messages(
             AgentMessage(
                 filter: {{ session_id: {{ _eq: "{session_id}" }} }},
                 order: {{ sequence: ASC }}
-            ) {{ _docID agent_did requester_did }}
+            ) {{ _docID node_did requester_did }}
         }}"#
     );
     let response = node.execute(&query).await;
@@ -201,7 +201,7 @@ async fn load_messages(
         let (_, message) = gents::session::load_canonical_message_from_node(
             node,
             header["_docID"].as_str().expect("message header _docID"),
-            header["agent_did"].as_str().expect("message header agent"),
+            header["node_did"].as_str().expect("message header agent"),
             header["requester_did"].as_str(),
         )
         .await
@@ -314,14 +314,14 @@ async fn recover_all_interrupts_backgrounded_running_tool_with_live_parent() {
         gents::KeyIdentity::load_or_create(ready.data_path.join("node.key"), None)
             .expect("reload crashed worker signing identity");
     assert_eq!(
-        gents::AgentIdentity::did(&reopened_identity),
-        ready.agent_did,
+        gents::NodeIdentity::did(&reopened_identity),
+        ready.node_did,
         "persisted crash-worker key must retain the exact node principal"
     );
     let node = std::sync::Arc::new(
         gents::defra_node::EmbeddedNode::builder()
             .data_path(&ready.data_path)
-            .with_node_identity_did(&ready.agent_did)
+            .with_node_identity_did(&ready.node_did)
             .build()
             .await
             .expect("reopen crashed recovery store"),
@@ -350,7 +350,7 @@ async fn recover_all_interrupts_backgrounded_running_tool_with_live_parent() {
     let executions = gents::BackgroundExecutionRegistry::default().with_process_records(records);
     let report = gents::tool_call_lifecycle::ToolCallLifecycle::recover_all_with_executions(
         &node,
-        &ready.agent_did,
+        &ready.node_did,
         &executions,
     )
     .await

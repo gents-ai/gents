@@ -42,7 +42,7 @@ private def runtimeSourceJson : RuntimeInternalSourceKind → String
 
 private def workspaceJson (w : RequestWorkspace) : String :=
   "{\"workspace_id\":" ++ optionalString w.workspaceId ++
-  ",\"workspace_owner_agent_did\":" ++ optionalString w.ownerAgentDid ++
+  ",\"workspace_owner_node_did\":" ++ optionalString w.ownerNodeDid ++
   ",\"workspace_authority\":" ++ optionalString (w.authority.map BindingAuthority.toDefraDB) ++
   ",\"workspace_seal_hash\":" ++ optionalString w.sealHash ++ "}"
 
@@ -63,8 +63,8 @@ private def requestInputCaseJson (c : RequestInputCase) : String :=
   ",\"context_skill_ids\":" ++ jsonStringArray c.contextSkillIds ++
   ",\"cwd_allowed\":" ++ boolString c.cwdAllowed ++
   ",\"queue_source_allowed\":" ++ boolString c.queueSourceAllowed ++
-  ",\"behavior\":" ++ jsonString c.behavior ++
-  ",\"session_behavior\":" ++ jsonString c.sessionBehavior ++
+  ",\"agent\":" ++ jsonString c.agent ++
+  ",\"session_agent\":" ++ jsonString c.sessionAgent ++
   ",\"session_exists\":" ++ boolString c.sessionExists ++
   ",\"current_title\":" ++ titleJson c.currentTitle ++
   ",\"canonical_input_fields\":" ++

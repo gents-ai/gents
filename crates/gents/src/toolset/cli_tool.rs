@@ -467,7 +467,7 @@ mod tests {
         crate::tool_call_lifecycle::load_tool_call_presentation(
             &crate::config_client::ConfigAccess::Local(node.clone()),
             tool.doc_id().unwrap(),
-            tool.agent_did(),
+            tool.node_did(),
             tool.session_id(),
             tool.requester_did(),
         )
@@ -486,7 +486,7 @@ mod tests {
             tool.doc_id().unwrap(),
             tool.request_doc_id().unwrap(),
             tool.session_id(),
-            tool.agent_did(),
+            tool.node_did(),
             tool.requester_did(),
         )
         .await

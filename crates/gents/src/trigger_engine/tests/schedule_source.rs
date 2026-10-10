@@ -4,13 +4,13 @@ use super::*;
 
 /// Build the shared stable "general" behavior once per test process so the
 /// fixture documents are seeded with the exact owner DID the runtime source
-/// resolves from the snapshot (`snapshot.behavior(...).agent_did()`).
-/// `integration_test_behavior` mints a fresh principal per call, so seeding
+/// resolves from the snapshot (`snapshot.agent(...).node_did()`).
+/// `integration_test_agent` mints a fresh principal per call, so seeding
 /// needs this stable handle.
-fn schedule_test_behavior() -> Arc<ResolvedBehavior> {
-    static BEHAVIOR: std::sync::OnceLock<Arc<ResolvedBehavior>> = std::sync::OnceLock::new();
+fn schedule_test_behavior() -> Arc<ResolvedAgent> {
+    static BEHAVIOR: std::sync::OnceLock<Arc<ResolvedAgent>> = std::sync::OnceLock::new();
     BEHAVIOR
-        .get_or_init(|| integration_test_behavior("general"))
+        .get_or_init(|| integration_test_agent("general"))
         .clone()
 }
 
@@ -24,7 +24,7 @@ async fn create_schedule_cadence_doc(
     cadence: serde_json::Value,
 ) {
     let input = serde_json::json!({
-        "agent_did": owner_did,
+        "node_did": owner_did,
         "schedule_id": schedule_id,
         "cadence": cadence,
     });
@@ -70,7 +70,7 @@ async fn create_schedule_with_next_run_at(
 ) -> String {
     create_schedule_cadence_doc(node, owner_did, schedule_id, cadence).await;
     let mut input = serde_json::json!({
-        "agent_did": owner_did,
+        "node_did": owner_did,
         "trigger_id": trigger_id,
         "task_id": task_id,
         "source": {"kind": "schedule", "schedule_id": schedule_id},
@@ -103,7 +103,7 @@ async fn create_schedule_with_next_run_at(
     // Resolve the physical document id the runtime projection carries as
     // `trigger_doc_id` for downstream request lineage.
     let query = format!(
-        r#"{{ Trigger(filter: {{ agent_did: {{ _eq: "{}" }}, trigger_id: {{ _eq: "{}" }} }}, limit: 2) {{ _docID }} }}"#,
+        r#"{{ Trigger(filter: {{ node_did: {{ _eq: "{}" }}, trigger_id: {{ _eq: "{}" }} }}, limit: 2) {{ _docID }} }}"#,
         escape_graphql_string(owner_did),
         escape_graphql_string(trigger_id),
     );
@@ -130,7 +130,7 @@ async fn observed_trigger(
     trigger_id: &str,
 ) -> serde_json::Value {
     let query = format!(
-        r#"{{ Trigger(filter: {{ agent_did: {{ _eq: "{}" }}, trigger_id: {{ _eq: "{}" }} }}, limit: 2) {{ _docID task_id source enabled concurrency next_run_at last_attempt_at last_status last_error fire_count }} }}"#,
+        r#"{{ Trigger(filter: {{ node_did: {{ _eq: "{}" }}, trigger_id: {{ _eq: "{}" }} }}, limit: 2) {{ _docID task_id source enabled concurrency next_run_at last_attempt_at last_status last_error fire_count }} }}"#,
         escape_graphql_string(owner_did),
         escape_graphql_string(trigger_id),
     );
@@ -153,7 +153,7 @@ async fn observed_schedule_cadence(
     schedule_id: &str,
 ) -> ScheduleCadence {
     let query = format!(
-        r#"{{ Schedule(filter: {{ agent_did: {{ _eq: "{}" }}, schedule_id: {{ _eq: "{}" }} }}, limit: 2) {{ cadence }} }}"#,
+        r#"{{ Schedule(filter: {{ node_did: {{ _eq: "{}" }}, schedule_id: {{ _eq: "{}" }} }}, limit: 2) {{ cadence }} }}"#,
         escape_graphql_string(owner_did),
         escape_graphql_string(schedule_id),
     );
@@ -184,7 +184,7 @@ async fn schedule_source_next_fire_emits_intent_when_schedule_is_due() {
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
     let behavior = schedule_test_behavior();
-    let owner_did = behavior.agent_did().to_string();
+    let owner_did = behavior.node_did().to_string();
     let past = (Utc::now() - ChronoDuration::seconds(1)).to_rfc3339();
     let trigger_doc_id = create_schedule_with_next_run_at(
         node.as_ref(),
@@ -206,7 +206,7 @@ async fn schedule_source_next_fire_emits_intent_when_schedule_is_due() {
         emit_outcome: false,
         task_id: "task-1".to_string(),
         name: None,
-        behavior_id: "general".to_string(),
+        agent_id: "general".to_string(),
         prompt_template: "hi".to_string(),
         goal_objective_template: None,
         goal_token_budget: None,
@@ -223,7 +223,7 @@ async fn schedule_source_next_fire_emits_intent_when_schedule_is_due() {
         enabled: true,
         concurrency: ConcurrencyMode::Serial,
     };
-    let snapshot = snapshot_with_behavior_and_schedules(
+    let snapshot = snapshot_with_agent_and_schedules(
         behavior,
         HashMap::from([("sched-1".to_string(), schedule)]),
     );
@@ -273,7 +273,7 @@ async fn schedule_source_on_result_writes_runtime_fields_on_fired_and_skipped() 
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
     let behavior = schedule_test_behavior();
-    let owner_did = behavior.agent_did().to_string();
+    let owner_did = behavior.node_did().to_string();
 
     // Seed a Trigger whose cursor is already due (next_run_at 1s in the past)
     // so next_fire() will immediately yield an intent.
@@ -294,7 +294,7 @@ async fn schedule_source_on_result_writes_runtime_fields_on_fired_and_skipped() 
         emit_outcome: false,
         task_id: "task-1".to_string(),
         name: None,
-        behavior_id: "general".to_string(),
+        agent_id: "general".to_string(),
         prompt_template: "hi".to_string(),
         goal_objective_template: None,
         goal_token_budget: None,
@@ -315,7 +315,7 @@ async fn schedule_source_on_result_writes_runtime_fields_on_fired_and_skipped() 
         ScheduleCadence::Interval { interval_secs } => interval_secs,
         ScheduleCadence::Cron { .. } => panic!("test helper should build an interval schedule"),
     };
-    let snapshot = snapshot_with_behavior_and_schedules(
+    let snapshot = snapshot_with_agent_and_schedules(
         behavior,
         HashMap::from([("sched-1".to_string(), schedule)]),
     );
@@ -413,7 +413,7 @@ async fn schedule_source_on_result_writes_runtime_fields_on_fired_and_skipped() 
     let mutation = format!(
         r#"mutation {{
             update_Trigger(
-                filter: {{ agent_did: {{ _eq: "{escaped_owner}" }}, trigger_id: {{ _eq: "{escaped_trigger_id}" }} }},
+                filter: {{ node_did: {{ _eq: "{escaped_owner}" }}, trigger_id: {{ _eq: "{escaped_trigger_id}" }} }},
                 input: {{
                     next_run_at: "{escaped_rewound}",
                     last_attempt_at: "{escaped_preserved_last_attempt}"
@@ -533,7 +533,7 @@ async fn trigger_engine_enqueues_agent_request_for_due_schedule_e2e() {
     // Seed a Trigger whose cursor (next_run_at) is 1s in the past — the
     // ScheduleSource will emit an intent on its next tick.
     let behavior = schedule_test_behavior();
-    let owner_did = behavior.agent_did().to_string();
+    let owner_did = behavior.node_did().to_string();
     let past = (Utc::now() - ChronoDuration::seconds(1)).to_rfc3339();
     let trigger_doc_id = create_schedule_with_next_run_at(
         node.as_ref(),
@@ -553,7 +553,7 @@ async fn trigger_engine_enqueues_agent_request_for_due_schedule_e2e() {
         emit_outcome: false,
         task_id: "task-e2e".to_string(),
         name: Some("Mini Host Health".to_string()),
-        behavior_id: behavior.behavior_id.clone(),
+        agent_id: behavior.agent_id.clone(),
         prompt_template: "integration fire".to_string(),
         goal_objective_template: None,
         goal_token_budget: None,
@@ -570,7 +570,7 @@ async fn trigger_engine_enqueues_agent_request_for_due_schedule_e2e() {
         enabled: true,
         concurrency: ConcurrencyMode::Serial,
     };
-    let snapshot = snapshot_with_behavior_and_schedules(
+    let snapshot = snapshot_with_agent_and_schedules(
         behavior,
         HashMap::from([("sched-e2e".to_string(), schedule)]),
     );
@@ -703,7 +703,7 @@ async fn schedule_source_seeds_null_next_run_at_and_fires_on_first_tick() {
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
     let behavior = schedule_test_behavior();
-    let owner_did = behavior.agent_did().to_string();
+    let owner_did = behavior.node_did().to_string();
 
     // Create the Schedule/Trigger pair WITHOUT a next_run_at cursor — mirrors
     // what the CLI/desktop apply writers do (they never touch runtime-owned
@@ -735,7 +735,7 @@ async fn schedule_source_seeds_null_next_run_at_and_fires_on_first_tick() {
         emit_outcome: false,
         task_id: "task-null".to_string(),
         name: None,
-        behavior_id: "general".to_string(),
+        agent_id: "general".to_string(),
         prompt_template: "hi".to_string(),
         goal_objective_template: None,
         goal_token_budget: None,
@@ -752,7 +752,7 @@ async fn schedule_source_seeds_null_next_run_at_and_fires_on_first_tick() {
         enabled: true,
         concurrency: ConcurrencyMode::Serial,
     };
-    let snapshot = snapshot_with_behavior_and_schedules(
+    let snapshot = snapshot_with_agent_and_schedules(
         behavior,
         HashMap::from([("sched-null".to_string(), schedule)]),
     );
@@ -801,7 +801,7 @@ async fn schedule_source_seeds_cron_next_run_at_without_immediate_fire() {
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
     let behavior = schedule_test_behavior();
-    let owner_did = behavior.agent_did().to_string();
+    let owner_did = behavior.node_did().to_string();
 
     let trigger_doc_id = create_schedule_with_next_run_at(
         node.as_ref(),
@@ -824,7 +824,7 @@ async fn schedule_source_seeds_cron_next_run_at_without_immediate_fire() {
         emit_outcome: false,
         task_id: "task-cron".to_string(),
         name: None,
-        behavior_id: "general".to_string(),
+        agent_id: "general".to_string(),
         prompt_template: "hi".to_string(),
         goal_objective_template: None,
         goal_token_budget: None,
@@ -845,7 +845,7 @@ async fn schedule_source_seeds_cron_next_run_at_without_immediate_fire() {
         enabled: true,
         concurrency: ConcurrencyMode::Serial,
     };
-    let snapshot = snapshot_with_behavior_and_schedules(
+    let snapshot = snapshot_with_agent_and_schedules(
         behavior,
         HashMap::from([("sched-cron-null".to_string(), schedule)]),
     );

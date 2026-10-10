@@ -68,7 +68,7 @@ def interruptBeforeClaim? (w : World) : Option World := do
   let request ← RequestContext.step? w.request .interruptBeforeClaim
   pure { w with request }
 
-/-- Native selection establishes the exact physical request and principal/requester
+/-- Native selection establishes the exact physical request and node/requester
 scope before this composition. Queue scope represents the admitted request's
 scope here; ACP and lookup cardinality remain native premises. Terminal state
 does not disqualify the selected row. -/
@@ -79,7 +79,7 @@ structure InterruptTarget where
   deriving DecidableEq, Repr
 
 def currentInterruptTarget (w : World) : InterruptTarget :=
-  ⟨w.input.requestDocId, w.queue.scope.agent, w.queue.scope.requester⟩
+  ⟨w.input.requestDocId, w.queue.scope.node, w.queue.scope.requester⟩
 
 def latchInterrupt? (w : World) (target : InterruptTarget) : Option World :=
   if target != currentInterruptTarget w then none
@@ -329,7 +329,7 @@ def providerSendPermitted (w : World) (prepared : PreparedInput)
       | some execution =>
           capture.key.requestId == w.input.requestDocId &&
             capture.key.sessionId == execution.sessionId &&
-            capture.key.agentDid == execution.principal &&
+            capture.key.nodeDid == execution.nodeDid &&
             capture.sendPermitted)
 
 theorem interrupted_before_claim_retains_exact_input
@@ -536,7 +536,7 @@ private def request (interrupt : Option Time := none) : RequestContext :=
   , interruptRequestedAt := interrupt }
 
 private def base (interrupt : Option Time := none) : World :=
-  { queue := ({ scope := { agent := 1, session := 7, requester := some 2 }, active := none, pending := [], terminal := ∅ } : SessionQueue.SessionQueueState)
+  { queue := ({ scope := { node := 1, session := 7, requester := some 2 }, active := none, pending := [], terminal := ∅ } : SessionQueue.SessionQueueState)
   , request := request interrupt
   , execution := none
   , input := { requestId := 11, requestDocId := 101, contentToken := 501 }
@@ -551,7 +551,7 @@ private def entry : SessionQueue.QueueEntry :=
 
 private def activation : Handover.Activation :=
   { request :=
-      { document := 101, entry, agent := 1, session := 7,
+      { document := 101, entry, node := 1, session := 7,
         requester := some 2, authenticated := true }
     evidence := .ordinary,
     generation := 91, duration := 10, deadline := 20 }
@@ -590,7 +590,7 @@ private def preparedInput : PreparedInput :=
 
 private def capture (prior : Option RenderedCapture.CanonicalRequest := none) :
     RenderedCapture.Scenario :=
-  { key := { agentDid := 1, sessionId := 7, requestId := 101,
+  { key := { nodeDid := 1, sessionId := 7, requestId := 101,
              turnIndex := 0, attempt := 0 },
     request := ⟨700⟩, priorBinding := prior }
 

@@ -8,15 +8,15 @@ namespace GraphPipeline.LogicalInvocation
 abbrev Doc := Nat
 /-- Existing graph ownership: receipt verification and a pinned route must
 resolve to the GraphRun/revision owner DID. DefraDB ACP and existing request
-admission own task/behavior permissions; this is not another ACL projector. -/
+admission own task/agent permissions; this is not another ACL projector. -/
 structure RootAuthorization where
   receiptValid : Bool
   routePinned : Bool
-  principalMatches : Bool
+  nodeMatches : Bool
   deriving DecidableEq, Repr
 
 def RootAuthorization.admitted (a : RootAuthorization) : Bool :=
-  a.receiptValid && a.routePinned && a.principalMatches
+  a.receiptValid && a.routePinned && a.nodeMatches
 
 theorem foreign_signed_root_denied (route : Bool) :
     RootAuthorization.admitted ⟨true, route, false⟩ = false := by

@@ -3,25 +3,24 @@
 
 use super::*;
 
-/// Bind the exact configured parent behavior to a signed, claimed request.
+/// Bind the exact configured parent agent to a signed, claimed request.
 /// The direct-hook R4C tests retain their assertions but no longer invent a
 /// processing row without the execution owner or an accepted provider turn.
 pub(super) async fn bind_accepted_request(
     db: &crate::support::TestDb,
     hook: &DefraSessionHook,
-    behavior_id: &str,
+    agent_id: &str,
     request_id: &str,
     session_id: &str,
     deadline_at: chrono::DateTime<chrono::Utc>,
 ) {
     let did = db.node_identity.did();
-    assert_eq!(hook.agent_did, did, "hook and signed request owner differ");
-    crate::session::ensure_session_with_behavior_id_and_requester_did(
+    assert_eq!(hook.node_did, did, "hook and signed request owner differ");
+    crate::session::ensure_session_with_agent_id_and_requester_did(
         db.node.as_ref(),
         session_id,
-        behavior_id,
         did,
-        behavior_id,
+        agent_id,
         Some(did),
     )
     .await
@@ -32,7 +31,7 @@ pub(super) async fn bind_accepted_request(
         request_id,
         did,
         did,
-        behavior_id,
+        agent_id,
         session_id,
         "R4C accepted control fixture",
         "interactive",
@@ -60,9 +59,9 @@ pub(super) async fn bind_accepted_request(
         crate::graphql::first_row(&loaded, "AgentRequest")
             .unwrap()
             .expect("created R4C request row");
-    let mut lifecycle = crate::lifecycle::RequestLifecycle::new_with_agent_did(
+    let mut lifecycle = crate::lifecycle::RequestLifecycle::new_with_node_did(
         db.node.clone(),
-        behavior_id,
+        agent_id,
         did,
         row.try_into().expect("canonical R4C request"),
         60,
@@ -145,7 +144,7 @@ pub(super) async fn assert_accepted_control_rows(
         let (header, _) = crate::session::load_canonical_message_from_node(
             hook.node.as_ref(),
             header_doc_id,
-            &hook.agent_did,
+            &hook.node_did,
             requester.as_deref(),
         )
         .await

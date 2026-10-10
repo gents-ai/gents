@@ -32,21 +32,21 @@ pub fn load_pack_config(
     Ok(config)
 }
 
-/// A distributable pack brings behaviors; which behavior runs by default is
-/// the user's decision, never the pack's. Install never writes the principal
-/// (it is shared identity), so an authored `default_behavior_id` would be
+/// A distributable pack brings agents; which agent runs by default is
+/// the user's decision, never the pack's. Install never writes the node
+/// (it is shared identity), so an authored `default_agent_id` would be
 /// silently ignored there and silently honoured by harnesses that stage the
 /// bundle whole. Refusing it at load keeps both paths honest. A user's own
 /// desired-state root decodes through [`decode_pack_config`] directly and
-/// keeps its principal, default included; harnesses select the behavior
+/// keeps its node, default included; harnesses select the agent
 /// under test after loading.
 pub fn ensure_pack_leaves_default_unselected(config: &PackConfig) -> Result<()> {
-    if let Some(default) = &config.agent_principal.default_behavior_id {
+    if let Some(default) = &config.node.default_agent_id {
         anyhow::bail!(
-            "pack agent_principal sets default_behavior_id {default:?}; a pack must not choose \
-             the default behavior. Remove it from the pack: the user selects the default \
-             (\"Make default\" in the desktop Behaviors panel, or default_behavior_id in the \
-             principal of their own `gents config apply` root)"
+            "pack node sets default_agent_id {default:?}; a pack must not choose \
+             the default agent. Remove it from the pack: the user selects the default \
+             (\"Make default\" in the desktop, or default_agent_id in the \
+             node of their own `gents config apply` root)"
         );
     }
     Ok(())
@@ -77,7 +77,7 @@ pub fn pin_pack_plugins(
 
 /// Decode canonical authoring for both distributed packs and local configuration.
 /// Explicit install scope wins over ambient environment. Without install options,
-/// the authored principal must supply its owner. Sidecar access stays with the
+/// the authored node must supply its owner. Sidecar access stays with the
 /// caller's asset/filesystem boundary; sidecar contents are never interpolated.
 pub fn decode_pack_config(
     mut value: Value,
@@ -87,12 +87,12 @@ pub fn decode_pack_config(
 ) -> Result<PackConfig> {
     let authored_owner = if options.is_none() {
         value
-            .pointer("/agent_principal/agent_did")
+            .pointer("/node/node_did")
             .and_then(Value::as_str)
             .map(|owner| {
                 interpolate::interpolate_with(owner, environment).map_err(|missing| {
                     anyhow::anyhow!(
-                        "principal owner references unset variables: {}",
+                        "node owner references unset variables: {}",
                         missing.join(", ")
                     )
                 })
@@ -102,15 +102,15 @@ pub fn decode_pack_config(
         None
     };
     let owner = options
-        .map(|options| options.agent_did.as_str())
+        .map(|options| options.node_did.as_str())
         .or(authored_owner.as_deref())
-        .context("configuration requires an explicit principal owner")?;
+        .context("configuration requires an explicit node owner")?;
     anyhow::ensure!(
         !owner.trim().is_empty(),
         "configuration owner DID must not be blank"
     );
     interpolate_values(&mut value, &|name| {
-        if name == "GENTS_PACK_AGENT_DID" {
+        if name == "GENTS_PACK_NODE_DID" {
             Some(owner.to_owned())
         } else {
             environment(name)
@@ -120,10 +120,9 @@ pub fn decode_pack_config(
         .as_object_mut()
         .context("pack config must be an object")?;
     bind_owner(
-        root.get_mut("agent_principal")
-            .context("pack config requires agent_principal")?,
+        root.get_mut("node").context("pack config requires node")?,
         owner,
-        "agent_principal",
+        "node",
     )?;
     // These are document roots, not an unrestricted recursive DID replacement.
     // The canonical serde decoder below rejects unknown collections/fields.
@@ -292,9 +291,9 @@ fn bind_owner(value: &mut Value, owner: &str, location: &str) -> Result<()> {
     let object = value
         .as_object_mut()
         .with_context(|| format!("{location} must be a document object"))?;
-    match object.get("agent_did") {
+    match object.get("node_did") {
         None => {
-            object.insert("agent_did".into(), owner.into());
+            object.insert("node_did".into(), owner.into());
         }
         Some(value) => anyhow::ensure!(
             value.as_str() == Some(owner),

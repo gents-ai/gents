@@ -74,7 +74,7 @@ fn generated_agent_request_admission_cases_match_shared_projector() {
             refused_over_hop_kinds.insert(kind.as_str());
         }
     }
-    // Every admission branch, including cross-principal `Peer` messaging, is
+    // Every admission branch, including cross-node `Peer` messaging, is
     // exercised by an admitted row, and both the LocalSelf and Peer branches
     // have a refused row whose hop exceeds the target's bound.
     for kind in [
@@ -102,7 +102,7 @@ fn generated_agent_request_admission_cases_match_shared_projector() {
 }
 
 /// The materializer is the single writer of the signed hop
-/// (`AgentRequest.subagent_depth`) and admission bounds it by the target's
+/// (`AgentRequest.request_hop`) and admission bounds it by the target's
 /// `max_request_hop`; both must evaluate exactly as `CausalHop` does.
 #[test]
 fn generated_causal_hop_cases_match_native_materializer() {
@@ -203,7 +203,7 @@ fn offer(step: &LeanEnrollmentTraceStep) -> EnrollmentOffer {
         server_peer: step.offer_server_peer.clone(),
         server_ticket_peer: step.server_ticket_peer.clone(),
         resolved_server_did: step.resolved_server_did.clone(),
-        owner_agent: step.offer_owner_agent.clone(),
+        owner_node: step.offer_owner_node.clone(),
         profile: step.offer_profile.clone(),
         schema_compatible: step.schema_compatible,
         admin_signed: step.offer_admin_signed,
@@ -225,7 +225,7 @@ fn request(step: &LeanEnrollmentTraceStep) -> EnrollmentRequest {
         observed_candidate_peer: step.observed_candidate_peer.clone(),
         resolved_candidate_did: step.resolved_candidate_did.clone(),
         candidate_ticket_peer: step.candidate_ticket_peer.clone(),
-        owner_agent: step.owner_agent.clone(),
+        owner_node: step.owner_node.clone(),
         profile: step.profile.clone(),
         client_nonce: step.client_nonce.clone(),
         issued_at: step.issued_at.clone(),
@@ -243,7 +243,7 @@ fn decision(step: &LeanEnrollmentTraceStep) -> EnrollmentDecision {
         admin_did: step.decision_admin_did.clone(),
         candidate_did: step.decision_candidate_did.clone(),
         candidate_peer: step.decision_candidate_peer.clone(),
-        owner_agent: step.decision_owner_agent.clone(),
+        owner_node: step.decision_owner_node.clone(),
         kind: match step.decision_kind.as_str() {
             "approved" => EnrollmentDecisionKind::Approved,
             "denied" => EnrollmentDecisionKind::Denied,
@@ -265,7 +265,7 @@ fn revision(step: &LeanEnrollmentTraceStep) -> AuthorizationRevision {
         admin_did: step.revision_admin_did.clone(),
         member_did: step.revision_member_did.clone(),
         member_peer: step.revision_member_peer.clone(),
-        owner_agent: step.revision_owner_agent.clone(),
+        owner_node: step.revision_owner_node.clone(),
         sequence: step.revision_sequence,
         authorization_expires_at: step.revision_authorization_expires_at.clone(),
         kind: match step.revision_kind.as_str() {
@@ -287,7 +287,7 @@ fn receipt(step: &LeanEnrollmentTraceStep) -> EnrollmentRouteReceipt {
         member_did: step.receipt_member_did.clone(),
         member_peer: step.receipt_member_peer.clone(),
         server_peer: step.receipt_server_peer.clone(),
-        owner_agent: step.receipt_owner_agent.clone(),
+        owner_node: step.receipt_owner_node.clone(),
         authorization_sequence: step.receipt_authorization_sequence,
         authorization_expires_at: step.receipt_authorization_expires_at.clone(),
         direction: match step.receipt_direction.as_str() {

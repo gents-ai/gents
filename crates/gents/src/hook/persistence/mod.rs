@@ -11,7 +11,7 @@ use crate::background_tools::{
     handle_list_background_tools, handle_read_tool_output, BackgroundToolArgs, CancelToolArgs,
     ProcessControlScope, ReadToolOutputOutcome, WaitToolArgs,
 };
-use crate::document_config::load_agent_behavior;
+use crate::document_config::load_agent;
 use crate::tool_call_lifecycle::query::load_tool_call_result;
 use crate::tool_call_lifecycle::{AwaitMode, CancelCause, FailureClass, ToolCallLifecycle};
 use crate::toolset::{

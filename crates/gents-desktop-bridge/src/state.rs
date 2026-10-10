@@ -8,7 +8,7 @@ use tauri::{AppHandle, Emitter, Runtime, State};
 use tokio::sync::watch;
 
 use crate::config::{
-    AgentHomePolicy, AppMeta, BootstrapPolicy, BridgeConfig, HomePolicy, ManagedServerPolicy,
+    AppMeta, BootstrapPolicy, BridgeConfig, HomePolicy, ManagedServerPolicy, NodeHomePolicy,
 };
 use crate::snapshot::projection::SnapshotGrants;
 use crate::types::ClientUpdateEvent;
@@ -16,7 +16,7 @@ use crate::types::ClientUpdateEvent;
 #[derive(Debug, Clone)]
 pub struct ResolvedBridgePolicy {
     pub desktop_paths: DesktopPaths,
-    pub agent_home: Option<PathBuf>,
+    pub node_home: Option<PathBuf>,
     pub bootstrap: BootstrapPolicy,
     pub app_meta: AppMeta,
     pub snapshot_grants: SnapshotGrants,
@@ -49,16 +49,16 @@ pub struct DesktopAppState {
     pub policy: ResolvedBridgePolicy,
     pub managed_server: tokio::sync::Mutex<ManagedServerState>,
     /// OAuth credentials issued by a completed provider sign-in whose save to
-    /// the agent's canonical configuration failed. Held only in memory so the
+    /// the node's canonical configuration failed. Held only in memory so the
     /// user can retry the save without repeating the browser login.
     pub pending_oauth_credentials: PendingOAuthCredentials,
 }
 
-/// Agent DID, credential provider and the sign-in's account identity.
+/// Node DID, credential provider and the sign-in's account identity.
 type CredentialKey = (String, String, String);
 
 /// A credential issued by a completed sign-in, ordered by issuance for its
-/// (agent DID, credential provider) key.
+/// (node DID, credential provider) key.
 pub struct IssuedOAuthCredential {
     sequence: u64,
     credential: gents::oauth_credential::OAuthCredential,
@@ -82,7 +82,7 @@ impl IssuedOAuthCredential {
         .find(|value| !value.is_empty())
         .unwrap_or_default();
         (
-            self.credential.agent_did.clone(),
+            self.credential.node_did.clone(),
             self.credential.provider.clone(),
             identity.to_owned(),
         )
@@ -103,7 +103,7 @@ struct CredentialSlot {
     held: Option<IssuedOAuthCredential>,
 }
 
-/// Issued-but-unsaved OAuth credentials, keyed by agent DID and credential
+/// Issued-but-unsaved OAuth credentials, keyed by node DID and credential
 /// provider. Never serialized, never written to disk, and never returned to
 /// the webview; the process exit discards them. Saves and retries for one key
 /// run one at a time in issuance order, so an older credential can neither
@@ -182,12 +182,12 @@ impl PendingOAuthCredentials {
         }
     }
 
-    /// Writes the newest credential held for this agent and provider, if any,
+    /// Writes the newest credential held for this node and provider, if any,
     /// and releases it once stored; other accounts' held sign-ins stay held.
     /// Returns `None` when nothing is held.
     pub async fn retry<T, F, Fut>(
         &self,
-        agent_did: &str,
+        node_did: &str,
         provider: &str,
         write: F,
     ) -> Option<(gents::oauth_credential::OAuthCredential, anyhow::Result<T>)>
@@ -198,8 +198,8 @@ impl PendingOAuthCredentials {
         let key = self
             .slots()
             .iter()
-            .filter(|((agent, held_provider, _), slot)| {
-                agent == agent_did && held_provider == provider && slot.held.is_some()
+            .filter(|((node, held_provider, _), slot)| {
+                node == node_did && held_provider == provider && slot.held.is_some()
             })
             .max_by_key(|(_, slot)| slot.held.as_ref().map(|held| held.sequence))
             .map(|(key, _)| key.clone())?;
@@ -220,11 +220,11 @@ impl PendingOAuthCredentials {
         Some((credential, written))
     }
 
-    pub fn held_for(&self, agent_did: &str) -> Vec<gents::oauth_credential::OAuthCredential> {
+    pub fn held_for(&self, node_did: &str) -> Vec<gents::oauth_credential::OAuthCredential> {
         let mut held: Vec<_> = self
             .slots()
             .iter()
-            .filter(|((agent, _, _), _)| agent == agent_did)
+            .filter(|((node, _, _), _)| node == node_did)
             .filter_map(|(_, slot)| slot.held.as_ref().map(|held| held.credential.clone()))
             .collect();
         held.sort_by(|left, right| left.provider.cmp(&right.provider));
@@ -346,18 +346,19 @@ pub fn resolve_policy(
         HomePolicy::FixedRoot(root) => DesktopPaths::from_root(root.clone()),
     };
 
-    let agent_home = match &config.bootstrap {
+    let node_home = match &config.bootstrap {
         BootstrapPolicy::PairedRemoteOnly => None,
-        BootstrapPolicy::LocalRuntimeAllowed { agent_home } => Some(match agent_home {
-            AgentHomePolicy::Default => gents_desktop_core::local_runtime::default_agent_home()
-                .map_err(|e| e.to_string())?,
-            AgentHomePolicy::Fixed(path) => path.clone(),
+        BootstrapPolicy::LocalRuntimeAllowed { node_home } => Some(match node_home {
+            NodeHomePolicy::Default => {
+                gents_desktop_core::local_runtime::default_node_home().map_err(|e| e.to_string())?
+            }
+            NodeHomePolicy::Fixed(path) => path.clone(),
         }),
     };
 
     Ok(ResolvedBridgePolicy {
         desktop_paths,
-        agent_home,
+        node_home,
         bootstrap: config.bootstrap.clone(),
         app_meta: config.app_meta.clone(),
         snapshot_grants: config.snapshot_grants,
@@ -366,13 +367,13 @@ pub fn resolve_policy(
     })
 }
 
-pub fn require_agent_home(
+pub fn require_node_home(
     state: &State<'_, DesktopAppState>,
 ) -> Result<PathBuf, crate::error::BridgeError> {
-    state.policy.agent_home.clone().ok_or_else(|| {
+    state.policy.node_home.clone().ok_or_else(|| {
         crate::error::BridgeError::new(
             crate::error::BridgeErrorCode::Unsupported,
-            "local agent home is not available under PairedRemoteOnly bootstrap policy",
+            "local node home is not available under PairedRemoteOnly bootstrap policy",
         )
     })
 }

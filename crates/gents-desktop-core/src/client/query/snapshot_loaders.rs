@@ -2,10 +2,10 @@ use super::*;
 
 pub async fn load_full_snapshot(node: &EmbeddedNode) -> Result<ClientStore> {
     Ok(ClientStore::from_rows(ClientStoreRows {
-        agent_principals: load_agent_principals(node).await?,
-        behaviors: load_agent_behaviors(node).await?,
-        runtimes: load_agent_runtimes(node).await?,
-        behavior_readiness: load_agent_behavior_readiness(node).await?,
+        nodes: load_nodes(node).await?,
+        agents: load_agents(node).await?,
+        runtimes: load_node_runtimes(node).await?,
+        node_readiness: load_node_readiness(node).await?,
         requests: load_agent_requests(node).await?,
         mailbox_items: load_mailbox_items(node).await?,
         sessions: load_agent_sessions(node).await?,
@@ -26,7 +26,7 @@ pub async fn load_full_snapshot(node: &EmbeddedNode) -> Result<ClientStore> {
         inference_execution: load_inference_execution(node).await?,
         tool_service_registries: load_tool_service_registries(node).await?,
         event_sources: load_event_sources(node).await?,
-        subagent_targets: load_subagent_targets(node).await?,
+        agent_targets: load_agent_targets(node).await?,
         datastore_tool_surfaces: load_datastore_tool_surfaces(node).await?,
         chain_key_bindings: load_chain_key_bindings(node).await?,
         ..ClientStoreRows::default()
@@ -45,17 +45,17 @@ pub async fn load_full_snapshot_with_peer_records(
         };
         match load_operator_config(
             &gents::config_client::ConfigAccess::Graphql(graphql.clone()),
-            &peer.agent_did,
+            &peer.node_did,
         )
         .await
         {
             Ok(remote) => {
-                store = store.overlay_agent_operator_config(&peer.agent_did, &remote);
+                store = store.overlay_node_operator_config(&peer.node_did, &remote);
             }
             Err(error) => {
                 tracing::warn!(
                     target: "gents_desktop_core::query",
-                    agent_did = %peer.agent_did,
+                    node_did = %peer.node_did,
                     graphql = %graphql,
                     error = %error,
                     "operator GraphQL config overlay failed; keeping the desktop replica"
@@ -68,16 +68,16 @@ pub async fn load_full_snapshot_with_peer_records(
 
 async fn load_operator_config(
     access: &gents::config_client::ConfigAccess,
-    agent_did: &str,
+    node_did: &str,
 ) -> Result<ClientStore> {
-    let did = escape_graphql_string(agent_did);
-    let did_filter = format!("filter: {{ agent_did: {{ _eq: \"{did}\" }} }}");
+    let did = escape_graphql_string(node_did);
+    let did_filter = format!("filter: {{ node_did: {{ _eq: \"{did}\" }} }}");
     let query = format!(
         "query DesktopOperatorConfig {{
-            agent_principals: AgentPrincipal({did_filter}) {{ {AGENT_PRINCIPAL_FIELDS} }}
-            behaviors: AgentBehavior({did_filter}) {{ {AGENT_BEHAVIOR_FIELDS} }}
-            runtimes: {AGENT_RUNTIME_NAME}({did_filter}) {{ {AGENT_RUNTIME_FIELDS} }}
-            behavior_readiness: {AGENT_BEHAVIOR_READINESS_NAME}({did_filter}) {{ {AGENT_BEHAVIOR_READINESS_FIELDS} }}
+            nodes: {NODE_NAME}({did_filter}) {{ {NODE_FIELDS} }}
+            agents: {AGENT_NAME}({did_filter}) {{ {AGENT_FIELDS} }}
+            runtimes: {NODE_RUNTIME_NAME}({did_filter}) {{ {NODE_RUNTIME_FIELDS} }}
+            node_readiness: {NODE_READINESS_NAME}({did_filter}) {{ {NODE_READINESS_FIELDS} }}
             contexts: AgentContext({did_filter}) {{ {AGENT_CONTEXT_FIELDS} }}
             tools: {TOOLS_NAME}({did_filter}) {{ {TOOLS_FIELDS} }}
             inference_backends: InferenceBackend({did_filter}) {{ {INFERENCE_BACKEND_FIELDS} }}
@@ -94,7 +94,7 @@ async fn load_operator_config(
             compactions: CompactionConfig({did_filter}) {{ {COMPACTION_CONFIG_FIELDS} }}
             tool_service_registries: {TOOL_SERVICE_REGISTRY_NAME}({did_filter}) {{ {TOOL_SERVICE_REGISTRY_FIELDS} }}
             event_sources: EventSource({did_filter}) {{ {EVENT_SOURCE_FIELDS} }}
-            subagent_targets: SubagentTarget({did_filter}) {{ {SUBAGENT_TARGET_FIELDS} }}
+            agent_targets: {AGENT_TARGET_NAME}({did_filter}) {{ {AGENT_TARGET_FIELDS} }}
             datastore_tool_surfaces: DatastoreToolSurface({did_filter}) {{ {DATASTORE_TOOL_SURFACE_FIELDS} }}
             chain_key_bindings: ChainKeyBinding({did_filter}) {{ {CHAIN_KEY_BINDING_FIELDS} }}
             sessions: {AGENT_SESSION_NAME}({did_filter}) {{ {AGENT_SESSION_FIELDS} }}
@@ -103,10 +103,10 @@ async fn load_operator_config(
     );
     let data = execute_access_graphql_query(access, &query, "operator config").await?;
     Ok(ClientStore::from_rows(ClientStoreRows {
-        agent_principals: parse_query_rows(&data, "agent_principals")?,
-        behaviors: parse_query_rows(&data, "behaviors")?,
+        nodes: parse_query_rows(&data, "nodes")?,
+        agents: parse_query_rows(&data, "agents")?,
         runtimes: parse_query_rows(&data, "runtimes")?,
-        behavior_readiness: parse_query_rows(&data, "behavior_readiness")?,
+        node_readiness: parse_query_rows(&data, "node_readiness")?,
         contexts: parse_query_rows(&data, "contexts")?,
         tools: parse_query_rows(&data, "tools")?,
         inference_backends: parse_query_rows(&data, "inference_backends")?,
@@ -123,7 +123,7 @@ async fn load_operator_config(
         compactions: parse_query_rows(&data, "compactions")?,
         tool_service_registries: parse_query_rows(&data, "tool_service_registries")?,
         event_sources: parse_query_rows(&data, "event_sources")?,
-        subagent_targets: parse_query_rows(&data, "subagent_targets")?,
+        agent_targets: parse_query_rows(&data, "agent_targets")?,
         datastore_tool_surfaces: parse_query_rows(&data, "datastore_tool_surfaces")?,
         chain_key_bindings: parse_query_rows(&data, "chain_key_bindings")?,
         sessions: parse_query_rows(&data, "sessions")?,
@@ -132,31 +132,31 @@ async fn load_operator_config(
     }))
 }
 
-pub async fn load_agent_scoped_snapshot_with_peer_records(
+pub async fn load_node_scoped_snapshot_with_peer_records(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     peers: &[PeerRecord],
     _requester_did: &str,
 ) -> Result<ClientStore> {
-    let mut store = load_agent_scoped_snapshot(node, agent_did).await?;
+    let mut store = load_node_scoped_snapshot(node, node_did).await?;
     if let Some(graphql) = peers
         .iter()
-        .find(|peer| peer.agent_did == agent_did)
+        .find(|peer| peer.node_did == node_did)
         .and_then(crate::local_runtime::operator_endpoint)
     {
         match load_operator_config(
             &gents::config_client::ConfigAccess::Graphql(graphql.clone()),
-            agent_did,
+            node_did,
         )
         .await
         {
             Ok(remote) => {
-                store = store.overlay_agent_operator_config(agent_did, &remote);
+                store = store.overlay_node_operator_config(node_did, &remote);
             }
             Err(error) => {
                 tracing::warn!(
                     target: "gents_desktop_core::query",
-                    agent_did,
+                    node_did,
                     graphql = %graphql,
                     error = %error,
                     "operator GraphQL config overlay failed; keeping the desktop replica"
@@ -167,42 +167,38 @@ pub async fn load_agent_scoped_snapshot_with_peer_records(
     Ok(store)
 }
 
-pub async fn load_agent_principals(node: &EmbeddedNode) -> Result<Vec<AgentPrincipal>> {
+pub async fn load_nodes(node: &EmbeddedNode) -> Result<Vec<Node>> {
     load_rows(
         node,
-        "AgentPrincipal",
-        &format!("query {{ AgentPrincipal {{ {AGENT_PRINCIPAL_FIELDS} }} }}"),
+        NODE_NAME,
+        &format!("query {{ {NODE_NAME} {{ {NODE_FIELDS} }} }}"),
     )
     .await
 }
 
-pub async fn load_agent_behaviors(node: &EmbeddedNode) -> Result<Vec<AgentBehavior>> {
+pub async fn load_agents(node: &EmbeddedNode) -> Result<Vec<Agent>> {
     load_rows(
         node,
-        "AgentBehavior",
-        &format!("query {{ AgentBehavior {{ {AGENT_BEHAVIOR_FIELDS} }} }}"),
+        AGENT_NAME,
+        &format!("query {{ {AGENT_NAME} {{ {AGENT_FIELDS} }} }}"),
     )
     .await
 }
 
-pub async fn load_agent_runtimes(node: &EmbeddedNode) -> Result<Vec<AgentRuntimeRow>> {
+pub async fn load_node_runtimes(node: &EmbeddedNode) -> Result<Vec<NodeRuntimeRow>> {
     load_rows(
         node,
-        AGENT_RUNTIME_NAME,
-        &format!("query {{ {AGENT_RUNTIME_NAME} {{ {AGENT_RUNTIME_FIELDS} }} }}"),
+        NODE_RUNTIME_NAME,
+        &format!("query {{ {NODE_RUNTIME_NAME} {{ {NODE_RUNTIME_FIELDS} }} }}"),
     )
     .await
 }
 
-pub async fn load_agent_behavior_readiness(
-    node: &EmbeddedNode,
-) -> Result<Vec<AgentBehaviorReadinessRow>> {
+pub async fn load_node_readiness(node: &EmbeddedNode) -> Result<Vec<NodeReadinessRow>> {
     load_rows(
         node,
-        AGENT_BEHAVIOR_READINESS_NAME,
-        &format!(
-            "query {{ {AGENT_BEHAVIOR_READINESS_NAME} {{ {AGENT_BEHAVIOR_READINESS_FIELDS} }} }}"
-        ),
+        NODE_READINESS_NAME,
+        &format!("query {{ {NODE_READINESS_NAME} {{ {NODE_READINESS_FIELDS} }} }}"),
     )
     .await
 }
@@ -399,11 +395,11 @@ pub async fn load_event_sources(node: &EmbeddedNode) -> Result<Vec<EventSource>>
     .await
 }
 
-pub async fn load_subagent_targets(node: &EmbeddedNode) -> Result<Vec<SubagentTargetDocument>> {
+pub async fn load_agent_targets(node: &EmbeddedNode) -> Result<Vec<AgentTargetDocument>> {
     load_rows(
         node,
-        "SubagentTarget",
-        &format!("query {{ SubagentTarget {{ {SUBAGENT_TARGET_FIELDS} }} }}"),
+        AGENT_TARGET_NAME,
+        &format!("query {{ {AGENT_TARGET_NAME} {{ {AGENT_TARGET_FIELDS} }} }}"),
     )
     .await
 }

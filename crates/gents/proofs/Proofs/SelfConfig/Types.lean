@@ -5,11 +5,11 @@ namespace SelfConfig
 abbrev Target := ConfigDocuments.Collection
 /-- Existing self-config families plus their extracted subdocuments. Pack-owned
 callback modules, keys, graph definitions, and placements do not become writable
-merely because the shared catalog knows about them. `SubagentTarget` is a
+merely because the shared catalog knows about them. `AgentTarget` is a
 `tools` document (#2058): the configurator authors the agents allowlist through
-the same desired-state owner `config apply` uses for `PackConfig.subagent_targets`. -/
+the same desired-state owner `config apply` uses for `Tools.agents`. -/
 def allTargets : List Target :=
-  [.agentBehavior, .agentContext, .compaction, .tools, .subagentTarget, .inferenceProfile,
+  [.agent, .agentContext, .compaction, .tools, .agentTarget, .inferenceProfile,
    .inferenceSampling, .inferenceExecution, .inferenceRetryPolicy,
    .inferenceBackend, .toolServiceRegistry, .task, .schedule, .trigger, .eventSource,
    .datastoreToolSurface, .skill]
@@ -18,8 +18,8 @@ abbrev Target.uniqueField (t : Target) := ConfigDocuments.Collection.uniqueField
 abbrev Target.category (t : Target) := ConfigDocuments.Collection.category t
 
 def selfConfigCategories : List String :=
-  ["behavior", "tools", "profile", "backend", "mcp_service", "automation", "persona"]
-def defaultCategories : List String := ["behavior", "tools", "profile"]
+  ["node", "agent", "tools", "profile", "backend", "mcp_service", "automation"]
+def defaultCategories : List String := ["agent", "tools", "profile"]
 abbrev FieldKey := String
 abbrev allFields := ConfigDocuments.Collection.fields
 
@@ -27,7 +27,7 @@ abbrev allFields := ConfigDocuments.Collection.fields
 references remain editable; raw-key and OAuth-account protection belong to the
 typed auth guard (`SelfConfig.authGuard`, enforced in Rust `validate`). -/
 def protectedKey (t : Target) (k : FieldKey) : Bool :=
-  (t == .task && k == "behavior_id") || k == t.uniqueField || ["agent_did", "created_at", "updated_at", "created_by",
+  (t == .task && k == "agent_id") || k == t.uniqueField || ["node_did", "created_at", "updated_at", "created_by",
     "wasm_bytes", "canonical_args", "signer_did", "provenance"].contains k
 
 def writableFields (t : Target) : List FieldKey :=
@@ -48,8 +48,9 @@ theorem writable_fields_nodup : ∀ t ∈ allTargets, (writableFields t).Nodup :
 theorem unique_field_protected :
     ∀ t ∈ allTargets, t.uniqueField ∈ protectedFields t := by decide
 
-theorem agent_did_never_writable :
-    ∀ t ∈ allTargets, "agent_did" ∉ writableFields t := by decide
+/-- The ownership key is never writable. -/
+theorem node_did_never_writable :
+    ∀ t ∈ allTargets, "node_did" ∉ writableFields t := by decide
 
 theorem auth_reference_editable : "auth" ∈ writableFields .inferenceBackend := by decide
 
@@ -59,7 +60,7 @@ theorem datastore_entries_editable :
 theorem skill_instructions_editable : "instructions" ∈ writableFields .skill := by decide
 
 theorem datastore_owner_and_identity_protected :
-    "agent_did" ∉ writableFields .datastoreToolSurface ∧
+    "node_did" ∉ writableFields .datastoreToolSurface ∧
     "surface_id" ∉ writableFields .datastoreToolSurface := by decide
 
 /-- Observations cannot be introduced by a self-config patch. -/

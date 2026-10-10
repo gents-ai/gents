@@ -1,11 +1,11 @@
 import type { SessionSummary } from "@source-inc/gents-desktop-client";
 
-export function sessionBelongsToBehavior(
+export function sessionBelongsToAgent(
   session: SessionSummary,
-  selectedBehaviorId: string | null,
+  selectedAgentId: string | null,
 ) {
-  if (!selectedBehaviorId) {
+  if (!selectedAgentId) {
     return true;
   }
-  return session.behaviorId === selectedBehaviorId;
+  return session.agentId === selectedAgentId;
 }

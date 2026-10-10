@@ -26,7 +26,7 @@ where
 }
 
 fn backend(owner: &str, id: &str) -> Value {
-    json!({"agent_did":owner,"backend_id":id,"name":"Local","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:8000/v1","auth":{"kind":"unauthenticated"}})
+    json!({"node_did":owner,"backend_id":id,"name":"Local","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:8000/v1","auth":{"kind":"unauthenticated"}})
 }
 fn document(value: Value) -> DesiredStateApplyDocument {
     DesiredStateApplyDocument {
@@ -39,7 +39,7 @@ fn document(value: Value) -> DesiredStateApplyDocument {
 #[test]
 fn plan_decode_errors_identify_the_document_and_operation() {
     let valid = document(backend("did:key:owner", "local"));
-    let incomplete = json!({"agent_did":"did:key:owner","system_prompt":"Inspect the host"});
+    let incomplete = json!({"node_did":"did:key:owner","system_prompt":"Inspect the host"});
     let error = DesiredStateApplyPlan::new(vec![
         valid,
         DesiredStateApplyDocument {
@@ -97,7 +97,7 @@ async fn register_config_schemas_dropping_unique_indexes(
                 if collection.graphql_type() == *name {
                     schema = schema.replace(
                         &format!(
-                            "@index(fields: [\"agent_did\", \"{}\"], unique: true)",
+                            "@index(fields: [\"node_did\", \"{}\"], unique: true)",
                             collection.unique_field()
                         ),
                         "",
@@ -161,7 +161,7 @@ async fn ignored_wire_api_warns_once_per_changed_backend_through_common_apply_ow
 fn every_canonical_collection_uses_derived_owner_and_identity_fields() {
     for collection in Collection::ALL {
         let (fields, _) = config_projection(collection, None).unwrap();
-        assert!(fields.contains(&"agent_did"), "{collection:?}");
+        assert!(fields.contains(&"node_did"), "{collection:?}");
         assert!(
             fields.contains(&collection.unique_field()),
             "{collection:?}"
@@ -179,7 +179,7 @@ fn plans_reject_unknown_fields_sparse_updates_and_scope_changes() {
     doc.update = json!({"enabled":false});
     assert!(DesiredStateApplyPlan::new(vec![doc]).is_err());
     let mut doc = document(backend("did:key:owner", "local"));
-    doc.update["agent_did"] = "did:key:other".into();
+    doc.update["node_did"] = "did:key:other".into();
     assert!(DesiredStateApplyPlan::new(vec![doc]).is_err());
     assert!(DesiredStateApplyPlan::new(vec![
         document(backend("did:key:a", "same")),
@@ -204,9 +204,9 @@ fn commitments_do_not_reinterpret_authored_strings_as_json() {
 #[test]
 fn task_projection_excludes_runtime_updated_at_and_normalizes_defaults() {
     let desired = json!({
-        "agent_did": "did:key:owner",
+        "node_did": "did:key:owner",
         "task_id": "run-once",
-        "behavior_id": "operator",
+        "agent_id": "operator",
         "prompt_template": "Run once"
     });
     let mut observed = desired.clone();
@@ -246,14 +246,18 @@ async fn replacement_resets_defaults_and_preserves_backend_observations() -> Res
         ],
     )
     .await?;
-    access.write("test.desired.observe", r#"mutation { update_InferenceBackend(filter:{agent_did:{_eq:"did:key:owner"},backend_id:{_eq:"local"}},input:{probe_status:"healthy",catalogs:{entries:[{agent_did:null,observed_at:"2026-01-01T00:00:00Z",models:null}]}}){_docID} }"#).await?;
+    access.write("test.desired.observe", r#"mutation { update_InferenceBackend(filter:{node_did:{_eq:"did:key:owner"},backend_id:{_eq:"local"}},input:{probe_status:"healthy",catalogs:{entries:[{node_did:null,observed_at:"2026-01-01T00:00:00Z",models:null}]}}){_docID} }"#).await?;
     let before = node
-        .execute("{InferenceBackend{_docID agent_did catalogs probe_status}}")
+        .execute("{InferenceBackend{_docID node_did catalogs probe_status}}")
         .await;
     assert!(!before.has_errors());
     let before = before.data.unwrap();
     apply(&access, vec![document(backend("did:key:owner", "local"))]).await?;
-    let after = node.execute("{InferenceBackend{_docID agent_did max_concurrent enabled tags catalogs probe_status}}").await;
+    let after = node
+        .execute(
+            "{InferenceBackend{_docID node_did max_concurrent enabled tags catalogs probe_status}}",
+        )
+        .await;
     assert!(!after.has_errors());
     let after = after.data.unwrap();
     for row in after["InferenceBackend"].as_array().unwrap() {
@@ -261,7 +265,7 @@ async fn replacement_resets_defaults_and_preserves_backend_observations() -> Res
             .as_array()
             .unwrap()
             .iter()
-            .find(|prior| prior["agent_did"] == row["agent_did"])
+            .find(|prior| prior["node_did"] == row["node_did"])
             .unwrap();
         assert_eq!(row["_docID"], prior["_docID"]);
         assert_eq!(row["catalogs"], prior["catalogs"]);
@@ -397,23 +401,23 @@ fn cyclic_configuration(owner: &str) -> Vec<DesiredStateApplyDocument> {
         document(backend(owner, "backend")),
         config(
             Collection::InferenceProfile,
-            json!({"agent_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model"}),
+            json!({"node_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model"}),
         ),
         config(
-            Collection::AgentBehavior,
-            json!({"agent_did":owner,"behavior_id":"behavior","inference_profile_id":"profile","context_id":"context"}),
+            Collection::Agent,
+            json!({"node_did":owner,"agent_id":"behavior","inference_profile_id":"profile","context_id":"context"}),
         ),
         config(
             Collection::AgentContext,
-            json!({"agent_did":owner,"context_id":"context","tools_id":"tools"}),
+            json!({"node_did":owner,"context_id":"context","tools_id":"tools"}),
         ),
         config(
             Collection::Tools,
-            json!({"agent_did":owner,"tools_id":"tools","subagents":{"target_ids":["target"]}}),
+            json!({"node_did":owner,"tools_id":"tools","agents":{"target_ids":["target"]}}),
         ),
         config(
-            Collection::SubagentTarget,
-            json!({"agent_did":owner,"target_id":"target","target_agent_did":owner,"behavior_id":"behavior","name":"worker"}),
+            Collection::AgentTarget,
+            json!({"node_did":owner,"target_id":"target","target_node_did":owner,"agent_id":"behavior","name":"worker"}),
         ),
     ]
 }
@@ -432,30 +436,30 @@ async fn generated_default_replacements_preserve_runtime_startup_selection() -> 
         let owner = format!("did:key:default-replacement-{index}");
         let principal = |default: &Value, name: &str| {
             config(
-                Collection::AgentPrincipal,
-                json!({"agent_did":owner,"default_behavior_id":default,"display_name":name}),
+                Collection::Node,
+                json!({"node_did":owner,"default_agent_id":default,"display_name":name}),
             )
         };
         let mut documents = vec![
             document(backend(&owner, "backend")),
             config(
                 Collection::InferenceProfile,
-                json!({"agent_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model"}),
+                json!({"node_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model"}),
             ),
             principal(&case["current"], "Original"),
         ];
         for behavior in ["coding", "review"] {
             documents.push(config(
-                Collection::AgentBehavior,
-                json!({"agent_did":owner,"behavior_id":behavior,"inference_profile_id":"profile"}),
+                Collection::Agent,
+                json!({"node_did":owner,"agent_id":behavior,"inference_profile_id":"profile"}),
             ));
         }
         apply(&access, documents).await?;
-        let mut requested = json!({"agent_principal": {
-            "agent_did":owner,"display_name":"Changed"
+        let mut requested = json!({"node": {
+            "node_did":owner,"display_name":"Changed"
         }});
         if !case["candidate"].is_null() {
-            requested["agent_principal"]["default_behavior_id"] = case["candidate"].clone();
+            requested["node"]["default_agent_id"] = case["candidate"].clone();
         }
         let pack: crate::document_config::PackConfig = serde_json::from_value(requested)?;
         let mut replacement = DesiredStateApplyPlan::from_pack_config(&pack)?
@@ -463,14 +467,12 @@ async fn generated_default_replacements_preserve_runtime_startup_selection() -> 
             .first()
             .expect("pack principal")
             .clone();
-        replacement.add["default_behavior_id"] = json!("coding");
+        replacement.add["default_agent_id"] = json!("coding");
         let plan = DesiredStateApplyPlan::new(vec![replacement])?;
         let before = access
             .transact("test.default.before", |txn| {
                 let owner = &owner;
-                Box::pin(
-                    async move { read_record(txn, Collection::AgentPrincipal, owner, owner).await },
-                )
+                Box::pin(async move { read_record(txn, Collection::Node, owner, owner).await })
             })
             .await?;
         let preview = access
@@ -491,19 +493,17 @@ async fn generated_default_replacements_preserve_runtime_startup_selection() -> 
         let after = access
             .transact("test.default.after", |txn| {
                 let owner = &owner;
-                Box::pin(
-                    async move { read_record(txn, Collection::AgentPrincipal, owner, owner).await },
-                )
+                Box::pin(async move { read_record(txn, Collection::Node, owner, owner).await })
             })
             .await?;
         if allowed {
             let (_, after) = after.expect("published principal");
-            assert_eq!(after["default_behavior_id"], case["candidate"]);
+            assert_eq!(after["default_agent_id"], case["candidate"]);
             assert_eq!(after["display_name"], "Changed");
         } else {
             assert_eq!(after, before, "refused replacement changed the principal");
             let message = format!("{:#}", published.unwrap_err());
-            assert!(message.contains("default_behavior_id"), "{message}");
+            assert!(message.contains("default_agent_id"), "{message}");
             assert!(message.contains("coding"), "{message}");
         }
     }
@@ -525,14 +525,14 @@ async fn retained_inbound_references_and_cycles_share_atomic_publication() -> Re
     for collection in cyclic_configuration(owner).iter().map(|doc| doc.collection) {
         assert_eq!(seeded.get(collection), 2, "{collection:?}");
     }
-    access.write("test.observe", r#"mutation { update_InferenceBackend(filter:{agent_did:{_eq:"did:key:owner"}},input:{probe_status:"healthy"}){_docID} }"#).await?;
-    let before = node.execute("{InferenceBackend{_docID agent_did name probe_status} AgentContext{_docID agent_did context_id}}").await.data;
+    access.write("test.observe", r#"mutation { update_InferenceBackend(filter:{node_did:{_eq:"did:key:owner"}},input:{probe_status:"healthy"}){_docID} }"#).await?;
+    let before = node.execute("{InferenceBackend{_docID node_did name probe_status} AgentContext{_docID node_did context_id}}").await.data;
 
     // The read-only preflight (`validate_desired_state_plan`) rejects the
     // same broken replacement the publication path rejects, on this fixture.
     let mut drifted_replacement = cyclic_configuration(owner)
         .into_iter()
-        .find(|doc| doc.collection == Collection::AgentBehavior)
+        .find(|doc| doc.collection == Collection::Agent)
         .unwrap();
     drifted_replacement.update["context_id"] = "absent".into();
     let preview_plan = DesiredStateApplyPlan::new(vec![drifted_replacement])?;
@@ -593,7 +593,7 @@ async fn retained_inbound_references_and_cycles_share_atomic_publication() -> Re
         .await
         .unwrap_err();
     assert!(format!("{error:#}").contains("references missing AgentContext"));
-    let after = node.execute("{InferenceBackend{_docID agent_did name probe_status} AgentContext{_docID agent_did context_id}}").await.data;
+    let after = node.execute("{InferenceBackend{_docID node_did name probe_status} AgentContext{_docID node_did context_id}}").await.data;
     assert_eq!(
         before, after,
         "failed publication preserves desired fields and observations"
@@ -621,15 +621,15 @@ async fn retained_inbound_references_and_cycles_share_atomic_publication() -> Re
         })
         .await?;
     let remaining = node
-        .execute("{AgentBehavior{agent_did} InferenceBackend{agent_did}}")
+        .execute("{Agent{node_did} InferenceBackend{node_did}}")
         .await;
     assert!(!remaining.has_errors());
-    for collection in ["AgentBehavior", "InferenceBackend"] {
+    for collection in ["Agent", "InferenceBackend"] {
         let rows = remaining.data.as_ref().unwrap()[collection]
             .as_array()
             .unwrap();
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0]["agent_did"], "did:key:foreign");
+        assert_eq!(rows[0]["node_did"], "did:key:foreign");
     }
     Ok(())
 }
@@ -643,17 +643,14 @@ async fn replacement_checks_actual_update_and_unchanged_duplicate_rows() -> Resu
     apply(&access, cyclic_configuration(owner)).await?;
     let mut replacement = cyclic_configuration(owner)
         .into_iter()
-        .find(|doc| doc.collection == Collection::AgentBehavior)
+        .find(|doc| doc.collection == Collection::Agent)
         .unwrap();
     replacement.update["context_id"] = "absent".into();
     assert!(apply(&access, vec![replacement]).await.is_err());
-    let row = node.execute("{AgentBehavior{context_id}}").await;
-    assert_eq!(
-        row.data.unwrap()["AgentBehavior"][0]["context_id"],
-        "context"
-    );
+    let row = node.execute("{Agent{context_id}}").await;
+    assert_eq!(row.data.unwrap()["Agent"][0]["context_id"], "context");
 
-    access.write("test.duplicate.context", r#"mutation { create_AgentContext(input:{agent_did:"did:key:owner",context_id:"context",description:"duplicate"}){_docID} }"#).await?;
+    access.write("test.duplicate.context", r#"mutation { create_AgentContext(input:{node_did:"did:key:owner",context_id:"context",description:"duplicate"}){_docID} }"#).await?;
     let error = apply(
         &access,
         vec![document(backend(owner, "unrelated-new-backend"))],
@@ -690,7 +687,7 @@ async fn expect_existing_documents_unchanged_rejects_drifted_live_rows() -> Resu
         .await?;
 
     // Mutate a non-committed live field out of band; the same plan now drifts.
-    access.write("test.drift", r#"mutation { update_InferenceBackend(filter:{agent_did:{_eq:"did:key:owner"},backend_id:{_eq:"packaged"}},input:{name:"out-of-band"}){_docID} }"#).await?;
+    access.write("test.drift", r#"mutation { update_InferenceBackend(filter:{node_did:{_eq:"did:key:owner"},backend_id:{_eq:"packaged"}},input:{name:"out-of-band"}){_docID} }"#).await?;
     let error = access
         .transact("test.verify.drifted", |txn| {
             let plan = &matching;
@@ -895,7 +892,7 @@ async fn guarded_publication_matches_lean_publish_if_cases() -> Result<()> {
         let prior = case
             .pre_desired
             .iter()
-            .map(|row| document(doc_for(&row.target.agent_did, &row.target.id, &row.content)))
+            .map(|row| document(doc_for(&row.target.node_did, &row.target.id, &row.content)))
             .collect::<Vec<_>>();
         apply(&access, prior).await?;
 
@@ -906,15 +903,15 @@ async fn guarded_publication_matches_lean_publish_if_cases() -> Result<()> {
                 let digest = row
                     .content
                     .as_deref()
-                    .map(|content| authored_digest(&row.target.agent_did, &row.target.id, content))
+                    .map(|content| authored_digest(&row.target.node_did, &row.target.id, content))
                     .transpose()?;
-                Ok(expectation(&row.target.agent_did, &row.target.id, digest))
+                Ok(expectation(&row.target.node_did, &row.target.id, digest))
             })
             .collect::<Result<Vec<_>>>()?;
         let plan = DesiredStateApplyPlan::new(
             case.candidate
                 .iter()
-                .map(|row| document(doc_for(&row.target.agent_did, &row.target.id, &row.content)))
+                .map(|row| document(doc_for(&row.target.node_did, &row.target.id, &row.content)))
                 .collect(),
         )?
         .with_expected(expected)?;
@@ -936,8 +933,8 @@ async fn guarded_publication_matches_lean_publish_if_cases() -> Result<()> {
 
         let mut after_first = Vec::new();
         for row in &case.expected_after_desired {
-            let live = live_digest(&access, &row.target.agent_did, &row.target.id).await?;
-            let want = authored_digest(&row.target.agent_did, &row.target.id, &row.content)?;
+            let live = live_digest(&access, &row.target.node_did, &row.target.id).await?;
+            let want = authored_digest(&row.target.node_did, &row.target.id, &row.content)?;
             assert_eq!(
                 live,
                 Some(want),
@@ -985,7 +982,7 @@ async fn guarded_publication_matches_lean_publish_if_cases() -> Result<()> {
             }
             for (row, first) in case.expected_after_desired.iter().zip(&after_first) {
                 assert_eq!(
-                    live_digest(&access, &row.target.agent_did, &row.target.id).await?,
+                    live_digest(&access, &row.target.node_did, &row.target.id).await?,
                     *first,
                     "case {} document {} changed on replay",
                     case.name,
@@ -1037,8 +1034,8 @@ async fn canonical_replacement_preserves_revocation_and_attested_creation() {
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let access = ConfigAccess::Local(node.clone());
     let original: crate::document_config::PackConfig = serde_json::from_value(serde_json::json!({
-        "agent_principal":{"agent_did":"binding-owner"},
-        "chain_key_bindings":[{"agent_did":"binding-owner","binding_id":"signing","address":"0x1111111111111111111111111111111111111111","key_backend":"keyring","attestation":"signed-owner-binding","created_at":"2026-01-01T00:00:00Z","revoked_at":"2026-01-02T00:00:00Z"}]
+        "node":{"node_did":"binding-owner"},
+        "chain_key_bindings":[{"node_did":"binding-owner","binding_id":"signing","address":"0x1111111111111111111111111111111111111111","key_backend":"keyring","attestation":"signed-owner-binding","created_at":"2026-01-01T00:00:00Z","revoked_at":"2026-01-02T00:00:00Z"}]
     })).unwrap();
     let plan = DesiredStateApplyPlan::from_pack_config(&original).unwrap();
     access
@@ -1075,7 +1072,7 @@ async fn canonical_replacement_preserves_revocation_and_attested_creation() {
             })
             .await
             .unwrap();
-        let read=node.execute(r#"{ChainKeyBinding(filter:{agent_did:{_eq:"binding-owner"},binding_id:{_eq:"signing"}}){created_at revoked_at tags}}"#).await;
+        let read=node.execute(r#"{ChainKeyBinding(filter:{node_did:{_eq:"binding-owner"},binding_id:{_eq:"signing"}}){created_at revoked_at tags}}"#).await;
         assert!(!read.has_errors(), "{:?}", read.errors);
         let rows = read.data.unwrap()["ChainKeyBinding"].clone();
         assert_eq!(
@@ -1095,7 +1092,7 @@ async fn preview_rejects_a_context_window_above_the_advertised_maximum() -> Resu
     let profile = |window: Value| {
         config(
             Collection::InferenceProfile,
-            json!({"agent_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model","context_window":window}),
+            json!({"node_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model","context_window":window}),
         )
     };
     apply(
@@ -1109,7 +1106,7 @@ async fn preview_rejects_a_context_window_above_the_advertised_maximum() -> Resu
         &node,
         &typed,
         serde_json::from_value(json!({
-            "agent_did": null,
+            "node_did": null,
             "observed_at": "2026-09-25T00:00:00Z",
             "models": [{"model_name":"model","context_window":272000,"max_context_window":872000}],
         }))?,
@@ -1150,7 +1147,7 @@ fn obligation_surface(
 ) -> DesiredStateApplyDocument {
     let surface = json!({
         "surface_id": surface_id,
-        "agent_did": owner,
+        "node_did": owner,
         "entries": {"entries": [{
             "tool_name": "write_outcome",
             "collection": collection,
@@ -1525,7 +1522,7 @@ fn event_source_document(
     count_field: Option<&str>,
 ) -> DesiredStateApplyDocument {
     let mut source = json!({
-        "agent_did": owner,
+        "node_did": owner,
         "event_source_id": id,
         "source_collection": collection,
     });
@@ -1980,18 +1977,18 @@ async fn outcome_delivery_requires_a_string_handoff_id_on_its_source_collection(
     let source = |collection: &str| {
         config(
             Collection::EventSource,
-            json!({"agent_did":owner,"event_source_id":"watcher","source_collection":collection,"event_kind":"created"}),
+            json!({"node_did":owner,"event_source_id":"watcher","source_collection":collection,"event_kind":"created"}),
         )
     };
     let task = |emit_outcome: bool| {
         config(
             Collection::Task,
-            json!({"agent_did":owner,"task_id":"handle","behavior_id":"behavior","prompt_template":"Handle {{ doc.message }}","emit_outcome":emit_outcome}),
+            json!({"node_did":owner,"task_id":"handle","agent_id":"behavior","prompt_template":"Handle {{ doc.message }}","emit_outcome":emit_outcome}),
         )
     };
     let trigger = config(
         Collection::Trigger,
-        json!({"agent_did":owner,"trigger_id":"on-ping","task_id":"handle","source":{"kind":"event","event_source_id":"watcher"},"concurrency":"parallel"}),
+        json!({"node_did":owner,"trigger_id":"on-ping","task_id":"handle","source":{"kind":"event","event_source_id":"watcher"},"concurrency":"parallel"}),
     );
     let triggers = || async {
         let rows = node.execute("{ Trigger { trigger_id } }").await;
@@ -2090,7 +2087,7 @@ fn rule_documents(
 )> {
     let owner = "did:key:template-rule";
     let mut source = json!({
-        "agent_did": owner, "event_source_id": "watcher",
+        "node_did": owner, "event_source_id": "watcher",
         "source_collection": source_collection, "event_kind": "created",
     });
     if let Some(group) = group {
@@ -2098,7 +2095,7 @@ fn rule_documents(
         source["correlation_field"] = json!("message");
     }
     let mut task = json!({
-        "agent_did": owner, "task_id": "work", "behavior_id": "behavior",
+        "node_did": owner, "task_id": "work", "agent_id": "behavior",
         "prompt_template": prompt_template, "emit_outcome": emit_outcome,
     });
     if let Some(goal_objective_template) = goal_objective_template {
@@ -2106,7 +2103,7 @@ fn rule_documents(
     }
     Ok((
         serde_json::from_value(json!({
-            "agent_did": owner, "trigger_id": "on-doc", "task_id": "work",
+            "node_did": owner, "trigger_id": "on-doc", "task_id": "work",
             "source": {"kind": "event", "event_source_id": "watcher"},
         }))?,
         serde_json::from_value(task)?,
@@ -2282,15 +2279,15 @@ async fn publication_applies_native_route_template_fields_the_schema_does_not_de
     let documents = vec![
         config(
             Collection::EventSource,
-            json!({"agent_did":owner,"event_source_id":"watcher","source_collection":"WorkspaceReceipt","event_kind":"created"}),
+            json!({"node_did":owner,"event_source_id":"watcher","source_collection":"WorkspaceReceipt","event_kind":"created"}),
         ),
         config(
             Collection::Task,
-            json!({"agent_did":owner,"task_id":"review","behavior_id":"behavior","prompt_template":"Review {{ doc.work_unit_id }} after attempt {{ doc.attempt }}","goal_objective_template":"Seal {{ doc.attempt }}","emit_outcome":true}),
+            json!({"node_did":owner,"task_id":"review","agent_id":"behavior","prompt_template":"Review {{ doc.work_unit_id }} after attempt {{ doc.attempt }}","goal_objective_template":"Seal {{ doc.attempt }}","emit_outcome":true}),
         ),
         config(
             Collection::Trigger,
-            json!({"agent_did":owner,"trigger_id":"on-receipt","task_id":"review","source":{"kind":"event","event_source_id":"watcher"},"session_id_template":"{{ doc.reply_session_id }}","concurrency":"parallel"}),
+            json!({"node_did":owner,"trigger_id":"on-receipt","task_id":"review","source":{"kind":"event","event_source_id":"watcher"},"session_id_template":"{{ doc.reply_session_id }}","concurrency":"parallel"}),
         ),
     ];
     let plan = DesiredStateApplyPlan::new(documents.clone())?;

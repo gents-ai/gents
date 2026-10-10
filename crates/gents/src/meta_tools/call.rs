@@ -115,7 +115,7 @@ impl Tool for CallToolTool {
         let service = lookup_service(&self.ctx, &args.service_id)
             .await
             .context("call_tool")?;
-        let outbound_agent_did = service.outbound_agent_did(&self.ctx);
+        let outbound_node_did = service.outbound_node_did(&self.ctx);
 
         let selection = self
             .ctx
@@ -134,7 +134,7 @@ impl Tool for CallToolTool {
                 &service.endpoint,
                 &args.tool_name,
                 argument_object,
-                outbound_agent_did,
+                outbound_node_did,
             )
             .await
         {
@@ -148,7 +148,7 @@ impl Tool for CallToolTool {
                 &service.endpoint,
                 &args.tool_name,
                 arguments,
-                outbound_agent_did,
+                outbound_node_did,
                 connect_timeout,
             ),
         )
@@ -203,11 +203,11 @@ impl CallToolTool {
         endpoint: &str,
         tool_name: &str,
         arguments: &Map<String, Value>,
-        agent_did: Option<&str>,
+        node_did: Option<&str>,
     ) -> Option<StructuredToolError> {
         let service = super::shared::ResolvedMcpService {
             endpoint: endpoint.to_string(),
-            send_agent_did: agent_did.is_some(),
+            send_node_did: node_did.is_some(),
         };
         let list_result = match self.ctx.list_tools(service_id, &service).await {
             Ok(result) => result,
@@ -489,7 +489,7 @@ mod tests {
             health: ServiceHealthMap::new(),
             local_hostname: "studio-1".to_string(),
             local_subnet: None,
-            agent_did: "did:key:z-test-agent".to_string(),
+            node_did: "did:key:z-test-agent".to_string(),
             allowed_mcp_service_ids: vec!["x-data".to_string()],
             remote_tools: super::super::tests::remote_selection(&["x-data"], &["search_posts"]),
         });

@@ -127,15 +127,15 @@ async fn accepted_pending_tool_uses_authoritative_lifecycle_state_when_status_is
             r#"mutation {
                 create_AgentSession(input: {
                     session_id: "pending-tool-session"
-                    agent_did: "did:test:timeline"
-                    behavior_id: "general"
+                    node_did: "did:test:timeline"
+                    agent_id: "general"
                     created_at: "2026-09-22T00:00:00Z"
                 }) { _docID }
                 create_AgentRequest(input: {
                     request_id: "pending-tool-request"
                     purpose: "normal"
-                    agent_did: "did:test:timeline"
-                    behavior_id: "general"
+                    node_did: "did:test:timeline"
+                    agent_id: "general"
                     session_id: "pending-tool-session"
                     retry_parent_request: ""
                     retry_root_request: "pending-tool-request"
@@ -148,7 +148,7 @@ async fn accepted_pending_tool_uses_authoritative_lifecycle_state_when_status_is
                     created_at: "2026-09-22T00:00:00Z"
                     retry_count: 0
                     max_retries: 3
-                    subagent_depth: 0
+                    request_hop: 0
                 }) { _docID }
             }"#,
         )
@@ -168,7 +168,7 @@ async fn accepted_pending_tool_uses_authoritative_lifecycle_state_when_status_is
         crate::graphql::first_row(&request_response, "AgentRequest")
             .unwrap()
             .expect("pending fixture request");
-    let mut lifecycle = RequestLifecycle::new_with_agent_did(
+    let mut lifecycle = RequestLifecycle::new_with_node_did(
         node.clone(),
         "general",
         "did:test:timeline",
@@ -309,7 +309,7 @@ async fn accepted_tool_arguments_read_only_the_accepted_message() {
     let second = publish_accepted_on_claimed_request(
         node.clone(),
         &mut owner,
-        &admitted.agent_did,
+        &admitted.node_did,
         1,
         crate::toolset::AGENT_NEW_TOOL_NAME,
         "bridge-second",
@@ -324,19 +324,19 @@ async fn accepted_tool_arguments_read_only_the_accepted_message() {
     let second_doc = second.doc_id().expect("second bridge").to_owned();
     let bridge = node
         .execute(&format!(
-            r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ agent_did session_id requester_did request_doc_id }} }}"#,
+            r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ node_did session_id requester_did request_doc_id }} }}"#,
             escape_graphql_string(&second_doc)
         ))
         .await;
     let bridge = &bridge.data.expect("bridge scope")["AgentToolCall"][0];
     let text = |field: &str| bridge[field].as_str().map(str::to_owned);
-    let (agent_did, session_id) = (text("agent_did").unwrap(), text("session_id").unwrap());
+    let (node_did, session_id) = (text("node_did").unwrap(), text("session_id").unwrap());
     let requester_did = text("requester_did");
 
     let unresolvable = TranscriptMessage {
         message_key: "unrelated-unresolvable".into(),
         session_id: session_id.clone(),
-        agent_did: agent_did.clone(),
+        node_did: node_did.clone(),
         requester_did: requester_did.clone(),
         request_doc_id: text("request_doc_id"),
         publication: MessagePublication::RequestExecution {
@@ -378,14 +378,14 @@ async fn accepted_tool_arguments_read_only_the_accepted_message() {
 
     let access = ConfigAccess::Local(node.clone());
     assert!(
-        load_session_tool_calls(&access, &agent_did, &session_id, requester_did.as_deref())
+        load_session_tool_calls(&access, &node_did, &session_id, requester_did.as_deref())
             .await
             .is_err(),
         "premise: the session-wide reader resolves every message in the session"
     );
     let first = load_accepted_tool_arguments(
         &access,
-        &agent_did,
+        &node_did,
         &session_id,
         requester_did.as_deref(),
         &first_doc,
@@ -399,7 +399,7 @@ async fn accepted_tool_arguments_read_only_the_accepted_message() {
     );
     let second = load_accepted_tool_arguments(
         &access,
-        &agent_did,
+        &node_did,
         &session_id,
         requester_did.as_deref(),
         &second_doc,
@@ -413,7 +413,7 @@ async fn accepted_tool_arguments_read_only_the_accepted_message() {
     );
     assert!(load_accepted_tool_arguments(
         &access,
-        &agent_did,
+        &node_did,
         "another-session",
         requester_did.as_deref(),
         &second_doc,

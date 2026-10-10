@@ -11,8 +11,8 @@ use gents_desktop_bridge::contract::{
     MANAGED_SERVER_TRAY_STOP_EVENT, MANAGED_SERVER_UPDATED_EVENT,
 };
 use gents_desktop_bridge::{
-    init, init_tracing as install_tracing, install_runtime, prefer_host_tools, AgentHomePolicy,
-    AppMeta, BootstrapPolicy, BridgeConfig, HomePolicy, ManagedServerPolicy, SnapshotGrants,
+    init, init_tracing as install_tracing, install_runtime, prefer_host_tools, AppMeta,
+    BootstrapPolicy, BridgeConfig, HomePolicy, ManagedServerPolicy, NodeHomePolicy, SnapshotGrants,
     TracingConfig,
 };
 #[cfg(desktop)]
@@ -219,7 +219,7 @@ fn native_local_e2e_config(config: BridgeConfig) -> BridgeConfig {
     BridgeConfig {
         home: HomePolicy::FixedRoot(path("GENTS_E2E_DESKTOP_HOME")),
         bootstrap: BootstrapPolicy::LocalRuntimeAllowed {
-            agent_home: AgentHomePolicy::Fixed(path("GENTS_E2E_AGENT_HOME")),
+            node_home: NodeHomePolicy::Fixed(path("GENTS_E2E_NODE_HOME")),
         },
         store_key_custody: if std::env::var("GENTS_E2E_FILE_STORE_KEYS").ok().as_deref()
             == Some("1")
@@ -235,7 +235,7 @@ fn native_local_e2e_config(config: BridgeConfig) -> BridgeConfig {
 #[cfg(all(desktop, any(target_os = "macos", target_os = "linux")))]
 fn platform_bootstrap_policy() -> BootstrapPolicy {
     BootstrapPolicy::LocalRuntimeAllowed {
-        agent_home: AgentHomePolicy::Default,
+        node_home: NodeHomePolicy::Default,
     }
 }
 

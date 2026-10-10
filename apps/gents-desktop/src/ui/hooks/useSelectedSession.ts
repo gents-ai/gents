@@ -14,10 +14,10 @@ export function selectedIn(
   state: SessionState,
   {
     selectedSessionId,
-    selectedAgentDid,
-  }: { selectedSessionId: string | null; selectedAgentDid: string | null },
+    selectedNodeDid,
+  }: { selectedSessionId: string | null; selectedNodeDid: string | null },
 ): DesktopSessionSnapshot | null {
-  return heldFor(state.session, selectedSessionId, selectedAgentDid);
+  return heldFor(state.session, selectedSessionId, selectedNodeDid);
 }
 
 /* the session store and the selection that picks the held read out of it */
@@ -25,7 +25,7 @@ function useHeld() {
   const { stores } = useApp();
   const selection = {
     selectedSessionId: stores.selection.use.sessionId(),
-    selectedAgentDid: stores.selection.use.agentDid(),
+    selectedNodeDid: stores.selection.use.nodeDid(),
   };
   return { store: stores.session, selection };
 }

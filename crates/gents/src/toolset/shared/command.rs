@@ -178,7 +178,7 @@ impl CommandExecutionPolicy {
     /// availability; launch still fails closed when enforcement is unavailable.
     pub fn network_enforcement_disclosure(&self) -> &'static str {
         if self.network_mode != CommandNetworkMode::Disabled {
-            return "network is not disabled by this behavior policy";
+            return "network is not disabled by this agent policy";
         }
         match self.mode {
             CommandExecutionMode::Unrestricted => {
@@ -1677,7 +1677,7 @@ mod network_enforcement_disclosure_tests {
         assert!(validate_network_mode("curl", &[], &inherited).is_ok());
         assert_eq!(
             inherited.network_enforcement_disclosure(),
-            "network is not disabled by this behavior policy"
+            "network is not disabled by this agent policy"
         );
     }
 }

@@ -52,7 +52,7 @@ pub enum IllegalToolCallTransition {
 impl ToolCallLifecycle {
     async fn sync_after_lost_running_compare(&mut self, method: &'static str) -> Result<()> {
         let current =
-            ToolCallLifecycle::load_by_doc_id(self.node.clone(), self.doc_id.as_deref().context("lost compare lifecycle missing physical identity")?, &self.agent_did, &self.session_id, self.requester_did.as_deref())
+            ToolCallLifecycle::load_by_doc_id(self.node.clone(), self.doc_id.as_deref().context("lost compare lifecycle missing physical identity")?, &self.node_did, &self.session_id, self.requester_did.as_deref())
                 .await?
                 .ok_or_else(|| {
                     anyhow!(
@@ -87,7 +87,7 @@ impl ToolCallLifecycle {
         target_mode: AwaitMode,
     ) -> Result<()> {
         let current =
-            ToolCallLifecycle::load_by_doc_id(self.node.clone(), self.doc_id.as_deref().context("lost compare lifecycle missing physical identity")?, &self.agent_did, &self.session_id, self.requester_did.as_deref())
+            ToolCallLifecycle::load_by_doc_id(self.node.clone(), self.doc_id.as_deref().context("lost compare lifecycle missing physical identity")?, &self.node_did, &self.session_id, self.requester_did.as_deref())
                 .await?
                 .ok_or_else(|| {
                     anyhow!(

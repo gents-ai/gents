@@ -5,7 +5,7 @@
   "stages": [
     {
       "stage_id": "build_attempt",
-      "prompt": "Set up graph 'g-broken-port' exactly as I specify. 1) Create two tasks bound to this engineer behavior: 't-extract-word' emits its input word on output port 'out'; 't-upper-word' uppercases its input and emits on output port 'out'. 2) Author graph 'g-broken-port' with node 'extract' bound to t-extract-word and node 'upper' bound to t-upper-word, and wire node 'upper' input port 'in' from node 'extract' output port 'does_not_exist' \u2014 I got that port name from an old note, use it exactly as written. 3) Preview the graph. If the preview accepts it, run it with input {\"word\": \"correlation\"}. If the preview rejects it, do not run it and tell me exactly what is wrong with the wiring.",
+      "prompt": "Set up graph 'g-broken-port' exactly as I specify. 1) Create two tasks bound to this engineer agent: 't-extract-word' emits its input word on output port 'out'; 't-upper-word' uppercases its input and emits on output port 'out'. 2) Author graph 'g-broken-port' with node 'extract' bound to t-extract-word and node 'upper' bound to t-upper-word, and wire node 'upper' input port 'in' from node 'extract' output port 'does_not_exist' \u2014 I got that port name from an old note, use it exactly as written. 3) Preview the graph. If the preview accepts it, run it with input {\"word\": \"correlation\"}. If the preview rejects it, do not run it and tell me exactly what is wrong with the wiring.",
       "deadline_secs": 600,
       "checks": [
         {
@@ -85,7 +85,7 @@
           "name": "run_calls",
           "collection": "AgentToolCall",
           "filter": {
-            "agent_did": {
+            "node_did": {
               "_eq": "$trial"
             },
             "tool_name": {

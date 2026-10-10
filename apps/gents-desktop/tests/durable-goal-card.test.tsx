@@ -9,8 +9,8 @@ describe("durable goal transcript card", () => {
   it("renders persisted goal status, objective, token usage, and active time", () => {
     const session: DesktopSessionSnapshot = {
       sessionId: "session-goal",
-      agentDid: "did:test:goal-agent",
-      behaviorId: "default",
+      nodeDid: "did:test:goal-node",
+      agentId: "default",
       title: "goal session",
       previewText: "",
       status: "active",
@@ -58,8 +58,8 @@ describe("durable goal transcript card", () => {
     // only the fully populated projection is observed.
     const session: DesktopSessionSnapshot = {
       sessionId: "session-goal-partial",
-      agentDid: "did:test:goal-agent",
-      behaviorId: "default",
+      nodeDid: "did:test:goal-node",
+      agentId: "default",
       title: "goal session",
       previewText: "",
       status: "active",

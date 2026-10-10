@@ -12,7 +12,7 @@ import type { AgentContext, SkillView } from "@source-inc/gents-desktop-client";
 const skills: SkillView[] = [
   {
     skillId: "review-skill",
-    agentDid: "did:key:z6MkAgent",
+    nodeDid: "did:key:z6MkAgent",
     name: "Review",
     sourceDirectory: null,
     description: null,
@@ -26,7 +26,7 @@ const skills: SkillView[] = [
   },
   {
     skillId: "deploy-skill",
-    agentDid: "did:key:z6MkAgent",
+    nodeDid: "did:key:z6MkAgent",
     name: "Deploy",
     sourceDirectory: null,
     description: null,
@@ -40,7 +40,7 @@ const skills: SkillView[] = [
   },
   {
     skillId: "off-skill",
-    agentDid: "did:key:z6MkAgent",
+    nodeDid: "did:key:z6MkAgent",
     name: "Disabled",
     sourceDirectory: null,
     description: null,
@@ -57,7 +57,7 @@ const skills: SkillView[] = [
 function context(skillIds: string[] | null): AgentContext {
   return {
     context_id: "ctx-default",
-    agent_did: "did:key:z6MkAgent",
+    node_did: "did:key:z6MkAgent",
     system_prompt: null,
     tools_id: null,
     compaction_id: null,
@@ -128,7 +128,7 @@ describe("composer slash menu", () => {
         activeRequestId={null}
         activityStatus={null}
         approxSerializedBytes={0}
-        behaviorLabel="default"
+        agentLabel="default"
         canSend
         draft={draft}
         interruptVisible={false}

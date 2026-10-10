@@ -33,7 +33,7 @@ pub struct MemoryParams {
 struct MemoryRow {
     memory_id: String,
     #[serde(default)]
-    agent_did: Option<String>,
+    node_did: Option<String>,
     #[serde(default)]
     key: Option<String>,
     #[serde(default)]
@@ -77,14 +77,14 @@ impl From<anyhow::Error> for MemoryToolError {
 #[derive(Clone)]
 pub struct MemoryTool {
     node: Arc<EmbeddedNode>,
-    agent_did: String,
+    node_did: String,
 }
 
 impl MemoryTool {
-    pub fn new(node: Arc<EmbeddedNode>, agent_did: impl Into<String>) -> Self {
+    pub fn new(node: Arc<EmbeddedNode>, node_did: impl Into<String>) -> Self {
         Self {
             node,
-            agent_did: agent_did.into(),
+            node_did: node_did.into(),
         }
     }
 }
@@ -99,9 +99,9 @@ impl Tool for MemoryTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Read or write this agent's persistent cross-session memory. \
-                Memory is a per-agent key-value store scoped to the running agent DID; \
-                it cannot read or write arbitrary DefraDB documents or another agent's memory."
+            description: "Read or write this node's persistent cross-session memory. \
+                Memory is a per-node key-value store scoped to the running node DID; \
+                it cannot read or write arbitrary DefraDB documents or another node's memory."
                 .to_string(),
             parameters: json!({
                 "type": "object",
@@ -126,18 +126,18 @@ impl Tool for MemoryTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let agent_did = normalize_agent_did(&self.agent_did)?;
+        let node_did = normalize_node_did(&self.node_did)?;
         let key = normalize_key(&args.key)?;
 
         let output = match args.action {
-            MemoryAction::Read => read_memory(&self.node, &agent_did, &key).await?,
+            MemoryAction::Read => read_memory(&self.node, &node_did, &key).await?,
             MemoryAction::Write => {
                 let value = normalize_value(
                     args.value
                         .as_deref()
                         .context("memory write requires `value`")?,
                 )?;
-                write_memory(&self.node, &agent_did, &key, &value).await?
+                write_memory(&self.node, &node_did, &key, &value).await?
             }
         };
 
@@ -146,19 +146,16 @@ impl Tool for MemoryTool {
     }
 }
 
-pub fn build_memory_tool(
-    node: Arc<EmbeddedNode>,
-    agent_did: impl Into<String>,
-) -> Box<dyn ToolDyn> {
-    Box::new(MemoryTool::new(node, agent_did))
+pub fn build_memory_tool(node: Arc<EmbeddedNode>, node_did: impl Into<String>) -> Box<dyn ToolDyn> {
+    Box::new(MemoryTool::new(node, node_did))
 }
 
-fn normalize_agent_did(agent_did: &str) -> Result<String> {
-    let agent_did = agent_did.trim();
-    if agent_did.is_empty() {
-        bail!("memory tool requires a running agent DID");
+fn normalize_node_did(node_did: &str) -> Result<String> {
+    let node_did = node_did.trim();
+    if node_did.is_empty() {
+        bail!("memory tool requires a running node DID");
     }
-    Ok(agent_did.to_string())
+    Ok(node_did.to_string())
 }
 
 fn normalize_key(key: &str) -> Result<String> {
@@ -182,30 +179,30 @@ fn normalize_value(value: &str) -> Result<String> {
     Ok(value.to_string())
 }
 
-fn memory_id(agent_did: &str, key: &str) -> String {
-    format!("{}:{}{}", agent_did.len(), agent_did, key)
+fn memory_id(node_did: &str, key: &str) -> String {
+    format!("{}:{}{}", node_did.len(), node_did, key)
 }
 
-async fn read_memory(node: &EmbeddedNode, agent_did: &str, key: &str) -> Result<MemoryOutput> {
-    let memory_id = escape_graphql_string(&memory_id(agent_did, key));
+async fn read_memory(node: &EmbeddedNode, node_did: &str, key: &str) -> Result<MemoryOutput> {
+    let memory_id = escape_graphql_string(&memory_id(node_did, key));
     let query = format!(
         r#"{{
-            AgentMemory(filter: {{ memory_id: {{ _eq: "{memory_id}" }} }}, limit: 1) {{
+            NodeMemory(filter: {{ memory_id: {{ _eq: "{memory_id}" }} }}, limit: 1) {{
                 memory_id
-                agent_did
+                node_did
                 key
                 value
                 updated_at
             }}
         }}"#
     );
-    let resp = graphql_with_transaction_retry(&node, &query, "reading agent memory").await?;
-    tracing::debug!(agent_did, key, "agent memory read");
+    let resp = graphql_with_transaction_retry(&node, &query, "reading node memory").await?;
+    tracing::debug!(node_did, key, "node memory read");
 
     let row = resp
         .data
         .as_ref()
-        .and_then(|data| data.get("AgentMemory"))
+        .and_then(|data| data.get("NodeMemory"))
         .and_then(|value| serde_json::from_value::<Vec<MemoryRow>>(value.clone()).ok())
         .and_then(|mut rows| rows.pop());
 
@@ -229,7 +226,7 @@ async fn read_memory(node: &EmbeddedNode, agent_did: &str, key: &str) -> Result<
 
 async fn write_memory(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     key: &str,
     value: &str,
 ) -> Result<MemoryOutput> {
@@ -237,18 +234,18 @@ async fn write_memory(
     let output_key = key.to_string();
     let output_value = value.to_string();
     let output_updated_at = updated_at.clone();
-    let escaped_memory_id = escape_graphql_string(&memory_id(agent_did, key));
-    let escaped_agent_did = escape_graphql_string(agent_did);
+    let escaped_memory_id = escape_graphql_string(&memory_id(node_did, key));
+    let escaped_node_did = escape_graphql_string(node_did);
     let escaped_key = escape_graphql_string(key);
     let escaped_value = escape_graphql_string(value);
     let escaped_updated_at = escape_graphql_string(&updated_at);
     let mutation = format!(
         r#"mutation {{
-            upsert_AgentMemory(
+            upsert_NodeMemory(
                 filter: {{ memory_id: {{ _eq: "{escaped_memory_id}" }} }},
                 add: {{
                     memory_id: "{escaped_memory_id}",
-                    agent_did: "{escaped_agent_did}",
+                    node_did: "{escaped_node_did}",
                     key: "{escaped_key}",
                     value: "{escaped_value}",
                     updated_at: "{escaped_updated_at}"
@@ -262,15 +259,15 @@ async fn write_memory(
     );
     crate::config_client::ConfigAccess::write_local_response(
         node,
-        "toolset.write_agent_memory",
+        "toolset.write_node_memory",
         &mutation,
     )
     .await?;
     tracing::debug!(
-        agent_did,
+        node_did,
         key,
         value_chars = value.chars().count(),
-        "agent memory write"
+        "node memory write"
     );
 
     Ok(MemoryOutput {
@@ -332,7 +329,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn memory_is_scoped_to_agent_did() {
+    async fn memory_is_scoped_to_node_did() {
         let node = seeded_node().await;
         let first_agent = MemoryTool::new(node.clone(), "did:key:z-first");
         let second_agent = MemoryTool::new(node, "did:key:z-second");

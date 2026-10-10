@@ -11,10 +11,10 @@ use serde_json::Value;
 use crate::support::p2p_waits::wait_for_listen_addr;
 use crate::support::test_p2p_db;
 
-/// Peer principal the conversation grant is written for. Transcript rows
+/// Peer node DID the conversation grant is written for. Transcript rows
 /// selected by the conversation grant requester filter.
 const SAFE_CONFIG: &[&str] = &[
-    "AgentBehavior",
+    "Agent",
     "AgentContext",
     "Tools",
     "CompactionConfig",
@@ -25,7 +25,7 @@ const SAFE_CONFIG: &[&str] = &[
 ];
 
 const PEER_DID: &str = "did:key:phone";
-/// Foreign principal on the same source node: its AgentRequest row must stay
+/// Foreign requester DID on the same source node: its AgentRequest row must stay
 /// behind the replicator's requester-scoped AgentRequest filter.
 const FOREIGN_DID: &str = "did:key:outsider";
 
@@ -39,9 +39,9 @@ async fn signed_conversation_pairing_replays_agent_config_over_p2p() {
         .node
         .execute(
             r#"mutation {
-                create_AgentBehavior(input: {
-                    behavior_id: "amy-default",
-                    agent_did: "did:key:amy",
+                create_Agent(input: {
+                    agent_id: "amy-default",
+                    node_did: "did:key:amy",
                     display_name: "Amy",
                     context_id: "amy-context",
                     inference_profile_id: "amy-profile",
@@ -49,25 +49,25 @@ async fn signed_conversation_pairing_replays_agent_config_over_p2p() {
                 }) { _docID }
                 create_InferenceBackend(input: {
                     backend_id: "amy-backend",
-                    agent_did: "did:key:amy",
+                    node_did: "did:key:amy",
                     name: "Amy inference",
                     provider_kind: "OpenAiCompatible",
                     enabled: true
                 }) { _docID }
                 create_AgentContext(input: {
-                    context_id: "amy-context", agent_did: "did:key:amy",
+                    context_id: "amy-context", node_did: "did:key:amy",
                     tools_id: "amy-tools", compaction_id: "amy-compaction"
                 }) { _docID }
-                create_Tools(input: { tools_id: "amy-tools", agent_did: "did:key:amy" }) { _docID }
-                create_CompactionConfig(input: { compaction_id: "amy-compaction", agent_did: "did:key:amy" }) { _docID }
+                create_Tools(input: { tools_id: "amy-tools", node_did: "did:key:amy" }) { _docID }
+                create_CompactionConfig(input: { compaction_id: "amy-compaction", node_did: "did:key:amy" }) { _docID }
                 create_InferenceProfile(input: {
-                    profile_id: "amy-profile", agent_did: "did:key:amy",
+                    profile_id: "amy-profile", node_did: "did:key:amy",
                     backend_id: "amy-backend", model_name: "test-model",
                     sampling_id: "amy-sampling", execution_id: "amy-execution"
                 }) { _docID }
-                create_InferenceSampling(input: { sampling_id: "amy-sampling", agent_did: "did:key:amy" }) { _docID }
-                create_InferenceExecution(input: { execution_id: "amy-execution", agent_did: "did:key:amy", retry_policy_id: "amy-retry" }) { _docID }
-                create_InferenceRetryPolicy(input: { retry_policy_id: "amy-retry", agent_did: "did:key:amy" }) { _docID }
+                create_InferenceSampling(input: { sampling_id: "amy-sampling", node_did: "did:key:amy" }) { _docID }
+                create_InferenceExecution(input: { execution_id: "amy-execution", node_did: "did:key:amy", retry_policy_id: "amy-retry" }) { _docID }
+                create_InferenceRetryPolicy(input: { retry_policy_id: "amy-retry", node_did: "did:key:amy" }) { _docID }
             }"#,
         )
         .await;
@@ -75,7 +75,7 @@ async fn signed_conversation_pairing_replays_agent_config_over_p2p() {
 
     // Seed the transcript plane the conversation template scopes by
     // requester_did: one row for the granted peer and one for a foreign
-    // principal. Only the peer-owned row may cross the replicator.
+    // requester. Only the peer-owned row may cross the replicator.
     for (request_id, requester_did) in [
         ("req-phone-owned", PEER_DID),
         ("req-foreign-owned", FOREIGN_DID),
@@ -89,9 +89,9 @@ async fn signed_conversation_pairing_replays_agent_config_over_p2p() {
                     create_AgentRequest(input: {{
                         request_id: "{request_id}",
                         purpose: "normal",
-                        agent_did: "did:key:amy",
+                        node_did: "did:key:amy",
                         requester_did: "{requester_did}",
-                        behavior_id: "amy-default",
+                        agent_id: "amy-default",
                         session_id: "{request_id}-session",
                         retry_parent_request: "",
                         retry_root_request: "{request_id}",
@@ -103,7 +103,7 @@ async fn signed_conversation_pairing_replays_agent_config_over_p2p() {
                         created_at: "2026-07-06T00:00:00Z",
                         retry_count: 0,
                         max_retries: 3,
-                        subagent_depth: 0
+                        request_hop: 0
                     }}) {{ _docID }}
                 }}"#
             ))
@@ -160,8 +160,8 @@ async fn signed_conversation_pairing_replays_agent_config_over_p2p() {
         .any(|value| gents_protocol::schemas::is_credential_collection(value)));
     assert_eq!(row_count(&data, "InferenceBackend"), 0);
     for (collection, field, expected) in [
-        ("AgentBehavior", "context_id", "amy-context"),
-        ("AgentBehavior", "inference_profile_id", "amy-profile"),
+        ("Agent", "context_id", "amy-context"),
+        ("Agent", "inference_profile_id", "amy-profile"),
         ("AgentContext", "tools_id", "amy-tools"),
         ("AgentContext", "compaction_id", "amy-compaction"),
         ("InferenceProfile", "backend_id", "amy-backend"),
@@ -204,7 +204,7 @@ async fn wait_for_config(node: &gents::defra_node::EmbeddedNode, timeout: Durati
         let response = node
             .execute(
                 r#"query {
-                    AgentBehavior(filter: { behavior_id: { _eq: "amy-default" } }) { behavior_id context_id inference_profile_id }
+                    Agent(filter: { agent_id: { _eq: "amy-default" } }) { agent_id context_id inference_profile_id }
                     InferenceBackend(filter: { backend_id: { _eq: "amy-backend" } }) { backend_id }
                     InferenceProfile(filter: { profile_id: { _eq: "amy-profile" } }) { profile_id backend_id model_name sampling_id execution_id }
                     AgentContext { context_id tools_id compaction_id }

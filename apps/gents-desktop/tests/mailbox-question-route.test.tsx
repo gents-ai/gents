@@ -11,8 +11,8 @@ const item = {
   itemId: "item-1",
   action: "start_request",
   kind: "ask",
-  targetAgentDid: "did:agent",
-  targetBehaviorId: "engineer",
+  targetNodeDid: "did:node",
+  targetAgentId: "engineer",
   sessionId: "session-1",
 } as MailboxItemView;
 
@@ -40,8 +40,8 @@ describe("answering a mailbox question", () => {
     const answer = { option_ids: ["yes"], free_text: null };
     await actions.answerMailboxQuestion(item, answer);
     expect(sendChatMessage).toHaveBeenCalledWith({
-      agentDid: "did:agent",
-      behaviorId: "engineer",
+      nodeDid: "did:node",
+      agentId: "engineer",
       sessionId: "session-1",
       content: "",
       causedBySourceDocId: "item-1",

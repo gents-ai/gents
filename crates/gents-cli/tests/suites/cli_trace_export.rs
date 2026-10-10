@@ -490,8 +490,8 @@ async fn seed_rendered_request_rows(node: &EmbeddedNode) -> Result<()> {
         r#"mutation {
             create_AgentRequest(input: {purpose: "normal", 
                 request_id: "req-cap",
-                agent_did: "did:test:amy",
-                behavior_id: "amy",
+                node_did: "did:test:amy",
+                agent_id: "amy",
                 session_id: "session-cap",
                 content: "capture me",
 
@@ -570,9 +570,9 @@ async fn seed_rendered_request_rows(node: &EmbeddedNode) -> Result<()> {
                         request_commit_cid: "{escaped_request_commit_cid}",
                         request_id: "req-cap",
                         session_id: "session-cap",
-                        agent_did: "did:test:amy",
+                        node_did: "did:test:amy",
                         requester_did: "",
-                        behavior_id: "amy",
+                        agent_id: "amy",
                         capture_scope: "inference.1",
                         turn_index: 0,
                         attempt: {attempt},
@@ -627,9 +627,9 @@ async fn seed_v2_rendered_request_rows(node: &Arc<EmbeddedNode>) -> Result<()> {
             capture_scope: capture_scope.clone(),
             turn_index: turn,
             attempt: 0,
-            agent_did: "did:test:amy".into(),
+            node_did: "did:test:amy".into(),
             requester_did: String::new(),
-            behavior_id: "amy".into(),
+            agent_id: "amy".into(),
             session_id: "session-cap-v2".into(),
             model_name: "test-model".into(),
             source: gents::rendered_request::RenderedRequestSource::OpenAiChatCompletions,
@@ -672,7 +672,7 @@ async fn seed_v2_rendered_request_rows(node: &Arc<EmbeddedNode>) -> Result<()> {
                     r#"mutation {{ create_RenderedRequest(input: {{
                         capture_key: "{capture_key}", request_doc_id: "", request_commit_cid: "",
                         request_id: "{request_id}", session_id: "{session_id}",
-                        agent_did: "did:test:amy", requester_did: "", behavior_id: "amy",
+                        node_did: "did:test:amy", requester_did: "", agent_id: "amy",
                         capture_scope: "inference.1", turn_index: {turn}, attempt: 0,
                         capture_version: 2, model_name: "test-model", source: "openai_chat_completions",
                         request_json: "{request_json}", provenance_json: "{provenance}",
@@ -721,7 +721,7 @@ async fn seed_v2_rendered_request_rows(node: &Arc<EmbeddedNode>) -> Result<()> {
             "doc_id": first_doc_id,
             "field_commit_cid": base_cid,
             "depth": 0,
-            "agent_did": rendered.agent_did,
+            "node_did": rendered.node_did,
             "requester_did": rendered.requester_did,
             "session_id": rendered.session_id,
             "source": "openai_chat_completions",
@@ -755,7 +755,7 @@ async fn seed_v2_rendered_request_rows(node: &Arc<EmbeddedNode>) -> Result<()> {
                 r#"mutation {{ create_RenderedRequest(input: {{
                     capture_key: "{capture_key}", request_doc_id: "", request_commit_cid: "",
                     request_id: "{request_id}", session_id: "{session_id}",
-                    agent_did: "did:test:amy", requester_did: "", behavior_id: "amy",
+                    node_did: "did:test:amy", requester_did: "", agent_id: "amy",
                     capture_scope: "inference.1", turn_index: {turn}, attempt: 0,
                     capture_version: 2, model_name: "test-model", source: "openai_chat_completions",
                     request_json: "{request_json}", provenance_json: "{provenance}",
@@ -804,9 +804,9 @@ async fn seed_manifest_rendered_request_row(node: &Arc<EmbeddedNode>) -> Result<
         capture_scope: capture_scope.clone(),
         turn_index: 0,
         attempt: 0,
-        agent_did: "did:test:amy".into(),
+        node_did: "did:test:amy".into(),
         requester_did: String::new(),
-        behavior_id: "amy".into(),
+        agent_id: "amy".into(),
         session_id: "session-cap-manifest".into(),
         model_name: "test-model".into(),
         source: gents::rendered_request::RenderedRequestSource::OpenAiChatCompletions,
@@ -1092,7 +1092,7 @@ async fn trace_project_exports_first_adapter_shapes_from_persisted_rows() -> Res
         atif.pointer("/agent/name")
             .and_then(Value::as_str)
             .is_some(),
-        "ATIF projection should identify the Gents behavior: {atif:#}"
+        "ATIF projection should identify the Gents agent: {atif:#}"
     );
     let openai = trace_project_json(tempdir.path(), home, "openai-codex", "public")?;
     assert_projection_json_matches_schema("openai_codex_run_trace", &openai)?;
@@ -1204,7 +1204,7 @@ async fn trace_project_exports_first_adapter_shapes_from_persisted_rows() -> Res
         home,
         "openai-codex",
         "full",
-        &["--scope-agent-did", "did:test:amy"],
+        &["--scope-node-did", "did:test:amy"],
     )?;
     let scoped_openai_serialized = serde_json::to_string(&scoped_openai)?;
     assert!(
@@ -1226,7 +1226,7 @@ async fn trace_project_exports_first_adapter_shapes_from_persisted_rows() -> Res
             "req-1",
             "--projection",
             "openai-codex",
-            "--scope-agent-did",
+            "--scope-node-did",
             "did:test:reviewer",
         ],
     )?;
@@ -1564,13 +1564,13 @@ async fn initialized_trace_node(
         cwd,
         &[
             "--identity-only",
-            "--agent-name",
+            "--node-name",
             "trace-test",
             "--home",
             home,
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
     let key_path = init
         .get("key_path")
         .and_then(Value::as_str)
@@ -1586,7 +1586,7 @@ async fn initialized_trace_node(
                 .data_path(&data)
                 .with_storage_backend(StorageBackend::Regolith),
         )
-        .with_node_identity_did(agent_did)
+        .with_node_identity_did(node_did)
         .build()
         .await
         .context("opening initialized embedded node")
@@ -1643,7 +1643,7 @@ async fn seed_canonical_trace_tool(
     request_doc_id: &str,
     request_id: &str,
     session_id: &str,
-    agent_did: &str,
+    node_did: &str,
     sequence: u32,
     tool_call_id: &str,
     tool_name: &str,
@@ -1666,14 +1666,14 @@ async fn seed_canonical_trace_tool(
     let arguments = arguments.to_string();
     let tool_doc_id = exec_doc_id(
         node,
-        &format!(r#"mutation {{ create_AgentToolCall(input: {{tool_call_key: "{}:{}", agent_did: "{}", request_id: "{}", request_doc_id: "{}", session_id: "{}", message_sequence: {}, tool_name: "{}", tool_call_id: "{}", lifecycle_state: "{}", tool_failure_class: {}, started_at: "2026-05-04T12:00:04.500Z", completed_at: "2026-05-04T12:00:06Z"}}) {{_docID}} }}"#,
-            escape_graphql_string(request_doc_id), escape_graphql_string(tool_call_id), escape_graphql_string(agent_did), escape_graphql_string(request_id), escape_graphql_string(request_doc_id), escape_graphql_string(session_id), sequence, escape_graphql_string(tool_name), escape_graphql_string(tool_call_id), escape_graphql_string(lifecycle_state), failure_class.map(|v| format!("\"{}\"", escape_graphql_string(v))).unwrap_or_else(|| "null".into())),
+        &format!(r#"mutation {{ create_AgentToolCall(input: {{tool_call_key: "{}:{}", node_did: "{}", request_id: "{}", request_doc_id: "{}", session_id: "{}", message_sequence: {}, tool_name: "{}", tool_call_id: "{}", lifecycle_state: "{}", tool_failure_class: {}, started_at: "2026-05-04T12:00:04.500Z", completed_at: "2026-05-04T12:00:06Z"}}) {{_docID}} }}"#,
+            escape_graphql_string(request_doc_id), escape_graphql_string(tool_call_id), escape_graphql_string(node_did), escape_graphql_string(request_id), escape_graphql_string(request_doc_id), escape_graphql_string(session_id), sequence, escape_graphql_string(tool_name), escape_graphql_string(tool_call_id), escape_graphql_string(lifecycle_state), failure_class.map(|v| format!("\"{}\"", escape_graphql_string(v))).unwrap_or_else(|| "null".into())),
         "AgentToolCall",
     ).await?;
     let generation = format!("trace:{request_doc_id}");
     let argument_bytes = arguments.len();
     let segment = OutputSegment {
-        agent_did: agent_did.into(),
+        node_did: node_did.into(),
         requester_did: None,
         session_id: session_id.into(),
         request_doc_id: request_doc_id.into(),
@@ -1720,7 +1720,7 @@ async fn seed_canonical_trace_tool(
     let header = TranscriptMessage {
         message_key: format!("trace:{session_id}:{sequence}"),
         session_id: session_id.into(),
-        agent_did: agent_did.into(),
+        node_did: node_did.into(),
         requester_did: None,
         request_doc_id: Some(request_doc_id.into()),
         publication: MessagePublication::RequestExecution {
@@ -1753,7 +1753,7 @@ async fn seed_canonical_trace_tool(
     .await?;
     if let Some(result) = result {
         let output = OutputSegment {
-            agent_did: agent_did.into(),
+            node_did: node_did.into(),
             requester_did: None,
             session_id: session_id.into(),
             request_doc_id: request_doc_id.into(),
@@ -1791,7 +1791,7 @@ async fn seed_canonical_trace_tool(
         let delivery = TranscriptMessage {
             message_key: format!("trace-delivery:{tool_doc_id}"),
             session_id: session_id.into(),
-            agent_did: agent_did.into(),
+            node_did: node_did.into(),
             requester_did: None,
             request_doc_id: Some(request_doc_id.into()),
             publication: MessagePublication::ToolDelivery {
@@ -1832,7 +1832,7 @@ async fn seed_canonical_terminal_text(
     node: &EmbeddedNode,
     request_doc_id: &str,
     session_id: &str,
-    agent_did: &str,
+    node_did: &str,
     sequence: u32,
     text: &str,
 ) -> Result<()> {
@@ -1847,7 +1847,7 @@ async fn seed_canonical_terminal_text(
     };
     let generation = format!("trace:{request_doc_id}");
     let segment = OutputSegment {
-        agent_did: agent_did.into(),
+        node_did: node_did.into(),
         requester_did: None,
         session_id: session_id.into(),
         request_doc_id: request_doc_id.into(),
@@ -1885,7 +1885,7 @@ async fn seed_canonical_terminal_text(
     let header = TranscriptMessage {
         message_key: format!("trace-terminal:{request_doc_id}"),
         session_id: session_id.into(),
-        agent_did: agent_did.into(),
+        node_did: node_did.into(),
         requester_did: None,
         request_doc_id: Some(request_doc_id.into()),
         publication: MessagePublication::RequestExecution {
@@ -1923,9 +1923,9 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
     exec(
         node,
         r#"mutation {
-            create_AgentBehavior(input: {
-                behavior_id: "amy",
-                agent_did: "did:test:amy",
+            create_Agent(input: {
+                agent_id: "amy",
+                node_did: "did:test:amy",
                 display_name: "Amy",
                 enabled: true,
                 created_at: "2026-05-04T12:00:00Z"
@@ -1938,8 +1938,8 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
         r#"mutation {
             create_AgentSession(input: {
                 session_id: "session-1",
-                agent_did: "did:test:amy",
-                behavior_id: "amy",
+                node_did: "did:test:amy",
+                agent_id: "amy",
                 title: { text: "Trace export test", source: "user" },
                 created_at: "2026-05-04T12:00:00Z",
                 observation: { last_activity_at: "2026-05-04T12:00:05Z", preview: "Inspect the repo" }
@@ -1952,8 +1952,8 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
         r#"mutation {
             create_AgentRequest(input: {purpose: "normal", 
                 request_id: "req-1",
-                agent_did: "did:test:amy",
-                behavior_id: "amy",
+                node_did: "did:test:amy",
+                agent_id: "amy",
                 session_id: "session-1",
                 content: "Inspect the repo and show README.md",
                 lifecycle_state: "completed",
@@ -1987,8 +1987,8 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
     let commit = escape_graphql_string(commit);
     let rendered_body = escape_graphql_string(&json!({"model":"baa-ai/GLM-5.1-RAM-420GB-MLX", "messages":[{"role":"user","content":"Inspect the repo and show README.md"}]}).to_string());
     exec(node, &format!(r#"mutation {{
-        create_InferenceCall(input: {{call_id: "trace-inference", request_id: "req-1", request_doc_id: "{observed}", agent_did: "did:test:amy", behavior_id: "amy", backend_id: "studios-cluster", call_seq: 0, attempt: 0, call_kind: "primary", call_state: "completed", queued_at: "2026-05-04T12:00:02Z"}}) {{_docID}}
-        create_RenderedRequest(input: {{capture_key: "trace-model", request_commit_cid: "{commit}", request_json: "{rendered_body}", request_id: "req-1", request_doc_id: "{observed}", session_id: "session-1", agent_did: "did:test:amy", requester_did: "", behavior_id: "amy", model_name: "baa-ai/GLM-5.1-RAM-420GB-MLX", capture_scope: "inference.0", turn_index: 0, attempt: 0, capture_version: 1, source: "openai_chat_completions", created_at: "2026-05-04T12:00:02Z"}}) {{_docID}}
+        create_InferenceCall(input: {{call_id: "trace-inference", request_id: "req-1", request_doc_id: "{observed}", node_did: "did:test:amy", agent_id: "amy", backend_id: "studios-cluster", call_seq: 0, attempt: 0, call_kind: "primary", call_state: "completed", queued_at: "2026-05-04T12:00:02Z"}}) {{_docID}}
+        create_RenderedRequest(input: {{capture_key: "trace-model", request_commit_cid: "{commit}", request_json: "{rendered_body}", request_id: "req-1", request_doc_id: "{observed}", session_id: "session-1", node_did: "did:test:amy", requester_did: "", agent_id: "amy", model_name: "baa-ai/GLM-5.1-RAM-420GB-MLX", capture_scope: "inference.0", turn_index: 0, attempt: 0, capture_version: 1, source: "openai_chat_completions", created_at: "2026-05-04T12:00:02Z"}}) {{_docID}}
     }}"#)).await?;
     let failed_result = format!(
         "gents_exec: {}\nstdout:\n(empty)\nstderr:\ngrep: invalid option -- P",
@@ -2055,8 +2055,8 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
         r#"mutation {
             create_AgentSession(input: {
                 session_id: "session-child",
-                agent_did: "did:test:reviewer",
-                behavior_id: "reviewer",
+                node_did: "did:test:reviewer",
+                agent_id: "reviewer",
                 title: { text: "Child trace export test", source: "user" },
                 created_at: "2026-05-04T12:00:04Z",
                 observation: { last_activity_at: "2026-05-04T12:00:07Z", preview: "Review the README finding" }
@@ -2070,8 +2070,8 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
             r#"mutation {{
             create_AgentRequest(input: {{purpose: "normal", 
                 request_id: "req-child",
-                agent_did: "did:test:reviewer",
-                behavior_id: "reviewer",
+                node_did: "did:test:reviewer",
+                agent_id: "reviewer",
                 session_id: "session-child",
                 content: "Review the README finding",
                 lifecycle_state: "completed",
@@ -2158,8 +2158,8 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
         r#"mutation {
             create_AgentSession(input: {
                 session_id: "session-2",
-                agent_did: "did:test:amy",
-                behavior_id: "amy",
+                node_did: "did:test:amy",
+                agent_id: "amy",
                 title: { text: "Trace export deadline test", source: "user" },
                 created_at: "2026-05-04T13:00:00Z",
                 observation: { last_activity_at: "2026-05-04T13:00:10Z", preview: "Read a file then deadline" }
@@ -2172,8 +2172,8 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
         r#"mutation {
             create_AgentRequest(input: {purpose: "normal", 
                 request_id: "req-deadline",
-                agent_did: "did:test:amy",
-                behavior_id: "amy",
+                node_did: "did:test:amy",
+                agent_id: "amy",
                 session_id: "session-2",
                 content: "Read README.md but the request later times out",
                 lifecycle_state: "failed",
@@ -2246,7 +2246,7 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
                 r#"mutation {{ update_AgentSession(
             filter: {{
                 session_id: {{ _eq: "{session}" }},
-                agent_did: {{ _eq: "{agent}" }},
+                node_did: {{ _eq: "{agent}" }},
                 requester_did: {{ _eq: null }}
             }}, input: {input}
         ) {{ _docID }} }}"#
@@ -2398,9 +2398,9 @@ fn projection_mock_root_request() -> Value {
     json!({
         "_docID": "doc-request-root",
         "request_id": "req-acp",
-        "agent_did": "did:test:amy",
+        "node_did": "did:test:amy",
         "requester_did": null,
-        "behavior_id": "amy",
+        "agent_id": "amy",
         "session_id": "session-acp",
         "content": "root visible request",
         "input": null,
@@ -2422,9 +2422,9 @@ fn projection_mock_child_request() -> Value {
     json!({
         "_docID": "doc-request-child",
         "request_id": "req-acp-child",
-        "agent_did": "did:test:reviewer",
+        "node_did": "did:test:reviewer",
         "requester_did": null,
-        "behavior_id": "reviewer",
+        "agent_id": "reviewer",
         "session_id": "session-acp",
         "content": "child private request",
         "input": null,
@@ -2446,9 +2446,9 @@ fn projection_mock_forged_child_request() -> Value {
     json!({
         "_docID": "doc-request-forged-child",
         "request_id": "req-forged-child",
-        "agent_did": "did:test:reviewer",
+        "node_did": "did:test:reviewer",
         "requester_did": null,
-        "behavior_id": "reviewer",
+        "agent_id": "reviewer",
         "session_id": "session-forged-child",
         "content": "forged child request",
         "input": null,
@@ -2474,7 +2474,7 @@ fn projection_mock_agent_messages(query: &str) -> Value {
     let root_tool = TranscriptMessage {
         message_key: "acp-root-tool".into(),
         session_id: "session-acp".into(),
-        agent_did: "did:test:amy".into(),
+        node_did: "did:test:amy".into(),
         requester_did: None,
         request_doc_id: Some("doc-request-root".into()),
         publication: MessagePublication::RequestExecution {
@@ -2501,7 +2501,7 @@ fn projection_mock_agent_messages(query: &str) -> Value {
     let root_result = TranscriptMessage {
         message_key: "acp-root-result".into(),
         session_id: "session-acp".into(),
-        agent_did: "did:test:amy".into(),
+        node_did: "did:test:amy".into(),
         requester_did: None,
         request_doc_id: Some("doc-request-root".into()),
         publication: MessagePublication::ToolDelivery {
@@ -2563,7 +2563,7 @@ fn canonical_text_header(
     TranscriptMessage {
         message_key: message_key.into(),
         session_id: "session-acp".into(),
-        agent_did: if request_doc_id == "doc-request-child" {
+        node_did: if request_doc_id == "doc-request-child" {
             "did:test:reviewer".into()
         } else {
             "did:test:amy".into()
@@ -2608,10 +2608,10 @@ fn filter_projection_mock_headers(query: &str, rows: Vec<Value>) -> Value {
         .as_array()
         .expect("projection header rows")
         .clone();
-    for agent_did in ["did:test:amy", "did:test:reviewer"] {
-        let predicate = format!(r#"agent_did: {{ _eq: "{agent_did}" }}"#);
+    for node_did in ["did:test:amy", "did:test:reviewer"] {
+        let predicate = format!(r#"node_did: {{ _eq: "{node_did}" }}"#);
         if query.contains(&predicate) {
-            rows.retain(|row| row["agent_did"].as_str() == Some(agent_did));
+            rows.retain(|row| row["node_did"].as_str() == Some(node_did));
         }
     }
     if query.contains("_or:") {
@@ -2698,7 +2698,7 @@ fn projection_mock_output_segments(query: &str) -> Value {
             };
             with_mock_doc_id(
                 OutputSegment {
-                    agent_did: if request_doc_id == "doc-request-child" {
+                    node_did: if request_doc_id == "doc-request-child" {
                         "did:test:reviewer".into()
                     } else {
                         "did:test:amy".into()
@@ -2796,7 +2796,7 @@ fn projection_mock_tool_calls(query: &str) -> Value {
             {
                 "_docID": "doc-tool-delegate",
                 "request_id": "req-acp",
-                "agent_did": "did:test:amy",
+                "node_did": "did:test:amy",
                 "requester_did": null,
                 "request_doc_id": "doc-request-root",
                 "session_id": "session-acp",
@@ -2829,7 +2829,7 @@ fn projection_mock_tool_calls(query: &str) -> Value {
     .expect("projection tool rows")
     .clone();
     for (field, value) in [
-        ("agent_did", "did:test:amy"),
+        ("node_did", "did:test:amy"),
         ("request_doc_id", "doc-request-root"),
         ("session_id", "session-acp"),
         ("tool_call_id", "call-delegate"),
@@ -2841,7 +2841,7 @@ fn projection_mock_tool_calls(query: &str) -> Value {
     }
     // Known foreign scopes are intentionally empty. Returning the root tool
     // here would invent an accepted binding for a different agent/request.
-    if query.contains(r#"agent_did: { _eq: "did:test:reviewer" }"#)
+    if query.contains(r#"node_did: { _eq: "did:test:reviewer" }"#)
         || query.contains(r#"request_doc_id: { _eq: "doc-request-child" }"#)
     {
         rows.clear();
@@ -2852,7 +2852,7 @@ fn projection_mock_tool_calls(query: &str) -> Value {
 fn projection_mock_session() -> Value {
     json!({
         "_docID": "doc-session", "session_id": "session-acp",
-        "agent_did": "did:test:amy", "behavior_id": "amy",
+        "node_did": "did:test:amy", "agent_id": "amy",
         "created_at": "2026-06-05T18:00:00Z",
         "title": {"text": "ACP projection test", "source": "user"},
         "observation": {

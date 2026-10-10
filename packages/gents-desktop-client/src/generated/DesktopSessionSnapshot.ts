@@ -15,7 +15,7 @@ export type DesktopSessionSnapshot = {
  * Ephemeral identity of the canonical live source. Full reads still own
  * historical reconciliation; this cursor carries no history coverage.
  */
-liveCursor?: string | null, sessionId: string, agentDid: string | null, behaviorId: string | null, title: string | null, previewText: string | null, status: string | null, goal: GoalView | null, turnState: string | null, latestRequestId: string | null, retryEligibility: RetryEligibilityView, latestRequestOutcome: RequestOutcomeView | null, pendingTurn: PendingTurnView | null,
+liveCursor?: string | null, sessionId: string, nodeDid: string | null, agentId: string | null, title: string | null, previewText: string | null, status: string | null, goal: GoalView | null, turnState: string | null, latestRequestId: string | null, retryEligibility: RetryEligibilityView, latestRequestOutcome: RequestOutcomeView | null, pendingTurn: PendingTurnView | null,
 /**
  * Unclaimed messages waiting behind the session's turn, in queue order.
  * They have not entered the transcript: a claim either folds them into

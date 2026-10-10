@@ -41,7 +41,7 @@ async fn config_apply_sigkill_mid_apply_leaves_db_unchanged() -> Result<()> {
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
+            "--node-name",
             &agent_name,
             "--model-name",
             &model_name,
@@ -49,7 +49,7 @@ async fn config_apply_sigkill_mid_apply_leaves_db_unchanged() -> Result<()> {
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
 
     run_cli_text(
         &home_dir,
@@ -62,9 +62,8 @@ async fn config_apply_sigkill_mid_apply_leaves_db_unchanged() -> Result<()> {
     )?;
     let config_path = root.join("pack_config.json");
     let mut config = read_json_file(&config_path)?;
-    config["agent_principal"]["display_name"] = Value::String("Interrupted principal".to_string());
-    config["agent_behaviors"][0]["display_name"] =
-        Value::String("Interrupted behavior".to_string());
+    config["node"]["display_name"] = Value::String("Interrupted principal".to_string());
+    config["agents"][0]["display_name"] = Value::String("Interrupted agent".to_string());
     config["contexts"][0]["description"] = Value::String("Interrupted context".to_string());
     config["tools"][0]["display_name"] = Value::String("Interrupted tools".to_string());
     config["inference_backends"][0]["name"] = Value::String("Interrupted backend".to_string());
@@ -72,7 +71,7 @@ async fn config_apply_sigkill_mid_apply_leaves_db_unchanged() -> Result<()> {
 
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
 
     let collections = [
         "InferenceBackend",
@@ -80,12 +79,12 @@ async fn config_apply_sigkill_mid_apply_leaves_db_unchanged() -> Result<()> {
         "ToolServiceRegistry",
         "Tools",
         "AgentContext",
-        "AgentBehavior",
+        "Agent",
         "Task",
         "Schedule",
         "EventSource",
         "Trigger",
-        "AgentPrincipal",
+        "Node",
     ];
     let mut pre_apply = std::collections::BTreeMap::new();
     for c in &collections {

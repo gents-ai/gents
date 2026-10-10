@@ -2,6 +2,7 @@ use super::support::*;
 use super::*;
 use crate::agent::DocumentResolveContext;
 use crate::config_client::write_telemetry::WRITE_ATTEMPT_EVENT_TARGET;
+use crate::identity::NodeIdentity;
 use crate::runtime_snapshot::ResolvedRuntimeSnapshot;
 use crate::runtime_status::{ReconcilePhase, RECONCILE_PHASE_EVENT_TARGET};
 use anyhow::Result;
@@ -49,7 +50,7 @@ where
 /// Collects the reconcile phases the watcher announced, in order.
 ///
 /// A phase the watcher only passes through cannot be sampled from
-/// `AgentRuntime`: the durable row keeps the latest phase, and one sample costs
+/// `NodeRuntime`: the durable row keeps the latest phase, and one sample costs
 /// a database round trip that can outlast the debounce interval itself.
 #[derive(Clone, Default)]
 struct ReconcilePhaseCapture {
@@ -106,7 +107,7 @@ const PROPOSAL_TIMEOUT: Duration = Duration::from_secs(5);
 async fn run_test_control_watcher(
     node: Arc<defra_node::EmbeddedNode>,
     subscription: events::DocumentChangeSubscription,
-    agent_did: String,
+    node_did: String,
     resolve_context: DocumentResolveContext,
     proposals_tx: mpsc::Sender<ResolvedRuntimeSnapshot>,
     runtime_status: RuntimeStatusHandle,
@@ -116,7 +117,7 @@ async fn run_test_control_watcher(
     run_control_watcher_with_timing(
         node,
         subscription,
-        agent_did,
+        node_did,
         resolve_context,
         proposals_tx,
         runtime_status,
@@ -127,16 +128,12 @@ async fn run_test_control_watcher(
     .await
 }
 
-async fn update_agent_principal_enabled(
-    node: &defra_node::EmbeddedNode,
-    agent_did: &str,
-    enabled: bool,
-) {
-    let escaped_agent_did = escape_graphql_string(agent_did);
+async fn update_node_enabled(node: &defra_node::EmbeddedNode, node_did: &str, enabled: bool) {
+    let escaped_node_did = escape_graphql_string(node_did);
     let mutation = format!(
         r#"mutation {{
-            update_AgentPrincipal(
-                filter: {{ agent_did: {{ _eq: "{escaped_agent_did}" }} }},
+            update_Node(
+                filter: {{ node_did: {{ _eq: "{escaped_node_did}" }} }},
                 input: {{ enabled: {enabled} }}
             ) {{ _docID }}
         }}"#
@@ -144,7 +141,7 @@ async fn update_agent_principal_enabled(
     let response = node.execute(&mutation).await;
     assert!(
         !response.has_errors(),
-        "update_AgentPrincipal failed: {:?}",
+        "update_Node failed: {:?}",
         response.errors
     );
 }
@@ -179,14 +176,14 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("control-watcher"));
-    bind_default_behavior_backend(
+    bind_default_agent_backend(
         node.as_ref(),
         identity.did(),
         "backend-control",
         "http://127.0.0.1:8111/v1",
     )
     .await;
-    let agent = crate::Gents::from_default_behavior_documents(
+    let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity,
         crate::agent::DocumentRuntimeOptions {
@@ -200,9 +197,9 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
         .document_runtime_context()
         .cloned()
         .expect("document-backed agent");
-    let runtime_status = RuntimeStatusHandle::new(node.clone(), agent.agent_did().to_string());
+    let runtime_status = RuntimeStatusHandle::new(node.clone(), agent.node_did().to_string());
     runtime_status
-        .initialize_startup(agent.default_behavior_id())
+        .initialize_startup(agent.default_agent_id())
         .await
         .unwrap();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -219,9 +216,9 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
     // falling into the gap between readiness and watcher startup.
     let subscription = node.subscribe_document_changes();
     let context = serde_json::json!({
-        "agent_did": agent.agent_did(),
-        "context_id": format!("{}:context", agent.default_behavior_id()),
-        "tools_id": format!("{}:tools", agent.default_behavior_id()),
+        "node_did": agent.node_did(),
+        "context_id": format!("{}:context", agent.default_agent_id()),
+        "tools_id": format!("{}:tools", agent.default_agent_id()),
         "system_prompt": "updated prompt"
     });
     let plan = crate::config_client::DesiredStateApplyPlan::new(vec![
@@ -248,7 +245,7 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
         run_test_control_watcher(
             node.clone(),
             subscription,
-            agent.agent_did().to_string(),
+            agent.node_did().to_string(),
             resolve_context,
             proposal_tx,
             runtime_status.clone(),
@@ -264,9 +261,9 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
         .expect("reconciled snapshot");
     assert_eq!(
         snapshot
-            .behaviors
-            .get(agent.default_behavior_id())
-            .expect("default behavior in snapshot")
+            .agents
+            .get(agent.default_agent_id())
+            .expect("default agent in snapshot")
             .system_prompt,
         "updated prompt"
     );
@@ -275,13 +272,13 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
         ["debouncing", "resolving"],
         "an observed control update debounces before it resolves"
     );
-    let resolving = fetch_runtime_status(node.as_ref(), agent.agent_did()).await;
+    let resolving = fetch_runtime_status(node.as_ref(), agent.node_did()).await;
     assert_eq!(resolving.reconcile_phase, "resolving");
 
     runtime_status
         .set_reconcile_phase(ReconcilePhase::Idle)
         .await;
-    let settled = fetch_runtime_status(node.as_ref(), agent.agent_did()).await;
+    let settled = fetch_runtime_status(node.as_ref(), agent.node_did()).await;
     let loads_after_reconcile = reload_count.load(Ordering::Relaxed);
     assert!(
         loads_after_reconcile > 0,
@@ -289,7 +286,7 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
     );
     tokio::time::sleep(TEST_CONTROL_WATCHER_TIMING.settle_retry * 5).await;
     tokio::task::yield_now().await;
-    let retried = fetch_runtime_status(node.as_ref(), agent.agent_did()).await;
+    let retried = fetch_runtime_status(node.as_ref(), agent.node_did()).await;
     assert_eq!(retried.reconcile_phase, "idle");
     assert_eq!(retried.updated_at, settled.updated_at);
     assert_eq!(
@@ -302,7 +299,7 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
     // still needs a proposal so the reconciler can publish its normal no-op
     // completion. An unchanged settle retry above must remain suppressed.
     let context_id =
-        crate::graphql::escape_graphql_string(&format!("{}:context", agent.default_behavior_id()));
+        crate::graphql::escape_graphql_string(&format!("{}:context", agent.default_agent_id()));
     let mutation = format!(
         r#"mutation {{ update_AgentContext(
         filter: {{context_id: {{_eq: "{context_id}"}}}},
@@ -340,14 +337,14 @@ async fn control_watcher_reconciles_a_local_write_without_the_replication_deboun
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("control-watcher-local"));
-    bind_default_behavior_backend(
+    bind_default_agent_backend(
         node.as_ref(),
         identity.did(),
         "backend-control",
         "http://127.0.0.1:8111/v1",
     )
     .await;
-    let agent = crate::Gents::from_default_behavior_documents(
+    let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity,
         crate::agent::DocumentRuntimeOptions {
@@ -361,9 +358,9 @@ async fn control_watcher_reconciles_a_local_write_without_the_replication_deboun
         .document_runtime_context()
         .cloned()
         .expect("document-backed agent");
-    let runtime_status = RuntimeStatusHandle::new(node.clone(), agent.agent_did().to_string());
+    let runtime_status = RuntimeStatusHandle::new(node.clone(), agent.node_did().to_string());
     runtime_status
-        .initialize_startup(agent.default_behavior_id())
+        .initialize_startup(agent.default_agent_id())
         .await
         .unwrap();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -372,7 +369,7 @@ async fn control_watcher_reconciles_a_local_write_without_the_replication_deboun
     let watcher_task = tokio::spawn(run_control_watcher_with_timing(
         node.clone(),
         subscription,
-        agent.agent_did().to_string(),
+        agent.node_did().to_string(),
         resolve_context,
         proposal_tx,
         runtime_status,
@@ -390,9 +387,9 @@ async fn control_watcher_reconciles_a_local_write_without_the_replication_deboun
         vec![(
             crate::Collection::AgentContext,
             serde_json::json!({
-                "agent_did": agent.agent_did(),
-                "context_id": format!("{}:context", agent.default_behavior_id()),
-                "tools_id": format!("{}:tools", agent.default_behavior_id()),
+                "node_did": agent.node_did(),
+                "context_id": format!("{}:context", agent.default_agent_id()),
+                "tools_id": format!("{}:tools", agent.default_agent_id()),
                 "system_prompt": "operator prompt"
             }),
         )],
@@ -405,9 +402,9 @@ async fn control_watcher_reconciles_a_local_write_without_the_replication_deboun
         .expect("reconciled snapshot");
     assert_eq!(
         snapshot
-            .behaviors
-            .get(agent.default_behavior_id())
-            .expect("default behavior in snapshot")
+            .agents
+            .get(agent.default_agent_id())
+            .expect("default agent in snapshot")
             .system_prompt,
         "operator prompt"
     );
@@ -417,23 +414,23 @@ async fn control_watcher_reconciles_a_local_write_without_the_replication_deboun
 }
 
 /// #640: a measured-health flip must re-resolve the snapshot without any
-/// document changing — demoting the behavior and marking the admission
+/// document changing — demoting the agent_config and marking the admission
 /// config while the backend is measured unhealthy, and restoring both after
 /// a successful probe flips the veto back.
 #[tokio::test]
-async fn control_watcher_demotes_and_recovers_behavior_on_measured_health_flip() {
+async fn control_watcher_demotes_and_recovers_agent_on_measured_health_flip() {
     crate::test_support::enable_scoped_event_capture();
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("control-watcher-health"));
-    bind_default_behavior_backend(
+    bind_default_agent_backend(
         node.as_ref(),
         identity.did(),
         "backend-measured",
         "http://127.0.0.1:8113/v1",
     )
     .await;
-    let agent = crate::Gents::from_default_behavior_documents(
+    let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity,
         crate::agent::DocumentRuntimeOptions {
@@ -448,10 +445,10 @@ async fn control_watcher_demotes_and_recovers_behavior_on_measured_health_flip()
         .cloned()
         .expect("document-backed agent");
     let backend_health = agent.backend_health();
-    let behavior_id = agent.default_behavior_id().to_string();
-    let runtime_status = RuntimeStatusHandle::new(node.clone(), agent.agent_did().to_string());
+    let agent_id = agent.default_agent_id().to_string();
+    let runtime_status = RuntimeStatusHandle::new(node.clone(), agent.node_did().to_string());
     runtime_status
-        .initialize_startup(agent.default_behavior_id())
+        .initialize_startup(agent.default_agent_id())
         .await
         .unwrap();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -465,7 +462,7 @@ async fn control_watcher_demotes_and_recovers_behavior_on_measured_health_flip()
         run_test_control_watcher(
             node.clone(),
             node.subscribe_document_changes(),
-            agent.agent_did().to_string(),
+            agent.node_did().to_string(),
             resolve_context,
             proposal_tx,
             runtime_status.clone(),
@@ -497,16 +494,16 @@ async fn control_watcher_demotes_and_recovers_behavior_on_measured_health_flip()
         "a measured-health transition debounces before it resolves"
     );
     assert!(
-        !snapshot.behaviors.contains_key(&behavior_id),
-        "behavior on a measured-unhealthy backend must leave the active set"
+        !snapshot.agents.contains_key(&agent_id),
+        "agent on a measured-unhealthy backend must leave the active set"
     );
     let reason = snapshot
-        .unavailable_behaviors
-        .get(&behavior_id)
-        .expect("unavailable reason for demoted behavior");
+        .unavailable_agents
+        .get(&agent_id)
+        .expect("unavailable reason for demoted agent");
     assert_eq!(
         reason.public_reason,
-        BehaviorReadinessUnavailableReason::BackendTemporarilyUnavailable
+        AgentReadinessUnavailableReason::BackendTemporarilyUnavailable
     );
     let config = snapshot
         .backend_admission_configs
@@ -534,8 +531,8 @@ async fn control_watcher_demotes_and_recovers_behavior_on_measured_health_flip()
         "recovery debounces before it resolves"
     );
     assert!(
-        snapshot.behaviors.contains_key(&behavior_id),
-        "behavior must return to the active set after recovery"
+        snapshot.agents.contains_key(&agent_id),
+        "agent must return to the active set after recovery"
     );
     assert!(
         !snapshot
@@ -555,14 +552,14 @@ async fn control_watcher_recovers_after_resolve_error() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("control-watcher-recover"));
-    bind_default_behavior_backend(
+    bind_default_agent_backend(
         node.as_ref(),
         identity.did(),
         "backend-control-recover",
         "http://127.0.0.1:8112/v1",
     )
     .await;
-    let agent = crate::Gents::from_default_behavior_documents(
+    let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity,
         crate::agent::DocumentRuntimeOptions {
@@ -576,9 +573,9 @@ async fn control_watcher_recovers_after_resolve_error() {
         .document_runtime_context()
         .cloned()
         .expect("document-backed agent");
-    let runtime_status = RuntimeStatusHandle::new(node.clone(), agent.agent_did().to_string());
+    let runtime_status = RuntimeStatusHandle::new(node.clone(), agent.node_did().to_string());
     runtime_status
-        .initialize_startup(agent.default_behavior_id())
+        .initialize_startup(agent.default_agent_id())
         .await
         .unwrap();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -591,7 +588,7 @@ async fn control_watcher_recovers_after_resolve_error() {
         run_test_control_watcher(
             node.clone(),
             node.subscribe_document_changes(),
-            agent.agent_did().to_string(),
+            agent.node_did().to_string(),
             resolve_context,
             proposal_tx,
             runtime_status.clone(),
@@ -602,12 +599,12 @@ async fn control_watcher_recovers_after_resolve_error() {
     );
 
     tokio::task::yield_now().await;
-    update_agent_principal_enabled(node.as_ref(), agent.agent_did(), false).await;
+    update_node_enabled(node.as_ref(), agent.node_did(), false).await;
 
     // A failed resolve is the only way back to idle with an error recorded, so
     // this is the reconcile's durable completion rather than a phase in flight.
     let failed_status =
-        wait_for_runtime_reconcile_phase(node.as_ref(), agent.agent_did(), "idle").await;
+        wait_for_runtime_reconcile_phase(node.as_ref(), agent.node_did(), "idle").await;
     assert_eq!(failed_status.active_generation, 0);
     assert_eq!(failed_status.last_reconcile_result, "error");
     assert!(!failed_status.last_reconcile_error.is_empty());
@@ -617,15 +614,15 @@ async fn control_watcher_recovers_after_resolve_error() {
         "a transient resolution failure must retry during the settle window"
     );
 
-    update_agent_principal_enabled(node.as_ref(), agent.agent_did(), true).await;
+    update_node_enabled(node.as_ref(), agent.node_did(), true).await;
 
     // The settle retry may already return the phase to idle after proposing
     // this fingerprint. Recovery is the queued proposal, not a transient phase.
     let snapshot = tokio::time::timeout(PROPOSAL_TIMEOUT, proposal_rx.recv())
         .await
-        .expect("a re-enabled principal must reach the reconcile owner")
+        .expect("a re-enabled Node must reach the reconcile owner")
         .expect("recovered snapshot");
-    assert_eq!(snapshot.default_behavior_id, agent.default_behavior_id());
+    assert_eq!(snapshot.default_agent_id, agent.default_agent_id());
 
     let _ = shutdown_tx.send(true);
     watcher_task.await.unwrap().unwrap();
@@ -636,14 +633,14 @@ async fn control_watcher_resolves_context_tools_into_reconciled_tool_surface() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("control-watcher-tools"));
-    bind_default_behavior_backend(
+    bind_default_agent_backend(
         node.as_ref(),
         identity.did(),
         "backend-control-tools",
         "http://127.0.0.1:8113/v1",
     )
     .await;
-    let agent = crate::Gents::from_default_behavior_documents(
+    let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity,
         crate::agent::DocumentRuntimeOptions {
@@ -657,9 +654,9 @@ async fn control_watcher_resolves_context_tools_into_reconciled_tool_surface() {
         .document_runtime_context()
         .cloned()
         .expect("document-backed agent");
-    let runtime_status = RuntimeStatusHandle::new(node.clone(), agent.agent_did().to_string());
+    let runtime_status = RuntimeStatusHandle::new(node.clone(), agent.node_did().to_string());
     runtime_status
-        .initialize_startup(agent.default_behavior_id())
+        .initialize_startup(agent.default_agent_id())
         .await
         .unwrap();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -668,7 +665,7 @@ async fn control_watcher_resolves_context_tools_into_reconciled_tool_surface() {
     let watcher_task = tokio::spawn(run_test_control_watcher(
         node.clone(),
         node.subscribe_document_changes(),
-        agent.agent_did().to_string(),
+        agent.node_did().to_string(),
         resolve_context,
         proposal_tx,
         runtime_status.clone(),
@@ -679,8 +676,8 @@ async fn control_watcher_resolves_context_tools_into_reconciled_tool_surface() {
     tokio::task::yield_now().await;
 
     let tools: Tools = serde_json::from_value(serde_json::json!({
-        "tools_id": format!("{}:tools", agent.default_behavior_id()),
-        "agent_did": agent.agent_did(),
+        "tools_id": format!("{}:tools", agent.default_agent_id()),
+        "node_did": agent.node_did(),
         "display_name": "Read tools",
         "host": {"files": {"mode": "ReadOnly"}}
     }))
@@ -699,8 +696,8 @@ async fn control_watcher_resolves_context_tools_into_reconciled_tool_surface() {
     let snapshot = proposal_rx.recv().await.expect("reconciled snapshot");
     let tool_surface = snapshot
         .tool_surfaces
-        .get(agent.default_behavior_id())
-        .expect("default behavior tool surface");
+        .get(agent.default_agent_id())
+        .expect("default agent tool surface");
     let tool_names = tool_surface.tool_names();
     assert!(tool_names.contains(&"read_file".to_string()));
     assert!(tool_names.contains(&"list_files".to_string()));
@@ -711,18 +708,18 @@ async fn control_watcher_resolves_context_tools_into_reconciled_tool_surface() {
 }
 
 #[tokio::test]
-async fn control_watcher_settles_when_an_unselected_behavior_is_permanently_invalid() {
+async fn control_watcher_settles_when_an_unselected_agent_is_permanently_invalid() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("control-watcher-settle"));
-    bind_default_behavior_backend(
+    bind_default_agent_backend(
         node.as_ref(),
         identity.did(),
         "backend-settle",
         "http://127.0.0.1:8114/v1",
     )
     .await;
-    let agent = crate::Gents::from_default_behavior_documents(
+    let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity,
         crate::agent::DocumentRuntimeOptions {
@@ -732,11 +729,11 @@ async fn control_watcher_settles_when_an_unselected_behavior_is_permanently_inva
     )
     .await
     .unwrap();
-    let agent_did = agent.agent_did().to_string();
-    let selected_behavior_id = agent.default_behavior_id().to_string();
+    let node_did = agent.node_did().to_string();
+    let selected_agent_id = agent.default_agent_id().to_string();
 
     let backend =
-        crate::backend_registry::lookup_backend(node.as_ref(), &agent_did, "backend-settle")
+        crate::backend_registry::lookup_backend(node.as_ref(), &node_did, "backend-settle")
             .await
             .unwrap()
             .expect("configured backend document");
@@ -750,7 +747,7 @@ async fn control_watcher_settles_when_an_unselected_behavior_is_permanently_inva
     };
     let catalog = |observed_at: &str, models: Vec<crate::document_config::AdvertisedModel>| {
         crate::document_config::BackendModelCatalog {
-            agent_did: None,
+            node_did: None,
             observed_at: observed_at.into(),
             models,
         }
@@ -772,9 +769,9 @@ async fn control_watcher_settles_when_an_unselected_behavior_is_permanently_inva
         .document_runtime_context()
         .cloned()
         .expect("document-backed agent");
-    let runtime_status = RuntimeStatusHandle::new(node.clone(), agent_did.clone());
+    let runtime_status = RuntimeStatusHandle::new(node.clone(), node_did.clone());
     runtime_status
-        .initialize_startup(&selected_behavior_id)
+        .initialize_startup(&selected_agent_id)
         .await
         .unwrap();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -782,8 +779,8 @@ async fn control_watcher_settles_when_an_unselected_behavior_is_permanently_inva
 
     // Subscribe before writing: DefraDB subscriptions are live-only.
     let subscription = node.subscribe_document_changes();
-    let spare_behavior_id = format!("{selected_behavior_id}:spare");
-    let spare_profile_id = format!("{spare_behavior_id}:inference");
+    let spare_agent_id = format!("{selected_agent_id}:spare");
+    let spare_profile_id = format!("{spare_agent_id}:inference");
     write_documents(
         node.as_ref(),
         "test.settle.spare",
@@ -791,17 +788,17 @@ async fn control_watcher_settles_when_an_unselected_behavior_is_permanently_inva
             (
                 crate::Collection::InferenceProfile,
                 serde_json::json!({
-                    "agent_did": agent_did,
+                    "node_did": node_did,
                     "profile_id": spare_profile_id,
                     "backend_id": "backend-settle",
                     "model_name": "retired-model"
                 }),
             ),
             (
-                crate::Collection::AgentBehavior,
+                crate::Collection::Agent,
                 serde_json::json!({
-                    "agent_did": agent_did,
-                    "behavior_id": spare_behavior_id,
+                    "node_did": node_did,
+                    "agent_id": spare_agent_id,
                     "inference_profile_id": spare_profile_id
                 }),
             ),
@@ -819,7 +816,7 @@ async fn control_watcher_settles_when_an_unselected_behavior_is_permanently_inva
     let watcher_task = tokio::spawn(run_test_control_watcher(
         node.clone(),
         subscription,
-        agent_did.clone(),
+        node_did.clone(),
         resolve_context,
         proposal_tx,
         runtime_status.clone(),
@@ -829,27 +826,27 @@ async fn control_watcher_settles_when_an_unselected_behavior_is_permanently_inva
 
     let snapshot = tokio::time::timeout(Duration::from_secs(5), proposal_rx.recv())
         .await
-        .expect("a permanently invalid unselected behavior must not hold reconciliation")
+        .expect("a permanently invalid unselected agent must not hold reconciliation")
         .expect("reconciled snapshot");
-    assert!(snapshot.behaviors.contains_key(&selected_behavior_id));
-    assert!(!snapshot.behaviors.contains_key(&spare_behavior_id));
+    assert!(snapshot.agents.contains_key(&selected_agent_id));
+    assert!(!snapshot.agents.contains_key(&spare_agent_id));
     assert_eq!(
         snapshot
-            .unavailable_behaviors
-            .get(&spare_behavior_id)
-            .expect("unavailable reason for the invalid behavior")
+            .unavailable_agents
+            .get(&spare_agent_id)
+            .expect("unavailable reason for the invalid agent")
             .public_reason,
-        BehaviorReadinessUnavailableReason::InferenceProfileInvalid
+        AgentReadinessUnavailableReason::InferenceProfileInvalid
     );
 
     let _ = shutdown_tx.send(true);
     watcher_task.await.unwrap().unwrap();
 
-    let view = crate::agent::document_view::load_document_runtime_view(node.as_ref(), &agent_did)
+    let view = crate::agent::document_view::load_document_runtime_view(node.as_ref(), &node_did)
         .await
         .unwrap();
     assert!(
-        !view.has_unresolved_behavior_references(),
+        !view.has_unresolved_agent_references(),
         "permanently invalid inference selection is not a pending document: {:?}",
         view.pending_visibility_details()
     );
@@ -859,7 +856,7 @@ async fn control_watcher_settles_when_an_unselected_behavior_is_permanently_inva
 /// owner every install path records through: the write the watcher wakes on.
 async fn record_plugin_install(
     node: &Arc<defra_node::EmbeddedNode>,
-    agent_did: &str,
+    node_did: &str,
     plugin_home: &std::path::Path,
 ) {
     let identity = crate::pack::PackIdentity {
@@ -874,7 +871,7 @@ async fn record_plugin_install(
     };
     crate::pack::record_plugin_store_change(
         &crate::config_client::ConfigAccess::Local(node.clone()),
-        agent_did,
+        node_did,
         plugin_home,
         &identity.coordinate,
         Some(&identity),
@@ -885,12 +882,12 @@ async fn record_plugin_install(
 
 async fn write_tools_naming_plugin(
     node: &Arc<defra_node::EmbeddedNode>,
-    agent_did: &str,
+    node_did: &str,
     tools_id: &str,
 ) {
     let tools: Tools = serde_json::from_value(serde_json::json!({
         "tools_id": tools_id,
-        "agent_did": agent_did,
+        "node_did": node_did,
         "integrations": {"plugins": [{"plugin": "fixture/list_files"}]},
     }))
     .unwrap();
@@ -929,7 +926,7 @@ async fn control_watcher_proposes_a_new_fingerprint_when_the_named_plugin_instal
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("control-watcher-plugin-install"));
-    bind_default_behavior_backend(
+    bind_default_agent_backend(
         node.as_ref(),
         identity.did(),
         "backend-plugin-install",
@@ -937,7 +934,7 @@ async fn control_watcher_proposes_a_new_fingerprint_when_the_named_plugin_instal
     )
     .await;
     let plugin_home = tempfile::tempdir().unwrap();
-    let agent = crate::Gents::from_default_behavior_documents(
+    let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
         identity,
         crate::agent::DocumentRuntimeOptions {
@@ -948,23 +945,20 @@ async fn control_watcher_proposes_a_new_fingerprint_when_the_named_plugin_instal
     )
     .await
     .unwrap();
-    let agent_did = agent.agent_did().to_string();
-    let behavior_id = agent.default_behavior_id().to_string();
+    let node_did = agent.node_did().to_string();
+    let agent_id = agent.default_agent_id().to_string();
     let resolve_context = agent
         .document_runtime_context()
         .cloned()
         .expect("document-backed agent");
-    let runtime_status = RuntimeStatusHandle::new(node.clone(), agent_did.clone());
-    runtime_status
-        .initialize_startup(&behavior_id)
-        .await
-        .unwrap();
+    let runtime_status = RuntimeStatusHandle::new(node.clone(), node_did.clone());
+    runtime_status.initialize_startup(&agent_id).await.unwrap();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let (proposal_tx, mut proposal_rx) = mpsc::channel(8);
     let watcher_task = tokio::spawn(run_test_control_watcher(
         node.clone(),
         node.subscribe_document_changes(),
-        agent_did.clone(),
+        node_did.clone(),
         resolve_context,
         proposal_tx,
         runtime_status,
@@ -973,15 +967,15 @@ async fn control_watcher_proposes_a_new_fingerprint_when_the_named_plugin_instal
     ));
     tokio::task::yield_now().await;
 
-    write_tools_naming_plugin(&node, &agent_did, &format!("{behavior_id}:tools")).await;
+    write_tools_naming_plugin(&node, &node_did, &format!("{agent_id}:tools")).await;
     let absent = tokio::time::timeout(PROPOSAL_TIMEOUT, proposal_rx.recv())
         .await
         .expect("the Tools write naming a missing plugin must reach the reconcile owner")
         .expect("proposal channel");
     let absent_surface = absent
         .tool_surfaces
-        .get(&behavior_id)
-        .expect("default behavior tool surface");
+        .get(&agent_id)
+        .expect("default agent_config tool surface");
     assert_eq!(
         absent_surface.plugin_resolutions(),
         &[(
@@ -998,7 +992,7 @@ async fn control_watcher_proposes_a_new_fingerprint_when_the_named_plugin_instal
     // The install: the plugin store record, then the only document an
     // install writes.
     crate::plugin::store::write_record(plugin_home.path(), &installed_record()).unwrap();
-    record_plugin_install(&node, &agent_did, plugin_home.path()).await;
+    record_plugin_install(&node, &node_did, plugin_home.path()).await;
     let installed = tokio::time::timeout(PROPOSAL_TIMEOUT, proposal_rx.recv())
         .await
         .expect("a pack install must wake the reconcile owner")
@@ -1013,7 +1007,7 @@ async fn control_watcher_proposes_a_new_fingerprint_when_the_named_plugin_instal
     // installed_at); the resolved identity is unchanged, so the proposal
     // repeats the fingerprint the reconciler already holds and nothing new
     // can apply.
-    record_plugin_install(&node, &agent_did, plugin_home.path()).await;
+    record_plugin_install(&node, &node_did, plugin_home.path()).await;
     let reinstalled = tokio::time::timeout(PROPOSAL_TIMEOUT, proposal_rx.recv())
         .await
         .expect("the reinstall observation must reach the reconcile owner")

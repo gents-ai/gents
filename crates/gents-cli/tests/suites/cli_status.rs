@@ -23,7 +23,7 @@ async fn status_reads_local_runtime_context_by_default() -> Result<()> {
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
+            "--node-name",
             &agent_name,
             "--model-name",
             &model_name,
@@ -31,24 +31,24 @@ async fn status_reads_local_runtime_context_by_default() -> Result<()> {
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
-    wait_for_runtime_quiescence(&graphql, &agent_did, 1, Duration::from_millis(200)).await?;
+    wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_quiescence(&graphql, &node_did, 1, Duration::from_millis(200)).await?;
     wait_for_runtime_state_graphql(&home_dir, &graphql, Duration::from_secs(30)).await?;
 
     let output = run_cli_json(&home_dir, &["status"])?;
     assert_eq!(
-        output.get("agent_did").and_then(Value::as_str),
-        Some(agent_did.as_str())
+        output.get("node_did").and_then(Value::as_str),
+        Some(node_did.as_str())
     );
     assert_eq!(
         output
             .pointer("/runtime/process_state")
             .and_then(Value::as_str),
         None,
-        "AgentRuntime is diagnostics-only; readiness owns process state"
+        "NodeRuntime is diagnostics-only; readiness owns process state"
     );
     assert_eq!(
         output.get("process_state").and_then(Value::as_str),
@@ -66,9 +66,7 @@ async fn status_reads_local_runtime_context_by_default() -> Result<()> {
         "status returned an unknown reconcile phase: {output}"
     );
     assert_eq!(
-        output
-            .get("runnable_behavior_count")
-            .and_then(Value::as_i64),
+        output.get("runnable_agent_count").and_then(Value::as_i64),
         Some(1),
         "status: {output}"
     );
@@ -96,7 +94,7 @@ async fn status_includes_p2p_runtime_info() -> Result<()> {
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
+            "--node-name",
             &agent_name,
             "--model-name",
             &model_name,
@@ -104,7 +102,7 @@ async fn status_includes_p2p_runtime_info() -> Result<()> {
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
     let (mut serve, _) = spawn_server_with_ready_json(
         &home_dir,
         port,
@@ -121,7 +119,7 @@ async fn status_includes_p2p_runtime_info() -> Result<()> {
         &[],
     )?;
     wait_for_port(port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
 
     let output = run_cli_json(&home_dir, &["status"])?;
     assert_eq!(
@@ -217,7 +215,7 @@ async fn status_and_metrics_surface_overridden_p2p_admission_knobs() -> Result<(
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
+            "--node-name",
             &agent_name,
             "--model-name",
             &model_name,
@@ -225,7 +223,7 @@ async fn status_and_metrics_surface_overridden_p2p_admission_knobs() -> Result<(
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
     let (mut serve, ready) = spawn_server_with_ready_json(
         &home_dir,
         port,
@@ -252,7 +250,7 @@ async fn status_and_metrics_surface_overridden_p2p_admission_knobs() -> Result<(
         &[],
     )?;
     wait_for_port(port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
 
     assert_eq!(
         ready
@@ -346,7 +344,7 @@ async fn status_liveness_surfaces_expired_processing_request_and_running_tool() 
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
+            "--node-name",
             &agent_name,
             "--model-name",
             &model_name,
@@ -354,10 +352,10 @@ async fn status_liveness_surfaces_expired_processing_request_and_running_tool() 
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
 
     let stuck_request_id = format!("stuck-req-{}", Uuid::new_v4().simple());
     let stuck_session_id = format!("stuck-session-{}", Uuid::new_v4().simple());
@@ -370,8 +368,8 @@ async fn status_liveness_surfaces_expired_processing_request_and_running_tool() 
             r#"mutation {{
                 create_AgentRequest(input: {{purpose: "normal", 
                     request_id: "{request_id}",
-                    agent_did: "{agent_did}",
-                    behavior_id: "default",
+                    node_did: "{node_did}",
+                    agent_id: "default",
                     session_id: "{session_id}",
                     content: "stuck request seeded for liveness surface test",
                     lifecycle_state: "processing",
@@ -383,7 +381,7 @@ async fn status_liveness_surfaces_expired_processing_request_and_running_tool() 
                 }}) {{ _docID }}
             }}"#,
             request_id = escape_graphql_string(&stuck_request_id),
-            agent_did = escape_graphql_string(&agent_did),
+            node_did = escape_graphql_string(&node_did),
             session_id = escape_graphql_string(&stuck_session_id),
         ),
     )
@@ -395,7 +393,7 @@ async fn status_liveness_surfaces_expired_processing_request_and_running_tool() 
             r#"mutation {{
                 create_AgentToolCall(input: {{
                     tool_call_key: "{key}",
-                    agent_did: "{agent_did}",
+                    node_did: "{node_did}",
                     request_id: "{request_id}",
                     session_id: "{session_id}",
                     message_sequence: 1,
@@ -408,7 +406,7 @@ async fn status_liveness_surfaces_expired_processing_request_and_running_tool() 
                 }}) {{ _docID }}
             }}"#,
             key = escape_graphql_string(&stuck_tool_call_key),
-            agent_did = escape_graphql_string(&agent_did),
+            node_did = escape_graphql_string(&node_did),
             request_id = escape_graphql_string(&stuck_request_id),
             session_id = escape_graphql_string(&stuck_session_id),
             tool_call_id = escape_graphql_string(&stuck_tool_call_id),
@@ -524,7 +522,7 @@ async fn status_liveness_progress_counts_completed_tools_and_inference() -> Resu
     let init = run_init_json(
         &home_dir,
         &[
-            "--agent-name",
+            "--node-name",
             &agent_name,
             "--model-name",
             &model_name,
@@ -532,22 +530,22 @@ async fn status_liveness_progress_counts_completed_tools_and_inference() -> Resu
             mock_endpoint.endpoint(),
         ],
     )?;
-    let agent_did = agent_did_from_init(&init)?;
+    let node_did = node_did_from_init(&init)?;
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
 
     let now = chrono::Utc::now();
     let at = |offset_secs: i64| (now + chrono::Duration::seconds(offset_secs)).to_rfc3339();
 
     let seed_request = |request_id: String| {
         let graphql = graphql.clone();
-        let agent_did = agent_did.clone();
+        let node_did = node_did.clone();
         let claimed_at = at(-600);
         let deadline = at(3600);
         async move {
             let request_id = escape_graphql_string(&request_id);
-            let agent_did = escape_graphql_string(&agent_did);
+            let node_did = escape_graphql_string(&node_did);
             let claimed_at = escape_graphql_string(&claimed_at);
             let deadline = escape_graphql_string(&deadline);
             let response = graphql_query(
@@ -556,8 +554,8 @@ async fn status_liveness_progress_counts_completed_tools_and_inference() -> Resu
                     r#"mutation {{
                         create_AgentRequest(input: {{purpose: "normal", 
                             request_id: "{request_id}",
-                            agent_did: "{agent_did}",
-                            behavior_id: "default",
+                            node_did: "{node_did}",
+                            agent_id: "default",
                             session_id: "session-{request_id}",
                             content: "liveness progress seed",
                             lifecycle_state: "processing",
@@ -579,11 +577,11 @@ async fn status_liveness_progress_counts_completed_tools_and_inference() -> Resu
                      started_at: String,
                      completed_at: Option<String>| {
         let graphql = graphql.clone();
-        let agent_did = agent_did.clone();
+        let node_did = node_did.clone();
         async move {
             let request_id = escape_graphql_string(&request_id);
             let request_doc_id = escape_graphql_string(&request_doc_id);
-            let agent_did = escape_graphql_string(&agent_did);
+            let node_did = escape_graphql_string(&node_did);
             let started_at = escape_graphql_string(&started_at);
             let (state, completed) = match completed_at {
                 Some(completed_at) => (
@@ -601,7 +599,7 @@ async fn status_liveness_progress_counts_completed_tools_and_inference() -> Resu
                     r#"mutation {{
                         create_AgentToolCall(input: {{
                             tool_call_key: "{request_id}-tc-{index}",
-                            agent_did: "{agent_did}",
+                            node_did: "{node_did}",
                             request_id: "{request_id}",
                             request_doc_id: "{request_doc_id}",
                             session_id: "session-{request_id}",
@@ -625,11 +623,11 @@ async fn status_liveness_progress_counts_completed_tools_and_inference() -> Resu
                           started_at: String,
                           ended_at: Option<String>| {
         let graphql = graphql.clone();
-        let agent_did = agent_did.clone();
+        let node_did = node_did.clone();
         async move {
             let request_id = escape_graphql_string(&request_id);
             let request_doc_id = escape_graphql_string(&request_doc_id);
-            let agent_did = escape_graphql_string(&agent_did);
+            let node_did = escape_graphql_string(&node_did);
             let started_at = escape_graphql_string(&started_at);
             let (state, ended) = match ended_at {
                 Some(ended_at) => (
@@ -646,7 +644,7 @@ async fn status_liveness_progress_counts_completed_tools_and_inference() -> Resu
                             call_id: "{request_id}-inference-{seq}",
                             request_id: "{request_id}",
                             request_doc_id: "{request_doc_id}",
-                            agent_did: "{agent_did}",
+                            node_did: "{node_did}",
                             call_kind: "inference",
                             call_seq: {seq},
                             call_state: "{state}",
@@ -694,7 +692,7 @@ async fn status_liveness_progress_counts_completed_tools_and_inference() -> Resu
             r#"mutation {{
                 create_AgentToolCall(input: {{
                     tool_call_key: "{batched}-foreign",
-                    agent_did: "did:key:zForeignProgress",
+                    node_did: "did:key:zForeignProgress",
                     request_id: "{batched}",
                     request_doc_id: "{batched_doc}",
                     session_id: "session-{batched}",

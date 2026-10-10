@@ -42,7 +42,7 @@ impl ManualTriggerHandle {
             .cloned()
             .ok_or_else(|| {
                 anyhow::anyhow!(
-                    "task {task_id} is not in the active snapshot (check the task exists, is enabled, and its behavior is available)"
+                    "task {task_id} is not in the active snapshot (check the task exists, is enabled, and its agent is available)"
                 )
             })?;
 

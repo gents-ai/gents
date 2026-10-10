@@ -14,7 +14,7 @@ pub struct DesktopInitRequest {
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ManagedServerStartRequest {
-    pub agent_name: String,
+    pub node_name: String,
     #[serde(default)]
     pub tool_ceiling: Option<ManagedServerToolCeiling>,
     #[serde(default)]
@@ -39,7 +39,7 @@ pub struct ManagedServerRootValidationRequest {
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ManagedServerRestartRequest {
-    pub agent_name: String,
+    pub node_name: String,
     pub tool_ceiling: ManagedServerToolCeiling,
     pub tool_root: Option<String>,
 }
@@ -74,8 +74,8 @@ pub struct EnrollmentStatusRequest {
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatSendRequest {
-    pub agent_did: String,
-    pub behavior_id: Option<String>,
+    pub node_did: String,
+    pub agent_id: Option<String>,
     pub session_id: Option<String>,
     pub content: String,
     #[serde(default)]
@@ -101,7 +101,7 @@ pub struct MailboxItemRequest {
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionRenameRequest {
-    pub agent_did: String,
+    pub node_did: String,
     pub session_id: String,
     pub title: String,
 }
@@ -109,94 +109,94 @@ pub struct SessionRenameRequest {
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
-pub struct AgentConfigSaveRequest {
-    pub document: gents::document_config::AgentPrincipal,
+pub struct NodeConfigSaveRequest {
+    pub document: gents::document_config::Node,
 }
 
-/// Make a behavior the principal's default, enabling it in the same apply.
+/// Make an agent the node's default, enabling it in the same apply.
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
-pub struct DefaultBehaviorSetRequest {
-    pub agent_did: String,
-    pub behavior_id: String,
+pub struct DefaultAgentSetRequest {
+    pub node_did: String,
+    pub agent_id: String,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
-pub struct BehaviorSaveRequest {
-    pub document: gents::AgentBehaviorDocument,
+pub struct AgentSaveRequest {
+    pub document: gents::document_config::Agent,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SkillDeleteRequest {
     pub skill_id: String,
-    pub agent_did: String,
+    pub node_did: String,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskDeleteRequest {
     pub task_id: String,
-    pub agent_did: String,
+    pub node_did: String,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ScheduleDeleteRequest {
     pub schedule_id: String,
-    pub agent_did: String,
+    pub node_did: String,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct TriggerDeleteRequest {
     pub trigger_id: String,
-    pub agent_did: String,
+    pub node_did: String,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct BackendDeleteRequest {
     pub backend_id: String,
-    pub agent_did: String,
+    pub node_did: String,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct InferenceProfileDeleteRequest {
     pub profile_id: String,
-    pub agent_did: String,
+    pub node_did: String,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolsDeleteRequest {
     pub tools_id: String,
-    pub agent_did: String,
+    pub node_did: String,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolServiceDeleteRequest {
     pub service_id: String,
-    pub agent_did: String,
+    pub node_did: String,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct BehaviorDeleteRequest {
-    pub behavior_id: String,
-    pub agent_did: String,
+pub struct AgentDeleteRequest {
+    pub agent_id: String,
+    pub node_did: String,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ContextDeleteRequest {
     pub context_id: String,
-    pub agent_did: String,
+    pub node_did: String,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
@@ -258,7 +258,7 @@ pub struct TaskRunRequest {
     pub task_id: String,
     /// Explicit action scope; independent of the shared observation filter.
     #[ts(optional)]
-    pub agent_did: Option<String>,
+    pub node_did: Option<String>,
     #[ts(type = "unknown", optional)]
     pub args: Option<serde_json::Value>,
 }
@@ -275,7 +275,7 @@ pub struct ScheduleSaveRequest {
 pub struct ScheduleRunRequest {
     pub schedule_id: String,
     #[ts(optional)]
-    pub agent_did: Option<String>,
+    pub node_did: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
@@ -289,7 +289,7 @@ pub struct TriggerSaveRequest {
 #[serde(rename_all = "camelCase")]
 pub struct DesktopOperationsSnapshotRequest {
     #[serde(default)]
-    pub agent_did: Option<String>,
+    pub node_did: Option<String>,
     #[serde(default)]
     /// Accepted from the client but not yet consumed: snapshot filtering by
     /// root request / terminal inclusion is staged (operator-surfaces spec).
@@ -307,7 +307,7 @@ pub struct DesktopOperationsSnapshotRequest {
 pub struct DesktopSessionProvenanceRequest {
     pub session_id: String,
     #[serde(default)]
-    pub agent_did: Option<String>,
+    pub node_did: Option<String>,
     /// Part of the exact session scope; null is the null-requester scope.
     #[serde(default)]
     pub requester_did: Option<String>,
@@ -320,7 +320,7 @@ pub struct DesktopSessionProvenanceRequest {
 pub struct DesktopInterruptRequest {
     pub request_id: String,
     #[serde(default)]
-    pub agent_did: Option<String>,
+    pub node_did: Option<String>,
     /// Only `"userCancelled"` is operator-authentic; the runtime derives every
     /// other cause.
     pub cause: String,
@@ -329,6 +329,7 @@ pub struct DesktopInterruptRequest {
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopProbeMcpServiceRequest {
+    pub node_did: String,
     pub service_id: String,
 }
 
@@ -340,12 +341,12 @@ mod tests {
 
     macro_rules! assert_source_routed_delete_request {
         ($request_type:ty, $id_key:literal, $id_field:ident, $id:literal) => {{
-            let mut value = json!({ "agentDid": "did:test:source" });
+            let mut value = json!({ "nodeDid": "did:test:source" });
             value[$id_key] = json!($id);
             let request: $request_type = serde_json::from_value(value).unwrap();
 
             assert_eq!(request.$id_field, $id);
-            assert_eq!(request.agent_did, "did:test:source");
+            assert_eq!(request.node_did, "did:test:source");
 
             let mut missing_source = json!({});
             missing_source[$id_key] = json!($id);
@@ -356,15 +357,15 @@ mod tests {
     #[test]
     fn tool_goal_capabilities_use_canonical_optional_group() {
         let omitted: ToolsSaveRequest =
-            serde_json::from_value(json!({"document":{"agent_did":"owner","tools_id":"tools"}}))
+            serde_json::from_value(json!({"document":{"node_did":"owner","tools_id":"tools"}}))
                 .unwrap();
         assert!(omitted.document.built_ins.is_none());
-        let explicit: ToolsSaveRequest = serde_json::from_value(json!({"document":{"agent_did":"owner","tools_id":"tools","built_ins":{"enable_goal_tools":true,"enable_goal_creation":false}}})).unwrap();
+        let explicit: ToolsSaveRequest = serde_json::from_value(json!({"document":{"node_did":"owner","tools_id":"tools","built_ins":{"enable_goal_tools":true,"enable_goal_creation":false}}})).unwrap();
         let built_ins = explicit.document.built_ins.unwrap();
         assert_eq!(built_ins.enable_goal_tools, Some(true));
         assert_eq!(built_ins.enable_goal_creation, Some(false));
         let explicit_null: ToolsSaveRequest = serde_json::from_value(
-            json!({"document":{"agent_did":"owner","tools_id":"tools","built_ins":null}}),
+            json!({"document":{"node_did":"owner","tools_id":"tools","built_ins":null}}),
         )
         .unwrap();
         assert!(explicit_null.document.built_ins.is_none());
@@ -372,7 +373,7 @@ mod tests {
 
     #[test]
     fn task_goal_fields_use_canonical_replacement_optionality() {
-        let mut value = json!({"document":{"agent_did":"owner","task_id":"task","behavior_id":"behavior","prompt_template":"Do work"}});
+        let mut value = json!({"document":{"node_did":"owner","task_id":"task","agent_id":"agent","prompt_template":"Do work"}});
         let omitted: TaskSaveRequest = serde_json::from_value(value.clone()).unwrap();
         assert!(omitted.document.goal_objective_template.is_none());
         value["document"]["goal_objective_template"] = Value::Null;
@@ -391,7 +392,7 @@ mod tests {
     }
 
     #[test]
-    fn config_delete_requests_require_camel_case_source_agent_did() {
+    fn config_delete_requests_require_camel_case_source_node_did() {
         assert_source_routed_delete_request!(SkillDeleteRequest, "skillId", skill_id, "skill-a");
         assert_source_routed_delete_request!(TaskDeleteRequest, "taskId", task_id, "task-a");
         assert_source_routed_delete_request!(
@@ -430,12 +431,7 @@ mod tests {
             service_id,
             "service-a"
         );
-        assert_source_routed_delete_request!(
-            BehaviorDeleteRequest,
-            "behaviorId",
-            behavior_id,
-            "behavior-a"
-        );
+        assert_source_routed_delete_request!(AgentDeleteRequest, "agentId", agent_id, "agent-a");
         assert_source_routed_delete_request!(
             ContextDeleteRequest,
             "contextId",
@@ -457,12 +453,12 @@ pub struct EventSourceSaveRequest {
 #[serde(deny_unknown_fields)]
 pub struct EventSourceDeleteRequest {
     pub event_source_id: String,
-    pub agent_did: String,
+    pub node_did: String,
 }
 
-/// Atomic component edits for an existing principal, not pack installation.
-/// Supply agent_principal with only agent_did/default-valued fields. Principal
-/// settings use AgentConfigSaveRequest. Omitted documents remain untouched;
+/// Atomic component edits for an existing node, not pack installation.
+/// Supply node with only node_did/default-valued fields. Node settings use
+/// NodeConfigSaveRequest. Omitted documents remain untouched;
 /// graph_intents/graph_capabilities are rejected, not compiled or ignored.
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -478,7 +474,7 @@ pub struct ConfigComponentsApplyRequest {
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
 pub struct ConfigComponentsPatchRequest {
-    pub agent_did: String,
+    pub node_did: String,
     pub patches: Vec<ConfigComponentPatch>,
 }
 
@@ -486,97 +482,95 @@ pub struct ConfigComponentsPatchRequest {
 #[serde(tag = "collection")]
 #[serde(deny_unknown_fields)]
 pub enum ConfigComponentPatch {
-    AgentBehavior {
+    Agent {
         id: String,
-        #[ts(
-            type = "Partial<Omit<import(\"./AgentBehavior.js\").AgentBehavior, \"agent_did\" | \"behavior_id\">>"
-        )]
+        #[ts(type = "Partial<Omit<import(\"./Agent.js\").Agent, \"node_did\" | \"agent_id\">>")]
         changes: serde_json::Map<String, serde_json::Value>,
     },
     AgentContext {
         id: String,
         #[ts(
-            type = "Partial<Omit<import(\"./AgentContext.js\").AgentContext, \"agent_did\" | \"context_id\">>"
+            type = "Partial<Omit<import(\"./AgentContext.js\").AgentContext, \"node_did\" | \"context_id\">>"
         )]
         changes: serde_json::Map<String, serde_json::Value>,
     },
     Compaction {
         id: String,
         #[ts(
-            type = "Partial<Omit<import(\"./CompactionConfig.js\").CompactionConfig, \"agent_did\" | \"compaction_id\">>"
+            type = "Partial<Omit<import(\"./CompactionConfig.js\").CompactionConfig, \"node_did\" | \"compaction_id\">>"
         )]
         changes: serde_json::Map<String, serde_json::Value>,
     },
     Tools {
         id: String,
-        #[ts(type = "Partial<Omit<import(\"./Tools.js\").Tools, \"agent_did\" | \"tools_id\">>")]
+        #[ts(type = "Partial<Omit<import(\"./Tools.js\").Tools, \"node_did\" | \"tools_id\">>")]
         changes: serde_json::Map<String, serde_json::Value>,
     },
     InferenceProfile {
         id: String,
         #[ts(
-            type = "Partial<Omit<import(\"./InferenceProfile.js\").InferenceProfile, \"agent_did\" | \"profile_id\">>"
+            type = "Partial<Omit<import(\"./InferenceProfile.js\").InferenceProfile, \"node_did\" | \"profile_id\">>"
         )]
         changes: serde_json::Map<String, serde_json::Value>,
     },
     InferenceSampling {
         id: String,
         #[ts(
-            type = "Partial<Omit<import(\"./InferenceSampling.js\").InferenceSampling, \"agent_did\" | \"sampling_id\">>"
+            type = "Partial<Omit<import(\"./InferenceSampling.js\").InferenceSampling, \"node_did\" | \"sampling_id\">>"
         )]
         changes: serde_json::Map<String, serde_json::Value>,
     },
     InferenceExecution {
         id: String,
         #[ts(
-            type = "Partial<Omit<import(\"./InferenceExecution.js\").InferenceExecution, \"agent_did\" | \"execution_id\">>"
+            type = "Partial<Omit<import(\"./InferenceExecution.js\").InferenceExecution, \"node_did\" | \"execution_id\">>"
         )]
         changes: serde_json::Map<String, serde_json::Value>,
     },
     InferenceRetryPolicy {
         id: String,
         #[ts(
-            type = "Partial<Omit<import(\"./InferenceRetryPolicy.js\").InferenceRetryPolicy, \"agent_did\" | \"retry_policy_id\">>"
+            type = "Partial<Omit<import(\"./InferenceRetryPolicy.js\").InferenceRetryPolicy, \"node_did\" | \"retry_policy_id\">>"
         )]
         changes: serde_json::Map<String, serde_json::Value>,
     },
     InferenceBackend {
         id: String,
         #[ts(
-            type = "Partial<Omit<import(\"./InferenceBackend.js\").InferenceBackend, \"agent_did\" | \"backend_id\">>"
+            type = "Partial<Omit<import(\"./InferenceBackend.js\").InferenceBackend, \"node_did\" | \"backend_id\">>"
         )]
         changes: serde_json::Map<String, serde_json::Value>,
     },
     ToolServiceRegistry {
         id: String,
         #[ts(
-            type = "Partial<Omit<import(\"./ToolServiceRegistry.js\").ToolServiceRegistry, \"agent_did\" | \"service_id\">>"
+            type = "Partial<Omit<import(\"./ToolServiceRegistry.js\").ToolServiceRegistry, \"node_did\" | \"service_id\">>"
         )]
         changes: serde_json::Map<String, serde_json::Value>,
     },
     Task {
         id: String,
-        #[ts(type = "Partial<Omit<import(\"./Task.js\").Task, \"agent_did\" | \"task_id\">>")]
+        #[ts(type = "Partial<Omit<import(\"./Task.js\").Task, \"node_did\" | \"task_id\">>")]
         changes: serde_json::Map<String, serde_json::Value>,
     },
     Schedule {
         id: String,
         #[ts(
-            type = "Partial<Omit<import(\"./Schedule.js\").Schedule, \"agent_did\" | \"schedule_id\">>"
+            type = "Partial<Omit<import(\"./Schedule.js\").Schedule, \"node_did\" | \"schedule_id\">>"
         )]
         changes: serde_json::Map<String, serde_json::Value>,
     },
     Trigger {
         id: String,
         #[ts(
-            type = "Partial<Omit<import(\"./Trigger.js\").Trigger, \"agent_did\" | \"trigger_id\">>"
+            type = "Partial<Omit<import(\"./Trigger.js\").Trigger, \"node_did\" | \"trigger_id\">>"
         )]
         changes: serde_json::Map<String, serde_json::Value>,
     },
     EventSource {
         id: String,
         #[ts(
-            type = "Partial<Omit<import(\"./EventSource.js\").EventSource, \"agent_did\" | \"event_source_id\">>"
+            type = "Partial<Omit<import(\"./EventSource.js\").EventSource, \"node_did\" | \"event_source_id\">>"
         )]
         changes: serde_json::Map<String, serde_json::Value>,
     },
@@ -592,7 +586,7 @@ impl ConfigComponentPatch {
     ) {
         use gents::config_client::patch::SelfConfigTarget;
         let (target, id, changes) = match self {
-            Self::AgentBehavior { id, changes } => (SelfConfigTarget::AgentBehavior, id, changes),
+            Self::Agent { id, changes } => (SelfConfigTarget::Agent, id, changes),
             Self::AgentContext { id, changes } => (SelfConfigTarget::AgentContext, id, changes),
             Self::Compaction { id, changes } => (SelfConfigTarget::Compaction, id, changes),
             Self::Tools { id, changes } => (SelfConfigTarget::Tools, id, changes),

@@ -59,9 +59,9 @@ export function originLabel(
     case "sessionMessage": {
       if (senderTitle) return `Message from ${senderTitle}`;
       if (origin.senderSessionId) return "Message from another session";
-      return origin.senderAgentDid === node?.agentDid
+      return origin.senderNodeDid === node?.nodeDid
         ? "Message from another session"
-        : "Message from another agent";
+        : "Message from another node";
     }
     case "trigger": {
       const name = triggerName(origin.triggerId, node);

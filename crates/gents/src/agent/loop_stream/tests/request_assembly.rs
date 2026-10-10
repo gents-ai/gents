@@ -84,7 +84,7 @@ async fn generated_authored_input_is_durable_before_provider_stream_entry() {
 
     let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
     let doc_id = lifecycle.request().doc_id.clone();
-    let agent_did = lifecycle.request().agent_did.clone();
+    let node_did = lifecycle.request().node_did.clone();
     let requester_did = lifecycle.request().requester_did.clone();
     let prompt = generated_steering_prepared_prompt(case);
     let gate = Arc::new(StreamEntryGate::default());
@@ -161,7 +161,7 @@ async fn generated_authored_input_is_durable_before_provider_stream_entry() {
                 let (_, native) = crate::session::load_canonical_message_from_node(
                     &node,
                     header_id,
-                    &agent_did,
+                    &node_did,
                     requester_did.as_deref(),
                 )
                 .await
@@ -357,7 +357,7 @@ async fn every_request_in_a_tool_loop_satisfies_provider_invariants() {
 #[tokio::test]
 async fn dirty_caller_history_is_sanitized_at_loop_entry() {
     // Chokepoint guarantee: EVERY owned-loop consumer (daemon, oneshot,
-    // compaction summarize, title, subagent children) sends provider-valid
+    // compaction summarize, title, agent-target sessions) sends provider-valid
     // history because the loop sanitizes the caller-provided history at entry
     // — no call site can forget the sanitizer. Feed a dirty history (unpaired
     // call, orphaned result, text-after-call ordering) and assert the request
@@ -891,7 +891,7 @@ async fn generated_layer_cases_pin_the_assembled_request_order() {
 
     for case in cases {
         let builder =
-            LayeredPromptBuilder::for_behavior("system prompt", "fence", &["bash"], false, &[]);
+            LayeredPromptBuilder::for_agent("system prompt", "fence", &["bash"], false, &[]);
 
         let conversation = (0..case.conversation_len)
             .map(|index| {
@@ -1163,9 +1163,9 @@ async fn insert_folded_requests(
             node,
             "test.folded_request",
             &format!(
-                r#"mutation {{ create_AgentRequest(input: {{ request_id: "{}", purpose: "normal", agent_did: "{}", behavior_id: "general", session_id: "{}", subagent_depth: 0, retry_parent_request: "", retry_root_request: "{}", superseded_by_request: "", content: "{}", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", created_at: "{}", retry_count: 0, max_retries: 3 }}) {{ _docID }} }}"#,
+                r#"mutation {{ create_AgentRequest(input: {{ request_id: "{}", purpose: "normal", node_did: "{}", agent_id: "general", session_id: "{}", request_hop: 0, retry_parent_request: "", retry_root_request: "{}", superseded_by_request: "", content: "{}", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", created_at: "{}", retry_count: 0, max_retries: 3 }}) {{ _docID }} }}"#,
                 crate::graphql::escape_graphql_string(&request_id),
-                crate::graphql::escape_graphql_string(&head.agent_did),
+                crate::graphql::escape_graphql_string(&head.node_did),
                 crate::graphql::escape_graphql_string(&head.session_id),
                 crate::graphql::escape_graphql_string(&request_id),
                 crate::graphql::escape_graphql_string(&folded.content),
@@ -1317,7 +1317,7 @@ async fn drive_generated_turn_input(
         let (_, native) = crate::session::load_canonical_message_from_node(
             &node,
             header["_docID"].as_str().unwrap(),
-            &head.agent_did,
+            &head.node_did,
             head.requester_did.as_deref(),
         )
         .await

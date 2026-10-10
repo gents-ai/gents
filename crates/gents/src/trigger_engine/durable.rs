@@ -85,7 +85,7 @@ async fn observe_goal_outcome_binding(
         return Ok(None);
     };
     Ok(Some(GoalOutcomeBinding {
-        owner_did: goal.agent_did,
+        owner_did: goal.node_did,
         session_id: goal.session_id,
         assignment_request_id,
         status: goal.status,

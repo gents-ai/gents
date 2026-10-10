@@ -1,6 +1,6 @@
 use crate::types::{
-    BehaviorView, DeploymentView, DesktopBootstrapSummary, DesktopClientSnapshot,
-    DesktopRuntimeSnapshot, InferenceBackendView, SkillView,
+    AgentEnvironmentView, AgentView, DeploymentView, DesktopBootstrapSummary,
+    DesktopClientSnapshot, DesktopRuntimeSnapshot, InferenceBackendView, NodeView, SkillView,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -88,7 +88,7 @@ pub fn project_bootstrap_summary(
     grants: SnapshotGrants,
 ) -> DesktopBootstrapSummary {
     if !grants.runtime_admin {
-        summary.default_agent_home = String::new();
+        summary.default_node_home = String::new();
         summary.init_tool_root = None;
         summary.desktop_home = String::new();
         summary.peer_directory_path = String::new();
@@ -139,7 +139,7 @@ fn project_deployment(mut deployment: DeploymentView, grants: SnapshotGrants) ->
 
     if !grants.session_read {
         deployment.sessions.clear();
-        for environment in &mut deployment.behavior_environments {
+        for environment in &mut deployment.agent_environments {
             environment.session_count = 0;
             environment.active_session_count = 0;
         }
@@ -152,10 +152,10 @@ fn project_deployment(mut deployment: DeploymentView, grants: SnapshotGrants) ->
         return deployment;
     }
 
-    deployment.behaviors = deployment
-        .behaviors
+    deployment.agents = deployment
+        .agents
         .into_iter()
-        .map(project_behavior_for_chat)
+        .map(project_agent_for_chat)
         .collect();
     deployment.skills = deployment
         .skills
@@ -167,9 +167,9 @@ fn project_deployment(mut deployment: DeploymentView, grants: SnapshotGrants) ->
         .into_iter()
         .map(project_backend_for_fleet)
         .collect();
-    deployment.principal_config = None;
-    deployment.behavior_configs.clear();
-    deployment.subagent_targets.clear();
+    deployment.node_config = None;
+    deployment.agent_configs.clear();
+    deployment.agent_targets.clear();
     deployment.datastore_tool_surfaces.clear();
     deployment.chain_key_bindings.clear();
     deployment.schedules.clear();
@@ -180,9 +180,9 @@ fn project_deployment(mut deployment: DeploymentView, grants: SnapshotGrants) ->
     deployment.compactions.clear();
     deployment.inference_sampling.clear();
     deployment.inference_execution.clear();
-    for environment in &mut deployment.behavior_environments {
+    for environment in &mut deployment.agent_environments {
         // Keep coarse capability labels: chat clients need an honest account
-        // of the behavior's authority. Referenced profile labels and host paths
+        // of the agent's authority. Referenced profile labels and host paths
         // remain config-only.
         environment.inference_profile_name = None;
         environment.workspace_root = None;
@@ -203,11 +203,11 @@ fn project_deployment(mut deployment: DeploymentView, grants: SnapshotGrants) ->
     deployment
 }
 
-fn project_behavior_for_chat(mut behavior: BehaviorView) -> BehaviorView {
-    behavior.description = None;
-    behavior.context_id = None;
-    behavior.inference_profile_id = None;
-    behavior
+fn project_agent_for_chat(mut agent: AgentView) -> AgentView {
+    agent.description = None;
+    agent.context_id = None;
+    agent.inference_profile_id = None;
+    agent
 }
 
 fn project_skill_for_chat(mut skill: SkillView) -> SkillView {
@@ -235,32 +235,32 @@ fn project_backend_for_fleet(mut backend: InferenceBackendView) -> InferenceBack
 mod tests {
     use super::*;
     use crate::types::{
-        AgentPrincipalView, BehaviorEnvironmentView, BehaviorView, ClientRouteStatusView,
-        DeploymentView, DesktopBootstrapSummary, DesktopClientSnapshot, DesktopRuntimeSnapshot,
-        EnrollmentRequestView, MailboxItemView, P2PHealthView, PairingCollectionStatusView,
-        SavedPeerView, SessionSummary, SkillView, SyncHealthView,
+        AgentEnvironmentView, AgentView, ClientRouteStatusView, DeploymentView,
+        DesktopBootstrapSummary, DesktopClientSnapshot, DesktopRuntimeSnapshot,
+        EnrollmentRequestView, MailboxItemView, NodeView, P2PHealthView,
+        PairingCollectionStatusView, SavedPeerView, SessionSummary, SkillView, SyncHealthView,
     };
 
     fn sample_snapshot() -> DesktopClientSnapshot {
         DesktopClientSnapshot {
             bootstrap: DesktopBootstrapSummary {
-                default_agent_home: "/secret/agent".into(),
-                init_agent_name: Some("Agent".into()),
-                init_agent_did: Some("did:test:local".into()),
+                default_node_home: "/secret/agent".into(),
+                init_node_name: Some("Agent".into()),
+                init_node_did: Some("did:test:local".into()),
                 init_tool_ceiling: Some("readonly".into()),
                 init_tool_root: Some("/secret/tools".into()),
                 desktop_home: "/secret/desktop".into(),
                 peer_directory_path: "/secret/peers.json".into(),
                 node_data_dir: "/secret/node".into(),
                 diagnostics_hint: "native logging".into(),
-                agent_home_exists: true,
+                node_home_exists: true,
                 desktop_home_exists: true,
                 peer_directory_exists: true,
                 client_state_exists: true,
                 saved_peers: vec![SavedPeerView {
                     peer_id: "peer_1".into(),
                     label: "Remote".into(),
-                    agent_did: "did:test:remote".into(),
+                    node_did: "did:test:remote".into(),
                     addr: "/ip4/10.0.0.1/tcp/1".into(),
                     source: Some("manual".into()),
                     graphql: Some("http://10.0.0.1/graphql".into()),
@@ -294,7 +294,7 @@ mod tests {
                     admin_did: "did:test:admin".into(),
                     server_peer: "peer_1".into(),
                     server_label: None,
-                    owner_agent: "did:test:remote".into(),
+                    owner_node: "did:test:remote".into(),
                     state: "pending_approval".into(),
                     expires_at: "2099-01-01T00:00:00Z".into(),
                 }]),
@@ -309,7 +309,7 @@ mod tests {
                 deployments: vec![DeploymentView {
                     peer_id: "local".into(),
                     label: "Local".into(),
-                    agent_did: "did:test:local".into(),
+                    node_did: "did:test:local".into(),
                     addr: "/ip4/127.0.0.1/tcp/1".into(),
                     source: Some("local".into()),
                     graphql: Some("http://127.0.0.1/graphql".into()),
@@ -342,20 +342,27 @@ mod tests {
                         })
                         .collect(),
                     last_error: None,
-                    agent_principal: AgentPrincipalView {
-                        agent_did: "did:test:local".into(),
+                    node: NodeView {
+                        node_did: "did:test:local".into(),
                         display_name: Some("Local".into()),
-                        default_behavior_id: Some("default".into()),
+                        default_agent_id: Some("default".into()),
                         enabled: Some(true),
                         created_at: None,
                         created_by: None,
                     },
+                    node_config: Some(serde_json::from_value(serde_json::json!({
+                        "node_did":"did:test:agent","tags":["private-node"]
+                    })).unwrap()),
+                    agent_configs: vec![serde_json::from_value(serde_json::json!({
+                        "node_did":"did:test:agent","agent_id":"agent",
+                        "inference_profile_id":"profile","tags":["private-agent"]
+                    })).unwrap()],
                     runtime: None,
-                    behavior_readiness: Default::default(),
-                    behaviors: vec![BehaviorView {
-                        behavior_id: "default".into(),
+                    node_readiness: Default::default(),
+                    agents: vec![AgentView {
+                        agent_id: "default".into(),
+                        node_did: "did:test:agent".into(),
                         display_name: "Default".into(),
-                        agent_did: "did:test:agent".into(),
                         description: Some("PRIVATE CONFIG DESCRIPTION".into()),
                         context_id: Some("context".into()),
                         inference_profile_id: Some("profile".into()),
@@ -364,8 +371,8 @@ mod tests {
                         tags: vec![],
                         created_at: None,
                     }],
-                    behavior_environments: vec![BehaviorEnvironmentView {
-                        behavior_id: "default".into(),
+                    agent_environments: vec![AgentEnvironmentView {
+                        agent_id: "default".into(),
                         display_name: "Default".into(),
                         enabled: true,
                         is_default: true,
@@ -380,26 +387,19 @@ mod tests {
                         active_session_count: 0,
                     }],
                     inference_backends: vec![],
-                    inference_profiles: vec![serde_json::from_value(serde_json::json!({"agent_did":"did:test:agent","profile_id":"profile","backend_id":"backend","model_name":"gpt"})).unwrap()],
-                    inference_sampling: vec![serde_json::from_value(serde_json::json!({"agent_did":"did:test:agent","sampling_id":"sampling","temperature":1})).unwrap()],
-                    inference_execution: vec![serde_json::from_value(serde_json::json!({"agent_did":"did:test:agent","execution_id":"execution","max_turns":1000})).unwrap()],
-                    contexts: vec![serde_json::from_value(serde_json::json!({"agent_did":"did:test:agent","context_id":"context","system_prompt":"SECRET PROMPT","tools_id":"tools","skill_ids":["skill_a"]})).unwrap()],
-                    compactions: vec![serde_json::from_value(serde_json::json!({"agent_did":"did:test:agent","compaction_id":"compaction"})).unwrap()],
-                    tools: vec![serde_json::from_value(serde_json::json!({"agent_did":"did:test:agent","tools_id":"tools","host":{"root":"/secret/tools"}})).unwrap()],
-                    principal_config: Some(serde_json::from_value(serde_json::json!({
-                        "agent_did":"did:test:agent","tags":["private-principal"]
-                    })).unwrap()),
-                    behavior_configs: vec![serde_json::from_value(serde_json::json!({
-                        "agent_did":"did:test:agent","behavior_id":"behavior",
-                        "inference_profile_id":"profile","tags":["private-behavior"]
-                    })).unwrap()],
-                    subagent_targets: vec![],
+                    inference_profiles: vec![serde_json::from_value(serde_json::json!({"node_did":"did:test:agent","profile_id":"profile","backend_id":"backend","model_name":"gpt"})).unwrap()],
+                    inference_sampling: vec![serde_json::from_value(serde_json::json!({"node_did":"did:test:agent","sampling_id":"sampling","temperature":1})).unwrap()],
+                    inference_execution: vec![serde_json::from_value(serde_json::json!({"node_did":"did:test:agent","execution_id":"execution","max_turns":1000})).unwrap()],
+                    contexts: vec![serde_json::from_value(serde_json::json!({"node_did":"did:test:agent","context_id":"context","system_prompt":"SECRET PROMPT","tools_id":"tools","skill_ids":["skill_a"]})).unwrap()],
+                    compactions: vec![serde_json::from_value(serde_json::json!({"node_did":"did:test:agent","compaction_id":"compaction"})).unwrap()],
+                    tools: vec![serde_json::from_value(serde_json::json!({"node_did":"did:test:agent","tools_id":"tools","host":{"root":"/secret/tools"}})).unwrap()],
+                    agent_targets: vec![],
                     datastore_tool_surfaces: vec![],
                     chain_key_bindings: vec![],
                     tool_service_registries: vec![],
                     skills: vec![SkillView {
                         skill_id: "skill_a".into(),
-                        agent_did: None,
+                        node_did: None,
                         name: Some("Skill A".into()),
                         description: Some("desc".into()),
                         instructions: Some("DO SECRET THINGS".into()),
@@ -417,13 +417,13 @@ mod tests {
                     triggers: vec![],
                     sessions: vec![SessionSummary {
             started_by: None,
-                        agent_did: "did:test:agent".into(), requester_did: None,
+                        node_did: "did:test:agent".into(), requester_did: None,
                         latest_request_doc_id: None, closed_at: None, tags: vec![], provenance: None,
                         session_id: "sess_1".into(),
                         title: Some("Chat".into()),
                         preview_text: Some("hi".into()),
                         status: None,
-                        behavior_id: None,
+                        agent_id: None,
                         latest_request_id: None,
                         task_id: None,
                         task_name: None,
@@ -439,7 +439,7 @@ mod tests {
                         item_id: "mailbox-1".into(),
                         item_key: "runtime:request-1:ask:1".into(),
                         requester_did: "did:test:local".into(),
-                        agent_did: "did:test:local".into(),
+                        node_did: "did:test:local".into(),
                         status: "open".into(),
                         kind: "ask".into(),
                         action: "ack".into(),
@@ -452,8 +452,8 @@ mod tests {
                         request_id: Some("request-1".into()),
                         graph_run_id: None,
                         cause_doc_id: None,
-                        target_agent_did: "did:test:local".into(),
-                        target_behavior_id: "default".into(),
+                        target_node_did: "did:test:local".into(),
+                        target_agent_id: "default".into(),
                         expected_collection: None,
                         parent_item_id: None,
                         deadline_at: None,
@@ -469,10 +469,10 @@ mod tests {
         let full = project_client_snapshot(sample_snapshot(), SnapshotGrants::all());
         let deployment = &full.client.as_ref().unwrap().deployments[0];
         assert_eq!(
-            deployment.principal_config.as_ref().unwrap().tags,
-            ["private-principal"]
+            deployment.node_config.as_ref().unwrap().tags,
+            ["private-node"]
         );
-        assert_eq!(deployment.behavior_configs[0].tags, ["private-behavior"]);
+        assert_eq!(deployment.agent_configs[0].tags, ["private-agent"]);
         for grants in [
             SnapshotGrants::core_only(),
             SnapshotGrants::chat_package(),
@@ -480,8 +480,8 @@ mod tests {
         ] {
             let limited = project_client_snapshot(sample_snapshot(), grants);
             let serialized = serde_json::to_string(&limited).unwrap();
-            assert!(!serialized.contains("private-principal"));
-            assert!(!serialized.contains("private-behavior"));
+            assert!(!serialized.contains("private-node"));
+            assert!(!serialized.contains("private-agent"));
             assert!(!serialized.contains("SECRET PROMPT"));
             assert!(!serialized.contains("/secret/tools"));
         }
@@ -491,18 +491,16 @@ mod tests {
     fn core_only_strips_paths_peers_sessions_and_authored_content() {
         let projected = project_client_snapshot(sample_snapshot(), SnapshotGrants::core_only());
         assert!(projected.bootstrap.desktop_home.is_empty());
-        assert!(projected.bootstrap.default_agent_home.is_empty());
+        assert!(projected.bootstrap.default_node_home.is_empty());
         assert!(projected.bootstrap.saved_peers.is_empty());
         let client = projected.client.expect("client");
         assert!(client.listen_addresses.is_empty());
         let dep = &client.deployments[0];
         assert!(dep.sessions.is_empty());
         assert!(dep.mailbox_items.is_empty());
-        assert_eq!(dep.behavior_environments[0].session_count, 0);
-        assert!(dep.behavior_environments[0].workspace_root.is_none());
-        assert!(dep.behavior_environments[0]
-            .inference_profile_name
-            .is_none());
+        assert_eq!(dep.agent_environments[0].session_count, 0);
+        assert!(dep.agent_environments[0].workspace_root.is_none());
+        assert!(dep.agent_environments[0].inference_profile_name.is_none());
         assert!(dep.addr.is_empty());
         assert!(dep.pairing.is_empty());
         assert_eq!(dep.routes.len(), 2);
@@ -513,21 +511,18 @@ mod tests {
         assert!(dep.inference_profiles.is_empty());
         assert!(dep.inference_sampling.is_empty());
         assert!(dep.inference_execution.is_empty());
-        assert!(dep.behaviors[0].context_id.is_none());
-        assert!(dep.behaviors[0].inference_profile_id.is_none());
+        assert!(dep.agents[0].context_id.is_none());
+        assert!(dep.agents[0].inference_profile_id.is_none());
+        assert_eq!(dep.agent_environments[0].model_name.as_deref(), Some("gpt"));
         assert_eq!(
-            dep.behavior_environments[0].model_name.as_deref(),
-            Some("gpt")
-        );
-        assert_eq!(
-            dep.behavior_environments[0].skill_names,
+            dep.agent_environments[0].skill_names,
             vec!["Skill A".to_string()]
         );
         assert!(dep.skills[0].instructions.is_none());
         assert_eq!(dep.skills[0].skill_id, "skill_a");
         assert!(dep.skills[0].source_directory.is_none());
         assert_eq!(
-            projected.bootstrap.init_agent_did.as_deref(),
+            projected.bootstrap.init_node_did.as_deref(),
             Some("did:test:local")
         );
     }
@@ -542,26 +537,21 @@ mod tests {
         assert_eq!(dep.sessions.len(), 1);
         assert!(dep.pairing.is_empty());
         assert!(dep.mailbox_items.is_empty());
-        assert_eq!(dep.behavior_environments[0].session_count, 1);
-        assert!(dep.behavior_environments[0].workspace_root.is_none());
-        assert!(dep.behavior_environments[0]
-            .inference_profile_name
-            .is_none());
+        assert_eq!(dep.agent_environments[0].session_count, 1);
+        assert!(dep.agent_environments[0].workspace_root.is_none());
+        assert!(dep.agent_environments[0].inference_profile_name.is_none());
         assert!(dep.contexts.is_empty());
         assert!(dep.tools.is_empty());
         assert!(dep.compactions.is_empty());
         assert!(dep.inference_profiles.is_empty());
         assert!(dep.inference_sampling.is_empty());
         assert!(dep.inference_execution.is_empty());
-        assert!(dep.behaviors[0].context_id.is_none());
-        assert!(dep.behaviors[0].inference_profile_id.is_none());
-        assert_eq!(
-            dep.behavior_environments[0].model_name.as_deref(),
-            Some("gpt")
-        );
+        assert!(dep.agents[0].context_id.is_none());
+        assert!(dep.agents[0].inference_profile_id.is_none());
+        assert_eq!(dep.agent_environments[0].model_name.as_deref(), Some("gpt"));
         assert!(dep.skills[0].instructions.is_none());
         assert_eq!(
-            dep.behavior_environments[0].skill_names,
+            dep.agent_environments[0].skill_names,
             vec!["Skill A".to_string()]
         );
     }
@@ -588,8 +578,8 @@ mod tests {
         assert_eq!(dep.pairing.len(), 1);
         assert_eq!(dep.pairing[0].pairing_retry_count, 2);
         assert!(dep.sessions.is_empty());
-        assert_eq!(dep.behavior_environments[0].session_count, 0);
-        assert!(dep.behavior_environments[0].workspace_root.is_none());
+        assert_eq!(dep.agent_environments[0].session_count, 0);
+        assert!(dep.agent_environments[0].workspace_root.is_none());
     }
 
     #[test]
@@ -603,13 +593,13 @@ mod tests {
             Some("SECRET PROMPT")
         );
         assert_eq!(
-            projected.client.as_ref().unwrap().deployments[0].behavior_environments[0]
+            projected.client.as_ref().unwrap().deployments[0].agent_environments[0]
                 .workspace_root
                 .as_deref(),
             Some("/secret/workspace")
         );
         assert_eq!(
-            projected.client.as_ref().unwrap().deployments[0].behavior_environments[0]
+            projected.client.as_ref().unwrap().deployments[0].agent_environments[0]
                 .inference_profile_name
                 .as_deref(),
             Some("Long context")

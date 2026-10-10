@@ -37,7 +37,7 @@ export function buildInferenceSetupPlan({
   recommendation: InferenceModelRecommendation;
   settings: InferenceSetupSettings;
   purpose?: "onboarding" | "add-backend";
-}): { document: PackConfig; profileId: string; defaultBehaviorId: string | null } {
+}): { document: PackConfig; profileId: string; defaultAgentId: string | null } {
   const addingBackend = purpose === "add-backend";
   const normalizedEndpoint = (endpoint: string | null) =>
     endpoint?.trim().replace(/\/+$/, "") ?? "";
@@ -76,37 +76,37 @@ export function buildInferenceSetupPlan({
     recommendation.temperature || recommendation.topP
       ? (existingProfile?.sampling_id ?? `${profileId}-sampling`)
       : null;
-  const defaultBehaviorId = deployment.agentPrincipal.defaultBehaviorId;
-  if (!defaultBehaviorId && !addingBackend) {
-    throw new Error("The agent has no default behavior to activate for Setup");
+  const defaultAgentId = deployment.node.defaultAgentId;
+  if (!defaultAgentId && !addingBackend) {
+    throw new Error("The node has no default agent to activate for Setup");
   }
   const shouldRebindDefault = shouldRebindSetupDefault(deployment, addingExtra);
-  const behaviorConfigs = (addingBackend ? [] : deployment.behaviorConfigs)
+  const agentConfigs = (addingBackend ? [] : deployment.agentConfigs)
     .filter(
-      (behavior) =>
-        !behavior.inference_profile_id ||
-        (behavior.behavior_id === defaultBehaviorId && shouldRebindDefault),
+      (agent) =>
+        !agent.inference_profile_id ||
+        (agent.agent_id === defaultAgentId && shouldRebindDefault),
     )
-    .map((behavior) => ({
-      ...behavior,
+    .map((agent) => ({
+      ...agent,
       inference_profile_id: profileId,
     }));
 
   return {
     profileId,
-    defaultBehaviorId,
+    defaultAgentId,
     document: {
-      agent_principal: { agent_did: deployment.agentDid },
+      node: { node_did: deployment.nodeDid },
       inference_backends: [
         {
-          agent_did: deployment.agentDid,
+          node_did: deployment.nodeDid,
           backend_id: backendId,
           name: discovery.backendName,
           provider_kind: discovery.providerKind,
           openai_wire_api: discovery.openaiWireApi,
           endpoint: discovery.effectiveEndpoint,
           auth: oauth
-            ? { kind: "principal_oauth" }
+            ? { kind: "node_oauth" }
             : apiKey.trim()
               ? { kind: "api_key", key: apiKey.trim() }
               : { kind: "unauthenticated" },
@@ -118,7 +118,7 @@ export function buildInferenceSetupPlan({
       inference_profiles: [
         {
           ...existingProfile,
-          agent_did: deployment.agentDid,
+          node_did: deployment.nodeDid,
           profile_id: profileId,
           display_name: discovery.backendName,
           backend_id: backendId,
@@ -137,7 +137,7 @@ export function buildInferenceSetupPlan({
         ? {
             inference_sampling: [
               {
-                agent_did: deployment.agentDid,
+                node_did: deployment.nodeDid,
                 sampling_id: samplingId,
                 display_name: `${discovery.backendName} recommended sampling`,
                 temperature: recommendation.temperature
@@ -148,7 +148,7 @@ export function buildInferenceSetupPlan({
             ],
           }
         : {}),
-      ...(behaviorConfigs.length ? { agent_behaviors: behaviorConfigs } : {}),
+      ...(agentConfigs.length ? { agents: agentConfigs } : {}),
     },
   };
 }

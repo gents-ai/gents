@@ -98,7 +98,7 @@ mod tests {
     #[test]
     fn prose_alone_is_an_interview_turn() {
         assert_eq!(
-            parse_reply("What must the behavior never do?\n```\nnot json\n```"),
+            parse_reply("What must the agent never do?\n```\nnot json\n```"),
             Ok(None)
         );
     }

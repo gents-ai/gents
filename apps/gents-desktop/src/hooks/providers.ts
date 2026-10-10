@@ -21,60 +21,60 @@ type ProviderParams = {
  * Inference providers for the app, made once: the reads behind the provider
  * store, and the commands that sign in to a provider and manage its accounts.
  * Accounts are not part of a node's view, so any change the client reports
- * may be one of them (a sign-in from the CLI or another device): each agent
+ * may be one of them (a sign-in from the CLI or another device): each node
  * some panel shows is read again when the client's snapshot changes, once,
- * however many panels show it. An account command reads its agent's accounts
+ * however many panels show it. An account command reads its node's accounts
  * again once it settles, whether or not it succeeded.
  */
 export function createProviders({ api, store, client }: ProviderParams) {
-  /* per agent, only the newest read is shown, so an older answer, or a
+  /* per node, only the newest read is shown, so an older answer, or a
      failure, landing after it changes nothing */
   const accountReads = newestWinsBy<string>();
   const watching = new Map<string, number>();
   const usageReads = newestWinsBy<string>();
 
   function loadProviderAccounts(
-    agentDid: string,
+    nodeDid: string,
   ): Promise<ProviderAccountView[] | null> {
-    const current = accountReads.begin(agentDid);
-    return (api.listProviderAccounts?.(agentDid) ?? Promise.resolve([])).then(
+    const current = accountReads.begin(nodeDid);
+    return (api.listProviderAccounts?.(nodeDid) ?? Promise.resolve([])).then(
       (views) => {
-        if (current()) providers.accountsRead(store, agentDid, views);
+        if (current()) providers.accountsRead(store, nodeDid, views);
         return views;
       },
       () => {
-        if (current()) providers.accountsRead(store, agentDid, []);
+        if (current()) providers.accountsRead(store, nodeDid, []);
         return null;
       },
     );
   }
 
-  /* An account command settles as the bridge answers it; its agent's
+  /* An account command settles as the bridge answers it; its node's
      accounts are read again after, without holding it up. */
-  function thenReload<T>(agentDid: string, command: () => Promise<T>) {
-    return command().finally(() => void loadProviderAccounts(agentDid));
+  function thenReload<T>(nodeDid: string, command: () => Promise<T>) {
+    return command().finally(() => void loadProviderAccounts(nodeDid));
   }
 
-  function login(provider: OauthProvider, agentDid: string, label: string | null) {
+  function login(provider: OauthProvider, nodeDid: string, label: string | null) {
     switch (provider) {
       case "openai":
-        return api.codexLogin(agentDid, null, label);
+        return api.codexLogin(nodeDid, null, label);
       case "anthropic":
-        return api.claudeLogin(agentDid, null, label);
+        return api.claudeLogin(nodeDid, null, label);
       case "grok":
-        return api.grokLogin(agentDid, null, label);
+        return api.grokLogin(nodeDid, null, label);
     }
   }
 
   client.subscribe((state, prev) => {
     if (state.snapshot === prev.snapshot) return;
-    for (const agentDid of watching.keys()) void loadProviderAccounts(agentDid);
+    for (const nodeDid of watching.keys()) void loadProviderAccounts(nodeDid);
   });
 
-  function readUsage(agentDid: string, force: boolean, provider: string | null) {
-    const current = usageReads.begin(agentDid);
-    return api.readProviderUsage?.(agentDid, force, provider).then((views) => {
-      if (current()) providers.usageRead(store, agentDid, views);
+  function readUsage(nodeDid: string, force: boolean, provider: string | null) {
+    const current = usageReads.begin(nodeDid);
+    return api.readProviderUsage?.(nodeDid, force, provider).then((views) => {
+      if (current()) providers.usageRead(store, nodeDid, views);
     });
   }
 
@@ -95,30 +95,30 @@ export function createProviders({ api, store, client }: ProviderParams) {
   }
 
   return {
-    /** Reads an agent's provider accounts again; resolves once this read
+    /** Reads a node's provider accounts again; resolves once this read
         has landed, to what it read, or null when it failed. Only the newest
-        read for the agent is shown, and a failed one shows none. */
+        read for the node is shown, and a failed one shows none. */
     loadProviderAccounts,
-    /** Shows an agent's accounts: they are read now, and again whenever the
+    /** Shows a node's accounts: they are read now, and again whenever the
         client's snapshot changes, until every watcher has let go. */
-    watchProviderAccounts(agentDid: string) {
-      watching.set(agentDid, (watching.get(agentDid) ?? 0) + 1);
-      void loadProviderAccounts(agentDid);
+    watchProviderAccounts(nodeDid: string) {
+      watching.set(nodeDid, (watching.get(nodeDid) ?? 0) + 1);
+      void loadProviderAccounts(nodeDid);
       return () => {
-        const left = (watching.get(agentDid) ?? 1) - 1;
-        if (left > 0) watching.set(agentDid, left);
-        else watching.delete(agentDid);
+        const left = (watching.get(nodeDid) ?? 1) - 1;
+        if (left > 0) watching.set(nodeDid, left);
+        else watching.delete(nodeDid);
       };
     },
-    /** Reads an agent's usage, skipping accounts read in the last five
+    /** Reads a node's usage, skipping accounts read in the last five
         minutes; a failure keeps the last usage shown. */
-    loadProviderUsage(agentDid: string) {
-      return readUsage(agentDid, false, null)?.catch(() => undefined);
+    loadProviderUsage(nodeDid: string) {
+      return readUsage(nodeDid, false, null)?.catch(() => undefined);
     },
-    /** Reads an agent's usage now, for one provider or all; rejects when the
-        read fails. Only the newest read for the agent is shown. */
-    refreshProviderUsage(agentDid: string, provider: string | null) {
-      return readUsage(agentDid, true, provider);
+    /** Reads a node's usage now, for one provider or all; rejects when the
+        read fails. Only the newest read for the node is shown. */
+    refreshProviderUsage(nodeDid: string, provider: string | null) {
+      return readUsage(nodeDid, true, provider);
     },
     /** Reads the setup catalog unless it is already held. */
     loadSetupCatalog,
@@ -127,22 +127,22 @@ export function createProviders({ api, store, client }: ProviderParams) {
       providers.catalogFailed(store, null);
       return loadSetupCatalog();
     },
-    /** Signs an agent in to a provider through the browser, under `label`
+    /** Signs a node in to a provider through the browser, under `label`
         when given. `onUrl` hears the sign-in URL while the login runs. */
     signInToProvider(
-      agentDid: string,
+      nodeDid: string,
       provider: OauthProvider,
       {
         label = null,
         onUrl,
       }: { label?: string | null; onUrl?: (url: string) => void } = {},
     ) {
-      return thenReload(agentDid, async () => {
+      return thenReload(nodeDid, async () => {
         const unwatch = onUrl
           ? await (api.watchProviderLoginUrl?.(provider, onUrl) ?? (() => {}))
           : () => {};
         try {
-          return await login(provider, agentDid, label);
+          return await login(provider, nodeDid, label);
         } finally {
           unwatch();
         }
@@ -164,28 +164,28 @@ export function createProviders({ api, store, client }: ProviderParams) {
     canRetryProviderSave: Boolean(api.retrySaveProviderAccount),
     /** Saves the sign-in the bridge holds after a failed credential save.
         `credentialKind` is the account's provider, as the account names it. */
-    retrySaveProviderAccount(agentDid: string, credentialKind: string) {
-      return thenReload(agentDid, async () => {
+    retrySaveProviderAccount(nodeDid: string, credentialKind: string) {
+      return thenReload(nodeDid, async () => {
         if (!api.retrySaveProviderAccount)
           throw new Error("Saving a sign-in again is not available");
-        return api.retrySaveProviderAccount(agentDid, credentialKind);
+        return api.retrySaveProviderAccount(nodeDid, credentialKind);
       });
     },
-    renameProviderAccount(agentDid: string, credentialId: string, label: string) {
-      return thenReload(agentDid, async () => {
-        await api.renameProviderAccount?.(agentDid, credentialId, label);
+    renameProviderAccount(nodeDid: string, credentialId: string, label: string) {
+      return thenReload(nodeDid, async () => {
+        await api.renameProviderAccount?.(nodeDid, credentialId, label);
       });
     },
-    disconnectProviderAccount(agentDid: string, credentialId: string) {
-      return thenReload(agentDid, async () => {
-        await api.disconnectProviderAccount?.(agentDid, credentialId);
+    disconnectProviderAccount(nodeDid: string, credentialId: string) {
+      return thenReload(nodeDid, async () => {
+        await api.disconnectProviderAccount?.(nodeDid, credentialId);
       });
     },
     /** Removes the account and the backends its sign-in created that no
         profile uses. */
-    removeProviderAccount(agentDid: string, credentialId: string) {
-      return thenReload(agentDid, async () => {
-        await api.removeProviderAccount?.(agentDid, credentialId);
+    removeProviderAccount(nodeDid: string, credentialId: string) {
+      return thenReload(nodeDid, async () => {
+        await api.removeProviderAccount?.(nodeDid, credentialId);
       });
     },
     /* Asked by the screen that shows the answer, which keeps it: no store. */

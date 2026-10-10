@@ -33,35 +33,35 @@ pub async fn fetch_doc_patch(
 
     let mut rows = ClientStoreRows::default();
     match collection_name {
-        AGENT_PRINCIPAL_NAME => {
-            rows.agent_principals = load_rows(
+        NODE_NAME => {
+            rows.nodes = load_rows(
                 node,
-                AGENT_PRINCIPAL_NAME,
-                &format!("query {{ {AGENT_PRINCIPAL_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {AGENT_PRINCIPAL_FIELDS} }} }}"),
+                NODE_NAME,
+                &format!("query {{ {NODE_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {NODE_FIELDS} }} }}"),
             )
             .await?;
         }
-        AGENT_BEHAVIOR_NAME => {
-            rows.behaviors = load_rows(
+        AGENT_NAME => {
+            rows.agents = load_rows(
                 node,
-                AGENT_BEHAVIOR_NAME,
-                &format!("query {{ {AGENT_BEHAVIOR_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {AGENT_BEHAVIOR_FIELDS} }} }}"),
+                AGENT_NAME,
+                &format!("query {{ {AGENT_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {AGENT_FIELDS} }} }}"),
             )
             .await?;
         }
-        AGENT_RUNTIME_NAME => {
+        NODE_RUNTIME_NAME => {
             rows.runtimes = load_rows(
                 node,
-                AGENT_RUNTIME_NAME,
-                &format!("query {{ {AGENT_RUNTIME_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {AGENT_RUNTIME_FIELDS} }} }}"),
+                NODE_RUNTIME_NAME,
+                &format!("query {{ {NODE_RUNTIME_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {NODE_RUNTIME_FIELDS} }} }}"),
             )
             .await?;
         }
-        AGENT_BEHAVIOR_READINESS_NAME => {
-            rows.behavior_readiness = load_rows(
+        NODE_READINESS_NAME => {
+            rows.node_readiness = load_rows(
                 node,
-                AGENT_BEHAVIOR_READINESS_NAME,
-                &format!("query {{ {AGENT_BEHAVIOR_READINESS_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {AGENT_BEHAVIOR_READINESS_FIELDS} }} }}"),
+                NODE_READINESS_NAME,
+                &format!("query {{ {NODE_READINESS_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {NODE_READINESS_FIELDS} }} }}"),
             )
             .await?;
         }
@@ -219,10 +219,10 @@ pub async fn fetch_doc_patch(
 pub(crate) fn supports_doc_patch_collection(collection_name: &str) -> bool {
     matches!(
         collection_name,
-        AGENT_PRINCIPAL_NAME
-            | AGENT_BEHAVIOR_NAME
-            | AGENT_RUNTIME_NAME
-            | AGENT_BEHAVIOR_READINESS_NAME
+        NODE_NAME
+            | AGENT_NAME
+            | NODE_RUNTIME_NAME
+            | NODE_READINESS_NAME
             | AGENT_REQUEST_NAME
             | MAILBOX_ITEM_NAME
             | AGENT_MESSAGE_NAME

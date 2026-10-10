@@ -216,14 +216,14 @@ export function useInferenceSetup({
     let unlisten: (() => void) | undefined;
     try {
       unlisten = await onCodexLoginUrl?.(setCodexAuthUrl);
-      const result = await onCodexLogin(deployment.agentDid);
+      const result = await onCodexLogin(deployment.nodeDid);
       setCodexResult(result);
       await persistBackend({
         name: backendName("ChatGPT / Codex"),
         providerKind: PROVIDER_CODEX,
         endpoint: CODEX_ENDPOINT,
         modelName: CODEX_DEFAULT_MODEL,
-        auth: { kind: "principal_oauth" },
+        auth: { kind: "node_oauth" },
       });
       setDone(`ChatGPT / Codex · ${CODEX_DEFAULT_MODEL}`);
     } catch (caught) {
@@ -248,14 +248,14 @@ export function useInferenceSetup({
     let unlisten: (() => void) | undefined;
     try {
       unlisten = await onGrokLoginUrl?.(setGrokAuthUrl);
-      const result = await onGrokLogin(deployment.agentDid);
+      const result = await onGrokLogin(deployment.nodeDid);
       setGrokResult(result);
       await persistBackend({
         name: backendName("Grok subscription"),
         providerKind: PROVIDER_GROK,
         endpoint: GROK_ENDPOINT,
         modelName: GROK_DEFAULT_MODEL,
-        auth: { kind: "principal_oauth" },
+        auth: { kind: "node_oauth" },
       });
       setDone(`Grok · ${GROK_DEFAULT_MODEL}`);
     } catch (caught) {

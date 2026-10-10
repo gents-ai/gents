@@ -90,7 +90,7 @@ async fn admitted_parent(case: &LeanR6BackgroundingCase, branch: &str) -> Publis
     if let Some(status) = goal_status(case) {
         set_goal(
             &admission.node,
-            &admission.agent_did,
+            &admission.node_did,
             session,
             Some("One continuation owner"),
             Some(status),
@@ -114,8 +114,8 @@ async fn notification_texts(admission: &PublishedAdmission) -> Vec<(Value, Strin
         let (_, native) = crate::session::load_canonical_message_from_node(
             &admission.node,
             doc_id,
-            &admission.agent_did,
-            Some(&admission.agent_did),
+            &admission.node_did,
+            Some(&admission.node_did),
         )
         .await
         .expect("reconstruct exact canonical header");
@@ -138,7 +138,7 @@ async fn notification_texts(admission: &PublishedAdmission) -> Vec<(Value, Strin
 async fn drive_notification(case: &LeanR6BackgroundingCase) {
     let mut admission = admitted_parent(case, "notification").await;
     let node = &admission.node;
-    let did = admission.agent_did.as_str();
+    let did = admission.node_did.as_str();
     let session = admission.tool.session_id.clone();
     let parent_doc = admission.tool.request_doc_id().unwrap().to_owned();
     let parent_row = rows(
@@ -273,7 +273,7 @@ async fn seed_session_head(node: &EmbeddedNode, session: &str, request: &Value) 
 async fn drive_redrive(case: &LeanR6BackgroundingCase) {
     let admission = admitted_parent(case, "redrive").await;
     let node = &admission.node;
-    let did = admission.agent_did.as_str();
+    let did = admission.node_did.as_str();
     let session = admission.tool.session_id.as_str();
     let parent_doc = admission.tool.request_doc_id().unwrap();
     let parent_row = rows(
@@ -316,13 +316,13 @@ async fn drive_redrive(case: &LeanR6BackgroundingCase) {
         gents_protocol::graphql::graphql_input_literal(&serde_json::to_value(input).unwrap())
             .unwrap();
     let response = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{
-        request_id: "{}", purpose: "normal", agent_did: "{}", requester_did: "{}", behavior_id: "general",
+        request_id: "{}", purpose: "normal", node_did: "{}", requester_did: "{}", agent_id: "general",
         session_id: "{}", content: "background input", input: {input},
         execution_origin: "scheduled", lifecycle_state: "failed",
         failure_reason: "backend admission failed", terminalized_at: "2026-07-15T00:00:00Z",
         created_at: "2026-07-15T00:00:00Z", retry_count: {source_retry_count}, max_retries: {max_retries},
         retry_root_request: "{}", terminal_redrive_attempts: 0,
-        subagent_depth: {source_depth}, deadline: "{}",
+        request_hop: {source_depth}, deadline: "{}",
         caused_by_parent_request_id: "{}", caused_by_parent_request_doc_id: "{}"
     }}) {{ _docID }} }}"#,
         escape_graphql_string(&failed_wake), escape_graphql_string(did), escape_graphql_string(did),
@@ -354,7 +354,7 @@ async fn drive_redrive(case: &LeanR6BackgroundingCase) {
         &format!(
             r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{}" }} }}) {{
         _docID request_id retry_count retry_parent_request retry_parent_request_doc_id max_retries
-        backend_id caused_by_parent_request_id caused_by_parent_request_doc_id subagent_depth
+        backend_id caused_by_parent_request_id caused_by_parent_request_doc_id request_hop
         deadline lifecycle_state
     }} }}"#,
             escape_graphql_string(session)
@@ -378,7 +378,7 @@ async fn drive_redrive(case: &LeanR6BackgroundingCase) {
             .find(|row| row["request_id"] != parent && row["request_id"] != failed_wake)
             .unwrap();
         assert_eq!(source["lifecycle_state"], "failed", "{}", case.name);
-        assert_eq!(source["subagent_depth"].as_u64(), Some(source_depth));
+        assert_eq!(source["request_hop"].as_u64(), Some(source_depth));
         assert_eq!(source["deadline"].as_str(), Some(source_deadline.as_str()));
         assert_eq!(source["caused_by_parent_request_id"], parent);
         assert_eq!(source["caused_by_parent_request_doc_id"], parent_doc);
@@ -393,7 +393,7 @@ async fn drive_redrive(case: &LeanR6BackgroundingCase) {
         );
         assert_eq!(successor["retry_parent_request"], failed_wake);
         assert_eq!(successor["retry_parent_request_doc_id"], source["_docID"]);
-        assert_eq!(successor["subagent_depth"].as_u64(), model.post_depth);
+        assert_eq!(successor["request_hop"].as_u64(), model.post_depth);
         assert_eq!(
             successor["retry_count"].as_u64(),
             model.post_retry_count.map(|v| v as u64)
@@ -484,9 +484,9 @@ pub(crate) async fn selected_background_wake() -> SelectedBackgroundWake {
     .unwrap();
     let admission = message.admission;
     let node = &admission.node;
-    let did = &admission.agent_did;
+    let did = &admission.node_did;
     let session = admission.tool.session_id.clone();
-    crate::test_support::install_test_behavior(node, did, "general").await;
+    crate::test_support::install_test_agent(node, did, "general").await;
 
     let mut wait = publish_accepted_on_claimed_request(
         node.clone(),
@@ -561,7 +561,7 @@ pub(crate) async fn selected_background_wake() -> SelectedBackgroundWake {
     let queue = wake.input.as_ref().unwrap().queue.as_ref().unwrap();
     assert_eq!(queue.policy, QueuePolicy::Coalesce);
     // The caused request ran at hop 1; its result returns at the caller's hop.
-    assert_eq!(wake.subagent_depth, Some(0));
+    assert_eq!(wake.request_hop, Some(0));
     assert_eq!(
         queue.key.as_deref(),
         Some(format!("background_completion:{session}").as_str())
@@ -615,9 +615,9 @@ async fn generated_r6_notification_precedes_continuation_claim() {
         notifications,
     } = selected_background_wake().await;
     let node = &admission.node;
-    let did = &admission.agent_did;
-    let behavior = selected.behavior_id.clone();
-    let mut continuation = crate::lifecycle::RequestLifecycle::new_with_agent_did(
+    let did = &admission.node_did;
+    let behavior = selected.agent_id.clone();
+    let mut continuation = crate::lifecycle::RequestLifecycle::new_with_node_did(
         node.clone(),
         &behavior,
         did,
@@ -655,7 +655,7 @@ async fn a_retried_over_bound_wake_is_refused_again() {
     let case = lean_r6_backgrounding_case("failed_background_wake_with_budget_redrives");
     let admission = admitted_parent(case, "over-bound-redrive").await;
     let node = &admission.node;
-    let did = admission.agent_did.as_str();
+    let did = admission.node_did.as_str();
     let session = admission.tool.session_id.as_str();
     let parent_doc = admission.tool.request_doc_id().unwrap();
     let parent = rows(
@@ -672,7 +672,7 @@ async fn a_retried_over_bound_wake_is_refused_again() {
         .to_owned();
     // The principal's effective bound, and the hop a completion caused at it
     // is written with (Lean `CausalHop.nextHop`).
-    let bound = crate::document_config::load_agent_principal(node, did)
+    let bound = crate::document_config::load_node(node, did)
         .await
         .unwrap()
         .and_then(|principal| principal.max_request_hop)
@@ -701,13 +701,13 @@ async fn a_retried_over_bound_wake_is_refused_again() {
             .unwrap();
     let deadline = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
     let response = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{
-        request_id: "{refused_wake}", purpose: "normal", agent_did: "{}", requester_did: "{}", behavior_id: "general",
+        request_id: "{refused_wake}", purpose: "normal", node_did: "{}", requester_did: "{}", agent_id: "general",
         session_id: "{}", content: "background input", input: {input},
         execution_origin: "scheduled", lifecycle_state: "failed",
-        failure_reason: "AgentRequest causal hop exceeds the target principal's max_request_hop",
+        failure_reason: "AgentRequest causal hop exceeds the target node's max_request_hop",
         terminalized_at: "2026-07-15T00:00:00Z", created_at: "2026-07-15T00:00:00Z", retry_count: 0, max_retries: 3,
         retry_root_request: "{refused_wake}", terminal_redrive_attempts: 0,
-        subagent_depth: {}, deadline: "{}",
+        request_hop: {}, deadline: "{}",
         caused_by_parent_request_id: "{}", caused_by_parent_request_doc_id: "{}"
     }}) {{ _docID }} }}"#,
         escape_graphql_string(did), escape_graphql_string(did), escape_graphql_string(session),
@@ -724,13 +724,13 @@ async fn a_retried_over_bound_wake_is_refused_again() {
     let successor = rows(
         node,
         &format!(
-            r#"{{ AgentRequest(filter: {{ retry_parent_request: {{ _eq: "{refused_wake}" }} }}) {{ subagent_depth }} }}"#
+            r#"{{ AgentRequest(filter: {{ retry_parent_request: {{ _eq: "{refused_wake}" }} }}) {{ request_hop }} }}"#
         ),
         "AgentRequest",
     )
     .await;
     assert_eq!(successor.len(), 1);
-    let hop = successor[0]["subagent_depth"].as_u64().unwrap() as u32;
+    let hop = successor[0]["request_hop"].as_u64().unwrap() as u32;
     assert_eq!(hop, over_bound);
     assert!(!crate::lifecycle::request_hop_within_bound(bound, hop));
     admission.node.shutdown().await;

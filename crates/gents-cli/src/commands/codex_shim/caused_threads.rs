@@ -12,7 +12,7 @@ use crate::caused_sessions::{
 
 const CAUSED_THREAD_COLLECTIONS: [&str; 4] = [
     "AgentRequest",
-    "AgentBehavior",
+    "Agent",
     "InferenceProfile",
     "InferenceBackend",
 ];
@@ -67,9 +67,9 @@ impl CausedThreadUpdateFilter {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct CausedThread {
     pub(super) session_id: String,
-    pub(super) agent_did: String,
+    pub(super) node_did: String,
     pub(super) requester_did: Option<String>,
-    pub(super) behavior_id: String,
+    pub(super) agent_id: String,
     pub(super) parent_session_id: String,
     pub(super) root_session_id: String,
     pub(super) depth: u32,
@@ -92,7 +92,7 @@ pub(super) async fn load_caused_thread(
 ) -> Result<Option<CausedThread>> {
     let roots = super::thread_projection::root_thread_ids(state).await?;
     let Some(session) = load_caused_session(&state.node, thread_id, |scope| {
-        scope.agent_did == state.agent_did.as_ref()
+        scope.node_did == state.node_did.as_ref()
             && scope.requester_did.as_deref() == Some(state.local_requester_did())
             && roots.contains(&scope.session_id)
     })
@@ -100,14 +100,14 @@ pub(super) async fn load_caused_thread(
     else {
         return Ok(None);
     };
-    let model = bound_model(state, &session.scope.agent_did, &session.behavior_id).await;
+    let model = bound_model(state, &session.scope.node_did, &session.agent_id).await;
     Ok(Some(caused_thread(session, model)))
 }
 
 impl CausedThread {
     pub(super) fn scope(&self) -> SessionScope {
         SessionScope {
-            agent_did: self.agent_did.clone(),
+            node_did: self.node_did.clone(),
             session_id: self.session_id.clone(),
             requester_did: self.requester_did.clone(),
         }
@@ -147,7 +147,7 @@ pub(super) async fn load_caused_threads_for_root_ids(
     let roots = root_session_ids
         .iter()
         .map(|session_id| SessionScope {
-            agent_did: state.agent_did.to_string(),
+            node_did: state.node_did.to_string(),
             session_id: session_id.clone(),
             requester_did: Some(state.local_requester_did().to_string()),
         })
@@ -157,7 +157,7 @@ pub(super) async fn load_caused_threads_for_root_ids(
     let mut labels = HashMap::<String, SessionScope>::new();
     let mut models = HashMap::<(String, String), Option<String>>::new();
     for session in sessions {
-        // A wire thread ID has no principal/requester component.
+        // A wire thread ID has no node/requester component.
         if let Some(existing) = labels.get(&session.scope.session_id) {
             anyhow::ensure!(
                 existing == &session.scope,
@@ -168,7 +168,7 @@ pub(super) async fn load_caused_threads_for_root_ids(
         }
         if root_session_ids.contains(&session.scope.session_id) {
             anyhow::ensure!(
-                session.scope.agent_did == state.agent_did.as_ref()
+                session.scope.node_did == state.node_did.as_ref()
                     && session.scope.requester_did.as_deref() == Some(state.local_requester_did()),
                 "ambiguous Codex root/caused thread label across canonical scopes: {}",
                 session.scope.session_id
@@ -176,7 +176,7 @@ pub(super) async fn load_caused_threads_for_root_ids(
             continue;
         }
         labels.insert(session.scope.session_id.clone(), session.scope.clone());
-        let key = (session.scope.agent_did.clone(), session.behavior_id.clone());
+        let key = (session.scope.node_did.clone(), session.agent_id.clone());
         if !models.contains_key(&key) {
             let model = bound_model(state, &key.0, &key.1).await;
             models.insert(key.clone(), model);
@@ -187,14 +187,14 @@ pub(super) async fn load_caused_threads_for_root_ids(
     Ok(threads)
 }
 
-async fn bound_model(state: &ShimState, agent_did: &str, behavior_id: &str) -> Option<String> {
-    match load_bound_model_selection_id(&state.node, agent_did, behavior_id).await {
+async fn bound_model(state: &ShimState, node_did: &str, agent_id: &str) -> Option<String> {
+    match load_bound_model_selection_id(&state.node, node_did, agent_id).await {
         Ok(model) => Some(model),
         Err(error) => {
             tracing::debug!(
                 error = format!("{error:#}"),
-                agent_did,
-                behavior_id,
+                node_did,
+                agent_id,
                 "Codex caused thread has no locally bound model"
             );
             None
@@ -205,10 +205,10 @@ async fn bound_model(state: &ShimState, agent_did: &str, behavior_id: &str) -> O
 fn caused_thread(session: CausedSession, model: Option<String>) -> CausedThread {
     let mut thread = CausedThread {
         session_id: session.scope.session_id.clone(),
-        agent_did: session.scope.agent_did.clone(),
+        node_did: session.scope.node_did.clone(),
         requester_did: session.scope.requester_did.clone(),
-        nickname: session.behavior_id.clone(),
-        behavior_id: session.behavior_id.clone(),
+        nickname: session.agent_id.clone(),
+        agent_id: session.agent_id.clone(),
         parent_session_id: session.caused_by_scope.session_id.clone(),
         root_session_id: session.root_session_id.clone(),
         depth: session.depth,

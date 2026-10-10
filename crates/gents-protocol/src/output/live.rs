@@ -477,12 +477,12 @@ pub struct LiveObservation<'a> {
     pub target: LiveTarget<'a>,
     /// Visible messages in scope for origin lookup and terminal resolution.
     pub messages: &'a [(&'a str, &'a TranscriptMessage)],
-    /// The observation's authorized scope: the agent DID and the optional
+    /// The observation's authorized scope: the node DID and the optional
     /// requester DID the view is served under. Every header and origin lookup
     /// validates against this scope through the origin owner
     /// (`origin::lookup_message`); ACP authorization itself stays with its
     /// existing owner, and the classifier never fabricates authority.
-    pub agent_did: &'a str,
+    pub node_did: &'a str,
     pub requester_did: Option<&'a str>,
     /// Visible segments, replicating in any order.
     pub records: &'a [ObservedSegment<'a>],
@@ -612,7 +612,7 @@ fn lookup_observed<'a>(
         &facts,
         observation.denied_headers,
         doc_id,
-        observation.agent_did,
+        observation.node_did,
         observation.requester_did,
     )
     .map_err(|error| match error {
@@ -1393,7 +1393,7 @@ mod tests {
         (
             doc_id.to_string(),
             OutputSegment {
-                agent_did: "did:key:z6MkAgent".to_string(),
+                node_did: "did:key:z6MkAgent".to_string(),
                 requester_did: None,
                 session_id: "session-1".to_string(),
                 request_doc_id: "request-1".to_string(),
@@ -2157,8 +2157,8 @@ mod tests {
         target_writer: OutputWriter,
     }
 
-    /// The observation's authorized agent DID for every fixture message.
-    const AGENT_DID: &str = "did:key:z6MkAgent";
+    /// The observation's authorized node DID for every fixture message.
+    const NODE_DID: &str = "did:key:z6MkAgent";
 
     impl Default for Fixture {
         fn default() -> Self {
@@ -2231,7 +2231,7 @@ mod tests {
                 TranscriptMessage {
                     message_key: format!("key-{id}"),
                     session_id: "session-1".to_string(),
-                    agent_did: "did:key:z6MkAgent".to_string(),
+                    node_did: "did:key:z6MkAgent".to_string(),
                     requester_did: None,
                     request_doc_id: Some("request-1".to_string()),
                     publication: MessagePublication::RequestExecution {
@@ -2267,7 +2267,7 @@ mod tests {
             let observation = LiveObservation {
                 request_doc_id: "request-1",
                 session_id: "session-1",
-                agent_did: AGENT_DID,
+                node_did: NODE_DID,
                 requester_did: self.requester_did,
                 target: LiveTarget {
                     request_doc_id: self.target_request_doc_id,

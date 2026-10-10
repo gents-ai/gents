@@ -13,7 +13,7 @@ fn schema_apply_registers_sdl_and_additive_patch_idempotently() -> Result<()> {
     fs::create_dir_all(&schema_dir)?;
     run_init_json(
         &home_dir,
-        &["--identity-only", "--agent-name", "schema-apply"],
+        &["--identity-only", "--node-name", "schema-apply"],
     )?;
 
     fs::write(
@@ -112,13 +112,13 @@ async fn bundled_workspace_owned_files_remain_immutable_on_fresh_install_and_upg
                 &home_dir,
                 &[
                     "--identity-only",
-                    "--agent-name",
+                    "--node-name",
                     "immutable-pack-schema",
                     "--home",
                     home_arg,
                 ],
             )?;
-            let did = agent_did_from_init(&init)?;
+            let did = node_did_from_init(&init)?;
             if upgrade {
                 // This is the actual shipped predecessor SDL, before this PR's
                 // one field addition; do not invent a different schema fixture.
@@ -172,7 +172,7 @@ async fn bundled_workspace_owned_files_remain_immutable_on_fresh_install_and_upg
             );
 
             // Reopen the same CLI-created store only after those processes exit.
-            // Verify actual immutable write behavior, not a patch JSON flag.
+            // Verify actual immutable write agent, not a patch JSON flag.
             let key_path = init
                 .get("key_path")
                 .and_then(Value::as_str)

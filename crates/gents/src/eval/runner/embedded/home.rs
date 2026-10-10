@@ -12,7 +12,7 @@ use tokio::task::JoinHandle;
 
 use crate::defra_node::{EmbeddedNode, P2PConfig, QueryResponse};
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
-use crate::{ensure_runtime_schemas, AgentIdentity, DocumentRuntimeOptions, Gents, KeyIdentity};
+use crate::{ensure_runtime_schemas, DocumentRuntimeOptions, Gents, KeyIdentity, NodeIdentity};
 
 // A full conformance run starts many embedded DefraDB nodes in parallel. On a
 // busy CI host, a healthy runtime can spend more than 60 seconds waiting for
@@ -31,7 +31,7 @@ pub type P2PConfigForPath = Arc<dyn Fn(&Path) -> P2PConfig + Send + Sync>;
 /// unencrypted at rest.
 pub struct EmbeddedHome {
     pub node: Arc<EmbeddedNode>,
-    pub identity: Arc<dyn AgentIdentity>,
+    pub identity: Arc<dyn NodeIdentity>,
     did: String,
     path: PathBuf,
     p2p: Option<P2PConfigForPath>,
@@ -87,7 +87,7 @@ impl EmbeddedHome {
     }
 
     async fn open_at(path: PathBuf, p2p: Option<P2PConfigForPath>) -> Result<Self> {
-        let identity: Arc<dyn AgentIdentity> = Arc::new(
+        let identity: Arc<dyn NodeIdentity> = Arc::new(
             KeyIdentity::load_or_create(path.join("node.key"), None).context("node identity")?,
         );
         Self::open_with_identity(path, p2p, identity, true).await
@@ -100,7 +100,7 @@ impl EmbeddedHome {
             dir.display()
         );
         crate::storage_backend::require_existing_store(dir)?;
-        let identity: Arc<dyn AgentIdentity> = Arc::new(
+        let identity: Arc<dyn NodeIdentity> = Arc::new(
             KeyIdentity::load_existing(dir.join("node.key"), None)
                 .context("loading the retained trial identity")?,
         );
@@ -115,7 +115,7 @@ impl EmbeddedHome {
     async fn open_with_identity(
         path: PathBuf,
         p2p: Option<P2PConfigForPath>,
-        identity: Arc<dyn AgentIdentity>,
+        identity: Arc<dyn NodeIdentity>,
         initialize_schemas: bool,
     ) -> Result<Self> {
         let did = identity.did().to_string();
@@ -216,7 +216,7 @@ impl EmbeddedHome {
 pub struct RunningRuntime {
     pub shutdown: watch::Sender<bool>,
     pub handle: JoinHandle<Result<()>>,
-    pub agent_did: String,
+    pub node_did: String,
 }
 
 impl RunningRuntime {
@@ -228,7 +228,7 @@ impl RunningRuntime {
 
 pub async fn boot_runtime(
     home: &EmbeddedHome,
-    identity: Arc<dyn AgentIdentity>,
+    identity: Arc<dyn NodeIdentity>,
     options: DocumentRuntimeOptions,
 ) -> Result<(RunningRuntime, Gents)> {
     boot_runtime_within(home, identity, options, RUNTIME_READY_TIMEOUT).await
@@ -245,19 +245,18 @@ pub async fn boot_runtime(
 /// signal cannot turn a reported failure into a hang.
 pub(crate) async fn boot_runtime_within(
     home: &EmbeddedHome,
-    identity: Arc<dyn AgentIdentity>,
+    identity: Arc<dyn NodeIdentity>,
     options: DocumentRuntimeOptions,
     ready_timeout: Duration,
 ) -> Result<(RunningRuntime, Gents)> {
-    let agent =
-        Gents::from_default_behavior_documents(home.node.clone(), identity, options).await?;
-    let agent_did = agent.agent_did().to_string();
+    let agent = Gents::from_default_agent_documents(home.node.clone(), identity, options).await?;
+    let node_did = agent.node_did().to_string();
     let (shutdown, shutdown_rx) = watch::channel(false);
     let mut handle = tokio::spawn(agent.clone().run(shutdown_rx));
     // A runtime that stops during startup never becomes ready; its own error
     // is the diagnosis, so it ends the wait rather than the timeout.
     let ready = tokio::select! {
-        ready = wait_for_runtime_ready_within(home.node.as_ref(), &agent_did, ready_timeout) => ready,
+        ready = wait_for_runtime_ready_within(home.node.as_ref(), &node_did, ready_timeout) => ready,
         stopped = &mut handle => {
             return Err(match stopped {
                 Ok(Ok(())) => anyhow!("the runtime stopped before it became ready"),
@@ -269,7 +268,7 @@ pub(crate) async fn boot_runtime_within(
     let runtime = RunningRuntime {
         shutdown,
         handle,
-        agent_did: agent_did.clone(),
+        node_did: node_did.clone(),
     };
     if let Err(error) = ready {
         // Bounded: a runtime that ignores its shutdown signal must not turn a
@@ -279,11 +278,11 @@ pub(crate) async fn boot_runtime_within(
             Ok(Ok(())) => {}
             Ok(Err(stopping)) => tracing::warn!(
                 error = %format!("{stopping:#}"),
-                agent_did = %agent_did,
+                node_did = %node_did,
                 "runtime that never became ready did not stop cleanly"
             ),
             Err(_) => tracing::warn!(
-                agent_did = %agent_did,
+                node_did = %node_did,
                 timeout = ?RUNTIME_READY_TIMEOUT,
                 "runtime that never became ready did not stop within its budget; abandoning it"
             ),
@@ -293,28 +292,29 @@ pub(crate) async fn boot_runtime_within(
     Ok((runtime, agent))
 }
 
-pub async fn wait_for_runtime_ready(node: &EmbeddedNode, agent_did: &str) -> Result<()> {
-    wait_for_runtime_ready_within(node, agent_did, RUNTIME_READY_TIMEOUT).await
+pub async fn wait_for_runtime_ready(node: &EmbeddedNode, node_did: &str) -> Result<()> {
+    wait_for_runtime_ready_within(node, node_did, RUNTIME_READY_TIMEOUT).await
 }
 
 async fn wait_for_runtime_ready_within(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
     ready_timeout: Duration,
 ) -> Result<()> {
     let deadline = tokio::time::Instant::now() + ready_timeout;
     let mut sleep = Duration::from_millis(50);
     loop {
-        let snapshot = fetch_runtime_snapshot(node, agent_did).await?;
-        let readiness = fetch_behavior_readiness_snapshot(node, agent_did).await?;
+        let snapshot = fetch_runtime_snapshot(node, node_did).await?;
+        let readiness = fetch_node_readiness_snapshot(node, node_did).await?;
         if let Some(snapshot) = &snapshot {
             if snapshot.process_state == "ready"
                 && snapshot.reconcile_phase == "idle"
                 && snapshot.active_generation >= 1
                 && readiness.as_ref().is_some_and(|readiness| {
                     readiness.process_state.accepts_work()
-                        && readiness.behaviors.iter().any(|behavior| {
-                            behavior.state == gents_protocol::row::BehaviorReadinessState::Ready
+                        && readiness.agents.iter().any(|agent| {
+                            agent.state
+                                == gents_protocol::node_readiness::AgentReadinessState::Ready
                         })
                 })
             {
@@ -323,7 +323,7 @@ async fn wait_for_runtime_ready_within(
         }
         if tokio::time::Instant::now() >= deadline {
             bail!(
-                "agent did not reach ready state within {ready_timeout:?}; \
+                "node did not reach ready state within {ready_timeout:?}; \
                  last runtime snapshot: {snapshot:?}; readiness: {readiness:?}"
             );
         }
@@ -332,7 +332,7 @@ async fn wait_for_runtime_ready_within(
     }
 }
 
-/// Fields the readiness condition reads from the runtime and behavior-readiness rows.
+/// Fields the readiness condition reads from the runtime and agent-readiness rows.
 #[derive(Debug)]
 struct RuntimeSnapshot {
     process_state: String,
@@ -342,24 +342,24 @@ struct RuntimeSnapshot {
 
 async fn fetch_runtime_snapshot(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
 ) -> Result<Option<RuntimeSnapshot>> {
-    let escaped_did = escape_graphql_string(agent_did);
+    let escaped_did = escape_graphql_string(node_did);
     let query = format!(
         r#"{{
-            AgentBehaviorReadiness(
-                filter: {{ agent_did: {{ _eq: "{escaped_did}" }} }},
+            NodeReadiness(
+                filter: {{ node_did: {{ _eq: "{escaped_did}" }} }},
                 limit: 1
             ) {{
-                agent_did
+                node_did
                 snapshot_json
                 updated_at
             }}
-            AgentRuntime(
-                filter: {{ agent_did: {{ _eq: "{escaped_did}" }} }},
+            NodeRuntime(
+                filter: {{ node_did: {{ _eq: "{escaped_did}" }} }},
                 limit: 1
             ) {{
-                agent_did
+                node_did
                 reconcile_phase
                 last_reconcile_result
                 last_reconcile_error
@@ -368,19 +368,20 @@ async fn fetch_runtime_snapshot(
     );
     let response = graphql_with_transaction_retry(node, &query, "runtime snapshot").await?;
     let Some(diagnostic) =
-        optional_row::<gents_protocol::row::AgentRuntimeRow>(&response, "AgentRuntime")?
+        optional_row::<gents_protocol::row::NodeRuntimeRow>(&response, "NodeRuntime")?
     else {
         return Ok(None);
     };
-    let Some(readiness_row) = optional_row::<gents_protocol::row::AgentBehaviorReadinessRow>(
+    let Some(readiness_row) = optional_row::<gents_protocol::node_readiness::NodeReadinessRow>(
         &response,
-        "AgentBehaviorReadiness",
+        "NodeReadiness",
     )?
     else {
         return Ok(None);
     };
     let Some(readiness) =
-        gents_protocol::row::decode_behavior_readiness_snapshot(&readiness_row, agent_did).ok()
+        gents_protocol::node_readiness::decode_node_readiness_snapshot(&readiness_row, node_did)
+            .ok()
     else {
         return Ok(None);
     };
@@ -391,27 +392,26 @@ async fn fetch_runtime_snapshot(
     }))
 }
 
-async fn fetch_behavior_readiness_snapshot(
+async fn fetch_node_readiness_snapshot(
     node: &EmbeddedNode,
-    agent_did: &str,
-) -> Result<Option<gents_protocol::row::BehaviorReadinessSnapshot>> {
-    let escaped_did = escape_graphql_string(agent_did);
+    node_did: &str,
+) -> Result<Option<gents_protocol::node_readiness::NodeReadinessSnapshot>> {
+    let escaped_did = escape_graphql_string(node_did);
     let query = format!(
         r#"{{
-            AgentBehaviorReadiness(
-                filter: {{ agent_did: {{ _eq: "{escaped_did}" }} }},
+            NodeReadiness(
+                filter: {{ node_did: {{ _eq: "{escaped_did}" }} }},
                 limit: 1
             ) {{
                 snapshot_json
             }}
         }}"#
     );
-    let response =
-        graphql_with_transaction_retry(node, &query, "behavior readiness snapshot").await?;
+    let response = graphql_with_transaction_retry(node, &query, "agent readiness snapshot").await?;
     Ok(response
         .data
         .as_ref()
-        .and_then(|data| data.get("AgentBehaviorReadiness"))
+        .and_then(|data| data.get("NodeReadiness"))
         .and_then(serde_json::Value::as_array)
         .and_then(|rows| rows.first())
         .and_then(|row| row.get("snapshot_json"))
@@ -469,7 +469,7 @@ mod tests {
     /// infrastructure.
     ///
     /// This does not assert that `boot_runtime_within` stopped the runtime it
-    /// spawned on that path. A bare temp home configures no behavior, so the
+    /// spawned on that path. A bare temp home configures no agent, so the
     /// spawned `Gents::run` task ends on its own: `Arc::strong_count` and
     /// `EmbeddedHome::reopen` read the same before and after the shutdown, and
     /// an assertion on either would pass with the shutdown removed.

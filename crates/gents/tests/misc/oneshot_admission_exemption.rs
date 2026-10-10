@@ -19,7 +19,7 @@ use anyhow::Result;
 use gents::defra_node::EmbeddedNode;
 use gents::{ensure_runtime_schemas, run_openai_oneshot};
 
-use crate::support::fixtures::{bind_behavior_backend, test_behavior};
+use crate::support::fixtures::{bind_agent_backend, test_agent};
 use crate::support::mock_endpoint::MockModelEndpoint;
 
 #[tokio::test]
@@ -28,16 +28,16 @@ async fn oneshot_completes_without_backend_admission_reconciliation() -> Result<
     ensure_runtime_schemas(node.as_ref()).await?;
 
     let mock_endpoint = MockModelEndpoint::start("default")?;
-    let mut behavior = test_behavior(
+    let mut behavior = test_agent(
         "oneshot-admission-exemption",
         "backend-oneshot-exempt",
         None,
     );
     behavior.backend_endpoint = mock_endpoint.endpoint().to_string();
-    bind_behavior_backend(
+    bind_agent_backend(
         node.as_ref(),
-        behavior.agent_did(),
-        &behavior.behavior_id,
+        behavior.node_did(),
+        &behavior.agent_id,
         "backend-oneshot-exempt",
         mock_endpoint.endpoint(),
         "default",

@@ -184,13 +184,11 @@ test.describe("kit shell", () => {
     await expect(filters.getByRole("button", { name: "Started by" })).toBeVisible();
     await expect(filters.getByRole("button", { name: "Clear filters" })).toHaveCount(0);
 
-    /* the behavior filter counts what each choice would leave: Ops has no
+    /* the agent filter counts what each choice would leave: Ops has no
        session here, so it is offered with its zero and cannot be picked */
-    await filters.getByRole("combobox", { name: "Behavior" }).click();
+    await filters.getByRole("combobox", { name: "Agent" }).click();
     /* the popup is a dialog with a search field; it carries its own name */
-    await expect(
-      page.getByRole("dialog", { name: "Filter by behavior" }),
-    ).toBeVisible();
+    await expect(page.getByRole("dialog", { name: "Filter by agent" })).toBeVisible();
     const ops = page.getByRole("option", { name: /Ops\s*0$/ });
     await expect(ops).toBeVisible();
     await expect(ops).toHaveAttribute("aria-disabled", "true");
@@ -213,9 +211,13 @@ test.describe("kit shell", () => {
 
   test("agents and configuration are reachable", async ({ page }) => {
     await gotoHarness(page);
-    await page.getByRole("link", { name: "Agents" }).first().click();
+    await page.getByRole("link", { name: "Nodes" }).first().click();
     await expect(page.getByTestId("agents-screen")).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Agents" })).toBeVisible();
+    await expect(
+      page
+        .getByTestId("agents-screen")
+        .getByRole("heading", { name: "Nodes", level: 1, exact: true }),
+    ).toBeVisible();
     await expect(page.getByText("Network", { exact: true })).toHaveCount(0);
 
     await openConfig(page);
@@ -226,7 +228,7 @@ test.describe("kit shell", () => {
     page,
   }) => {
     await gotoHarness(page);
-    await page.getByRole("link", { name: "Agents" }).first().click();
+    await page.getByRole("link", { name: "Nodes" }).first().click();
     const sync = page.getByRole("button", { name: /Sync healthy/ });
     const syncDialog = page.getByRole("dialog", { name: "Database sync details" });
 
@@ -234,30 +236,28 @@ test.describe("kit shell", () => {
     await expect(syncDialog).toBeVisible();
     await startDialogObservation(page);
     await sync.click();
-    await page.getByRole("button", { name: "Add agent" }).click();
-    await expect(page.getByRole("dialog", { name: "Add agent" })).toBeVisible();
+    await page.getByRole("button", { name: "Add node" }).click();
+    await expect(page.getByRole("dialog", { name: "Add node" })).toBeVisible();
     await page.waitForTimeout(200);
 
     const observed = await finishDialogObservation(page);
     expect(observed).toEqual({ current: 1, max: 1, overlapping: [] });
   });
 
-  test("the behavior filter and sync health never stack as dialogs", async ({
-    page,
-  }) => {
-    /* Bombadil (run 35946895240): Behavior filter, then Sync healthy, left
+  test("the agent filter and sync health never stack as dialogs", async ({ page }) => {
+    /* Bombadil (run 35946895240): Agent filter, then Sync healthy, left
        both popups open. Both are dialogs; the shell keeps one at a time. */
     await gotoHarness(page);
     const filters = page.getByLabel("Session filters");
-    const behavior = page.getByRole("dialog", { name: "Filter by behavior" });
+    const agent = page.getByRole("dialog", { name: "Filter by agent" });
     const sync = page.getByRole("dialog", { name: "Database sync details" });
 
     await startDialogObservation(page);
-    await filters.getByRole("combobox", { name: "Behavior" }).click();
-    await expect(behavior).toBeVisible();
+    await filters.getByRole("combobox", { name: "Agent" }).click();
+    await expect(agent).toBeVisible();
     await page.getByRole("button", { name: /Sync healthy/ }).click();
     await expect(sync).toBeVisible();
-    await expect(behavior).toHaveCount(0);
+    await expect(agent).toHaveCount(0);
 
     await page.waitForTimeout(200);
     const observed = await finishDialogObservation(page);
@@ -268,24 +268,22 @@ test.describe("kit shell", () => {
   test("requires a document name before configuration deletion", async ({ page }) => {
     await gotoHarness(page);
     await openConfig(page);
-    await openConfigSection(page, /^Behaviors\b/);
+    await openConfigSection(page, /^Agents\b/);
     await page
       .getByRole("link", { name: /^Ops\b/ })
       .first()
       .click();
 
     await expect(page.getByRole("textbox", { name: "Tags" })).toBeVisible();
-    await page.getByRole("button", { name: "Delete behavior" }).click();
+    await page.getByRole("button", { name: "Delete agent" }).click();
     const confirm = page.getByRole("textbox", {
       name: "Type Ops to confirm",
     });
     await expect(confirm).toBeFocused();
     const dialog = page.getByRole("alertdialog");
-    await expect(
-      dialog.getByRole("button", { name: "Delete behavior" }),
-    ).toBeDisabled();
+    await expect(dialog.getByRole("button", { name: "Delete agent" })).toBeDisabled();
     await confirm.fill("Ops");
-    await expect(dialog.getByRole("button", { name: "Delete behavior" })).toBeEnabled();
+    await expect(dialog.getByRole("button", { name: "Delete agent" })).toBeEnabled();
     await dialog.getByRole("button", { name: "Cancel" }).click();
     await expect(confirm).toHaveCount(0);
   });
@@ -363,23 +361,14 @@ test.describe("kit shell", () => {
       .click();
     const transcript = page.getByTestId("transcript-panel");
     const removed = transcript.locator("[data-diff=removed]");
-    // Consecutive calls sit in one activity group, folded to its header
-    // until opened; then only the step's caret opens the step, so the
-    // row's text stays selectable.
-    const groups = transcript
-      .locator("button[aria-expanded=false]")
-      .filter({ hasText: /edited|ran|read|used/i });
-    for (let opened = 0; opened < 4 && (await groups.count()); opened += 1) {
-      await groups.first().click();
-    }
-    for (let opened = 0; opened < 4 && !(await removed.count()); opened += 1) {
-      await transcript
-        .locator("[data-slot=collapsible]")
-        .filter({ hasText: /parser\.rs|edited|read|\$/ })
-        .getByRole("button", { name: "Show detail" })
-        .first()
-        .click();
-    }
+    const fileEdit = transcript
+      .locator("[data-slot=collapsible]")
+      .filter({ hasText: "src/parser.rs" });
+    const group = transcript.locator("[data-anchor-key]").filter({
+      has: page.locator("[data-slot=collapsible]").filter({ hasText: "src/parser.rs" }),
+    });
+    await group.locator(":scope > button[aria-expanded=false]").click();
+    await fileEdit.getByRole("button", { name: "Show detail" }).click();
     await expect(removed).toHaveText(/fn parse\(\) -> Ast \{ todo!\(\) \}/);
     await expect(transcript.locator("[data-diff=added]")).toHaveText(
       /fn parse\(\) -> Ast \{ Ast::default\(\) \}/,
@@ -389,9 +378,7 @@ test.describe("kit shell", () => {
     );
   });
 
-  test("condensed session behavior details are keyboard accessible", async ({
-    page,
-  }) => {
+  test("condensed session agent details are keyboard accessible", async ({ page }) => {
     await page.setViewportSize({ width: 800, height: 300 });
     await gotoHarness(page, "coding");
     await page
@@ -406,11 +393,11 @@ test.describe("kit shell", () => {
       element.scrollTop = element.scrollHeight;
     });
 
-    const trigger = page.getByRole("button", { name: "About Default behavior" });
+    const trigger = page.getByRole("button", { name: "About Default agent" });
     await expect(trigger).toBeVisible();
     await trigger.focus();
     await expect(trigger).toBeFocused();
-    await expect(page.getByTestId("behavior-hover-card")).toBeVisible();
+    await expect(page.getByTestId("agent-hover-card")).toBeVisible();
   });
 
   test("context and sync popovers never overlap as dialog portals", async ({
@@ -456,10 +443,10 @@ test.describe("kit shell", () => {
   test("keeps dialogs inside short windows", async ({ page }) => {
     await page.setViewportSize({ width: 800, height: 300 });
     await gotoHarness(page);
-    await page.getByRole("link", { name: "Agents" }).first().click();
-    await page.getByRole("button", { name: "Add agent" }).click();
+    await page.getByRole("link", { name: "Nodes" }).first().click();
+    await page.getByRole("button", { name: "Add node" }).click();
 
-    const dialog = page.getByRole("dialog", { name: "Add agent" });
+    const dialog = page.getByRole("dialog", { name: "Add node" });
     await expect(dialog).toBeVisible();
     await expect(dialog).toHaveCSS("max-height", "268px");
     await expect(dialog).toHaveCSS("overflow-y", "auto");
@@ -520,10 +507,10 @@ test.describe("kit shell", () => {
     ).toBeVisible();
   });
 
-  test("reopens a conversation after using a different behavior", async ({ page }) => {
+  test("reopens a conversation after using a different agent", async ({ page }) => {
     await gotoHarness(page);
     await openChat(page);
-    await page.getByRole("button", { name: "Behavior" }).click();
+    await page.getByRole("button", { name: "Agent" }).click();
     await page.getByRole("option", { name: /Ops/ }).click();
     await composer(page).fill("inspect the runtime");
     await sendButton(page).click();

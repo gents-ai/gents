@@ -1,7 +1,7 @@
 use super::{DocumentRecord, DocumentRuntimeView};
 use crate::collection::Collection;
 use crate::config_client::{config_projection, ConfigAccess, ConfigApplyTxn};
-use crate::document_config::ensure_agent_principal;
+use crate::document_config::ensure_node;
 use crate::graphql::escape_graphql_string;
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
@@ -10,14 +10,14 @@ use std::collections::HashMap;
 
 pub(crate) async fn load_document_runtime_view(
     node: &EmbeddedNode,
-    agent_did: &str,
+    node_did: &str,
 ) -> Result<DocumentRuntimeView> {
     anyhow::ensure!(
-        !agent_did.trim().is_empty(),
+        !node_did.trim().is_empty(),
         "runtime view requires an owner DID"
     );
-    ensure_agent_principal(node, agent_did).await?;
-    let owner = agent_did.to_owned();
+    ensure_node(node, node_did).await?;
+    let owner = node_did.to_owned();
     let mut view = ConfigAccess::transact_local_readonly(
         node,
         None,
@@ -25,7 +25,7 @@ pub(crate) async fn load_document_runtime_view(
         move |txn| {
             let owner = owner.clone();
             Box::pin(async move {
-                let mut principals = load_records(txn, &owner, Collection::AgentPrincipal).await?;
+                let mut principals = load_records(txn, &owner, Collection::Node).await?;
                 let principal = principals
                     .remove(&owner)
                     .context("scoped principal is missing")?;
@@ -33,12 +33,12 @@ pub(crate) async fn load_document_runtime_view(
                 let (package_artifacts, graph_digests) =
                     crate::graph_pipeline::load_runtime_graph_artifacts_in_txn(txn, &owner).await?;
                 let mut view = DocumentRuntimeView {
-                    principal,
-                    behaviors: load_records(txn, &owner, Collection::AgentBehavior).await?,
+                    node: principal,
+                    agents: load_records(txn, &owner, Collection::Agent).await?,
                     contexts: load_records(txn, &owner, Collection::AgentContext).await?,
                     compactions: load_records(txn, &owner, Collection::Compaction).await?,
                     tools: load_records(txn, &owner, Collection::Tools).await?,
-                    subagent_targets: load_records(txn, &owner, Collection::SubagentTarget).await?,
+                    agent_targets: load_records(txn, &owner, Collection::AgentTarget).await?,
                     skills: load_records(txn, &owner, Collection::Skill).await?,
                     datastore_tool_surfaces: load_records(
                         txn,
@@ -104,11 +104,11 @@ pub(crate) async fn load_document_runtime_view(
                     ($($field:ident),+ $(,)?) => { $(view.$field.retain(|id, _| visible(id));)+ };
                 }
                 retain_visible!(
-                    behaviors,
+                    agents,
                     contexts,
                     compactions,
                     tools,
-                    subagent_targets,
+                    agent_targets,
                     skills,
                     datastore_tool_surfaces,
                     eth_tools,
@@ -137,19 +137,19 @@ pub(crate) async fn load_document_runtime_view(
     .await?;
     for backend_id in view.backends.keys() {
         if let Some(observation) =
-            crate::backend_registry::lookup_backend_observation(node, agent_did, backend_id).await?
+            crate::backend_registry::lookup_backend_observation(node, node_did, backend_id).await?
         {
             view.backend_observations
                 .insert(backend_id.clone(), observation);
         }
     }
-    for credential in crate::oauth_credential::list_oauth_credentials(node, agent_did).await? {
+    for credential in crate::oauth_credential::list_oauth_credentials(node, node_did).await? {
         let doc_id = credential
             .doc_id
             .clone()
             .context("OAuthCredential missing physical ID")?;
         anyhow::ensure!(
-            credential.agent_did == agent_did,
+            credential.node_did == node_did,
             "OAuthCredential owner mismatch"
         );
         let id = credential.credential_id.clone();
@@ -202,7 +202,7 @@ async fn load_records_skipping<T: DeserializeOwned>(
     let (fields, _) = config_projection(collection, None)?;
     let response = txn
         .execute(&format!(
-            "{{ {name}(filter: {{agent_did: {{_eq: \"{}\"}}}}) {{ _docID {} }} }}",
+            "{{ {name}(filter: {{node_did: {{_eq: \"{}\"}}}}) {{ _docID {} }} }}",
             escape_graphql_string(owner),
             fields.join(" ")
         ))
@@ -223,7 +223,7 @@ async fn load_records_skipping<T: DeserializeOwned>(
             .context("config row missing physical ID")?;
         anyhow::ensure!(!doc_id.is_empty(), "config row has empty physical ID");
         anyhow::ensure!(
-            row.get("agent_did").and_then(serde_json::Value::as_str) == Some(owner),
+            row.get("node_did").and_then(serde_json::Value::as_str) == Some(owner),
             "foreign {name} row escaped owner filter"
         );
         let id = row

@@ -32,7 +32,7 @@ import { Hint } from "./Hint";
 
 import { ActivityLine } from "./Thinking";
 import { activityStatus } from "./activity-status";
-import { BehaviorAvatar } from "./parts";
+import { AgentInitials } from "./parts";
 import { Markdown } from "./Markdown";
 import { StreamText } from "./StreamText";
 import {
@@ -149,8 +149,8 @@ const TranscriptItem = memo(function TranscriptItem({
            first line's center: the bubble's own my-1 and py-3 put that 26px
            down, half the avatar is 12 */
         <div className={cn("relative", state && "mb-2")}>
-          <BehaviorAvatar
-            name={sender.behaviorName ?? senderName}
+          <AgentInitials
+            name={sender.agentName ?? senderName}
             /* in the gutter where there is one; seated on the bubble's
                top corner when the screen is too narrow to spare it */
             className="absolute -top-1 right-2 size-6 text-[10px] ring-2 ring-background sm:top-3.5 sm:-right-8 sm:ring-0"

@@ -7,7 +7,7 @@ export type GatheredWorker = { key: string; tools: RenderedToolCallView[] };
 /* a worker is its session, or its name while the call has not named one */
 const workerKey = (tool: RenderedToolCallView) => {
   const p = tool.presentation;
-  if (p.kind !== "subagent") return null;
+  if (p.kind !== "agent") return null;
   return p.sessionId ?? p.name ?? null;
 };
 
@@ -41,7 +41,7 @@ export function workerStory(tools: readonly RenderedToolCallView[]): string {
   const counts = new Map<string, number>();
   for (const tool of tools) {
     const p = tool.presentation;
-    if (p.kind !== "subagent") continue;
+    if (p.kind !== "agent") continue;
     const verb = VERB[p.action] ?? p.action;
     counts.set(verb, (counts.get(verb) ?? 0) + 1);
   }

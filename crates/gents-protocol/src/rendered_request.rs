@@ -67,7 +67,7 @@ const COMPLETION_REQUEST_PATHS: &[(&str, RenderedRequestSource)] = &[
 
 /// The provider wire shape a captured body was actually sent on.
 ///
-/// Derived from the request path the transport posted to, never from behavior
+/// Derived from the request path the transport posted to, never from agent
 /// configuration: configuration says what the runtime *intended*, and this
 /// column has to say what the provider *received*. The two can disagree — a
 /// backend document can be edited between reconcile and send.
@@ -515,7 +515,7 @@ pub struct ContextAccounting {
 /// The request-local inputs that reconstruction must account for explicitly.
 ///
 /// Everything else that shapes a request is either durable (transcript rows,
-/// behavior/profile/backend/skill documents) or a pure function of durable data.
+/// agent/profile/backend/skill documents) or a pure function of durable data.
 /// These four need an overlay, an oracle, or an explicit durable lineage:
 ///
 /// 1. `assistant_message_ids` — provider-assigned, persisted as `None`.

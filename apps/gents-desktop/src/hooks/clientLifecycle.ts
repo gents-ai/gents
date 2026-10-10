@@ -300,9 +300,9 @@ export function createClientLifecycle({
 
   async function restartManagedServer() {
     const status = client.getState().managedServerFailure?.status;
-    if (!status?.agentName || !status.effectiveToolCeiling || !api.restartManagedServer)
+    if (!status?.nodeName || !status.effectiveToolCeiling || !api.restartManagedServer)
       return;
-    const agentName = status.agentName;
+    const nodeName = status.nodeName;
     const authority = {
       toolCeiling: status.effectiveToolCeiling,
       toolRoot: status.effectiveToolRoot,
@@ -311,7 +311,7 @@ export function createClientLifecycle({
     setError(null);
     setStartupPhase("checking-managed-server");
     try {
-      await localServer.restartLocalServer(agentName, authority);
+      await localServer.restartLocalServer(nodeName, authority);
       await initializeDesktop();
     } catch (error) {
       setError(error instanceof Error ? error.message : String(error));
@@ -400,7 +400,7 @@ export function createClientLifecycle({
     /** Stops waiting for the managed server and continues startup without
         it. */
     skipManagedServerWait,
-    /** Restarts a managed server whose start failed, with the agent and
+    /** Restarts a managed server whose start failed, with the node and
         authority that start reported, then runs startup again. */
     restartManagedServer,
     /** Whether this window owns a managed server, which startup checks first. */

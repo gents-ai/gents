@@ -20,7 +20,7 @@ structure RemoteServiceTools where
 
 abbrev RemoteSelection := String → Option RemoteServiceTools
 /-- Registry enablement and discovery are distinct observations, both scoped to
-principal and logical service name. Selection is already behavior-local. -/
+node and logical service name. Selection is already agent-local. -/
 abbrev RemoteAvailability := (String × String) → Finset String
 abbrev RemoteEnablement := (String × String) → Bool
 
@@ -37,7 +37,7 @@ theorem invalid_remote_selection_rejected (s : RemoteServiceTools)
     (h : ¬ s.backgroundNames ⊆ s.toolNames) : admitRemoteService s = none := by
   simp [admitRemoteService, RemoteServiceTools.valid, h]
 
-/-- Optional outages do not block behavior admission; required services must
+/-- Optional outages do not block agent admission; required services must
 be enabled and observed available. Invocation always applies both gates. -/
 def serviceReady (s : RemoteServiceTools) (enabled : Bool)
     (available : Option (Finset String)) : Bool :=
@@ -59,7 +59,7 @@ theorem required_available_admitted (s : RemoteServiceTools) (names : Finset Str
     (hr : s.required = true) (hv : s.valid = true) :
     serviceReady s true (some names) = true := by simp [serviceReady, hr, hv]
 
-/-- Resolve selected names through the same principal-scoped registry gate
+/-- Resolve selected names through the same node-scoped registry gate
 used by readiness. Cached discovery cannot enable a disabled service. -/
 def remoteGrants (selected : RemoteSelection) (available : RemoteAvailability)
     (enabled : RemoteEnablement) (agent service : String) : Finset String :=
@@ -84,8 +84,8 @@ theorem disabled_remote_grants_none (selected : RemoteSelection)
     remoteGrants selected available enabled agent service = ∅ := by
   cases hs : selected service <;> simp [remoteGrants, hs, h]
 
-/-- Grants depend only on the selected principal/service pair; registry or
-health observations for other principals cannot change this invocation. -/
+/-- Grants depend only on the selected node/service pair; registry or
+health observations for other nodes cannot change this invocation. -/
 theorem remote_grants_owner_local (selected : RemoteSelection)
     (a b : RemoteAvailability) (e f : RemoteEnablement) (agent service : String)
     (ha : a (agent, service) = b (agent, service))
@@ -122,19 +122,19 @@ theorem presentation_invariant (s : RemoteServiceTools) (style : RemoteToolStyle
 
 /-- Exact name selection is enforced together with the existing resolved ceiling,
 including calls through discovery wrappers. -/
-def remoteExecutable (behavior ceiling runtime : Surface) (selected : RemoteSelection)
+def remoteExecutable (agentSurface ceiling runtime : Surface) (selected : RemoteSelection)
     (available : RemoteAvailability) (enabled : RemoteEnablement)
     (agent service name : String) : Prop :=
-  (effective behavior ceiling runtime).mcpServices.permits service ∧
+  (effective agentSurface ceiling runtime).mcpServices.permits service ∧
     name ∈ remoteGrants selected available enabled agent service
 
-theorem remote_executable_within_ceiling (behavior ceiling runtime : Surface)
+theorem remote_executable_within_ceiling (agentSurface ceiling runtime : Surface)
     (selected : RemoteSelection) (available : RemoteAvailability) (enabled : RemoteEnablement)
     (agent service name : String)
-    (h : remoteExecutable behavior ceiling runtime selected available enabled agent service name) :
+    (h : remoteExecutable agentSurface ceiling runtime selected available enabled agent service name) :
     ceiling.mcpServices.permits service ∧
       ∃ s, selected service = some s ∧ name ∈ s.toolNames := by
-  exact ⟨effective_mcp_subset_ceiling behavior ceiling runtime service h.1,
+  exact ⟨effective_mcp_subset_ceiling agentSurface ceiling runtime service h.1,
     remote_grants_selected selected available enabled agent service name h.2⟩
 
 /-! ## Capability timeouts use the shared signed-limit decoder -/
@@ -349,13 +349,13 @@ theorem plugin_resource_within_host (baseline requested ceiling : Nat) :
     effectivePluginResource baseline requested ceiling ≤ ceiling := by
   exact Nat.min_le_right _ _
 
-/-- Plugin inference is an optional capability, separate from required behavior inference. -/
-def pluginModelSlotAllowed (declared optional behaviorFree : Bool) : Bool :=
-  declared && optional && behaviorFree
+/-- Plugin inference is an optional capability, separate from required agent inference. -/
+def pluginModelSlotAllowed (declared optional agentFree : Bool) : Bool :=
+  declared && optional && agentFree
 
-theorem plugin_model_slot_optional (declared optional behaviorFree : Bool)
-    (h : pluginModelSlotAllowed declared optional behaviorFree = true) : optional = true := by
-  cases declared <;> cases optional <;> cases behaviorFree <;> simp_all [pluginModelSlotAllowed]
+theorem plugin_model_slot_optional (declared optional agentFree : Bool)
+    (h : pluginModelSlotAllowed declared optional agentFree = true) : optional = true := by
+  cases declared <;> cases optional <;> cases agentFree <;> simp_all [pluginModelSlotAllowed]
 
 /-- How much of a bound folder a plugin call uses. `read` is below `readWrite`,
 so a grant of `readWrite` also serves a reading call. -/

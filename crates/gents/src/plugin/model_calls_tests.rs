@@ -183,7 +183,7 @@ fn installed(canned: &Value, forever: bool, bound: bool) -> (tempfile::TempDir, 
     let (home, mut record) = installed_plugin(&model_plugin_wat(canned, forever), None);
     record.declaration.model_slot = Some("remote_ocr".to_owned());
     record.model_binding = bound.then(|| ModelBinding {
-        agent_did: "did:key:owner".to_owned(),
+        node_did: "did:key:owner".to_owned(),
         profile_id: "chandra".to_owned(),
     });
     store::write_record(home.path(), &record).unwrap();
@@ -439,10 +439,10 @@ async fn a_profile_resolves_to_its_chat_completions_endpoint() {
     let owner = "did:key:model-owner";
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    crate::test_support::install_test_behavior(&node, owner, "chandra").await;
+    crate::test_support::install_test_agent(&node, owner, "chandra").await;
     let models = AccessModels(ConfigAccess::Local(node.clone()));
     let binding = |profile: &str| ModelBinding {
-        agent_did: owner.to_owned(),
+        node_did: owner.to_owned(),
         profile_id: profile.to_owned(),
     };
     let endpoint = models.resolve(&binding("chandra:inference")).await.unwrap();
@@ -458,7 +458,7 @@ async fn a_profile_resolves_to_its_chat_completions_endpoint() {
 }
 
 fn backend(patch: Value) -> InferenceBackend {
-    let mut backend = json!({"agent_did": "did:key:o", "backend_id": "b", "name": "B",
+    let mut backend = json!({"node_did": "did:key:o", "backend_id": "b", "name": "B",
         "provider_kind": "OpenAiCompatible", "endpoint": "http://h:8000/v1/",
         "auth": {"kind": "api_key", "key": "k"}, "max_concurrent": 3});
     backend
@@ -469,7 +469,7 @@ fn backend(patch: Value) -> InferenceBackend {
 }
 
 fn profile() -> InferenceProfile {
-    serde_json::from_value(json!({"agent_did": "did:key:o", "profile_id": "p",
+    serde_json::from_value(json!({"node_did": "did:key:o", "profile_id": "p",
         "backend_id": "b", "model_name": "m", "max_output_tokens": 4096}))
     .unwrap()
 }
@@ -485,7 +485,7 @@ fn only_an_enabled_chat_completions_backend_can_serve_a_slot() {
         json!({"enabled": false}),
         json!({"openai_wire_api": "responses"}),
         json!({"provider_kind": "ChatGptCodex"}),
-        json!({"auth": {"kind": "principal_oauth"}}),
+        json!({"auth": {"kind": "node_oauth"}}),
         json!({"max_concurrent": 0}),
     ] {
         assert!(

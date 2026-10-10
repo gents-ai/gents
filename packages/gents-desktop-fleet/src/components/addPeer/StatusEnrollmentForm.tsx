@@ -28,14 +28,14 @@ export function StatusEnrollmentForm({
         <p className="eyebrow">Recommended</p>
         <h3>Connect by server address</h3>
         <p className="muted">
-          Enter an agent&apos;s IP address, hostname, or URL. Gents reads its
+          Enter a node&apos;s IP address, hostname, or URL. Gents reads its
           <code> /status</code> offer, authenticates the server, and requests
           enrollment. The server must approve the request before chat opens.
         </p>
       </div>
       <div className="fleet-discovery-row">
         <label className="field">
-          <span>Agent server</span>
+          <span>Node server</span>
           <input
             className="mono"
             data-testid="fleet-add-server-address"

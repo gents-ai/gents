@@ -2,7 +2,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use gents::identity::AgentIdentity;
+use gents::identity::NodeIdentity;
 use gents_desktop_core::client::{
     initialize_local_standard_peer, ClientCore, ClientCoreOptions, DesktopPaths,
     SubmitRequestOptions,
@@ -16,10 +16,10 @@ use uuid::Uuid;
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn submit_request_does_not_create_runtime_projections() -> Result<()> {
     let tempdir = tempfile::tempdir()?;
-    let (runtime, core, agent_did) = start_core_with_local_route(tempdir.path()).await?;
+    let (runtime, core, node_did) = start_core_with_local_route(tempdir.path()).await?;
 
     let session_id = Uuid::new_v4().to_string();
-    core.submit_request(&session_id, &agent_did, "hello", Some("amy-code"))
+    core.submit_request(&session_id, &node_did, "hello", Some("amy-code"))
         .await?;
     let response = core
         .node()
@@ -27,13 +27,13 @@ async fn submit_request_does_not_create_runtime_projections() -> Result<()> {
             r#"{{
                 AgentSession(filter: {{
                     session_id: {{ _eq: "{}" }},
-                    agent_did: {{ _eq: "{}" }},
+                    node_did: {{ _eq: "{}" }},
                     requester_did: {{ _eq: "{}" }}
                 }}) {{ _docID }}
             }}"#,
             gents::graphql::escape_graphql_string(&session_id),
-            gents::graphql::escape_graphql_string(&agent_did),
-            gents::graphql::escape_graphql_string(&agent_did),
+            gents::graphql::escape_graphql_string(&node_did),
+            gents::graphql::escape_graphql_string(&node_did),
         ))
         .await;
     assert!(
@@ -58,16 +58,16 @@ async fn submit_request_does_not_create_runtime_projections() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn submit_request_writes_request_as_the_only_durable_input() -> Result<()> {
     let tempdir = tempfile::tempdir()?;
-    let (runtime, core, agent_did) = start_core_with_local_route(tempdir.path()).await?;
+    let (runtime, core, node_did) = start_core_with_local_route(tempdir.path()).await?;
 
     let session_id = Uuid::new_v4().to_string();
-    let behavior_id = format!("{agent_did}:default");
+    let agent_id = gents::default_agent_id_for_node(&node_did);
     let submitted = core
         .submit_request(
             &session_id,
-            &agent_did,
+            &node_did,
             "  hello   there\noperator  ",
-            Some(&behavior_id),
+            Some(&agent_id),
         )
         .await?;
 
@@ -77,10 +77,10 @@ async fn submit_request_writes_request_as_the_only_durable_input() -> Result<()>
             r#"{{
                 AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 1) {{
                     request_id
-                    agent_did
+                    node_did
                     requester_did
                     admission_signer_did
-                    behavior_id
+                    agent_id
                     session_id
                     content
                     lifecycle_state
@@ -98,17 +98,14 @@ async fn submit_request_writes_request_as_the_only_durable_input() -> Result<()>
     )
     .await?;
     assert_eq!(request.request_id, submitted.request_id);
-    assert_eq!(request.agent_did.as_deref(), Some(agent_did.as_str()));
-    assert_ne!(core.principal().did(), agent_did);
-    assert_eq!(request.requester_did.as_deref(), Some(agent_did.as_str()));
+    assert_eq!(request.node_did.as_deref(), Some(node_did.as_str()));
+    assert_ne!(core.node_identity().did(), node_did);
+    assert_eq!(request.requester_did.as_deref(), Some(node_did.as_str()));
     assert_eq!(
         request.admission_signer_did.as_deref(),
-        Some(agent_did.as_str())
+        Some(node_did.as_str())
     );
-    assert_eq!(
-        request.behavior_id.as_deref(),
-        Some(format!("{agent_did}:default").as_str())
-    );
+    assert_eq!(request.agent_id.as_deref(), Some(agent_id.as_str()));
     assert_eq!(request.session_id.as_deref(), Some(session_id.as_str()));
     assert_eq!(request.content.as_deref(), Some("hello   there\noperator"));
     assert_eq!(
@@ -138,18 +135,18 @@ async fn submit_request_writes_request_as_the_only_durable_input() -> Result<()>
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn resend_preserves_request_lineage_without_caller_inference_overrides() -> Result<()> {
     let tempdir = tempfile::tempdir()?;
-    let (runtime, core, agent_did) = start_core_with_local_route(tempdir.path()).await?;
+    let (runtime, core, node_did) = start_core_with_local_route(tempdir.path()).await?;
 
     let session_id = Uuid::new_v4().to_string();
-    let behavior_id = format!("{agent_did}:default");
+    let agent_id = gents::default_agent_id_for_node(&node_did);
 
     let options = SubmitRequestOptions::default();
     let original = core
         .submit_request_with_options(
             &session_id,
-            &agent_did,
+            &node_did,
             "please preserve this request",
-            Some(&behavior_id),
+            Some(&agent_id),
             options,
         )
         .await?;
@@ -212,17 +209,17 @@ async fn resend_preserves_request_lineage_without_caller_inference_overrides() -
 }
 
 async fn start_core_with_local_route(root: &Path) -> Result<(ClientCore, ClientCore, String)> {
-    let agent_home = root.join("agent-home");
-    std::fs::create_dir_all(&agent_home)?;
-    let key_path = agent_home.join("agent.key");
+    let node_home = root.join("node-home");
+    std::fs::create_dir_all(&node_home)?;
+    let key_path = node_home.join("node.key");
     let identity = gents::identity::KeyIdentity::load_or_create(&key_path, None)?;
-    let agent_did = identity.did().to_string();
+    let node_did = identity.did().to_string();
     let key_path_text = key_path.display().to_string();
     std::fs::write(
-        agent_home.join("init.json"),
+        node_home.join("init.json"),
         serde_json::to_vec_pretty(&serde_json::json!({
-            "agent_name": "amy",
-            "agent_did": agent_did.as_str(),
+            "node_name": "amy",
+            "node_did": node_did.as_str(),
             "key_path": key_path_text,
         }))?,
     )?;
@@ -238,11 +235,9 @@ async fn start_core_with_local_route(root: &Path) -> Result<(ClientCore, ClientC
         &client_paths.peer_directory_path(),
         "Test Local Runtime",
         &runtime_addr,
-        &agent_did,
+        &node_did,
         "http://127.0.0.1:1/api/v0/graphql",
-        agent_home
-            .to_str()
-            .context("agent home path is not UTF-8")?,
+        node_home.to_str().context("node home path is not UTF-8")?,
     )
     .await?;
     let client = ClientCore::start_with_paths_and_options(
@@ -250,8 +245,8 @@ async fn start_core_with_local_route(root: &Path) -> Result<(ClientCore, ClientC
         ClientCoreOptions::local_simulated_route(),
     )
     .await?;
-    client.add_local_standard_peer_for_test(&agent_did).await?;
-    Ok((runtime, client, agent_did))
+    client.add_local_standard_peer_for_test(&node_did).await?;
+    Ok((runtime, client, node_did))
 }
 
 async fn query_single<T>(node: &defra_node::EmbeddedNode, query: &str, root: &str) -> Result<T>

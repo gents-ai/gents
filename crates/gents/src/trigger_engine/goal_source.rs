@@ -21,11 +21,11 @@ use crate::config_client::ConfigAccess;
 use crate::goal::{
     claim_continuation, claim_retry_continuation, gate_claimed_goal_continuation,
     gate_goal_continuation, goal_continuation_materialization_step, goal_failure_cause,
-    load_goal_by_id, load_goals_for_session, next_goal_infrastructure_retries,
-    observe_goal_behavior, refresh_goal_usage, stop_claimed_continuation_for_unavailable_behavior,
+    load_goal_by_id, load_goals_for_session, next_goal_infrastructure_retries, observe_goal_agent,
+    refresh_goal_usage, stop_claimed_continuation_for_unavailable_agent,
     update_goal_fields_if_status, GoalAction, GoalClaimedDecision, GoalContinuationAction,
     GoalContinuationFacts, GoalContinuationPhase, GoalDecision, GoalDocument, GoalGatedDecision,
-    GoalRequestTerminal, GoalStatus, ObservedGoalBehavior, GOAL_READINESS_WAIT_PREFIX,
+    GoalRequestTerminal, GoalStatus, ObservedGoalAgent, GOAL_READINESS_WAIT_PREFIX,
     GOAL_TRIGGER_KIND, MAX_INFRASTRUCTURE_RETRIES,
 };
 use crate::goal::{publish_claimed_continuation, resume_at_reset};
@@ -106,13 +106,13 @@ impl GoalSource {
 
     /// A reset is a clock event, so only the rescan `tick` resumes at one.
     async fn rescan(&mut self, tick: bool) -> Option<FireIntent> {
-        let agent_did = self.snapshot_rx.borrow().local_did.clone();
+        let node_did = self.snapshot_rx.borrow().local_did.clone();
         if tick {
-            self.resume_at_reported_resets(&agent_did).await;
+            self.resume_at_reported_resets(&node_did).await;
         }
         match self
             .load_goals(
-                &agent_did,
+                &node_did,
                 r#"status: { _in: ["active", "budget_limited"] }"#,
             )
             .await
@@ -133,10 +133,10 @@ impl GoalSource {
 
     /// Opted-in usage-limited Goals resume through the operator resume
     /// transaction once their reported reset has passed.
-    async fn resume_at_reported_resets(&self, agent_did: &str) {
+    async fn resume_at_reported_resets(&self, node_did: &str) {
         let goals = match self
             .load_goals(
-                agent_did,
+                node_did,
                 r#"status: { _eq: "usage_limited" }, auto_resume_at_reset: { _eq: true }"#,
             )
             .await
@@ -149,7 +149,7 @@ impl GoalSource {
         };
         for goal in goals {
             let resumed = async {
-                let identity = RegisteredIdentity::from_registered_did(&goal.agent_did, None)?;
+                let identity = RegisteredIdentity::from_registered_did(&goal.node_did, None)?;
                 resume_at_reset(&self.node, &identity, &goal, Utc::now()).await
             }
             .await;
@@ -167,18 +167,18 @@ impl GoalSource {
         }
     }
 
-    async fn load_goals(&self, agent_did: &str, status_filter: &str) -> Result<Vec<GoalDocument>> {
-        let agent_did = escape_graphql_string(agent_did);
+    async fn load_goals(&self, node_did: &str, status_filter: &str) -> Result<Vec<GoalDocument>> {
+        let node_did = escape_graphql_string(node_did);
         let query = format!(
             r#"{{
                 Goal(
                     filter: {{
-                        agent_did: {{ _eq: "{agent_did}" }},
+                        node_did: {{ _eq: "{node_did}" }},
                         {status_filter}
                     }},
                     order: [{{ created_at: ASC }}, {{ goal_id: ASC }}]
                 ) {{
-                    _docID goal_id session_id agent_did objective status token_budget tokens_used
+                    _docID goal_id session_id node_did objective status token_budget tokens_used
                     active_time_seconds active_started_at consecutive_blocked_audits
                     last_blocked_request_id last_blocked_reason last_continued_from_request_id continuation_sequence
                     wrapup_requested wrapup_completed infrastructure_retry_count last_failure completion_evidence
@@ -201,7 +201,7 @@ impl GoalSource {
 
     async fn build_intent(&self, mut goal: GoalDocument) -> Result<Option<FireIntent>> {
         let session_goals =
-            load_goals_for_session(&self.node, &goal.agent_did, &goal.session_id).await?;
+            load_goals_for_session(&self.node, &goal.node_did, &goal.session_id).await?;
         let Some(canonical) = session_goals.first() else {
             return Ok(None);
         };
@@ -270,10 +270,10 @@ impl GoalSource {
             }
             return Ok(None);
         }
-        let behavior = observe_goal_behavior(
+        let agent = observe_goal_agent(
             &self.node,
-            &goal.agent_did,
-            latest.behavior_id.as_deref(),
+            &goal.node_did,
+            latest.agent_id.as_deref(),
             latest.terminalized_at.as_deref(),
         )
         .await?;
@@ -282,8 +282,8 @@ impl GoalSource {
                 return Ok(None);
             }
             match gate_claimed_goal_continuation(
-                behavior.observation,
-                behavior.settled,
+                agent.observation,
+                agent.settled,
                 child_exists,
                 &goal.state().context("claimed Goal has an unknown status")?,
             ) {
@@ -292,16 +292,16 @@ impl GoalSource {
                     return Ok(None)
                 }
                 GoalClaimedDecision::Stop => {
-                    if stop_claimed_continuation_for_unavailable_behavior(
+                    if stop_claimed_continuation_for_unavailable_agent(
                         &self.node,
                         &goal,
                         &latest.request_id,
-                        &behavior.reason,
+                        &agent.reason,
                     )
                     .await?
                     {
-                        tracing::warn!(goal_id = %goal.goal_id, reason = %behavior.reason,
-                            "durable claimed goal stopped because its behavior is unavailable");
+                        tracing::warn!(goal_id = %goal.goal_id, reason = %agent.reason,
+                            "durable claimed goal stopped because its agent is unavailable");
                     }
                     return Ok(None);
                 }
@@ -414,17 +414,17 @@ impl GoalSource {
             .token_budget
             .is_some_and(|budget| goal.tokens_used.unwrap_or_default() >= budget);
         if gate_goal_continuation(
-            behavior.observation,
-            behavior.settled,
+            agent.observation,
+            agent.settled,
             cause,
             &facts(&goal, status, persisted_budget_reached),
         ) == GoalGatedDecision::AwaitReadiness
         {
-            self.record_readiness_wait(&goal, status, &behavior).await?;
+            self.record_readiness_wait(&goal, status, &agent).await?;
             return Ok(None);
         }
         let tokens_used = refresh_goal_usage(&self.node, &goal).await?;
-        let refreshed_goal = load_goal_by_id(&self.node, &goal.agent_did, &goal.goal_id)
+        let refreshed_goal = load_goal_by_id(&self.node, &goal.node_did, &goal.goal_id)
             .await?
             .context("refreshed Goal row disappeared")?;
         if !continuation_evidence_is_current(&goal, &refreshed_goal) {
@@ -441,16 +441,16 @@ impl GoalSource {
             .parsed_status()
             .context("refreshed Goal candidate has an unknown status")?;
         let facts = facts(&goal, status, budget_reached);
-        let gated = gate_goal_continuation(behavior.observation, behavior.settled, cause, &facts);
+        let gated = gate_goal_continuation(agent.observation, agent.settled, cause, &facts);
         let next_retries = next_goal_infrastructure_retries(cause, &facts, gated);
         let decision = match gated {
             GoalGatedDecision::Decided(decision) => decision,
             GoalGatedDecision::AwaitReadiness => {
-                self.record_readiness_wait(&goal, status, &behavior).await?;
+                self.record_readiness_wait(&goal, status, &agent).await?;
                 return Ok(None);
             }
-            GoalGatedDecision::BehaviorUnavailable => {
-                self.stop_for_unavailable_behavior(&goal, status, &behavior.reason)
+            GoalGatedDecision::AgentUnavailable => {
+                self.stop_for_unavailable_agent(&goal, status, &agent.reason)
                     .await?;
                 return Ok(None);
             }
@@ -627,7 +627,7 @@ impl GoalSource {
             emit_outcome: false,
             task_id: format!("goal:{}", goal.goal_id),
             name: Some("Durable goal continuation".to_string()),
-            behavior_id: parent.behavior_id.clone(),
+            agent_id: parent.agent_id.clone(),
             prompt_template: prompt,
             goal_objective_template: None,
             goal_token_budget: None,
@@ -684,12 +684,12 @@ impl GoalSource {
         &self,
         goal: &GoalDocument,
     ) -> Result<Option<AgentRequestRow>> {
-        let agent_did = escape_graphql_string(&goal.agent_did);
+        let node_did = escape_graphql_string(&goal.node_did);
         let session_id = escape_graphql_string(&goal.session_id);
         let query = format!(
             r#"{{
                 AgentRequest(
-                    filter: {{ agent_did: {{ _eq: "{agent_did}" }}, session_id: {{ _eq: "{session_id}" }} }},
+                    filter: {{ node_did: {{ _eq: "{node_did}" }}, session_id: {{ _eq: "{session_id}" }} }},
                     order: [{{ created_at: DESC }}, {{ request_id: DESC }}]
                 ) {{
                     {signed_fields}
@@ -724,7 +724,7 @@ impl GoalSource {
         goal: &GoalDocument,
         parent_request_id: &str,
     ) -> Result<bool> {
-        let agent_did = escape_graphql_string(&goal.agent_did);
+        let node_did = escape_graphql_string(&goal.node_did);
         let session_id = escape_graphql_string(&goal.session_id);
         let goal_id = escape_graphql_string(&goal.goal_id);
         let parent_request_id = escape_graphql_string(parent_request_id);
@@ -732,7 +732,7 @@ impl GoalSource {
             r#"{{
                 AgentRequest(
                     filter: {{
-                        agent_did: {{ _eq: "{agent_did}" }},
+                        node_did: {{ _eq: "{node_did}" }},
                         session_id: {{ _eq: "{session_id}" }},
                         purpose: {{ _eq: "normal" }},
                         caused_by_trigger_id: {{ _eq: "{goal_id}" }},
@@ -826,7 +826,7 @@ impl GoalSource {
     /// Settled unavailability ends automatic continuation through the
     /// existing Goal transitions: an active Goal pauses and a pending budget
     /// wrap-up is abandoned. Operator resume restarts it after the fix.
-    async fn stop_for_unavailable_behavior(
+    async fn stop_for_unavailable_agent(
         &self,
         goal: &GoalDocument,
         status: GoalStatus,
@@ -839,11 +839,11 @@ impl GoalSource {
         };
         goal.state()
             .and_then(|state| state.step(action))
-            .context("unavailable-behavior transition must be legal for a publishing Goal")?;
+            .context("unavailable-agent transition must be legal for a publishing Goal")?;
         tracing::warn!(
             goal_id = %goal.goal_id,
             %reason,
-            "durable goal stopped because its behavior is unavailable"
+            "durable goal stopped because its agent is unavailable"
         );
         if action == GoalAction::Pause {
             self.pause_goal(goal, status, reason).await
@@ -877,9 +877,9 @@ impl GoalSource {
         &self,
         goal: &GoalDocument,
         status: GoalStatus,
-        behavior: &ObservedGoalBehavior,
+        agent: &ObservedGoalAgent,
     ) -> Result<()> {
-        let waiting = behavior.waiting_reason();
+        let waiting = agent.waiting_reason();
         if goal.last_failure.as_deref() == Some(waiting.as_str()) {
             return Ok(());
         }
@@ -1003,7 +1003,7 @@ mod tests {
             "_docID": "goal-doc",
             "goal_id": "goal-1",
             "session_id": "session-1",
-            "agent_did": "did:test:agent",
+            "node_did": "did:test:agent",
             "objective": "finish <carefully> and call update_goal('complete')",
             "status": "active",
             "token_budget": 1000,

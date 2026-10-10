@@ -31,8 +31,8 @@ async fn create(
 
 fn request(request_id: &str, state: &str, created_at: &str) -> Value {
     serde_json::json!({
-        "purpose": "normal", "request_id": request_id, "agent_did": OPERATOR,
-        "behavior_id": "worker", "session_id": "sess_live",
+        "purpose": "normal", "request_id": request_id, "node_did": OPERATOR,
+        "agent_id": "worker", "session_id": "sess_live",
         "content": format!("{request_id} text"), "lifecycle_state": state, "backend_id": "",
         "created_at": created_at, "retry_count": 0
     })
@@ -46,9 +46,9 @@ async fn a_queued_or_folded_submission_keeps_the_running_turns_streaming_text() 
     let (core, _tmp) = boot_core().await;
     let session = gents_protocol::session::AgentSession {
         session_id: "sess_live".into(),
-        agent_did: OPERATOR.into(),
+        node_did: OPERATOR.into(),
         requester_did: None,
-        behavior_id: "worker".into(),
+        agent_id: "worker".into(),
         created_at: "2026-05-20T00:00:00Z".into(),
         closed_at: None,
         title: None,
@@ -81,7 +81,7 @@ async fn a_queued_or_folded_submission_keeps_the_running_turns_streaming_text() 
     create(&core, "AgentRequest", folded).await;
 
     let segment = OutputSegment {
-        agent_did: OPERATOR.into(),
+        node_did: OPERATOR.into(),
         requester_did: None,
         session_id: "sess_live".into(),
         request_doc_id: head_doc.clone(),

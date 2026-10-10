@@ -158,6 +158,14 @@ fn external_projection_preserves_mapped_children_without_forging_native_provenan
         2
     );
     assert_eq!(
+        projection.pointer("/output/projection/messages/0/role"),
+        Some(&json!("planner"))
+    );
+    assert_eq!(
+        projection.pointer("/output/projection/messages/1/role"),
+        Some(&json!("researcher"))
+    );
+    assert_eq!(
         projection.pointer("/output/projection/delegations/0/parent_tool_call_id"),
         Some(&json!("tool-delegate"))
     );
@@ -390,11 +398,11 @@ fn valid_multi_agent_capture_value() -> Value {
             "participants": [
                 {
                     "role": "planner",
-                    "agent_did": "did:test:planner"
+                    "node_did": "did:test:planner"
                 },
                 {
                     "role": "researcher",
-                    "agent_did": "did:test:researcher",
+                    "node_did": "did:test:researcher",
                     "request_id": "req-child"
                 }
             ],

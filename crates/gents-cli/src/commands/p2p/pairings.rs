@@ -17,7 +17,7 @@ struct PeerPairingDesiredRow {
     peer_id: String,
     transport_peer_ids: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    agent_did: Option<String>,
+    node_did: Option<String>,
     collections: Vec<String>,
     replicator_addresses: Vec<String>,
     profiles: Vec<String>,
@@ -73,7 +73,7 @@ fn pairings_list_query() -> &'static str {
     r#"query {
         PeerPairingDesired {
             peer_id
-            agent_did
+            node_did
             collections
             replicator_addresses
             profiles
@@ -117,7 +117,7 @@ fn parse_pairing_rows(rows: Vec<Value>) -> Vec<PeerPairingDesiredRow> {
             Some(PeerPairingDesiredRow {
                 peer_id,
                 transport_peer_ids,
-                agent_did: optional_string(&row, "agent_did"),
+                node_did: optional_string(&row, "node_did"),
                 collections: string_list(&row, "collections"),
                 replicator_addresses,
                 profiles: string_list(&row, "profiles"),
@@ -306,7 +306,7 @@ fn print_pairings_table(rows: &[PeerPairingDesiredRow]) -> Result<()> {
                 } else {
                     row.transport_peer_ids.join(",")
                 },
-                row.agent_did.clone().unwrap_or_else(|| "-".to_string()),
+                row.node_did.clone().unwrap_or_else(|| "-".to_string()),
                 if row.profiles.is_empty() {
                     "-".to_string()
                 } else {
@@ -390,7 +390,7 @@ mod tests {
                         .map(|endpoint| endpoint.peer_id().to_string())
                 })
                 .collect(),
-            agent_did: None,
+            node_did: None,
             collections: collections.iter().map(|c| c.to_string()).collect(),
             replicator_addresses: addresses.iter().map(|a| a.to_string()).collect(),
             profiles: Vec::new(),
@@ -446,17 +446,17 @@ mod tests {
         let desired = vec![desired_row(
             "peer-a",
             "agent-config",
-            &["AgentBehavior", "Tools"],
+            &["Agent", "Tools"],
             &[],
         )];
-        let partial = vec![applied("peer-a", &["AgentBehavior"], &[])];
+        let partial = vec![applied("peer-a", &["Agent"], &[])];
         let annotated = annotate_pairing_health(desired.clone(), &partial, &[]);
         assert!(
             !annotated[0].subscribed,
             "Replicate pairing missing a collection must report unhealthy"
         );
 
-        let full = vec![applied("peer-a", &["AgentBehavior", "Tools"], &[])];
+        let full = vec![applied("peer-a", &["Agent", "Tools"], &[])];
         let annotated = annotate_pairing_health(desired, &full, &[]);
         assert!(
             annotated[0].subscribed,
@@ -545,7 +545,7 @@ mod tests {
         let rows = vec![
             json!({
                 "peer_id": "peer-b",
-                "agent_did": " did:key:b ",
+                "node_did": " did:key:b ",
                 "collections": ["AgentMessage", "", 3],
                 "replicator_addresses": ["/ip4/2/tcp/4001"],
                 "profiles": ["chat-requests", "", 4],
@@ -554,7 +554,7 @@ mod tests {
             }),
             json!({
                 "peer_id": "",
-                "agent_did": "did:key:missing-peer"
+                "node_did": "did:key:missing-peer"
             }),
             json!({
                 "peer_id": "peer-a",
@@ -571,7 +571,7 @@ mod tests {
         assert_eq!(pairings[0].collections, vec!["AgentRequest"]);
         assert!(pairings[0].replicator_addresses.is_empty());
         assert_eq!(pairings[1].peer_id, "peer-b");
-        assert_eq!(pairings[1].agent_did.as_deref(), Some("did:key:b"));
+        assert_eq!(pairings[1].node_did.as_deref(), Some("did:key:b"));
         assert_eq!(pairings[1].collections, vec!["AgentMessage"]);
         assert_eq!(pairings[1].profiles, vec!["chat-requests"]);
         assert!(pairings[1].created_at.is_none());

@@ -30,7 +30,7 @@ pub(crate) use peer_directory::PeerDirectory;
 pub use peer_directory::{initialize_local_standard_peer, load_peer_records, PeerRecord};
 pub use principal_identity::PrincipalIdentity;
 pub use query::{
-    fetch_doc_patch, load_agent_scoped_snapshot, load_request_prompt_ownership,
+    fetch_doc_patch, load_node_scoped_snapshot, load_request_prompt_ownership,
     load_request_prompt_ownership_on, load_session_context_store, load_session_context_store_on,
     load_session_diagnostics_store, load_session_live_store, load_session_live_store_on,
     load_session_tip_store, load_session_tip_store_on, load_session_transcript_page,

@@ -50,7 +50,7 @@ test.describe("desktop stable screenshot states", () => {
     );
 
     for (const [section, name] of [
-      [/^Behaviors\b/, "stable-behaviors"],
+      [/^Agents\b/, "stable-agents"],
       [/^Providers\b/, "stable-providers"],
       [/^Tasks\b/, "stable-tasks"],
     ] as const) {
@@ -78,12 +78,12 @@ test.describe("desktop stable screenshot states", () => {
   test("captures reconciliation states", async ({ page }, testInfo) => {
     await gotoHarness(page);
     await openConfig(page);
-    await openConfigSection(page, /^Behaviors\b/);
+    await openConfigSection(page, /^Agents\b/);
     await page
       .getByRole("link", { name: /^Ops\b/ })
       .first()
       .click();
-    await page.getByRole("button", { name: "Delete behavior" }).click();
+    await page.getByRole("button", { name: "Delete agent" }).click();
     await expect(
       page.getByRole("textbox", { name: "Type Ops to confirm" }),
     ).toBeFocused();

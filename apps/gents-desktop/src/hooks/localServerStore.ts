@@ -8,8 +8,8 @@ import { createSelectors, type WithSelectors } from "./createSelectors";
 export type LocalServerOperation =
   "start" | "stop" | "restart" | "autostart" | "ensure" | "restore";
 
-/** The OS-managed local agent service as this window last saw it, held once
-    for startup, the tray, setup and the agent screen. */
+/** The OS-managed local node service as this window last saw it, held once
+    for startup, the tray, setup and the node screen. */
 export type LocalServerState = {
   /** the service as last read or as the last operation left it */
   status: ManagedServerStatus | null;

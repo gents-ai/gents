@@ -384,12 +384,12 @@ fn docs_vs_goal(live: Option<&LiveSnapshot>, goal: &[GoalEntry]) -> String {
 /// The short name a frame gives a configuration collection.
 fn abbreviation(collection: &str) -> &str {
     match collection {
-        "AgentBehavior" => "beh",
+        "Agent" => "beh",
         "AgentContext" => "ctx",
         "Tools" => "tools",
         "InferenceProfile" => "prof",
         "InferenceExecution" => "exec",
-        "SubagentTarget" => "sub",
+        "AgentTarget" => "sub",
         "DatastoreToolSurface" => "surf",
         "EventSource" => "src",
         "Trigger" => "trig",

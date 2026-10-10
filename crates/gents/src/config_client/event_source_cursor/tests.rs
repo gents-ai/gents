@@ -8,7 +8,7 @@ use serde_json::Value;
 use std::sync::Arc;
 
 fn document(collection: Collection, mut value: Value) -> DesiredStateApplyDocument {
-    value["agent_did"] = json!(PIN_FIXED_DID);
+    value["node_did"] = json!(PIN_FIXED_DID);
     DesiredStateApplyDocument {
         collection,
         add: value.clone(),
@@ -57,8 +57,8 @@ async fn fixture(enabled: bool) -> Result<(Arc<defra_node::EmbeddedNode>, Config
     publish(&access, vec![
         document(Collection::InferenceBackend, json!({"backend_id":"backend", "name":"Test", "provider_kind":"OpenAiCompatible", "endpoint":"http://127.0.0.1:8000/v1", "auth":{"kind":"unauthenticated"}})),
         document(Collection::InferenceProfile, json!({"profile_id":"profile", "backend_id":"backend", "model_name":"model"})),
-        document(Collection::AgentBehavior, json!({"behavior_id":"behavior", "inference_profile_id":"profile"})),
-        document(Collection::Task, json!({"task_id":"task", "behavior_id":"behavior", "prompt_template":"work"})),
+        document(Collection::Agent, json!({"agent_id":"behavior", "inference_profile_id":"profile"})),
+        document(Collection::Task, json!({"task_id":"task", "agent_id":"behavior", "prompt_template":"work"})),
         source("WorkA"), trigger(enabled),
     ]).await?;
     Ok((node, access))

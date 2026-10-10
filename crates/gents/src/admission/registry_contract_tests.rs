@@ -58,7 +58,7 @@ fn backend_document(
     name: &str,
 ) -> Result<crate::document_config::InferenceBackend> {
     Ok(serde_json::from_value(serde_json::json!({
-        "agent_did":"did:test:registry", "backend_id":backend_id, "name":name,
+        "node_did":"did:test:registry", "backend_id":backend_id, "name":name,
         "provider_kind":"OpenAiCompatible",
         "endpoint":format!("http://127.0.0.1/resource-{connection}/v1"),
         "auth":{"kind":"unauthenticated"}, "max_concurrent":i64::try_from(capacity)?,
@@ -88,7 +88,7 @@ fn config_from_case(backend_id: &str, desired: &Desired) -> Result<BackendAdmiss
     let observation = serde_json::from_value::<crate::document_config::InferenceBackendObservation>(
         serde_json::json!({
             "backend_id":backend_id, "probe_status":crate::backend_registry::HEALTHY_PROBE_STATUS,
-            "catalogs":[{"agent_did":null,"observed_at":"2026-01-01T00:00:00Z",
+            "catalogs":[{"node_did":null,"observed_at":"2026-01-01T00:00:00Z",
                 "models":[{"model_name":desired.catalog}]}]
         }),
     )?;

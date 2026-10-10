@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use gents::goal::{load_canonical_goal, set_goal, GoalStatus, UPDATE_GOAL_TOOL_NAME};
 use gents::graphql::escape_graphql_string;
-use gents::AgentIdentity;
+use gents::NodeIdentity;
 use serde::Deserialize;
 
 use crate::support::fixtures::test_identity;
@@ -70,15 +70,15 @@ async fn durable_goal_continues_with_real_inference_until_model_completes() {
     let target = live_target();
 
     let db = test_db("durable-goal-real-inference").await;
-    let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity("durable-goal-real-inference"));
-    let (agent_did, behavior_id) = bind_target(db.node.as_ref(), identity.as_ref(), &target).await;
+    let identity: Arc<dyn NodeIdentity> = Arc::new(test_identity("durable-goal-real-inference"));
+    let (node_did, agent_id) = bind_target(db.node.as_ref(), identity.as_ref(), &target).await;
     let agent = boot_live_agent(&db, identity)
         .await
         .expect("boot real-inference goal agent");
     let session_id = "session-durable-goal-real";
     let goal = set_goal(
         db.node.as_ref(),
-        &agent_did,
+        &node_did,
         session_id,
         Some(
             "When—and only when—you receive a message explicitly stating that you are running under the durable goal controller, call update_goal with status complete and reason 'real inference continuation verified', then reply with the exact marker DURABLE_GOAL_COMPLETE.",
@@ -92,8 +92,8 @@ async fn durable_goal_continues_with_real_inference_until_model_completes() {
     let initial_request_id = "request-durable-goal-initial";
     create_runtime_request(
         db.node.as_ref(),
-        &agent_did,
-        &behavior_id,
+        &node_did,
+        &agent_id,
         initial_request_id,
         session_id,
         "This is the initial human turn, not a durable-controller continuation. Do not call update_goal on this turn. Reply with exactly INITIAL_GOAL_PROGRESS.",
@@ -136,7 +136,7 @@ async fn durable_goal_continues_with_real_inference_until_model_completes() {
         "real continuation response omitted completion marker: {answer:?}"
     );
 
-    let persisted = load_canonical_goal(db.node.as_ref(), &agent_did, session_id)
+    let persisted = load_canonical_goal(db.node.as_ref(), &node_did, session_id)
         .await
         .expect("load durable goal")
         .expect("durable goal exists");
@@ -145,13 +145,13 @@ async fn durable_goal_continues_with_real_inference_until_model_completes() {
     let query = format!(
         r#"{{
             InferenceCall(
-                filter: {{ call_state: {{ _eq: "completed" }}, agent_did: {{ _eq: "{}" }} }}
+                filter: {{ call_state: {{ _eq: "completed" }}, node_did: {{ _eq: "{}" }} }}
             ) {{ call_id }}
             AgentToolCall(
                 filter: {{ session_id: {{ _eq: "{}" }}, tool_name: {{ _eq: "{}" }} }}
             ) {{ lifecycle_state }}
         }}"#,
-        escape_graphql_string(&agent_did),
+        escape_graphql_string(&node_did),
         escape_graphql_string(session_id),
         UPDATE_GOAL_TOOL_NAME,
     );

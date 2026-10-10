@@ -157,7 +157,7 @@ pub fn bind_plugin_slots(
             home,
             &coordinate,
             Some(ModelBinding {
-                agent_did: owner.to_owned(),
+                node_did: owner.to_owned(),
                 profile_id: profile_id.clone(),
             }),
         )?;
