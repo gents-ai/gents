@@ -128,7 +128,7 @@ def blockedReasonName : BlockedReason → String
 
 def sendBlockedReasonName : SendBlockedReason → String
   | .clientOffline              => "clientOffline"
-  | .agentNotSelected           => "agentNotSelected"
+  | .nodeNotSelected           => "nodeNotSelected"
   | .composerEmpty              => "composerEmpty"
   | .mutationInFlight           => "mutationInFlight"
   | .awaitingObservation        => "awaitingObservation"
@@ -139,7 +139,7 @@ def sendBlockedReasonName : SendBlockedReason → String
 
 def frontendBlockedReasonName : SendBlockedReason → String
   | .clientOffline              => "clientOffline"
-  | .agentNotSelected           => "agentNotSelected"
+  | .nodeNotSelected           => "nodeNotSelected"
   | .composerEmpty              => "composerEmpty"
   | .mutationInFlight           => "submittingRequest"
   | .awaitingObservation        => "waitingForRequestObservation"

@@ -8,7 +8,7 @@ theorem matching_terminal_snapshot_allows_follow_up
     (sid : SessionId) (req : RequestId) (obs : SessionObservation)
     (turn : ClientTurnState)
     (hsel : s.selection.session = some sid)
-    (hagent : s.selection.agent.isNone = false)
+    (hnode : s.selection.node.isNone = false)
     (hw : s.workflow = .awaiting sid req)
     (hfind : store.find sid = some obs)
     (hreq : obs.latestObservedRequest = some req)
@@ -18,7 +18,7 @@ theorem matching_terminal_snapshot_allows_follow_up
     (hagent_match : agentMismatch store sid ctx.requestedAgent = false) :
     projectSendDecision (step s (.snapshot store) store .healthy ctx) store ctx = .ready := by
   simp [step, snapshotAdvanceWorkflow, observesRequest, hw, hfind, hreq, projectSendDecision,
-    hsel, hagent, hclient, hagent_match, hturn, hterminal]
+    hsel, hnode, hclient, hagent_match, hturn, hterminal]
 
 /-- A terminal observation for another request cannot acknowledge this submit. -/
 theorem unrelated_terminal_does_not_retire_awaiting
@@ -78,8 +78,8 @@ theorem select_session_latches
 
 theorem select_node_route_clears_session
     (s : ShellState) (store : LocalStore) (ctx : SubmitContext)
-    (peer : PeerId) (agent : NodeDid) (h : TransportHealth) :
-    (step s (.user (.selectNodeRoute peer agent)) store h ctx).selection.session
+    (peer : PeerId) (node : NodeDid) (h : TransportHealth) :
+    (step s (.user (.selectNodeRoute peer node)) store h ctx).selection.session
       = none := rfl
 
 theorem selection_sticky_under_inflight

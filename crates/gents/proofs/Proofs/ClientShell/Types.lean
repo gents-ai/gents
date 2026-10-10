@@ -46,7 +46,7 @@ inductive TransportHealth where
 
 structure Selection where
   peer    : Option PeerId
-  agent   : Option NodeDid
+  node   : Option NodeDid
   session : Option SessionId
   deriving DecidableEq, Repr
 
@@ -58,7 +58,7 @@ inductive BlockedReason where
 
 inductive SubmissionWorkflow where
   | idle
-  | submitting (agent : NodeDid) (session : Option SessionId)
+  | submitting (node : NodeDid) (session : Option SessionId)
   | awaiting   (session : SessionId) (request : RequestId)
   | blocked    (reason  : BlockedReason)
   deriving DecidableEq, Repr
@@ -71,13 +71,13 @@ structure ShellState where
 namespace ShellState
 
 def initial : ShellState :=
-  { selection := { peer := none, agent := none, session := none },
+  { selection := { peer := none, node := none, session := none },
     workflow  := .idle }
 
 end ShellState
 
 inductive UserAction where
-  | selectNodeRoute (peer : PeerId) (agent : NodeDid)
+  | selectNodeRoute (peer : PeerId) (node : NodeDid)
   | selectSession    (session : SessionId)
   | requestNewSession
   | startSubmit

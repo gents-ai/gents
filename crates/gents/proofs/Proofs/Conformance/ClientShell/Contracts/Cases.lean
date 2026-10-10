@@ -33,12 +33,12 @@ def sessionObs
     (sid : SessionId)
     (req : Option RequestId)
     (turn : Option ClientTurnState)
-    (agent : NodeDid := contractNode)
+    (node : NodeDid := contractNode)
     (agentId : Option AgentId := some contractAgent)
     (queued : List RequestId := [])
     : SessionObservation :=
   { sessionId := sid
-  , nodeDid := agent
+  , nodeDid := node
   , agentId := agentId
   , latestObservedRequest := req
   , latestTurn := turn
@@ -96,9 +96,9 @@ def storeSid2Completed : LocalStore :=
 def selectedShell
     (session : Option SessionId)
     (workflow : SubmissionWorkflow := .idle)
-    (agent : Option NodeDid := some contractNode)
+    (node : Option NodeDid := some contractNode)
     : ShellState :=
-  { selection := { peer := some contractPeer, agent := agent, session := session }
+  { selection := { peer := some contractPeer, node := node, session := session }
   , workflow := workflow
   }
 
@@ -259,9 +259,9 @@ def clientShellCaseFromStep
   { name := name
   , property := property
   , input := inputName input
-  , preSelectionNode := pre.selection.agent
+  , preSelectionNode := pre.selection.node
   , preSelectionSession := pre.selection.session
-  , postSelectionNode := post.selection.agent
+  , postSelectionNode := post.selection.node
   , postSelectionSession := post.selection.session
   , preWorkflowKind := workflowKind pre.workflow
   , preWorkflowSession := workflowSession pre.workflow
@@ -285,7 +285,7 @@ def clientShellCaseFromStep
   , sendDecision := sendDecisionKind chat.sendDecision
   , sendBlockedReason := sendDecisionReason chat.sendDecision
   , frontendClientAvailable := ctx.clientAvailable
-  , frontendSelectedNodeDid := frontendLocal.selection.agent
+  , frontendSelectedNodeDid := frontendLocal.selection.node
   , frontendSelectedSessionId := frontendLocal.selection.session
   , frontendSending :=
       match frontendLocal.workflow with
@@ -335,7 +335,7 @@ def clientShellCases : List ClientShellContractCase :=
   let noAgent := selectedShell none .idle none
   let staleBeforeSwitch :=
     { selectedShell (some sid1) (.awaiting sid1 reqOld) with
-      selection := { peer := some contractPeer, agent := some alternateNode, session := some sid1 }
+      selection := { peer := some contractPeer, node := some alternateNode, session := some sid1 }
     }
   let switchedStaleLocal :=
     { staleBeforeSwitch with selection := { staleBeforeSwitch.selection with session := some sid2 } }

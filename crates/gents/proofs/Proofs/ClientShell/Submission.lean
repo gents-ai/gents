@@ -18,7 +18,7 @@ def agentMismatch
 
 inductive SendBlockedReason where
   | clientOffline
-  | agentNotSelected
+  | nodeNotSelected
   | composerEmpty
   | mutationInFlight
   | awaitingObservation
@@ -46,7 +46,7 @@ def SendDecision.admits : SendDecision → Bool
 def projectSendDecision
     (s : ShellState) (store : LocalStore) (ctx : SubmitContext) : SendDecision :=
   if ¬ ctx.clientAvailable then .blocked .clientOffline
-  else if s.selection.agent.isNone then .blocked .agentNotSelected
+  else if s.selection.node.isNone then .blocked .nodeNotSelected
   else match s.workflow with
     | .submitting _ _ => .blocked .mutationInFlight
     | .awaiting _ _                 => .blocked .awaitingObservation
@@ -82,7 +82,7 @@ theorem nonterminal_turn_queues
     (s : ShellState) (store : LocalStore) (ctx : SubmitContext)
     (sid : SessionId) (obs : SessionObservation) (req : RequestId) (turn : ClientTurnState)
     (hclient : ctx.clientAvailable = true)
-    (hagent : s.selection.agent.isSome = true)
+    (hnode : s.selection.node.isSome = true)
     (hw : s.workflow = .idle)
     (hsel : s.selection.session = some sid)
     (hfind : store.find sid = some obs)
@@ -91,7 +91,7 @@ theorem nonterminal_turn_queues
     (hturn : obs.latestTurn = some turn)
     (hrunning : turn.isTerminal = false) :
     projectSendDecision s store ctx = .queue turn := by
-  have hagent' : s.selection.agent.isNone = false := by
-    cases h : s.selection.agent <;> simp_all
-  simp [projectSendDecision, hclient, hagent', hw, hsel, hfind, hagent_match, hreq, hturn,
+  have hnode' : s.selection.node.isNone = false := by
+    cases h : s.selection.node <;> simp_all
+  simp [projectSendDecision, hclient, hnode', hw, hsel, hfind, hagent_match, hreq, hturn,
     hrunning]
