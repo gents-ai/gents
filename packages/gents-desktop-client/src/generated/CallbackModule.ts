@@ -4,7 +4,7 @@
  * Existing WASM callback module configuration. Resource limits retain their
  * executor defaults when absent; signer_did is provenance, not execution owner.
  */
-export type CallbackModule = { module_id: string, node_did: string, abi_version?: number | null, wasm_bytes?: string | null, canonical_args?: string | null, signer_did?: string | null, provenance?: string | null, enabled?: boolean | null, fuel_limit?: number | null, memory_pages?: number | null, max_input_bytes?: number | null, max_output_bytes?: number | null,
+export type CallbackModule = { module_id: string, node_did: string, abi_version?: number | null, artifact_bytes?: string | null, canonical_args?: string | null, signer_did?: string | null, provenance?: string | null, enabled?: boolean | null, fuel_limit?: number | null, memory_pages?: number | null, max_input_bytes?: number | null, max_output_bytes?: number | null,
 /**
  * Optional UI/discovery labels. References, never tags, determine execution.
  */

@@ -324,6 +324,10 @@ impl DefraSessionHook {
                     .remove(internal_call_id);
 
                 if let Some(mut lc) = lifecycle {
+                    let receipt = if let Some(doc_id) = lc.doc_id() {
+                        self.background_live_outputs.registry.plugin_receipt(doc_id).await
+                    } else { None };
+                    lc.stage_plugin_receipt(receipt)?;
                     let output_doc_id = lc.doc_id().map(str::to_owned);
                     match outcome {
                         ToolOutcome::TimedOut { .. } => {
@@ -406,6 +410,10 @@ impl DefraSessionHook {
                         "on_tool_result: no in-flight lifecycle for tool_call_id={internal_call_id}"
                     )
                 })?;
+
+            lc.stage_plugin_receipt(
+                self.background_live_outputs.registry.plugin_receipt(&tool_call_doc_id).await
+            )?;
 
             let presentation = self.background_live_outputs.registry
                 .take_prepared_presentation(&tool_call_doc_id, result)

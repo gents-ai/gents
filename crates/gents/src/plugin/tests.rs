@@ -40,6 +40,10 @@ drop))
 /// `precompiled/wasm32-wasip1/main.wasm` member and a `[runtime]
 /// target = "wasm32-wasip1"`.
 pub(crate) fn build_plugin_afb(wat_source: &str) -> Vec<u8> {
+    build_plugin_afb_bytes(&wat(wat_source))
+}
+
+pub(crate) fn build_plugin_afb_bytes(wasm: &[u8]) -> Vec<u8> {
     use afterburner_afb::manifest::{Format, Manifest, Package, Runtime};
     use afterburner_afb::pack::Builder;
 
@@ -72,7 +76,7 @@ pub(crate) fn build_plugin_afb(wat_source: &str) -> Vec<u8> {
         extra: Default::default(),
     };
     let (bytes, _digest) = Builder::new(manifest, Manifold::sealed())
-        .precompiled("precompiled/wasm32-wasip1/main.wasm", wat(wat_source))
+        .precompiled("precompiled/wasm32-wasip1/main.wasm", wasm.to_vec())
         .build()
         .expect("build a real fixture .afb");
     bytes

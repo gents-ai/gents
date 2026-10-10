@@ -103,10 +103,26 @@ pub trait Tool: Sized + Send + Sync {
     }
 }
 
+/// Host-owned execution evidence is carried separately from model-facing text.
+#[derive(Debug)]
+pub struct ToolDispatchResult {
+    pub result: Result<String, ToolError>,
+    pub plugin_receipt: Option<gents_protocol::plugin::PluginExecutionReceipt>,
+}
+
 pub trait ToolDyn: Send + Sync {
     fn name(&self) -> String;
     fn definition<'a>(&'a self, prompt: String) -> BoxFuture<'a, ToolDefinition>;
     fn call<'a>(&'a self, args: String) -> BoxFuture<'a, Result<String, ToolError>>;
+
+    fn call_with_receipt<'a>(&'a self, args: String) -> BoxFuture<'a, ToolDispatchResult> {
+        Box::pin(async move {
+            ToolDispatchResult {
+                result: self.call(args).await,
+                plugin_receipt: None,
+            }
+        })
+    }
 
     /// True only for the built-in command runner, whose results render
     /// [`crate::live_output::COMMAND_OUTPUT_META_PREFIX`] metadata with

@@ -881,6 +881,8 @@ impl ToolCallLifecycle {
             Some(self.output_budget().await)
         };
         let terminal_status = self.terminal_persistence_status(fields.completion_reason);
+        let plugin_receipt = self.plugin_receipt.clone();
+        let execution_generation = self.execution_generation.clone();
         let spawned_by_tool_call_doc_id = self.spawned_by_tool_call_doc_id.clone();
 
         let published = ConfigAccess::transact_local_idempotent(
@@ -900,6 +902,8 @@ impl ToolCallLifecycle {
                 let arguments = arguments.clone();
                 let tool_name = tool_name.clone();
                 let terminal_status = terminal_status.clone();
+                let plugin_receipt = plugin_receipt.clone();
+                let execution_generation = execution_generation.clone();
                 let spawned_by_tool_call_doc_id = spawned_by_tool_call_doc_id.clone();
                 let presentation = presentation.clone();
                 Box::pin(async move {
@@ -924,6 +928,8 @@ impl ToolCallLifecycle {
                         expected,
                         fields,
                         &terminal_status,
+                        plugin_receipt.as_ref(),
+                        execution_generation.as_deref(),
                         text,
                         pending_raw,
                         presentation.as_ref(),
@@ -966,6 +972,8 @@ async fn terminalize_transaction(
     expected: ToolCallState,
     fields: TerminalFields<'_>,
     terminal_status: &str,
+    plugin_receipt: Option<&gents_protocol::plugin::PluginExecutionReceipt>,
+    execution_generation: Option<&str>,
     text: &str,
     pending_raw: Option<&str>,
     presentation: Option<&PayloadPresentation>,
@@ -1117,6 +1125,71 @@ async fn terminalize_transaction(
             "accepted tool header does not bind this exact physical invocation"
         );
     }
+
+    let plugin_receipt_field = if let Some(receipt) = plugin_receipt {
+        let generation =
+            execution_generation.context("plugin receipt lacks accepted generation")?;
+        let request_rows = txn
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{request}" }},
+                session_id: {{ _eq: "{session}" }}, node_did: {{ _eq: "{agent}" }}
+                {requester_filter} }}, limit: 2) {{ execution_generation }} }}"#
+            ))
+            .await?;
+        let requests = request_rows["data"]["AgentRequest"]
+            .as_array()
+            .context("plugin receipt request query omitted rows")?;
+        let current_generation = requests
+            .first()
+            .filter(|_| requests.len() == 1)
+            .and_then(|row| row["execution_generation"].as_str());
+        let accepted_generation = match &accepted.publication {
+            MessagePublication::RequestExecution {
+                execution_generation,
+            } => Some(execution_generation.as_str()),
+            _ => None,
+        };
+        let rows = txn
+            .execute(&format!(
+                r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{tool}" }},
+                request_doc_id: {{ _eq: "{request}" }}, session_id: {{ _eq: "{session}" }},
+                node_did: {{ _eq: "{agent}" }}, tool_call_id: {{ _eq: "{tool_id}" }},
+                tool_name: {{ _eq: "{name}" }}, message_sequence: {{ _eq: {message_sequence} }}
+                {requester_filter} }}, limit: 2) {{ lifecycle_state plugin_execution_receipt }} }}"#
+            ))
+            .await?;
+        let rows = rows["data"]["AgentToolCall"]
+            .as_array()
+            .context("plugin receipt tool query omitted rows")?;
+        anyhow::ensure!(
+            rows.len() == 1,
+            "plugin receipt lacks exact physical tool invocation"
+        );
+        let row = &rows[0];
+        let state = row["lifecycle_state"]
+            .as_str()
+            .and_then(ToolCallState::from_persisted)
+            .context("plugin receipt tool has invalid lifecycle state")?;
+        if state.is_terminal() && row["plugin_execution_receipt"].is_null() {
+            return Ok(false);
+        }
+        let existing = if row["plugin_execution_receipt"].is_null() {
+            None
+        } else {
+            Some(serde_json::from_value::<
+                gents_protocol::plugin::PluginExecutionReceipt,
+            >(row["plugin_execution_receipt"].clone())?)
+        };
+        super::plugin_receipt::ensure_commit(
+            current_generation == Some(generation) && accepted_generation == Some(generation),
+            state.is_terminal(),
+            existing.as_ref(),
+            receipt,
+        )?;
+        ", plugin_execution_receipt: $plugin_receipt".to_owned()
+    } else {
+        String::new()
+    };
 
     // A durable background receipt is already the invocation's unique native
     // reply.  Rehydrated completion paths must discover that fact from the
@@ -1512,15 +1585,24 @@ async fn terminalize_transaction(
             )
         })
         .unwrap_or_else(|| ", spawned_by_tool_call_doc_id: { _eq: null }".to_owned());
-    let lifecycle = txn.execute(&format!(r#"mutation {{ update_AgentToolCall(docID: "{tool}", filter: {{
+    let receipt_variable = if plugin_receipt.is_some() {
+        "($plugin_receipt: JSON)"
+    } else {
+        ""
+    };
+    let variables = match plugin_receipt {
+        Some(receipt) => serde_json::json!({"plugin_receipt": receipt}),
+        None => serde_json::json!({}),
+    };
+    let lifecycle = txn.execute_with_variables(&format!(r#"mutation{receipt_variable} {{ update_AgentToolCall(docID: "{tool}", filter: {{
         _docID: {{ _eq: "{tool}" }}, request_doc_id: {{ _eq: "{request}" }},
         session_id: {{ _eq: "{session}" }}, node_did: {{ _eq: "{agent}" }},
         tool_call_id: {{ _eq: "{tool_id}" }}, tool_name: {{ _eq: "{name}" }},
         message_sequence: {{ _eq: {message_sequence} }},
         lifecycle_state: {{ _eq: "{expected}" }}{requester_filter}{spawned_filter} }}, input: {{
         status: "{}", lifecycle_state: "{state}", started_at: {started_at},
-        deadline_at: "{deadline_at}", completed_at: "{completed_at}", latency_ms: {latency_ms}{failure}{cancel}
-    }}) {{ _docID request_id }} }}"#, escape_graphql_string(terminal_status))).await?;
+        deadline_at: "{deadline_at}", completed_at: "{completed_at}", latency_ms: {latency_ms}{failure}{cancel}{plugin_receipt_field}
+    }}) {{ _docID request_id }} }}"#, escape_graphql_string(terminal_status)), &variables).await?;
     if !lifecycle["data"]["update_AgentToolCall"]
         .as_array()
         .is_some_and(|rows| !rows.is_empty())

@@ -133,7 +133,7 @@ impl SelfConfigTarget {
                         "created_at",
                         "updated_at",
                         "created_by",
-                        "wasm_bytes",
+                        "artifact_bytes",
                         "canonical_args",
                         "signer_did",
                         "provenance",

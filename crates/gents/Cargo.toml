@@ -92,11 +92,6 @@ tracing.workspace = true
 tracing-opentelemetry.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
-wasmtime = { version = "46.0.2", default-features = false, features = [
-    "cranelift",
-    "runtime",
-    "std",
-] }
 rig-core.workspace = true
 reqwest.workspace = true
 rmcp = { version = "1.2.0", features = ["client", "transport-streamable-http-client-reqwest", "reqwest"] }

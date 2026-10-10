@@ -35,6 +35,7 @@ type AgentToolCall @branchable {
     completed_at: DateTime
     selected_service_id: String
     selected_tool_name: String
+    plugin_execution_receipt: JSON
     tool_failure_class: String
     denial_reason: String
     denied_argv: [String]

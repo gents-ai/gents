@@ -488,6 +488,15 @@ impl PluginRunner {
         budget: &PluginBudget,
         bound: &BoundDir,
     ) -> Result<PluginOutcome> {
+        let (arguments, manifold) = self.prepare_bound(arguments, bound)?;
+        self.call_with_manifold(&arguments, budget, manifold)
+    }
+
+    pub(super) fn prepare_bound(
+        &self,
+        arguments: &serde_json::Value,
+        bound: &BoundDir,
+    ) -> Result<(serde_json::Value, Manifold)> {
         let bind_dir = self.plugin.bind_dir.as_ref().with_context(|| {
             format!(
                 "plugin {:?} does not declare bind_dir; it cannot be bound to a directory",
@@ -542,7 +551,7 @@ impl PluginRunner {
             },
             ..self.manifold.clone()
         };
-        self.call_with_manifold(&arguments, budget, manifold)
+        Ok((arguments, manifold))
     }
 
     /// [`Self::call`] and [`Self::call_bound`]'s shared implementation: the

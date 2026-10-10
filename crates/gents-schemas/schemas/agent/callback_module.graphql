@@ -1,12 +1,12 @@
-# Desired-state WASM planner module. `wasm_bytes` is standard base64 of the
-# decoded module (GraphQL String cannot carry raw NUL/non-UTF-8). `module_id`
+# Desired-state Afterburner planner artifact. `artifact_bytes` is standard base64 of the
+# decoded .afb package (GraphQL String cannot carry raw NUL/non-UTF-8). `module_id`
 # is content-addressed over (decoded bytes, canonical_args, abi_version).
 # Resource limits deny execution; they do not mint capabilities.
 type CallbackModule @branchable @index(fields: ["node_did", "module_id"], unique: true) {
     module_id: String
     node_did: String @index
     abi_version: Int
-    wasm_bytes: String
+    artifact_bytes: String
     canonical_args: String
     signer_did: String @index
     provenance: String

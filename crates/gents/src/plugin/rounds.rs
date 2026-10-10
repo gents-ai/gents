@@ -43,6 +43,26 @@ impl HostCalls {
     pub(super) fn is_empty(&self) -> bool {
         self.model.is_none() && self.http.is_none()
     }
+
+    pub(super) fn prepare_input(&self, input: Value) -> Result<Value> {
+        let mut base = match input {
+            Value::Null => Map::new(),
+            Value::Object(object) => object,
+            _ => {
+                anyhow::bail!("a plugin the host serves requests for takes a JSON object as input")
+            }
+        };
+        base.remove("state");
+        if self.model.is_some() {
+            base.remove("model_results");
+            base.insert("model_calls".to_owned(), Value::Bool(true));
+        }
+        if self.http.is_some() {
+            base.remove("http_results");
+            base.insert("http_calls".to_owned(), Value::Bool(true));
+        }
+        Ok(Value::Object(base))
+    }
 }
 
 enum Asked {
@@ -92,20 +112,9 @@ pub(super) async fn drive(
     let deadline = started + budget.wall_clock;
     // Requests stop here; the plugin's final round runs on the rest.
     let serve_deadline = deadline - budget.wall_clock / FINAL_ROUND_RESERVE_DIVISOR;
-    let mut base = match input {
-        Value::Null => Map::new(),
-        Value::Object(object) => object,
-        _ => anyhow::bail!("a plugin the host serves requests for takes a JSON object as input"),
+    let Value::Object(base) = calls.prepare_input(input)? else {
+        anyhow::bail!("a driven plugin requires host services");
     };
-    base.remove("state");
-    if calls.model.is_some() {
-        base.remove("model_results");
-        base.insert("model_calls".to_owned(), Value::Bool(true));
-    }
-    if calls.http.is_some() {
-        base.remove("http_results");
-        base.insert("http_calls".to_owned(), Value::Bool(true));
-    }
     let mut next = Value::Object(base.clone());
     let mut fuel = 0u64;
     let mut served = 0u32;
