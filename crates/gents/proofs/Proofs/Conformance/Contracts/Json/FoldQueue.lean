@@ -24,7 +24,7 @@ def eventJson : Event → String
 
 def caseJson (entry : String × List Event) : String :=
   "{\"name\":" ++ jsonString entry.1 ++
-  ",\"agent_id\":" ++ toString queue.scope.agent ++
+  ",\"node_id\":" ++ toString queue.scope.node ++
   ",\"session_id\":" ++ toString queue.scope.session ++
   ",\"inputs\":" ++ jsonArray (entry.2.map eventJson) ++
   ",\"expected\":" ++ (match observation entry.2 with
