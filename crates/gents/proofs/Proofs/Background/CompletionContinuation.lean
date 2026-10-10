@@ -541,7 +541,7 @@ theorem canonical_wake_retry_backoff_is_bounded :
 
 The watcher preserves FIFO until a background-completion wake reaches the
 aging threshold.  Once aged, it precedes ordinary descendant work at the
-bounded behavior-executor queue.  This is the runtime's weak-fairness
+bounded agent-executor queue.  This is the runtime's weak-fairness
 assumption made executable: an ongoing descendant storm may fill the finite
 queue ahead of a wake, but new descendants cannot continue overtaking it.
 -/

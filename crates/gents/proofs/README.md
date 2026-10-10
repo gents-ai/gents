@@ -74,7 +74,7 @@ exactly-once ingestion of those reports.
 
 Sessions started by `agent_new`/`agent_message` carry no copied arguments
 or delegated workspace: the started request is materialized by its own owner
-under the target's behavior, and its `caused_by_parent_*` lineage is provenance
+under the target agent's configuration, and its `caused_by_parent_*` lineage is provenance
 only, never a hydration root.
 
 Lean conformance-source adapters change with their owners; external fixture
