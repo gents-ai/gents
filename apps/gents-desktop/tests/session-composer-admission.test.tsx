@@ -506,7 +506,7 @@ describe("SessionScreen automated inputs", () => {
           {
             kind: "automatedInput",
             origin: { kind: "backgroundCompletion" },
-            content: "<subagent-notification>done</subagent-notification>",
+            content: "<agent-notification>done</agent-notification>",
             ...durable("background", 5),
           },
           {

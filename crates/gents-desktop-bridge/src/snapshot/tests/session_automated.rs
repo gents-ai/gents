@@ -119,11 +119,11 @@ fn automated_store() -> ClientStore {
             "write the nightly report",
         ),
         (
-            "background-completion-notification:child-1:subagent",
+            "background-completion-notification:child-1:agent",
             "doc-wake",
             6,
             MessageRole::User,
-            "<subagent-notification child_request_id=\"child-1\">done</subagent-notification>",
+            "<agent-notification child_request_id=\"child-1\">done</agent-notification>",
         ),
         (
             "authored:doc-wake:prompt",
@@ -226,7 +226,7 @@ fn automated_inputs_render_in_stream_order_with_their_sender_and_full_content() 
             trigger_kind: Some("schedule".into()),
         }
     );
-    assert!(automated[2].1.starts_with("<subagent-notification"));
+    assert!(automated[2].1.starts_with("<agent-notification"));
     assert_eq!(
         automated[3].1,
         gents::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT
