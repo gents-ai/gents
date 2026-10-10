@@ -880,7 +880,7 @@ fn graph_run_by_graph_id_is_pinned_to_the_active_digest() -> Result<()> {
             home_arg,
             "--graphql",
             &graphql,
-            "--agent-did",
+            "--node-did",
             &owner_did,
             "--output",
             "json",
@@ -899,7 +899,7 @@ fn graph_run_by_graph_id_is_pinned_to_the_active_digest() -> Result<()> {
         home_arg,
         "--graphql",
         graphql.as_str(),
-        "--agent-did",
+        "--node-did",
         owner_did.as_str(),
     ];
 
