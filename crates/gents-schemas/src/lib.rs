@@ -159,6 +159,10 @@ pub const SESSION_HYDRATION_REQUEST_NAME: &str = "SessionHydrationRequest";
 pub const SESSION_HYDRATION_REQUEST: &str =
     include_str!("../schemas/agent/session_hydration_request.graphql");
 
+pub const AGENT_SESSION_INPUT_EDIT_NAME: &str = "AgentSessionInputEdit";
+pub const AGENT_SESSION_INPUT_EDIT: &str =
+    include_str!("../schemas/agent/agent_session_input_edit.graphql");
+
 /// Every agent-domain schema in registration order.
 pub const ALL: &[&str] = &[
     NODE,
@@ -224,6 +228,7 @@ pub const ALL: &[&str] = &[
     NETWORK_ENROLLMENT_ROUTE_RECEIPT,
     ENROLLMENT_OPERATOR_NONCE,
     SESSION_HYDRATION_REQUEST,
+    AGENT_SESSION_INPUT_EDIT,
     EVAL_DEFINITION,
     EVAL_RUN,
     EVAL_TRIAL,
@@ -297,6 +302,7 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     NETWORK_ENROLLMENT_ROUTE_RECEIPT_NAME,
     ENROLLMENT_OPERATOR_NONCE_NAME,
     SESSION_HYDRATION_REQUEST_NAME,
+    AGENT_SESSION_INPUT_EDIT_NAME,
     EVAL_DEFINITION_NAME,
     EVAL_RUN_NAME,
     EVAL_TRIAL_NAME,
