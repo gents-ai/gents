@@ -8,7 +8,7 @@ work as documents in a local, replicated database.
 
 Download the installer for your platform from the
 [latest GitHub release](https://github.com/gents-ai/gents/releases/latest).
-The app includes everything it needs; you do not need to install Rust, Node, or
+The app includes everything it needs; you do not need to install Rust, Node.js, or
 a separate command-line tool.
 
 ### macOS (Apple Silicon)
