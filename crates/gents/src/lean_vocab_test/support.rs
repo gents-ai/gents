@@ -1837,7 +1837,7 @@ pub(crate) fn lean_fold_queue_cases() -> &'static [LeanFoldQueueCase] {
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanFoldQueueCase {
     pub(crate) name: String,
-    pub(crate) agent_id: u64,
+    pub(crate) node_id: u64,
     pub(crate) session_id: u64,
     pub(crate) inputs: Vec<LeanFoldQueueInput>,
     pub(crate) expected: LeanFoldQueueObservation,
