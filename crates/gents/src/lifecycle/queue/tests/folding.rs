@@ -201,7 +201,7 @@ async fn generated_fold_queue_cases_bind_to_native_claims() {
 }
 
 async fn drive(case: &LeanFoldQueueCase) {
-    assert_eq!(case.agent_id, 1, "fixture maps modeled agent 1 to its DID");
+    assert_eq!(case.node_id, 1, "fixture maps modeled node 1 to its DID");
     let db = test_db(&case.name).await;
     let session_id = case.session_id.to_string();
     let mut bound: HashMap<u64, String> = HashMap::new();
