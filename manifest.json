@@ -23,7 +23,7 @@
   "description": "Runs SQL over CSV, TSV, JSON, NDJSON, Parquet, XLSX and ODS files, a folder of them, or rows sent inline, with exact types, and saves a result as CSV or Parquet, as a Data analyst agent and one plugin.",
   "inference_slots": [
     {
-      "behaviors": [
+      "agents": [
         "data-analyst"
       ],
       "description": "Explores the data files the user names with the data_tables tool and answers from SQL results. Any capable profile.",

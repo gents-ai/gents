@@ -1,7 +1,7 @@
 {
   "install": {
     "documents": [
-      "AgentBehavior/data-analyst",
+      "Agent/data-analyst",
       "AgentContext/data-analyst-context",
       "Callback/data-run",
       "CallbackBinding/data-run",

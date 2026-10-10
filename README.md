@@ -39,14 +39,14 @@ From a terminal:
 
 ```sh
 gents pack install gents/data_tables --inference-slot data_analyst=<profile>
-gents chat --behavior-id data-analyst "Which region sold the most in reports/sales.csv?"
+gents chat --agent-id data-analyst "Which region sold the most in reports/sales.csv?"
 ```
 
 ## Use it as a model tool
 
-The `data-analyst` behavior's Tools document grants the plugin as a model tool
-(`integrations.plugins: [{"plugin": "gents/data_tables"}]`). To give it to another behavior, add the same entry
-to that behavior's Tools. The model calls
+The `data-analyst` agent's Tools document grants the plugin as a model tool
+(`integrations.plugins: [{"plugin": "gents/data_tables"}]`). To give it to another agent, add the same entry
+to that agent's Tools. The model calls
 
 ```json
 {"path": "reports", "sql": "SELECT region, sum(units) AS units FROM sales GROUP BY region"}

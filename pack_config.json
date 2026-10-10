@@ -1,13 +1,13 @@
 {
-  "agent_behaviors": [
+  "agents": [
     {
-      "behavior_id": "data-analyst",
+      "agent_id": "data-analyst",
       "context_id": "data-analyst-context",
       "display_name": "Data analyst",
       "inference_profile_id": "gents:inference-slot:data_analyst"
     }
   ],
-  "agent_principal": {},
+  "node": {},
   "callback_bindings": [
     {
       "binding_id": "data-run",
