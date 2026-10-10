@@ -157,7 +157,7 @@ export function NodeAgentStack({
             shifted,
             foldedCount,
           )}
-          title={`${workers.length} worker${workers.length === 1 ? "" : "s"}`}
+          title={`${workers.length} started session${workers.length === 1 ? "" : "s"}`}
         >
           {leftOut > 0 ? (
             <>
