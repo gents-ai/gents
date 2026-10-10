@@ -240,7 +240,7 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
         let preamble = prompt_builder.preamble().to_string();
         let provider_inputs = Arc::new(std::sync::Mutex::new(Vec::new()));
         let request_identity = agent_config.node_identity().clone();
-        let mut daemon = BehaviorDaemon::new(
+        let mut daemon = AgentDaemon::new(
             node.clone(),
             agent_config.clone(),
             None,
@@ -361,7 +361,7 @@ async fn scripted_daemon(
     node: &Arc<defra_node::EmbeddedNode>,
     agent_config: &Arc<ResolvedAgent>,
     provider_inputs: &Arc<std::sync::Mutex<Vec<String>>>,
-) -> BehaviorDaemon<WakeInputModel> {
+) -> AgentDaemon<WakeInputModel> {
     let prompt_builder = LayeredPromptBuilder::for_agent(
         &agent_config.system_prompt,
         &agent_config.agent_id,
@@ -370,7 +370,7 @@ async fn scripted_daemon(
         &[],
     );
     let preamble = prompt_builder.preamble().to_string();
-    BehaviorDaemon::new(
+    AgentDaemon::new(
         node.clone(),
         agent_config.clone(),
         None,
