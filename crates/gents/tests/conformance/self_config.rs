@@ -11,20 +11,20 @@
 use crate::lean_vocab_test::{
     lean_agent_decision_cases, lean_agent_materialization_cases, lean_self_config_cases,
     lean_self_config_field_tables, lean_self_config_selection_cases, lean_sibling_tools_cases,
-    LeanAgentCandidate, LeanAgentDecisionInputs, LeanSelfConfigPatchEntry, LeanSelfConfigCase,
+    LeanAgentCandidate, LeanAgentDecisionInputs, LeanSelfConfigCase, LeanSelfConfigPatchEntry,
 };
 use gents::config_client::patch::{
     apply_patch, ensure_admissible, SelfConfigPatch, SelfConfigTarget, ALL_SELF_CONFIG_TARGETS,
-};
-use gents::self_config::{
-    guard_backend_auth, guard_backend_choice, guard_agent_keeps_reach, guard_tools_keep_control,
-    guard_tools_keep_grants, reselection_keeps_grants, OperatorGrants,
 };
 use gents::self_config::agent::{
     admit_sibling_tools_target, decide_agent_operation, materialize_agent, AgentCandidate,
     AgentCatalogView, AgentCreateRequest, AgentOperation, SiblingToolsTarget,
 };
 use gents::self_config::{apply_tool_grant_selection, validate_tool_network_selection};
+use gents::self_config::{
+    guard_agent_keeps_reach, guard_backend_auth, guard_backend_choice, guard_tools_keep_control,
+    guard_tools_keep_grants, reselection_keeps_grants, OperatorGrants,
+};
 use gents::toolset::CommandNetworkMode;
 use serde_json::{Map, Value};
 use std::collections::BTreeSet;
@@ -121,9 +121,7 @@ pub(super) fn generated_self_config_cases_fence_patch_merge() {
         }
         let grant_guarded = matches!(
             target,
-            SelfConfigTarget::Tools
-                | SelfConfigTarget::AgentContext
-                | SelfConfigTarget::Agent
+            SelfConfigTarget::Tools | SelfConfigTarget::AgentContext | SelfConfigTarget::Agent
         );
         if (case.guarded || grant_guarded) && case.admissible && case.validates {
             let held = OperatorGrants {
@@ -153,9 +151,7 @@ pub(super) fn generated_self_config_cases_fence_patch_merge() {
                 let (stored, candidate) = typed();
                 match target {
                     SelfConfigTarget::Tools => guard_tools_keep_control(&stored, &candidate),
-                    SelfConfigTarget::Agent => {
-                        guard_agent_keeps_reach(&stored, &candidate)
-                    }
+                    SelfConfigTarget::Agent => guard_agent_keeps_reach(&stored, &candidate),
                     SelfConfigTarget::InferenceBackend => guard_backend_auth(&stored, &candidate),
                     SelfConfigTarget::InferenceProfile => {
                         let backend = |doc: &Map<String, Value>| {
