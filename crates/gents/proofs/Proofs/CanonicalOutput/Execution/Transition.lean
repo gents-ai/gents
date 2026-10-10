@@ -115,28 +115,6 @@ def retractBeforeRetryCore (world : World) (generation : Generation)
   | none => .error .leaseRejected
   | some lease => .ok { world with lease := lease, segments := world.segments ++ [record] }
 
-def closedComplete (record : Segment) : Bool :=
-  match record.close with
-  | some (.closed .complete _ _) => true
-  | _ => false
-
-def closedPartial (record : Segment) : Bool :=
-  match record.close with
-  | some (.closed .«partial» _ _) => true
-  | _ => false
-
-def validateClosingRecord (segments : List Segment) (closing : Segment) : Bool :=
-  match uniqueRecord LookupError.unavailable .conflictingClosures
-      (closures segments closing.coordinate) with
-  | .ok only => only == closing &&
-      (match validateOpenPrefix segments closing.coordinate closing.writer with
-      | .ok _ => true
-      | .error _ => false) &&
-      match reconstructExtent segments closing with
-      | .ok _ => true
-      | .error _ => false
-  | .error _ => false
-
 /-- Fresh publication closes the entire authoritative data extent visible at
 its gate. Reconstruction remains deliberately tolerant of later facts beyond a
 previously committed extent. -/
@@ -477,14 +455,14 @@ def toolDispatchPublicationValid (world : World) (generation : Generation)
   match ownedToolByDocument? world document with
   | some tool => match tool.provenance with
     | .acceptedIntent => dispatchPublicationValid world generation document
-    | .spawnedBackground _ => acceptedHeaderBindsToolGeneration world tool generation
+    | .spawnedBackground _ | .pluginEffect _ _ => acceptedHeaderBindsToolGeneration world tool generation
   | none => false
 
 def toolReadyToDispatch (world : World) (document : DocId) : Bool :=
   match ownedToolByDocument? world document with
   | some tool => match tool.provenance with
     | .acceptedIntent => decide (world.transcript.ReadyToDispatch document)
-    | .spawnedBackground _ => tool.context.state == .pending
+    | .spawnedBackground _ | .pluginEffect _ _ => tool.context.state == .pending
   | none => false
 
 def dispatchCore (world : World) (generation : Generation)
@@ -512,8 +490,9 @@ def dispatchCore (world : World) (generation : Generation)
               .ok { world with
                 lease := lease
                 toolContexts := replaceOwnedTool world.toolContexts callId updated
-                transcript := world.transcript.dispatchToolCallWithMode
-                  callId context.awaitMode }
+                transcript := match tool.provenance with
+                  | .acceptedIntent => world.transcript.dispatchToolCallWithMode callId context.awaitMode
+                  | .spawnedBackground _ | .pluginEffect _ _ => world.transcript }
 
 def toolControlAction : ToolExecution.ToolCallContext.Action → Bool
   | .background | .foreground => true
@@ -530,6 +509,9 @@ def changeToolControlCore (world : World) (generation : Generation) (document : 
   | some tool =>
       if acceptedHeaderBindsToolGeneration world tool generation = false ||
           tool.stuckSince.isSome then
+        .error .transcriptRejected
+      else if action == .background && (match tool.provenance with
+          | .pluginEffect _ _ => true | _ => false) then
         .error .transcriptRejected
       else if action == .foreground && world.terminalSelection.isSome then
         .error .terminalRejected
@@ -709,6 +691,9 @@ def normalCompletionToolsReady (world : World) (generation : Generation) : Bool 
       match tool.provenance, tool.context.state with
       | _, .pending => true
       | .spawnedBackground _, .running => tool.context.awaitMode == .background
+      | .pluginEffect _ _, .running => false
+      | .pluginEffect _ _, terminal => decide (isTerminal terminal) &&
+          (tool.context.startedAt.isNone || pluginTerminalPayloadValid world tool)
       | .acceptedIntent, .running =>
           tool.context.awaitMode == .background && canonicalToolDelivered world tool
       | .spawnedBackground _, terminal =>
@@ -960,6 +945,34 @@ def admitSpawnedBackground (world : World) (generation : Generation)
     (admission : SpawnedToolAdmission) : Except Error World :=
   checked (fun post => toolProjectionCoherent post && spawnedToolPresent post admission)
     (admitSpawnedBackgroundCore world generation admission)
+
+def admitPluginEffectCore (world : World) (generation : Generation)
+    (admission : PluginEffectAdmission) : Except Error World :=
+  if pluginEffectPresent world admission && pluginEffectInvocationValid world generation admission then .ok world
+  else if !pluginEffectAdmissionValid world generation admission then .error .transcriptRejected
+  else match ownedToolByDocument? world admission.parentToolDoc with
+  | none => .error .transcriptRejected
+  | some parent =>
+      match RequestExecutionLease.step? world.lease
+          (.authorizeProducerDecision .mutationWriteGate generation .dispatch) with
+      | none => .error .leaseRejected
+      | some lease =>
+          .ok { world with
+            lease := lease
+            segments := world.segments ++ [admission.arguments]
+            toolContexts := world.toolContexts ++ [{
+              document := admission.document
+              requestDoc := parent.requestDoc
+              session := parent.session
+              acceptedSequence := parent.acceptedSequence
+              provenance := .pluginEffect admission.parentToolDoc admission.ordinal
+              effectArguments := some admission.arguments.id
+              context := admission.context }] }
+
+def admitPluginEffect (world : World) (generation : Generation)
+    (admission : PluginEffectAdmission) : Except Error World :=
+  checked (fun post => toolProjectionCoherent post && pluginEffectPresent post admission)
+    (admitPluginEffectCore world generation admission)
 
 def changeToolControl (world : World) (generation : Generation) (document : DocId)
     (action : ToolExecution.ToolCallContext.Action) : Except Error World :=

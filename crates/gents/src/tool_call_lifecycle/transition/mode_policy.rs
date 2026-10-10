@@ -9,6 +9,10 @@ impl ToolCallLifecycle {
     /// the in-memory field on success.
     pub async fn background(&mut self) -> Result<()> {
         self.ensure_state(&[ToolCallState::Running], "background")?;
+        anyhow::ensure!(
+            self.plugin_effect.is_none(),
+            "plugin effects cannot detach from their parent invocation"
+        );
         if self.await_mode == AwaitMode::Background {
             return Err(IllegalToolCallTransition::ModeAlreadyBackground.into());
         }

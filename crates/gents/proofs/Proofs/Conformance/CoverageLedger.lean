@@ -1271,6 +1271,26 @@ def caseCoverage : List CoverageEntry :=
       "tool_call_lifecycle::plugin_receipt::tests::generated_receipt_commit_cases")
       "tool-policy" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "plugin_resource_cases"
+      "PluginEffectCases"
+      "tool_call_lifecycle::plugin_effect::tests::generated_plugin_effect_admission_matches_execution_owner")
+      "tool-policy" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "plugin_resource_cases"
+      "PluginEffectTerminalCases"
+      "tool_call_lifecycle::query::result::tests::generated_plugin_child_terminal_presentation_matches_execution_owner")
+      "tool-policy" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "plugin_resource_cases"
+      "PluginEffectAccountingCases"
+      "lifecycle::terminal_tools::tests::generated_plugin_child_request_accounting_matches_execution_owner")
+      "tool-policy" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "plugin_resource_cases"
+      "PluginToolCallCases"
+      "plugin::tool_calls::tests::generated_tool_call_bounds_and_grants")
+      "tool-policy" [Surface.agentFacing]
+  , tagged (consumerCoverage
       "tool_timeout_cases"
       "ToolTimeoutCases"
       "tool_surface::timeouts::tests::generated_tool_timeout_cases_bind_native_resolution")

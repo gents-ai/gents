@@ -4186,3 +4186,80 @@ async fn real_bash_policy_denial_persists_typed_class_and_payload() {
     node.shutdown().await;
     let _ = std::fs::remove_dir_all(&data_path);
 }
+
+#[tokio::test]
+async fn plugin_child_requires_durable_completion_even_when_hook_is_fail_open() {
+    use gents_loop::SessionHook;
+
+    let data_path =
+        std::env::temp_dir().join(format!("plugin-child-hook-{}", uuid::Uuid::new_v4()));
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .data_path(&data_path)
+            .build()
+            .await
+            .unwrap(),
+    );
+    ensure_runtime_schemas(&node).await.unwrap();
+    let hook = DefraSessionHook::with_identity(
+        node.clone(),
+        "did:test:plugin-owner",
+        FailurePolicy::FailOpen,
+    );
+    hook.on_completion_call(&user_text_message("compose tools"), &[])
+        .await;
+    let session_id = hook.session_id().await.unwrap();
+    bind_interruptible_request(
+        node.as_ref(),
+        &hook,
+        "plugin-child-request",
+        &session_id,
+        chrono::Utc::now() + chrono::Duration::minutes(5),
+    )
+    .await;
+    let claimed_deadline = {
+        let fixtures = hook_execution_fixtures().lock().await;
+        fixtures[&hook_execution_fixture_key(&hook, "plugin-child-request")]
+            .lifecycle
+            .claimed_deadline_at()
+            .unwrap()
+    };
+    hook.set_request_deadline_at(Some(claimed_deadline)).await;
+    accept_hook_tool_call(&hook, "plugin-parent", "plugin", "{}", None).await;
+    assert!(matches!(
+        hook.on_tool_call("plugin", None, "plugin-parent", "{}")
+            .await,
+        ToolCallHookAction::Continue
+    ));
+    let child = hook
+        .admit_tool_effect("plugin-parent", 1, "query", "{}")
+        .await
+        .unwrap();
+    assert!(matches!(
+        hook.on_tool_call("query", None, &child, "{}").await,
+        ToolCallHookAction::Continue
+    ));
+
+    hook.in_flight_lifecycles.lock().await.remove(&child);
+    assert!(matches!(
+        hook.on_tool_result(
+            "query",
+            None,
+            &child,
+            "{}",
+            &crate::tool_call_lifecycle::ToolOutcome::Completed("table".into())
+        )
+        .await,
+        HookAction::Terminate { .. }
+    ));
+    assert!(hook.finish_tool_effect(&child, None).await.is_err());
+    assert!(hook.effect_lifecycles.lock().await.contains_key(&child));
+    hook.finish_tool_effect(
+        &child,
+        Some(&crate::tool_call_lifecycle::ToolOutcome::Cancelled),
+    )
+    .await
+    .unwrap();
+    assert!(!hook.effect_lifecycles.lock().await.contains_key(&child));
+    let _ = std::fs::remove_dir_all(data_path);
+}

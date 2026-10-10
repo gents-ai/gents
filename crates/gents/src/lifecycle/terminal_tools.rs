@@ -101,7 +101,8 @@ pub(super) async fn account_tools_in_txn(
         AgentToolCall(filter: {{ {scope}, request_doc_id: {{ _eq: "{escaped_request}" }} }}) {{
             _docID tool_call_key request_doc_id node_did requester_did session_id
             message_sequence tool_call_id tool_name lifecycle_state await_mode
-            started_at spawned_by_tool_call_doc_id
+            started_at deadline_at spawned_by_tool_call_doc_id
+            plugin_parent_tool_call_doc_id plugin_effect_ordinal terminal_output
         }}
     }}"#
         ))
@@ -121,7 +122,46 @@ pub(super) async fn account_tools_in_txn(
     let timestamp = escape_graphql_string(timestamp);
     for tool in &tools {
         let spawned = tool.row.spawned_by_tool_call_doc_id.as_deref();
-        let accepted = if let Some(parent_id) = spawned {
+        let plugin_parent = tool.row.plugin_parent_tool_call_doc_id.as_deref();
+        anyhow::ensure!(
+            plugin_parent.is_some() == tool.row.plugin_effect_ordinal.is_some(),
+            "plugin effect has incomplete provenance"
+        );
+        let accepted = if let Some(parent_id) = plugin_parent {
+            anyhow::ensure!(spawned.is_none(), "plugin effect cannot be spawned");
+            let parent = tools
+                .iter()
+                .find(|candidate| candidate.doc_id == parent_id)
+                .context("plugin effect has no direct parent in request")?;
+            anyhow::ensure!(
+                parent.row.spawned_by_tool_call_doc_id.is_none()
+                    && parent.row.plugin_parent_tool_call_doc_id.is_none()
+                    && parent.row.plugin_effect_ordinal.is_none(),
+                "plugin effect parent is not direct"
+            );
+            let binding = directly_bound(headers, parent, generation)?;
+            if binding.is_some() {
+                crate::tool_call_lifecycle::query::load_tool_call_arguments_in_txn(
+                    txn,
+                    &tool.doc_id,
+                    agent,
+                    session,
+                    request.requester_did.as_deref(),
+                )
+                .await?;
+                if completed {
+                    crate::tool_call_lifecycle::query::load_tool_call_read_in_txn(
+                        txn,
+                        &tool.doc_id,
+                        agent,
+                        session,
+                        request.requester_did.as_deref(),
+                    )
+                    .await?;
+                }
+            }
+            binding
+        } else if let Some(parent_id) = spawned {
             let Some(parent) = tools.iter().find(|candidate| candidate.doc_id == parent_id) else {
                 continue;
             };
@@ -166,7 +206,10 @@ pub(super) async fn account_tools_in_txn(
                     return Err(ToolAccountingRejection::ForegroundRunning.into());
                 }
             }
-            if spawned.is_none() && (state == "running" || tool.row.started_at.is_some()) {
+            if spawned.is_none()
+                && plugin_parent.is_none()
+                && (state == "running" || tool.row.started_at.is_some())
+            {
                 let intent = accepted_header
                     .message
                     .blocks
@@ -247,4 +290,126 @@ pub(super) async fn account_tools_in_txn(
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config_client::ConfigAccess;
+
+    #[tokio::test]
+    async fn generated_plugin_child_request_accounting_matches_execution_owner() {
+        let snapshot = crate::lean_vocab_test::lean_contract_snapshot();
+        let cases = snapshot.plugin_resource_cases["tool_effect_accounting"]
+            .as_array()
+            .unwrap();
+        for case in cases {
+            let name = case["name"].as_str().unwrap();
+            let (fixture, request_owner) =
+                crate::tool_call_lifecycle::admission_fixture::published_admission_with_owner(
+                    crate::tool_call_lifecycle::admission_fixture::PublishedAdmissionOptions {
+                        name: (&format!("account-{name}")).to_owned(),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap();
+            let crate::tool_call_lifecycle::admission_fixture::PublishedAdmission {
+                node,
+                path,
+                tool: mut parent,
+                ..
+            } = fixture;
+            let mut child = parent
+                .admit_plugin_effect(1, "fixture_effect", "{}")
+                .await
+                .unwrap();
+            if name != "pending_cancel" {
+                child.start_running().await.unwrap();
+            }
+            let child_doc = child.doc_id().unwrap().to_owned();
+            let generation = parent.execution_generation().unwrap().to_owned();
+            let request_doc = parent.request_doc_id().unwrap().to_owned();
+            let agent = parent.node_did().to_owned();
+            let session = parent.session_id().to_owned();
+            let normal = name == "running_normal";
+            if normal {
+                parent
+                    .complete("parent completed before child")
+                    .await
+                    .unwrap();
+            }
+            let result =
+                ConfigAccess::transact_local(&node, None, "test.plugin_child_accounting", |txn| {
+                    let request_doc = request_doc.clone();
+                    let session = session.clone();
+                    let agent = agent.clone();
+                    let generation = generation.clone();
+                    Box::pin(async move {
+                        let response = txn
+                            .execute(&format!(
+                                r#"{{ AgentRequest(docID: "{}") {{ {} }} }}"#,
+                                escape_graphql_string(&request_doc),
+                                crate::watcher::AGENT_REQUEST_FIELDS,
+                            ))
+                            .await?;
+                        let request: AgentRequestRow =
+                            serde_json::from_value(response["data"]["AgentRequest"][0].clone())?;
+                        let headers = crate::session::load_request_headers_in_txn(
+                            txn,
+                            &session,
+                            &agent,
+                            None,
+                            &request_doc,
+                        )
+                        .await?;
+                        let mut reader = crate::session::TxnCanonicalReader::new(txn, &agent, None);
+                        reader.observe_headers(&headers);
+                        account_tools_in_txn(
+                            txn,
+                            &mut reader,
+                            &request,
+                            &headers,
+                            &generation,
+                            normal,
+                            &chrono::Utc::now().to_rfc3339(),
+                        )
+                        .await
+                    })
+                })
+                .await;
+            if normal {
+                assert_eq!(
+                    result.is_ok(),
+                    case["expected_normal_ready"].as_bool().unwrap()
+                );
+            } else {
+                result.unwrap();
+            }
+            let response = ConfigAccess::Local(node.clone()).execute(&format!(
+                r#"{{ AgentToolCall(docID: "{}") {{ lifecycle_state started_at stuck_since terminal_output }} }}"#,
+                escape_graphql_string(&child_doc),
+            )).await.unwrap();
+            let row = &response["data"]["AgentToolCall"][0];
+            assert_eq!(row["lifecycle_state"], case["expected_state"], "{name}");
+            assert_eq!(
+                !row["started_at"].is_null(),
+                case["expected_started"].as_bool().unwrap(),
+                "{name}"
+            );
+            assert_eq!(
+                !row["stuck_since"].is_null(),
+                case["expected_stuck"].as_bool().unwrap(),
+                "{name}"
+            );
+            assert_eq!(
+                !row["terminal_output"].is_null(),
+                case["expected_terminal_output"].as_bool().unwrap(),
+                "{name}"
+            );
+            drop(request_owner);
+            node.shutdown().await;
+            let _ = std::fs::remove_dir_all(path);
+        }
+    }
 }

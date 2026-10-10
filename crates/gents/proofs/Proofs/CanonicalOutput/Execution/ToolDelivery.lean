@@ -175,7 +175,7 @@ def closeReplayValid (world : World) (tool : OwnedTool) (record : Segment) : Boo
         | some row => row.state == tool.context.state &&
             decide (tool.document ∉ world.transcript.inFlight)
         | none => false
-    | .spawnedBackground _ =>
+    | .spawnedBackground _ | .pluginEffect _ _ =>
         (transcriptToolByDocument? world tool.document).isNone &&
           decide (tool.document ∉ world.transcript.inFlight)
 
@@ -207,7 +207,27 @@ private def closeToolOutputWrite (world : World) (document : DocId)
 
 def closeToolOutput (world : World) (document : DocId)
     (authority : CloseAuthority) (record : Segment) : Except Error World :=
-  ToolWrite.lift world (closeToolOutputWrite world document authority record)
+  ToolWrite.lift world <|
+    if (ownedToolByDocument? world document).any (fun tool =>
+        match tool.provenance with | .pluginEffect _ _ => true | _ => false) then
+      .error .publication
+    else closeToolOutputWrite world document authority record
+
+theorem plugin_effect_requires_terminal_presentation (world : World) (tool : OwnedTool)
+    (parent ordinal : Nat) (authority : CloseAuthority) (record : Segment)
+    (found : ownedToolByDocument? world tool.document = some tool)
+    (derived : tool.provenance = .pluginEffect parent ordinal) :
+    closeToolOutput world tool.document authority record = .error .publication := by
+  simp [closeToolOutput, ToolWrite.lift, Except.map, found, derived]
+
+private theorem closeToolOutput_lift_success {world after : World} {document : DocId}
+    {authority : CloseAuthority} {record : Segment}
+    (h : closeToolOutput world document authority record = .ok after) :
+    ToolWrite.lift world (closeToolOutputWrite world document authority record) = .ok after := by
+  obtain ⟨write, hw, rfl⟩ := ToolWrite.lift_success h
+  split at hw <;> try contradiction
+  simp [ToolWrite.lift, hw, Except.map]
+
 
 def matchingMessageIdentity (left right : MessageEnvelope) : Bool :=
   left.header.id == right.header.id ||
@@ -248,18 +268,113 @@ def terminalNotificationExists (world : World) (tool : OwnedTool) : Bool :=
       deliveryShape? message tool.document == some .backgroundNotification
 
 def referenceOwnedByTool (world : World) (tool : OwnedTool)
-    (reference : PayloadRef) : Bool :=
-  match resolveClose world.segments noDeniedDocuments reference with
-  | .error _ => false
-  | .ok closing =>
-      closing.coordinate == CanonicalOutput.ToolDelivery.coordinate
-        tool.requestDoc tool.document &&
-      closing.writer == .tool tool.document &&
-      CanonicalOutput.ToolDelivery.closedRecordValid world.segments
-        tool.requestDoc tool.document closing
+    (reference : PayloadRef) : Bool := toolOutputReferenceOwned world tool reference
+
+/-- Derived effects have no transcript header. Their exact rendered terminal
+payload is stored on the child owner in the same write as its closure and state. -/
+private def closePluginEffectOutputWrite (world : World) (document : DocId)
+    (authority : CloseAuthority) (record : Segment) (payload : PayloadSpec) : Except Error ToolWrite :=
+  match ownedToolByDocument? world document with
+  | none => .error .missingTool
+  | some tool =>
+      if !(match tool.provenance with | .pluginEffect _ _ => true | _ => false) ||
+          payload.reference.closeId != record.id ||
+          (tool.terminalOutput.isSome && tool.terminalOutput != some payload) then
+        .error .publication
+      else match closeToolOutputWrite world document authority record with
+      | .error error => .error error
+      | .ok write =>
+          let post := ToolWrite.apply world write
+          match ownedToolByDocument? post document with
+          | none => .error .missingTool
+          | some closed =>
+              if !referenceOwnedByTool post closed payload.reference then .error .publication
+              else match resolveMessagePayload post.segments [] [.toolOutput] false payload with
+              | .error _ => .error .publication
+              | .ok _ =>
+                  let updated := { closed with terminalOutput := some payload }
+                  let write := { write with toolContexts := replaceOwnedTool post.toolContexts document updated }
+                  if toolProjectionCoherent (ToolWrite.apply world write) then .ok write
+                  else .error .ownership
+
+def closePluginEffectOutput (world : World) (document : DocId)
+    (authority : CloseAuthority) (record : Segment) (payload : PayloadSpec) : Except Error World :=
+  ToolWrite.lift world (closePluginEffectOutputWrite world document authority record payload)
+
+private theorem plugin_close_underlying (before after : World) (document : DocId)
+    (authority : CloseAuthority) (record : Segment) (payload : PayloadSpec)
+    (h : closePluginEffectOutput before document authority record payload = .ok after) :
+    ∃ closed, ToolWrite.lift before (closeToolOutputWrite before document authority record) = .ok closed ∧
+      after.segments = closed.segments ∧ after.messages = closed.messages ∧
+      after.transcript = closed.transcript := by
+  obtain ⟨write, hw, rfl⟩ := ToolWrite.lift_success h
+  unfold closePluginEffectOutputWrite at hw
+  cases found : ownedToolByDocument? before document with
+  | none => simp [found] at hw
+  | some tool =>
+    simp only [found] at hw
+    by_cases denied : (!(match tool.provenance with | .pluginEffect _ _ => true | _ => false) ||
+        payload.reference.closeId != record.id ||
+        (tool.terminalOutput.isSome && tool.terminalOutput != some payload)) = true
+    · simp only [if_pos denied] at hw
+      contradiction
+    simp only [if_neg denied] at hw
+    cases closedResult : closeToolOutputWrite before document authority record with
+    | error e => simp [closedResult] at hw
+    | ok closedWrite =>
+      simp only [closedResult] at hw
+      cases foundClosed : ownedToolByDocument? (ToolWrite.apply before closedWrite) document with
+      | none => simp [foundClosed] at hw
+      | some closedTool =>
+        simp only [foundClosed] at hw
+        split at hw <;> try contradiction
+        cases resolved : resolveMessagePayload (ToolWrite.apply before closedWrite).segments [] [.toolOutput] false payload with
+        | error e => simp [resolved] at hw
+        | ok text =>
+          simp only [resolved] at hw
+          try dsimp only at hw
+          split at hw <;> try contradiction
+          cases hw
+          exact ⟨ToolWrite.apply before closedWrite,
+            by simp [ToolWrite.lift, closedResult, Except.map], rfl, rfl, rfl⟩
+
+theorem plugin_close_preserves_projection (before after : World) (document : DocId)
+    (authority : CloseAuthority) (record : Segment) (payload : PayloadSpec)
+    (h : closePluginEffectOutput before document authority record payload = .ok after) :
+    toolProjectionCoherent after = true := by
+  obtain ⟨write, hw, rfl⟩ := ToolWrite.lift_success h
+  unfold closePluginEffectOutputWrite at hw
+  cases found : ownedToolByDocument? before document with
+  | none => simp [found] at hw
+  | some tool =>
+    simp only [found] at hw
+    by_cases denied : (!(match tool.provenance with | .pluginEffect _ _ => true | _ => false) ||
+        payload.reference.closeId != record.id ||
+        (tool.terminalOutput.isSome && tool.terminalOutput != some payload)) = true
+    · simp only [if_pos denied] at hw
+      contradiction
+    simp only [if_neg denied] at hw
+    cases closedResult : closeToolOutputWrite before document authority record with
+    | error e => simp [closedResult] at hw
+    | ok closedWrite =>
+      simp only [closedResult] at hw
+      cases foundClosed : ownedToolByDocument? (ToolWrite.apply before closedWrite) document with
+      | none => simp [foundClosed] at hw
+      | some closedTool =>
+        simp only [foundClosed] at hw
+        split at hw <;> try contradiction
+        cases resolved : resolveMessagePayload (ToolWrite.apply before closedWrite).segments [] [.toolOutput] false payload with
+        | error e => simp [resolved] at hw
+        | ok text =>
+          simp only [resolved] at hw
+          try dsimp only at hw
+          split at hw <;> try contradiction
+          cases hw
+          assumption
 
 def deliveryHeaderValid (world : World) (tool : OwnedTool)
     (message : MessageEnvelope) : Bool :=
+  (match tool.provenance with | .pluginEffect _ _ => false | _ => true) &&
   message.header.publication == .toolDelivery tool.document &&
     message.header.request == some tool.requestDoc &&
     message.header.session == tool.session && message.header.role == .user &&
@@ -285,6 +400,7 @@ def wakeBindingValid (world : World) (tool : OwnedTool)
 
 def wakeNotificationHeaderValid (world : World) (tool : OwnedTool)
     (binding : WakeDocumentBinding) (message : MessageEnvelope) : Bool :=
+  (match tool.provenance with | .pluginEffect _ _ => false | _ => true) &&
   wakeBindingValid world tool binding message &&
     tool.context.awaitMode == .background &&
     message.header.publication == .toolDelivery tool.document &&
@@ -323,7 +439,7 @@ def deliveryRowPresent (world : World) (tool : OwnedTool)
             | some row => row.state == tool.context.state &&
                 decide (tool.document ∉ world.transcript.inFlight)
             | none => false
-        | .spawnedBackground _ =>
+        | .spawnedBackground _ | .pluginEffect _ _ =>
             (transcriptToolByDocument? world tool.document).isNone &&
               decide (tool.document ∉ world.transcript.inFlight)
 
@@ -350,6 +466,7 @@ def notificationReady (world : World) (tool : OwnedTool) : Bool :=
         | none => false
     | .spawnedBackground _ =>
         (transcriptToolByDocument? world tool.document).isNone
+    | .pluginEffect _ _ => false
 
 def freshDeliveryTranscript? (world : World) (tool : OwnedTool)
     (message : MessageEnvelope) : Option Transcript.TranscriptState :=
@@ -616,10 +733,11 @@ theorem exact_close_replay_is_inert
     (coherent : toolLifecycleProjectionCoherent world = true)
     (found : ownedToolByDocument? world document = some tool)
     (bound : bindingValid world tool = true)
-    (valid : closeReplayValid world tool record = true) :
+    (valid : closeReplayValid world tool record = true)
+    (direct : tool.provenance = .acceptedIntent) :
     closeToolOutput world document authority record = .ok world := by
   simp [closeToolOutput, closeToolOutputWrite, ToolWrite.lift, Except.map,
-    coherent, found, bound, valid]
+    coherent, found, bound, valid, direct]
 
 theorem exact_publication_replay_ignores_clock_and_cursor
     (world : World) (document : DocId) (tool : OwnedTool)
@@ -712,15 +830,15 @@ theorem close_preserves_parent_lease (before after : World) (document : DocId)
     (authority : CloseAuthority) (record : Segment)
     (h : closeToolOutput before document authority record = .ok after) :
     after.lease = before.lease := by
-  exact ToolWrite.lift_preserves_lease h
+  exact ToolWrite.lift_preserves_lease (closeToolOutput_lift_success h)
 
-theorem close_success_effect (before after : World) (document : DocId)
+private theorem close_write_success_effect (before after : World) (document : DocId)
     (authority : CloseAuthority) (record : Segment)
-    (h : closeToolOutput before document authority record = .ok after) :
+    (h : ToolWrite.lift before (closeToolOutputWrite before document authority record) = .ok after) :
     (after.sessionId = before.sessionId ∧ after.messages = before.messages ∧
       after.transcript.nextSeq = before.transcript.nextSeq) ∧
       toolLifecycleProjectionCoherent after = true := by
-  unfold closeToolOutput ToolWrite.lift closeToolOutputWrite at h
+  unfold ToolWrite.lift closeToolOutputWrite at h
   split at h <;> try contradiction
   rename_i preCoherent
   split at h <;> try contradiction
@@ -740,16 +858,25 @@ theorem close_success_effect (before after : World) (document : DocId)
       subst after
       exact ⟨⟨rfl, rfl, rfl⟩, by simpa using postCoherent⟩
 
+theorem close_success_effect (before after : World) (document : DocId)
+    (authority : CloseAuthority) (record : Segment)
+    (h : closeToolOutput before document authority record = .ok after) :
+    (after.sessionId = before.sessionId ∧ after.messages = before.messages ∧
+      after.transcript.nextSeq = before.transcript.nextSeq) ∧
+      toolLifecycleProjectionCoherent after = true :=
+  close_write_success_effect before after document authority record (closeToolOutput_lift_success h)
+
 theorem close_preserves_publications (before after : World) (document : DocId)
     (authority : CloseAuthority) (record : Segment)
     (h : closeToolOutput before document authority record = .ok after) :
     after.sessionId = before.sessionId ∧ after.messages = before.messages ∧
       after.transcript.nextSeq = before.transcript.nextSeq := by
-  exact (close_success_effect before after document authority record h).1
+  exact (close_write_success_effect before after document authority record
+    (closeToolOutput_lift_success h)).1
 
-theorem close_success_write_effect (before after : World) (document : DocId)
+private theorem close_write_success_write_effect (before after : World) (document : DocId)
     (authority : CloseAuthority) (record : Segment)
-    (h : closeToolOutput before document authority record = .ok after) :
+    (h : ToolWrite.lift before (closeToolOutputWrite before document authority record) = .ok after) :
     after = before ∨ ∃ tool context segments,
       ownedToolByDocument? before document = some tool ∧
       terminalContext? before tool authority = some context ∧
@@ -759,7 +886,7 @@ theorem close_success_write_effect (before after : World) (document : DocId)
         segments := segments
         toolContexts := replaceOwnedTool before.toolContexts document (clearReconcileIntent tool context)
         transcript := before.transcript.terminalizeToolCall document context.state } := by
-  unfold closeToolOutput ToolWrite.lift closeToolOutputWrite at h
+  unfold ToolWrite.lift closeToolOutputWrite at h
   split at h <;> try contradiction
   split at h <;> try contradiction
   rename_i tool found
@@ -776,6 +903,20 @@ theorem close_success_write_effect (before after : World) (document : DocId)
     subst after
     exact Or.inr ⟨tool, context, segments, found, terminal, closed, rfl⟩
 
+theorem close_success_write_effect (before after : World) (document : DocId)
+    (authority : CloseAuthority) (record : Segment)
+    (h : closeToolOutput before document authority record = .ok after) :
+    after = before ∨ ∃ tool context segments,
+      ownedToolByDocument? before document = some tool ∧
+      terminalContext? before tool authority = some context ∧
+      CanonicalOutput.ToolDelivery.closeRecords before.segments tool.requestDoc tool.document
+        before.lease.now record = .ok segments ∧
+      after = { before with
+        segments := segments
+        toolContexts := replaceOwnedTool before.toolContexts document (clearReconcileIntent tool context)
+        transcript := before.transcript.terminalizeToolCall document context.state } :=
+  close_write_success_write_effect before after document authority record (closeToolOutput_lift_success h)
+
 theorem closeToolOutput_success_segment_effect (before after : World) (document : DocId)
     (authority : CloseAuthority) (record : Segment)
     (h : closeToolOutput before document authority record = .ok after) :
@@ -785,12 +926,41 @@ theorem closeToolOutput_success_segment_effect (before after : World) (document 
         CanonicalOutput.ToolDelivery.identityAvailable before.segments record = true ∧
         CanonicalOutput.ToolDelivery.ownedRecord before.segments request sourceDoc
           before.lease.now record = true := by
-  rcases close_success_write_effect before after document authority record h with same | effect
+  rcases close_write_success_write_effect before after document authority record
+    (closeToolOutput_lift_success h) with same | effect
   · exact Or.inl (congrArg World.segments same)
   · obtain ⟨tool, context, segments, _, _, closed, rfl⟩ := effect
     rcases CanonicalOutput.ToolDelivery.closeRecords_success_effect
       before.segments segments tool.requestDoc tool.document before.lease.now record closed with
       replay | fresh
+    · exact Or.inl replay
+    · exact Or.inr ⟨tool.requestDoc, tool.document, fresh⟩
+
+theorem plugin_close_preserves_publications (before after : World) (document : DocId)
+    (authority : CloseAuthority) (record : Segment) (payload : PayloadSpec)
+    (h : closePluginEffectOutput before document authority record payload = .ok after) :
+    after.sessionId = before.sessionId ∧ after.messages = before.messages ∧
+      after.transcript.nextSeq = before.transcript.nextSeq := by
+  obtain ⟨closed, hc, _, hm, ht⟩ := plugin_close_underlying before after document authority record payload h
+  have frame := (close_write_success_effect before closed document authority record hc).1
+  exact ⟨(tool_write_preserves_request_identity h).2, hm.trans frame.2.1, by rw [ht]; exact frame.2.2⟩
+
+theorem plugin_close_segment_effect (before after : World) (document : DocId)
+    (authority : CloseAuthority) (record : Segment) (payload : PayloadSpec)
+    (h : closePluginEffectOutput before document authority record payload = .ok after) :
+    after.segments = before.segments ∨
+      ∃ request sourceDoc, after.segments = before.segments ++ [record] ∧
+        closures before.segments (CanonicalOutput.ToolDelivery.coordinate request sourceDoc) = [] ∧
+        CanonicalOutput.ToolDelivery.identityAvailable before.segments record = true ∧
+        CanonicalOutput.ToolDelivery.ownedRecord before.segments request sourceDoc
+          before.lease.now record = true := by
+  obtain ⟨closed, hc, hs, _, _⟩ := plugin_close_underlying before after document authority record payload h
+  rw [hs]
+  rcases close_write_success_write_effect before closed document authority record hc with same | effect
+  · exact Or.inl (congrArg World.segments same)
+  · obtain ⟨tool, context, segments, _, _, closed, rfl⟩ := effect
+    rcases CanonicalOutput.ToolDelivery.closeRecords_success_effect
+      before.segments segments tool.requestDoc tool.document before.lease.now record closed with replay | fresh
     · exact Or.inl replay
     · exact Or.inr ⟨tool.requestDoc, tool.document, fresh⟩
 

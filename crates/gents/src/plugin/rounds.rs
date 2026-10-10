@@ -21,7 +21,7 @@ use std::time::Instant;
 use anyhow::{Context, Result};
 use serde_json::{Map, Value};
 
-use super::{http_calls, model_calls, PluginBudget, PluginOutcome, PluginVerdict};
+use super::{http_calls, model_calls, tool_calls, PluginBudget, PluginOutcome, PluginVerdict};
 
 /// Rounds of requests one call may be answered.
 pub const MAX_ROUNDS: u32 = 64;
@@ -37,11 +37,12 @@ pub(super) type Round = Arc<dyn Fn(Value, PluginBudget) -> Result<PluginOutcome>
 pub(super) struct HostCalls {
     pub(super) model: Option<model_calls::Session>,
     pub(super) http: Option<http_calls::Session>,
+    pub(super) tools: Option<tool_calls::Session>,
 }
 
 impl HostCalls {
     pub(super) fn is_empty(&self) -> bool {
-        self.model.is_none() && self.http.is_none()
+        self.model.is_none() && self.http.is_none() && self.tools.is_none()
     }
 
     pub(super) fn prepare_input(&self, input: Value) -> Result<Value> {
@@ -61,6 +62,10 @@ impl HostCalls {
             base.remove("http_results");
             base.insert("http_calls".to_owned(), Value::Bool(true));
         }
+        if self.tools.is_some() {
+            base.remove("tool_results");
+            base.insert("tool_calls".to_owned(), Value::Bool(true));
+        }
         Ok(Value::Object(base))
     }
 }
@@ -68,6 +73,7 @@ impl HostCalls {
 enum Asked {
     Model(model_calls::Batch),
     Http(http_calls::Batch),
+    Tools(tool_calls::Batch),
 }
 
 fn refused(started: Instant, fuel: u64, verdict: PluginVerdict, why: String) -> PluginOutcome {
@@ -91,13 +97,18 @@ fn asked(calls: &HostCalls, output: &Value) -> Result<Option<Asked>, String> {
         Some(_) => http_calls::parse_batch(output)?,
         None => None,
     };
-    match (model, http) {
-        (None, None) => Ok(None),
-        (Some(model), None) => Ok(Some(Asked::Model(model))),
-        (None, Some(http)) => Ok(Some(Asked::Http(http))),
-        (Some(_), Some(_)) => {
-            Err("one round asks for model_calls or http_calls, not both".to_owned())
-        }
+    let tools = match calls.tools {
+        Some(_) => tool_calls::parse_batch(output)?,
+        None => None,
+    };
+    match (model, http, tools) {
+        (None, None, None) => Ok(None),
+        (Some(model), None, None) => Ok(Some(Asked::Model(model))),
+        (None, Some(http), None) => Ok(Some(Asked::Http(http))),
+        (None, None, Some(tools)) => Ok(Some(Asked::Tools(tools))),
+        _ => Err(
+            "one round asks for exactly one of model_calls, http_calls or tool_calls".to_owned(),
+        ),
     }
 }
 
@@ -161,7 +172,7 @@ pub(super) async fn drive(
                     fuel_used: fuel,
                     wall_ms: elapsed_ms(started),
                     ..outcome
-                })
+                });
             }
             Ok(Some(asked)) => asked,
             Err(why) => return Ok(refused(started, fuel, PluginVerdict::BadOutput, why)),
@@ -186,6 +197,15 @@ pub(super) async fn drive(
         served += 1;
         let mut object = base.clone();
         let state = match asked {
+            Asked::Tools(batch) => {
+                let session = calls.tools.as_mut().expect("parsed only when offered");
+                let results = session.serve(batch.requests, serve_deadline).await;
+                if let Some(reason) = session.fatal.take() {
+                    return Ok(refused(started, fuel, PluginVerdict::Failed, reason));
+                }
+                object.insert("tool_results".to_owned(), Value::Object(results));
+                batch.state
+            }
             Asked::Model(batch) => {
                 tracing::debug!(
                     round = served,

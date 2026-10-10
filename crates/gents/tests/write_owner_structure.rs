@@ -48,7 +48,6 @@ const NODE_EXECUTE_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents/src/registry.rs", 1),
     ("crates/gents/src/session/observations.rs", 1),
     ("crates/gents/src/session/query.rs", 1),
-    ("crates/gents/src/tool_call_lifecycle/query.rs", 2),
     ("crates/gents/src/tool_call_lifecycle/recovery.rs", 3),
 ];
 

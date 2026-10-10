@@ -333,7 +333,7 @@ theorem dispatch_preserves_sequenceBound
   have hcore := checked_core_success _ _ _ h
   have hframe : after.messages = before.messages ∧ after.sessionId = before.sessionId := by
     unfold dispatchCore at hcore
-    dsimp only at hcore
+    try dsimp only at hcore
     repeat' first | contradiction | (solve | cases hcore; exact ⟨rfl, rfl⟩) | split at hcore
   exact hbound.of_messages_eq hframe.1 hframe.2
     (Nat.le_of_eq (dispatch_preserves_nextSeq before after generation permit h).symm)
@@ -345,11 +345,23 @@ theorem admitSpawnedBackground_preserves_sequenceBound
   have hcore := checked_core_success _ _ _ h
   have hframe : after.messages = before.messages ∧ after.sessionId = before.sessionId := by
     unfold admitSpawnedBackgroundCore at hcore
-    dsimp only at hcore
+    try dsimp only at hcore
     repeat' first | contradiction | (solve | cases hcore; exact ⟨rfl, rfl⟩) | split at hcore
   exact hbound.of_messages_eq hframe.1 hframe.2
     (Nat.le_of_eq (admitSpawnedBackground_preserves_nextSeq
       before after generation admission h).symm)
+
+theorem admitPluginEffect_preserves_sequenceBound
+    (before after : World) (generation : Generation) (admission : PluginEffectAdmission)
+    (hbound : SequenceBound before)
+    (h : Execution.admitPluginEffect before generation admission = .ok after) : SequenceBound after := by
+  have hcore := checked_core_success _ _ _ h
+  have hframe : after.messages = before.messages ∧ after.sessionId = before.sessionId := by
+    unfold admitPluginEffectCore at hcore
+    try dsimp only at hcore
+    repeat' first | contradiction | (solve | cases hcore; exact ⟨rfl, rfl⟩) | split at hcore
+  exact hbound.of_messages_eq hframe.1 hframe.2
+    (Nat.le_of_eq (admitPluginEffect_preserves_nextSeq before after generation admission h).symm)
 
 theorem changeToolControl_preserves_sequenceBound
     (before after : World) (generation : Generation) (document : DocId)
@@ -448,6 +460,9 @@ theorem Gate.evaluate_preserves_sequenceBound
   | dispatch generation permit =>
       exact dispatch_preserves_sequenceBound before after generation permit hbound
         (mapError_success Error.execution _ _ h)
+  | admitPluginEffect generation admission =>
+      exact admitPluginEffect_preserves_sequenceBound before after generation admission hbound
+        (mapError_success Error.execution _ _ h)
   | admitSpawned generation admission =>
       exact admitSpawnedBackground_preserves_sequenceBound before after generation admission hbound
         (mapError_success Error.execution _ _ h)
@@ -462,6 +477,11 @@ theorem Gate.evaluate_preserves_sequenceBound
   | toolClose document authority record =>
       have hop := mapError_success Error.delivery _ _ h
       rcases ToolDelivery.close_preserves_publications before after document authority record hop with
+        ⟨hsession, hmessages, hnext⟩
+      exact hbound.of_messages_eq hmessages hsession (Nat.le_of_eq hnext.symm)
+  | pluginEffectClose document authority record payload =>
+      have hop := mapError_success Error.delivery _ _ h
+      rcases ToolDelivery.plugin_close_preserves_publications before after document authority record payload hop with
         ⟨hsession, hmessages, hnext⟩
       exact hbound.of_messages_eq hmessages hsession (Nat.le_of_eq hnext.symm)
   | toolComplete document authority record message =>

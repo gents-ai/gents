@@ -107,7 +107,7 @@ theorem clockWorld_preserves_toolProjectionCoherent
           (isTerminal row.state ||
             (row.state == .running && runningReceiptSourceBound
               (clockWorld world document now) (clockEdit document now tool)))
-    | .spawnedBackground _, none => true
+    | .spawnedBackground _, none | .pluginEffect _ _, none => true
     | _, _ => false) = true
   cases hp : tool.provenance <;> cases hr : transcriptToolByDocument? world tool.document <;>
     simp only [hp, hr] at ht ⊢

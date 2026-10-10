@@ -2,6 +2,9 @@ import Proofs.ToolPolicy.Configuration
 import Proofs.ToolPolicy.PluginNetwork
 import Proofs.ToolPolicy.PluginInvocation
 import Proofs.Conformance.PluginReceipt
+
+import Proofs.ToolPolicy.PluginCalls
+import Proofs.Conformance.PluginEffects
 import Lean
 
 namespace Conformance.PluginResources
@@ -142,7 +145,24 @@ private def invocationJson : Json :=
           | none => false
           | some current => PluginInvocation.reusable original current))]
 
+private def toolCallsJson : Json := Json.mkObj [
+  ("supported", toJson <| ["create_goal", "get_goal", "update_goal", "agent_new", "agent_message",
+    "agent_list", "agent_interrupt", "spawn_process", "wait_process", "list_processes",
+    "read_process", "cancel_process", "configure", "query", "charts", "bash", "call_tool"].map fun name =>
+      Json.mkObj [("name", toJson name), ("expected", toJson (PluginCalls.supported name))]),
+  ("availability", toJson <| [false, true].flatMap fun grant =>
+    [false, true].flatMap fun parent => [false, true].map fun nested => Json.mkObj [
+      ("grant", toJson grant), ("parent", toJson parent), ("nested", toJson nested),
+      ("expected", toJson (PluginCalls.available grant parent nested))]),
+  ("reservation", toJson <| [0, 1, 63, 64, 65, 1000].map fun used => Json.mkObj [
+    ("used", toJson used), ("expected", toJson (PluginCalls.reserve used))]),
+  ("result_bytes", toJson <| [0, 1048575, 1048576, 1048577].map fun bytes => Json.mkObj [
+    ("bytes", toJson bytes), ("expected", toJson (PluginCalls.resultFits bytes))])]
+
 def casesJson : String := (Json.mkObj [("consent", consentJson), ("budgets", budgetsJson),
+  ("tool_calls", toolCallsJson), ("tool_effects", PluginEffects.casesJson),
+  ("tool_effect_terminals", PluginEffects.terminalCasesJson),
+  ("tool_effect_accounting", PluginEffects.accountingCasesJson),
   ("model_slots", modelSlotsJson), ("network", networkJson),
   ("call_access", callAccessJson), ("invocation", invocationJson), ("receipt", Conformance.PluginReceipt.casesJson)]).compress
 end Conformance.PluginResources

@@ -30,6 +30,29 @@ pub trait CanonicalSessionHook<Accepted: Send>: SessionHook {
 
 #[async_trait]
 pub trait SessionHook: Send + Sync {
+    /// Admit one child under an already running plugin call. Implementations
+    /// must bind its canonical arguments and physical parent before returning
+    /// the internal identity consumed by the ordinary dispatch hooks.
+    async fn admit_tool_effect(
+        &self,
+        _parent_internal_id: &str,
+        _ordinal: u32,
+        _tool_name: &str,
+        _arguments: &str,
+    ) -> Result<String, String> {
+        Err("tool effects require a durable session owner".to_owned())
+    }
+
+    /// Release a derived-call admission, settling its exact durable child if
+    /// cancellation or deadline interrupted the before hook.
+    async fn finish_tool_effect(
+        &self,
+        _internal_id: &str,
+        _interruption: Option<&ToolOutcome>,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+
     /// Called once per completion turn, before the provider is dispatched:
     /// persists the prompt (and the per-request context message on turn 1)
     /// and gives the hook a chance to terminate the loop early.

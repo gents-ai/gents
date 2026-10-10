@@ -32,6 +32,8 @@ pub struct PluginExecutionAuthority {
     pub environment: PluginEnvironmentGrant,
     pub host_http: Option<PluginHttpGrant>,
     pub host_model: bool,
+    /// True only when this invocation received a live, explicitly granted tool dispatcher.
+    pub host_tools: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

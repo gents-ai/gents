@@ -384,6 +384,15 @@ theorem admitSpawnedBackground_preserves_nextSeq (world after : World)
   try dsimp only at hcore
   repeat' first | contradiction | (solve | cases hcore; rfl) | split at hcore
 
+theorem admitPluginEffect_preserves_nextSeq (world after : World)
+    (generation : Generation) (admission : PluginEffectAdmission)
+    (h : admitPluginEffect world generation admission = .ok after) :
+    after.transcript.nextSeq = world.transcript.nextSeq := by
+  have hcore := checked_core_success _ _ _ h
+  simp only [admitPluginEffectCore] at hcore
+  try dsimp only at hcore
+  repeat' first | contradiction | (solve | cases hcore; rfl) | split at hcore
+
 theorem revokeCorrupt_preserves_nextSeq
     (world after : World) (expected fresh : Generation)
     (outcome : RequestExecutionLease.Outcome) (selection : TerminalSelection)

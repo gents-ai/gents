@@ -1,4 +1,5 @@
 import Proofs.CanonicalOutput.Execution.State
+import Proofs.CanonicalOutput.ToolDelivery
 
 namespace CanonicalOutput.Execution
 
@@ -69,6 +70,28 @@ def validateOpenPrefix (records : List Segment) (coordinate : Coordinate)
     (writer : Writer) : Except IntegrityError Unit := do
   let _ ← reconstructOpenPrefix records coordinate writer
   pure ()
+
+def closedComplete (record : Segment) : Bool :=
+  match record.close with
+  | some (.closed .complete _ _) => true
+  | _ => false
+
+def closedPartial (record : Segment) : Bool :=
+  match record.close with
+  | some (.closed .«partial» _ _) => true
+  | _ => false
+
+def validateClosingRecord (segments : List Segment) (closing : Segment) : Bool :=
+  match uniqueRecord LookupError.unavailable .conflictingClosures
+      (closures segments closing.coordinate) with
+  | .ok only => only == closing &&
+      (match validateOpenPrefix segments closing.coordinate closing.writer with
+      | .ok _ => true
+      | .error _ => false) &&
+      match reconstructExtent segments closing with
+      | .ok _ => true
+      | .error _ => false
+  | .error _ => false
 
 def headerCoordinateConflict (world : World) (message : MessageEnvelope) : Bool :=
   world.messages.any fun other => other != message &&
@@ -209,7 +232,7 @@ def metadataOwnedByGeneration (world : World) (generation : Generation)
         (toolIntents message).any (fun intent => intent.call == document)
   match tool.provenance with
   | .acceptedIntent => direct tool.document && directAcceptedHeaderMetadataBindsTool world tool
-  | .spawnedBackground parentDoc =>
+  | .spawnedBackground parentDoc | .pluginEffect parentDoc _ =>
       direct parentDoc && tool.document != parentDoc &&
         match ownedToolByDocument? world parentDoc with
         | some parent => parent.provenance == .acceptedIntent &&
@@ -232,12 +255,23 @@ def spawnParentIntentValid (world : World) (tool : OwnedTool) (parentDoc : DocId
             intent.call == parentDoc && intent.name == "spawn_process"))
   | none => false
 
+def pluginParentIntentValid (world : World) (tool : OwnedTool) (parentDoc : DocId) : Bool :=
+  match ownedToolByDocument? world parentDoc with
+  | some parent => parent.provenance == .acceptedIntent &&
+      parent.requestDoc == tool.requestDoc && parent.session == tool.session &&
+      parent.acceptedSequence == tool.acceptedSequence &&
+      directAcceptedHeaderMetadataBindsTool world parent
+  | none => false
+
 def acceptedHeaderBindsTool (world : World) (tool : OwnedTool) : Bool :=
   match tool.provenance with
   | .acceptedIntent => directAcceptedHeaderMetadataBindsTool world tool
   | .spawnedBackground parentDoc =>
       spawnParentIntentValid world tool parentDoc &&
         tool.document != parentDoc && tool.context.awaitMode == .background
+  | .pluginEffect parentDoc ordinal =>
+      pluginParentIntentValid world tool parentDoc && tool.document != parentDoc &&
+        ordinal > 0 && ordinal ≤ 64 && tool.context.awaitMode == .foreground
 
 def acceptedHeaderBindsToolGeneration (world : World) (tool : OwnedTool)
     (generation : Generation) : Bool :=
@@ -252,6 +286,8 @@ def acceptedHeaderBindsToolGeneration (world : World) (tool : OwnedTool)
   | .acceptedIntent => direct tool.document
   | .spawnedBackground parentDoc =>
       spawnParentIntentValid world tool parentDoc && direct parentDoc
+  | .pluginEffect parentDoc _ =>
+      pluginParentIntentValid world tool parentDoc && direct parentDoc
 
 def messageContainsToolResult (message : MessageEnvelope) (document : DocId) : Bool :=
   message.blocks.any fun block => match block with
@@ -324,7 +360,7 @@ def toolLifecycleProjectionCoherent (world : World) : Bool :=
                   row.state == tool.context.state &&
                   (decide (tool.document ∈ world.transcript.inFlight) ==
                     (tool.context.state == .running && !toolHandedOff tool))
-        | .spawnedBackground _ =>
+        | .spawnedBackground _ | .pluginEffect _ _ =>
             (transcriptToolByDocument? world tool.document).isNone &&
               decide (tool.document ∉ world.transcript.inFlight)) &&
     world.transcript.toolCalls.all (fun row =>
@@ -349,7 +385,7 @@ def toolProjectionCoherent (world : World) : Bool :=
         | some key => canonicalToolResultBound world tool key &&
             (isTerminal row.state ||
               (row.state == .running && runningReceiptSourceBound world tool))
-    | .spawnedBackground _, none => true
+    | .spawnedBackground _, none | .pluginEffect _ _, none => true
     | _, _ => false)
 
 /-- A result key is delivery only when its unique transcript result row is
@@ -426,6 +462,71 @@ def spawnedAdmissionReplayValid (world : World)
       ToolGenesis.fromContext tool.context == ToolGenesis.fromContext admission.context &&
       acceptedHeaderBindsTool world tool
   | _ => false
+
+def toolOutputReferenceOwned (world : World) (tool : OwnedTool)
+    (reference : PayloadRef) : Bool :=
+  match resolveClose world.segments noDeniedDocuments reference with
+  | .error _ => false
+  | .ok closing =>
+      closing.coordinate == CanonicalOutput.ToolDelivery.coordinate tool.requestDoc tool.document &&
+      closing.writer == .tool tool.document &&
+      CanonicalOutput.ToolDelivery.closedRecordValid world.segments tool.requestDoc tool.document closing
+
+def pluginTerminalPayloadValid (world : World) (tool : OwnedTool) : Bool :=
+  tool.terminalOutput.any fun payload =>
+    toolOutputReferenceOwned world tool payload.reference &&
+      match resolveMessagePayload world.segments [] [.toolOutput] false payload with
+      | .ok _ => true | .error _ => false
+
+def pluginEffectInputValid (world : World) (generation : Generation)
+    (admission : PluginEffectAdmission) : Bool :=
+  let record := admission.arguments
+  record.coordinate == ⟨world.requestId, .toolEffectArguments admission.document⟩ &&
+    record.writer == .request generation && closedComplete record &&
+    record.createdAt ≤ world.lease.now &&
+    validateClosingRecord (world.segments ++ [record]) record &&
+    match reconstructExtent (world.segments ++ [record]) record with
+    | .ok [(declaration, bytes)] => declaration.kind == .arguments &&
+        bytes.length ≤ 1048576 && !admission.name.isEmpty &&
+        declaration.tool.any (fun identity => identity.name == admission.name)
+    | _ => false
+
+def pluginEffectPresent (world : World) (admission : PluginEffectAdmission) : Bool :=
+  match ownedToolByDocument? world admission.document with
+  | some tool => tool.provenance == .pluginEffect admission.parentToolDoc admission.ordinal &&
+      tool.effectArguments == some admission.arguments.id &&
+      tool.context.deadline == admission.context.deadline &&
+      ToolGenesis.fromContext tool.context == ToolGenesis.fromContext admission.context &&
+      admission.arguments ∈ world.segments &&
+      (transcriptToolByDocument? world admission.document).isNone
+  | none => false
+
+/-- Effect retries belong to a live invocation, not durable workflow resumption. -/
+def pluginEffectInvocationValid (world : World) (generation : Generation)
+    (admission : PluginEffectAdmission) : Bool :=
+  admission.delegationGranted &&
+    (RequestExecutionLease.step? world.lease
+      (.authorizeProducerDecision .mutationWriteGate generation .dispatch)).isSome &&
+    match ownedToolByDocument? world admission.parentToolDoc with
+    | some parent => parent.provenance == .acceptedIntent &&
+        parent.context.state == .running &&
+        acceptedHeaderBindsToolGeneration world parent generation
+    | none => false
+
+def pluginEffectAdmissionValid (world : World) (generation : Generation)
+    (admission : PluginEffectAdmission) : Bool :=
+  admission.delegationGranted && admission.ordinal > 0 && admission.ordinal ≤ 64 &&
+    admission.document != admission.parentToolDoc &&
+    admission.context.state == .pending && admission.context.awaitMode == .foreground &&
+    !(world.toolContexts.any (fun tool => tool.document == admission.document ||
+      tool.provenance == .pluginEffect admission.parentToolDoc admission.ordinal)) &&
+    pluginEffectInputValid world generation admission &&
+    match ownedToolByDocument? world admission.parentToolDoc with
+    | some parent => parent.provenance == .acceptedIntent &&
+        parent.context.state == .running &&
+        admission.context.deadline ≤ parent.context.deadline &&
+        acceptedHeaderBindsToolGeneration world parent generation
+    | none => false
 
 def indexedDeclarations : Streams → Nat → List (Nat × Declaration)
   | [], _ => []
