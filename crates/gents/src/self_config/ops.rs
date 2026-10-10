@@ -886,7 +886,7 @@ pub fn guard_tools_keep_grants(
     Ok(())
 }
 
-/// Lean `SelfConfig.reselectionKeepsGrants`: the Tools a Context or Behavior
+/// Lean `SelfConfig.reselectionKeepsGrants`: the Tools a Context or Agent
 /// newly selects are bounded like a Tools write from the previously selected
 /// Tools; with no previous selection (a new Context, a clone's copy) like a
 /// Tools write over a document with no grant. Selecting no Tools carries no
@@ -903,7 +903,7 @@ pub fn reselection_keeps_grants(
 }
 
 /// The native side of Lean `SelfConfig.chainKeepsGrants`: resolve the Tools a
-/// Context or Behavior selected before and selects after this write, through
+/// Context or Agent selected before and selects after this write, through
 /// owner-scoped reads in the write's own transaction, and decide through
 /// [`reselection_keeps_grants`]. An unchanged selection passes without reads
 /// (Lean `chain_unchanged_selection_keeps_grants`); a reference to a missing

@@ -373,7 +373,7 @@ async fn build_registers_gated_family() {
 #[tokio::test]
 async fn pack_install_uses_current_node_and_inference_chain() {
     let node = build_agent_node().await;
-    let identity = agent_identity("pack-install");
+    let identity = node_identity("pack-install");
     let node_did = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &node_did, "setup").await;
     for role in ["coordinator", "worker", "verifier"] {
@@ -650,7 +650,7 @@ async fn pack_tool(
     plugins: Arc<crate::plugin::executor::PluginExecutor>,
 ) -> (Arc<EmbeddedNode>, String, Vec<Box<dyn ToolDyn>>) {
     let node = build_agent_node().await;
-    let identity = agent_identity(label);
+    let identity = node_identity(label);
     let node_did = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &node_did, "setup").await;
     let mut tool_config = config(&[]);
@@ -892,7 +892,7 @@ async fn pack_install_puts_a_sealed_plugin_in_the_home_and_refuses_one_that_asks
 #[tokio::test]
 async fn graph_tools_start_observe_and_cancel_on_the_current_node() {
     let node = build_agent_node().await;
-    let identity = agent_identity("graph-tools");
+    let identity = node_identity("graph-tools");
     let node_did = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &node_did, "setup").await;
     let repository = tempfile::tempdir().expect("repository");
@@ -1102,7 +1102,7 @@ async fn graph_tools_start_observe_and_cancel_on_the_current_node() {
 #[tokio::test]
 async fn run_graph_by_graph_id_is_selected_through_the_shared_owner() {
     let node = build_agent_node().await;
-    let identity = agent_identity("run-graph-by-id");
+    let identity = node_identity("run-graph-by-id");
     let node_did = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &node_did, "setup").await;
     let (_home, plugins) = crate::test_support::home_with_fixture_pack("review_graph");
@@ -1232,7 +1232,7 @@ async fn run_graph_description_makes_entry_optional_for_every_selection() {
 #[tokio::test]
 async fn list_graphs_value_is_the_in_session_reply_and_names_no_run_tool_without_one() {
     let node = build_agent_node().await;
-    let identity = agent_identity("list-graphs-value");
+    let identity = node_identity("list-graphs-value");
     let node_did = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &node_did, "setup").await;
     let mut tool_config = config(&["tools"]);
@@ -1320,7 +1320,7 @@ async fn list_graphs_value_is_the_in_session_reply_and_names_no_run_tool_without
 #[tokio::test]
 async fn run_graph_refuses_a_git_diff_prepare_without_ceiling_authority() {
     let node = build_agent_node().await;
-    let identity = agent_identity("prepare-ceiling");
+    let identity = node_identity("prepare-ceiling");
     let node_did = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &node_did, "setup").await;
 
@@ -1476,7 +1476,7 @@ async fn run_graph_refuses_a_git_diff_prepare_without_ceiling_authority() {
 #[tokio::test]
 async fn run_graph_prepares_host_input_under_the_effective_root() {
     let node = build_agent_node().await;
-    let identity = agent_identity("prepare-under-root");
+    let identity = node_identity("prepare-under-root");
     let node_did = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &node_did, "setup").await;
 
@@ -1656,7 +1656,7 @@ async fn run_graph_prepares_host_input_under_the_effective_root() {
 #[tokio::test]
 async fn config_tools_cannot_self_grant_pack_install() {
     let node = build_agent_node().await;
-    let identity = agent_identity("pack-self-grant");
+    let identity = node_identity("pack-self-grant");
     let node_did = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &node_did, "setup").await;
 
@@ -1736,7 +1736,7 @@ async fn operator_grant_pack_install(node: &defra_node::EmbeddedNode, owner: &st
 #[tokio::test]
 async fn config_tools_unrelated_edit_on_granted_tools_is_accepted() {
     let node = build_agent_node().await;
-    let identity = agent_identity("granted-tools-edit");
+    let identity = node_identity("granted-tools-edit");
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "granted").await;
     operator_grant_pack_install(&node, &owner, "granted:tools").await;
@@ -1779,7 +1779,7 @@ async fn config_tools_unrelated_edit_on_granted_tools_is_accepted() {
 #[tokio::test]
 async fn built_ins_enable_graph_tools_remains_self_grantable() {
     let node = build_agent_node().await;
-    let identity = agent_identity("graph-tools-self-grant");
+    let identity = node_identity("graph-tools-self-grant");
     let node_did = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &node_did, "setup").await;
     let mut tool_config = config(&["tools"]);
@@ -1806,7 +1806,7 @@ async fn built_ins_enable_graph_tools_remains_self_grantable() {
 #[tokio::test]
 async fn config_tools_holder_may_grant_pack_install_to_a_sibling() {
     let node = build_agent_node().await;
-    let identity = agent_identity("pack-holder-sibling");
+    let identity = node_identity("pack-holder-sibling");
     let node_did = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &node_did, "setup").await;
     crate::test_support::install_test_agent(&node, &node_did, "sibling").await;
@@ -1874,7 +1874,7 @@ async fn reselection_tools(
     hold_pack_install: bool,
 ) -> Vec<Box<dyn crate::llm::tool::ToolDyn>> {
     let node = build_agent_node().await;
-    let identity = agent_identity(label);
+    let identity = node_identity(label);
     let owner = identity.did().to_string();
     for agent in ["worker", "sibling", "granted", "granted-2"] {
         crate::test_support::install_test_agent(&node, &owner, agent).await;
@@ -2054,7 +2054,7 @@ pub(super) async fn build_agent_node() -> std::sync::Arc<defra_node::EmbeddedNod
     std::sync::Arc::new(node)
 }
 
-pub(super) fn agent_identity(label: &str) -> std::sync::Arc<dyn crate::NodeIdentity> {
+pub(super) fn node_identity(label: &str) -> std::sync::Arc<dyn crate::NodeIdentity> {
     let tempdir = tempfile::tempdir().expect("identity tempdir");
     std::sync::Arc::new(
         crate::KeyIdentity::load_or_create(&tempdir.path().join(format!("{label}.key")), None)
@@ -2065,7 +2065,7 @@ pub(super) fn agent_identity(label: &str) -> std::sync::Arc<dyn crate::NodeIdent
 #[tokio::test]
 async fn automation_rejects_invalid_template_before_publication_and_can_recover() {
     let node = build_agent_node().await;
-    let identity = agent_identity("template-config");
+    let identity = node_identity("template-config");
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
     let mut grants = config(&["automation"]);
@@ -2117,7 +2117,7 @@ async fn automation_rejects_invalid_template_before_publication_and_can_recover(
 #[tokio::test]
 async fn automation_rejects_a_count_field_the_runtime_cannot_read_and_can_recover() {
     let node = build_agent_node().await;
-    let identity = agent_identity("event-source-config");
+    let identity = node_identity("event-source-config");
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
     node.add_schema("type SelfConfigProbe { batch: String flag: Boolean total: Int }")
@@ -2187,7 +2187,7 @@ async fn automation_rejects_a_count_field_the_runtime_cannot_read_and_can_recove
 #[tokio::test]
 async fn skill_import_previews_without_writes_and_requires_file_authority() {
     let node = build_agent_node().await;
-    let identity = agent_identity("skill-import");
+    let identity = node_identity("skill-import");
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
     let root = tempfile::tempdir().unwrap();
@@ -2334,7 +2334,7 @@ async fn skill_import_previews_without_writes_and_requires_file_authority() {
 #[tokio::test]
 async fn configuration_discovery_is_read_only_root_bounded_and_sanitized() {
     let node = build_agent_node().await;
-    let identity = agent_identity("configuration-discovery");
+    let identity = node_identity("configuration-discovery");
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
     let root = tempfile::tempdir().unwrap();
@@ -2463,7 +2463,7 @@ async fn setup_discovery_clarification_apply_and_verification_preserve_disabled_
     };
 
     let node = build_agent_node().await;
-    let identity = agent_identity("setup-discovery-flow");
+    let identity = node_identity("setup-discovery-flow");
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
 
@@ -2692,7 +2692,7 @@ async fn setup_discovery_clarification_apply_and_verification_preserve_disabled_
 #[tokio::test]
 async fn datastore_preview_create_and_sparse_edit_use_owned_patch_path() {
     let node = build_agent_node().await;
-    let identity = agent_identity("datastore-config");
+    let identity = node_identity("datastore-config");
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
     let mut grants = config(&["tools"]);
@@ -2933,7 +2933,7 @@ async fn datastore_preview_create_and_sparse_edit_use_owned_patch_path() {
 #[tokio::test]
 async fn structured_config_preview_and_apply_round_trip_literal_prompt() {
     let node = build_agent_node().await;
-    let identity = agent_identity("structured-config");
+    let identity = node_identity("structured-config");
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "working").await;
     let mut settings = config(&["agent"]);
@@ -2993,7 +2993,7 @@ pub(super) async fn call_config_tool(
 async fn outcome_schema_error_returns_an_executable_schema_recovery() {
     use crate::llm::tool::Tool;
     let node = build_agent_node().await;
-    let identity = agent_identity("schema-recovery");
+    let identity = node_identity("schema-recovery");
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
     let access = crate::config_client::ConfigAccess::Local(node.clone());
@@ -3054,7 +3054,7 @@ async fn outcome_schema_error_returns_an_executable_schema_recovery() {
 #[tokio::test]
 async fn config_errors_name_the_next_call() {
     let node = build_agent_node().await;
-    let identity = agent_identity("next-call");
+    let identity = node_identity("next-call");
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
     crate::test_support::install_test_agent(&node, &owner, &format!("{owner}:builder")).await;
@@ -3162,7 +3162,7 @@ async fn config_errors_name_the_next_call() {
 #[tokio::test]
 async fn config_execution_receipts_separate_rejected_syntax_from_write_dispatch() {
     let node = build_agent_node().await;
-    let identity = agent_identity("config-execution");
+    let identity = node_identity("config-execution");
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
     let mut grants = config(&[
@@ -3242,7 +3242,7 @@ async fn config_execution_receipts_separate_rejected_syntax_from_write_dispatch(
 #[tokio::test]
 async fn agent_category_gates_the_tool() {
     let node = build_agent_node().await;
-    let identity = agent_identity("agent-gate");
+    let identity = node_identity("agent-gate");
     let node_did = identity.did().to_string();
 
     let without_agent = build_self_config_tools(
@@ -3272,7 +3272,7 @@ async fn agent_category_gates_the_tool() {
 #[tokio::test]
 async fn agent_unknown_action_errors_cleanly() {
     let node = build_agent_node().await;
-    let identity = agent_identity("agent-unknown");
+    let identity = node_identity("agent-unknown");
     let tools = build_self_config_tools(
         node,
         identity.did().to_string(),
@@ -3293,7 +3293,7 @@ async fn agent_unknown_action_errors_cleanly() {
 #[tokio::test]
 async fn agent_only_grant_cannot_acquire_node_authority_and_writes_require_exact_signer() {
     let node = build_agent_node().await;
-    let identity = agent_identity("agent-only-owner");
+    let identity = node_identity("agent-only-owner");
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "current").await;
     let mut tool_config = config(&["agent"]);
@@ -3340,7 +3340,7 @@ async fn agent_only_grant_cannot_acquire_node_authority_and_writes_require_exact
     .expect("agent authority can edit its own document");
     let edited: Value = serde_json::from_str(&edited).unwrap();
     assert_eq!(edited["committed"], true);
-    let foreign_identity = agent_identity("foreign-signer");
+    let foreign_identity = node_identity("foreign-signer");
     let params = agent_params(
         "edit",
         None,
@@ -3367,7 +3367,7 @@ async fn agent_only_grant_cannot_acquire_node_authority_and_writes_require_exact
 #[tokio::test]
 async fn config_lists_are_bounded_paginated_and_inference_inventory_is_read_only() {
     let node = build_agent_node().await;
-    let identity = agent_identity("config-inventory");
+    let identity = node_identity("config-inventory");
     let owner = identity.did().to_string();
     for agent in ["alpha", "beta", "gamma"] {
         crate::test_support::install_test_agent(&node, &owner, agent).await;
@@ -3453,7 +3453,7 @@ async fn config_creates_and_discovers_an_unauthenticated_local_backend() {
     });
 
     let node = build_agent_node().await;
-    let identity = agent_identity("local-backend-create");
+    let identity = node_identity("local-backend-create");
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "setup").await;
     let mut tool_config = config(&["backend", "profile"]);
@@ -3561,7 +3561,7 @@ async fn config_creates_and_discovers_an_unauthenticated_local_backend() {
 #[tokio::test]
 async fn config_targets_owned_working_agent_for_all_bound_documents() {
     let node = build_agent_node().await;
-    let identity = agent_identity("targeted-config");
+    let identity = node_identity("targeted-config");
     let owner = identity.did().to_string();
     for agent in ["setup", "working"] {
         crate::test_support::install_test_agent(&node, &owner, agent).await;
@@ -3903,7 +3903,7 @@ async fn config_targets_owned_working_agent_for_all_bound_documents() {
 #[tokio::test]
 async fn cleanup_previews_and_removes_exact_unreferenced_cycles_atomically() {
     let node = build_agent_node().await;
-    let identity = agent_identity("config-cleanup");
+    let identity = node_identity("config-cleanup");
     let owner = identity.did().to_string();
     for agent in ["beh-test", "orphan"] {
         crate::test_support::install_test_agent(&node, &owner, agent).await;
@@ -4022,7 +4022,7 @@ fn take_agent_tool(
 #[tokio::test]
 async fn agent_default_commits_through_the_agent_owner() {
     let node = build_agent_node().await;
-    let identity = agent_identity("agent-default");
+    let identity = node_identity("agent-default");
     let node_did = identity.did().to_string();
     for agent in ["seed", "working"] {
         crate::test_support::install_test_agent(&node, &node_did, agent).await;
@@ -4085,7 +4085,7 @@ async fn agent_default_commits_through_the_agent_owner() {
 #[tokio::test]
 async fn agent_create_commits_and_resolves_after_restart() {
     let node = build_agent_node().await;
-    let identity = agent_identity("agent-create");
+    let identity = node_identity("agent-create");
     let node_did = identity.did().to_string();
 
     crate::test_support::install_test_agent(&node, &node_did, "seed").await;
@@ -4324,7 +4324,7 @@ async fn agent_create_commits_and_resolves_after_restart() {
 #[tokio::test]
 async fn agent_clone_accepts_sibling_agent_id() {
     let node = build_agent_node().await;
-    let identity = agent_identity("agent-clone");
+    let identity = node_identity("agent-clone");
     let node_did = identity.did().to_string();
     let qualified_sibling_id = "sibling-agent".to_owned();
     crate::test_support::install_test_agent(&node, &node_did, &qualified_sibling_id).await;
@@ -4367,7 +4367,7 @@ async fn agent_clone_accepts_sibling_agent_id() {
 #[tokio::test]
 async fn agent_clone_cannot_copy_unheld_grants() {
     let node = build_agent_node().await;
-    let identity = agent_identity("persona-clone-grants");
+    let identity = node_identity("agent-clone-grants");
     let node_did = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &node_did, "granted").await;
     operator_grant_pack_install(&node, &node_did, "granted:tools").await;
@@ -4442,7 +4442,7 @@ async fn agent_clone_cannot_copy_unheld_grants() {
 #[tokio::test]
 async fn agent_clone_by_holder_copies_granted_source() {
     let node = build_agent_node().await;
-    let identity = agent_identity("persona-clone-holder");
+    let identity = node_identity("agent-clone-holder");
     let node_did = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &node_did, "granted").await;
     operator_grant_pack_install(&node, &node_did, "granted:tools").await;
@@ -4483,8 +4483,8 @@ async fn agent_clone_by_holder_copies_granted_source() {
 #[tokio::test]
 async fn canonical_self_config_preview_and_apply_preserve_scope_and_reject_lockout() {
     let node = build_agent_node().await;
-    let identity = agent_identity("canonical-self-config");
-    let other = agent_identity("other-self-config");
+    let identity = node_identity("canonical-self-config");
+    let other = node_identity("other-self-config");
     let owner = identity.did().to_string();
     let foreign = other.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "same").await;
@@ -4553,7 +4553,7 @@ async fn canonical_self_config_preview_and_apply_preserve_scope_and_reject_locko
 #[tokio::test]
 async fn direct_tools_preview_and_apply_enforce_and_persist_canonical_workspace_root() {
     let node = build_agent_node().await;
-    let identity = agent_identity("tools-root-policy");
+    let identity = node_identity("tools-root-policy");
     let owner = identity.did().to_string();
     let agent_id = "root-policy";
     crate::test_support::install_test_agent(&node, &owner, agent_id).await;
@@ -4645,7 +4645,7 @@ async fn direct_tools_preview_and_apply_enforce_and_persist_canonical_workspace_
 #[tokio::test]
 async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tools() {
     let node = build_agent_node().await;
-    let identity = agent_identity("descendant-root-self-config");
+    let identity = node_identity("descendant-root-self-config");
     let owner = identity.did().to_string();
     let seed_agent = "beh-test";
     crate::test_support::install_test_agent(&node, &owner, seed_agent).await;
@@ -4907,7 +4907,7 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
 #[tokio::test]
 async fn backend_self_config_protects_raw_keys_in_writes_reads_and_diffs() {
     let node = build_agent_node().await;
-    let identity = agent_identity("self-config-secret");
+    let identity = node_identity("self-config-secret");
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "secret").await;
     let core = SelfConfigCore::new(node.clone(), owner.clone(), "secret".into()).unwrap();
@@ -4957,7 +4957,7 @@ async fn unrelated_backend_patch_keeps_environment_reference_unresolved() {
     const VARIABLE: &str = "GENTS_TEST_UNRELATED_PATCH_ENV_REFERENCE";
     const SENTINEL: &str = "sentinel-env-secret-never-stored";
     let node = build_agent_node().await;
-    let identity = agent_identity("self-config-env-reference");
+    let identity = node_identity("self-config-env-reference");
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "envref").await;
     let core = SelfConfigCore::new(node.clone(), owner.clone(), "envref".into()).unwrap();
@@ -5021,7 +5021,7 @@ async fn unrelated_backend_patch_keeps_environment_reference_unresolved() {
 #[tokio::test]
 async fn backend_self_config_cannot_set_or_change_an_oauth_account() {
     let node = build_agent_node().await;
-    let identity = agent_identity("self-config-account");
+    let identity = node_identity("self-config-account");
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "acct").await;
     let core = SelfConfigCore::new(node.clone(), owner.clone(), "acct".into()).unwrap();
@@ -5099,7 +5099,7 @@ async fn account_choice_core(
     SelfConfigCore,
 ) {
     let node = build_agent_node().await;
-    let identity = agent_identity(agent);
+    let identity = node_identity(agent);
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, agent).await;
     let access = crate::config_client::ConfigAccess::Local(node.clone());
@@ -5645,7 +5645,7 @@ async fn pack_inference_slot_cannot_pick_another_account() {
 #[tokio::test]
 async fn explicit_tools_grant_preserves_lsp_settings_guard_for_preview_and_apply() {
     let node = build_agent_node().await;
-    let identity = agent_identity("self-config-lsp-guard");
+    let identity = node_identity("self-config-lsp-guard");
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
     let mut tool_config = config(&["tools"]);
@@ -5705,7 +5705,7 @@ async fn explicit_tools_grant_preserves_lsp_settings_guard_for_preview_and_apply
 #[tokio::test]
 async fn profile_edit_rejects_a_context_window_above_the_advertised_maximum() {
     let node = build_agent_node().await;
-    let identity = agent_identity("profile-context-window");
+    let identity = node_identity("profile-context-window");
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "setup").await;
     let backend: crate::document_config::InferenceBackend = serde_json::from_value(json!({
@@ -5772,7 +5772,7 @@ async fn profile_edit_rejects_a_context_window_above_the_advertised_maximum() {
 #[tokio::test]
 async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out() {
     let node = build_agent_node().await;
-    let identity = agent_identity("engineer-god-mode");
+    let identity = node_identity("engineer-god-mode");
     let owner = identity.did().to_string();
     for agent in ["setup", "lead", "caller"] {
         crate::test_support::install_test_agent(&node, &owner, agent).await;
@@ -6224,7 +6224,7 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
 async fn backend_reads_expose_operator_catalogs_without_credentials_or_provider_calls() {
     const SECRET: &str = "operator-api-key-never-exposed";
     let node = build_agent_node().await;
-    let identity = agent_identity("backend-catalog-read");
+    let identity = node_identity("backend-catalog-read");
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "setup").await;
     let access = crate::config_client::ConfigAccess::Local(node.clone());
@@ -6751,7 +6751,7 @@ async fn seed_account_view(node: &std::sync::Arc<defra_node::EmbeddedNode>, owne
 #[tokio::test]
 async fn config_backend_accounts_lists_accounts_and_usage_read_only() {
     let node = build_agent_node().await;
-    let identity = agent_identity("config-accounts");
+    let identity = node_identity("config-accounts");
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "alpha").await;
     seed_account_view(&node, &owner).await;
@@ -6825,7 +6825,7 @@ async fn config_backend_accounts_lists_accounts_and_usage_read_only() {
 #[tokio::test]
 async fn config_backend_accounts_needs_the_backend_grant() {
     let node = build_agent_node().await;
-    let identity = agent_identity("config-accounts-grant");
+    let identity = node_identity("config-accounts-grant");
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "alpha").await;
     let mut tool_config = config(&["node", "profile"]);
@@ -6844,7 +6844,7 @@ async fn config_backend_accounts_needs_the_backend_grant() {
 #[tokio::test]
 async fn agent_management_clears_optional_fields_and_refuses_ignored_tool_modifiers() {
     let node = build_agent_node().await;
-    let identity = agent_identity("agent-clear");
+    let identity = node_identity("agent-clear");
     let owner = identity.did().to_owned();
     crate::test_support::install_test_agent(&node, &owner, "seed").await;
     let created: Value = serde_json::from_str(
@@ -6922,7 +6922,7 @@ async fn agent_management_clears_optional_fields_and_refuses_ignored_tool_modifi
 #[tokio::test]
 async fn no_lockout_rejects_current_agent_disable_in_preview_and_commit() {
     let node = build_agent_node().await;
-    let identity = agent_identity("disable-preview-parity");
+    let identity = node_identity("disable-preview-parity");
     let owner = identity.did().to_owned();
     for id in ["current", "default"] {
         crate::test_support::install_test_agent(&node, &owner, id).await;
@@ -6965,7 +6965,7 @@ async fn no_lockout_rejects_current_agent_disable_in_preview_and_commit() {
 #[tokio::test]
 async fn agent_only_edits_preserve_an_optional_absent_context() {
     let node = build_agent_node().await;
-    let identity = agent_identity("contextless-agent-edit");
+    let identity = node_identity("contextless-agent-edit");
     let owner = identity.did().to_owned();
     for id in ["current", "other"] {
         crate::test_support::install_test_agent(&node, &owner, id).await;
@@ -7017,7 +7017,7 @@ async fn agent_only_edits_preserve_an_optional_absent_context() {
 #[tokio::test]
 async fn public_agent_management_previews_without_publishing_and_checks_signer() {
     let node = build_agent_node().await;
-    let identity = agent_identity("public-agent-management");
+    let identity = node_identity("public-agent-management");
     let owner = identity.did().to_owned();
     crate::test_support::install_test_agent(&node, &owner, "seed").await;
     let access = crate::config_client::ConfigAccess::Local(node.clone());
@@ -7046,7 +7046,7 @@ async fn public_agent_management_previews_without_publishing_and_checks_signer()
     assert_eq!(crate::list_agents(&node, &owner).await.unwrap().len(), 1);
     args.action = "create".into();
     args.operation = None;
-    let foreign = agent_identity("public-agent-foreign");
+    let foreign = node_identity("public-agent-foreign");
     let error = configure_agent(
         &access,
         &owner,
@@ -7100,7 +7100,7 @@ fn agent_decision_rejects_fields_outside_the_edit_contract() {
 #[tokio::test]
 async fn public_agent_edit_preserves_disabled_state_and_rejects_clone_options() {
     let node = build_agent_node().await;
-    let identity = agent_identity("disabled-agent-edit");
+    let identity = node_identity("disabled-agent-edit");
     let owner = identity.did().to_owned();
     crate::test_support::install_test_agent(&node, &owner, "target").await;
     let mut stored = crate::load_agent(&node, "target").await.unwrap().unwrap();
@@ -7198,7 +7198,7 @@ async fn public_agent_edit_preserves_disabled_state_and_rejects_clone_options() 
 #[tokio::test]
 async fn public_prompt_edits_require_an_existing_unshared_context_without_partial_writes() {
     let node = build_agent_node().await;
-    let identity = agent_identity("prompt-context-ownership");
+    let identity = node_identity("prompt-context-ownership");
     let owner = identity.did().to_owned();
     for id in ["missing", "shared", "sibling", "private"] {
         crate::test_support::install_test_agent(&node, &owner, id).await;
@@ -7326,7 +7326,7 @@ async fn grant_pack_install_for_test(node: &defra_node::EmbeddedNode, owner: &st
 #[tokio::test]
 async fn model_clone_is_atomically_grant_bounded_but_operator_clone_is_not() {
     let node = build_agent_node().await;
-    let identity = agent_identity("clone-grant-bound");
+    let identity = node_identity("clone-grant-bound");
     let owner = identity.did().to_owned();
     for id in ["worker", "source"] {
         crate::test_support::install_test_agent(&node, &owner, id).await;
@@ -7385,7 +7385,7 @@ async fn model_clone_is_atomically_grant_bounded_but_operator_clone_is_not() {
 #[tokio::test]
 async fn model_reselection_and_existing_sibling_grants_use_invoker_bounds() {
     let node = build_agent_node().await;
-    let identity = agent_identity("reselection-grant-bound");
+    let identity = node_identity("reselection-grant-bound");
     let owner = identity.did().to_owned();
     for id in ["worker", "sibling", "granted"] {
         crate::test_support::install_test_agent(&node, &owner, id).await;

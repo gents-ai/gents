@@ -2,7 +2,7 @@
 //! name their target, refused silent Tools drops, the validation gaps the
 //! factory-setup audit found, and help recipes that run as written.
 
-use super::tests::{agent_identity, build_agent_node, call_config_tool, config};
+use super::tests::{node_identity, build_agent_node, call_config_tool, config};
 use super::*;
 
 type Tools = Vec<Box<dyn ToolDyn>>;
@@ -33,7 +33,7 @@ async fn refused(tools: &Tools, args: Value) -> String {
 
 async fn setup(label: &str, categories: &[&str]) -> (Arc<EmbeddedNode>, String, Tools) {
     let node = build_agent_node().await;
-    let identity = agent_identity(label);
+    let identity = node_identity(label);
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
     let mut grants = config(categories);
@@ -246,7 +246,7 @@ fn target_id_may_repeat_the_argv_id_but_not_conflict() {
 #[tokio::test]
 async fn own_tools_refuse_a_group_set_that_silently_drops_existing_settings() {
     let node = build_agent_node().await;
-    let identity = agent_identity("tools-drop");
+    let identity = node_identity("tools-drop");
     let owner = identity.did().to_string();
     for agent in ["setup", "worker"] {
         crate::test_support::install_test_agent(&node, &owner, agent).await;
@@ -514,7 +514,7 @@ async fn execution_deadlines_are_bounded_where_a_claim_can_represent_them() {
 #[tokio::test]
 async fn help_is_layered_and_its_recipes_run_as_written() {
     let node = build_agent_node().await;
-    let identity = agent_identity("recipes");
+    let identity = node_identity("recipes");
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "setup").await;
     crate::test_support::install_test_agent(&node, &owner, &format!("{owner}:worker")).await;
@@ -1187,7 +1187,7 @@ async fn local_target_creation_defaults_identity_but_updates_preserve_remote_des
             .await
             .is_err()
     );
-    let remote = agent_identity("remote-target-owner").did().to_string();
+    let remote = node_identity("remote-target-owner").did().to_string();
     ok(&tools, json!({"argv":["agent-target","create"],"target_id":"remote","set":{"name":"remote","target_node_did":remote,"agent_id":"helper"}})).await;
     let changed = ok(&tools, json!({"argv":["agent-target","update"],"target_id":"remote","set":{"description":"Remote helper"}})).await;
     assert_eq!(changed["connection"]["kind"], "remote");
@@ -1315,7 +1315,7 @@ async fn saved_config_audit_reports_broken_references_without_mutation_and_accep
 #[tokio::test]
 async fn saved_config_audit_is_node_scoped_and_does_not_require_preview() {
     let (node, owner, tools) = setup("audit-scope", &["node"]).await;
-    let foreign = agent_identity("audit-foreign").did().to_string();
+    let foreign = node_identity("audit-foreign").did().to_string();
     crate::ConfigAccess::write_local(&node, "test.audit.foreign", &format!(
         r#"mutation {{create_AgentContext(input: {{node_did: "{}", context_id: "foreign-context", tools_id: "missing-foreign-tools"}}) {{context_id}}}}"#,
         crate::graphql::escape_graphql_string(&foreign)
@@ -1324,7 +1324,7 @@ async fn saved_config_audit_is_node_scoped_and_does_not_require_preview() {
     assert_eq!(valid["valid"], true, "{valid}");
     assert_eq!(valid["collections"]["AgentContext"], 1);
     assert!(!valid.to_string().contains("foreign-context"));
-    let identity = agent_identity("audit-scope");
+    let identity = node_identity("audit-scope");
     for (categories, allowed) in [(&["node"][..], true), (&["tools"][..], false)] {
         let mut grants = config(categories);
         grants.preview = false;
