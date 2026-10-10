@@ -85,7 +85,7 @@ pub async fn desktop_init_local_standard(
         label: request
             .label
             .filter(|label| !label.trim().is_empty())
-            .unwrap_or_else(|| "Local Node".to_string()),
+            .unwrap_or_else(|| "Forge".to_string()),
     })
     .await
     .map_err(BridgeError::classify_transport_error)

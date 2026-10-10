@@ -242,9 +242,9 @@ function activityStatusFor(
     return sendStatus.turnState === "waitingForClaim"
       ? {
           kind: "waiting",
-          label: "Waiting for the agent…",
+          label: "Waiting for the node…",
           detail:
-            "The agent has not started yet. Messages you send now wait behind it.",
+            "The node has not started this request yet. Messages you send now wait behind it.",
           animated: true,
         }
       : {

@@ -50,7 +50,7 @@ pub(super) fn canonical_records(
         .map(|document| {
             anyhow::ensure!(
                 document.update["node_did"].as_str() == Some(config.node.node_did.as_str()),
-                "configuration document belongs to another principal"
+                "configuration document belongs to another node"
             );
             let id = document.update[document.collection.unique_field()]
                 .as_str()
@@ -74,7 +74,7 @@ fn compare_manifests(
     if let Some(principal) = live_principal {
         anyhow::ensure!(
             principal.node_did == live.node.node_did,
-            "live principal does not match config scope"
+            "live node does not match config scope"
         );
     }
     let desired_docs = canonical_records(desired)?;

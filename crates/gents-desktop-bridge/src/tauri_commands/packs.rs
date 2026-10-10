@@ -1,5 +1,5 @@
 //! Packs from the desktop: the same operations `gents pack` runs, through
-//! `gents_server::packs`, against the managed local agent's home.
+//! `gents_server::packs`, against the managed local Node's home.
 
 use serde::Deserialize;
 use serde_json::Value;
@@ -13,7 +13,7 @@ fn home(state: &DesktopAppState) -> Result<std::path::PathBuf, BridgeError> {
     state.policy.node_home.clone().ok_or_else(|| {
         BridgeError::new(
             BridgeErrorCode::Unsupported,
-            "packs install into a local agent; start one first",
+            "packs install into a local Node; start one first",
         )
     })
 }

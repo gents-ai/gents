@@ -303,7 +303,7 @@ export function ToolGroupControls({
       </Group>
       <Group title="Self-configuration">
         {flags("self_config", [
-          ["enable_self_config", "Configure this agent"],
+          ["enable_self_config", "Can change this node's configuration"],
           ["enable_pack_install", "Install graph packs"],
           ["self_config_no_lockout", "Prevent self-configuration lockout"],
           ["self_config_preview", "Preview configuration changes"],

@@ -54,7 +54,7 @@ test("opening and closing the dock lays the pane out once", async ({
 
   const opening = await widthsDuring(page, async () => {
     await page.getByRole("button", { name: "More" }).first().click();
-    await page.getByRole("menuitem", { name: "Workers" }).click();
+    await page.getByRole("menuitem", { name: "Started sessions" }).click();
   });
   /* the pane: its width before, then the one it settles at */
   expect(distinct(opening.map((w) => w.pane))).toHaveLength(2);
@@ -83,7 +83,7 @@ test("dragging the divider lays the pane out once, on release", async ({
   await page.locator('[data-testid="session-session-large"]').click();
   await page.getByTestId("transcript-panel").getByText("stream-start").last().waitFor();
   await page.getByRole("button", { name: "More" }).first().click();
-  await page.getByRole("menuitem", { name: "Workers" }).click();
+  await page.getByRole("menuitem", { name: "Started sessions" }).click();
   await page.waitForTimeout(1200);
   const handle = page.getByRole("separator", { name: "Resize panel" });
   const box = (await handle.boundingBox())!;
@@ -168,7 +168,7 @@ for (const rest of ["remembered", "widest"] as const) {
       .last()
       .waitFor();
     await page.getByRole("button", { name: "More" }).first().click();
-    await page.getByRole("menuitem", { name: "Workers" }).click();
+    await page.getByRole("menuitem", { name: "Started sessions" }).click();
     await page.waitForTimeout(1200);
 
     const handle = page.getByRole("separator", { name: "Resize panel" });

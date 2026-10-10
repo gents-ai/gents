@@ -484,7 +484,7 @@ pub(crate) async fn build_compaction_engine(
     anyhow::ensure!(
         inference.backend.node_did == agent_config.node_did()
             && inference.profile.node_did == agent_config.node_did(),
-        "summary inference must belong to the invoking principal"
+        "summary inference must belong to the invoking node"
     );
     anyhow::ensure!(
         inference.profile.backend_id == inference.backend.backend_id,

@@ -2,10 +2,12 @@
 # Run native onboarding evals with a live browser or terminal view.
 #
 #   scripts/evals/run-ladder.sh [SUITE|all|list] [TRIALS] [CONCURRENCY]
+#       [--backend TARGET | --target TARGET] [--trials N] [--concurrency N]
 #
 # `all` runs L1-L5 and the configuration-only capstone. L6 is an explicit
 # capability probe, excluded from acceptance while graph authoring is missing.
-# Defaults: 3 trials per case; 4 concurrent inference calls; train + validation.
+# Defaults: 3 trials per case; global trial cap floor(4 / PER_TRIAL); train + validation.
+# The cap covers active trials across all runs, not every provider/background call.
 # Held-out cases run only with GENTS_EVAL_SPLITS=held_out.
 #
 # GENTS_EVAL_TARGET: target file name (default workstation-1).
@@ -18,21 +20,35 @@
 # GENTS_BIN: existing gents binary; otherwise builds this checkout.
 set -euo pipefail
 
-usage() { sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
-[ $# -le 3 ] || usage
-SELECTION=${1:-all}
+usage() { sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-2}"; }
+POSITIONAL=()
+TARGET=${GENTS_EVAL_TARGET:-workstation-1}
+NAMED_TRIALS=
+NAMED_CONCURRENCY=
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --backend|--target) [ $# -ge 2 ] || usage; TARGET=$2; shift 2 ;;
+    --trials) [ $# -ge 2 ] || usage; NAMED_TRIALS=$2; shift 2 ;;
+    --concurrency) [ $# -ge 2 ] || usage; NAMED_CONCURRENCY=$2; shift 2 ;;
+    -h|--help) usage 0 ;;
+    --*) usage ;;
+    *) POSITIONAL+=("$1"); shift ;;
+  esac
+done
+[ ${#POSITIONAL[@]} -le 3 ] || usage
+SELECTION=${POSITIONAL[0]:-all}
 
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 FIXTURES="$ROOT/crates/gents/tests/fixtures/configurator_evals"
 LADDER="$FIXTURES/ladder"
 MATRIX="$ROOT/scripts/evals/matrix.json"
 SHA=$(git -C "$ROOT" rev-parse --short HEAD)
-TRIALS=${2:-3}
-CONCURRENCY=${3:-4}
+TRIALS=${NAMED_TRIALS:-${POSITIONAL[1]:-3}}
+CONCURRENCY=${NAMED_CONCURRENCY:-${POSITIONAL[2]:-4}}
 PER_TRIAL=${GENTS_EVAL_PER_TRIAL:-1}
-TARGET=${GENTS_EVAL_TARGET:-workstation-1}
 SPLITS=${GENTS_EVAL_SPLITS:-train validation}
 EVAL_HOME=${GENTS_EVAL_HOME:-$HOME/gents-eval-homes/ladder-$SHA-$TARGET}
+EVAL_HOME=$(python3 -c 'import os,sys; print(os.path.abspath(sys.argv[1]))' "$EVAL_HOME")
 PORT_OVERRIDE=${GENTS_EVAL_PORT:-}
 PORT=$(python3 - "$EVAL_HOME/runtime.json" "$PORT_OVERRIDE" "$TARGET" <<'PYPORT'
 import json, pathlib, sys, urllib.parse
@@ -76,7 +92,7 @@ PYLIST
   exit 0
 fi
 SELECTED=()
-while IFS= read -r level; do SELECTED+=("$level"); done < <(python3 - "$MATRIX" "$SELECTION" "${GENTS_EVAL_SHARD:-1/1}" <<'PYSELECT'
+SELECTED_TEXT=$(python3 - "$MATRIX" "$SELECTION" "${GENTS_EVAL_SHARD:-1/1}" <<'PYSELECT'
 import json,sys
 m=json.load(open(sys.argv[1])); selection=sys.argv[2]
 try:
@@ -93,12 +109,19 @@ if not selected: sys.exit('this shard selects no suites')
 print('\n'.join(selected))
 PYSELECT
 )
+while IFS= read -r level; do [ -z "$level" ] || SELECTED+=("$level"); done <<< "$SELECTED_TEXT"
 [ ${#SELECTED[@]} -gt 0 ] || { echo "no suites selected for $SELECTION and shard ${GENTS_EVAL_SHARD:-1/1}; use list" >&2; exit 2; }
 [[ "$TRIALS" =~ ^[1-9][0-9]*$ && "$CONCURRENCY" =~ ^[1-9][0-9]*$ && "$PER_TRIAL" =~ ^[1-9][0-9]*$ ]] || usage
 [ -f "$TARGET_FILE" ] || { echo "no target $TARGET_FILE" >&2; exit 2; }
 [ "$PORT" != 9191 ] || { echo "port 9191 belongs to the desktop node; pick another GENTS_EVAL_PORT" >&2; exit 2; }
 (( PER_TRIAL >= 1 && CONCURRENCY >= PER_TRIAL )) || { echo "CONCURRENCY must be at least GENTS_EVAL_PER_TRIAL" >&2; exit 2; }
 TRIAL_CONCURRENCY=$(( CONCURRENCY / PER_TRIAL ))
+python3 - "$SPLITS" <<'PYVALIDATESPLITS'
+import sys
+splits = sys.argv[1].split()
+if not splits or len(splits) != len(set(splits)) or any(s not in {"train", "validation", "held_out"} for s in splits):
+    sys.exit("GENTS_EVAL_SPLITS must contain distinct train, validation or held_out splits")
+PYVALIDATESPLITS
 
 if [ -n "${GENTS_BIN:-}" ]; then
   GENTS=$GENTS_BIN
@@ -224,8 +247,10 @@ c["tools"][0]["self_config"] = json.load(open(grant))
 json.dump(c, open(config, "w"), indent=2)
 PY
 
-STAMP=$(date +%Y%m%d-%H%M%S)
-MATRIX_STATUS=0
+STAMP=$(python3 -c 'import datetime,uuid; print(datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d-%H%M%S-%f") + "-" + uuid.uuid4().hex[:8])')
+PLAN="$EVAL_HOME/batch-$STAMP.json"
+PLAN_DRAFT="$PLAN.tmp"
+printf '{"runs":[]}\n' >"$PLAN_DRAFT"
 WATCH=${GENTS_EVAL_WATCH:-auto}
 if [ "$WATCH" = auto ]; then WATCH=0; [ ! -t 1 ] || WATCH=1; fi
 if [ "$WATCH" = 1 ] || [ "$WATCH" = web ]; then
@@ -324,7 +349,6 @@ if len(engineers) == 1:
 PYENGINEERBASELINE
   "$GENTS" config apply --root "$DEFINITION" --bind-node-did home --home "$EVAL_HOME" >/dev/null
   for split in $SPLITS; do
-    [ "$split" != none ] || continue
     if ! python3 - "$DEFINITION" "$split" <<'PYSPLIT'
 import json,pathlib,sys
 root=pathlib.Path(sys.argv[1]); definition=json.load(open(root/'pack_config.json'))['eval_definitions'][0]
@@ -337,41 +361,53 @@ PYSPLIT
 == $level ($split): $TRIALS trials per case, $TRIAL_CONCURRENCY trials at once, $PER_TRIAL call(s) per trial, $MODEL at $ENDPOINT
 watch:  $GENTS eval watch $RUN_ID --home $EVAL_HOME
 EOF
-    status=0
-    RUN_LOG="$EVAL_HOME/$RUN_ID.log"
-    (cd "$EVAL_HOME/work" && exec "$GENTS" eval run "$DEFINITION_ID" \
-      --cell "engineer=$RUN_SUBJECT:engineer" --profile "engineer=$PROFILE_ID" \
-      --split "$split" --trials "$TRIALS" --concurrency "$TRIAL_CONCURRENCY" \
-      --run-id "$RUN_ID" --home "$EVAL_HOME") >"$RUN_LOG" 2>&1 &
-    RUN_PID=$!
-    WATCH_COMMAND="$GENTS eval watch $RUN_ID --home $EVAL_HOME"
-    if [ "$WATCH" = web ]; then WATCH_COMMAND="http://127.0.0.1:$WEB_PORT"; fi
-    trap 'echo "Eval continues in process $RUN_PID. Watch: $WATCH_COMMAND" >&2; disown "$RUN_PID" 2>/dev/null || true; exit 130' INT
-    if [ "$WATCH" = tui ]; then
-      while kill -0 "$RUN_PID" 2>/dev/null; do
-        if [ -f "$EVAL_HOME/eval/runs/$RUN_ID/progress.json" ] || [ -f "$EVAL_HOME/eval/runs/$RUN_ID/report.json" ]; then
-          "$GENTS" eval watch "$RUN_ID" --home "$EVAL_HOME" || true
-          break
-        fi
-        sleep 1
-      done
-    else
-      echo "run log: $RUN_LOG" >&2
-    fi
-    wait "$RUN_PID" || status=$?
-    trap - INT
-    if [ "$status" != 0 ]; then MATRIX_STATUS=$status; tail -n 20 "$RUN_LOG" >&2; fi
-    cat >&2 <<EOF
-report: $GENTS eval show $RUN_ID --home $EVAL_HOME
-trial:  $GENTS eval trial $RUN_ID engineer <case_id> [index] --home $EVAL_HOME
-EOF
-    if [ "$status" != 0 ]; then
-      echo "matrix stopped after an execution error; resume with: $GENTS eval resume $RUN_ID --home $EVAL_HOME" >&2
-      echo "the eval home stays served on $PORT" >&2
-      exit "$status"
-    fi
+    python3 - "$PLAN_DRAFT" "$DEFINITION_ID" "$RUN_SUBJECT" "$PROFILE_ID" "$split" "$TRIALS" "$TRIAL_CONCURRENCY" "$RUN_ID" <<'PYPLAN'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+definition, subject, profile, split, trials, concurrency, run_id = sys.argv[2:]
+plan = json.loads(path.read_text())
+args = [definition, "--cell", f"engineer={subject}:engineer", "--profile", f"engineer={profile}",
+        "--split", split, "--trials", trials, "--concurrency", concurrency, "--run-id", run_id]
+if any(run["args"][run["args"].index("--run-id") + 1] == run_id for run in plan["runs"]):
+    sys.exit(f"duplicate run id: {run_id}")
+plan["runs"].append({"args": args})
+path.write_text(json.dumps(plan, indent=2) + "\n")
+PYPLAN
   done
 done
+python3 - "$PLAN_DRAFT" "$PLAN" <<'PYFINALPLAN'
+import json, os, pathlib, sys
+source, destination = map(pathlib.Path, sys.argv[1:])
+plan = json.loads(source.read_text())
+if not plan["runs"]:
+    sys.exit("selected suites and splits contain no runs")
+os.link(source, destination)
+source.unlink()
+PYFINALPLAN
+BATCH_LOG="$EVAL_HOME/batch-$STAMP.log"
+FIRST_RUN_ID=$(python3 -c 'import json,sys; a=json.load(open(sys.argv[1]))["runs"][0]["args"]; print(a[a.index("--run-id")+1])' "$PLAN")
+echo "saved batch plan: $PLAN" >&2
+echo "global active trial cap: $TRIAL_CONCURRENCY (floor($CONCURRENCY / $PER_TRIAL)); provider/background calls are not globally capped" >&2
+(cd "$EVAL_HOME/work" && exec "$GENTS" eval batch --plan "$PLAN" --concurrency "$TRIAL_CONCURRENCY" --home "$EVAL_HOME") >"$BATCH_LOG" 2>&1 &
+BATCH_PID=$!
+WATCH_COMMAND="$GENTS eval watch $FIRST_RUN_ID --home $EVAL_HOME"
+if [ "$WATCH" = web ]; then WATCH_COMMAND="http://127.0.0.1:$WEB_PORT"; fi
+trap 'echo "Batch continues in process $BATCH_PID. Plan: $PLAN. Watch: $WATCH_COMMAND" >&2; disown "$BATCH_PID" 2>/dev/null || true; exit 130' INT
+echo "batch log: $BATCH_LOG" >&2
+if [ "$WATCH" = tui ]; then
+  while kill -0 "$BATCH_PID" 2>/dev/null; do
+    if [ -f "$EVAL_HOME/eval/runs/$FIRST_RUN_ID/progress.json" ] || [ -f "$EVAL_HOME/eval/runs/$FIRST_RUN_ID/report.json" ]; then
+      "$GENTS" eval watch "$FIRST_RUN_ID" --home "$EVAL_HOME" || true
+      break
+    fi
+    sleep 1
+  done
+fi
+status=0
+wait "$BATCH_PID" || status=$?
+trap - INT
+if [ "$status" != 0 ]; then tail -n 20 "$BATCH_LOG" >&2; fi
+echo "resume saved batch: $GENTS eval batch --plan $PLAN --concurrency $TRIAL_CONCURRENCY --home $EVAL_HOME" >&2
+echo "saved plan: $PLAN; inspect each run with $GENTS eval show <run-id> --home $EVAL_HOME" >&2
 echo "the eval home stays served on $PORT; stop it with: kill \$(cat $EVAL_HOME/server.pid)" >&2
-
-exit "$MATRIX_STATUS"
+exit "$status"

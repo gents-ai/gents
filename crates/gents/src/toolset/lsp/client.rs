@@ -243,8 +243,12 @@ impl LspClient {
                 .request_with_timeout("rust-analyzer/analyzerStatus", json!({}), status_timeout)
                 .await
             {
-                Ok(Value::String(status)) if !status.starts_with("No workspaces") => {
+                Ok(Value::String(status))
+                    if !status.trim().is_empty()
+                        && !status.trim_start().starts_with("No workspaces") =>
+                {
                     if seen_workspace
+                        && self.is_quiescent().await
                         && started.elapsed() >= MINIMUM_SETTLE
                         && self.progress.lock().await.is_empty()
                     {

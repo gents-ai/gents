@@ -105,7 +105,7 @@ pub(crate) fn request_workspace_owner(request: &AgentRequest) -> Result<&str> {
     request
         .workspace_owner_node_did
         .as_deref()
-        .context("workspace owner principal is missing")
+        .context("workspace owner node is missing")
 }
 
 pub(crate) fn require_workspace_principal(
@@ -120,7 +120,7 @@ pub(crate) fn require_workspace_principal(
     };
     if principal_did.trim() != required.trim() {
         bail!(
-            "principal {principal_did} is not authorized for {} on workspace {}",
+            "node {principal_did} is not authorized for {} on workspace {}",
             authority.as_str(),
             workspace.workspace_id
         );
@@ -265,9 +265,7 @@ async fn load_request_workspace_overlay(
     let node_did = request_workspace_owner(request)?;
     let placement = load_workspace_placement(node, workspace_id, node_did)
         .await?
-        .ok_or_else(|| {
-            anyhow!("workspace placement for {workspace_id} not found on this principal")
-        })?;
+        .ok_or_else(|| anyhow!("workspace placement for {workspace_id} not found on this node"))?;
     let request_cwd = request_workspace_cwd(request);
     let sealed = crate::toolset::normalize_workspace_lifecycle_state(&workspace.lifecycle_state)
         == Some("sealed");
@@ -627,7 +625,7 @@ pub(super) async fn load_workspace_bindings_for(
             .all(|binding| binding.workspace_id == workspace_id
                 && !binding.request_doc_id.trim().is_empty()
                 && !binding.owner_node_did.trim().is_empty()),
-        "workspace binding is missing its physical request or principal identity"
+        "workspace binding is missing its physical request or node identity"
     );
     Ok(bindings)
 }
@@ -716,7 +714,7 @@ pub(crate) fn decode_isolated_workspace_record_response(
         .pointer("/data/IsolatedWorkspace")
         .and_then(serde_json::Value::as_array)
         .ok_or_else(|| anyhow!("workspace observation omitted IsolatedWorkspace"))?;
-    anyhow::ensure!(rows.len() <= 1, "ambiguous principal-scoped workspace");
+    anyhow::ensure!(rows.len() <= 1, "ambiguous node-scoped workspace");
     rows.first()
         .cloned()
         .map(serde_json::from_value::<IsolatedWorkspaceRow>)
@@ -764,7 +762,7 @@ pub(crate) async fn load_isolated_workspace_record(
     let query = isolated_workspace_record_query(workspace_id, node_did);
     let response = graphql_with_transaction_retry(node, &query, "load IsolatedWorkspace").await?;
     let mut found = rows::<IsolatedWorkspaceRow>(&response, "IsolatedWorkspace")?;
-    anyhow::ensure!(found.len() <= 1, "ambiguous principal-scoped workspace");
+    anyhow::ensure!(found.len() <= 1, "ambiguous node-scoped workspace");
     found
         .pop()
         .map(decode_isolated_workspace_record)
@@ -798,7 +796,7 @@ async fn load_workspace_placement(
     let mut found = rows::<WorkspacePlacementRow>(&response, "WorkspacePlacement")?;
     anyhow::ensure!(
         found.len() <= 1,
-        "ambiguous principal-scoped workspace placement"
+        "ambiguous node-scoped workspace placement"
     );
     let Some(row) = found.pop() else {
         return Ok(None);

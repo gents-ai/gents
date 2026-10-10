@@ -1,14 +1,14 @@
 # Gents
 
-Gents is a desktop app for running your own AI agents. Each agent runs in the
-background on your machine and keeps its configuration, conversations, and
+Gents is a desktop app for running your own AI agents. A node runs in the
+background on your machine and keeps its agents, configuration, sessions, and
 work as documents in a local, replicated database.
 
 ## Install
 
 Download the installer for your platform from the
 [latest GitHub release](https://github.com/gents-ai/gents/releases/latest).
-The app includes everything it needs; you do not need to install Rust, Node, or
+The app includes everything it needs; you do not need to install Rust, Node.js, or
 a separate command-line tool.
 
 ### macOS (Apple Silicon)
@@ -16,7 +16,7 @@ a separate command-line tool.
 1. Download `gents-desktop_<version>_aarch64.dmg`.
 2. Open the disk image and drag **Gents** to **Applications**.
 3. Launch **Gents** from **Applications**. Keep it there so the background
-   agent can find it at the next login.
+   node can find it at the next login.
 
 Intel Macs are not supported. The app is signed and notarized. If macOS refuses
 to open it, do not disable Gatekeeper or strip the quarantine attribute;
@@ -41,7 +41,7 @@ chmod +x gents-desktop_<version>_x86_64.AppImage
 ```
 
 If FUSE is unavailable, run it with `APPIMAGE_EXTRACT_AND_RUN=1`. The
-background agent needs a user systemd session.
+background node needs a user systemd session.
 
 Installer checksums are attached to each release as
 `SHA256SUMS-desktop-macos.txt` and `SHA256SUMS-desktop-linux.txt`.
@@ -53,12 +53,12 @@ macOS arm64) from the same release; checksums are in `SHA256SUMS-cli-*.txt`.
 
 ## First run
 
-The app walks you through setup: create a local agent, review the folders and
+The app walks you through setup: create a local node, review the folders and
 permissions it may use, then connect a model provider. If `~/.gents` already
-exists, setup continues that agent instead of creating a second one.
+exists, setup continues that node instead of creating a second one.
 
-The agent keeps running when you close the window or quit the app. Use
-**Stop Agent** in the menu bar or tray menu to stop it; **Start at login** is a separate setting.
+The node keeps running when you close the window or quit the app. Use
+**Stop Node** in the menu bar or tray menu to stop it; **Start at login** is a separate setting.
 
 ## Get help
 

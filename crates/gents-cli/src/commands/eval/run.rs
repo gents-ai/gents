@@ -28,6 +28,16 @@ pub(super) async fn run(
 ) -> Result<()> {
     // The packs are held until the run ends: a cache entry stays locked.
     let (request, _packs) = run_request(ctx, args).await?;
+    run_prepared(ctx, args, &request, deps, out).await
+}
+
+pub(super) async fn run_prepared(
+    ctx: &EvalContext,
+    args: &EvalRunArgs,
+    request: &RunRequest,
+    deps: &Deps<'_>,
+    out: &mut dyn Write,
+) -> Result<()> {
     let run_id = request.run_id.clone();
     // A `--run-id` naming an existing run continues it, as `resume` does:
     // its landed attempts are not printed again, and the marker the runner
@@ -43,7 +53,7 @@ pub(super) async fn run(
         out,
         runner::run(
             &ctx.access,
-            &request,
+            request,
             deps.executor,
             deps.registry,
             deps.cancel.clone(),

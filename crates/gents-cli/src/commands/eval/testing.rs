@@ -133,6 +133,7 @@ impl Fixture {
 
 pub(crate) fn fast() -> RunOptions {
     RunOptions {
+        trial_budget: None,
         poll_backoff_base: Duration::from_millis(1),
         poll_backoff_cap: Duration::from_millis(2),
     }

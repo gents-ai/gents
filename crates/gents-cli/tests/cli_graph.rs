@@ -293,7 +293,7 @@ fn clean_binary_install_is_idempotent_activates_and_is_owner_fenced() -> Result<
         ],
     )?;
     anyhow::ensure!(
-        denial.contains("package owner principal is missing"),
+        denial.contains("package owner node is missing"),
         "wrong-owner install did not fail at the identity boundary: {denial}"
     );
 

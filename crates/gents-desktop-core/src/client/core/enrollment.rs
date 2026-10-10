@@ -1515,7 +1515,7 @@ async fn project_desktop_approval(
     let request = request_row.to_record()?;
     anyhow::ensure!(
         request.candidate_did == principal.did() && request.candidate_peer == local_peer_id,
-        "enrollment request is not owned by this desktop principal and transport"
+        "enrollment request is not owned by this desktop identity and transport"
     );
     let [admin_did] = pins
         .get(&request.network_id)

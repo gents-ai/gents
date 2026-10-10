@@ -183,7 +183,7 @@ async fn write_binding(access: &ConfigAccess, doc: &ChainKeyBindingDocument) -> 
                 )?;
                 anyhow::ensure!(
                     rows.len() <= 1,
-                    "duplicate chain key binding within principal"
+                    "duplicate chain key binding within node scope"
                 );
                 txn.execute(&upsert_chain_key_binding_mutation(doc)?)
                     .await?;
@@ -206,7 +206,7 @@ async fn create_binding(access: &ConfigAccess, doc: &ChainKeyBindingDocument) ->
                 )?;
                 anyhow::ensure!(
                     rows.is_empty(),
-                    "chain key binding already exists for this principal"
+                    "chain key binding already exists for this node"
                 );
                 let response = txn
                     .execute(&create_chain_key_binding_mutation(doc)?)
@@ -240,7 +240,7 @@ async fn load_bindings(
     for row in &rows {
         anyhow::ensure!(
             row.node_did == node_did && ids.insert(row.binding_id.clone()),
-            "invalid or duplicate chain key identity in principal list"
+            "invalid or duplicate chain key identity in node list"
         );
     }
     Ok(rows)
@@ -258,7 +258,7 @@ async fn load_binding(
     )?;
     anyhow::ensure!(
         rows.len() <= 1,
-        "duplicate chain key binding within principal"
+        "duplicate chain key binding within node scope"
     );
     anyhow::ensure!(
         rows.iter()

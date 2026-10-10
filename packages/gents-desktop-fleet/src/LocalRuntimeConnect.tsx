@@ -3,6 +3,7 @@ import { useState } from "react";
 import type { BootstrapSummary } from "@source-inc/gents-desktop-client";
 
 import type { FleetCopy } from "./copy.js";
+import { DEFAULT_NODE_NAME } from "./copy.js";
 import { formatPeerConnectionError } from "./peerConnectionErrors.js";
 
 export type LocalRuntimeConnectProps = {
@@ -25,9 +26,9 @@ export function LocalRuntimeConnect({
   onCommitServerAutoStart,
 }: LocalRuntimeConnectProps) {
   const [error, setError] = useState<string | null>(null);
-  const [newNodeName, setNewNodeName] = useState("Local Node");
+  const [newNodeName, setNewNodeName] = useState(DEFAULT_NODE_NAME);
   const nodeName =
-    bootstrap?.initNodeName?.trim() || newNodeName.trim() || "Local Node";
+    bootstrap?.initNodeName?.trim() || newNodeName.trim() || DEFAULT_NODE_NAME;
   const identity =
     bootstrap?.initNodeDid?.trim() || bootstrap?.defaultNodeHome || "";
 

@@ -180,7 +180,7 @@ pub async fn seal_on_writer_success(
         .ok_or_else(|| anyhow::anyhow!("isolated workspace {workspace_id} not found"))?;
     anyhow::ensure!(
         workspace.writer_principal.trim() == request.node_did.trim(),
-        "request principal no longer holds the workspace writer_principal grant"
+        "request node no longer holds the workspace writer_principal grant"
     );
     docs.load_placement(workspace_id)?
         .ok_or_else(|| anyhow::anyhow!("workspace placement {workspace_id} not found"))?;
@@ -243,7 +243,7 @@ pub async fn integrate_on_integrator_success(
         .ok_or_else(|| anyhow::anyhow!("isolated workspace {workspace_id} not found"))?;
     anyhow::ensure!(
         workspace.integrator_principal.trim() == request.node_did.trim(),
-        "request principal no longer holds the workspace integrator_principal grant"
+        "request node no longer holds the workspace integrator_principal grant"
     );
     docs.load_placement(workspace_id)?
         .ok_or_else(|| anyhow::anyhow!("workspace placement {workspace_id} not found"))?;
@@ -427,7 +427,7 @@ pub async fn materialize_workspace_binding(
             && actual.workspace_owner_node_did == lineage.workspace_owner_node_did
             && actual.workspace_authority.as_deref() == Some(authority.as_str())
             && actual.workspace_seal_hash == lineage.workspace_seal_hash,
-        "workspace binding must match exact physical request principal and lineage"
+        "workspace binding must match exact physical request node and lineage"
     );
     let workspace =
         super::overlay::load_isolated_workspace_record(node, workspace_id, workspace_owner)
@@ -620,10 +620,7 @@ async fn load_isolated_workspace_doc(
     {
         let mut found =
             crate::graphql::rows::<IsolatedWorkspaceDoc>(&response, "IsolatedWorkspace")?;
-        anyhow::ensure!(
-            found.len() <= 1,
-            "ambiguous principal-scoped IsolatedWorkspace"
-        );
+        anyhow::ensure!(found.len() <= 1, "ambiguous node-scoped IsolatedWorkspace");
         Ok(found.pop())
     }
 }
@@ -648,10 +645,7 @@ async fn load_placement_doc(
     {
         let mut found =
             crate::graphql::rows::<WorkspacePlacementDoc>(&response, "WorkspacePlacement")?;
-        anyhow::ensure!(
-            found.len() <= 1,
-            "ambiguous principal-scoped WorkspacePlacement"
-        );
+        anyhow::ensure!(found.len() <= 1, "ambiguous node-scoped WorkspacePlacement");
         Ok(found.pop())
     }
 }
@@ -670,7 +664,7 @@ async fn load_repository(
     )?;
     anyhow::ensure!(
         found.len() == 1,
-        "repository placement missing or ambiguous for principal"
+        "repository placement missing or ambiguous for node"
     );
     let row = found.pop().unwrap();
     anyhow::ensure!(row.enabled, "repository placement is disabled");

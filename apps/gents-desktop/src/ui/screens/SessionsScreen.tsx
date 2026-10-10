@@ -271,8 +271,8 @@ export function SessionsScreen({
                     )}
                   />
                   {row.open || row.hidden === 0
-                    ? `${row.kin} ${row.kin === 1 ? "worker" : "workers"}`
-                    : `${row.hidden} more ${row.hidden === 1 ? "worker" : "workers"}`}
+                    ? `${row.kin} started session${row.kin === 1 ? "" : "s"}`
+                    : `${row.hidden} more started session${row.hidden === 1 ? "" : "s"}`}
                   {row.running > 0 && <span>· {row.running} running</span>}
                 </button>
               </li>

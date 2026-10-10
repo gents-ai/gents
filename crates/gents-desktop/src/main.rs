@@ -85,7 +85,7 @@ fn run_command(command: Command) -> anyhow::Result<()> {
             let summary = runtime.block_on(init_standard_local_runtime(DesktopInitOptions {
                 node_home,
                 desktop_paths,
-                label: args.label.unwrap_or_else(|| "Local Node".to_string()),
+                label: args.label.unwrap_or_else(|| "Forge".to_string()),
             }))?;
             if args.json {
                 println!("{}", serde_json::to_string_pretty(&summary)?);

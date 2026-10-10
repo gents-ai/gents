@@ -34,7 +34,7 @@ pub fn admit_workspace_binding(
                 .iter()
                 .filter(|binding| binding.workspace_id == workspace_id)
                 .all(|binding| binding.owner_node_did == candidate.owner_node_did),
-        "workspace bindings must share their principal owner"
+        "workspace bindings must share their node owner"
     );
     let authority = WorkspaceAuthority::parse(&candidate.authority)?;
     if !authority.bindable_lifecycle_state(workspace_state) {

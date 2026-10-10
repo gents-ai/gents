@@ -2,6 +2,7 @@ import type {
   DesktopApiAdapter,
   ManagedServerStatus,
 } from "@source-inc/gents-desktop-client";
+import { DEFAULT_NODE_NAME } from "@source-inc/gents-desktop-fleet";
 
 import {
   awaitManagedServerSettled,
@@ -97,7 +98,7 @@ export async function ensureManagedRuntimeServing(
         throw new ManagedRuntimeUnavailableError("The local node is not running.");
       }
       const nodeName =
-        status.nodeName?.trim() || fallbackNodeName.trim() || "Local Node";
+        status.nodeName?.trim() || fallbackNodeName.trim() || DEFAULT_NODE_NAME;
       try {
         await observeManagedServerOperation(
           api,

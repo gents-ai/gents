@@ -32,7 +32,7 @@ function pulse(
   const overdue = tools.filter((t) => t.deadlineExpired).length;
   const parts = [
     live ? `${live} ${live === 1 ? "session" : "sessions"} live` : null,
-    workers ? `${workers} ${workers === 1 ? "worker" : "workers"}` : null,
+    workers ? `${workers} ${workers === 1 ? "session call" : "session calls"}` : null,
     jobs ? `${jobs} background ${jobs === 1 ? "job" : "jobs"}` : null,
     overdue ? `${overdue} past ${overdue === 1 ? "its" : "their"} deadline` : null,
   ].filter(Boolean) as string[];

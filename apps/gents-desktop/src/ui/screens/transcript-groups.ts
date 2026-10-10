@@ -121,7 +121,7 @@ export function groupLabel(members: GroupMember[]): string {
     n("read") && `read ${plural(n("read"), "file", "files")}`,
     n("edit") && `edited ${plural(n("edit"), "file", "files")}`,
     n("command") && `ran ${plural(n("command"), "command", "commands")}`,
-    n("worker") && `worked with ${plural(n("worker"), "agent", "agents")}`,
+    n("worker") && `made ${plural(n("worker"), "session call", "session calls")}`,
     n("other") && `used ${plural(n("other"), "tool", "tools")}`,
   ].filter(Boolean) as string[];
   const text = parts.join(", ") || "thought";

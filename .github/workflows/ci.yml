@@ -472,6 +472,7 @@ jobs:
           npm run build --workspace @source-inc/gents-desktop-client
           npm run build --workspace @source-inc/gents-desktop-ui
           npm run build --workspace @source-inc/gents-desktop-chat
+          npm run build --workspace @source-inc/gents-desktop-fleet
 
       - name: Run Lean-backed desktop conformance tests
         run: |

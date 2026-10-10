@@ -318,7 +318,7 @@ export function WorkerStep({
   );
 }
 
-const workerName = (worker: Worker | null) => worker?.summary?.title ?? "a worker";
+const workerName = (worker: Worker | null) => worker?.summary?.title ?? "a session";
 
 /* The sessions this one started, each as the session it is: where it got
    to and a way in. Stopping is a row's business: it names the call. */
@@ -327,7 +327,7 @@ export function WorkerList({ workers }: { workers: Workers }) {
   if (workers.all.length === 0) return null;
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-      <span>Workers</span>
+      <span>Started sessions</span>
       {workers.all.map((worker) => {
         const name = workerName(worker);
         const agentId = worker.summary?.agentId ?? null;

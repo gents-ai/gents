@@ -26,7 +26,7 @@ describe("the dock's tab strip", () => {
     workspace.reset();
     for (const [id, title] of [
       ["trace", "Trace"],
-      ["workers", "Workers"],
+      ["workers", "Started sessions"],
       ["diagnostics", "Diagnostics"],
     ]) {
       registerSurface({
@@ -48,10 +48,10 @@ describe("the dock's tab strip", () => {
       within(tablist)
         .getAllByRole("tab")
         .map((t) => t.textContent),
-    ).toEqual(["Trace", "Workers", "Diagnostics"]);
+    ).toEqual(["Trace", "Started sessions", "Diagnostics"]);
     expect(within(tablist).queryAllByRole("button")).toEqual([]);
     expect(tab("Trace")).toHaveAttribute("tabindex", "0");
-    expect(tab("Workers")).toHaveAttribute("tabindex", "-1");
+    expect(tab("Started sessions")).toHaveAttribute("tabindex", "-1");
   });
 
   it("moves between tabs with the arrows, Home and End, showing the one reached", () => {
@@ -59,9 +59,9 @@ describe("the dock's tab strip", () => {
     tab("Trace").focus();
     fireEvent.keyDown(tab("Trace"), { key: "ArrowRight" });
     expect(workspace.dock(SCOPE).active).toBe("workers");
-    expect(tab("Workers")).toHaveFocus();
-    expect(tab("Workers")).toHaveAttribute("aria-selected", "true");
-    fireEvent.keyDown(tab("Workers"), { key: "End" });
+    expect(tab("Started sessions")).toHaveFocus();
+    expect(tab("Started sessions")).toHaveAttribute("aria-selected", "true");
+    fireEvent.keyDown(tab("Started sessions"), { key: "End" });
     expect(tab("Diagnostics")).toHaveFocus();
     fireEvent.keyDown(tab("Diagnostics"), { key: "ArrowRight" });
     expect(tab("Trace")).toHaveFocus();
@@ -77,13 +77,13 @@ describe("the dock's tab strip", () => {
     tab("Trace").focus();
     fireEvent.keyDown(tab("Trace"), { key: "Delete" });
     expect(workspace.dock(SCOPE).tabs).toEqual(["workers", "diagnostics"]);
-    expect(tab("Workers")).toHaveFocus();
+    expect(tab("Started sessions")).toHaveFocus();
   });
 
   it("focuses a tab pressed with the pointer", () => {
     renderTabs();
-    fireEvent.pointerDown(tab("Workers"), { button: 0, pointerId: 1 });
-    expect(tab("Workers")).toHaveFocus();
+    fireEvent.pointerDown(tab("Started sessions"), { button: 0, pointerId: 1 });
+    expect(tab("Started sessions")).toHaveFocus();
     expect(workspace.dock(SCOPE).active).toBe("workers");
   });
 });

@@ -1,5 +1,5 @@
 //! Backend configuration and observation lookups. Logical references are scoped
-//! by their owning principal; authentication remains an explicit selection.
+//! by their owning node; authentication remains an explicit selection.
 
 use crate::backend_provider::BackendProviderKind;
 pub use crate::document_config::InferenceBackend;
@@ -131,7 +131,7 @@ impl InferenceBackend {
     }
 
     /// Catalog authentication scope of this connection: `None` for shared
-    /// credentials, the owning principal for principal OAuth.
+    /// credentials, the owning node for node OAuth.
     pub fn catalog_scope(&self) -> Option<&str> {
         matches!(self.auth, BackendAuth::NodeOAuth { .. }).then_some(self.node_did.as_str())
     }
@@ -162,7 +162,7 @@ impl BackendAuth {
                 Ok(Some(key))
             }
             Self::NodeOAuth { .. } => {
-                anyhow::bail!("principal OAuth requires the invoking principal's OAuthCredential")
+                anyhow::bail!("node OAuth requires the invoking node's OAuthCredential")
             }
         }
     }
@@ -329,7 +329,7 @@ pub async fn list_enabled_backends(node: &EmbeddedNode) -> Result<Vec<InferenceB
     )
 }
 
-/// Enumerate enabled configuration only within the selected principal.
+/// Enumerate enabled configuration only within the selected node.
 pub async fn list_enabled_backends_for_agent(
     node: &EmbeddedNode,
     node_did: &str,

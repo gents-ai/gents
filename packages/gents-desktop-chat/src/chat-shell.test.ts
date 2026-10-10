@@ -492,9 +492,14 @@ describe("projectChatShell", () => {
         );
 
         if (contractCase.frontend_expected_send_status === "ready") {
-          expect(projection.nonEmptyContentSendStatus).toEqual({ kind: "ready" });
+          expect(projection.nonEmptyContentSendStatus).toEqual({
+            kind: "ready",
+          });
         } else if (contractCase.frontend_expected_send_status === "queue") {
-          expect(projection.nonEmptyContentSendStatus.kind, contractCase.name).toBe("queue");
+          expect(
+            projection.nonEmptyContentSendStatus.kind,
+            contractCase.name,
+          ).toBe("queue");
           if (projection.nonEmptyContentSendStatus.kind === "queue") {
             expect(projection.nonEmptyContentSendStatus.turnState).toBe(
               contractCase.frontend_expected_turn_state,
@@ -559,9 +564,9 @@ describe("projectChatShell", () => {
     });
     expect(projection.activityStatus).toEqual({
       kind: "waiting",
-      label: "Waiting for the agent…",
+      label: "Waiting for the node…",
       detail:
-        "The agent has not started yet. Messages you send now wait behind it.",
+        "The node has not started this request yet. Messages you send now wait behind it.",
       animated: true,
     });
   });

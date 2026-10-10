@@ -109,7 +109,7 @@ impl DesktopPaths {
 
     /// Every entry of the desktop client's durable state: its store and the
     /// store's encryption record and key file, peer directory (and lease),
-    /// principal identity and P2P key. The packaged runtime copied under the
+    /// desktop identity and P2P key. The packaged runtime copied under the
     /// same root is not client state.
     pub fn client_state_entries(&self) -> Vec<PathBuf> {
         vec![

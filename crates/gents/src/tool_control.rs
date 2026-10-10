@@ -582,7 +582,7 @@ mod tests {
 
         // The wake continuation is authored with RequestSigner::RegisteredTarget,
         // so its persisted row must carry a real admission signature from the
-        // registered runtime principal, plus the runtime-source lineage back to
+        // registered runtime node, plus the runtime-source lineage back to
         // the parent request.
         let escaped_session = crate::graphql::escape_graphql_string("session-custom");
         let escaped_agent = crate::graphql::escape_graphql_string(&node_did);
@@ -618,7 +618,7 @@ mod tests {
                 .as_str()
                 .unwrap_or_default()
                 .is_empty(),
-            "wake request must be signed by the registered runtime principal"
+            "wake request must be signed by the registered runtime node"
         );
         assert_eq!(wake["runtime_issuer_did"].as_str(), Some(node_did.as_str()));
         assert_eq!(

@@ -5,3 +5,4 @@ export type FleetCopy = {
 
 export const DEFAULT_RUNTIME_PRODUCT_NAME = "Gents";
 export const DEFAULT_CLI_BINARY_NAME = "gents";
+export const DEFAULT_NODE_NAME = "Forge";

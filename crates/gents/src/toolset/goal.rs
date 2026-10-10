@@ -44,7 +44,7 @@ impl Tool for CreateGoalTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Create a durable goal owned by the current principal and session. Repeating the exact same objective and budget is idempotent; a different request conflicts. Ownership cannot be supplied by the model.".to_string(),
+            description: "Create a durable goal owned by the current node and session. Repeating the exact same objective and budget is idempotent; a different request conflicts. Ownership cannot be supplied by the model.".to_string(),
             parameters: json!({
                 "type": "object",
                 "additionalProperties": false,

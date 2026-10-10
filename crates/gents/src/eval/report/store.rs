@@ -200,6 +200,7 @@ mod tests {
             &RunOptions {
                 poll_backoff_base: Duration::from_millis(1),
                 poll_backoff_cap: Duration::from_millis(2),
+                trial_budget: None,
             },
         )
         .await

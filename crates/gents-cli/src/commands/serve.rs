@@ -585,7 +585,7 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
         tracing::warn!(
             home = %home_dir.display(),
             port = http_port,
-            "serving a non-default home on port {http_port}, which the desktop agent and the default CLI expect to belong to the default home; pass --http-port to serve this home on another port"
+            "serving a non-default home on port {http_port}, which the desktop app and the default CLI expect to belong to the default home; pass --http-port to serve this home on another port"
         );
     }
     let http_addr = SocketAddr::new(args.http_addr, http_port);
@@ -1115,7 +1115,7 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
             "degraded"
         };
         let node_readiness = serde_json::to_value(&readiness.snapshot)
-            .context("serializing durable agent readiness")?;
+            .context("serializing durable node readiness")?;
         let pack_apply = applied_pack.map(|outcome| outcome.report);
 
         write_runtime_state(

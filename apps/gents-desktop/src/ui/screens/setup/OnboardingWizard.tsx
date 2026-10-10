@@ -7,6 +7,7 @@ import type {
   DesktopClientSnapshot,
   ManagedServerAuthorityInput,
 } from "@source-inc/gents-desktop-client";
+import { DEFAULT_NODE_NAME } from "@source-inc/gents-desktop-fleet";
 import { Button } from "@gents/ui/components/button";
 import { Input } from "@gents/ui/components/input";
 import { Spinner } from "@gents/ui/components/spinner";
@@ -152,7 +153,9 @@ export function OnboardingWizard({
   const existingHome = Boolean(
     bootstrap?.nodeHomeExists && bootstrap?.initNodeDid?.trim(),
   );
-  const [name, setName] = useState(bootstrap?.initNodeName?.trim() || "Forge");
+  const [name, setName] = useState(
+    bootstrap?.initNodeName?.trim() || DEFAULT_NODE_NAME,
+  );
   /* An initialized home keeps its identity: provisioning never renames it,
      so its name is shown, not asked for. */
   const existingName = existingHome ? bootstrap?.initNodeName?.trim() || null : null;

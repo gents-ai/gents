@@ -7,7 +7,7 @@ export { isLive };
 export const turnLabel = (turnState: string | null | undefined): string | null => {
   switch (turnState) {
     case "waitingForClaim":
-      return "Waiting for agent";
+      return "Waiting for node";
     case "running":
       return "Working";
     case "failed":

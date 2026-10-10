@@ -1820,6 +1820,8 @@ describe("configuration panels", () => {
       "Files",
       "Bash",
       "Background processes",
+      "Can change this node's configuration",
+      "Install graph packs",
       "Canonical JSON",
     ]);
     const user = await replace("Workspace root", "relative/repo");

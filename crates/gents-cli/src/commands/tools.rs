@@ -129,7 +129,7 @@ async fn explain(args: ToolExplainArgs) -> Result<()> {
                 .is_some_and(|value| value == only_agent_id)
         }) || configuration_issues.contains_key(only_agent_id);
         if !found {
-            anyhow::bail!("agent {only_agent_id} was not found for agent {node_did}");
+            anyhow::bail!("agent {only_agent_id} was not found for node {node_did}");
         }
     }
 

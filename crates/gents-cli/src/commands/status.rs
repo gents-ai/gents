@@ -238,7 +238,7 @@ pub(crate) async fn load_node_readiness(
         .await?
         .into_iter()
         .next()
-        .map(|row| serde_json::from_value(row).context("decoding agent readiness row"))
+        .map(|row| serde_json::from_value(row).context("decoding node readiness row"))
         .transpose()
 }
 

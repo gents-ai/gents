@@ -33,7 +33,7 @@ pub(crate) fn ensure_local_request_signer(
     })?;
     anyhow::ensure!(
         config.node_did.trim() == target_node_did.trim(),
-        "local-self request target {} does not match initialized home principal {}",
+        "local-self request target {} does not match initialized home node {}",
         target_node_did,
         config.node_did
     );
@@ -225,7 +225,7 @@ pub(crate) fn request_output_envelope(
         node_did: request
             .node_did
             .clone()
-            .context("request output omitted principal")?,
+            .context("request output omitted node_did")?,
         requester_did: request.requester_did.clone(),
         agent_id: request.agent_id.clone(),
         session_id: request
@@ -517,7 +517,7 @@ fn submitted_from_receipt(row: AgentRequestRow) -> Result<SubmittedRequest> {
             .context("receipt has no physical identity")?,
         request_id: row.request_id,
         session_id: row.session_id.context("receipt has no session")?,
-        node_did: row.node_did.context("receipt has no principal")?,
+        node_did: row.node_did.context("receipt has no node_did")?,
         requester_did: row.requester_did,
         agent_id: row.agent_id,
         input: row.input,
@@ -614,12 +614,12 @@ async fn resolve_request_agent_id(
         .context("Node query returned no row array")?;
     anyhow::ensure!(
         nodes.len() == 1,
-        "request target principal must resolve to exactly one row"
+        "request target node must resolve to exactly one row"
     );
     let principal = &nodes[0];
     anyhow::ensure!(
         principal.get("enabled").and_then(Value::as_bool) == Some(true),
-        "request target principal is disabled"
+        "request target node is disabled"
     );
     let agent_id = match requested.map(str::trim).filter(|value| !value.is_empty()) {
         Some(agent_id) => agent_id.to_string(),
@@ -629,7 +629,7 @@ async fn resolve_request_agent_id(
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned)
-            .context("request target principal has no canonical default agent")?,
+            .context("request target node has no canonical default agent")?,
     };
     let agents = response
         .pointer("/data/Agent")
@@ -641,7 +641,7 @@ async fn resolve_request_agent_id(
         .collect::<Vec<_>>();
     anyhow::ensure!(
         matching.len() == 1,
-        "request agent must resolve to exactly one row owned by the target principal"
+        "request agent must resolve to exactly one row owned by the target node"
     );
     anyhow::ensure!(
         matching[0].get("enabled").and_then(Value::as_bool) == Some(true),
@@ -787,9 +787,6 @@ pub(crate) async fn wait_for_terminal_response(
             }
             Some(gents::session::CanonicalRequestOutput::Invalid) => {
                 anyhow::bail!("canonical output for request {request_id} is invalid")
-            }
-            Some(gents::session::CanonicalRequestOutput::Retracted) => {
-                anyhow::bail!("canonical output for request {request_id} is retracted")
             }
             _ => {}
         }
@@ -1212,6 +1209,110 @@ mod tests {
         };
         assert_eq!(presentation.body_markdown, "hello");
         assert_eq!(presentation.reasoning_markdown.as_deref(), Some("idea"));
+        Ok(())
+    }
+
+    /// The executable SessionCompositionCases.retractedPhase continues through
+    /// delayedPhase before terminalization; a source retraction is not a request terminal.
+    #[tokio::test]
+    async fn terminal_wait_survives_active_retraction_and_preserves_later_failure(
+    ) -> anyhow::Result<()> {
+        use gents_protocol::output::{OutputSegment, OutputSource, OutputWriter, SourceClose};
+        use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let snapshot: Value = gents_lean_contract::load_contract_snapshot()?;
+        let modeled = snapshot["canonical_output_projection_cases"]
+            .as_array()
+            .expect("generated canonical projection cases")
+            .iter()
+            .find(|case| case["name"] == "retracted_attempt_is_not_rendered")
+            .expect("generated nonterminal retraction case");
+        assert_eq!(modeled["input"]["request_terminal"], false);
+        assert_eq!(modeled["expected"]["kind"], "retracted");
+        let modeled_close: SourceClose =
+            serde_json::from_value(modeled["input"]["records"][0]["close"].clone())?;
+        let close = OutputSegment {
+            node_did: "did:test:owner".into(),
+            requester_did: None,
+            session_id: "session".into(),
+            request_doc_id: "physical".into(),
+            source: OutputSource::ProviderTurn {
+                scope: CaptureScope {
+                    kind: CaptureScopeKind::Inference,
+                    seq: 1,
+                },
+                turn_index: 0,
+                attempt: 0,
+            },
+            writer: OutputWriter::RequestExecution {
+                execution_generation: "generation".into(),
+            },
+            ordinal: None,
+            runs: vec![],
+            payload: String::new(),
+            close: Some(modeled_close),
+            created_at: "2026-09-01T00:00:00Z".into(),
+        };
+        let mut close = serde_json::to_value(close)?;
+        close["_docID"] = json!("retracted-attempt");
+        let output_reads = Arc::new(AtomicUsize::new(0));
+        let request_reads = Arc::new(AtomicUsize::new(0));
+        let app = Router::new().route("/graphql", post({
+            let output_reads = output_reads.clone();
+            let request_reads = request_reads.clone();
+            move |Json(body): Json<Value>| {
+                let output_reads = output_reads.clone();
+                let request_reads = request_reads.clone();
+                let close = close.clone();
+                async move {
+                    if body["query"].as_str().unwrap().contains("AgentOutputSegment") {
+                        output_reads.fetch_add(1, Ordering::SeqCst);
+                        Json(json!({"data": {"AgentOutputSegment": [close], "AgentMessage": []}}))
+                    } else {
+                        request_reads.fetch_add(1, Ordering::SeqCst);
+                        let terminal = output_reads.load(Ordering::SeqCst) > 0;
+                        Json(json!({"data": {"AgentRequest": [{
+                            "_docID": "physical", "request_id": "request",
+                            "node_did": "did:test:owner", "requester_did": null,
+                            "agent_id": "engineer", "session_id": "session",
+                            "lifecycle_state": if terminal { "failed" } else { "processing" },
+                            "execution_generation": "generation",
+                            "execution_lease_secs": 30,
+                            "execution_lease_expires_at": "2026-09-01T00:00:30Z",
+                            "failure_reason": if terminal { Some("provider returned an empty response") } else { None },
+                            "terminal_output": if terminal { Some(json!({"kind": "no_message"})) } else { None },
+                            "terminalized_at": if terminal { Some("2026-09-01T00:00:01Z") } else { None }
+                        }]}}))
+                    }
+                }
+            }
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let endpoint = gents::config_client::GraphqlEndpoint::anonymous(format!(
+            "http://{}/graphql",
+            listener.local_addr()?
+        ));
+        let server = tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        let result = super::wait_for_terminal_response(&endpoint, "request", 5, 0).await;
+        server.abort();
+        let result = result?;
+        assert_eq!(output_reads.load(Ordering::SeqCst), 1);
+        assert_eq!(request_reads.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            result.request.lifecycle_state,
+            gents_protocol::client_protocol::RequestLifecycleState::Failed
+        );
+        assert_eq!(
+            result.request.failure_reason.as_deref(),
+            Some("provider returned an empty response")
+        );
+        assert!(matches!(
+            result.output,
+            super::CliOutputObservation::TerminalNoMessage
+        ));
         Ok(())
     }
 

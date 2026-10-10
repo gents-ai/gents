@@ -261,7 +261,7 @@ describe("agent list", () => {
     render(
       <WorkerList workers={workersWith(reached(caused("child-req", "completed")))} />,
     );
-    expect(screen.getByText("Workers")).toBeInTheDocument();
+    expect(screen.getByText("Started sessions")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Reviewer/ })).toBeInTheDocument();
   });
 
