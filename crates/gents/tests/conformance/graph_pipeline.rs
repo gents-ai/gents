@@ -313,7 +313,7 @@ fn edge_fixture(grouped: bool) -> (GraphIntent, Vec<StageCapability>) {
         PortCardinality::One
     };
     let capability = |id: &str, inputs: Vec<PortSpec>, outputs: Vec<PortSpec>| StageCapability {
-        agent_did: CALLER_DID.to_owned(),
+        node_did: CALLER_DID.to_owned(),
         capability_id: id.to_owned(),
         revision: "v1".to_owned(),
         target: gents::graph_pipeline::StageTarget::Task {
@@ -349,7 +349,7 @@ fn edge_fixture(grouped: bool) -> (GraphIntent, Vec<StageCapability>) {
         capability_revision: "v1".to_owned(),
     };
     let intent = GraphIntent {
-        agent_did: CALLER_DID.to_owned(),
+        node_did: CALLER_DID.to_owned(),
         graph_id: "lean-edge-delivery-fixture".to_owned(),
         nodes: vec![node("extract"), node("review")],
         edges: vec![GraphEdge {

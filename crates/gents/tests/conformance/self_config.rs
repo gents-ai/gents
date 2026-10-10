@@ -235,7 +235,7 @@ fn typed_doc(
         .iter()
         .map(|entry| {
             let value = Value::String(entry.value.clone());
-            let value = if entry.field == target.unique_field() || entry.field == "agent_did" {
+            let value = if entry.field == target.unique_field() || entry.field == "node_did" {
                 value
             } else {
                 parse_nested(value)
