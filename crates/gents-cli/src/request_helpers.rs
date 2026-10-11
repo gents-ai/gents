@@ -893,11 +893,7 @@ where
                 .take()
                 .context("terminal request output observation is missing")?;
             match output {
-                gents::session::CanonicalRequestOutput::Loading
-                | gents::session::CanonicalRequestOutput::Absent
-                | gents::session::CanonicalRequestOutput::Live(_)
-                | gents::session::CanonicalRequestOutput::Settling(_)
-                | gents::session::CanonicalRequestOutput::Published { .. } => {
+                gents::session::CanonicalRequestOutput::Loading => {
                     if last_progress_at.elapsed() >= idle_timeout {
                         anyhow::bail!(
                             "timed out waiting for materialized AgentMessage {request_id} after {timeout_secs}s of inactivity\n{}",
@@ -926,6 +922,12 @@ where
                 | gents::session::CanonicalRequestOutput::TerminalMessage { .. } => {
                     return request_output_envelope(request, output)
                 }
+                gents::session::CanonicalRequestOutput::Absent
+                | gents::session::CanonicalRequestOutput::Live(_)
+                | gents::session::CanonicalRequestOutput::Settling(_)
+                | gents::session::CanonicalRequestOutput::Published { .. } => anyhow::bail!(
+                    "terminal request {request_id} produced a nonterminal canonical output observation"
+                ),
             }
         }
 

@@ -114,7 +114,7 @@ pub(super) async fn run(
                     &gents::ConfigAccess::Graphql(graphql.clone()),
                     node, session, Default::default(), gents_protocol::request_input::QueueDelivery::Steer,
                 ).await?;
-                match goal.take() {
+                match goal.as_ref() {
                     Some(goal) => crate::request_helpers::create_goal_backed_agent_request(
                         graphql, node, content, session, agent, goal.objective, goal.token_budget, input,
                     ).await,
@@ -126,6 +126,7 @@ pub(super) async fn run(
                 }.await;
                 match submitted {
                     Ok(submitted) => {
+                        goal = None;
                         eprintln!("Submitted {}", submitted.request_id);
                         let endpoint = graphql.clone();
                         turns.push(async move {
