@@ -289,9 +289,12 @@ pub struct PendingQueueEntryView {
 #[serde(rename_all = "camelCase")]
 pub struct PendingTurnView {
     pub request_id: String,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    #[ts(optional = nullable)]
-    pub request_doc_id: Option<String>,
+    /// Internal reconciliation identity. The wire view keeps its existing
+    /// shape; canonical messages link to the physical request document, not
+    /// the caller-authored logical request id.
+    #[serde(skip)]
+    #[ts(skip)]
+    pub(crate) request_doc_id: Option<String>,
     pub content: String,
     pub selected_skill_ids: Vec<String>,
     pub lifecycle_state: Option<String>,

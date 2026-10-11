@@ -411,10 +411,18 @@ export async function runNativeLocalE2e(
   const staleEntry = staleQueue?.find((entry) => entry.content === originalText);
   if (!staleQueue || !staleEntry)
     throw new Error("Pending edit snapshot is missing its original target");
+  const pendingCards = () =>
+    Array.from(document.querySelectorAll<HTMLElement>('[data-testid="queued-input"]'));
   const pendingCard = (text: string) =>
-    Array.from(
-      document.querySelectorAll<HTMLElement>('[data-testid="queued-input"]'),
-    ).find((item) => item.textContent?.includes(text)) ?? null;
+    pendingCards().find((item) => item.textContent?.includes(text)) ?? null;
+  const renderedPendingOrder = (texts: string[], label: string) =>
+    until(() => {
+      const cards = pendingCards();
+      return cards.length === texts.length &&
+        texts.every((text, index) => cards[index].textContent?.includes(text))
+        ? true
+        : null;
+    }, label);
   (
     await until(() => {
       const card = pendingCard(originalText);
@@ -507,6 +515,10 @@ export async function runNativeLocalE2e(
       ? true
       : null;
   }, "runtime-acknowledged removal");
+  await renderedPendingOrder(
+    [editedText, secondText],
+    "edited message rendered in its runtime slot",
+  );
   (
     await until(
       () =>
@@ -524,6 +536,10 @@ export async function runNativeLocalE2e(
       ? entries
       : null;
   }, "runtime-acknowledged queue order");
+  await renderedPendingOrder(
+    [secondText, editedText],
+    "pending messages rendered in runtime queue order",
+  );
   await report({
     stage: "local-queue-edited",
     detail: JSON.stringify({ sessionId: heldSession.sessionId, heldRequestId }),

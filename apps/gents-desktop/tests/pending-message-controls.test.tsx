@@ -13,26 +13,23 @@ const entry = (id: string, group: string | null = "same"): PendingQueueEntryView
   editable: group !== null,
   editGroup: group,
 });
-const turn = (row: PendingQueueEntryView): PendingTurnView => ({
+const turn = (row: PendingQueueEntryView, createdAt: string): PendingTurnView => ({
   requestId: row.requestId,
-  requestDocId: row.requestDocId,
   content: row.content,
   selectedSkillIds: [],
   lifecycleState: "pending",
   foldedIntoRequestId: null,
   origin: null,
-  createdAt: null,
+  createdAt,
 });
 
-function setup(queue: PendingQueueEntryView[]) {
+/** `queued` arrives in creation order, as the snapshot sorts it. */
+function setup(
+  queue: PendingQueueEntryView[],
+  queued = queue.map((row, index) => turn(row, `2026-10-10T00:00:0${index}Z`)),
+) {
   const onEdit = vi.fn().mockResolvedValue(undefined);
-  render(
-    <QueuedInputs
-      queued={queue.filter((row) => row.editable).map(turn)}
-      queue={queue}
-      onEdit={onEdit}
-    />,
-  );
+  render(<QueuedInputs queued={queued} queue={queue} onEdit={onEdit} />);
   return onEdit;
 }
 
@@ -85,6 +82,34 @@ describe("pending message controls", () => {
     );
     expect(screen.getAllByTestId("queued-input").map((row) => row.textContent)).toEqual(
       [expect.stringContaining("message a"), expect.stringContaining("message b")],
+    );
+  });
+
+  it("renders an edited message in its runtime slot, not by its newer creation time", async () => {
+    const edited = { ...entry("edited"), content: "edited first" };
+    const second = entry("second");
+    const onEdit = setup(
+      [edited, second],
+      [turn(second, "2026-10-10T00:00:01Z"), turn(edited, "2026-10-10T00:00:02Z")],
+    );
+    expect(screen.getAllByTestId("queued-input").map((row) => row.textContent)).toEqual(
+      [
+        expect.stringContaining("edited first"),
+        expect.stringContaining("message second"),
+      ],
+    );
+    fireEvent.click(
+      screen.getAllByRole("button", { name: "Move pending message down" })[0],
+    );
+    await waitFor(() =>
+      expect(onEdit).toHaveBeenCalledWith({
+        expectedRequestDocIds: ["doc-edited", "doc-second"],
+        selectedRequestDocIds: ["doc-edited", "doc-second"],
+        messages: [
+          { requestDocId: "doc-second", content: "message second" },
+          { requestDocId: "doc-edited", content: "edited first" },
+        ],
+      }),
     );
   });
 

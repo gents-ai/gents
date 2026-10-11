@@ -15,7 +15,6 @@ const entry = (id: string, group: string | null = "same"): PendingQueueEntryView
 });
 const turn = (row: PendingQueueEntryView): PendingTurnView => ({
   requestId: row.requestId,
-  requestDocId: row.requestDocId,
   content: row.content,
   selectedSkillIds: [],
   lifecycleState: "pending",
