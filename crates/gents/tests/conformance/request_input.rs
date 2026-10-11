@@ -17,8 +17,18 @@ fn lean_request_inputs_decode_without_losing_explicit_issuance_facts() {
         for (field, value) in case["input"].as_object().unwrap() {
             if !value.is_null() && value.as_array().is_none_or(|xs| !xs.is_empty()) {
                 if field == "queue" {
+                    let modeled: gents_protocol::request_input::RequestQueue =
+                        serde_json::from_value(value.clone()).unwrap();
+                    let decoded = input.queue.as_ref().expect("modeled queue survives decode");
+                    assert_eq!(decoded.delivery, modeled.delivery, "{name}: queue.delivery");
+                    assert_eq!(decoded.position, modeled.position, "{name}: queue.position");
                     for (key, value) in value.as_object().unwrap() {
-                        if !value.is_null() {
+                        if key == "delivery" && modeled.delivery.is_queue() {
+                            assert!(
+                                encoded[field].get(key).is_none(),
+                                "{name}: compact default delivery"
+                            );
+                        } else if !value.is_null() {
                             assert_eq!(&encoded[field][key], value, "{name}: queue.{key}");
                         }
                     }

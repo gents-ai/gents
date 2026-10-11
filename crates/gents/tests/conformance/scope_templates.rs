@@ -275,6 +275,12 @@ fn client_route_is_directional_destination_scoped_and_control_plane_bounded() {
             .expect("hydration request filter"),
         &[("requester_did", requester), ("node_did", owner)],
     );
+    assert_and_eq_filter(
+        outbound
+            .get("AgentSessionInputEdit")
+            .expect("signed input edit request filter"),
+        &[("requester_did", requester), ("node_did", owner)],
+    );
     for collection in RETURN_CONTROL_PLANE {
         assert!(!outbound.contains_key(*collection));
         assert!(!client_to_runtime.contains(collection));
@@ -285,6 +291,12 @@ fn client_route_is_directional_destination_scoped_and_control_plane_bounded() {
         PairingDirection::RuntimeToClient,
         requester,
         owner,
+    );
+    assert_and_eq_filter(
+        returning
+            .get("AgentSessionInputEdit")
+            .expect("signed input edit receipt filter"),
+        &[("requester_did", requester), ("node_did", owner)],
     );
     assert_eq!(
         returning.len(),

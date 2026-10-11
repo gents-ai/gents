@@ -1113,6 +1113,38 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "FoldPublicationCases".to_string(),
         ));
     }
+    if !snapshot.session_input_edit_cases.is_empty() {
+        for domain in ["SessionInputEditCases", "SessionInputEditRemoteCases"] {
+            emitted.insert(("session_input_edit_cases".to_string(), domain.to_string()));
+        }
+    }
+    if !snapshot.queue_management_cases.is_empty() {
+        emitted.insert((
+            "queue_management_cases".to_string(),
+            "QueueManagementCases".to_string(),
+        ));
+    }
+    for name in [
+        "expired_steering_is_barrier",
+        "malformed_ttl_steering_is_barrier",
+    ] {
+        assert!(
+            snapshot
+                .queue_management_cases
+                .iter()
+                .any(|case| case.name == name),
+            "queue expiry coverage requires generated case {name}"
+        );
+    }
+    emitted.insert((
+        "queue_management_cases".to_string(),
+        "QueueExpiryBarrierCases".to_string(),
+    ));
+    if !snapshot.steering_publication_cases.is_empty() {
+        for domain in ["SteeringPublicationCases", "SteeringUnsafeBoundaryCases"] {
+            emitted.insert(("steering_publication_cases".to_string(), domain.to_string()));
+        }
+    }
     if !snapshot.handover_fold_cases.is_empty() {
         emitted.insert((
             "handover_fold_cases".to_string(),
