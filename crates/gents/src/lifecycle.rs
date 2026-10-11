@@ -63,12 +63,12 @@ pub(crate) use materialize::{
 };
 pub use queue::enqueue_local_steering_request;
 pub use queue::validate_position as validate_queue_position;
-pub use queue::FOLDED_REASON;
 pub use queue::{pending_user_queue, PendingQueueEntry, PendingQueueSnapshot};
 pub use queue::{prepare_pending_user_edit, prepare_user_message_input};
 pub use queue::{
     replace_pending_user_messages, PendingMessageEdit, PendingQueueEdit, PendingQueueReceipt,
 };
+pub use queue::{FOLDED_REASON, REPLACED_REASON};
 pub(crate) use task_title::task_goal_session_title;
 pub use task_title::task_session_title;
 
@@ -147,6 +147,16 @@ pub fn folded_into(row: &gents_protocol::row::AgentRequestRow) -> Option<&str> {
     .then_some(row.superseded_by_request.as_deref())
     .flatten()
     .filter(|head| !head.trim().is_empty())
+}
+
+/// The pending request that replaced this one when its author edited it.
+pub fn replaced_by(row: &gents_protocol::row::AgentRequestRow) -> Option<&str> {
+    (row.lifecycle_state
+        == Some(gents_protocol::request_lifecycle::RequestLifecycleState::Superseded)
+        && row.failure_reason.as_deref() == Some(queue::REPLACED_REASON))
+    .then_some(row.superseded_by_request.as_deref())
+    .flatten()
+    .filter(|replacement| !replacement.trim().is_empty())
 }
 
 /// The transcript key under which the claimed request publishes a message

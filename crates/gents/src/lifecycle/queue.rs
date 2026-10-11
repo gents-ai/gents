@@ -69,6 +69,7 @@ pub(crate) use intake::{pending_ids_in_txn, steering_inputs, steering_snapshot};
 pub(crate) use management::{apply_pending_user_edit_in_txn, validate_pending_user_edit_in_txn};
 pub use management::{
     pending_user_queue, prepare_pending_user_edit, PendingQueueEntry, PendingQueueSnapshot,
+    REPLACED_REASON,
 };
 pub use management::{
     replace_pending_user_messages, PendingMessageEdit, PendingQueueEdit, PendingQueueReceipt,

@@ -8,7 +8,7 @@ use gents_protocol::request_admission::{
 use gents_protocol::request_input::QueuePosition;
 use serde::{Deserialize, Serialize};
 
-const REPLACED_REASON: &str = "pending message replaced";
+pub const REPLACED_REASON: &str = "pending message replaced";
 
 pub use gents_protocol::session_input_edit::{
     PendingMessageEdit, PendingQueueEdit, PendingQueueReceipt,
