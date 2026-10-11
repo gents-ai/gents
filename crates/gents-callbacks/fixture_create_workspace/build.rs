@@ -16,6 +16,7 @@ fn main() {
     println!("cargo:rustc-check-cfg=cfg(callback_fixture_skipped)");
     println!("cargo:rerun-if-changed=src");
     println!("cargo:rerun-if-changed=Cargo.toml");
+    println!("cargo:rerun-if-changed=../../../Cargo.lock");
     println!("cargo:rerun-if-env-changed=GENTS_SKIP_CALLBACK_WASM_BUILD");
     if env::var("CARGO_CFG_TARGET_ARCH").as_deref() == Ok("wasm32") {
         return;

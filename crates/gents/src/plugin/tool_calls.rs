@@ -25,15 +25,10 @@ pub(crate) fn supported(name: &str) -> bool {
     crate::hook::persistence::HookOwnedTool::of(name).is_none()
 }
 
-/// The guest-facing sentence naming what children cannot call.
+/// The model-facing composition rule; a refused child's error names the tool.
 pub(super) fn composition_note() -> String {
-    let owned = crate::hook::persistence::HookOwnedTool::ROUTES
-        .iter()
-        .map(|(name, _)| *name)
-        .collect::<Vec<_>>()
-        .join(", ");
     format!(
-        "\nTool composition is sequential, up to {MAX_EFFECTS} granted-tool calls per invocation. Call {owned} directly outside this plugin."
+        "\nThis plugin may call up to {MAX_EFFECTS} of this request's other tools in sequence, except tools that control request, session or process lifecycle; call those directly."
     )
 }
 

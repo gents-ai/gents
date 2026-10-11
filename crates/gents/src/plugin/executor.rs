@@ -421,21 +421,17 @@ impl PluginExecutor {
             session_id: session_id.as_deref(),
             interactive: approval::interactive(),
         };
-        match self
+        let bound = self
             .bind_input(record, &input, &context)
             .await
-            .map_err(anyhow::Error::msg)?
-        {
-            bound => {
-                self.run(
-                    record,
-                    input,
-                    bound,
-                    super::tool_calls::Session::for_call(tool_calls),
-                )
-                .await
-            }
-        }
+            .map_err(anyhow::Error::msg)?;
+        self.run(
+            record,
+            input,
+            bound,
+            super::tool_calls::Session::for_call(tool_calls),
+        )
+        .await
     }
 
     pub async fn call_data_bound_with_receipt(
