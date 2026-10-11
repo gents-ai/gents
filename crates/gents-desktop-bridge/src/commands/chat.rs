@@ -152,7 +152,7 @@ pub async fn edit_pending_queue(
     request: super::super::types::PendingQueueEditRequest,
 ) -> Result<super::super::types::PendingQueueEditResult> {
     let result = core
-        .replace_pending_user_messages(
+        .edit_pending_queue(
             &request.node_did,
             &request.session_id,
             gents::lifecycle::PendingQueueEdit {
