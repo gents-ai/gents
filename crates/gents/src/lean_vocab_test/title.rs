@@ -86,6 +86,9 @@ pub(crate) struct LeanTitleInitialTitle {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanTitleQueueInput {
+    pub(crate) delivery: gents_protocol::request_input::QueueDelivery,
+    #[serde(deserialize_with = "required_nullable")]
+    pub(crate) position: Option<gents_protocol::request_input::QueuePosition>,
     pub(crate) source: String,
     pub(crate) policy: String,
     #[serde(deserialize_with = "required_nullable")]
