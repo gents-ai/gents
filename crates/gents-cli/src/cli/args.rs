@@ -3737,23 +3737,83 @@ pub(crate) enum P2pCollectionProfileArg {
 #[derive(Subcommand)]
 pub(crate) enum RequestCommand {
     #[command(
-        about = "Create an AgentRequest document and optionally wait for its canonical terminal output"
+        about = "Send a message at the next safe step and optionally wait for its canonical terminal output"
     )]
     Submit(RequestSubmitArgs),
     #[command(about = "Show a stored AgentRequest document")]
     Show(RequestShowArgs),
     #[command(about = "Signal interrupt on an in-flight request (idempotent latch)")]
     Interrupt(RequestInterruptArgs),
+    #[command(about = "Inspect pending user messages and their physical queue identities")]
+    Pending(RequestPendingArgs),
+    #[command(about = "Replace a pending message with newly signed text")]
+    EditPending(RequestEditPendingArgs),
+    #[command(about = "Remove adjacent pending messages")]
+    RemovePending(RequestRemovePendingArgs),
+    #[command(about = "Reorder adjacent pending messages through signed replacements")]
+    ReorderPending(RequestReorderPendingArgs),
     #[command(about = "Resend a stale-terminal request with a fresh TTL")]
     Resend(RequestResendArgs),
 }
 
+#[derive(clap::Args)]
+pub(crate) struct RequestPendingArgs {
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long)]
+    pub(crate) graphql: Option<String>,
+    #[arg(long)]
+    pub(crate) node_did: Option<String>,
+    #[arg(long)]
+    pub(crate) session_id: String,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+    pub(crate) output: OutputFormat,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct RequestPendingMutationArgs {
+    #[command(flatten)]
+    pub(crate) scope: RequestPendingArgs,
+    #[arg(long = "expected-request-doc-id", required = true, action = clap::ArgAction::Append,
+        help = "Every physical ID from request pending, in its observed order; repeat for each entry")]
+    pub(crate) expected_request_doc_ids: Vec<String>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct RequestEditPendingArgs {
+    #[command(flatten)]
+    pub(crate) queue: RequestPendingMutationArgs,
+    #[arg(long)]
+    pub(crate) request_doc_id: String,
+    #[arg(
+        long,
+        required_unless_present = "content_file",
+        conflicts_with = "content_file"
+    )]
+    pub(crate) content: Option<String>,
+    #[arg(long, required_unless_present = "content", conflicts_with = "content")]
+    pub(crate) content_file: Option<PathBuf>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct RequestRemovePendingArgs {
+    #[command(flatten)]
+    pub(crate) queue: RequestPendingMutationArgs,
+    #[arg(long = "request-doc-id", required = true, action = clap::ArgAction::Append)]
+    pub(crate) request_doc_ids: Vec<String>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct RequestReorderPendingArgs {
+    #[command(flatten)]
+    pub(crate) queue: RequestPendingMutationArgs,
+    #[arg(long = "request-doc-id", required = true, action = clap::ArgAction::Append,
+        help = "Selected adjacent physical IDs in the desired order; repeat for each entry")]
+    pub(crate) request_doc_ids: Vec<String>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub(crate) enum RequestInterruptCauseArg {
-    #[value(name = "interrupted")]
-    Interrupted,
-    #[value(name = "deadline")]
-    Deadline,
     #[value(name = "userCancelled")]
     UserCancelled,
 }
@@ -3761,8 +3821,6 @@ pub(crate) enum RequestInterruptCauseArg {
 impl From<RequestInterruptCauseArg> for gents::tool_call_lifecycle::CancelCause {
     fn from(value: RequestInterruptCauseArg) -> Self {
         match value {
-            RequestInterruptCauseArg::Interrupted => Self::Interrupted,
-            RequestInterruptCauseArg::Deadline => Self::Deadline,
             RequestInterruptCauseArg::UserCancelled => Self::UserCancelled,
         }
     }
@@ -3812,7 +3870,7 @@ pub(crate) struct RequestInterruptArgs {
         long,
         value_enum,
         default_value_t = RequestInterruptCauseArg::UserCancelled,
-        help = "Reason for the interrupt: userCancelled for operator action, deadline for timeout-driven cancellation, interrupted for propagated runtime interruption"
+        help = "Operator cancellation. Deadline and propagated interruption are owned by the runtime"
     )]
     pub(crate) cause: RequestInterruptCauseArg,
     #[arg(long, default_value_t = false)]

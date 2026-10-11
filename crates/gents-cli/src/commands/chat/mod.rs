@@ -1,8 +1,8 @@
 mod approvals;
+mod interactive;
 mod streaming;
 
 use gents::config_client::GraphqlEndpoint;
-use std::io::{self, Write};
 use std::path::Path;
 
 use anyhow::{bail, Context, Result};
@@ -17,7 +17,7 @@ use crate::{
     RequestSubmitOptions, SubmittedRequest,
 };
 
-pub(crate) use streaming::{load_existing_tool_call_keys, stream_turn_progress};
+pub(crate) use streaming::{load_existing_tool_call_keys, stream_turn_progress, ApprovalHandling};
 use streaming::{sanitize_summary_text, SUMMARY_ARGUMENT_MAX_CHARS};
 
 pub(crate) async fn chat(args: ChatArgs) -> Result<()> {
@@ -106,41 +106,19 @@ pub(crate) async fn chat(args: ChatArgs) -> Result<()> {
 
     let prompt_label = chat_prompt_label(&args, runtime_state.as_ref());
 
-    let mut pending_goal = goal;
-    // Not a held lock: a plugin approval question reads the terminal mid-turn.
-    let mut lines = io::stdin().lines();
-    let mut stdout = io::stdout();
-    loop {
-        write!(stdout, "{prompt_label}> ")?;
-        stdout.flush()?;
-        let Some(line) = lines.next() else {
-            break;
-        };
-        let line = line?;
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        if matches!(trimmed, "/exit" | "/quit" | "exit" | "quit") {
-            break;
-        }
-
-        submit_chat_turn_with_goal(
-            &home_dir,
-            &graphql,
-            &node_did,
-            &session_id,
-            args.agent_id.as_deref(),
-            trimmed,
-            pending_goal.take(),
-            args.timeout_secs,
-            args.poll_secs,
-            args.verbose,
-        )
-        .await?;
-    }
-
-    Ok(())
+    interactive::run(
+        &home_dir,
+        &graphql,
+        &node_did,
+        &session_id,
+        args.agent_id.as_deref(),
+        goal,
+        &prompt_label,
+        args.timeout_secs,
+        args.poll_secs,
+        args.verbose,
+    )
+    .await
 }
 
 /// Minimal, one-line context for the interactive prompt: which node is
@@ -186,6 +164,14 @@ async fn submit_chat_turn_with_goal(
     verbose: bool,
 ) -> Result<RequestOutputEnvelope> {
     let existing_tool_calls = load_existing_tool_call_keys(graphql, session_id).await?;
+    let input = gents::lifecycle::prepare_user_message_input(
+        &gents::ConfigAccess::Graphql(graphql.clone()),
+        node_did,
+        session_id,
+        Default::default(),
+        gents_protocol::request_input::QueueDelivery::Steer,
+    )
+    .await?;
     let submitted = match goal {
         Some(goal) => {
             create_goal_backed_agent_request(
@@ -196,6 +182,7 @@ async fn submit_chat_turn_with_goal(
                 agent_id,
                 goal.objective,
                 goal.token_budget,
+                input,
             )
             .await?
         }
@@ -206,7 +193,10 @@ async fn submit_chat_turn_with_goal(
                 content,
                 Some(session_id),
                 agent_id,
-                RequestSubmitOptions::default(),
+                RequestSubmitOptions {
+                    input: Some(input),
+                    ..Default::default()
+                },
             )
             .await?
         }
@@ -218,7 +208,8 @@ async fn submit_chat_turn_with_goal(
         timeout_secs,
         poll_secs,
         verbose,
-        Some(home_dir),
+        ApprovalHandling::Answer(home_dir),
+        true,
     )
     .await
 }
@@ -233,6 +224,14 @@ async fn submit_chat_turn_json(
     timeout_secs: u64,
     poll_secs: u64,
 ) -> Result<Value> {
+    let input = gents::lifecycle::prepare_user_message_input(
+        &gents::ConfigAccess::Graphql(graphql.clone()),
+        node_did,
+        session_id,
+        Default::default(),
+        gents_protocol::request_input::QueueDelivery::Steer,
+    )
+    .await?;
     let submitted = match goal {
         Some(goal) => {
             create_goal_backed_agent_request(
@@ -243,6 +242,7 @@ async fn submit_chat_turn_json(
                 agent_id,
                 goal.objective,
                 goal.token_budget,
+                input,
             )
             .await?
         }
@@ -253,7 +253,10 @@ async fn submit_chat_turn_json(
                 content,
                 Some(session_id),
                 agent_id,
-                RequestSubmitOptions::default(),
+                RequestSubmitOptions {
+                    input: Some(input),
+                    ..Default::default()
+                },
             )
             .await?
         }

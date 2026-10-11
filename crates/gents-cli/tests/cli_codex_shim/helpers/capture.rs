@@ -3,6 +3,7 @@ use super::*;
 #[derive(Debug)]
 pub(super) struct TurnCapture {
     pub(super) text: String,
+    pub(super) completed_user_inputs: Vec<Vec<codex::UserInput>>,
     pub(super) turn: codex::Turn,
     pub(super) started_tools: Vec<String>,
     pub(super) completed_tool_ids: Vec<String>,
@@ -28,6 +29,7 @@ pub(super) async fn read_turn_to_completion(
 
 pub(super) async fn read_turn_capture(ws: &mut ShimWebSocket) -> Result<TurnCapture> {
     let mut text = String::new();
+    let mut completed_user_inputs = Vec::new();
     let mut started_tools = Vec::new();
     let mut completed_tool_ids = Vec::new();
     let mut completed_tools = Vec::new();
@@ -58,6 +60,9 @@ pub(super) async fn read_turn_capture(ws: &mut ShimWebSocket) -> Result<TurnCapt
                         _ => {}
                     },
                     codex::ServerNotification::ItemCompleted(completed) => match completed.item {
+                        codex::ThreadItem::UserMessage { content, .. } => {
+                            completed_user_inputs.push(content)
+                        }
                         codex::ThreadItem::McpToolCall { id, tool, .. } => {
                             event_order.push(TurnStreamEvent::ToolCompleted);
                             completed_tool_ids.push(id);
@@ -74,6 +79,7 @@ pub(super) async fn read_turn_capture(ws: &mut ShimWebSocket) -> Result<TurnCapt
                         let turn_completed_tool_ids = mcp_tool_ids(&completed.turn);
                         return Ok(TurnCapture {
                             text,
+                            completed_user_inputs,
                             turn: completed.turn,
                             started_tools,
                             completed_tool_ids,

@@ -12,7 +12,9 @@ use serde_json::{json, Value};
 use tokio::time::Instant;
 
 use crate::cli::args::{
-    RequestCommand, RequestInterruptArgs, RequestResendArgs, RequestShowArgs, RequestSubmitArgs,
+    RequestCommand, RequestEditPendingArgs, RequestInterruptArgs, RequestPendingArgs,
+    RequestPendingMutationArgs, RequestRemovePendingArgs, RequestReorderPendingArgs,
+    RequestResendArgs, RequestShowArgs, RequestSubmitArgs,
 };
 use crate::cli::output_format::OutputFormat;
 use crate::request_helpers::{
@@ -32,7 +34,187 @@ pub(crate) async fn dispatch(command: RequestCommand) -> Result<()> {
         RequestCommand::Show(args) => request_show(args).await,
         RequestCommand::Interrupt(args) => request_interrupt(args).await,
         RequestCommand::Resend(args) => request_resend(args).await,
+        RequestCommand::Pending(args) => request_pending(args).await,
+        RequestCommand::EditPending(args) => request_edit_pending(args).await,
+        RequestCommand::RemovePending(args) => request_remove_pending(args).await,
+        RequestCommand::ReorderPending(args) => request_reorder_pending(args).await,
     }
+}
+
+async fn pending_scope(
+    args: &RequestPendingArgs,
+) -> Result<(
+    ConfigAccess,
+    String,
+    std::sync::Arc<dyn gents::NodeIdentity>,
+)> {
+    anyhow::ensure!(
+        !args.session_id.trim().is_empty(),
+        "--session-id must not be empty"
+    );
+    let endpoint = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
+    let node = resolve_node_did(args.home.as_deref(), args.node_did.as_deref())?;
+    let home = crate::resolve_home_dir(args.home.as_deref());
+    let config = crate::read_init_config(&home)?
+        .context("An initialized --home is required to identify the message author")?;
+    let signer = crate::load_initialized_home_identity(&home, &config)?;
+    Ok((ConfigAccess::Graphql(endpoint), node, signer))
+}
+
+async fn request_pending(args: RequestPendingArgs) -> Result<()> {
+    let (access, node, signer) = pending_scope(&args).await?;
+    let snapshot =
+        gents::lifecycle::pending_user_queue(&access, &node, &args.session_id, signer.did())
+            .await?;
+    match args
+        .output
+        .ensure_supported("request pending", &[OutputFormat::Text, OutputFormat::Json])?
+    {
+        OutputFormat::Json => print_json(&serde_json::to_value(&snapshot)?)?,
+        OutputFormat::Text => {
+            let mut output = std::io::stdout().lock();
+            use std::io::Write;
+            if snapshot.entries.is_empty() {
+                writeln!(output, "No pending user messages.")?;
+            }
+            for entry in snapshot.entries {
+                writeln!(
+                    output,
+                    "{}  {}  {}",
+                    entry.request_doc_id,
+                    if entry.editable {
+                        "editable"
+                    } else {
+                        "read-only"
+                    },
+                    entry.content
+                )?;
+            }
+        }
+        _ => unreachable!("validated output format"),
+    }
+    Ok(())
+}
+
+fn selected_queue_ids(expected: &[String], requested: &[String]) -> Result<Vec<String>> {
+    anyhow::ensure!(
+        !requested.is_empty(),
+        "Select at least one pending message."
+    );
+    let unique = requested.iter().collect::<BTreeSet<_>>();
+    anyhow::ensure!(
+        unique.len() == requested.len(),
+        "A selected physical request ID must appear only once."
+    );
+    anyhow::ensure!(
+        requested.iter().all(|id| expected.contains(id)),
+        "Selected messages must belong to the observed queue snapshot."
+    );
+    Ok(expected
+        .iter()
+        .filter(|id| requested.contains(id))
+        .cloned()
+        .collect())
+}
+
+async fn apply_pending_edit(
+    args: RequestPendingMutationArgs,
+    selected: Vec<String>,
+    messages: Vec<gents::lifecycle::PendingMessageEdit>,
+) -> Result<()> {
+    let output = args.scope.output.ensure_supported(
+        "pending message edit",
+        &[OutputFormat::Text, OutputFormat::Json],
+    )?;
+    let (access, node, signer) = pending_scope(&args.scope).await?;
+    // This CLI authors local-self replacements, just as request submit does.
+    anyhow::ensure!(
+        signer.did() == node,
+        "Pending message edits require the initialized author's node; use --home for that author."
+    );
+    let receipt = gents::lifecycle::replace_pending_user_messages(
+        &access,
+        signer.as_ref(),
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(signer.did()),
+        &node,
+        &args.scope.session_id,
+        signer.did(),
+        gents::lifecycle::PendingQueueEdit {
+            expected_request_doc_ids: args.expected_request_doc_ids,
+            selected_request_doc_ids: selected,
+            messages,
+        },
+    )
+    .await?;
+    match output {
+        OutputFormat::Json => print_json(&serde_json::to_value(&receipt)?)?,
+        OutputFormat::Text => {
+            use std::io::Write;
+            let mut output = std::io::stdout().lock();
+            if receipt.request_doc_ids.is_empty() {
+                writeln!(output, "Pending messages removed.")?;
+            }
+            for (request, physical) in receipt.request_ids.iter().zip(&receipt.request_doc_ids) {
+                writeln!(output, "{physical}  {request}")?;
+            }
+        }
+        _ => unreachable!("validated output format"),
+    }
+    Ok(())
+}
+
+async fn request_edit_pending(args: RequestEditPendingArgs) -> Result<()> {
+    let content = resolve_request_content(args.content.as_deref(), args.content_file.as_deref())?;
+    let selected = selected_queue_ids(
+        &args.queue.expected_request_doc_ids,
+        std::slice::from_ref(&args.request_doc_id),
+    )?;
+    let message = gents::lifecycle::PendingMessageEdit {
+        request_doc_id: args.request_doc_id,
+        content,
+    };
+    apply_pending_edit(args.queue, selected, vec![message]).await
+}
+
+async fn request_remove_pending(args: RequestRemovePendingArgs) -> Result<()> {
+    let selected = selected_queue_ids(&args.queue.expected_request_doc_ids, &args.request_doc_ids)?;
+    apply_pending_edit(args.queue, selected, Vec::new()).await
+}
+
+async fn request_reorder_pending(args: RequestReorderPendingArgs) -> Result<()> {
+    let selected = selected_queue_ids(&args.queue.expected_request_doc_ids, &args.request_doc_ids)?;
+    let (access, node, signer) = pending_scope(&args.queue.scope).await?;
+    let snapshot = gents::lifecycle::pending_user_queue(
+        &access,
+        &node,
+        &args.queue.scope.session_id,
+        signer.did(),
+    )
+    .await?;
+    anyhow::ensure!(
+        snapshot
+            .entries
+            .iter()
+            .map(|entry| &entry.request_doc_id)
+            .eq(args.queue.expected_request_doc_ids.iter()),
+        "The message queue changed. Run request pending and retry with its complete snapshot."
+    );
+    let messages = args
+        .request_doc_ids
+        .into_iter()
+        .map(|id| {
+            let entry = snapshot
+                .entries
+                .iter()
+                .find(|entry| entry.request_doc_id == id)
+                .context("Selected message is no longer pending")?;
+            Ok(gents::lifecycle::PendingMessageEdit {
+                request_doc_id: id,
+                content: entry.content.clone(),
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    apply_pending_edit(args.queue, selected, messages).await
 }
 
 /// Canonical `request create --wait` result: the submitted-request summary plus
@@ -60,25 +242,35 @@ async fn request_submit(args: RequestSubmitArgs) -> Result<()> {
     let content = resolve_request_content(args.content.as_deref(), args.content_file.as_deref())?;
     let valid_until = parse_valid_until_flag(args.valid_until.as_deref())?;
     ensure_local_request_signer(args.home.as_deref(), &node_did)?;
+    let session_id = args
+        .session_id
+        .clone()
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let input = args
+        .input
+        .as_deref()
+        .map(serde_json::from_str::<RequestInput>)
+        .transpose()
+        .context("--input must be canonical RequestInput JSON")?
+        .unwrap_or_default();
+    let input = gents::lifecycle::prepare_user_message_input(
+        &ConfigAccess::Graphql(graphql.clone()),
+        &node_did,
+        &session_id,
+        input,
+        gents_protocol::request_input::QueueDelivery::Steer,
+    )
+    .await?;
     let submitted = create_agent_request(
         &graphql,
         &node_did,
         &content,
-        args.session_id.as_deref(),
+        Some(&session_id),
         args.agent_id.as_deref(),
         RequestSubmitOptions {
-            caused_by_source_doc_id: None,
-            input: args
-                .input
-                .as_deref()
-                .map(serde_json::from_str::<RequestInput>)
-                .transpose()
-                .context("--input must be canonical RequestInput JSON")?,
+            input: Some(input),
             valid_until,
-            retry_parent_request: None,
-            retry_parent_request_doc_id: None,
-            retry_root_request: None,
-            retry_key: None,
+            ..Default::default()
         },
     )
     .await?;
@@ -1184,20 +1376,21 @@ async fn request_interrupt(args: RequestInterruptArgs) -> Result<()> {
     let already_terminal = before.is_terminal();
 
     if !already_interrupted && !already_terminal {
-        let now = chrono::Utc::now().to_rfc3339();
-        let mutation = format!(
-            r#"mutation {{
-                update_AgentRequest(
-                    filter: {{ request_id: {{ _eq: "{request_id}" }} }},
-                    input: {{ interrupt_requested_at: "{now_escaped}" }}
-                ) {{ _docID }}
-            }}"#,
-            request_id = escape_graphql_string(&request_id),
-            now_escaped = escape_graphql_string(&now),
-        );
-        ConfigAccess::Graphql(graphql.clone())
-            .write("cli.request.interrupt", &mutation)
-            .await?;
+        let physical = before
+            .doc_id
+            .as_deref()
+            .context("request has no physical identity")?;
+        let node = before
+            .node_did
+            .as_deref()
+            .context("request has no node identity")?;
+        gents::interrupt::interrupt_request_by_doc_id_with_access(
+            &ConfigAccess::Graphql(graphql.clone()),
+            physical,
+            node,
+            before.requester_did.as_deref(),
+        )
+        .await?;
     }
 
     let mut row = fetch_interrupt_request_row(&graphql, &request_id).await?;
@@ -1237,11 +1430,10 @@ async fn fetch_interrupt_request_row(
         r#"{{
             AgentRequest(
                 filter: {{ request_id: {{ _eq: "{request_id}" }} }},
-                order: {{ created_at: DESC }},
-                limit: 1
+                limit: 2
             ) {{
-                request_id
-                node_did
+                _docID request_id
+                node_did requester_did
                 agent_id
                 session_id
                 lifecycle_state
@@ -1258,13 +1450,16 @@ async fn fetch_interrupt_request_row(
         request_id = escape_graphql_string(request_id),
     );
     let response = post_graphql(graphql, &query).await?;
-    let row = response
+    let rows = response
         .pointer("/data/AgentRequest")
         .and_then(Value::as_array)
-        .and_then(|rows| rows.first())
-        .cloned()
-        .ok_or_else(|| anyhow::anyhow!("request {request_id} not found"))?;
-    serde_json::from_value(row).with_context(|| format!("decoding AgentRequest {request_id}"))
+        .context("interrupt request query omitted rows")?;
+    anyhow::ensure!(
+        rows.len() == 1,
+        "request {request_id} must resolve to exactly one accessible physical request"
+    );
+    serde_json::from_value(rows[0].clone())
+        .with_context(|| format!("decoding AgentRequest {request_id}"))
 }
 
 async fn wait_for_terminal_request_state(
@@ -1523,6 +1718,18 @@ mod tests {
     fn show_now() -> chrono::DateTime<chrono::Utc> {
         use chrono::TimeZone;
         chrono::Utc.with_ymd_and_hms(2026, 9, 25, 16, 0, 0).unwrap()
+    }
+
+    #[test]
+    fn pending_selection_uses_original_slots_and_rejects_unknown_or_duplicate_ids() {
+        let expected = vec!["a".into(), "b".into(), "c".into()];
+        assert_eq!(
+            selected_queue_ids(&expected, &["c".into(), "b".into()]).unwrap(),
+            vec!["b", "c"]
+        );
+        assert!(selected_queue_ids(&expected, &["b".into(), "b".into()]).is_err());
+        assert!(selected_queue_ids(&expected, &["other-queue".into()]).is_err());
+        assert!(selected_queue_ids(&expected, &[]).is_err());
     }
 
     #[test]
