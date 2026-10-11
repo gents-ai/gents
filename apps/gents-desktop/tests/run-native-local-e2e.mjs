@@ -6,17 +6,17 @@ import { createServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { nativeLocalHelp, parseNativeLocalOptions } from "./native-local-options.mjs";
-
 import { createNativeProviderGate } from "./native-local-provider-gate.mjs";
 
 const appRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = resolve(appRoot, "../..");
-const options = parseNativeLocalOptions(process.argv.slice(2), process.env);
-if (options.help) {
-  console.log(nativeLocalHelp);
-  process.exit(0);
+const args = new Set(process.argv.slice(2));
+if ([...args].some((arg) => arg !== "--skip-build")) {
+  throw new Error(
+    "Only --skip-build is supported; it requires fresh native-e2e app and CLI binaries.",
+  );
 }
+const fileStoreKeys = process.env.GENTS_E2E_FILE_STORE_KEYS === "1";
 if (process.platform !== "darwin")
   throw new Error("Native local acceptance currently requires macOS launchd.");
 const service = "ai.gents.runtime.native-e2e";
@@ -43,7 +43,7 @@ await writeFile(
     toolRoot,
     serviceTarget,
     webviewStoreId,
-    storeKeyCustody: options.fileStoreKeys ? "file" : "macos-keychain",
+    storeKeyCustody: fileStoreKeys ? "file" : "macos-keychain",
   }),
 );
 const buildLog = createWriteStream(join(artifactRoot, "build.log"));
@@ -58,7 +58,7 @@ async function recordedCustody() {
     await readFile(join(desktopHome, "store-encryption.json"), "utf8"),
   );
   const records = { node: node.store_encryption, desktop };
-  const expected = options.fileStoreKeys ? "file" : "macos-keychain";
+  const expected = fileStoreKeys ? "file" : "macos-keychain";
   for (const record of Object.values(records)) {
     if (record?.custody !== expected)
       throw new Error(`Expected native store custody ${expected}`);
@@ -138,7 +138,6 @@ async function runPhase(phase) {
     TMPDIR: `${runTmp}/`,
     GENTS_BIN: join(binaries, "gents"),
     GENTS_NATIVE_E2E: "1",
-    GENTS_E2E_FILE_STORE_KEYS: options.fileStoreKeys ? "1" : "0",
     GENTS_DESKTOP_CONSOLE_LOG: "1",
     GENTS_E2E_NODE_HOME: nodeHome,
     GENTS_E2E_DESKTOP_HOME: desktopHome,
@@ -252,7 +251,7 @@ try {
     probe.once("error", reject);
     probe.listen(21919, "127.0.0.1", () => probe.close(resolve));
   });
-  if (!options.skipBuild) {
+  if (!args.has("--skip-build")) {
     const env = { ...process.env, CARGO_BUILD_JOBS: "3", VITE_GENTS_NATIVE_E2E: "1" };
     console.log("Building isolated native-e2e runtime and desktop");
     await checked(
