@@ -8,6 +8,11 @@ path/workspace owner supplies cwd evidence; the authenticated origin supplies
 queue-source evidence. Neither is inferred from caller-authored input. -/
 namespace Enrollment
 
+structure QueuePosition where
+  slotRequestDocId : String
+  replacesRequestDocId : String
+  deriving DecidableEq, Repr
+
 structure RequestQueue where
   source : SessionQueue.QueueSource
   policy : SessionQueue.QueuePolicy
@@ -15,6 +20,8 @@ structure RequestQueue where
   queuedAfterRequestId : Option String := none
   interruptedRequestId : Option String := none
   backgroundCompletionWakeVersion : Option Nat := none
+  delivery : SessionQueue.QueueDelivery := .queue
+  position : Option QueuePosition := none
   deriving DecidableEq, Repr
 
 /-- Original signed facts, not the mutable current Goal state. Goal and parent
@@ -43,12 +50,21 @@ private def optionFields {α : Type} (encode : α → List String) : Option α �
 private def titleFields (title : AgentSession.Title) : List String :=
   [title.text, title.source.toWireName]
 
+/-- The extension marker cannot be confused with the following goal option's
+`none`/`some` tag. Default queue input retains its existing signed bytes; new
+fields use the same length-framed canonical encoder as every other field. -/
+def queueExtensionFields (queue : RequestQueue) : List String :=
+  if queue.delivery == .queue && queue.position.isNone then []
+  else ["queue-v2", queue.delivery.toDefraDB] ++
+    optionFields (fun p => [p.slotRequestDocId, p.replacesRequestDocId]) queue.position
+
 private def queueFields (queue : RequestQueue) : List String :=
   [queue.source.toDefraDB, queue.policy.toDefraDB] ++
   optionFields (fun s => [s]) queue.key ++
   optionFields (fun s => [s]) queue.queuedAfterRequestId ++
   optionFields (fun s => [s]) queue.interruptedRequestId ++
-  optionFields (fun n => [toString n]) queue.backgroundCompletionWakeVersion
+  optionFields (fun n => [toString n]) queue.backgroundCompletionWakeVersion ++
+  queueExtensionFields queue
 
 def requestInputFields (input : RequestInput) : CanonicalFields :=
   textFieldsToBytes <|
@@ -56,6 +72,17 @@ def requestInputFields (input : RequestInput) : CanonicalFields :=
     optionFields (fun s => [s]) input.cwd ++
     optionFields titleFields input.initialTitle ++ optionFields queueFields input.queue ++
     optionFields (fun goal => [toString goal.sequence, toString goal.wrapup]) input.goalContinuation
+
+theorem default_queue_has_no_encoding_extension (queue : RequestQueue) :
+    queueExtensionFields {queue with delivery := .queue, position := none} = [] := by
+  simp [queueExtensionFields]
+
+theorem queue_position_encoding_is_injective (left right : QueuePosition)
+    (h : [left.slotRequestDocId, left.replacesRequestDocId] =
+      [right.slotRequestDocId, right.replacesRequestDocId]) : left = right := by
+  cases left
+  cases right
+  simp_all
 
 /-- Existing context allowlist is the sole skill grant. Invalid activation is
 rejected rather than silently authorizing an extra node-wide skill. -/

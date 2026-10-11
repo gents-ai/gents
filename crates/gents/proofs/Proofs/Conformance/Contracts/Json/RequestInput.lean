@@ -23,7 +23,12 @@ private def queueJson : Option RequestQueue → String
       ",\"key\":" ++ optionalString q.key ++
       ",\"queued_after_request_id\":" ++ optionalString q.queuedAfterRequestId ++
       ",\"interrupted_request_id\":" ++ optionalString q.interruptedRequestId ++
-      ",\"background_completion_wake_version\":" ++ jsonOptionalNat q.backgroundCompletionWakeVersion ++ "}"
+      ",\"background_completion_wake_version\":" ++ jsonOptionalNat q.backgroundCompletionWakeVersion ++
+      ",\"delivery\":" ++ jsonString q.delivery.toDefraDB ++
+      ",\"position\":" ++ (match q.position with
+        | none => "null"
+        | some p => "{\"slot_request_doc_id\":" ++ jsonString p.slotRequestDocId ++
+            ",\"replaces_request_doc_id\":" ++ jsonString p.replacesRequestDocId ++ "}") ++ "}"
 
 private def goalJson : Option GoalContinuationInput → String
   | none => "null"
