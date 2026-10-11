@@ -85,6 +85,20 @@ pub fn graphql_string_list_literal<'a>(values: impl IntoIterator<Item = &'a str>
     }
 }
 
+/// Read `collection`'s arrival head so the transaction conflicts with any
+/// concurrent insert into it; predicate reads alone do not fence inserts.
+pub(crate) async fn fence_arrivals(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    collection: &str,
+) -> Result<()> {
+    txn.execute(&format!(
+        r#"{{ _documentArrivals(collection: "{}", limit: 1) {{ head }} }}"#,
+        escape_graphql_string(collection)
+    ))
+    .await?;
+    Ok(())
+}
+
 pub async fn graphql_response_with_transaction_retry(
     node: &EmbeddedNode,
     graphql: &str,

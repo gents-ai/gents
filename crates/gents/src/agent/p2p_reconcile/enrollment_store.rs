@@ -797,10 +797,7 @@ impl GraphqlEnrollmentStore {
             "NetworkAuthorizationRevision",
             "NetworkEnrollmentRouteReceipt",
         ] {
-            txn.execute(&format!(
-                r#"{{ _documentArrivals(collection: "{collection}", limit: 1) {{ head }} }}"#
-            ))
-            .await?;
+            crate::graphql::fence_arrivals(txn, collection).await?;
         }
         let response = txn
             .execute_local_response(ENROLLMENT_DOCUMENT_QUERY)

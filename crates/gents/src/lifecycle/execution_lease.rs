@@ -449,7 +449,7 @@ async fn terminalize_execution_with_time(
         "lifecycle.terminalize_execution",
         move |txn| Box::pin(async move {
             if pending_fence.is_some() {
-                txn.execute(r#"{ _documentArrivals(collection: "AgentRequest", limit: 1) { head } }"#).await?;
+                crate::graphql::fence_arrivals(txn, "AgentRequest").await?;
             }
             let doc_id = escape_graphql_string(request_doc_id);
             let result = txn.execute_local_response(&format!(r#"{{ AgentRequest(
