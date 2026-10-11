@@ -10,12 +10,12 @@
     "build:packages": "npm run build:packages --prefix ../..",
     "format": "prettier --write \"src/**/*.{css,json,ts,tsx}\" \"tests/**/*.{html,mjs,ts,tsx}\" \"*.{json,ts}\"",
     "format:check": "prettier --check \"src/**/*.{css,json,ts,tsx}\" \"tests/**/*.{html,mjs,ts,tsx}\" \"*.{json,ts}\"",
-    "test": "vitest run",
+    "test": "npm run test:native:options && vitest run",
     "typecheck": "tsc --noEmit -p tests",
     "test:lean-conformance": "vitest run --config vitest.lean-conformance.config.ts",
     "test:ui": "npm run format:check && npm run build && npm run test:ui:unit && npm run test:ui:e2e && npm run test:ui:fuzz -- --time-limit 20s",
     "test:ui:qa-sweep": "npm run format:check && npm run build && npm run test:ui:unit && npm run test:ui:e2e && npm run test:ui:screenshots && npm run test:ui:fuzz -- --time-limit 2m",
-    "test:ui:unit": "vitest run",
+    "test:ui:unit": "npm run test:native:options && vitest run",
     "test:ui:e2e": "playwright test",
     "test:ui:invariants": "playwright test tests/playwright/desktop-invariants.spec.ts",
     "test:ui:screenshots": "playwright test -c playwright.screenshots.config.ts",
@@ -43,7 +43,8 @@
     "test:live:sad-path": "node ./tests/run-live-test.mjs --suite sad-path",
     "test:live:e2e-acceptance": "node ./tests/run-live-test.mjs --suite e2e-acceptance",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "test:native:options": "node --test tests/*.node-test.mjs"
   },
   "dependencies": {
     "@fontsource-variable/funnel-display": "^5.2.8",

@@ -51,6 +51,7 @@ identifier = "chat-write"
 description = "Chat send and rename"
 permissions = [
   "allow-desktop-chat-send",
+  "allow-desktop-pending-queue-edit",
   "allow-desktop-session-rename",
 ]
 

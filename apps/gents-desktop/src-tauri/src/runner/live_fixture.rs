@@ -664,6 +664,9 @@ mod tests {
                     row.request_id == initial.request_id
                         && row.node_did.as_deref() == Some(node_did.as_str())
                         && row.session_id.as_deref() == Some(initial.session_id.as_str())
+                        && matches!(row.lifecycle_state,
+                            Some(gents_protocol::request_lifecycle::RequestLifecycleState::Claimed
+                                | gents_protocol::request_lifecycle::RequestLifecycleState::Processing))
                 }) && store
                     .derive_turn_for_node(&initial.session_id, &node_did)
                     .is_some_and(|turn| !turn.is_terminal())
@@ -741,7 +744,22 @@ mod tests {
         .context("desktop session snapshot missing after skill chat submit")?;
         assert_eq!(
             session.latest_request_id.as_deref(),
-            Some(initial.request_id.as_str())
+            Some(initial.request_id.as_str()),
+            "initial={} submitted={} source_rows={:?} gate_permits={:?}",
+            initial.request_id,
+            submitted.request_id,
+            fixture
+                .desktop_core()
+                .store()
+                .snapshot()
+                .requests
+                .iter()
+                .filter(|row| row.request_id == initial.request_id
+                    || row.request_id == submitted.request_id)
+                .collect::<Vec<_>>(),
+            mock.held_response
+                .as_ref()
+                .map(|gate| gate.available_permits()),
         );
         let queued_turn = session
             .queued_turns
@@ -1013,6 +1031,40 @@ mod tests {
         .await
     }
 
+    fn has_exact_user_text(request: &Value, text: &str) -> bool {
+        request["messages"].as_array().is_some_and(|messages| {
+            messages.iter().any(|message| {
+                message["role"] == "user"
+                    && (message["content"].as_str() == Some(text)
+                        || message["content"].as_array().is_some_and(|parts| {
+                            parts.len() == 1 && parts[0]["text"].as_str() == Some(text)
+                        }))
+            })
+        })
+    }
+
+    #[test]
+    fn held_provider_match_excludes_title_wrappers() {
+        assert!(has_exact_user_text(
+            &serde_json::json!({"messages": [
+                {"role": "user", "content": HELD_PROMPT}
+            ]}),
+            HELD_PROMPT
+        ));
+        assert!(has_exact_user_text(
+            &serde_json::json!({"messages": [
+                {"role": "user", "content": [{"type": "text", "text": HELD_PROMPT}]}
+            ]}),
+            HELD_PROMPT
+        ));
+        assert!(!has_exact_user_text(
+            &serde_json::json!({"messages": [
+                {"role": "user", "content": format!("First user request: {HELD_PROMPT}")}
+            ]}),
+            HELD_PROMPT
+        ));
+    }
+
     async fn wait_for_captured_chat_request(
         mock: &MockChatEndpoint,
         needle: &str,
@@ -1022,7 +1074,7 @@ mod tests {
             let captured = mock.captured_chat_requests();
             if let Some(request) = captured
                 .iter()
-                .find(|request| request.to_string().contains(needle))
+                .find(|request| has_exact_user_text(request, needle))
             {
                 return Ok(request.clone());
             }
@@ -1238,7 +1290,7 @@ mod tests {
                     .into_response()
             }
         };
-        let held = request_json.to_string().contains(HELD_PROMPT);
+        let held = has_exact_user_text(&request_json, HELD_PROMPT);
         state
             .captured
             .lock()

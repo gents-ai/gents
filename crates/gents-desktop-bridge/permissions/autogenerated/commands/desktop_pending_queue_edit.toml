@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-pending-queue-edit"
+description = "Enables the desktop_pending_queue_edit command without any pre-configured scope."
+commands.allow = ["desktop_pending_queue_edit"]
+
+[[permission]]
+identifier = "deny-desktop-pending-queue-edit"
+description = "Denies the desktop_pending_queue_edit command without any pre-configured scope."
+commands.deny = ["desktop_pending_queue_edit"]

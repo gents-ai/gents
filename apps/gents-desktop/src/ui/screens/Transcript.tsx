@@ -98,6 +98,8 @@ function copyActions(text: string | null | undefined) {
    labeled with its sender */
 const ParentContext = createContext<ParentWork | null>(null);
 
+const AppliedInputsContext = createContext<ReadonlySet<string>>(new Set());
+
 const TranscriptItem = memo(function TranscriptItem({
   item,
   final = false,
@@ -107,6 +109,7 @@ const TranscriptItem = memo(function TranscriptItem({
   final?: boolean;
 }) {
   const parentWork = useContext(ParentContext);
+  const appliedInputs = useContext(AppliedInputsContext);
   switch (item.kind) {
     case "automatedInput":
       return (
@@ -121,7 +124,9 @@ const TranscriptItem = memo(function TranscriptItem({
       const state =
         item.kind === "pendingUserTurn"
           ? pendingInputState(item.lifecycleState, item.foldedIntoRequestId)
-          : null;
+          : item.inputRequestId && appliedInputs.has(item.inputRequestId)
+            ? "Applied"
+            : null;
       if (item.kind === "pendingUserTurn" && item.origin) {
         return (
           <AutomatedInput origin={item.origin} content={item.content} state={state} />
@@ -399,6 +404,13 @@ export const TranscriptPanel = memo(function TranscriptPanel({
     ? activityStatus(session?.timelineItems ?? [], stopping)
     : null;
   const wasInterrupted = session?.turnState === "interrupted";
+  const appliedInputIds = JSON.stringify(
+    (session?.foldedInputs ?? []).map((input) => input.requestId).sort(),
+  );
+  const appliedInputs = useMemo(
+    () => new Set<string>(JSON.parse(appliedInputIds)),
+    [appliedInputIds],
+  );
   const responseError =
     latest?.failureReason?.trim() ||
     (session?.turnState === "failed"
@@ -522,38 +534,40 @@ export const TranscriptPanel = memo(function TranscriptPanel({
         </div>
       )}
       <WorkerActionsContext.Provider value={workerActions}>
-        <ParentContext.Provider value={parentWork}>
-          <GroupStateContext.Provider value={groupState}>
-            <TranscriptWindowProvider scroller={scroller} session={sessionKey}>
-              {entries.map((entry, index) =>
-                entry.kind === "item" ? (
-                  /* keyed for the pager, which holds the reader's place
+        <AppliedInputsContext.Provider value={appliedInputs}>
+          <ParentContext.Provider value={parentWork}>
+            <GroupStateContext.Provider value={groupState}>
+              <TranscriptWindowProvider scroller={scroller} session={sessionKey}>
+                {entries.map((entry, index) =>
+                  entry.kind === "item" ? (
+                    /* keyed for the pager, which holds the reader's place
                      by the row under their eye while older pages land */
-                  <ItemRow
-                    key={drawKey(keys, entry.item)}
-                    rowKey={drawKey(keys, entry.item)}
-                    timelineKey={entry.key}
-                    item={entry.item}
-                    final={finalKeys.has(entry.key)}
-                    drawn={entries.length - index <= ALWAYS_DRAWN}
-                  />
-                ) : (
-                  <GroupRow
-                    key={entry.key}
-                    entry={entry}
-                    workers={workers}
-                    drawn={entries.length - index <= ALWAYS_DRAWN}
-                  />
-                ),
-              )}
-            </TranscriptWindowProvider>
-          </GroupStateContext.Provider>
-          {continuing && showError && <FailedEarlier message={responseError} />}
-          {continuing &&
-            session?.timelineItems
-              .filter((item) => item.kind === "liveAssistant")
-              .map((item) => <TranscriptItem key={item.itemKey} item={item} />)}
-        </ParentContext.Provider>
+                    <ItemRow
+                      key={drawKey(keys, entry.item)}
+                      rowKey={drawKey(keys, entry.item)}
+                      timelineKey={entry.key}
+                      item={entry.item}
+                      final={finalKeys.has(entry.key)}
+                      drawn={entries.length - index <= ALWAYS_DRAWN}
+                    />
+                  ) : (
+                    <GroupRow
+                      key={entry.key}
+                      entry={entry}
+                      workers={workers}
+                      drawn={entries.length - index <= ALWAYS_DRAWN}
+                    />
+                  ),
+                )}
+              </TranscriptWindowProvider>
+            </GroupStateContext.Provider>
+            {continuing && showError && <FailedEarlier message={responseError} />}
+            {continuing &&
+              session?.timelineItems
+                .filter((item) => item.kind === "liveAssistant")
+                .map((item) => <TranscriptItem key={item.itemKey} item={item} />)}
+          </ParentContext.Provider>
+        </AppliedInputsContext.Provider>
       </WorkerActionsContext.Provider>
       {wasInterrupted && !inFlight && (
         <StoppedNotice cause={session?.latestRequestOutcome?.cancelCause ?? null} />
@@ -586,7 +600,20 @@ export const TranscriptPanel = memo(function TranscriptPanel({
           <ActivityLine status={status} />
         </div>
       </div>
-      <QueuedInputs queued={session?.queuedTurns ?? []} />
+      <QueuedInputs
+        queued={session?.queuedTurns ?? []}
+        queue={session?.pendingQueue ?? null}
+        onEdit={
+          session?.nodeDid
+            ? (edit) =>
+                actions.editPendingQueue({
+                  ...edit,
+                  nodeDid: session.nodeDid!,
+                  sessionId: session.sessionId,
+                })
+            : undefined
+        }
+      />
     </div>
   );
 });

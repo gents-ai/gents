@@ -453,3 +453,16 @@ pub async fn desktop_request_timeline(
         .map_err(|error| BridgeError::untyped(error.to_string()))?;
     serde_json::to_value(&timeline).map_err(|error| BridgeError::untyped(error.to_string()))
 }
+
+#[tauri::command]
+pub async fn desktop_pending_queue_edit(
+    request: crate::types::PendingQueueEditRequest,
+    state: State<'_, DesktopAppState>,
+) -> Result<crate::types::PendingQueueEditResult, BridgeError> {
+    let Some(core) = current_core(&state) else {
+        return Err(BridgeError::untyped("desktop client is not running"));
+    };
+    crate::commands::edit_pending_queue(core.as_ref(), request)
+        .await
+        .map_err(|error| BridgeError::untyped(error.to_string()))
+}

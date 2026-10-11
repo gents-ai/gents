@@ -192,6 +192,7 @@ export type SessionHeader = Pick<
   | "latestRequestId"
   | "pendingTurn"
   | "queuedTurns"
+  | "pendingQueue"
   | "foldedInputs"
   | "hydration"
 >;
@@ -206,6 +207,7 @@ export function headerOf(session: DesktopSessionSnapshot | null): SessionHeader 
     latestRequestId: session.latestRequestId,
     pendingTurn: session.pendingTurn,
     queuedTurns: session.queuedTurns,
+    pendingQueue: session.pendingQueue,
     foldedInputs: session.foldedInputs,
     hydration: session.hydration,
   };

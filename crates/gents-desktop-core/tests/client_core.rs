@@ -83,6 +83,54 @@ async fn live_core_persists_managed_server_peer_through_watched_owner() -> Resul
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn message_preparation_uses_the_hosted_head_when_the_replica_lags() -> Result<()> {
+    use wiremock::matchers::{body_string_contains, method};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    let node_did = "did:key:hosted-message-owner";
+    Mock::given(method("POST"))
+        .and(body_string_contains("AgentRequest"))
+        .and(body_string_contains(node_did))
+        .and(body_string_contains("hosted-session"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data": {"AgentRequest": [{"_docID": "hosted-head-doc", "request_id": "hosted-head"}]}
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let root = tempfile::tempdir()?;
+    let core = ClientCore::start_with_paths_and_options(
+        DesktopPaths::from_root(root.path()),
+        ClientCoreOptions::local_only(),
+    )
+    .await?;
+    core.persist_local_standard_peer(
+        "Hosted runtime",
+        "endpoint:hosted-message-owner",
+        node_did,
+        &format!("{}/api/v0/graphql", server.uri()),
+        "/tmp/test-hosted-message-home",
+    )
+    .await?;
+    assert!(core.store().snapshot().requests.is_empty());
+    let input = core
+        .prepare_user_message_input(node_did, "hosted-session", Default::default())
+        .await?;
+    let queue = input.queue.context("prepared user queue")?;
+    assert_eq!(
+        queue.queued_after_request_id.as_deref(),
+        Some("hosted-head")
+    );
+    assert_eq!(
+        queue.delivery,
+        gents_protocol::request_input::QueueDelivery::Steer
+    );
+    core.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn managed_config_write_never_falls_back_to_the_desktop_replica() -> Result<()> {
     let tempdir = tempfile::tempdir()?;
     let paths = DesktopPaths::from_root(tempdir.path());

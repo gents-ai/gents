@@ -833,6 +833,9 @@ export function createDesktopUiHarness(
 
   let allowedFolders: AllowedFolder[] = [];
   const adapter: DesktopApiAdapter = {
+    async editPendingQueue() {
+      throw new Error("Pending queue edits are unavailable in this fixture.");
+    },
     async fetchDesktopSnapshot() {
       if (scenario === "bridge-unavailable") {
         throw new Error(

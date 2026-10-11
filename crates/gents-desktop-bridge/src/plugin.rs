@@ -92,6 +92,7 @@ pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
             tauri_commands::chat::desktop_request_timeline,
             tauri_commands::tools_explain::desktop_tool_surface_explain,
             tauri_commands::chat::desktop_chat_send,
+            tauri_commands::chat::desktop_pending_queue_edit,
             tauri_commands::chat::desktop_session_rename,
             tauri_commands::chat::desktop_request_resend,
             tauri_commands::chat::desktop_request_retry,

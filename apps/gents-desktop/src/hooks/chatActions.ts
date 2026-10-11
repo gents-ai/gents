@@ -1,6 +1,7 @@
 import {
   selectedNodeReadinessDecision,
   type ChatSendResult,
+  type PendingQueueEditRequest,
   type DesktopApiAdapter,
   type DesktopInterruptRequestRequest,
   type DesktopSessionSnapshot,
@@ -163,6 +164,20 @@ export function createChatActions({
     }
   }
 
+  async function editPendingQueue(request: PendingQueueEditRequest) {
+    try {
+      await api.editPendingQueue(request);
+      if (
+        store.getState().nodeDid === request.nodeDid &&
+        store.getState().sessionId === request.sessionId
+      )
+        await refreshSession(request.sessionId);
+    } catch (error) {
+      reportFailure(actionFailure("change pending messages", error));
+      throw shownFailure(error);
+    }
+  }
+
   async function renameSession(sessionId: string, title: string) {
     /* the selection, not the fleet read: a read can briefly not list the
        node while the session it holds is still shown */
@@ -208,6 +223,7 @@ export function createChatActions({
      * once, unless the person has moved on.
      */
     sendMessage,
+    editPendingQueue,
     /**
      * Retries a failed request through the bridge's fenced retry, admitted
      * under the session's own agent rather than the composer's. Shares
