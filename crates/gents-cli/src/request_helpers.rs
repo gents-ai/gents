@@ -727,18 +727,20 @@ fn wait_progress_marker(
     }
 }
 
-fn folded_output_target(row: &AgentRequestRow) -> Result<Option<(String, String)>> {
-    let Some(logical) = gents::lifecycle::folded_into(row) else {
+fn successor_output_target(row: &AgentRequestRow) -> Result<Option<(String, String)>> {
+    let Some(logical) =
+        gents::lifecycle::folded_into(row).or_else(|| gents::lifecycle::replaced_by(row))
+    else {
         return Ok(None);
     };
     let physical = row
         .superseded_by_request_doc_id
         .as_deref()
         .filter(|id| !id.trim().is_empty())
-        .context("folded request has no physical output target")?;
+        .context("superseded request has no physical output target")?;
     anyhow::ensure!(
         row.doc_id.as_deref() != Some(physical),
-        "folded request targets itself"
+        "superseded request targets itself"
     );
     Ok(Some((logical.to_owned(), physical.to_owned())))
 }
@@ -815,12 +817,12 @@ where
             );
             anyhow::ensure!(
                 request.request_id == current_request_id,
-                "folded output target changed logical identity"
+                "successor output target changed logical identity"
             );
             if let Some(expected) = target_physical.as_deref() {
                 anyhow::ensure!(
                     request.doc_id.as_deref() == Some(expected),
-                    "folded output changed physical target"
+                    "successor output changed physical target"
                 );
             }
             if let Some(original) = original_scope.as_ref() {
@@ -829,7 +831,7 @@ where
                         && request.requester_did == original.requester_did
                         && request.session_id == original.session_id
                         && request.agent_id == original.agent_id,
-                    "folded output target crossed request scope"
+                    "successor output target crossed request scope"
                 );
             } else {
                 original_scope = Some(request.clone());
@@ -847,11 +849,11 @@ where
             }
         }
         if let Some(request) = request_row.as_ref() {
-            if let Some((logical, physical)) = folded_output_target(request)? {
+            if let Some((logical, physical)) = successor_output_target(request)? {
                 followed.insert(request.doc_id.clone().unwrap());
                 anyhow::ensure!(
                     !followed.contains(&physical),
-                    "cycle in folded output targets"
+                    "cycle in successor output targets"
                 );
                 current_request_id = logical;
                 target_physical = Some(physical);
@@ -1184,7 +1186,7 @@ mod tests {
         content_and_input_with_prompt_selected_skill_ids, submit_prepared_agent_request_committed,
         PreparedAgentRequest, RequestSubmitOptions,
     };
-    use super::{folded_output_target, CliOutputObservation};
+    use super::{successor_output_target, CliOutputObservation};
     use axum::{
         body::{Body, Bytes},
         extract::State,
@@ -1730,9 +1732,13 @@ mod tests {
         assert_eq!(input.selected_skill_ids, ["vuln-scan"]);
     }
     #[tokio::test]
-    async fn terminal_wait_follows_only_exact_same_scope_folded_output_owner() -> anyhow::Result<()>
-    {
-        for cross_scope in [false, true] {
+    async fn terminal_wait_follows_only_exact_same_scope_successor_output_owner(
+    ) -> anyhow::Result<()> {
+        for (cross_scope, reason) in [
+            (false, gents::lifecycle::FOLDED_REASON),
+            (true, gents::lifecycle::FOLDED_REASON),
+            (false, gents::lifecycle::REPLACED_REASON),
+        ] {
             let queries = Arc::new(Mutex::new(Vec::<String>::new()));
             let target_polls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
             let app = Router::new().route("/graphql", post({
@@ -1755,7 +1761,7 @@ mod tests {
                             "node_did":"did:test:owner", "requester_did":"did:test:author",
                             "session_id": if target && cross_scope {"other-session"} else {"same-session"},
                             "agent_id":"engineer", "lifecycle_state": if target {"completed"} else {"superseded"},
-                            "failure_reason": if target {Value::Null} else {json!(gents::lifecycle::FOLDED_REASON)},
+                            "failure_reason": if target {Value::Null} else {json!(reason)},
                             "superseded_by_request": if target {Value::Null} else {json!("active")},
                             "superseded_by_request_doc_id": if target {Value::Null} else {json!("active-physical")},
                             "terminal_output":if output_visible {json!({"kind":"no_message"})} else {Value::Null},
@@ -1821,19 +1827,23 @@ mod tests {
     }
 
     #[test]
-    fn folded_output_target_rejects_missing_physical_identity_and_self_cycles() {
+    fn successor_output_target_rejects_missing_physical_identity_and_self_cycles() {
         let mut row: AgentRequestRow = serde_json::from_value(json!({
             "_docID":"input", "request_id":"input", "lifecycle_state":"superseded",
             "failure_reason":gents::lifecycle::FOLDED_REASON, "superseded_by_request":"active"
         }))
         .unwrap();
-        assert!(folded_output_target(&row).is_err());
+        assert!(successor_output_target(&row).is_err());
         row.superseded_by_request_doc_id = Some("input".into());
-        assert!(folded_output_target(&row).is_err());
-        row.failure_reason = Some("pending message replaced".into());
-        assert!(
-            folded_output_target(&row).unwrap().is_none(),
-            "edited input is not an executing consumer"
+        assert!(successor_output_target(&row).is_err());
+        row.failure_reason = Some(gents::lifecycle::REPLACED_REASON.into());
+        row.superseded_by_request_doc_id = Some("replacement".into());
+        assert_eq!(
+            successor_output_target(&row).unwrap(),
+            Some(("active".into(), "replacement".into())),
+            "an edited input is answered by its replacement"
         );
+        row.failure_reason = Some("other supersession".into());
+        assert!(successor_output_target(&row).unwrap().is_none());
     }
 }
