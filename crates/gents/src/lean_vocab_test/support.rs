@@ -2992,12 +2992,26 @@ pub(crate) fn lean_session_input_edit_cases() -> &'static [LeanSessionInputEditC
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanSessionInputEditCase {
     pub(crate) name: String,
+    pub(crate) history: Vec<LeanSessionInputEditStep>,
     pub(crate) before: LeanSessionInputEditState,
     pub(crate) now: u64,
     pub(crate) command: LeanSessionInputEditCommand,
     pub(crate) authority: LeanSessionInputEditAuthority,
     pub(crate) after: LeanSessionInputEditState,
     pub(crate) receipt: Option<LeanSessionInputEditReceipt>,
+}
+#[derive(Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum LeanSessionInputEditStep {
+    Apply {
+        now: u64,
+        authority: LeanSessionInputEditAuthority,
+        command: LeanSessionInputEditCommand,
+    },
+    LoseReceipts,
+    OtherSession {
+        session: u64,
+    },
 }
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
