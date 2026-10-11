@@ -35,11 +35,22 @@ pub struct PluginExecutionAuthority {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "access", content = "paths", rename_all = "snake_case")]
+#[serde(tag = "access", content = "scope", rename_all = "snake_case")]
 pub enum PluginFilesystemGrant {
     None,
-    ReadOnly(Vec<String>),
-    ReadWrite(Vec<String>),
+    ReadOnly(PluginFilesystemScope),
+    ReadWrite(PluginFilesystemScope),
+}
+
+/// Receipts sync between nodes, so they name where filesystem authority came
+/// from, never a host path.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "source", rename_all = "snake_case", deny_unknown_fields)]
+pub enum PluginFilesystemScope {
+    /// The roots the operator granted at install, counted.
+    Installed { roots: u64 },
+    /// The one path the call named in this declared `bind_dir` input field.
+    BoundInput { field: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -62,6 +73,7 @@ pub struct PluginHttpGrant {
 #[serde(rename_all = "snake_case")]
 pub enum PluginExecutionVerdict {
     AdmissionRefused,
+    /// The host failed to run or serve the guest; a retry may succeed.
     ExecutionError,
     Success,
     Refused,
@@ -69,5 +81,6 @@ pub enum PluginExecutionVerdict {
     OutOfMemory,
     Timeout,
     BadOutput,
+    /// The guest failed on its own: a non-zero exit or a trap.
     Failed,
 }

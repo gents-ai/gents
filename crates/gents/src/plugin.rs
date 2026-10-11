@@ -312,6 +312,14 @@ pub enum PluginVerdict {
     Failed,
 }
 
+/// The guest itself trapped; distinct from the host failing to run it.
+#[derive(Debug, thiserror::Error)]
+#[error("plugin {plugin:?} trapped: {message}")]
+pub struct GuestTrap {
+    plugin: String,
+    message: String,
+}
+
 /// What came back from one plugin call.
 #[derive(Debug, Clone)]
 pub struct PluginOutcome {
@@ -639,10 +647,11 @@ impl PluginRunner {
                         wall_ms,
                     })
                 } else {
-                    Err(anyhow::anyhow!(
-                        "plugin {:?} trapped: {message}",
-                        self.plugin.name
-                    ))
+                    Err(GuestTrap {
+                        plugin: self.plugin.name.clone(),
+                        message,
+                    }
+                    .into())
                 }
             }
             AfbRunOutcome::Exited(code) => Ok(outcome_from_exit(

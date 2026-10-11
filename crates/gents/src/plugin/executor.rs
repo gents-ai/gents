@@ -13,7 +13,8 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use gents_protocol::plugin::{
     PluginEnvironmentGrant, PluginExecutionAuthority, PluginExecutionLimits,
-    PluginExecutionReceipt, PluginExecutionVerdict, PluginFilesystemGrant, PluginHttpGrant,
+    PluginExecutionReceipt, PluginExecutionVerdict, PluginFilesystemGrant, PluginFilesystemScope,
+    PluginHttpGrant,
 };
 use sha2::{Digest, Sha256};
 
@@ -148,25 +149,24 @@ pub(super) fn initial_receipt(
 
 fn authority(
     manifold: &Manifold,
+    bound_field: Option<&str>,
     model: bool,
     http: Option<&http_calls::Session>,
-) -> Result<PluginExecutionAuthority> {
+) -> PluginExecutionAuthority {
     use afterburner_core::manifold::{EnvAccess, FsAccess, NetAccess};
-    let paths = |paths: &[PathBuf]| -> Result<Vec<String>> {
-        paths
-            .iter()
-            .map(|path| {
-                path.to_str()
-                    .map(str::to_owned)
-                    .context("plugin grant path is not UTF-8")
-            })
-            .collect()
+    let scope = |roots: &[PathBuf]| match bound_field {
+        Some(field) => PluginFilesystemScope::BoundInput {
+            field: field.to_owned(),
+        },
+        None => PluginFilesystemScope::Installed {
+            roots: roots.len() as u64,
+        },
     };
-    Ok(PluginExecutionAuthority {
+    PluginExecutionAuthority {
         filesystem: match &manifold.fs {
             FsAccess::None => PluginFilesystemGrant::None,
-            FsAccess::ReadOnly(roots) => PluginFilesystemGrant::ReadOnly(paths(roots)?),
-            FsAccess::ReadWrite(roots) => PluginFilesystemGrant::ReadWrite(paths(roots)?),
+            FsAccess::ReadOnly(roots) => PluginFilesystemGrant::ReadOnly(scope(roots)),
+            FsAccess::ReadWrite(roots) => PluginFilesystemGrant::ReadWrite(scope(roots)),
         },
         environment: match &manifold.env {
             EnvAccess::None => PluginEnvironmentGrant::None,
@@ -184,7 +184,7 @@ fn authority(
             }
         },
         host_model: model,
-    })
+    }
 }
 
 fn receipt_verdict(verdict: super::PluginVerdict) -> PluginExecutionVerdict {
@@ -238,12 +238,16 @@ impl PluginExecutor {
     }
 
     fn sealed_artifact_runner(artifact: &[u8]) -> Result<PluginRunner> {
-        let declaration: crate::pack::PackPlugin = serde_json::from_value(serde_json::json!({
-            "name": "callback-planner", "description": "Callback ActionPlan",
-            "language": "rust", "artifact": "plugins/callback.afb",
-            "input_schema": {"type":"object"}
-        }))?;
-        PluginRunner::compile_within(artifact, &declaration, &Manifold::sealed())
+        static DECLARATION: std::sync::LazyLock<crate::pack::PackPlugin> =
+            std::sync::LazyLock::new(|| {
+                serde_json::from_value(serde_json::json!({
+                    "name": "callback-planner", "description": "Callback ActionPlan",
+                    "language": "rust", "artifact": "plugins/callback.afb",
+                    "input_schema": {"type":"object"}
+                }))
+                .expect("the sealed callback declaration is a valid PackPlugin")
+            });
+        PluginRunner::compile_within(artifact, &DECLARATION, &Manifold::sealed())
     }
 
     /// Plugins installed under `home`; `None` has none installed.
@@ -513,7 +517,16 @@ impl PluginExecutor {
                 wall_ms: admitted.budget.wall_clock.as_millis().try_into().unwrap_or(u64::MAX),
                 max_output_bytes: admitted.budget.max_output_bytes as u64,
             });
-            receipt.authority = Some(authority(&manifold, calls.model.is_some(), calls.http.as_ref())?);
+            let bound_field = bound
+                .as_ref()
+                .and(record.declaration.bind_dir.as_ref())
+                .map(|binding| binding.input_field.as_str());
+            receipt.authority = Some(authority(
+                &manifold,
+                bound_field,
+                calls.model.is_some(),
+                calls.http.as_ref(),
+            ));
             receipt.verdict = PluginExecutionVerdict::ExecutionError;
             let outcome = drive_with_calls(
                 &coordinate,
@@ -522,7 +535,13 @@ impl PluginExecutor {
                 input,
                 admitted.budget,
                 bound,
-            ).await?;
+            )
+            .await
+            .inspect_err(|error| {
+                if error.downcast_ref::<super::GuestTrap>().is_some() {
+                    receipt.verdict = PluginExecutionVerdict::Failed;
+                }
+            })?;
             receipt.verdict = receipt_verdict(outcome.verdict);
             if outcome.verdict == super::PluginVerdict::Success {
                 receipt.output_digest = Some(json_digest(&outcome.output));
@@ -550,6 +569,13 @@ impl PluginExecutor {
             format!("installed plugin digest {:?} is not sha256", record.digest)
         })?;
         let bytes = store::read_bytes(home, digest_hex)?;
+        anyhow::ensure!(
+            store::content_digest_hex(&bytes) == digest_hex,
+            "installed plugin {}/{} bytes do not match their digest {}; reinstall it",
+            record.namespace,
+            record.name,
+            record.digest
+        );
         let afb = afterburner_afb::Afb::from_bytes(&bytes).map_err(|error| {
             anyhow::anyhow!(
                 "installed plugin {}/{} is not a readable .afb: {error}",

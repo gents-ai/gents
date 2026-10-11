@@ -1,30 +1,66 @@
-use anyhow::{ensure, Result};
+use gents_protocol::plugin::{PluginExecutionReceipt, PluginExecutionVerdict};
 
-pub(super) fn ensure_commit<T: PartialEq + ?Sized>(
-    generation_matches: bool,
+use super::ToolCallState;
+
+/// Lean `ToolPolicy.PluginReceipt.Decision`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ReceiptDecision {
+    Commit,
+    Adopt,
+    Replay,
+    Conflict,
+}
+
+/// Lean `ToolPolicy.PluginReceipt.published`.
+pub(super) fn published(
+    terminal: ToolCallState,
+    receipt: &PluginExecutionReceipt,
+) -> PluginExecutionReceipt {
+    let mut receipt = receipt.clone();
+    if terminal != ToolCallState::Completed {
+        receipt.output_digest = None;
+        if receipt.verdict == PluginExecutionVerdict::Success {
+            receipt.verdict = if terminal == ToolCallState::TimedOut {
+                PluginExecutionVerdict::Timeout
+            } else {
+                PluginExecutionVerdict::ExecutionError
+            };
+        }
+    }
+    receipt
+}
+
+/// Lean `ToolPolicy.PluginReceipt.decide`.
+pub(super) fn decide<T: PartialEq + ?Sized>(
     terminal: bool,
     existing: Option<&T>,
     receipt: &T,
-) -> Result<()> {
-    ensure!(
-        generation_matches,
-        "plugin receipt has a stale execution generation"
-    );
-    match existing {
-        Some(existing) => ensure!(
-            existing == receipt,
-            "plugin receipt conflicts with durable evidence"
-        ),
-        None => ensure!(
-            !terminal,
-            "terminal tool call cannot acquire a plugin receipt"
-        ),
+) -> ReceiptDecision {
+    match (terminal, existing) {
+        (false, None) => ReceiptDecision::Commit,
+        (false, Some(_)) => ReceiptDecision::Conflict,
+        (true, None) => ReceiptDecision::Adopt,
+        (true, Some(prior)) if prior == receipt => ReceiptDecision::Replay,
+        (true, Some(_)) => ReceiptDecision::Conflict,
     }
-    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    fn modeled(value: &serde_json::Value) -> PluginExecutionReceipt {
+        PluginExecutionReceipt {
+            coordinate: "team/plugin".into(),
+            artifact_digest: "sha256:artifact".into(),
+            input_digest: value["evidence"].as_str().unwrap().into(),
+            output_digest: value["output"].as_str().map(str::to_owned),
+            authority: None,
+            limits: None,
+            verdict: serde_json::from_value(value["verdict"].clone()).unwrap(),
+        }
+    }
+
     #[test]
     fn generated_receipt_commit_cases() {
         for case in crate::lean_vocab_test::lean_contract_snapshot().plugin_resource_cases
@@ -32,15 +68,25 @@ mod tests {
             .as_array()
             .expect("modeled plugin receipt cases")
         {
-            let result = super::ensure_commit(
-                case["generation_matches"].as_bool().unwrap(),
-                case["terminal"].as_bool().unwrap(),
-                case["existing"].as_str(),
-                case["receipt"].as_str().unwrap(),
-            );
+            let terminal = ToolCallState::from_persisted(case["terminal"].as_str().unwrap())
+                .expect("modeled terminal");
+            let candidate = published(terminal, &modeled(&case["receipt"]));
+            assert_eq!(candidate, modeled(&case["published"]), "{case}");
+            let existing = (!case["existing"].is_null()).then(|| modeled(&case["existing"]));
+            let decision = match case["decision"].as_str().unwrap() {
+                "commit" => ReceiptDecision::Commit,
+                "adopt" => ReceiptDecision::Adopt,
+                "replay" => ReceiptDecision::Replay,
+                "conflict" => ReceiptDecision::Conflict,
+                other => panic!("unknown modeled decision {other}"),
+            };
             assert_eq!(
-                result.is_ok(),
-                case["accepted"].as_bool().unwrap(),
+                decide(
+                    case["row_terminal"].as_bool().unwrap(),
+                    existing.as_ref(),
+                    &candidate
+                ),
+                decision,
                 "{case}"
             );
         }
@@ -84,7 +130,7 @@ mod persistence_tests {
             .unwrap()
             .unwrap();
             let evidence = receipt();
-            tool.stage_plugin_receipt(Some(evidence.clone())).unwrap();
+            tool.stage_plugin_receipt(Some(evidence.clone()));
             match terminal {
                 "complete" => {
                     tool.complete("model output").await.unwrap();
@@ -111,7 +157,8 @@ mod persistence_tests {
                 row["data"]["AgentToolCall"][0]["plugin_execution_receipt"].clone(),
             )
             .unwrap();
-            assert_eq!(stored, evidence);
+            assert_eq!(stored, super::published(tool.state, &evidence));
+            assert_eq!(stored.output_digest.is_some(), terminal == "complete");
             if terminal == "complete" {
                 let presented = load_tool_call_presentation(
                     &ConfigAccess::Local(node.clone()),
@@ -123,7 +170,7 @@ mod persistence_tests {
                 .await
                 .unwrap();
                 assert_eq!(presented.result.as_deref(), Some("model output"));
-                replay.stage_plugin_receipt(Some(evidence.clone())).unwrap();
+                replay.stage_plugin_receipt(Some(evidence.clone()));
                 replay.complete("model output").await.unwrap();
                 let mut conflict = ToolCallLifecycle::load_by_doc_id(
                     node.clone(),
@@ -138,7 +185,7 @@ mod persistence_tests {
                 conflict.state = ToolCallState::Running;
                 let mut changed = evidence;
                 changed.input_digest = "conflicting-input".into();
-                conflict.stage_plugin_receipt(Some(changed)).unwrap();
+                conflict.stage_plugin_receipt(Some(changed));
                 assert!(conflict.complete("model output").await.is_err());
             }
             node.shutdown().await;
@@ -147,27 +194,34 @@ mod persistence_tests {
     }
 
     #[tokio::test]
-    async fn stale_generation_cannot_publish_plugin_receipt_or_output() {
+    async fn replaced_generation_terminalizes_plugin_call_like_any_tool() {
         let (node, path, mut tool) =
             admission_fixture::published_spawn_parent("plugin-receipt-stale").await;
-        tool.stage_plugin_receipt(Some(receipt())).unwrap();
+        tool.stage_plugin_receipt(Some(receipt()));
         ConfigAccess::write_local(&node, "test.stale_plugin_generation", &format!(
             r#"mutation {{ update_AgentRequest(docID: "{}", input: {{ execution_generation: "replacement" }}) {{ _docID }} }}"#,
             escape_graphql_string(tool.request_doc_id.as_deref().unwrap()),
         )).await.unwrap();
-        assert!(tool.complete("must not publish").await.is_err());
+        tool.complete("plugin output").await.unwrap();
         let row = ConfigAccess::Local(node.clone()).execute(&format!(
             r#"{{ AgentToolCall(docID: "{}") {{ lifecycle_state plugin_execution_receipt }} }}"#,
             escape_graphql_string(tool.doc_id().unwrap()),
         )).await.unwrap();
         assert_eq!(
             row["data"]["AgentToolCall"][0]["lifecycle_state"],
-            "running"
+            "completed"
         );
-        assert!(row["data"]["AgentToolCall"][0]["plugin_execution_receipt"].is_null());
+        assert_eq!(
+            serde_json::from_value::<PluginExecutionReceipt>(
+                row["data"]["AgentToolCall"][0]["plugin_execution_receipt"].clone()
+            )
+            .unwrap(),
+            receipt()
+        );
         node.shutdown().await;
         let _ = std::fs::remove_dir_all(path);
     }
+
     #[tokio::test]
     async fn competing_terminal_without_receipt_is_never_backfilled() {
         let (node, path, mut winner) =
@@ -187,7 +241,7 @@ mod persistence_tests {
             .cancel_during_run(CancelCause::Interrupted)
             .await
             .unwrap();
-        loser.stage_plugin_receipt(Some(receipt())).unwrap();
+        loser.stage_plugin_receipt(Some(receipt()));
         loser.complete("late plugin success").await.unwrap();
         assert_eq!(loser.state, ToolCallState::Cancelled);
         let row = ConfigAccess::Local(node.clone()).execute(&format!(

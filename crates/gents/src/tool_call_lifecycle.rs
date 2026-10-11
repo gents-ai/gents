@@ -311,17 +311,10 @@ impl ToolCallLifecycle {
     pub(crate) fn stage_plugin_receipt(
         &mut self,
         receipt: Option<gents_protocol::plugin::PluginExecutionReceipt>,
-    ) -> anyhow::Result<()> {
-        if let Some(receipt) = receipt {
-            anyhow::ensure!(
-                self.plugin_receipt
-                    .as_ref()
-                    .is_none_or(|existing| existing == &receipt),
-                "plugin execution receipt conflicts with staged receipt"
-            );
-            self.plugin_receipt = Some(receipt);
+    ) {
+        if receipt.is_some() {
+            self.plugin_receipt = receipt;
         }
-        Ok(())
     }
 
     /// Exact DefraDB document identifier after the first persisted transition.

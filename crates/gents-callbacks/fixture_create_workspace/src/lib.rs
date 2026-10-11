@@ -4,6 +4,13 @@ use serde_json::{json, Map, Value};
 
 pub const ACTION_PLAN_ABI: u32 = 1;
 
+/// This crate's `wasm32-wasip1` command, built by `build.rs`.
+#[cfg(all(not(target_arch = "wasm32"), not(callback_fixture_skipped)))]
+pub const WASI_COMMAND: Option<&[u8]> =
+    Some(include_bytes!(env!("GENTS_CALLBACK_FIXTURE_WASI_COMMAND")));
+#[cfg(all(not(target_arch = "wasm32"), callback_fixture_skipped))]
+pub const WASI_COMMAND: Option<&[u8]> = None;
+
 /// Pure planner used by the wasm entry and host rlib tests.
 pub fn plan_create_workspace(
     source: &Value,

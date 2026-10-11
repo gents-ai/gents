@@ -214,6 +214,11 @@ pub fn store_bytes(home: &Path, digest_hex: &str, bytes: &[u8]) -> Result<()> {
     crate::pack_registry::stage_and_persist(&dir, &path, bytes)
 }
 
+/// The hex SHA-256 the store addresses `bytes` by.
+pub fn content_digest_hex(bytes: &[u8]) -> String {
+    format!("{:x}", <sha2::Sha256 as sha2::Digest>::digest(bytes))
+}
+
 pub fn read_bytes(home: &Path, digest_hex: &str) -> Result<Vec<u8>> {
     let path = store_path(home, digest_hex)?;
     std::fs::read(&path)

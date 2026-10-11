@@ -24,9 +24,8 @@ use super::documents::{
     CallbackResultInvocationRow,
 };
 use super::planner::{
-    compute_module_id, fixture_artifact_is_stub, fixture_create_workspace_artifact,
-    invoke_plugin_planner, plan_from_module, validate_callback_module, CallbackModuleLimits,
-    MAX_ARTIFACT_BYTES,
+    compute_module_id, fixture_create_workspace_artifact, invoke_plugin_planner, plan_from_module,
+    validate_callback_module, CallbackModuleLimits, MAX_ARTIFACT_BYTES,
 };
 use super::run::{
     apply_planner_deny, can_emit_callback_result, can_start_executing, decode_journal,
@@ -995,10 +994,9 @@ fn callback_requires_bounded_afterburner_artifact() {
 
 #[test]
 fn capability_miss_denies_create_workspace_plan() {
-    let wasm = fixture_create_workspace_artifact();
-    if fixture_artifact_is_stub(wasm) {
+    let Some(wasm) = fixture_create_workspace_artifact() else {
         return;
-    }
+    };
     let source = json!({
         "owned_files": [],
         "work_unit_id": "unit-1",
@@ -1024,10 +1022,9 @@ fn capability_miss_denies_create_workspace_plan() {
 
 #[test]
 fn fixture_artifact_emits_valid_create_workspace_plan() {
-    let wasm = fixture_create_workspace_artifact();
-    if fixture_artifact_is_stub(wasm) {
+    let Some(wasm) = fixture_create_workspace_artifact() else {
         return;
-    }
+    };
     let source = json!({
         "owned_files": [],
         "work_unit_id": "unit-1",
@@ -1512,11 +1509,9 @@ fn callback_artifact_identity_and_output_are_host_validated() {
     validate_callback_module(&module, &trusted("did:key:zTrusted")).unwrap();
     module.canonical_args = Some(r#"{"forged":true}"#.into());
     assert!(validate_callback_module(&module, &trusted("did:key:zTrusted")).is_err());
-    assert!(plan_from_module(&module, &json!({}), &BTreeSet::new()).is_err());
     module = module_doc(&artifact, &json!({}), "did:key:zTrusted");
     module.abi_version = Some(99);
     assert!(validate_callback_module(&module, &trusted("did:key:zTrusted")).is_err());
-    assert!(plan_from_module(&module, &json!({}), &BTreeSet::new()).is_err());
 
     let trap = crate::plugin::tests::build_plugin_afb(
         r#"(module (memory (export "memory") 1) (func (export "_start") unreachable))"#,

@@ -881,8 +881,10 @@ impl ToolCallLifecycle {
             Some(self.output_budget().await)
         };
         let terminal_status = self.terminal_persistence_status(fields.completion_reason);
-        let plugin_receipt = self.plugin_receipt.clone();
-        let execution_generation = self.execution_generation.clone();
+        let plugin_receipt = self
+            .plugin_receipt
+            .as_ref()
+            .map(|receipt| super::plugin_receipt::published(fields.state, receipt));
         let spawned_by_tool_call_doc_id = self.spawned_by_tool_call_doc_id.clone();
 
         let published = ConfigAccess::transact_local_idempotent(
@@ -903,7 +905,6 @@ impl ToolCallLifecycle {
                 let tool_name = tool_name.clone();
                 let terminal_status = terminal_status.clone();
                 let plugin_receipt = plugin_receipt.clone();
-                let execution_generation = execution_generation.clone();
                 let spawned_by_tool_call_doc_id = spawned_by_tool_call_doc_id.clone();
                 let presentation = presentation.clone();
                 Box::pin(async move {
@@ -929,7 +930,6 @@ impl ToolCallLifecycle {
                         fields,
                         &terminal_status,
                         plugin_receipt.as_ref(),
-                        execution_generation.as_deref(),
                         text,
                         pending_raw,
                         presentation.as_ref(),
@@ -973,7 +973,6 @@ async fn terminalize_transaction(
     fields: TerminalFields<'_>,
     terminal_status: &str,
     plugin_receipt: Option<&gents_protocol::plugin::PluginExecutionReceipt>,
-    execution_generation: Option<&str>,
     text: &str,
     pending_raw: Option<&str>,
     presentation: Option<&PayloadPresentation>,
@@ -1127,28 +1126,6 @@ async fn terminalize_transaction(
     }
 
     let plugin_receipt_field = if let Some(receipt) = plugin_receipt {
-        let generation =
-            execution_generation.context("plugin receipt lacks accepted generation")?;
-        let request_rows = txn
-            .execute(&format!(
-                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{request}" }},
-                session_id: {{ _eq: "{session}" }}, node_did: {{ _eq: "{agent}" }}
-                {requester_filter} }}, limit: 2) {{ execution_generation }} }}"#
-            ))
-            .await?;
-        let requests = request_rows["data"]["AgentRequest"]
-            .as_array()
-            .context("plugin receipt request query omitted rows")?;
-        let current_generation = requests
-            .first()
-            .filter(|_| requests.len() == 1)
-            .and_then(|row| row["execution_generation"].as_str());
-        let accepted_generation = match &accepted.publication {
-            MessagePublication::RequestExecution {
-                execution_generation,
-            } => Some(execution_generation.as_str()),
-            _ => None,
-        };
         let rows = txn
             .execute(&format!(
                 r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{tool}" }},
@@ -1170,9 +1147,6 @@ async fn terminalize_transaction(
             .as_str()
             .and_then(ToolCallState::from_persisted)
             .context("plugin receipt tool has invalid lifecycle state")?;
-        if state.is_terminal() && row["plugin_execution_receipt"].is_null() {
-            return Ok(false);
-        }
         let existing = if row["plugin_execution_receipt"].is_null() {
             None
         } else {
@@ -1180,12 +1154,14 @@ async fn terminalize_transaction(
                 gents_protocol::plugin::PluginExecutionReceipt,
             >(row["plugin_execution_receipt"].clone())?)
         };
-        super::plugin_receipt::ensure_commit(
-            current_generation == Some(generation) && accepted_generation == Some(generation),
-            state.is_terminal(),
-            existing.as_ref(),
-            receipt,
-        )?;
+        match super::plugin_receipt::decide(state.is_terminal(), existing.as_ref(), receipt) {
+            super::plugin_receipt::ReceiptDecision::Commit
+            | super::plugin_receipt::ReceiptDecision::Replay => {}
+            super::plugin_receipt::ReceiptDecision::Adopt => return Ok(false),
+            super::plugin_receipt::ReceiptDecision::Conflict => {
+                anyhow::bail!("plugin receipt conflicts with durable evidence")
+            }
+        }
         ", plugin_execution_receipt: $plugin_receipt".to_owned()
     } else {
         String::new()

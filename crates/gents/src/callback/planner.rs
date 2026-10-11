@@ -150,14 +150,6 @@ pub fn plan_from_module(
     }
     let wasm = decode_artifact_bytes(module.artifact_bytes.as_deref().unwrap_or(""))?;
     let args = parse_canonical_args(module.canonical_args.as_deref())?;
-    let abi = module.abi_version.unwrap_or(0);
-    if abi != i64::from(ACTION_PLAN_ABI)
-        || compute_module_id(&wasm, &args, abi)? != module.module_id
-    {
-        return Err(
-            "CallbackModule content address or ActionPlan ABI does not match artifact".into(),
-        );
-    }
     let limits = limits_from_module(module)?;
     let capabilities: Vec<String> = capabilities.iter().cloned().collect();
     let input = json!({
@@ -176,7 +168,7 @@ pub fn invoke_plugin_planner(
     limits: &CallbackModuleLimits,
     input: &Value,
 ) -> Result<Value, String> {
-    require_artifact(artifact)?;
+    require_artifact_size(artifact)?;
     let input_len = canonical_json_string(input)?.len();
     if input_len > limits.max_input_bytes {
         return Err(format!(
@@ -202,12 +194,17 @@ pub fn invoke_plugin_planner(
     Ok(outcome.output)
 }
 
-fn require_artifact(artifact: &[u8]) -> Result<(), String> {
+fn require_artifact_size(artifact: &[u8]) -> Result<(), String> {
     if artifact.len() > MAX_ARTIFACT_BYTES {
         return Err(format!(
             "callback artifact exceeds max_artifact_bytes {MAX_ARTIFACT_BYTES}"
         ));
     }
+    Ok(())
+}
+
+fn require_artifact(artifact: &[u8]) -> Result<(), String> {
+    require_artifact_size(artifact)?;
     crate::plugin::executor::PluginExecutor::validate_sealed_artifact(artifact).map_err(|error| {
         format!("callback requires a bounded Afterburner .afb artifact: {error:#}")
     })
@@ -236,24 +233,14 @@ fn bounded_usize(value: Option<i64>, field: &str, max: usize) -> Result<usize, S
     usize::try_from(n).map_err(|_| format!("CallbackModule.{field} exceeds usize"))
 }
 
+/// `None` only when the fixture build was explicitly skipped.
 #[cfg(test)]
-pub(crate) fn fixture_create_workspace_artifact() -> &'static [u8] {
-    static ARTIFACT: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
-    ARTIFACT.get_or_init(|| {
-        crate::plugin::tests::build_plugin_afb_bytes(include_bytes!(env!(
-            "GENTS_CALLBACK_FIXTURE_CREATE_WORKSPACE_WASM_PATH"
-        )))
-    })
-}
-
-#[cfg(test)]
-pub(crate) fn fixture_artifact_is_stub(bytes: &[u8]) -> bool {
-    afterburner_afb::Afb::from_bytes(bytes)
-        .map(|artifact| {
-            artifact
-                .precompiled
-                .values()
-                .all(|module| module.len() <= 16)
+pub(crate) fn fixture_create_workspace_artifact() -> Option<&'static [u8]> {
+    static ARTIFACT: std::sync::OnceLock<Option<Vec<u8>>> = std::sync::OnceLock::new();
+    ARTIFACT
+        .get_or_init(|| {
+            gents_callback_fixture_create_workspace::WASI_COMMAND
+                .map(crate::plugin::tests::build_plugin_afb_bytes)
         })
-        .unwrap_or(true)
+        .as_deref()
 }

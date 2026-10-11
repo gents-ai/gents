@@ -839,7 +839,7 @@ async fn execution_receipt_hashes_canonical_values_and_keeps_tool_output_native(
 }
 
 #[tokio::test]
-async fn execution_receipts_distinguish_refusal_bad_output_and_trap() {
+async fn execution_receipts_distinguish_refusal_bad_output_and_guest_trap() {
     use gents_protocol::plugin::PluginExecutionVerdict;
     for (wat, verdict) in [
         (
@@ -848,7 +848,7 @@ async fn execution_receipts_distinguish_refusal_bad_output_and_trap() {
         ),
         (
             r#"(module (memory (export "memory") 1) (func (export "_start") unreachable))"#.into(),
-            PluginExecutionVerdict::ExecutionError,
+            PluginExecutionVerdict::Failed,
         ),
     ] {
         let (home, record) = installed_plugin(&wat, None);
@@ -911,4 +911,51 @@ async fn receipt_hashes_host_prepared_input_and_actual_http_grant() {
             assert_eq!(http.timeout_ms, Some(timeout.unwrap_or(30_000).min(30_000)));
         }
     }
+}
+
+#[tokio::test]
+async fn corrupted_store_bytes_are_refused_and_never_cached() {
+    let (home, record) = installed_echo();
+    let hex = record.digest.strip_prefix("sha256:").unwrap();
+    let mut bytes = store::read_bytes(home.path(), hex).unwrap();
+    bytes.push(0);
+    let path = home
+        .path()
+        .join("plugins")
+        .join("store")
+        .join(format!("{hex}.afb"));
+    assert!(path.is_file(), "{}", path.display());
+    std::fs::write(&path, &bytes).unwrap();
+    let executor = PluginExecutor::new(Some(home.path().to_owned()));
+    let error = executor
+        .call(&record, serde_json::json!({}))
+        .await
+        .unwrap_err();
+    assert!(
+        format!("{error:#}").contains("do not match their digest"),
+        "{error:#}"
+    );
+    assert_eq!(executor.admitted_len(), 0);
+}
+
+#[tokio::test]
+async fn bound_receipt_names_the_declared_field_not_the_host_path() {
+    use gents_protocol::plugin::{PluginFilesystemGrant, PluginFilesystemScope};
+    let (home, record) = installed_plugin(ECHO_WAT, Some(crate::pack::BindAccess::Read));
+    let directory = tempfile::tempdir().unwrap();
+    let bound = crate::plugin::BoundDir::new(directory.path(), None).unwrap();
+    let call = PluginExecutor::new(Some(home.path().to_owned()))
+        .call_bound(&record, serde_json::json!({}), bound)
+        .await
+        .unwrap();
+    let authority = call.receipt.authority.unwrap();
+    assert_eq!(
+        authority.filesystem,
+        PluginFilesystemGrant::ReadOnly(PluginFilesystemScope::BoundInput {
+            field: "path".into()
+        })
+    );
+    let encoded = serde_json::to_string(&authority).unwrap();
+    let host = directory.path().canonicalize().unwrap();
+    assert!(!encoded.contains(host.to_str().unwrap()), "{encoded}");
 }
