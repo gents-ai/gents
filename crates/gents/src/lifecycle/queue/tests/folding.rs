@@ -928,14 +928,16 @@ async fn claim_selected_publication_keeps_later_incompatible_pending_row() {
 #[tokio::test]
 async fn expired_or_malformed_steering_is_a_modelled_publication_barrier() {
     use crate::lean_vocab_test::LeanQueueManagementOperation;
-    for (name, ttl) in [
-        ("expired_steering_is_barrier", "2000-01-01T00:00:00Z"),
-        ("malformed_ttl_steering_is_barrier", "not-a-timestamp"),
-    ] {
-        let case = crate::lean_vocab_test::lean_queue_management_cases()
-            .iter()
-            .find(|case| case.name == name)
-            .unwrap();
+    let case = crate::lean_vocab_test::lean_queue_management_cases()
+        .iter()
+        .find(|case| case.name == "expired_steering_is_barrier")
+        .unwrap();
+    // Expired and malformed TTLs are the two native encodings of `fresh = false`.
+    for (variant, ttl) in ["2000-01-01T00:00:00Z", "not-a-timestamp"]
+        .into_iter()
+        .enumerate()
+    {
+        let name = &format!("{}-{variant}", case.name);
         let LeanQueueManagementOperation::Intake { active: head, .. } = &case.operation else {
             panic!("expected intake case");
         };

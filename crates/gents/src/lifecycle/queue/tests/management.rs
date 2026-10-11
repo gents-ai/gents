@@ -8,7 +8,8 @@ async fn generated_pending_management_cases_bind_to_signed_replacement_owner() {
     let cases = crate::lean_vocab_test::lean_queue_management_cases();
     assert!(!cases.is_empty());
     let mut exercised = Vec::new();
-    for case in cases {
+    // Each model freshness value has two native TTL encodings; both must bind.
+    for (case, variant) in cases.iter().flat_map(|case| [(case, 0), (case, 1)]) {
         let LeanQueueManagementOperation::Replace {
             caller,
             expected,
@@ -19,23 +20,39 @@ async fn generated_pending_management_cases_bind_to_signed_replacement_owner() {
         else {
             continue;
         };
-        // The native API generates fresh identities and derives positions itself;
-        // forged identity/slot cases belong to admission, not this API's inputs.
-        if matches!(
-            case.name.as_str(),
-            "reused_request_id" | "changed_slot_rejected"
-        ) {
-            continue;
-        }
-        exercised.push(case.name.as_str());
-        let db = test_db(&case.name).await;
-        let session_id = format!("management-{}", case.name);
         let originals = case
             .before
             .folding
             .iter()
             .chain(&case.before.pending)
             .collect::<Vec<_>>();
+        let selected =
+            &originals[(*offset).min(originals.len())..(offset + count).min(originals.len())];
+        // The native API generates fresh identities and derives positions itself;
+        // forged identity/slot cases belong to admission, not this API's inputs.
+        if replacements.iter().any(|replacement| {
+            originals
+                .iter()
+                .any(|entry| entry.request_id == replacement.request_id)
+        }) || replacements
+            .iter()
+            .zip(selected)
+            .any(|(replacement, original)| replacement.order_key != original.order_key)
+        {
+            continue;
+        }
+        if variant == 0 {
+            exercised.push(case.name.as_str());
+        }
+        let db = test_db(&format!("{}-{variant}", case.name)).await;
+        let session_id = format!("management-{}", case.name);
+        let ttl = |entry: &crate::lean_vocab_test::LeanFoldQueueEntry| match (entry.fresh, variant)
+        {
+            (true, 0) => None,
+            (true, _) => Some("2099-01-01T00:00:00Z"),
+            (false, 0) => Some("2000-01-01T00:00:00Z"),
+            (false, _) => Some("malformed"),
+        };
         let mut bound = HashMap::new();
         for (arrival, entry) in originals.iter().enumerate() {
             let id = if entry.requester_id == Some(2) {
@@ -56,16 +73,14 @@ async fn generated_pending_management_cases_bind_to_signed_replacement_owner() {
                     ),
                 );
                 create.input = super::folding::generated_input(entry);
-                create.valid_until = match case.name.as_str() {
-                    "expired_pending_edit_rejected" => Some("2000-01-01T00:00:00Z".into()),
-                    "edit_fresh_same_slot" => Some("2099-01-01T00:00:00Z".into()),
-                    _ => None,
-                };
+                create.valid_until = ttl(entry)
+                    .filter(|ttl| *ttl != "malformed")
+                    .map(str::to_owned);
                 crate::sign_agent_request_create(db.identity.as_ref(), &mut create)
                     .await
                     .unwrap();
                 let mut mutation = create.graphql_mutation().unwrap();
-                if case.name == "malformed_ttl_edit_rejected" {
+                if ttl(entry) == Some("malformed") {
                     // Malformed TTLs cannot be canonically signed. Insert an adversarial
                     // signature-mismatched row directly; never mutate immutable fields.
                     mutation = mutation.replacen(
@@ -82,7 +97,6 @@ async fn generated_pending_management_cases_bind_to_signed_replacement_owner() {
             };
             bound.insert(entry.request_id, id);
         }
-        let selected = &originals[*offset..offset + count];
         let edit = PendingQueueEdit {
             expected_request_doc_ids: expected.iter().map(|id| bound[id].clone()).collect(),
             selected_request_doc_ids: selected
@@ -108,16 +122,17 @@ async fn generated_pending_management_cases_bind_to_signed_replacement_owner() {
             r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID content input admission_signature lifecycle_state valid_until }} }}"#,
             escape_graphql_string(&session_id),
         );
-        if matches!(
-            case.name.as_str(),
-            "expired_pending_edit_rejected" | "malformed_ttl_edit_rejected"
-        ) {
-            let snapshot = pending_user_queue(&access, db.node_did(), &session_id, caller_did)
-                .await
+        let snapshot = pending_user_queue(&access, db.node_did(), &session_id, caller_did)
+            .await
+            .unwrap();
+        for original in selected.iter().filter(|entry| !entry.fresh) {
+            let entry = snapshot
+                .entries
+                .iter()
+                .find(|entry| entry.request_doc_id == bound[&original.request_id])
                 .unwrap();
-            assert_eq!(snapshot.entries.len(), 1);
             assert!(
-                !snapshot.entries[0].editable,
+                !entry.editable,
                 "{}: stale TTL cannot offer an edit",
                 case.name
             );
@@ -209,6 +224,18 @@ async fn generated_pending_management_cases_bind_to_signed_replacement_owner() {
                 "{}: logical queue order",
                 case.name
             );
+            for original in &originals {
+                let row = actual_rows
+                    .iter()
+                    .find(|row| row["_docID"] == bound[&original.request_id])
+                    .unwrap();
+                assert_eq!(
+                    row["lifecycle_state"] != "pending",
+                    after.terminal.contains(&original.request_id),
+                    "{}: terminal requests",
+                    case.name
+                );
+            }
             for (replacement, id) in replacements.iter().zip(&receipt.request_doc_ids) {
                 let row = crate::request_binding::load_agent_request_by_doc_id(&db.node, id)
                     .await
@@ -241,12 +268,15 @@ async fn generated_pending_management_cases_bind_to_signed_replacement_owner() {
                     r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ admission_signature valid_until }} }}"#,
                     escape_graphql_string(id),
                 )).await.unwrap();
-                if case.name == "edit_fresh_same_slot" {
-                    assert_eq!(
-                        persisted["data"]["AgentRequest"][0]["valid_until"], "2099-01-01T00:00:00Z",
-                        "live signed expiry must be retained rather than extended"
-                    );
-                }
+                let predecessor = before_rows
+                    .iter()
+                    .find(|row| row["_docID"] == bound[&slot.request_id])
+                    .unwrap();
+                assert_eq!(
+                    persisted["data"]["AgentRequest"][0]["valid_until"], predecessor["valid_until"],
+                    "{}: signed expiry is retained rather than extended",
+                    case.name
+                );
                 assert!(
                     persisted["data"]["AgentRequest"][0]["admission_signature"]
                         .as_str()
@@ -259,7 +289,7 @@ async fn generated_pending_management_cases_bind_to_signed_replacement_owner() {
     }
     assert_eq!(
         exercised.len(),
-        10,
+        9,
         "all representable generated management operations"
     );
 }
