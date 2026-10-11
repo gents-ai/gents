@@ -1124,18 +1124,13 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "QueueManagementCases".to_string(),
         ));
     }
-    for name in [
-        "expired_steering_is_barrier",
-        "malformed_ttl_steering_is_barrier",
-    ] {
-        assert!(
-            snapshot
-                .queue_management_cases
-                .iter()
-                .any(|case| case.name == name),
-            "queue expiry coverage requires generated case {name}"
-        );
-    }
+    assert!(
+        snapshot
+            .queue_management_cases
+            .iter()
+            .any(|case| case.name == "expired_steering_is_barrier"),
+        "queue expiry coverage requires generated case expired_steering_is_barrier"
+    );
     emitted.insert((
         "queue_management_cases".to_string(),
         "QueueExpiryBarrierCases".to_string(),

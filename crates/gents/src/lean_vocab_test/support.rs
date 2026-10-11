@@ -3026,7 +3026,6 @@ pub(crate) struct LeanSessionInputEditAuthority {
     pub(crate) replacements_valid: bool,
     pub(crate) command_identity_unique: bool,
     pub(crate) session_owned: bool,
-    pub(crate) local_self: bool,
     pub(crate) requester_is_node: bool,
     pub(crate) enrollment_fresh: bool,
     pub(crate) route_applied: bool,
@@ -3037,4 +3036,5 @@ pub(crate) struct LeanSessionInputEditReceipt {
     pub(crate) command_id: u64,
     pub(crate) digest: u64,
     pub(crate) outcome: String,
+    pub(crate) request_ids: Vec<u64>,
 }
