@@ -155,6 +155,7 @@ theorem open_preview_requires_validated_prefix {observation : Observation}
   have haux : observation.target.coordinate.source.isAuxiliary = false := by
     cases hsource : observation.target.coordinate.source with
     | auxiliary kind scope turn attempt => simp [ownerLive, hsource] at hlive
+    | toolEffectArguments call => simp [ownerLive, hsource] at hlive
     | provider scope turn attempt => simp [Source.isAuxiliary]
     | tool call => simp [Source.isAuxiliary]
     | authored key => simp [Source.isAuxiliary]

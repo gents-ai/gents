@@ -2264,6 +2264,7 @@ async fn plugin_resolution_surfaces(
             .unwrap(),
     );
     let plugin_ref = crate::document_config::PluginToolRef {
+        tool_calls: false,
         plugin: "fixture/list_files".to_string(),
         digest: None,
         input_fields: Vec::new(),

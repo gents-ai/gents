@@ -266,7 +266,7 @@ private theorem evaluate_preserves_purpose_nodeDid
     try replace hcore := checked_core_success _ _ _ hcore
     simp only [Execution.renew, renewCore, appendRaw, appendRawCore,
       retractBeforeRetryCore, publishAuthoredCore, publishHeaderOnlyCore,
-      dispatchCore, admitSpawnedBackgroundCore, changeToolControlCore,
+      dispatchCore, admitSpawnedBackgroundCore, admitPluginEffectCore, changeToolControlCore,
       closePartialAndPublishCore, recoverExpiredBatchCore,
       recoverExpiredTerminalCore, terminalizeCore, revokeCorruptCore] at hcore
     try dsimp only at hcore

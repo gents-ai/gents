@@ -15,6 +15,11 @@ plugin: string,
  */
 digest?: string | null,
 /**
+ * Permit this installed plugin to call the current request's selected
+ * tools through the owned loop. Child calls do not inherit this grant.
+ */
+tool_calls?: boolean,
+/**
  * Trigger-owned String inputs hidden from the model. Resolution uses the
  * same correlation/source-field owner as bounded datastore tools; a caller
  * cannot supply or replace one of these fields.

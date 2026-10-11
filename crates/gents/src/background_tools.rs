@@ -396,7 +396,7 @@ pub(crate) async fn observe_canonical_tool_output_with_access(
     canonical_tool_output_from_rows(rows, tool_doc_id, request_doc_id)
 }
 
-fn canonical_tool_output_from_rows(
+pub(crate) fn canonical_tool_output_from_rows(
     rows: Vec<crate::session::canonical_rows::OutputSegmentRow>,
     tool_doc_id: &str,
     request_doc_id: &str,

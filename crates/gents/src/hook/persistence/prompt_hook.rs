@@ -1,4 +1,5 @@
 use super::*;
+use crate::hook::{decide_persistence_outcome, FailurePolicy, PolicyDecision};
 
 impl DefraSessionHook {
     pub async fn on_completion_call(&self, prompt: &Message, _history: &[Message]) -> HookAction {
@@ -310,6 +311,11 @@ impl DefraSessionHook {
     ) -> HookAction {
         use crate::tool_call_lifecycle::ToolOutcome;
 
+        let is_plugin_effect = self
+            .effect_lifecycles
+            .lock()
+            .await
+            .contains_key(internal_call_id);
         let persist_result: anyhow::Result<HookAction> = async {
             // Managed terminals terminate the turn; they carry no model-facing
             // text and never thread back to the provider.
@@ -395,9 +401,6 @@ impl DefraSessionHook {
                 )
             };
 
-            // Canonical segments retain the full result exactly once.  Provider
-            // narrowing is represented by the delivery header's presentation,
-            // never by a spill row or a second truncated payload copy.
             let _ = (&session_id, &tool_call_doc_id, args);
 
             let mut lc = self
@@ -444,9 +447,6 @@ impl DefraSessionHook {
                 }
             }
 
-            // The lifecycle terminal transition already published the sole
-            // canonical ToolResult header with exact physical identity.  Do
-            // not append the retired serialized-message projection again.
             let _ = (
                 should_persist_message,
                 persisted_result_id,
@@ -470,7 +470,23 @@ impl DefraSessionHook {
                 self.record_success();
                 action
             }
-            Err(e) => self.on_persistence_error("persist tool result", &e),
+            Err(e) => {
+                if is_plugin_effect {
+                    match decide_persistence_outcome(
+                        FailurePolicy::FailClosed,
+                        &self.counters,
+                        "persist plugin effect",
+                        &e,
+                    ) {
+                        PolicyDecision::Terminate(reason) => HookAction::Terminate { reason },
+                        PolicyDecision::Continue => {
+                            unreachable!("plugin effects require durable results")
+                        }
+                    }
+                } else {
+                    self.on_persistence_error("persist tool result", &e)
+                }
+            }
         }
     }
 }

@@ -553,6 +553,7 @@ async fn a_model_tool_gets_its_model_answers_through_the_same_path() {
     let tool = PluginTool::resolve(
         executor,
         &PluginToolRef {
+            tool_calls: false,
             plugin: "team/plugin".into(),
             digest: Some(record.digest.clone()),
             input_fields: Vec::new(),
@@ -822,6 +823,7 @@ async fn fuel_is_spent_across_rounds() {
     let calls = HostCalls {
         model: Some(session(&fake)),
         http: None,
+        tools: None,
     };
     let outcome = drive(calls, json!({}), budget, round).await.unwrap();
     assert_eq!(outcome.verdict, PluginVerdict::OutOfFuel);

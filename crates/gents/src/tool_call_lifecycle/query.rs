@@ -6,7 +6,9 @@ pub use result::{
     load_tool_call_arguments, load_tool_call_presentation, load_tool_call_result,
     render_tool_result, CanonicalToolCallPresentation,
 };
-pub(crate) use result::{load_tool_call_read, load_tool_call_read_in_txn};
+pub(crate) use result::{
+    load_tool_call_arguments_in_txn, load_tool_call_read, load_tool_call_read_in_txn,
+};
 
 use std::sync::Arc;
 
@@ -68,6 +70,8 @@ struct ToolCallRow {
     await_mode: Option<String>,
     #[serde(default)]
     spawned_by_tool_call_doc_id: Option<String>,
+    plugin_parent_tool_call_doc_id: Option<String>,
+    plugin_effect_ordinal: Option<u32>,
 }
 
 impl ToolCallLifecycle {
@@ -117,10 +121,13 @@ impl ToolCallLifecycle {
                     selected_tool_name
                     await_mode
                     spawned_by_tool_call_doc_id
+                    plugin_parent_tool_call_doc_id
+                    plugin_effect_ordinal
         }}}}"#
         );
 
-        let resp = node.execute(&query).await;
+        let resp =
+            crate::graphql::graphql_with_transaction_retry(&node, &query, "tool_call.load").await?;
         if resp.has_errors() {
             return Err(anyhow!(
                 "load AgentToolCall query failed: {:?}",
@@ -151,8 +158,27 @@ impl ToolCallLifecycle {
             .as_deref()
             .filter(|value| !value.trim().is_empty())
             .map(str::to_owned);
-        let admission_doc_id = spawned_by_tool_call_doc_id
-            .as_deref()
+        let plugin_effect = match (
+            row.plugin_parent_tool_call_doc_id.as_deref(),
+            row.plugin_effect_ordinal,
+        ) {
+            (None, None) => None,
+            (Some(parent), Some(ordinal))
+                if !parent.is_empty()
+                    && (1..=64).contains(&ordinal)
+                    && spawned_by_tool_call_doc_id.is_none() =>
+            {
+                Some(super::PluginEffectBinding {
+                    parent_tool_call_doc_id: parent.to_owned(),
+                    ordinal,
+                })
+            }
+            _ => anyhow::bail!("invalid plugin effect provenance"),
+        };
+        let admission_doc_id = plugin_effect
+            .as_ref()
+            .map(|effect| effect.parent_tool_call_doc_id.as_str())
+            .or(spawned_by_tool_call_doc_id.as_deref())
             .unwrap_or(&row.doc_id);
         let accepted = Self::load_direct_binding(
             node.as_ref(),
@@ -164,7 +190,19 @@ impl ToolCallLifecycle {
         )
         .await?;
 
-        if let Some(parent_doc_id) = spawned_by_tool_call_doc_id.as_deref() {
+        if let Some(effect) = plugin_effect.as_ref() {
+            anyhow::ensure!(
+                effect.parent_tool_call_doc_id != row.doc_id
+                    && row.request_doc_id.as_deref() == Some(accepted.request_doc_id.as_str())
+                    && row.message_sequence == accepted.message_sequence
+                    && row.tool_call_id
+                        == format!(
+                            "plugin-effect:{}:{}",
+                            effect.parent_tool_call_doc_id, effect.ordinal
+                        ),
+                "plugin effect has incoherent accepted-parent provenance"
+            );
+        } else if let Some(parent_doc_id) = spawned_by_tool_call_doc_id.as_deref() {
             anyhow::ensure!(
                 parent_doc_id != row.doc_id
                     && row.request_doc_id.as_deref() == Some(accepted.request_doc_id.as_str())
@@ -223,6 +261,64 @@ impl ToolCallLifecycle {
                 "spawned lifecycle must be background work"
             );
         }
+        if plugin_effect.is_some() {
+            anyhow::ensure!(
+                await_mode == AwaitMode::Foreground,
+                "plugin effect must remain foreground work"
+            );
+        }
+        let arguments = if plugin_effect.is_some() {
+            let binding = super::delivery::ToolOutputBinding {
+                node: node.clone(),
+                tool_call_doc_id: row.doc_id.clone(),
+                request_doc_id: accepted.request_doc_id.clone(),
+                session_id: row.session_id.clone(),
+                node_did: owner.to_owned(),
+                requester_did: row.requester_did.clone(),
+            };
+            Some(
+                crate::config_client::ConfigAccess::transact_local_readonly(
+                    &node,
+                    None,
+                    "tool_call.load_plugin_arguments",
+                    |txn| {
+                        Box::pin(async {
+                            let mut parent_binding = binding.clone();
+                            parent_binding.tool_call_doc_id = plugin_effect
+                                .as_ref()
+                                .unwrap()
+                                .parent_tool_call_doc_id
+                                .clone();
+                            super::plugin_effect::validate_parent(
+                                txn,
+                                &parent_binding,
+                                &accepted.accepted_header_doc_id,
+                                &accepted.execution_generation,
+                                row.message_sequence,
+                                deadline_at,
+                                false,
+                            )
+                            .await?;
+                            super::plugin_effect::arguments_in_txn(
+                                txn,
+                                &binding,
+                                &row.doc_id,
+                                &accepted.execution_generation,
+                                &row.tool_call_id,
+                                &row.tool_name,
+                            )
+                            .await
+                            .map(|(reference, _)| reference)
+                        })
+                    },
+                )
+                .await?,
+            )
+        } else if spawned_by_tool_call_doc_id.is_none() {
+            Some(accepted.arguments.clone())
+        } else {
+            None
+        };
         let selected_tool_identity =
             decode_selected_tool_identity(row.selected_service_id, row.selected_tool_name)?;
 
@@ -234,9 +330,9 @@ impl ToolCallLifecycle {
             row.requester_did.as_deref(),
         );
         let request_doc = escape_graphql_string(&accepted.request_doc_id);
-        let request_response = node.execute(&format!(
+        let request_response = crate::graphql::graphql_with_transaction_retry(&node, &format!(
             r#"{{ AgentRequest(filter: {{ {scope}, _docID: {{ _eq: "{request_doc}" }} }}, limit: 2) {{ request_id }} }}"#
-        )).await;
+        ), "tool_call.load_request").await?;
         anyhow::ensure!(
             !request_response.has_errors(),
             "tool owner request lookup failed: {:?}",
@@ -277,7 +373,7 @@ impl ToolCallLifecycle {
             // silently rehydrate the lifecycle as unrouted.
             requester_did: row.requester_did,
             tool_call_id: row.tool_call_id,
-            call_id: if spawned_by_tool_call_doc_id.is_none() {
+            call_id: if spawned_by_tool_call_doc_id.is_none() && plugin_effect.is_none() {
                 accepted.call_id.clone()
             } else {
                 None
@@ -285,14 +381,11 @@ impl ToolCallLifecycle {
             message_sequence: row.message_sequence,
             tool_name: row.tool_name,
             accepted_header_doc_id: Some(accepted.accepted_header_doc_id),
-            arguments: if spawned_by_tool_call_doc_id.is_none() {
-                Some(accepted.arguments.clone())
-            } else {
-                None
-            },
+            arguments,
             execution_generation: Some(accepted.execution_generation),
             plugin_receipt: None,
             spawned_by_tool_call_doc_id,
+            plugin_effect,
             doc_id: Some(row.doc_id),
             deadline_at,
             state,
@@ -355,10 +448,10 @@ mod tests {
         let requester_did_field = crate::session::requester_did_create_field(requester_did);
         let created = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", purpose: "normal", node_did: "{node_did}", agent_id: "general", session_id: "{session_id}", retry_parent_request: "", retry_root_request: "{request_id}", superseded_by_request: "", content: "query fixture", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "{now}", retry_count: 0, max_retries: 3, request_hop: 0, {requester_did_field} }}) {{ _docID }} }}"#)).await;
         assert!(!created.has_errors(), "{:#?}", created.errors);
-        let row = node.execute(&format!(
+        let row = crate::graphql::graphql_with_transaction_retry(node, &format!(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ {} }} }}"#,
             crate::watcher::AGENT_REQUEST_FIELDS,
-        )).await;
+        ), "test.tool_call.load_request").await.unwrap();
         let row: gents_protocol::row::AgentRequestRow =
             crate::graphql::first_row(&row, "AgentRequest")
                 .unwrap()

@@ -29,12 +29,15 @@ inductive Operation where
   | headerOnly (generation : Generation) (message : MessageEnvelope)
       (admissions : List ToolAdmission)
   | dispatch (generation : Generation) (permit : DispatchPermit)
+  | admitPluginEffect (generation : Generation) (admission : PluginEffectAdmission)
   | admitSpawned (generation : Generation) (admission : SpawnedToolAdmission)
   | toolControl (generation : Generation) (document : DocId)
       (action : ToolExecution.ToolCallContext.Action)
   | toolAppend (document : DocId) (record : Segment)
   | toolClose (document : DocId) (authority : ToolDelivery.CloseAuthority)
       (record : Segment)
+  | pluginEffectClose (document : DocId) (authority : ToolDelivery.CloseAuthority)
+      (record : Segment) (payload : PayloadSpec)
   | toolComplete (document : DocId) (authority : ToolDelivery.CloseAuthority)
       (record : Segment) (message : MessageEnvelope)
   | toolDeliver (document : DocId) (message : MessageEnvelope)
@@ -145,6 +148,8 @@ def evaluateCore (operation : Operation) (world : World) : Except Error World :=
   | .headerOnly generation message admissions =>
       (publishHeaderOnly world generation message admissions).mapError .execution
   | .dispatch generation permit => (Execution.dispatch world generation permit).mapError .execution
+  | .admitPluginEffect generation admission =>
+      (Execution.admitPluginEffect world generation admission).mapError .execution
   | .admitSpawned generation admission =>
       (admitSpawnedBackground world generation admission).mapError .execution
   | .toolControl generation document action =>
@@ -153,6 +158,8 @@ def evaluateCore (operation : Operation) (world : World) : Except Error World :=
       (ToolDelivery.appendToolOutput world document record).mapError .delivery
   | .toolClose document authority record =>
       (ToolDelivery.closeToolOutput world document authority record).mapError .delivery
+  | .pluginEffectClose document authority record payload =>
+      (ToolDelivery.closePluginEffectOutput world document authority record payload).mapError Error.delivery
   | .toolComplete document authority record message =>
       (ToolDelivery.completeAndDeliver world document authority record message).mapError .delivery
   | .toolDeliver document message =>
@@ -231,6 +238,9 @@ theorem evaluate_nextSequence_monotone (operation : Operation) (before after : W
   | dispatch generation permit =>
       rw [dispatch_preserves_nextSeq before after generation permit
         (mapError_success Error.execution _ _ h)]
+  | admitPluginEffect generation admission =>
+      rw [admitPluginEffect_preserves_nextSeq before after generation admission
+        (mapError_success Error.execution _ _ h)]
   | admitSpawned generation admission =>
       rw [admitSpawnedBackground_preserves_nextSeq before after generation admission
         (mapError_success Error.execution _ _ h)]
@@ -243,6 +253,9 @@ theorem evaluate_nextSequence_monotone (operation : Operation) (before after : W
   | toolClose document authority record =>
       rw [ToolDelivery.close_preserves_nextSeq before after document authority record
         (mapError_success Error.delivery _ _ h)]
+  | pluginEffectClose document authority record payload =>
+      rw [(ToolDelivery.plugin_close_preserves_publications before after document authority record payload
+        (mapError_success Error.delivery _ _ h)).2.2]
   | toolComplete document authority record message =>
       obtain ⟨closed, hclose, hdeliver⟩ := ToolDelivery.completeAndDeliver_success
         before after document authority record message
@@ -505,7 +518,7 @@ theorem evaluate_preserves_request_identity (operation : Operation) (before afte
       | exact revokeCorruptCore_preserves_request_identity _ _ _ _ _ _ hcore
       | simp only [Execution.renew, renewCore, appendRaw, appendRawCore,
           retractBeforeRetryCore, acceptAndPublishCore, publishAuthoredCore,
-          publishHeaderOnlyCore, dispatchCore, admitSpawnedBackgroundCore,
+          publishHeaderOnlyCore, dispatchCore, admitSpawnedBackgroundCore, admitPluginEffectCore,
           changeToolControlCore] at hcore
         try dsimp only at hcore
         repeat' first

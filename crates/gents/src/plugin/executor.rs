@@ -150,6 +150,7 @@ fn authority(
     manifold: &Manifold,
     model: bool,
     http: Option<&http_calls::Session>,
+    tools: bool,
 ) -> Result<PluginExecutionAuthority> {
     use afterburner_core::manifold::{EnvAccess, FsAccess, NetAccess};
     let paths = |paths: &[PathBuf]| -> Result<Vec<String>> {
@@ -184,6 +185,7 @@ fn authority(
             }
         },
         host_model: model,
+        host_tools: tools,
     })
 }
 
@@ -388,6 +390,7 @@ impl PluginExecutor {
         record: &InstalledPlugin,
         input: serde_json::Value,
         tool_root: Option<&Path>,
+        tool_calls: bool,
     ) -> Result<PluginCall> {
         let session = crate::tool_call_lifecycle::runtime::current_tool_runtime_context();
         let workdir = session
@@ -410,8 +413,15 @@ impl PluginExecutor {
             .await
             .map_err(anyhow::Error::msg)?
         {
-            Some(bound) => self.call_bound(record, input, bound).await,
-            None => self.call(record, input).await,
+            bound => {
+                self.run(
+                    record,
+                    input,
+                    bound,
+                    super::tool_calls::Session::for_call(tool_calls),
+                )
+                .await
+            }
         }
     }
 
@@ -420,9 +430,12 @@ impl PluginExecutor {
         record: &InstalledPlugin,
         input: serde_json::Value,
         tool_root: Option<&Path>,
+        tool_calls: bool,
     ) -> (Result<PluginCall>, PluginExecutionReceipt) {
         let refused = initial_receipt(record, &input);
-        let result = self.call_data_bound(record, input, tool_root).await;
+        let result = self
+            .call_data_bound(record, input, tool_root, tool_calls)
+            .await;
         let receipt = match &result {
             Ok(call) => call.receipt.clone(),
             Err(error) => error
@@ -461,7 +474,7 @@ impl PluginExecutor {
         record: &InstalledPlugin,
         input: serde_json::Value,
     ) -> Result<PluginCall> {
-        self.run(record, input, None).await
+        self.run(record, input, None, None).await
     }
 
     /// [`Self::call`] with `bound` granted for this one call, in the
@@ -473,7 +486,7 @@ impl PluginExecutor {
         input: serde_json::Value,
         bound: BoundDir,
     ) -> Result<PluginCall> {
-        self.run(record, input, Some(bound)).await
+        self.run(record, input, Some(bound), None).await
     }
 
     async fn run(
@@ -481,6 +494,7 @@ impl PluginExecutor {
         record: &InstalledPlugin,
         input: serde_json::Value,
         bound: Option<BoundDir>,
+        tools: Option<super::tool_calls::Session>,
     ) -> Result<PluginCall> {
         let mut receipt = initial_receipt(record, &input);
         let result: Result<PluginCall> = async {
@@ -496,6 +510,7 @@ impl PluginExecutor {
             let calls = HostCalls {
                 model,
                 http: http_calls::Session::for_grant(&coordinate, &admitted.runner.manifold)?,
+                tools,
             };
             let first_input = if calls.is_empty() {
                 input.clone()
@@ -513,7 +528,7 @@ impl PluginExecutor {
                 wall_ms: admitted.budget.wall_clock.as_millis().try_into().unwrap_or(u64::MAX),
                 max_output_bytes: admitted.budget.max_output_bytes as u64,
             });
-            receipt.authority = Some(authority(&manifold, calls.model.is_some(), calls.http.as_ref())?);
+            receipt.authority = Some(authority(&manifold, calls.model.is_some(), calls.http.as_ref(), calls.tools.is_some())?);
             receipt.verdict = PluginExecutionVerdict::ExecutionError;
             let outcome = drive_with_calls(
                 &coordinate,
@@ -620,7 +635,7 @@ pub async fn call_runner(
     budget: PluginBudget,
     bound: Option<BoundDir>,
 ) -> Result<PluginOutcome> {
-    drive(coordinate, runner, None, input, budget, bound).await
+    drive(coordinate, runner, None, input, budget, bound, None).await
 }
 
 async fn drive(
@@ -630,10 +645,12 @@ async fn drive(
     input: serde_json::Value,
     budget: PluginBudget,
     bound: Option<BoundDir>,
+    tools: Option<super::tool_calls::Session>,
 ) -> Result<PluginOutcome> {
     let calls = HostCalls {
         model,
         http: http_calls::Session::for_grant(coordinate, &runner.manifold)?,
+        tools,
     };
     drive_with_calls(coordinate, runner, calls, input, budget, bound).await
 }

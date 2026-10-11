@@ -78,6 +78,7 @@ impl ToolCallLifecycle {
         self.cancel_cause = current.cancel_cause;
         self.await_mode = current.await_mode;
         self.spawned_by_tool_call_doc_id = current.spawned_by_tool_call_doc_id;
+        self.plugin_effect = current.plugin_effect;
         Ok(())
     }
 
@@ -114,6 +115,7 @@ impl ToolCallLifecycle {
         self.cancel_cause = current.cancel_cause;
         self.await_mode = current.await_mode;
         self.spawned_by_tool_call_doc_id = current.spawned_by_tool_call_doc_id;
+        self.plugin_effect = current.plugin_effect;
         Ok(())
     }
 
