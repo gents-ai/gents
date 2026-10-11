@@ -2992,6 +2992,7 @@ pub(crate) fn lean_session_input_edit_cases() -> &'static [LeanSessionInputEditC
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanSessionInputEditCase {
     pub(crate) name: String,
+    pub(crate) initial: LeanSessionInputEditState,
     pub(crate) history: Vec<LeanSessionInputEditStep>,
     pub(crate) before: LeanSessionInputEditState,
     pub(crate) now: u64,
