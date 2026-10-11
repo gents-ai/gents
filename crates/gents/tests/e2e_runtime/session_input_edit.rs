@@ -193,129 +193,32 @@ async fn generated_remote_edits_replicate_signed_effect_and_receipt() {
         .await
         .unwrap();
     let contract: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
-    let cases = contract["session_input_edit_cases"].as_array().unwrap();
+    // Applied routes come only from the enrollment and pairing owners, so a
+    // withdrawn route is not reproducible here; revocation is.
+    let cases = contract["session_input_edit_cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|case| {
+            case["command"]["has_peer"] == true
+                && case["authority"]["command_identity_unique"] == true
+                && case["authority"]["route_applied"] == true
+                && case["history"].as_array().unwrap().is_empty()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(cases.len(), 2, "remote generated input-edit cases");
+    let remote = RemoteEdit {
+        runtime: &runtime,
+        client: &client,
+        admission,
+        peer: peer.clone(),
+    };
+    let (fresh, revoked): (Vec<_>, Vec<_>) = cases
+        .into_iter()
+        .partition(|case| case["authority"]["enrollment_fresh"] == true);
     let mut prepared = Vec::new();
-    for name in [
-        "remote_applied",
-        "expired_rejected",
-        "stale_queue_rejected",
-        "signature_rejected",
-        "replacement_signature_rejected",
-    ] {
-        let case = cases.iter().find(|case| case["name"] == name).unwrap();
-        let session_id = format!("remote-{name}");
-        let mut session = support::session_document_in_scope(
-            did,
-            &session_id,
-            "general",
-            &chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        );
-        session.requester_did = Some(requester.into());
-        support::create_session_document(&runtime.node, &session).await;
-        let mut original = AgentRequestCreate::base(
-            RequestPurpose::Normal,
-            format!("original-{name}"),
-            did,
-            requester,
-            "general",
-            &session_id,
-            "original pending message",
-            "interactive",
-            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-            admission.clone(),
-        );
-        original.input.queue = Some(RequestQueue {
-            source: QueueSource::User,
-            policy: QueuePolicy::Append,
-            delivery: QueueDelivery::Steer,
-            position: None,
-            key: None,
-            queued_after_request_id: None,
-            interrupted_request_id: None,
-            background_completion_wake_version: None,
-        });
-        gents::sign_agent_request_create(client.node_identity.as_ref(), &mut original)
-            .await
-            .unwrap();
-        let written = ConfigAccess::Local(runtime.node.clone())
-            .write("test.remote_pending", &original.graphql_mutation().unwrap())
-            .await
-            .unwrap();
-        let original_id = gents::graphql::created_doc_id(&written, "AgentRequest").unwrap();
-        wait_row(
-            &client,
-            "AgentRequest",
-            "request_id",
-            &original.request_id,
-            "_docID",
-            "",
-        )
-        .await;
-        let edit = PendingQueueEdit {
-            expected_request_doc_ids: vec![original_id.clone()],
-            selected_request_doc_ids: vec![original_id.clone()],
-            messages: vec![PendingMessageEdit {
-                request_doc_id: original_id.clone(),
-                content: "edited remote message".into(),
-            }],
-        };
-        let replacements = prepare_pending_user_edit(
-            &ConfigAccess::Local(client.node.clone()),
-            client.node_identity.as_ref(),
-            admission.clone(),
-            did,
-            &session_id,
-            requester,
-            &edit,
-        )
-        .await
-        .unwrap();
-        let now = chrono::Utc::now();
-        let mut command = SessionInputEdit {
-            version: SESSION_INPUT_EDIT_VERSION,
-            command_id: format!("edit-{name}"),
-            requester_did: requester.into(),
-            requester_peer_id: Some(peer.clone()),
-            node_did: did.into(),
-            session_id,
-            issued_at: (now - chrono::Duration::seconds(1)).to_rfc3339(),
-            expires_at: (now + chrono::Duration::minutes(5)).to_rfc3339(),
-            edit,
-            replacements,
-            signature: Vec::new(),
-        };
-        match name {
-            "expired_rejected" => {
-                command.issued_at = (now - chrono::Duration::minutes(2)).to_rfc3339();
-                command.expires_at = (now - chrono::Duration::minutes(1)).to_rfc3339();
-            }
-            "stale_queue_rejected" => command.edit.expected_request_doc_ids.clear(),
-            "replacement_signature_rejected" => command.replacements[0].admission.signature[0] ^= 1,
-            _ => {}
-        }
-        command.signature = client
-            .node_identity
-            .sign(&command.signing_payload())
-            .await
-            .unwrap();
-        if name == "signature_rejected" {
-            command.signature[0] ^= 1;
-        }
-        write_command(&client, &command).await;
-        wait_row(
-            &runtime,
-            "AgentSessionInputEdit",
-            "command_id",
-            &command.command_id,
-            "_docID",
-            "",
-        )
-        .await;
-        prepared.push((
-            command,
-            original_id,
-            case["receipt"]["outcome"].as_str().unwrap().to_owned(),
-        ));
+    for case in &fresh {
+        prepared.push(remote.prepare(case).await);
     }
     let edit_cancel = cancel.child_token();
     let edit_task = tokio::spawn(run_session_input_edit_reconciler(
@@ -323,85 +226,17 @@ async fn generated_remote_edits_replicate_signed_effect_and_receipt() {
         runtime.node_identity.clone(),
         edit_cancel.clone(),
     ));
-    for (command, original_id, expected) in &prepared {
-        let observed = wait_row(
-            &client,
-            "AgentSessionInputEdit",
-            "command_id",
-            &command.command_id,
-            "_docID receipt_json",
-            "receipt_json",
-        )
-        .await;
-        let receipt: SessionInputEditReceipt =
-            serde_json::from_str(observed["receipt_json"].as_str().unwrap()).unwrap();
-        receipt.validate_for(command).unwrap();
-        assert!(client
-            .node_identity
-            .verify(did, &receipt.signing_payload(), &receipt.signature)
-            .await
-            .unwrap());
-        assert_eq!(
-            serde_json::to_value(receipt.outcome).unwrap(),
-            expected.as_str()
-        );
-        let old = wait_row(
-            &runtime,
-            "AgentRequest",
-            "_docID",
-            original_id,
-            "content lifecycle_state admission_signature superseded_by_request_doc_id",
-            "",
-        )
-        .await;
-        assert_eq!(old["content"], "original pending message");
-        if receipt.outcome == SessionInputEditOutcome::Applied {
-            assert_eq!(old["lifecycle_state"], "superseded");
-            assert_eq!(
-                old["superseded_by_request_doc_id"],
-                receipt.request_doc_ids[0]
-            );
-            let replacement = wait_row(
-                &client,
-                "AgentRequest",
-                "request_id",
-                &receipt.request_ids[0],
-                "content",
-                "",
-            )
-            .await;
-            assert_eq!(replacement["content"], "edited remote message");
-        } else {
-            assert_eq!(old["lifecycle_state"], "pending");
-        }
+    for (case, modeled) in fresh.iter().zip(&prepared) {
+        remote.assert_modeled(case, modeled, &client).await;
     }
     edit_cancel.cancel();
     edit_task.await.unwrap().unwrap();
-    // The command crosses the live route before revocation. Application must
+    // The commands cross the live route before revocation. Application must
     // re-read the current signed enrollment instead of trusting transport arrival.
-    let (template, original_id, _) = prepared
-        .iter()
-        .find(|(command, _, _)| command.command_id == "edit-expired_rejected")
-        .unwrap();
-    let mut revoked = template.clone();
-    revoked.command_id = "edit-after-revocation".into();
-    revoked.issued_at = (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
-    revoked.expires_at = (chrono::Utc::now() + chrono::Duration::minutes(5)).to_rfc3339();
-    revoked.signature = client
-        .node_identity
-        .sign(&revoked.signing_payload())
-        .await
-        .unwrap();
-    write_command(&client, &revoked).await;
-    wait_row(
-        &runtime,
-        "AgentSessionInputEdit",
-        "command_id",
-        &revoked.command_id,
-        "_docID",
-        "",
-    )
-    .await;
+    let mut prepared = Vec::new();
+    for case in &revoked {
+        prepared.push(remote.prepare(case).await);
+    }
     gents::agent::p2p_reconcile::GraphqlEnrollmentStore::new(
         runtime.node.clone(),
         runtime.node_identity.clone(),
@@ -419,46 +254,310 @@ async fn generated_remote_edits_replicate_signed_effect_and_receipt() {
         runtime.node_identity.clone(),
         cancel.clone(),
     ));
-    let observed = wait_row(
-        &runtime,
-        "AgentSessionInputEdit",
-        "command_id",
-        &revoked.command_id,
-        "receipt_json",
-        "receipt_json",
-    )
-    .await;
-    let receipt: SessionInputEditReceipt =
-        serde_json::from_str(observed["receipt_json"].as_str().unwrap()).unwrap();
-    receipt.validate_for(&revoked).unwrap();
-    assert!(client
-        .node_identity
-        .verify(did, &receipt.signing_payload(), &receipt.signature)
-        .await
-        .unwrap());
-    let model = cases
-        .iter()
-        .find(|case| case["name"] == "revoked_enrollment_rejected")
-        .unwrap();
-    assert_eq!(
-        serde_json::to_value(receipt.outcome).unwrap(),
-        model["receipt"]["outcome"]
-    );
-    assert_eq!(
-        wait_row(
-            &runtime,
-            "AgentRequest",
-            "_docID",
-            original_id,
-            "lifecycle_state",
-            ""
-        )
-        .await["lifecycle_state"],
-        "pending"
-    );
+    // Revocation also withdraws the return route; observe the receipt at its writer.
+    for (case, modeled) in revoked.iter().zip(&prepared) {
+        remote.assert_modeled(case, modeled, &runtime).await;
+    }
     cancel.cancel();
     for task in [revoked_task, pairing_task, enrollment_task] {
         task.await.unwrap().unwrap();
+    }
+}
+
+struct RemoteEdit<'a> {
+    runtime: &'a TestDb,
+    client: &'a TestDb,
+    admission: AgentRequestAdmissionRecord,
+    peer: String,
+}
+
+struct ModeledEdit {
+    session_id: String,
+    command: SessionInputEdit,
+    request_ids: std::collections::HashMap<u64, String>,
+}
+
+fn model_ids(values: &serde_json::Value) -> Vec<u64> {
+    values
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| value.as_u64().unwrap())
+        .collect()
+}
+
+impl RemoteEdit<'_> {
+    /// Seeds the modeled initial queue on the runtime and replicates the client's
+    /// signed intent for the modeled command and authority.
+    async fn prepare(&self, case: &serde_json::Value) -> ModeledEdit {
+        let did = self.runtime.node_identity.did();
+        let requester = self.client.node_identity.did();
+        let name = case["name"].as_str().unwrap();
+        let session_id = format!("remote-{name}");
+        let mut session = support::session_document_in_scope(
+            did,
+            &session_id,
+            "general",
+            &chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        );
+        session.requester_did = Some(requester.into());
+        support::create_session_document(&self.runtime.node, &session).await;
+        let mut request_ids = std::collections::HashMap::new();
+        let mut doc_ids = std::collections::HashMap::new();
+        for entry in case["initial"]["queue"]["pending"].as_array().unwrap() {
+            let id = entry["request_id"].as_u64().unwrap();
+            assert_eq!(
+                entry["requester_id"], 1,
+                "requester 1 is the enrolled client"
+            );
+            assert_eq!(entry["fresh"], true);
+            let mut original = AgentRequestCreate::base(
+                RequestPurpose::Normal,
+                format!("{name}-{id}"),
+                did,
+                requester,
+                "general",
+                &session_id,
+                format!("message {id}"),
+                entry["execution_origin"].as_str().unwrap(),
+                chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                self.admission.clone(),
+            );
+            original.input.queue = Some(RequestQueue {
+                source: serde_json::from_value(entry["source"].clone()).unwrap(),
+                policy: serde_json::from_value(entry["policy"].clone()).unwrap(),
+                delivery: serde_json::from_value(entry["delivery"].clone()).unwrap(),
+                position: None,
+                key: None,
+                queued_after_request_id: entry["queued_after"].as_u64().map(|id| id.to_string()),
+                interrupted_request_id: None,
+                background_completion_wake_version: None,
+            });
+            gents::sign_agent_request_create(self.client.node_identity.as_ref(), &mut original)
+                .await
+                .unwrap();
+            let written = ConfigAccess::Local(self.runtime.node.clone())
+                .write("test.remote_pending", &original.graphql_mutation().unwrap())
+                .await
+                .unwrap();
+            doc_ids.insert(
+                id,
+                gents::graphql::created_doc_id(&written, "AgentRequest").unwrap(),
+            );
+            request_ids.insert(id, original.request_id.clone());
+            wait_row(
+                self.client,
+                "AgentRequest",
+                "request_id",
+                &original.request_id,
+                "_docID",
+                "",
+            )
+            .await;
+        }
+        let model = &case["command"];
+        let authority = &case["authority"];
+        let (offset, count) = (
+            model["offset"].as_u64().unwrap() as usize,
+            model["count"].as_u64().unwrap() as usize,
+        );
+        let pending = case["initial"]["queue"]["pending"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| entry["request_id"].as_u64().unwrap())
+            .collect::<Vec<_>>();
+        let selected = pending.iter().skip(offset).take(count).collect::<Vec<_>>();
+        let replacements = model["replacements"].as_array().unwrap();
+        let mut edit = PendingQueueEdit {
+            expected_request_doc_ids: pending.iter().map(|id| doc_ids[id].clone()).collect(),
+            selected_request_doc_ids: selected.iter().map(|id| doc_ids[id].clone()).collect(),
+            messages: replacements
+                .iter()
+                .zip(&selected)
+                .map(|(replacement, id)| PendingMessageEdit {
+                    request_doc_id: doc_ids[id].clone(),
+                    content: format!("message {}", replacement["request_id"]),
+                })
+                .collect(),
+        };
+        let mut native = prepare_pending_user_edit(
+            &ConfigAccess::Local(self.client.node.clone()),
+            self.client.node_identity.as_ref(),
+            self.admission.clone(),
+            did,
+            &session_id,
+            requester,
+            &edit,
+        )
+        .await
+        .unwrap();
+        // Presigning requires the observed queue; the signed intent carries the modeled one.
+        edit.expected_request_doc_ids = model_ids(&model["expected"])
+            .iter()
+            .map(|id| doc_ids[id].clone())
+            .collect();
+        if authority["replacements_valid"] == false {
+            native[0].admission.signature[0] ^= 1;
+        }
+        for (replacement, create) in replacements.iter().zip(&native) {
+            request_ids.insert(
+                replacement["request_id"].as_u64().unwrap(),
+                create.request_id.clone(),
+            );
+        }
+        let now = case["now"].as_u64().unwrap();
+        let instant = |model: &serde_json::Value| {
+            let model = model.as_u64().unwrap();
+            let offset = chrono::Duration::seconds(model as i64);
+            if model <= now {
+                chrono::Utc::now() - chrono::Duration::hours(1) + offset
+            } else {
+                chrono::Utc::now() + chrono::Duration::hours(1) + offset
+            }
+        };
+        let mut command = SessionInputEdit {
+            version: SESSION_INPUT_EDIT_VERSION,
+            command_id: format!("edit-{name}"),
+            requester_did: requester.into(),
+            requester_peer_id: Some(self.peer.clone()),
+            node_did: did.into(),
+            session_id: if authority["session_owned"] == true {
+                session_id.clone()
+            } else {
+                format!("{session_id}-foreign")
+            },
+            issued_at: instant(&model["issued_at"]).to_rfc3339(),
+            expires_at: instant(&model["expires_at"]).to_rfc3339(),
+            edit,
+            replacements: native,
+            signature: Vec::new(),
+        };
+        command.signature = self
+            .client
+            .node_identity
+            .sign(&command.signing_payload())
+            .await
+            .unwrap();
+        if authority["signature_valid"] == false {
+            command.signature[0] ^= 1;
+        }
+        write_command(self.client, &command).await;
+        wait_row(
+            self.runtime,
+            "AgentSessionInputEdit",
+            "command_id",
+            &command.command_id,
+            "_docID",
+            "",
+        )
+        .await;
+        ModeledEdit {
+            session_id,
+            command,
+            request_ids,
+        }
+    }
+
+    /// Compares the observed receipt and the runtime queue with the modeled result.
+    async fn assert_modeled(
+        &self,
+        case: &serde_json::Value,
+        modeled: &ModeledEdit,
+        observer: &TestDb,
+    ) {
+        let name = case["name"].as_str().unwrap();
+        let command = &modeled.command;
+        let observed = wait_row(
+            observer,
+            "AgentSessionInputEdit",
+            "command_id",
+            &command.command_id,
+            "_docID receipt_json",
+            "receipt_json",
+        )
+        .await;
+        let receipt: SessionInputEditReceipt =
+            serde_json::from_str(observed["receipt_json"].as_str().unwrap()).unwrap();
+        receipt.validate_for(command).unwrap();
+        assert!(self
+            .client
+            .node_identity
+            .verify(
+                self.runtime.node_identity.did(),
+                &receipt.signing_payload(),
+                &receipt.signature
+            )
+            .await
+            .unwrap());
+        let expected = &case["receipt"];
+        assert_eq!(
+            serde_json::to_value(receipt.outcome).unwrap(),
+            expected["outcome"],
+            "{name}: outcome"
+        );
+        let mapped = |ids: Vec<u64>| {
+            ids.iter()
+                .map(|id| modeled.request_ids[id].clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            receipt.request_ids,
+            mapped(model_ids(&expected["request_ids"])),
+            "{name}: receipt request IDs"
+        );
+        let after = &case["after"]["queue"];
+        let pending = gents::lifecycle::pending_user_queue(
+            &ConfigAccess::Local(self.runtime.node.clone()),
+            self.runtime.node_identity.did(),
+            &modeled.session_id,
+            &command.requester_did,
+        )
+        .await
+        .unwrap();
+        let modeled_pending = after["folding"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .chain(after["pending"].as_array().unwrap())
+            .map(|entry| entry["request_id"].as_u64().unwrap())
+            .collect();
+        assert_eq!(
+            pending
+                .entries
+                .iter()
+                .map(|entry| entry.request_id.clone())
+                .collect::<Vec<_>>(),
+            mapped(modeled_pending),
+            "{name}: pending order"
+        );
+        let requests = rows(
+            self.runtime,
+            "AgentRequest",
+            &format!(
+                "{{ session_id: {{ _eq: \"{}\" }} }}",
+                escape_graphql_string(&modeled.session_id)
+            ),
+            "request_id content lifecycle_state",
+        )
+        .await;
+        let terminal = mapped(model_ids(&after["terminal"]));
+        for row in &requests {
+            let request_id = row["request_id"].as_str().unwrap();
+            assert_eq!(
+                row["lifecycle_state"] != "pending",
+                terminal.iter().any(|id| id == request_id),
+                "{name}: terminal requests"
+            );
+        }
+        for id in &receipt.request_ids {
+            let replacement =
+                wait_row(self.client, "AgentRequest", "request_id", id, "content", "").await;
+            assert!(replacement["content"]
+                .as_str()
+                .unwrap()
+                .starts_with("message "));
+        }
     }
 }
 
@@ -605,8 +704,27 @@ async fn persisted_edit_survives_database_reopen_and_receipt_replay_is_idempoten
     db.simulate_process_crash().await.unwrap();
     let cancel = CancellationToken::new();
     let _stop = Stop(cancel.clone());
+    // A distinct intent signed against the superseded queue, with its own replacements.
     let mut stale = command.clone();
     stale.command_id = "edit-after-reopen-stale".into();
+    stale.replacements = prepare_pending_user_edit(
+        &ConfigAccess::Local(db.node.clone()),
+        db.node_identity.as_ref(),
+        AgentRequestAdmissionRecord::local_self(&did),
+        &did,
+        session,
+        &did,
+        &PendingQueueEdit {
+            expected_request_doc_ids: receipt.request_doc_ids.clone(),
+            selected_request_doc_ids: receipt.request_doc_ids.clone(),
+            messages: vec![PendingMessageEdit {
+                request_doc_id: receipt.request_doc_ids[0].clone(),
+                content: "stale replacement".into(),
+            }],
+        },
+    )
+    .await
+    .unwrap();
     stale.signature = db
         .node_identity
         .sign(&stale.signing_payload())
@@ -1044,18 +1162,22 @@ async fn conflicting_offline_edits_preserve_queue_and_prior_receipt(
         }
     }
     let model: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
-    let case_name = if same_intent {
-        "same_intent_physical_collision"
-    } else if late_twin {
-        "cross_session_collision_preserves_prior_receipt"
-    } else {
-        "simultaneous_command_identity_collision"
-    };
+    // Identical and differing signed intents are both distinct physical documents;
+    // the model abstracts either as an observed command-identity collision. A late
+    // twin follows a prior receipt for the same command ID in another session.
     let case = model["session_input_edit_cases"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|case| case["name"] == case_name)
+        .find(|case| {
+            let history = case["history"].as_array().unwrap();
+            case["authority"]["command_identity_unique"] == false
+                && if late_twin {
+                    history.iter().any(|step| step["kind"] == "other_session")
+                } else {
+                    history.is_empty()
+                }
+        })
         .unwrap();
     assert_eq!(case["authority"]["command_identity_unique"], false);
     assert_eq!(case["before"], case["after"]);
