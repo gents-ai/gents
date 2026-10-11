@@ -16,10 +16,10 @@ use crate::UpdateSubscriptionSource;
 
 mod claim;
 mod documents;
+mod planner;
 pub(crate) mod plugin;
 mod run;
 mod scan;
-mod wasm;
 
 #[cfg(test)]
 mod tests;

@@ -165,6 +165,7 @@ pub use query::{
     load_tool_call_arguments, load_tool_call_presentation, load_tool_call_result,
     render_tool_result, CanonicalToolCallPresentation,
 };
+mod plugin_receipt;
 mod recovery;
 pub(crate) mod runtime;
 mod transition;
@@ -224,6 +225,7 @@ pub struct ToolCallLifecycle {
     accepted_header_doc_id: Option<String>,
     arguments: Option<gents_protocol::output::PayloadRef>,
     execution_generation: Option<String>,
+    plugin_receipt: Option<gents_protocol::plugin::PluginExecutionReceipt>,
     /// A native background execution is admitted by an already accepted
     /// `spawn_process` call.  It is deliberately not an `AcceptedToolCall` of
     /// its own: this is the immutable physical provenance used for dispatch,
@@ -293,6 +295,7 @@ impl ToolCallLifecycle {
             accepted_header_doc_id: Some(accepted.accepted_header_doc_id),
             arguments: Some(accepted.arguments),
             execution_generation: Some(accepted.execution_generation),
+            plugin_receipt: None,
             spawned_by_tool_call_doc_id: None,
             doc_id: Some(accepted.tool_call_doc_id),
             deadline_at,
@@ -303,6 +306,22 @@ impl ToolCallLifecycle {
             selected_tool_identity: None,
             await_mode,
         })
+    }
+
+    pub(crate) fn stage_plugin_receipt(
+        &mut self,
+        receipt: Option<gents_protocol::plugin::PluginExecutionReceipt>,
+    ) -> anyhow::Result<()> {
+        if let Some(receipt) = receipt {
+            anyhow::ensure!(
+                self.plugin_receipt
+                    .as_ref()
+                    .is_none_or(|existing| existing == &receipt),
+                "plugin execution receipt conflicts with staged receipt"
+            );
+            self.plugin_receipt = Some(receipt);
+        }
+        Ok(())
     }
 
     /// Exact DefraDB document identifier after the first persisted transition.
@@ -339,6 +358,7 @@ impl ToolCallLifecycle {
             accepted_header_doc_id: None,
             arguments: None,
             execution_generation: None,
+            plugin_receipt: None,
             spawned_by_tool_call_doc_id: None,
             doc_id: None,
             deadline_at,
@@ -410,6 +430,7 @@ impl ToolCallLifecycle {
             accepted_header_doc_id: None,
             arguments: None,
             execution_generation: None,
+            plugin_receipt: None,
             spawned_by_tool_call_doc_id: None,
             doc_id: None,
             deadline_at,

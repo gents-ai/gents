@@ -742,3 +742,173 @@ mod bound {
         );
     }
 }
+
+#[tokio::test]
+async fn generated_plugin_invocation_retry_revalidates_current_installation() {
+    let cases = &crate::lean_vocab_test::lean_contract_snapshot().plugin_resource_cases;
+    for case in cases["invocation"].as_array().unwrap() {
+        let (home, original) = installed_plugin(ECHO_WAT, Some(crate::pack::BindAccess::Read));
+        let mut executor = PluginExecutor::new(Some(home.path().to_owned()));
+        executor
+            .call(&original, serde_json::json!({"attempt":"first"}))
+            .await
+            .unwrap();
+        if case["restart"] == true {
+            executor = PluginExecutor::new(Some(home.path().to_owned()));
+        }
+        let mut current = original.clone();
+        if case["current"].is_null() {
+            store::remove_record(home.path(), &original.namespace, &original.name).unwrap();
+        } else {
+            let snapshot = &case["current"];
+            match snapshot["digest"].as_str().unwrap() {
+                "artifact" => {}
+                "replacement" => current.digest = format!("sha256:{}", "0".repeat(64)),
+                other => panic!("unknown modeled artifact {other}"),
+            }
+            match snapshot["grant"].as_str().unwrap() {
+                "sealed" => {}
+                "changed" => current.granted = Some(crate::plugin::Manifold::sealed()),
+                other => panic!("unknown modeled grant {other}"),
+            }
+            match snapshot["declaration"].as_str().unwrap() {
+                "original" => {}
+                "changed" => current.declaration.description.push_str(" updated"),
+                other => panic!("unknown modeled declaration {other}"),
+            }
+            match snapshot["binding"].as_str().unwrap() {
+                "original" => {}
+                "changed" => current.instructions = Some("updated instructions".into()),
+                other => panic!("unknown modeled binding {other}"),
+            }
+            store::write_record(home.path(), &current).unwrap();
+        }
+        let reusable = !case["current"].is_null() && executor.cached_admission_matches(&current);
+        assert_eq!(reusable, case["reusable"].as_bool().unwrap(), "{case}");
+        let input = serde_json::json!({"attempt":"retry"});
+        let result = if case["bound"] == true {
+            let directory = tempfile::tempdir().unwrap();
+            let bound = crate::plugin::BoundDir::new(directory.path(), None).unwrap();
+            executor.call_bound(&original, input.clone(), bound).await
+        } else {
+            executor.call(&original, input.clone()).await
+        };
+        assert_eq!(
+            result.is_ok(),
+            case["admitted"].as_bool().unwrap(),
+            "{case}: {result:?}"
+        );
+        if let Ok(call) = result {
+            assert_eq!(call.outcome.output["attempt"], input["attempt"], "{case}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn execution_receipt_hashes_canonical_values_and_keeps_tool_output_native() {
+    use gents_protocol::plugin::{PluginExecutionVerdict, PluginFilesystemGrant};
+    use sha2::{Digest, Sha256};
+    let (home, record) = installed_echo();
+    let executor = Arc::new(PluginExecutor::new(Some(home.path().to_owned())));
+    let input = serde_json::json!({"z":2,"a":1});
+    let (call, receipt) = executor
+        .call_data_bound_with_receipt(&record, input.clone(), None)
+        .await;
+    assert_eq!(call.unwrap().outcome.output, input);
+    let digest = format!("sha256:{:x}", Sha256::digest(br#"{"a":1,"z":2}"#));
+    assert_eq!(receipt.input_digest, digest);
+    assert_eq!(receipt.output_digest.as_deref(), Some(digest.as_str()));
+    assert_eq!(receipt.artifact_digest, record.digest);
+    assert_eq!(receipt.verdict, PluginExecutionVerdict::Success);
+    let authority = receipt.authority.unwrap();
+    assert_eq!(authority.filesystem, PluginFilesystemGrant::None);
+    assert_eq!(authority.host_http, None);
+    assert!(!authority.host_model);
+    assert!(receipt.limits.unwrap().memory_bytes > 0);
+
+    let tool = PluginTool::resolve(executor, &tool_ref(None), None).unwrap();
+    let dispatched = tool.call_with_receipt(input.to_string()).await;
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&dispatched.result.unwrap()).unwrap(),
+        input
+    );
+    assert_eq!(
+        dispatched.plugin_receipt.unwrap().output_digest,
+        Some(digest)
+    );
+}
+
+#[tokio::test]
+async fn execution_receipts_distinguish_refusal_bad_output_and_trap() {
+    use gents_protocol::plugin::PluginExecutionVerdict;
+    for (wat, verdict) in [
+        (
+            crate::plugin::tests::constant_output_wat(b"invalid JSON"),
+            PluginExecutionVerdict::BadOutput,
+        ),
+        (
+            r#"(module (memory (export "memory") 1) (func (export "_start") unreachable))"#.into(),
+            PluginExecutionVerdict::ExecutionError,
+        ),
+    ] {
+        let (home, record) = installed_plugin(&wat, None);
+        let executor = PluginExecutor::new(Some(home.path().to_owned()));
+        let (_, receipt) = executor
+            .call_data_bound_with_receipt(&record, serde_json::json!({}), None)
+            .await;
+        assert_eq!(receipt.verdict, verdict);
+        assert!(receipt.authority.is_some());
+        assert!(receipt.limits.is_some());
+        assert_eq!(receipt.output_digest, None);
+        store::remove_record(home.path(), &record.namespace, &record.name).unwrap();
+        let (result, receipt) = executor
+            .call_data_bound_with_receipt(&record, serde_json::json!({}), None)
+            .await;
+        assert!(result.is_err());
+        assert_eq!(receipt.verdict, PluginExecutionVerdict::AdmissionRefused);
+        assert_eq!(receipt.authority, None);
+        assert_eq!(receipt.limits, None);
+        assert_eq!(receipt.output_digest, None);
+    }
+}
+
+#[tokio::test]
+async fn receipt_hashes_host_prepared_input_and_actual_http_grant() {
+    use afterburner_core::manifold::NetAccess;
+    use sha2::{Digest, Sha256};
+    for (hosts, timeout) in [
+        (vec![], None),
+        (vec!["api.example.com".to_owned()], None),
+        (vec!["api.example.com".to_owned()], Some(60_000)),
+        (vec!["api.example.com".to_owned()], Some(1_000)),
+    ] {
+        let (home, mut record) = installed_echo();
+        let mut granted = crate::plugin::Manifold::sealed();
+        granted.net = NetAccess::OutboundHttp(Some(hosts.clone()));
+        granted.http_timeout_ms = timeout;
+        record.declaration.manifold = Some(serde_json::to_value(&granted).unwrap());
+        record.granted = Some(granted);
+        store::write_record(home.path(), &record).unwrap();
+        let input = serde_json::json!({"state":"caller","http_results":{"forged":true},"value":1});
+        let call = PluginExecutor::new(Some(home.path().to_owned()))
+            .call(&record, input.clone())
+            .await
+            .unwrap();
+        let effective = if hosts.is_empty() {
+            input
+        } else {
+            serde_json::json!({"http_calls":true,"value":1})
+        };
+        let canonical = crate::workspace::canonical_json_string(&effective).unwrap();
+        assert_eq!(
+            call.receipt.input_digest,
+            format!("sha256:{:x}", Sha256::digest(canonical.as_bytes()))
+        );
+        assert_eq!(call.outcome.output, effective);
+        let http = call.receipt.authority.unwrap().host_http;
+        assert_eq!(http.is_some(), !hosts.is_empty());
+        if let Some(http) = http {
+            assert_eq!(http.timeout_ms, Some(timeout.unwrap_or(30_000).min(30_000)));
+        }
+    }
+}

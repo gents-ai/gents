@@ -291,6 +291,7 @@ impl ToolCallLifecycle {
                 None
             },
             execution_generation: Some(accepted.execution_generation),
+            plugin_receipt: None,
             spawned_by_tool_call_doc_id,
             doc_id: Some(row.doc_id),
             deadline_at,

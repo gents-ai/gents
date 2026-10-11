@@ -1,5 +1,7 @@
 import Proofs.ToolPolicy.Configuration
 import Proofs.ToolPolicy.PluginNetwork
+import Proofs.ToolPolicy.PluginInvocation
+import Proofs.Conformance.PluginReceipt
 import Lean
 
 namespace Conformance.PluginResources
@@ -115,7 +117,32 @@ private def callAccessJson : Json := toJson <| [PluginAccess.read, .readWrite].f
     ("call", toJson (pluginCallAccess declared writeFields setsWriteField).spelling),
     ("admitted", toJson (pluginCallAdmitted declared granted writeFields setsWriteField))]
 
+private def invocationJson : Json :=
+  let original : PluginInvocation.Record := ⟨"artifact", "sealed", "original", "original"⟩
+  toJson <| ["same", "removed", "replaced", "grant", "declaration", "binding"].flatMap fun change =>
+    [false, true].flatMap fun restart =>
+    [false, true].map fun bound =>
+      let current : Option PluginInvocation.Record := match change with
+        | "removed" => none
+        | "replaced" => some { original with digest := "replacement" }
+        | "grant" => some { original with grant := "changed" }
+        | "declaration" => some { original with declaration := "changed" }
+        | "binding" => some { original with binding := "changed" }
+        | _ => some original
+      Json.mkObj [
+        ("current", match current with
+          | none => Json.null
+          | some record => Json.mkObj [("digest", toJson record.digest),
+              ("grant", toJson record.grant), ("declaration", toJson record.declaration),
+              ("binding", toJson record.binding)]),
+        ("restart", toJson restart), ("bound", toJson bound),
+        ("admitted", toJson (PluginInvocation.admitted current original.digest
+          (if bound then some original else none))),
+        ("reusable", toJson (!restart && match current with
+          | none => false
+          | some current => PluginInvocation.reusable original current))]
+
 def casesJson : String := (Json.mkObj [("consent", consentJson), ("budgets", budgetsJson),
   ("model_slots", modelSlotsJson), ("network", networkJson),
-  ("call_access", callAccessJson)]).compress
+  ("call_access", callAccessJson), ("invocation", invocationJson), ("receipt", Conformance.PluginReceipt.casesJson)]).compress
 end Conformance.PluginResources

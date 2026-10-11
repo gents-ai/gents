@@ -43,7 +43,15 @@ pub async fn dispatch_tool(
     };
 
     let Some(scope) = current_tool_runtime_context() else {
-        return ToolOutcome::from_dispatch(name, tool.call(args).await);
+        return ToolOutcome::from_dispatch(
+            name,
+            crate::tool_call_lifecycle::runtime::dispatch_with_receipt(
+                tool.as_ref(),
+                args,
+                live_output,
+            )
+            .await,
+        );
     };
 
     if deadline_remaining(scope.deadline_at).is_some_and(|remaining| remaining.is_zero()) {
@@ -60,19 +68,21 @@ pub async fn dispatch_tool(
         }
     });
 
+    let receipt_writer = live_output.clone();
     let call = scope_request_tool_execution_with_session(
         scope.deadline_at,
         scope.cancellation_token.clone(),
         scope.workspace_cwd.clone(),
         live_output,
         session_id.or(scope.session_id.clone()),
-        tool.call(args),
+        tool.call_with_receipt(args),
     );
     tokio::select! {
         biased;
         _ = scope.cancellation_token.cancelled() => ToolOutcome::Cancelled,
         _ = &mut deadline => ToolOutcome::TimedOut { deadline_at: scope.deadline_at },
-        result = call => {
+        dispatched = call => {
+            let result = crate::tool_call_lifecycle::runtime::record_dispatch_receipt(dispatched, receipt_writer).await;
             if deadline_remaining(scope.deadline_at).is_some_and(|remaining| remaining.is_zero()) {
                 ToolOutcome::TimedOut { deadline_at: scope.deadline_at }
             } else {

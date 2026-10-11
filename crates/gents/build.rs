@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const FIXTURE_PACKAGE: &str = "gents-callback-fixture-create-workspace";
-const FIXTURE_ARTIFACT: &str = "gents_callback_fixture_create_workspace.wasm";
+const FIXTURE_ARTIFACT: &str = "gents-callback-fixture-create-workspace.wasm";
 const FIXTURE_ENV: &str = "GENTS_CALLBACK_FIXTURE_CREATE_WORKSPACE_WASM_PATH";
 
 fn main() {
@@ -25,6 +25,10 @@ fn main() {
     println!(
         "cargo:rerun-if-changed={}",
         fixture_dir.join("Cargo.toml").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        fixture_dir.join("src").join("main.rs").display()
     );
     println!("cargo:rerun-if-env-changed=GENTS_SKIP_CALLBACK_WASM_BUILD");
 
@@ -50,8 +54,10 @@ fn build_fixture(workspace_root: &Path, pkg: &str, artifact_name: &str, env_var:
             "build",
             "-p",
             pkg,
+            "--bin",
+            pkg,
             "--target",
-            "wasm32-unknown-unknown",
+            "wasm32-wasip1",
             "--config",
             "profile.dev.panic=\"abort\"",
             "--target-dir",
@@ -65,7 +71,7 @@ fn build_fixture(workspace_root: &Path, pkg: &str, artifact_name: &str, env_var:
         Ok(s) => {
             panic!(
                 "callback fixture wasm build for {pkg} failed with {s}; install \
-                 wasm32-unknown-unknown (`rustup target add wasm32-unknown-unknown`) \
+                 wasm32-wasip1 (`rustup target add wasm32-wasip1`) \
                  or set GENTS_SKIP_CALLBACK_WASM_BUILD=1"
             );
         }
@@ -73,42 +79,16 @@ fn build_fixture(workspace_root: &Path, pkg: &str, artifact_name: &str, env_var:
     }
 
     let artifact = wasm_target_dir
-        .join("wasm32-unknown-unknown")
+        .join("wasm32-wasip1")
         .join("debug")
         .join(artifact_name);
-    let alt = wasm_target_dir
-        .join("wasm32-unknown-unknown")
-        .join("debug")
-        .join(format!("lib{artifact_name}"));
-    let pkg_alt = wasm_target_dir
-        .join("wasm32-unknown-unknown")
-        .join("debug")
-        .join(format!("{}.wasm", pkg.replace('-', "_")));
+    assert!(
+        artifact.is_file(),
+        "expected callback artifact at {}",
+        artifact.display()
+    );
 
-    let path = if artifact.exists() {
-        artifact
-    } else if alt.exists() {
-        alt
-    } else if pkg_alt.exists() {
-        pkg_alt
-    } else {
-        let dir = wasm_target_dir.join("wasm32-unknown-unknown").join("debug");
-        let listing = std::fs::read_dir(&dir)
-            .map(|rd| {
-                rd.filter_map(|e| e.ok().map(|e| e.file_name().to_string_lossy().into_owned()))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            })
-            .unwrap_or_else(|_| "<unreadable>".into());
-        panic!(
-            "expected WASM artifact at {}, {}, or {}, directory contains: [{listing}]",
-            artifact.display(),
-            alt.display(),
-            pkg_alt.display()
-        );
-    };
-
-    println!("cargo:rustc-env={}={}", env_var, path.display());
+    println!("cargo:rustc-env={}={}", env_var, artifact.display());
 }
 
 fn workspace_root() -> PathBuf {

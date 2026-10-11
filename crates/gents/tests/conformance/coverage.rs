@@ -1809,6 +1809,15 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "plugin_resource_cases".into(),
         "PluginCallAccessCases".into(),
     ));
+    for (family, domain) in [
+        ("invocation", "PluginInvocationCases"),
+        ("receipt", "PluginReceiptCases"),
+    ] {
+        assert!(snapshot.plugin_resource_cases[family]
+            .as_array()
+            .is_some_and(|rows| !rows.is_empty()));
+        emitted.insert(("plugin_resource_cases".into(), domain.into()));
+    }
     assert!(snapshot.configuration_scope_cases["cases"]
         .as_array()
         .is_some_and(|rows| !rows.is_empty()));

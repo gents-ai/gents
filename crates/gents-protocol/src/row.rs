@@ -340,6 +340,8 @@ pub struct AgentToolCallRow {
     #[serde(default)]
     pub selected_tool_name: Option<String>,
     #[serde(default)]
+    pub plugin_execution_receipt: Option<crate::plugin::PluginExecutionReceipt>,
+    #[serde(default)]
     pub tool_failure_class: Option<String>,
     #[serde(default)]
     pub denial_reason: Option<String>,
@@ -649,5 +651,45 @@ mod tests {
         }"#;
         let row: ToolServiceRegistryRow = serde_json::from_str(json).expect("parse");
         assert!(!row.send_node_did);
+    }
+}
+
+#[cfg(test)]
+mod plugin_receipt_tests {
+    use super::AgentToolCallRow;
+    use crate::plugin::{PluginExecutionReceipt, PluginExecutionVerdict};
+    use serde_json::json;
+
+    #[test]
+    fn tool_row_decodes_optional_receipt_from_graphql_json() {
+        let receipt = PluginExecutionReceipt {
+            coordinate: "team/plugin".into(),
+            artifact_digest: "sha256:artifact".into(),
+            input_digest: "sha256:input".into(),
+            output_digest: None,
+            authority: None,
+            limits: None,
+            verdict: PluginExecutionVerdict::AdmissionRefused,
+        };
+        let value = json!({"tool_call_key":"tool-1", "plugin_execution_receipt":receipt});
+        let row: AgentToolCallRow = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(row.plugin_execution_receipt, Some(receipt));
+        assert_eq!(
+            serde_json::to_value(row).unwrap()["plugin_execution_receipt"],
+            value["plugin_execution_receipt"]
+        );
+        for value in [
+            json!({"tool_call_key":"tool-1"}),
+            json!({"tool_call_key":"tool-1", "plugin_execution_receipt":null}),
+        ] {
+            assert!(serde_json::from_value::<AgentToolCallRow>(value)
+                .unwrap()
+                .plugin_execution_receipt
+                .is_none());
+        }
+        assert!(serde_json::from_value::<AgentToolCallRow>(
+            json!({"tool_call_key":"tool-1", "plugin_execution_receipt":"invalid"})
+        )
+        .is_err());
     }
 }

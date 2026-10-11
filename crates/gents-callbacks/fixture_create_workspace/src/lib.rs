@@ -1,18 +1,4 @@
-//! Fixture callback planner: emit a `create_workspace` ActionPlan.
-//!
-//! Host ABI (no WASI). Wasmtime instantiates this module with an empty linker;
-//! any import is a denial.
-//!
-//! - `memory` — exported linear memory
-//! - `alloc(size: u32) -> u32` — bump pointer for the host to write input JSON
-//! - `plan(in_ptr: u32, in_len: u32) -> i32` — output length; negative = error
-//! - `output_ptr() -> u32` — start of the last `plan` output in linear memory
-//!
-//! Input JSON (secrets already stripped by the host):
-//! `{ "source": {...}, "args": {...}, "capabilities": ["create_workspace", ...] }`
-//!
-//! Output JSON is an ActionPlan. No host paths. The host re-validates the plan
-//! against granted capabilities; this crate cannot mint capabilities.
+//! Fixture ActionPlan producer for the sealed Afterburner callback adapter.
 
 use serde_json::{json, Map, Value};
 
@@ -136,58 +122,6 @@ fn optional_string(source: &Value, field: &str) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
-}
-
-#[cfg(all(feature = "wasm-entry", target_arch = "wasm32"))]
-#[allow(static_mut_refs)]
-mod wasm_abi {
-    use super::plan_from_bytes;
-
-    static mut OUTPUT: Vec<u8> = Vec::new();
-
-    #[no_mangle]
-    pub extern "C" fn alloc(size: u32) -> u32 {
-        if size == 0 {
-            return 0;
-        }
-        let mut buf = vec![0u8; size as usize];
-        let ptr = buf.as_mut_ptr() as u32;
-        std::mem::forget(buf);
-        ptr
-    }
-
-    #[no_mangle]
-    pub extern "C" fn plan(in_ptr: u32, in_len: u32) -> i32 {
-        let input = if in_len == 0 {
-            &[][..]
-        } else {
-            unsafe { std::slice::from_raw_parts(in_ptr as *const u8, in_len as usize) }
-        };
-        match plan_from_bytes(input) {
-            Ok(bytes) => store_output(bytes),
-            Err(error) => {
-                let msg = if error.is_empty() {
-                    "planner error".to_string()
-                } else {
-                    error
-                };
-                -store_output(msg.into_bytes())
-            }
-        }
-    }
-
-    #[no_mangle]
-    pub extern "C" fn output_ptr() -> u32 {
-        unsafe { OUTPUT.as_ptr() as u32 }
-    }
-
-    fn store_output(bytes: Vec<u8>) -> i32 {
-        let len = i32::try_from(bytes.len()).unwrap_or(i32::MAX);
-        unsafe {
-            OUTPUT = bytes;
-        }
-        len
-    }
 }
 
 #[cfg(test)]

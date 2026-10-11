@@ -291,6 +291,17 @@ impl DefraSessionHook {
             .catch_unwind()
             .await;
 
+            if let Err(error) = lifecycle.stage_plugin_receipt(
+                live_outputs
+                    .registry
+                    .plugin_receipt(&execution_tool_doc_id)
+                    .await,
+            ) {
+                tracing::error!(tool_call_doc_id = %execution_tool_doc_id, %error,
+                    "background plugin receipt conflicts with invocation");
+                return;
+            }
+
             match execution {
                 Ok(outcome) => match outcome {
                     crate::tool_call_lifecycle::ToolOutcome::TimedOut { .. } => {

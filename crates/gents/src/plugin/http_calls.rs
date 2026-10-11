@@ -544,6 +544,10 @@ pub(super) struct Session {
 }
 
 impl Session {
+    pub(super) fn request_timeout_ms(&self) -> u64 {
+        self.request_timeout.as_millis() as u64
+    }
+
     /// The session `manifold`'s granted `net` axis allows, or `None` when it
     /// allows nothing and the plugin runs as a sealed one.
     pub(super) fn for_grant(coordinate: &str, manifold: &Manifold) -> Result<Option<Self>> {

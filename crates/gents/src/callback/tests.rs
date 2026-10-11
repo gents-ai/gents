@@ -23,14 +23,15 @@ use super::documents::{
     CallbackBindingDoc, CallbackInvocationDoc, CallbackModuleDoc, CallbackResultDoc,
     CallbackResultInvocationRow,
 };
+use super::planner::{
+    compute_module_id, fixture_artifact_is_stub, fixture_create_workspace_artifact,
+    invoke_plugin_planner, plan_from_module, validate_callback_module, CallbackModuleLimits,
+    MAX_ARTIFACT_BYTES,
+};
 use super::run::{
     apply_planner_deny, can_emit_callback_result, can_start_executing, decode_journal,
     emit_plan_from_source, plan_from_callback, resolve_action_plan,
     resolve_action_plan_with_module,
-};
-use super::wasm::{
-    compute_module_id, fixture_create_workspace_wasm, fixture_wasm_is_stub, invoke_wasm_planner,
-    plan_from_wasm_module, validate_callback_module, CallbackModuleLimits, MAX_WASM_BYTES,
 };
 use super::{
     LIFECYCLE_DENIED, LIFECYCLE_FAILED, LIFECYCLE_PENDING, LIFECYCLE_RUNNING, LIFECYCLE_SUCCEEDED,
@@ -422,8 +423,8 @@ fn wasm_recovery_reuses_stored_plan_without_reloading_module() {
         claimed_at: None,
         created_at: None,
     };
-    let mut wasm_binding = callback();
-    wasm_binding.handler = crate::document_config::CallbackHandler::Module {
+    let mut module_binding = callback();
+    module_binding.handler = crate::document_config::CallbackHandler::Module {
         module_id: "mod-gone".into(),
     };
     let mutated = json!({
@@ -435,7 +436,7 @@ fn wasm_recovery_reuses_stored_plan_without_reloading_module() {
         "workspace_id": "ws-mutated"
     });
     let resolved =
-        resolve_action_plan_with_module(&invocation, &wasm_binding, &mutated, None).unwrap();
+        resolve_action_plan_with_module(&invocation, &module_binding, &mutated, None).unwrap();
     match &resolved.actions[0] {
         crate::workspace::HostAction::CreateWorkspace(action) => {
             assert_eq!(action.workspace_id, "ws-stored");
@@ -788,8 +789,8 @@ async fn first_seen_source_create_materializes_owner_invocation() {
     );
 }
 
-fn wasm_bytes_for_id() -> Vec<u8> {
-    b"\0asm\x01\x00\x00\x00hello-planner".to_vec()
+fn artifact_bytes_for_id() -> Vec<u8> {
+    crate::plugin::tests::build_plugin_afb(&crate::plugin::tests::constant_output_wat(b"{}"))
 }
 
 fn module_doc(wasm: &[u8], args: &serde_json::Value, signer: &str) -> CallbackModuleDoc {
@@ -801,7 +802,7 @@ fn module_doc(wasm: &[u8], args: &serde_json::Value, signer: &str) -> CallbackMo
         node_did: "did:key:zWriter".into(),
         tags: vec![],
         abi_version: Some(1),
-        wasm_bytes: Some(STANDARD.encode(wasm)),
+        artifact_bytes: Some(STANDARD.encode(wasm)),
         canonical_args: Some(serde_json::to_string(args).unwrap()),
         signer_did: Some(signer.into()),
         provenance: Some("fixture_create_workspace".into()),
@@ -817,22 +818,9 @@ fn trusted(signer: &str) -> BTreeSet<String> {
     [signer.to_string()].into_iter().collect()
 }
 
-fn compile_wat(wat: &str) -> Vec<u8> {
-    wat::parse_str(wat).unwrap_or_else(|error| panic!("wat parse: {error}"))
-}
-
 fn wat_returns_json(json: &str) -> Vec<u8> {
-    let escaped = json.replace('\\', "\\\\").replace('"', "\\\"");
-    compile_wat(&format!(
-        r#"(module
-  (memory (export "memory") 1)
-  (data (i32.const 0) "{escaped}")
-  (func (export "alloc") (param i32) (result i32) (i32.const 2048))
-  (func (export "output_ptr") (result i32) (i32.const 0))
-  (func (export "plan") (param i32 i32) (result i32)
-    (i32.const {len}))
-)"#,
-        len = json.len()
+    crate::plugin::tests::build_plugin_afb(&crate::plugin::tests::constant_output_wat(
+        json.as_bytes(),
     ))
 }
 
@@ -847,7 +835,7 @@ fn tight_limits(fuel: u64, pages: u32, max_in: usize, max_out: usize) -> Callbac
 
 #[test]
 fn module_id_is_stable_across_host_paths_and_arg_key_order() {
-    let wasm = wasm_bytes_for_id();
+    let wasm = artifact_bytes_for_id();
     let root = TempDir::new().unwrap();
     let path_a = root.path().join("one").join("module.wasm");
     let path_b = root.path().join("other-host").join("copy.wasm");
@@ -869,7 +857,7 @@ fn module_id_is_stable_across_host_paths_and_arg_key_order() {
 
 #[test]
 fn signer_policy_fail_closes_when_missing_or_untrusted() {
-    let wasm = wasm_bytes_for_id();
+    let wasm = artifact_bytes_for_id();
     let mut module = module_doc(&wasm, &json!({}), "did:key:zTrusted");
     let empty = BTreeSet::new();
     let error = validate_callback_module(&module, &empty).unwrap_err();
@@ -894,47 +882,31 @@ fn signer_policy_fail_closes_when_missing_or_untrusted() {
 }
 
 #[test]
-fn fuel_exhaustion_denies_without_a_plan() {
-    let wat = r#"(module
-  (memory (export "memory") 1)
-  (func (export "alloc") (param i32) (result i32) (i32.const 0))
-  (func (export "output_ptr") (result i32) (i32.const 0))
-  (func (export "plan") (param i32 i32) (result i32)
-    (loop $spin (br $spin))
-    unreachable)
-)"#;
-    let wasm = compile_wat(wat);
-    // Empty input skips `alloc` so the first metered call is the spinning `plan`.
-    let error = invoke_wasm_planner(&wasm, &tight_limits(1, 1, 64, 64), b"").unwrap_err();
-    assert!(
-        error.to_lowercase().contains("fuel"),
-        "expected wasmtime fuel exhaustion, got {error}"
+fn planner_uses_shared_plugin_fuel_memory_and_output_limits() {
+    let infinite = crate::plugin::tests::build_plugin_afb(
+        r#"(module (memory (export "memory") 1)
+          (func (export "_start") (loop $spin (br $spin))))"#,
     );
-}
-
-#[test]
-fn memory_limit_denies_at_instantiate() {
-    let wat = r#"(module
-  (memory (export "memory") 8)
-  (func (export "alloc") (param i32) (result i32) (i32.const 0))
-  (func (export "output_ptr") (result i32) (i32.const 0))
-  (func (export "plan") (param i32 i32) (result i32) (i32.const 0))
-)"#;
-    let wasm = compile_wat(wat);
-    let error = invoke_wasm_planner(&wasm, &tight_limits(10_000, 1, 64, 64), b"{}").unwrap_err();
-    assert!(error.to_lowercase().contains("denied"), "{error}");
-}
-
-#[test]
-fn input_and_output_byte_limits_deny() {
-    let wasm = wat_returns_json(&"x".repeat(32));
-    let error = invoke_wasm_planner(&wasm, &tight_limits(10_000_000, 1, 4, 1024), b"0123456789")
+    let error = invoke_plugin_planner(&infinite, &tight_limits(100, 1, 1024, 1024), &json!({}))
         .unwrap_err();
+    assert!(error.contains("OutOfFuel"), "{error}");
+    let memory = crate::plugin::tests::build_plugin_afb(
+        r#"(module (memory (export "memory") 8) (func (export "_start")))"#,
+    );
+    assert!(
+        invoke_plugin_planner(&memory, &tight_limits(10_000, 1, 1024, 1024), &json!({})).is_err()
+    );
+    let output = wat_returns_json(r#"{"value":"long output"}"#);
+    let error = invoke_plugin_planner(
+        &output,
+        &tight_limits(100_000, 1, 4, 1024),
+        &json!({"input":"too long"}),
+    )
+    .unwrap_err();
     assert!(error.contains("max_input_bytes"), "{error}");
-
     let error =
-        invoke_wasm_planner(&wasm, &tight_limits(10_000_000, 1, 1024, 8), b"{}").unwrap_err();
-    assert!(error.contains("max_output_bytes"), "{error}");
+        invoke_plugin_planner(&output, &tight_limits(100_000, 1, 1024, 8), &json!({})).unwrap_err();
+    assert!(error.contains("BadOutput"), "{error}");
 }
 
 #[test]
@@ -945,26 +917,8 @@ fn unknown_action_type_denies_the_entire_plan() {
         .into_iter()
         .map(str::to_string)
         .collect();
-    let error = plan_from_wasm_module(&module, &json!({}), &caps).unwrap_err();
+    let error = plan_from_module(&module, &json!({}), &caps).unwrap_err();
     assert!(error.contains("unknown ActionPlan action type"), "{error}");
-}
-
-#[test]
-fn wasi_import_is_denied() {
-    let wasm = compile_wat(
-        r#"(module
-  (import "wasi_snapshot_preview1" "fd_write" (func (param i32 i32 i32 i32) (result i32)))
-  (memory (export "memory") 1)
-  (func (export "alloc") (param i32) (result i32) (i32.const 0))
-  (func (export "output_ptr") (result i32) (i32.const 0))
-  (func (export "plan") (param i32 i32) (result i32) (i32.const 0))
-)"#,
-    );
-    let error = invoke_wasm_planner(&wasm, &tight_limits(10_000, 1, 64, 64), b"{}").unwrap_err();
-    assert!(
-        error.contains("may not import") && error.contains("wasi_snapshot_preview1"),
-        "{error}"
-    );
 }
 
 #[test]
@@ -1021,31 +975,28 @@ fn extra_action_fields_deny_the_plan() {
 }
 
 #[test]
-fn wat_text_and_over_ceiling_limits_are_denied() {
-    let error = invoke_wasm_planner(b"(module)", &tight_limits(1, 1, 64, 64), b"{}").unwrap_err();
-    assert!(error.contains("binary module"), "{error}");
-
-    let wasm = wasm_bytes_for_id();
-    let mut module = module_doc(&wasm, &json!({}), "did:key:zTrusted");
+fn callback_requires_bounded_afterburner_artifact() {
+    let artifact = artifact_bytes_for_id();
+    let mut module = module_doc(&artifact, &json!({}), "did:key:zTrusted");
     module.fuel_limit = Some(i64::MAX);
     let error = validate_callback_module(&module, &trusted("did:key:zTrusted")).unwrap_err();
     assert!(error.contains("host maximum"), "{error}");
-
-    let mut wat_module = module_doc(b"(module)", &json!({}), "did:key:zTrusted");
-    let error = validate_callback_module(&wat_module, &trusted("did:key:zTrusted")).unwrap_err();
-    assert!(error.contains("binary module"), "{error}");
-
-    let mut oversized = vec![0u8; MAX_WASM_BYTES + 1];
-    oversized[..4].copy_from_slice(b"\0asm");
-    wat_module = module_doc(&oversized, &json!({}), "did:key:zTrusted");
-    let error = validate_callback_module(&wat_module, &trusted("did:key:zTrusted")).unwrap_err();
-    assert!(error.contains("max_wasm_bytes"), "{error}");
+    let malformed = module_doc(b"not an artifact", &json!({}), "did:key:zTrusted");
+    let error = validate_callback_module(&malformed, &trusted("did:key:zTrusted")).unwrap_err();
+    assert!(error.contains("Afterburner"), "{error}");
+    let oversized = module_doc(
+        &vec![0; MAX_ARTIFACT_BYTES + 1],
+        &json!({}),
+        "did:key:zTrusted",
+    );
+    let error = validate_callback_module(&oversized, &trusted("did:key:zTrusted")).unwrap_err();
+    assert!(error.contains("max_artifact_bytes"), "{error}");
 }
 
 #[test]
 fn capability_miss_denies_create_workspace_plan() {
-    let wasm = fixture_create_workspace_wasm();
-    if fixture_wasm_is_stub(wasm) {
+    let wasm = fixture_create_workspace_artifact();
+    if fixture_artifact_is_stub(wasm) {
         return;
     }
     let source = json!({
@@ -1062,7 +1013,7 @@ fn capability_miss_denies_create_workspace_plan() {
         .into_iter()
         .map(str::to_string)
         .collect();
-    let plan = plan_from_wasm_module(&module, &source, &caps).expect("plan");
+    let plan = plan_from_module(&module, &source, &caps).expect("plan");
     let missing = BTreeSet::from([CAP_OBSERVE_DIRTY_BASE.to_string()]);
     let error = plan.validate_against(&missing).unwrap_err().to_string();
     assert!(
@@ -1072,9 +1023,9 @@ fn capability_miss_denies_create_workspace_plan() {
 }
 
 #[test]
-fn fixture_wasm_emits_valid_create_workspace_plan() {
-    let wasm = fixture_create_workspace_wasm();
-    if fixture_wasm_is_stub(wasm) {
+fn fixture_artifact_emits_valid_create_workspace_plan() {
+    let wasm = fixture_create_workspace_artifact();
+    if fixture_artifact_is_stub(wasm) {
         return;
     }
     let source = json!({
@@ -1097,7 +1048,7 @@ fn fixture_wasm_emits_valid_create_workspace_plan() {
         .map(str::to_string)
         .collect();
     let stripped = strip_secret_fields(source);
-    let plan = plan_from_wasm_module(&module, &stripped, &caps).expect("fixture plan");
+    let plan = plan_from_module(&module, &stripped, &caps).expect("fixture plan");
     let canonical = action_plan_canonical_json(&plan).expect("canonical");
     assert!(!canonical.contains("host_path"), "{canonical}");
     assert!(!canonical.contains("/tmp"), "{canonical}");
@@ -1118,12 +1069,12 @@ fn fixture_wasm_emits_valid_create_workspace_plan() {
     }
     plan.validate_against(&caps).expect("capabilities");
 
-    let mut wasm_binding = callback();
-    wasm_binding.handler = crate::document_config::CallbackHandler::Module {
+    let mut module_binding = callback();
+    module_binding.handler = crate::document_config::CallbackHandler::Module {
         module_id: module.module_id.clone(),
     };
-    wasm_binding.capabilities = vec![CAP_CREATE_WORKSPACE.into(), CAP_OBSERVE_DIRTY_BASE.into()];
-    let via_binding = plan_from_callback(&wasm_binding, &stripped, Some(&module)).expect("wired");
+    module_binding.capabilities = vec![CAP_CREATE_WORKSPACE.into(), CAP_OBSERVE_DIRTY_BASE.into()];
+    let via_binding = plan_from_callback(&module_binding, &stripped, Some(&module)).expect("wired");
     assert_eq!(via_binding, plan);
 
     let clone_caps: BTreeSet<String> = [
@@ -1552,4 +1503,27 @@ async fn admission_refuses_a_binding_disabled_after_its_snapshot() {
         .unwrap());
     assert!(backlog.invoked().await.is_empty());
     backlog.node.shutdown().await;
+}
+
+#[test]
+fn callback_artifact_identity_and_output_are_host_validated() {
+    let artifact = wat_returns_json(r#"{"abi":1,"actions":[]}"#);
+    let mut module = module_doc(&artifact, &json!({}), "did:key:zTrusted");
+    validate_callback_module(&module, &trusted("did:key:zTrusted")).unwrap();
+    module.canonical_args = Some(r#"{"forged":true}"#.into());
+    assert!(validate_callback_module(&module, &trusted("did:key:zTrusted")).is_err());
+    assert!(plan_from_module(&module, &json!({}), &BTreeSet::new()).is_err());
+    module = module_doc(&artifact, &json!({}), "did:key:zTrusted");
+    module.abi_version = Some(99);
+    assert!(validate_callback_module(&module, &trusted("did:key:zTrusted")).is_err());
+    assert!(plan_from_module(&module, &json!({}), &BTreeSet::new()).is_err());
+
+    let trap = crate::plugin::tests::build_plugin_afb(
+        r#"(module (memory (export "memory") 1) (func (export "_start") unreachable))"#,
+    );
+    let module = module_doc(&trap, &json!({}), "did:key:zTrusted");
+    assert!(plan_from_module(&module, &json!({}), &BTreeSet::new()).is_err());
+    let malformed = wat_returns_json("not JSON");
+    let module = module_doc(&malformed, &json!({}), "did:key:zTrusted");
+    assert!(plan_from_module(&module, &json!({}), &BTreeSet::new()).is_err());
 }
