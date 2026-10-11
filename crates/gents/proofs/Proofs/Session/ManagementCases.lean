@@ -70,15 +70,12 @@ def cases : List Case :=
   , ⟨"edit_selected_unpublished", { initial [pending 3] with folding := [pending 2] },
       .replace (some 1) [2,3] 0 1 [replacement 4 2]⟩
   , intakeCase "expired_steering_is_barrier" [{pending 2 with fresh := false}, pending 3] [2,3]
-  , intakeCase "malformed_ttl_steering_is_barrier" [{pending 2 with fresh := false}, pending 3] [2,3]
   , managementCase "expired_pending_edit_rejected" [{pending 2 with fresh := false}] [2] 0 1 [replacement 4 2]
-  , managementCase "malformed_ttl_edit_rejected" [{pending 2 with fresh := false}] [2] 0 1 [replacement 4 2]
-
   ]
 
 theorem intake_and_management_decisions :
     (cases.map fun c => c.after.isSome) =
-      [true,true,true,false,false,true,true,true,true,true,false,false,false,false,false,true,true,true,true,false,false] := by
+      [true,true,true,false,false,true,true,true,true,true,false,false,false,false,false,true,true,true,false] := by
   native_decide
 
 theorem selected_exact_contiguous_prefix :
@@ -100,12 +97,12 @@ theorem selected_edit_invalidates_provisional_selection :
       [some (some 1, [], [3]), some (some 1, [], [4,3])] := by native_decide
 
 
-theorem expired_and_malformed_are_steering_barriers :
-    ([cases[17]!,cases[18]!].map fun c => c.after.map fun s =>
-      (s.folding.map (·.requestId),s.pending.map (·.requestId))) =
-      [some ([],[2,3]),some ([],[2,3])] := by native_decide
+/-- Expired and malformed TTLs reach the model identically as `fresh = false`. -/
+theorem stale_steering_is_barrier :
+    ((cases[17]!).after.map fun s =>
+      (s.folding.map (·.requestId),s.pending.map (·.requestId))) = some ([],[2,3]) := by
+  native_decide
 
-theorem expired_and_malformed_edits_are_rejected :
-    ([cases[19]!,cases[20]!].map fun c => c.after.isSome) = [false,false] := by native_decide
+theorem stale_pending_edit_is_rejected : (cases[18]!).after = none := by native_decide
 
 end SessionQueue.ManagementCases
