@@ -165,6 +165,7 @@ pub use query::{
     load_tool_call_arguments, load_tool_call_presentation, load_tool_call_result,
     render_tool_result, CanonicalToolCallPresentation,
 };
+mod plugin_receipt;
 mod recovery;
 pub(crate) mod runtime;
 mod transition;
@@ -191,6 +192,7 @@ mod request_scope_conformance;
 #[cfg(test)]
 mod session_activity_conformance;
 
+mod plugin_effect;
 pub(crate) use crate::streaming::AcceptedToolCall;
 pub use recovery::{
     deadline_at_is_expired, deadline_is_expired, BackgroundCompletionSideEffectReport,
@@ -202,6 +204,7 @@ pub use transition::IllegalToolCallTransition;
 /// State machine struct for an individual tool call. Mirrors `RequestLifecycle`
 /// from `lifecycle.rs:189-204`. Owns every persistence write for a single
 /// AgentToolCall row.
+#[derive(Clone)]
 pub struct ToolCallLifecycle {
     node: Arc<EmbeddedNode>,
     request_id: String,
@@ -224,11 +227,13 @@ pub struct ToolCallLifecycle {
     accepted_header_doc_id: Option<String>,
     arguments: Option<gents_protocol::output::PayloadRef>,
     execution_generation: Option<String>,
+    plugin_receipt: Option<gents_protocol::plugin::PluginExecutionReceipt>,
     /// A native background execution is admitted by an already accepted
     /// `spawn_process` call.  It is deliberately not an `AcceptedToolCall` of
     /// its own: this is the immutable physical provenance used for dispatch,
     /// recovery and completion notification routing.
     spawned_by_tool_call_doc_id: Option<String>,
+    plugin_effect: Option<PluginEffectBinding>,
     doc_id: Option<String>,
     deadline_at: chrono::DateTime<chrono::Utc>,
     state: ToolCallState,
@@ -237,6 +242,44 @@ pub struct ToolCallLifecycle {
     cancel_cause: Option<CancelCause>,
     selected_tool_identity: Option<SelectedToolIdentity>,
     pub(crate) await_mode: AwaitMode,
+}
+
+/// Persisted provenance of one plugin child. [`Self::decode`] is the only
+/// constructor for stored rows, so a binding in hand is already bounded,
+/// unspawned and bound to its derived stable identity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PluginEffectBinding {
+    pub(crate) parent_tool_call_doc_id: String,
+    pub(crate) ordinal: u32,
+}
+
+impl PluginEffectBinding {
+    pub(crate) fn internal_id(parent_tool_call_doc_id: &str, ordinal: u32) -> String {
+        format!("plugin-effect:{parent_tool_call_doc_id}:{ordinal}")
+    }
+
+    pub(crate) fn decode(
+        parent_tool_call_doc_id: Option<&str>,
+        ordinal: Option<u32>,
+        spawned: bool,
+        tool_call_id: &str,
+    ) -> anyhow::Result<Option<Self>> {
+        match (parent_tool_call_doc_id, ordinal) {
+            (None, None) => Ok(None),
+            (Some(parent), Some(ordinal))
+                if !parent.is_empty()
+                    && (1..=crate::plugin::tool_calls::MAX_EFFECTS).contains(&ordinal)
+                    && !spawned
+                    && tool_call_id == Self::internal_id(parent, ordinal) =>
+            {
+                Ok(Some(Self {
+                    parent_tool_call_doc_id: parent.to_owned(),
+                    ordinal,
+                }))
+            }
+            _ => anyhow::bail!("invalid plugin effect provenance"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -293,7 +336,9 @@ impl ToolCallLifecycle {
             accepted_header_doc_id: Some(accepted.accepted_header_doc_id),
             arguments: Some(accepted.arguments),
             execution_generation: Some(accepted.execution_generation),
+            plugin_receipt: None,
             spawned_by_tool_call_doc_id: None,
+            plugin_effect: None,
             doc_id: Some(accepted.tool_call_doc_id),
             deadline_at,
             state: ToolCallState::Pending,
@@ -303,6 +348,15 @@ impl ToolCallLifecycle {
             selected_tool_identity: None,
             await_mode,
         })
+    }
+
+    pub(crate) fn stage_plugin_receipt(
+        &mut self,
+        receipt: Option<gents_protocol::plugin::PluginExecutionReceipt>,
+    ) {
+        if receipt.is_some() {
+            self.plugin_receipt = receipt;
+        }
     }
 
     /// Exact DefraDB document identifier after the first persisted transition.
@@ -339,7 +393,9 @@ impl ToolCallLifecycle {
             accepted_header_doc_id: None,
             arguments: None,
             execution_generation: None,
+            plugin_receipt: None,
             spawned_by_tool_call_doc_id: None,
+            plugin_effect: None,
             doc_id: None,
             deadline_at,
             state: ToolCallState::Pending,
@@ -410,7 +466,9 @@ impl ToolCallLifecycle {
             accepted_header_doc_id: None,
             arguments: None,
             execution_generation: None,
+            plugin_receipt: None,
             spawned_by_tool_call_doc_id: None,
+            plugin_effect: None,
             doc_id: None,
             deadline_at,
             state: ToolCallState::Pending,
@@ -453,7 +511,9 @@ impl ToolCallLifecycle {
     }
 
     pub(crate) fn is_background_tool_bridge(&self) -> bool {
-        self.await_mode == AwaitMode::Background && self.spawned_by_tool_call_doc_id.is_none()
+        self.await_mode == AwaitMode::Background
+            && self.spawned_by_tool_call_doc_id.is_none()
+            && self.plugin_effect.is_none()
     }
 
     pub(crate) fn is_spawned_background(&self) -> bool {

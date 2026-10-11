@@ -625,6 +625,8 @@ pub struct DefraSessionHook {
     state: Arc<Mutex<SessionState>>,
     in_flight_lifecycles: Arc<Mutex<HashMap<String, ToolCallLifecycle>>>,
     accepted_tool_calls: Arc<Mutex<HashMap<String, crate::streaming::AcceptedToolCall>>>,
+    effect_tool_calls: Arc<Mutex<HashMap<String, (ToolCallLifecycle, String)>>>,
+    effect_lifecycles: Arc<Mutex<HashMap<String, ToolCallLifecycle>>>,
     background_tool_registry: BackgroundToolRegistry,
     background_executions: BackgroundExecutionRegistry,
     background_live_outputs: BackgroundLiveOutputState,
@@ -657,10 +659,10 @@ impl DefraSessionHook {
         Ok(())
     }
 
-    /// Bind a dispatch hook invocation to the exact provider-published tool
-    /// row. Rig's internal call key is deliberately only the map key: the
-    /// provider-native identity registered by `StreamProcessor` must agree
-    /// with the immutable accepted header before anything can run.
+    /// Binds hooks to an admitted physical call. Plugin effects require their
+    /// exact parent-admitted arguments; provider calls require StreamProcessor's
+    /// native identity and immutable accepted header. Internal keys alone never
+    /// authorize dispatch.
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn adopt_accepted_tool_dispatch(
         &self,
@@ -673,6 +675,19 @@ impl DefraSessionHook {
         deadline_at: DateTime<Utc>,
         await_mode: AwaitMode,
     ) -> anyhow::Result<ToolCallLifecycle> {
+        if let Some((lifecycle, recorded_arguments)) =
+            self.effect_tool_calls.lock().await.remove(internal_call_id)
+        {
+            anyhow::ensure!(
+                provider_call_id.is_none()
+                    && lifecycle.tool_name() == tool_name
+                    && lifecycle.request_id() == request_id
+                    && lifecycle.session_id() == session_id
+                    && recorded_arguments == args,
+                "plugin effect dispatch does not match its admitted input"
+            );
+            return Ok(lifecycle);
+        }
         let registered = self
             .state
             .lock()
@@ -766,6 +781,8 @@ impl DefraSessionHook {
             })),
             in_flight_lifecycles: Arc::new(Mutex::new(HashMap::new())),
             accepted_tool_calls: Arc::new(Mutex::new(HashMap::new())),
+            effect_tool_calls: Arc::new(Mutex::new(HashMap::new())),
+            effect_lifecycles: Arc::new(Mutex::new(HashMap::new())),
             background_tool_registry: BackgroundToolRegistry::default(),
             background_executions,
             background_live_outputs,
@@ -811,6 +828,8 @@ impl DefraSessionHook {
             })),
             in_flight_lifecycles: Arc::new(Mutex::new(HashMap::new())),
             accepted_tool_calls: Arc::new(Mutex::new(HashMap::new())),
+            effect_tool_calls: Arc::new(Mutex::new(HashMap::new())),
+            effect_lifecycles: Arc::new(Mutex::new(HashMap::new())),
             background_tool_registry: BackgroundToolRegistry::default(),
             background_executions,
             background_live_outputs,
@@ -1054,6 +1073,23 @@ impl DefraSessionHook {
         for mut lifecycle in lifecycles {
             let _ = lifecycle.timeout().await?;
         }
+        let effects = self
+            .effect_lifecycles
+            .lock()
+            .await
+            .iter()
+            .filter(|(_, child)| child.is_deadline_expired(Utc::now()))
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>();
+        for id in effects {
+            <Self as gents_loop::session_hook::SessionHook>::finish_tool_effect(
+                self,
+                &id,
+                Some(&gents_loop::tool_call_lifecycle::ToolOutcome::TimedOut { deadline_at: None }),
+            )
+            .await
+            .map_err(anyhow::Error::msg)?;
+        }
         Ok(count)
     }
 
@@ -1082,6 +1118,24 @@ impl DefraSessionHook {
             };
             if let Err(error) = applied {
                 first_error.get_or_insert(error);
+            }
+        }
+        let effects = self
+            .effect_lifecycles
+            .lock()
+            .await
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        for id in effects {
+            if let Err(error) = <Self as gents_loop::session_hook::SessionHook>::finish_tool_effect(
+                self,
+                &id,
+                Some(&gents_loop::tool_call_lifecycle::ToolOutcome::Cancelled),
+            )
+            .await
+            {
+                first_error.get_or_insert(anyhow::Error::msg(error));
             }
         }
         first_error.map_or(Ok(cancelled), Err)
@@ -1153,6 +1207,123 @@ impl gents_loop::session_hook::CanonicalSessionHook<crate::streaming::AcceptedTo
 
 #[async_trait::async_trait]
 impl gents_loop::session_hook::SessionHook for DefraSessionHook {
+    async fn admit_tool_effect(
+        &self,
+        parent_internal_id: &str,
+        ordinal: u32,
+        tool_name: &str,
+        arguments: &str,
+    ) -> Result<String, String> {
+        let parents = self.in_flight_lifecycles.lock().await;
+        let parent = parents
+            .get(parent_internal_id)
+            .cloned()
+            .ok_or_else(|| "plugin effect has no running parent".to_owned())?;
+        drop(parents);
+        let mut child = parent
+            .admit_plugin_effect(ordinal, tool_name, arguments)
+            .await
+            .map_err(|error| format!("cannot admit plugin effect: {error:#}"))?;
+        let internal_id = child.plugin_effect_internal_id().to_owned();
+        if !crate::plugin::tool_calls::supported(tool_name) {
+            let reason = format!(
+                "{tool_name} controls request, session or process lifecycle; call it directly outside the plugin"
+            );
+            child
+                .spawn_failed(
+                    crate::tool_call_lifecycle::FailureClass::PolicyDenied,
+                    &reason,
+                )
+                .await
+                .map_err(|error| format!("cannot persist plugin effect refusal: {error:#}"))?;
+            return Err(reason);
+        }
+        let mut pending = self.effect_tool_calls.lock().await;
+        if pending.contains_key(&internal_id) {
+            return Err("plugin effect is already awaiting dispatch".into());
+        }
+        self.effect_lifecycles
+            .lock()
+            .await
+            .insert(internal_id.clone(), child.clone());
+        pending.insert(internal_id.clone(), (child, arguments.to_owned()));
+        Ok(internal_id)
+    }
+
+    async fn finish_tool_effect(
+        &self,
+        internal_id: &str,
+        interruption: Option<&gents_loop::tool_call_lifecycle::ToolOutcome>,
+    ) -> Result<(), String> {
+        let Some(binding) = self
+            .effect_lifecycles
+            .lock()
+            .await
+            .get(internal_id)
+            .cloned()
+        else {
+            return Ok(());
+        };
+        self.effect_tool_calls.lock().await.remove(internal_id);
+        let result: anyhow::Result<()> = async {
+            let mut current = ToolCallLifecycle::load_by_doc_id(
+                self.node.clone(),
+                binding
+                    .doc_id()
+                    .ok_or_else(|| anyhow::anyhow!("plugin child has no physical identity"))?,
+                binding.node_did(),
+                binding.session_id(),
+                binding.requester_did(),
+            )
+            .await?
+            .ok_or_else(|| {
+                anyhow::anyhow!("plugin child disappeared before interruption settlement")
+            })?;
+            let Some(outcome) = interruption else {
+                anyhow::ensure!(
+                    current.is_terminal(),
+                    "plugin child did not durably terminalize"
+                );
+                crate::tool_call_lifecycle::query::load_tool_call_result(
+                    &crate::config_client::ConfigAccess::Local(self.node.clone()),
+                    current.doc_id().expect("loaded physical child"),
+                    current.node_did(),
+                    current.session_id(),
+                    current.requester_did(),
+                )
+                .await?;
+                self.in_flight_lifecycles.lock().await.remove(internal_id);
+                return Ok(());
+            };
+            let cause = match outcome {
+                gents_loop::tool_call_lifecycle::ToolOutcome::TimedOut { .. } => {
+                    crate::tool_call_lifecycle::CancelCause::Deadline
+                }
+                _ => crate::tool_call_lifecycle::CancelCause::Interrupted,
+            };
+            match current.state() {
+                crate::tool_call_lifecycle::ToolCallState::Pending => {
+                    current.cancel_before_dispatch(cause).await?
+                }
+                crate::tool_call_lifecycle::ToolCallState::Running => {
+                    if cause == crate::tool_call_lifecycle::CancelCause::Deadline {
+                        current.timeout().await?;
+                    } else {
+                        current.cancel_during_run(cause).await?;
+                    }
+                }
+                _ => {}
+            }
+            self.in_flight_lifecycles.lock().await.remove(internal_id);
+            Ok(())
+        }
+        .await;
+        if result.is_ok() {
+            self.effect_lifecycles.lock().await.remove(internal_id);
+        }
+        result.map_err(|error| format!("cannot settle plugin effect: {error:#}"))
+    }
+
     async fn on_completion_call_with_context(
         &self,
         prompt: &Message,

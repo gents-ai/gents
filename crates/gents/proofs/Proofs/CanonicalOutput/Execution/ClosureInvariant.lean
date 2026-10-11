@@ -222,6 +222,27 @@ private theorem spawned_segments (before after : World) (generation : Generation
   all_goals cases hcore
   all_goals rfl
 
+private theorem pluginEffect_preserves (before after : World) (generation : Generation)
+    (admission : PluginEffectAdmission) (unique : ClosureUnique before)
+    (h : admitPluginEffect before generation admission = .ok after) : ClosureUnique after := by
+  have hcore := checked_core_success _ _ _ h
+  unfold admitPluginEffectCore at hcore
+  split at hcore
+  · cases hcore
+    exact unique
+  · split at hcore
+    · contradiction
+    · rename_i valid
+      have hv : pluginEffectAdmissionValid before generation admission = true := by
+        simpa using valid
+      have closing : validateClosingRecord (before.segments ++ [admission.arguments])
+          admission.arguments = true := by
+        simp only [pluginEffectAdmissionValid, pluginEffectInputValid, Bool.and_eq_true] at hv
+        aesop
+      repeat' first | contradiction | split at hcore
+      all_goals cases hcore
+      all_goals exact closureUnique_append_winner before.segments admission.arguments unique (validateClosingRecord_winner _ _ closing)
+
 private theorem toolControl_segments (before after : World) (generation : Generation)
     (document : DocId) (action : ToolExecution.ToolCallContext.Action)
     (h : changeToolControl before generation document action = .ok after) :
@@ -491,6 +512,9 @@ private theorem evaluate_preserves (operation : Gate.Operation) (before after : 
       exact closureUnique_of_segments_eq unique
         (spawned_segments before after generation admission
           (mapError_success Gate.Error.execution _ _ h))
+  | admitPluginEffect generation admission =>
+      exact pluginEffect_preserves before after generation admission unique
+        (mapError_success Gate.Error.execution _ _ h)
   | toolControl generation document action =>
       exact closureUnique_of_segments_eq unique
         (toolControl_segments before after generation document action
@@ -501,6 +525,17 @@ private theorem evaluate_preserves (operation : Gate.Operation) (before after : 
   | toolClose document authority record =>
       exact toolClose_preserves before after document authority record unique
         (mapError_success Gate.Error.delivery _ _ h)
+  | pluginEffectClose document authority record payload =>
+      rcases ToolDelivery.plugin_close_segment_effect before after document authority record payload
+        (mapError_success Gate.Error.delivery _ _ h) with same | ⟨request, sourceDoc, added, hopen, _, owned⟩
+      · exact closureUnique_of_segments_eq unique same
+      · unfold ClosureUnique
+        rw [added]
+        apply closureUnique_append_fresh before.segments record unique
+        have coordinate : record.coordinate = CanonicalOutput.ToolDelivery.coordinate request sourceDoc := by
+          simp [CanonicalOutput.ToolDelivery.ownedRecord] at owned
+          exact owned.1.1.1
+        simpa [coordinate] using hopen
   | toolComplete document authority record message =>
       obtain ⟨closed, hclose, hdeliver⟩ := ToolDelivery.completeAndDeliver_success
         before after document authority record message

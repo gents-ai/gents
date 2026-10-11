@@ -151,6 +151,7 @@ where
     H: SessionHook + 'static,
 {
     try_stream! {
+        let hook = hook.map(Arc::new);
         let provider_profile = config.provider_input_counter.profile();
         let routing_affinity = crate::provider_input::routing_affinity::RoutingAffinity::start(
             provider_profile == crate::provider_input::ProviderInputProfile::ChatGptCodexResponses,
@@ -1116,29 +1117,37 @@ where
                         };
                         let suppressed =
                             repeat_decision == repeated_tool_failure::RepeatDecision::Suppress;
+                        let effects = hook.as_ref().filter(|_| !suppressed).map(|hook| {
+                            Arc::new(tool_dispatch::EffectDispatcher {
+                                tools: tools.clone(),
+                                hook: hook.clone(),
+                                parent_internal_id: internal_call_id.clone(),
+                                fatal: tokio::sync::Mutex::new(None),
+                            })
+                        });
                         let outcome = if suppressed {
                             drop(live_output);
                             repeated_tool_failure.suppress()
                         } else {
-                            dispatch_tool(
+                            crate::tool_effects::scope(effects.clone().map(|effects| effects as Arc<dyn crate::tool_effects::ToolEffectDispatcher>), dispatch_tool(
                                 tools.as_slice(),
                                 &tool_name,
                                 tool_args.clone(),
                                 live_output,
                                 session_id,
-                            )
+                            ))
                             .await
                         };
                         if let Some(hook) = hook.as_ref() {
-                            let result_action = hook
-                                .on_tool_result(
-                                    &tool_name,
-                                    tool_call.call_id.clone(),
-                                    &internal_call_id,
-                                    &tool_args,
-                                    &outcome,
-                                )
-                                .await;
+                            let result_action = match effects.as_ref() {
+                                Some(effects) => effects.settle_parent_result(
+                                    &tool_name, tool_call.call_id.clone(), &tool_args, &outcome,
+                                ).await,
+                                None => hook.on_tool_result(
+                                    &tool_name, tool_call.call_id.clone(), &internal_call_id,
+                                    &tool_args, &outcome,
+                                ).await,
+                            };
                             if let HookAction::Terminate { reason } = result_action {
                                 Err(StreamingError::Prompt(Box::new(
                                     PromptError::PromptCancelled {

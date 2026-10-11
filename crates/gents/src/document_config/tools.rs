@@ -503,6 +503,11 @@ pub struct PluginToolRef {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub digest: Option<String>,
+    /// Permit this installed plugin to call the current request's selected
+    /// tools through the owned loop. Child calls do not inherit this grant.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[cfg_attr(feature = "typescript", ts(as = "Option<bool>", optional))]
+    pub tool_calls: bool,
     /// Trigger-owned String inputs hidden from the model. Resolution uses the
     /// same correlation/source-field owner as bounded datastore tools; a caller
     /// cannot supply or replace one of these fields.

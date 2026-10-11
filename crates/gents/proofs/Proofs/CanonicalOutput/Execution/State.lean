@@ -99,6 +99,7 @@ structure ToolAdmission where
 inductive ToolProvenance where
   | acceptedIntent
   | spawnedBackground (parentToolDoc : DocId)
+  | pluginEffect (parentToolDoc : DocId) (ordinal : Nat)
   deriving DecidableEq, Repr
 
 structure ToolGenesis where
@@ -120,8 +121,22 @@ structure OwnedTool where
   session : SessionId
   acceptedSequence : Transcript.Sequence
   provenance : ToolProvenance := .acceptedIntent
+  effectArguments : Option DocId := none
+  terminalOutput : Option PayloadSpec := none
   context : ToolExecution.ToolCallContext
   stuckSince : Option Time := none
+  deriving DecidableEq, Repr
+
+/-- Input bytes and the child lifecycle commit together. The selected
+installed-plugin grant is enforced before this admission by the invocation
+owner (`ToolPolicy.PluginCalls.available`). -/
+structure PluginEffectAdmission where
+  document : DocId
+  parentToolDoc : DocId
+  ordinal : Nat
+  name : String
+  context : ToolExecution.ToolCallContext
+  arguments : Segment
   deriving DecidableEq, Repr
 
 structure SpawnedToolAdmission where

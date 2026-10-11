@@ -21,7 +21,7 @@ use super::documents::{
     load_trusted_callback_signers, strip_secret_fields, update_invocation, CallbackInvocationDoc,
     CallbackModuleDoc, CallbackResultDoc,
 };
-use super::wasm::{plan_from_wasm_module, validate_callback_module};
+use super::planner::{plan_from_module, validate_callback_module};
 use super::{
     LIFECYCLE_CLAIMED, LIFECYCLE_DENIED, LIFECYCLE_FAILED, LIFECYCLE_RUNNING, LIFECYCLE_SUCCEEDED,
 };
@@ -94,12 +94,12 @@ pub fn plan_from_callback(
         } => emit_create_workspace_from_source(&source),
         CallbackHandler::Module { module_id } => {
             let module = module.ok_or_else(|| {
-                format!("CallbackModule {module_id} was not loaded for WASM planner")
+                format!("CallbackModule {module_id} was not loaded for callback planner")
             })?;
             if module.module_id != *module_id || module.node_did != callback.node_did {
                 return Err("callback module owner/reference mismatch".into());
             }
-            plan_from_wasm_module(
+            plan_from_module(
                 module,
                 &source,
                 &callback.capabilities.iter().cloned().collect(),
@@ -600,7 +600,7 @@ async fn emit_new_plan(
         let source = source.clone();
         tokio::task::spawn_blocking(move || plan_from_callback(&callback, &source, module.as_ref()))
             .await
-            .map_err(|error| format!("WASM planner task failed: {error}"))?
+            .map_err(|error| format!("callback planner task failed: {error}"))?
     } else {
         plan_from_callback(callback, source, None)
     }

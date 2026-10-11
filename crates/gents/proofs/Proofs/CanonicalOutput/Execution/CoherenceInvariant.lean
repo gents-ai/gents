@@ -45,6 +45,12 @@ private theorem authoredHeader_binding (world : World) (message : MessageEnvelop
     simp only [authoredHeader_direct world message notAssistant]
     simp only [authoredHeaderWorld, List.any_append, Bool.or_eq_true, Bool.and_eq_true] at h ⊢
     aesop
+  · have lookupFrame : ∀ doc, ownedToolByDocument? (authoredHeaderWorld world message) doc =
+        ownedToolByDocument? world doc := fun _ => rfl
+    simp only [pluginParentIntentValid, lookupFrame] at h ⊢
+    split at h <;> simp_all only [Bool.and_eq_true, Bool.false_eq_true, false_and]
+    simp only [authoredHeader_direct world message notAssistant]
+    aesop
 
 private theorem authoredHeader_rows (world : World) (message : MessageEnvelope) :
     (authoredHeaderWorld world message).transcript.toolCalls = world.transcript.toolCalls ∧

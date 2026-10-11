@@ -57,7 +57,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@1.97.1
         with:
-          targets: wasm32-unknown-unknown
+          targets: wasm32-unknown-unknown, wasm32-wasip1
 
       - name: Install native build dependencies
         run: |

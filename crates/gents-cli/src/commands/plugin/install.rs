@@ -290,6 +290,7 @@ mod instruction_tests {
         let tool = gents::plugin::tool::PluginTool::resolve(
             executor,
             &gents::document_config::PluginToolRef {
+                tool_calls: false,
                 plugin: "team/echo".into(),
                 digest: None,
                 input_fields: Vec::new(),

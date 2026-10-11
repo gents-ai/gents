@@ -71,6 +71,11 @@ pub enum OutputSource {
     /// segments. It can outlive the provider turn, and for background tools the
     /// request's active execution.
     ToolCall { tool_call_doc_id: String },
+    /// Arguments emitted by an installed plugin for one derived tool call.
+    /// The request owner commits this complete source atomically with the
+    /// child's pending lifecycle row. It is audit evidence, not a provider
+    /// turn or a transcript message.
+    ToolEffectArguments { tool_call_doc_id: String },
     /// Content the requester or runtime supplies whole: the prompt as placed in
     /// the transcript, request context and output-obligation reminders. `key`
     /// is the existing request-scoped idempotency key of that content. Small
@@ -80,19 +85,20 @@ pub enum OutputSource {
 }
 
 impl OutputSource {
-    /// Auxiliary captures are request-owned audit evidence, not assistant output.
+    /// Auxiliary captures and plugin effect arguments are request-owned audit evidence.
     pub fn is_auxiliary_audit(&self) -> bool {
         matches!(
             self,
-            Self::ProviderTurn {
-                scope: CaptureScope {
-                    kind: CaptureScopeKind::Compaction
-                        | CaptureScopeKind::CompactionFallback
-                        | CaptureScopeKind::Title,
+            Self::ToolEffectArguments { .. }
+                | Self::ProviderTurn {
+                    scope: CaptureScope {
+                        kind: CaptureScopeKind::Compaction
+                            | CaptureScopeKind::CompactionFallback
+                            | CaptureScopeKind::Title,
+                        ..
+                    },
                     ..
-                },
-                ..
-            }
+                }
         )
     }
 }

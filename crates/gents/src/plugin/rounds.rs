@@ -9,7 +9,8 @@
 //! service's key; the caller's `"state"` and result keys are stripped (only
 //! the host sets them) and a null input becomes `{}`. One round asks one
 //! service. Bounds shared by every service: [`MAX_ROUNDS`] rounds, and the
-//! call's wall clock and fuel across all rounds. When the wall clock runs out
+//! call's wall clock and fuel across all rounds; time serving `tool_calls`
+//! children is excluded from that wall clock. When the wall clock runs out
 //! while requests are served, the unanswered ones get error results and the
 //! plugin gets one final round (the last [`FINAL_ROUND_RESERVE_DIVISOR`]th of
 //! the clock) to finish with what it has; only a plugin that asks again is a
@@ -21,7 +22,7 @@ use std::time::Instant;
 use anyhow::{Context, Result};
 use serde_json::{Map, Value};
 
-use super::{http_calls, model_calls, PluginBudget, PluginOutcome, PluginVerdict};
+use super::{http_calls, model_calls, tool_calls, PluginBudget, PluginOutcome, PluginVerdict};
 
 /// Rounds of requests one call may be answered.
 pub const MAX_ROUNDS: u32 = 64;
@@ -37,17 +38,43 @@ pub(super) type Round = Arc<dyn Fn(Value, PluginBudget) -> Result<PluginOutcome>
 pub(super) struct HostCalls {
     pub(super) model: Option<model_calls::Session>,
     pub(super) http: Option<http_calls::Session>,
+    pub(super) tools: Option<tool_calls::Session>,
 }
 
 impl HostCalls {
     pub(super) fn is_empty(&self) -> bool {
-        self.model.is_none() && self.http.is_none()
+        self.model.is_none() && self.http.is_none() && self.tools.is_none()
+    }
+
+    pub(super) fn prepare_input(&self, input: Value) -> Result<Value> {
+        let mut base = match input {
+            Value::Null => Map::new(),
+            Value::Object(object) => object,
+            _ => {
+                anyhow::bail!("a plugin the host serves requests for takes a JSON object as input")
+            }
+        };
+        base.remove("state");
+        if self.model.is_some() {
+            base.remove("model_results");
+            base.insert("model_calls".to_owned(), Value::Bool(true));
+        }
+        if self.http.is_some() {
+            base.remove("http_results");
+            base.insert("http_calls".to_owned(), Value::Bool(true));
+        }
+        if self.tools.is_some() {
+            base.remove("tool_results");
+            base.insert("tool_calls".to_owned(), Value::Bool(true));
+        }
+        Ok(Value::Object(base))
     }
 }
 
 enum Asked {
     Model(model_calls::Batch),
     Http(http_calls::Batch),
+    Tools(tool_calls::Batch),
 }
 
 fn refused(started: Instant, fuel: u64, verdict: PluginVerdict, why: String) -> PluginOutcome {
@@ -71,13 +98,18 @@ fn asked(calls: &HostCalls, output: &Value) -> Result<Option<Asked>, String> {
         Some(_) => http_calls::parse_batch(output)?,
         None => None,
     };
-    match (model, http) {
-        (None, None) => Ok(None),
-        (Some(model), None) => Ok(Some(Asked::Model(model))),
-        (None, Some(http)) => Ok(Some(Asked::Http(http))),
-        (Some(_), Some(_)) => {
-            Err("one round asks for model_calls or http_calls, not both".to_owned())
-        }
+    let tools = match calls.tools {
+        Some(_) => tool_calls::parse_batch(output)?,
+        None => None,
+    };
+    match (model, http, tools) {
+        (None, None, None) => Ok(None),
+        (Some(model), None, None) => Ok(Some(Asked::Model(model))),
+        (None, Some(http), None) => Ok(Some(Asked::Http(http))),
+        (None, None, Some(tools)) => Ok(Some(Asked::Tools(tools))),
+        _ => Err(
+            "one round asks for exactly one of model_calls, http_calls or tool_calls".to_owned(),
+        ),
     }
 }
 
@@ -89,23 +121,12 @@ pub(super) async fn drive(
     round: Round,
 ) -> Result<PluginOutcome> {
     let started = Instant::now();
-    let deadline = started + budget.wall_clock;
-    // Requests stop here; the plugin's final round runs on the rest.
-    let serve_deadline = deadline - budget.wall_clock / FINAL_ROUND_RESERVE_DIVISOR;
-    let mut base = match input {
-        Value::Null => Map::new(),
-        Value::Object(object) => object,
-        _ => anyhow::bail!("a plugin the host serves requests for takes a JSON object as input"),
+    let mut deadline = started + budget.wall_clock;
+    // Requests stop at the serve deadline; the plugin's final round runs on the rest.
+    let reserve = budget.wall_clock / FINAL_ROUND_RESERVE_DIVISOR;
+    let Value::Object(base) = calls.prepare_input(input)? else {
+        anyhow::bail!("a driven plugin requires host services");
     };
-    base.remove("state");
-    if calls.model.is_some() {
-        base.remove("model_results");
-        base.insert("model_calls".to_owned(), Value::Bool(true));
-    }
-    if calls.http.is_some() {
-        base.remove("http_results");
-        base.insert("http_calls".to_owned(), Value::Bool(true));
-    }
     let mut next = Value::Object(base.clone());
     let mut fuel = 0u64;
     let mut served = 0u32;
@@ -152,7 +173,7 @@ pub(super) async fn drive(
                     fuel_used: fuel,
                     wall_ms: elapsed_ms(started),
                     ..outcome
-                })
+                });
             }
             Ok(Some(asked)) => asked,
             Err(why) => return Ok(refused(started, fuel, PluginVerdict::BadOutput, why)),
@@ -176,7 +197,20 @@ pub(super) async fn drive(
         }
         served += 1;
         let mut object = base.clone();
+        let serve_deadline = deadline - reserve;
         let state = match asked {
+            Asked::Tools(batch) => {
+                let session = calls.tools.as_mut().expect("parsed only when offered");
+                let serving = Instant::now();
+                let results = session.serve(batch.requests).await;
+                // Lean `PluginCalls.chargedCompute`: children are not guest compute.
+                deadline += serving.elapsed();
+                if let Some(reason) = session.fatal.take() {
+                    return Ok(refused(started, fuel, PluginVerdict::Failed, reason));
+                }
+                object.insert("tool_results".to_owned(), Value::Object(results));
+                batch.state
+            }
             Asked::Model(batch) => {
                 tracing::debug!(
                     round = served,
@@ -200,7 +234,7 @@ pub(super) async fn drive(
                 batch.state
             }
         };
-        last_round = Instant::now() >= serve_deadline;
+        last_round = Instant::now() >= deadline - reserve;
         if let Some(state) = state {
             object.insert("state".to_owned(), state);
         }

@@ -38,6 +38,7 @@ struct LiveToolOutputState {
     /// Channel-to-canonical byte coordinates, never captured payload bytes.
     receipts: [Vec<OutputReceipt>; 2],
     prepared: Option<PreparedToolPresentation>,
+    plugin_receipt: Option<gents_protocol::plugin::PluginExecutionReceipt>,
 }
 
 #[derive(Debug, Clone)]
@@ -98,6 +99,17 @@ impl LiveToolOutputRegistry {
             append_gate: Arc::new(Mutex::new(())),
             pending_utf8: Arc::new(Mutex::new(std::array::from_fn(|_| Vec::new()))),
         }
+    }
+
+    pub async fn plugin_receipt(
+        &self,
+        tool_call_doc_id: &str,
+    ) -> Option<gents_protocol::plugin::PluginExecutionReceipt> {
+        self.inner
+            .lock()
+            .await
+            .get(tool_call_doc_id)
+            .and_then(|state| state.plugin_receipt.clone())
     }
 
     /// Ids of every tool call currently holding a live buffer.
@@ -437,6 +449,25 @@ pub struct LiveToolOutputWriter {
 }
 
 impl LiveToolOutputWriter {
+    pub async fn record_plugin_receipt(
+        &self,
+        receipt: gents_protocol::plugin::PluginExecutionReceipt,
+    ) -> anyhow::Result<()> {
+        let mut states = self.registry.inner.lock().await;
+        let state = states
+            .get_mut(&self.tool_call_id)
+            .context("plugin receipt has no registered physical tool invocation")?;
+        anyhow::ensure!(
+            state
+                .plugin_receipt
+                .as_ref()
+                .is_none_or(|existing| existing == &receipt),
+            "plugin execution receipt conflicts with this physical tool invocation"
+        );
+        state.plugin_receipt = Some(receipt);
+        Ok(())
+    }
+
     pub async fn prepare_command_presentation(
         &self,
         expected_text: &str,

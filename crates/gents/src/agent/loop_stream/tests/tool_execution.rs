@@ -578,6 +578,7 @@ fn plugin_image_tool(image_bytes: usize) -> (tempfile::TempDir, Box<dyn ToolDyn>
     let tool = crate::plugin::tool::PluginTool::resolve(
         executor,
         &crate::document_config::PluginToolRef {
+            tool_calls: false,
             plugin: "team/plugin".into(),
             digest: Some(record.digest.clone()),
             input_fields: Vec::new(),
@@ -1359,5 +1360,128 @@ async fn background_output_query_work_is_independent_of_principal_history() {
     );
     assert!(work[0] > 0);
     drop(lifecycle);
+    node.shutdown().await;
+}
+
+/// A granted plugin child: `slow` outlasts the plugin's whole guest compute
+/// budget, `late` fails on its own local timeout.
+struct ComposedChild {
+    name: &'static str,
+}
+
+impl ToolDyn for ComposedChild {
+    fn name(&self) -> String {
+        self.name.to_owned()
+    }
+
+    fn definition<'a>(&'a self, _prompt: String) -> BoxFuture<'a, ToolDefinition> {
+        Box::pin(async move {
+            ToolDefinition {
+                name: self.name.to_owned(),
+                description: "composed child".into(),
+                parameters: serde_json::json!({"type": "object"}),
+            }
+        })
+    }
+
+    fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+        Box::pin(async move {
+            if self.name == "slow" {
+                tokio::time::sleep(
+                    crate::plugin::PluginBudget::default().wall_clock + Duration::from_secs(1),
+                )
+                .await;
+                return Ok("\"slow done\"".into());
+            }
+            let local = tokio::time::timeout(
+                Duration::from_millis(50),
+                std::future::pending::<()>(),
+            )
+            .await;
+            assert!(local.is_err());
+            Err(ToolError::ReportedFailure {
+                class: crate::tool_call_lifecycle::FailureClass::External,
+                text: "late timed out after 50ms".into(),
+            })
+        })
+    }
+}
+
+#[tokio::test]
+async fn composed_children_outlast_the_guest_clock_and_fail_without_ending_the_parent() {
+    let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
+    let request = serde_json::json!({"tool_calls": {"requests": [
+        {"id": "slow", "tool_name": "slow", "arguments": {}},
+        {"id": "late", "tool_name": "late", "arguments": {}}]}});
+    let (home, record) = crate::plugin::tests::executor::installed_plugin(
+        &crate::plugin::tests::executor::asking_plugin_wat(
+            "tool_calls",
+            "tool_results",
+            &request,
+            false,
+        ),
+        None,
+    );
+    let plugin = crate::plugin::tool::PluginTool::resolve(
+        Arc::new(crate::plugin::executor::PluginExecutor::new(Some(
+            home.path().to_owned(),
+        ))),
+        &crate::document_config::PluginToolRef {
+            tool_calls: true,
+            plugin: "team/plugin".into(),
+            digest: Some(record.digest.clone()),
+            input_fields: Vec::new(),
+        },
+        None,
+    )
+    .unwrap();
+    let tools: Vec<Box<dyn ToolDyn>> = vec![
+        Box::new(plugin),
+        Box::new(ComposedChild { name: "slow" }),
+        Box::new(ComposedChild { name: "late" }),
+    ];
+    let stream = run_loop_stream(
+        ScriptedModel::new_turns(plugin_call_then_text_turns()),
+        Some(hook.clone()),
+        TaggedMessage::unassociated(Message::user("compose")),
+        Vec::new(),
+        Arc::new(tools),
+        owned_config(4),
+    );
+    let collected = crate::tool_call_lifecycle::runtime::scope_request_tool_execution(
+        Some(chrono::Utc::now() + chrono::Duration::seconds(60)),
+        tokio_util::sync::CancellationToken::new(),
+        Box::pin(collect_owned_scripted_stream(
+            stream,
+            &hook,
+            &writer,
+            &mut lifecycle,
+            gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
+        )),
+    )
+    .await;
+    assert!(collected.error.is_none(), "{:?}", collected.error);
+    assert_eq!(collected.final_text.as_deref(), Some("seen"));
+    let output: serde_json::Value = serde_json::from_str(&collected.tool_results[0]).unwrap();
+    assert_eq!(output["tool_results"]["slow"]["result"], "slow done");
+    assert_eq!(
+        output["tool_results"]["late"]["error"],
+        "late timed out after 50ms"
+    );
+    let rows = node
+        .execute("query { AgentToolCall { tool_name lifecycle_state } }")
+        .await;
+    let rows = rows.data.unwrap()["AgentToolCall"].clone();
+    for (name, state) in [
+        ("plugin", "completed"),
+        ("slow", "completed"),
+        ("late", "failed"),
+    ] {
+        assert!(
+            rows.as_array().unwrap().iter().any(|row| row["tool_name"] == name
+                && row["lifecycle_state"] == state),
+            "{name} {state}: {rows}"
+        );
+    }
     node.shutdown().await;
 }

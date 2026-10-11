@@ -4678,7 +4678,6 @@ dependencies = [
  "ts-rs",
  "unicode-normalization",
  "uuid",
- "wasmtime 46.0.2",
  "wat",
  "windows-sys 0.61.2",
 ]

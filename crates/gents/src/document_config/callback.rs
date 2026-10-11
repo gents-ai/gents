@@ -140,7 +140,7 @@ pub struct CallbackModule {
     pub abi_version: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
-    pub wasm_bytes: Option<String>,
+    pub artifact_bytes: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub canonical_args: Option<String>,

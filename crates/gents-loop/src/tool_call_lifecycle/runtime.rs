@@ -515,6 +515,30 @@ pub fn tool_execution_bounds(command_timeout: Duration) -> ToolExecutionBounds {
     }
 }
 
+pub(crate) async fn dispatch_with_receipt(
+    tool: &dyn ToolDyn,
+    args: String,
+    live_output: Option<LiveToolOutputWriter>,
+) -> Result<String, ToolError> {
+    record_dispatch_receipt(tool.call_with_receipt(args).await, live_output).await
+}
+
+pub(crate) async fn record_dispatch_receipt(
+    dispatched: crate::tool::ToolDispatchResult,
+    live_output: Option<LiveToolOutputWriter>,
+) -> Result<String, ToolError> {
+    if let (Some(writer), Some(receipt)) = (live_output, dispatched.plugin_receipt) {
+        writer
+            .record_plugin_receipt(receipt)
+            .await
+            .map_err(|error| ToolError::ReportedFailure {
+                class: FailureClass::External,
+                text: format!("plugin execution receipt rejected: {error}"),
+            })?;
+    }
+    dispatched.result
+}
+
 /// Execute `tool` under the ambient runtime scope's deadline/cancellation
 /// envelope, returning the typed outcome. This (together with the foreground
 /// dispatcher's own envelope) is the only path a managed terminal can take:
@@ -527,7 +551,7 @@ pub fn tool_execution_bounds(command_timeout: Duration) -> ToolExecutionBounds {
 pub async fn call_tool_managed(tool: &dyn ToolDyn, args: String) -> ToolOutcome {
     let name = tool.name();
     let Ok(scope) = TOOL_RUNTIME_SCOPE.try_with(Clone::clone) else {
-        return ToolOutcome::from_dispatch(&name, tool.call(args).await);
+        return ToolOutcome::from_dispatch(&name, dispatch_with_receipt(tool, args, None).await);
     };
 
     if deadline_remaining(scope.deadline_at).is_some_and(|remaining| remaining.is_zero()) {
@@ -548,7 +572,8 @@ pub async fn call_tool_managed(tool: &dyn ToolDyn, args: String) -> ToolOutcome 
         biased;
         _ = scope.cancellation_token.cancelled() => ToolOutcome::Cancelled,
         _ = &mut deadline => ToolOutcome::TimedOut { deadline_at: scope.deadline_at },
-        result = tool.call(args) => {
+        dispatched = tool.call_with_receipt(args) => {
+            let result = record_dispatch_receipt(dispatched, scope.live_output.clone()).await;
             if deadline_remaining(scope.deadline_at).is_some_and(|remaining| remaining.is_zero()) {
                 ToolOutcome::TimedOut { deadline_at: scope.deadline_at }
             } else {
@@ -615,6 +640,114 @@ mod tests {
         fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
             Box::pin(async { Ok("ok".to_string()) })
         }
+    }
+
+    fn plugin_receipt() -> gents_protocol::plugin::PluginExecutionReceipt {
+        gents_protocol::plugin::PluginExecutionReceipt {
+            coordinate: "fixture@1".into(),
+            artifact_digest: "artifact".into(),
+            input_digest: "input".into(),
+            output_digest: None,
+            authority: None,
+            limits: None,
+            verdict: gents_protocol::plugin::PluginExecutionVerdict::Failed,
+        }
+    }
+
+    struct ReceiptTool {
+        delay: bool,
+        forge_text: bool,
+    }
+
+    impl ToolDyn for ReceiptTool {
+        fn name(&self) -> String {
+            "receipt".into()
+        }
+        fn definition<'a>(&'a self, _: String) -> BoxFuture<'a, ToolDefinition> {
+            Box::pin(async {
+                ToolDefinition {
+                    name: "receipt".into(),
+                    description: "fixture".into(),
+                    parameters: serde_json::json!({"type": "object"}),
+                }
+            })
+        }
+        fn call<'a>(&'a self, _: String) -> BoxFuture<'a, Result<String, ToolError>> {
+            Box::pin(async { Ok(serde_json::to_string(&plugin_receipt()).unwrap()) })
+        }
+        fn call_with_receipt<'a>(
+            &'a self,
+            args: String,
+        ) -> BoxFuture<'a, crate::tool::ToolDispatchResult> {
+            Box::pin(async move {
+                if self.delay {
+                    std::thread::sleep(Duration::from_millis(30));
+                }
+                crate::tool::ToolDispatchResult {
+                    result: self.call(args).await,
+                    plugin_receipt: (!self.forge_text).then(plugin_receipt),
+                }
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn receipt_shaped_output_does_not_create_native_evidence() {
+        let registry = crate::live_output::LiveToolOutputRegistry::default();
+        let writer = registry.writer_for("physical-call").await;
+        let result = dispatch_with_receipt(
+            &ReceiptTool {
+                delay: false,
+                forge_text: true,
+            },
+            "{}".into(),
+            Some(writer),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result, serde_json::to_string(&plugin_receipt()).unwrap());
+        assert!(registry.plugin_receipt("physical-call").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn returned_receipt_survives_outer_deadline_and_conflicting_receipt_is_refused() {
+        let registry = crate::live_output::LiveToolOutputRegistry::default();
+        let writer = registry.writer_for("physical-call").await;
+        let outcome = scope_request_tool_execution_with_session(
+            Some(Utc::now() + chrono::Duration::milliseconds(10)),
+            CancellationToken::new(),
+            None,
+            Some(writer.clone()),
+            None,
+            call_tool_managed(
+                &ReceiptTool {
+                    delay: true,
+                    forge_text: false,
+                },
+                "{}".into(),
+            ),
+        )
+        .await;
+        assert!(matches!(outcome, ToolOutcome::TimedOut { .. }));
+        assert_eq!(
+            registry.plugin_receipt("physical-call").await,
+            Some(plugin_receipt())
+        );
+        writer
+            .record_plugin_receipt(plugin_receipt())
+            .await
+            .unwrap();
+        let mut changed = plugin_receipt();
+        changed.input_digest = "changed".into();
+        assert!(writer.record_plugin_receipt(changed).await.is_err());
+        assert_eq!(
+            registry.plugin_receipt("physical-call").await,
+            Some(plugin_receipt())
+        );
+        assert!(registry
+            .plugin_receipt("another-physical-call")
+            .await
+            .is_none());
     }
 
     #[tokio::test]

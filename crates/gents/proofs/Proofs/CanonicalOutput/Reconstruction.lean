@@ -233,6 +233,7 @@ def writerMatchesSource (coordinate : Coordinate) (writer : Writer) : Bool :=
   | .provider _ _ _, .request _ => true
   | .auxiliary _ _ _ _, .request _ => true
   | .tool sourceCall, .tool writerCall => sourceCall == writerCall
+  | .toolEffectArguments _, .request _ => true
   | .authored _, .request _ => true
   | .authored _, .tool _ => true
   | _, _ => false

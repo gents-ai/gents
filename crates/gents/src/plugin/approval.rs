@@ -34,6 +34,7 @@ const LISTENER_GRACE: Duration = if cfg!(test) {
 
 tokio::task_local! {
     static INTERACTIVE: ();
+    static COMPOSED: ();
 }
 
 /// Runs `future` as an interactive chat's call when `interactive`, so a
@@ -52,12 +53,53 @@ pub async fn scope_interactive<F: std::future::Future>(interactive: bool, future
 pub fn carry_interactive<F: std::future::Future>(
     future: F,
 ) -> impl std::future::Future<Output = F::Output> {
-    scope_interactive(interactive(), future)
+    let composed = composed();
+    let future = scope_interactive(interactive(), future);
+    async move {
+        if composed {
+            COMPOSED.scope((), future).await
+        } else {
+            future.await
+        }
+    }
 }
 
 /// Whether the running call came from an interactive chat.
 pub fn interactive() -> bool {
     INTERACTIVE.try_with(|_| ()).is_ok()
+}
+
+/// Runs `future` as a child call composed by another plugin, which cannot
+/// suspend its parent invocation to wait for the operator.
+pub(crate) async fn scope_composed<F: std::future::Future>(future: F) -> F::Output {
+    COMPOSED.scope((), future).await
+}
+
+fn composed() -> bool {
+    COMPOSED.try_with(|_| ()).is_ok()
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Consent {
+    Ask,
+    RefuseComposed,
+    Deny,
+}
+
+/// Lean `ToolPolicy.PluginCalls.consentRoute`.
+pub(crate) fn consent_route(interactive: bool, composed: bool) -> Consent {
+    if composed {
+        Consent::RefuseComposed
+    } else if interactive {
+        Consent::Ask
+    } else {
+        Consent::Deny
+    }
+}
+
+/// How an uncovered path in the running call reaches the operator.
+pub(crate) fn consent(interactive: bool) -> Consent {
+    consent_route(interactive, composed())
 }
 
 /// One pending question.

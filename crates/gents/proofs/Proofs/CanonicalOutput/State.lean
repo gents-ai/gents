@@ -24,11 +24,14 @@ inductive Source where
   | provider (scope turn attempt : Nat)
   | auxiliary (kind : AuxiliaryKind) (scope turn attempt : Nat)
   | tool (call : DocId)
+  /-- A plugin effect's arguments are committed with its pending lifecycle row.
+  They are request-owned audit evidence, never an assistant/provider turn. -/
+  | toolEffectArguments (call : DocId)
   | authored (key : Nat)
   deriving DecidableEq, Repr
 
 def Source.isAuxiliary : Source → Bool
-  | .auxiliary _ _ _ _ => true
+  | .auxiliary _ _ _ _ | .toolEffectArguments _ => true
   | _ => false
 
 structure Coordinate where

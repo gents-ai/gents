@@ -13,7 +13,7 @@ use super::executor::PluginExecutor;
 use super::store::InstalledPlugin;
 use super::PluginVerdict;
 use crate::document_config::{PluginToolRef, WriteToolField};
-use crate::llm::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
+use crate::llm::tool::{BoxFuture, ToolDefinition, ToolDispatchResult, ToolDyn, ToolError};
 
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
@@ -31,6 +31,7 @@ pub struct PluginTool {
     /// of a session that has no workspace folder of its own.
     root: Option<PathBuf>,
     input_fields: Vec<WriteToolField>,
+    tool_calls: bool,
 }
 
 impl PluginTool {
@@ -42,12 +43,16 @@ impl PluginTool {
         root: Option<PathBuf>,
     ) -> Result<Self> {
         let record = executor.resolve(&plugin.plugin, plugin.digest.as_deref())?;
+        let mut description = record
+            .instructions
+            .clone()
+            .unwrap_or_else(|| record.declaration.description.clone());
+        if plugin.tool_calls {
+            description.push_str(&super::tool_calls::composition_note());
+        }
         let definition = ToolDefinition {
             name: plugin.tool_name().to_string(),
-            description: record
-                .instructions
-                .clone()
-                .unwrap_or_else(|| record.declaration.description.clone()),
+            description,
             parameters: bound_schema(&record.declaration.input_schema, &plugin.input_fields)?,
         };
         Ok(Self {
@@ -56,6 +61,7 @@ impl PluginTool {
             definition,
             root,
             input_fields: plugin.input_fields.clone(),
+            tool_calls: plugin.tool_calls,
         })
     }
 }
@@ -70,23 +76,48 @@ impl ToolDyn for PluginTool {
     }
 
     fn call<'a>(&'a self, args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+        Box::pin(async move { self.call_with_receipt(args).await.result })
+    }
+
+    fn call_with_receipt<'a>(&'a self, args: String) -> BoxFuture<'a, ToolDispatchResult> {
         Box::pin(async move {
-            let mut input: serde_json::Value = crate::llm::tool::parse_tool_args(&args)?;
-            fill_inputs(&mut input, &self.input_fields)
-                .map_err(|error| tool_error(format!("{error:#}")))?;
-            let call = self
-                .executor
-                .call_data_bound(&self.record, input, self.root.as_deref())
-                .await
-                .map_err(|error| tool_error(format!("{error:#}")))?;
-            match call.outcome.verdict {
-                PluginVerdict::Success => {
-                    serde_json::to_string(&call.outcome.output).map_err(ToolError::JsonError)
+            let mut input: serde_json::Value = match crate::llm::tool::parse_tool_args(&args) {
+                Ok(input) => input,
+                Err(error) => {
+                    return ToolDispatchResult {
+                        result: Err(error),
+                        plugin_receipt: None,
+                    };
                 }
-                _ => Err(tool_error(format!(
-                    "plugin {} did not return a result: {}",
-                    call.coordinate, call.outcome.diagnostics
-                ))),
+            };
+            if let Err(error) = fill_inputs(&mut input, &self.input_fields) {
+                return ToolDispatchResult {
+                    result: Err(tool_error(format!("{error:#}"))),
+                    plugin_receipt: Some(super::executor::initial_receipt(&self.record, &input)),
+                };
+            }
+            let (call, receipt) = self
+                .executor
+                .call_data_bound_with_receipt(
+                    &self.record,
+                    input,
+                    self.root.as_deref(),
+                    self.tool_calls,
+                )
+                .await;
+            let result =
+                call.map_err(|error| tool_error(format!("{error:#}")))
+                    .and_then(|call| match call.outcome.verdict {
+                        PluginVerdict::Success => serde_json::to_string(&call.outcome.output)
+                            .map_err(ToolError::JsonError),
+                        _ => Err(tool_error(format!(
+                            "plugin {} did not return a result: {}",
+                            call.coordinate, call.outcome.diagnostics
+                        ))),
+                    });
+            ToolDispatchResult {
+                result,
+                plugin_receipt: Some(receipt),
             }
         })
     }

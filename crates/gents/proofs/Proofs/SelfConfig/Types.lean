@@ -28,7 +28,7 @@ references remain editable; raw-key and OAuth-account protection belong to the
 typed auth guard (`SelfConfig.authGuard`, enforced in Rust `validate`). -/
 def protectedKey (t : Target) (k : FieldKey) : Bool :=
   (t == .task && k == "agent_id") || k == t.uniqueField || ["node_did", "created_at", "updated_at", "created_by",
-    "wasm_bytes", "canonical_args", "signer_did", "provenance"].contains k
+    "artifact_bytes", "canonical_args", "signer_did", "provenance"].contains k
 
 def writableFields (t : Target) : List FieldKey :=
   if t ∈ allTargets then (allFields t).filter (fun k => !protectedKey t k) else []

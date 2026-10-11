@@ -375,7 +375,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::CALLBACK_MODULE_NAME,
         gents_protocol::schemas::CALLBACK_MODULE,
-        "bafyreiaujetzfiauz2wfduqsmmynybedpwm4udowmkcfo66u7stdr552iq"
+        "bafyreib7haitwuad7wkxrermsm4nyrtvjc5asva3ubms34kspq3psfmjde"
     ),
     baseline_entry!(
         gents_protocol::schemas::CALLBACK_BINDING_NAME,
@@ -460,7 +460,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::AGENT_TOOL_CALL_NAME,
         gents_protocol::schemas::AGENT_TOOL_CALL,
-        "bafyreicuz2wf6aqbpfqtji6f6advclq5aeuiaaxerczwbaiel2w3aj56oy"
+        "bafyreiexmbjxfqyg6yhjst6r746spzge27f6mhh2moyrkawbmvtvba4mbi"
     ),
     baseline_entry!(
         gents_protocol::schemas::COMPACTION_ENTRY_NAME,

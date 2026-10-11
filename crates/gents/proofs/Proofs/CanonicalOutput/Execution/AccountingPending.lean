@@ -107,7 +107,7 @@ theorem cancelPendingWorld_lifecycle (world : World) (document : DocId)
             toolHandedOff]
         · simp_all [hp, hr, cancelPendingTool, cancelPendingRow, cancelPendingWorld,
             toolHandedOff, Finset.mem_erase]
-    | spawnedBackground parent =>
+    | spawnedBackground parent | pluginEffect parent _ =>
       by_cases selected : tool.document = document <;>
         simp_all [hp, cancelPendingTool, cancelPendingRow, cancelPendingWorld, Finset.mem_erase]
   · change (world.transcript.toolCalls.map (cancelPendingRow document)).all _ = true

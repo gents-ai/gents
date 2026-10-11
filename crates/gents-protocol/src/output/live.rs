@@ -109,7 +109,10 @@ pub struct DensePrefix {
 /// owners reuse the one shared predicate instead of reimplementing it.
 pub(crate) fn writer_matches_source(source: &OutputSource, writer: &OutputWriter) -> bool {
     match (source, writer) {
-        (OutputSource::ProviderTurn { .. }, OutputWriter::RequestExecution { .. }) => true,
+        (
+            OutputSource::ProviderTurn { .. } | OutputSource::ToolEffectArguments { .. },
+            OutputWriter::RequestExecution { .. },
+        ) => true,
         (
             OutputSource::ToolCall {
                 tool_call_doc_id: a,

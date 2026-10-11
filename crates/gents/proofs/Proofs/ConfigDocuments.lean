@@ -72,7 +72,7 @@ def documentSpec : Collection → DocumentSpec
   | .trigger => ⟨"Trigger", "trigger_id", "automation", ["node_did", "trigger_id", "display_name", "description", "task_id", "source", "session_id_template", "enabled", "concurrency", "created_at", "updated_at", "tags"]⟩
   | .callback => ⟨"Callback", "callback_id", "automation", ["callback_id", "node_did", "display_name", "description", "handler", "capabilities", "enabled", "tags"]⟩
   | .callbackBinding => ⟨"CallbackBinding", "binding_id", "automation", ["binding_id", "node_did", "event_source_id", "callback_id", "input_fields", "enabled", "tags"]⟩
-  | .callbackModule => ⟨"CallbackModule", "module_id", "automation", ["module_id", "node_did", "abi_version", "wasm_bytes", "canonical_args", "signer_did", "provenance", "enabled", "fuel_limit", "memory_pages", "max_input_bytes", "max_output_bytes", "tags"]⟩
+  | .callbackModule => ⟨"CallbackModule", "module_id", "automation", ["module_id", "node_did", "abi_version", "artifact_bytes", "canonical_args", "signer_did", "provenance", "enabled", "fuel_limit", "memory_pages", "max_input_bytes", "max_output_bytes", "tags"]⟩
   | .repositoryPlacement => ⟨"RepositoryPlacement", "repository_id", "automation", ["repository_id", "node_did", "host_path", "enabled", "tags"]⟩
   | .graphDefinition => ⟨"GraphDefinition", "graph_id", "automation", ["graph_id", "node_did", "enabled", "created_at", "updated_at", "tags"]⟩
   | .evalDefinition => ⟨"EvalDefinition", "definition_id", "automation", ["definition_id", "node_did", "comparability_version", "title", "subject", "fixtures", "cases", "updated_at", "tags"]⟩

@@ -57,6 +57,7 @@ fn unique<'a>(
 fn writer_matches_source(source: &OutputSource, writer: &OutputWriter) -> bool {
     match (source, writer) {
         (OutputSource::ProviderTurn { .. }, OutputWriter::RequestExecution { .. }) => true,
+        (OutputSource::ToolEffectArguments { .. }, OutputWriter::RequestExecution { .. }) => true,
         (
             OutputSource::ToolCall {
                 tool_call_doc_id: source,

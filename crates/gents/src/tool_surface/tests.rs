@@ -1285,6 +1285,7 @@ async fn plugin_only_bindings_are_captured_for_trigger_execution() {
         "evidence",
         ResolvedToolSelection {
             plugin_tools: vec![PluginToolRef {
+                tool_calls: false,
                 plugin: "team/page_reader".into(),
                 digest: None,
                 input_fields: vec![

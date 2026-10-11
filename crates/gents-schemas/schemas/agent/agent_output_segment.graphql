@@ -15,7 +15,7 @@ type AgentOutputSegment @branchable {
     requester_did: String @index @immutable
     session_id: String @index @immutable
     request_doc_id: String @index @immutable
-    # OutputSource as strict JSON: provider_turn / tool_call / authored.
+    # OutputSource as strict JSON: provider_turn / tool_call / tool_effect_arguments / authored.
     source: JSON @immutable
     # Null on terminal-only records; otherwise dense from zero within the source.
     ordinal: Int @immutable
