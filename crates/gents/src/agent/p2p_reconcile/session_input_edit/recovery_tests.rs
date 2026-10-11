@@ -266,3 +266,70 @@ async fn late_twin_of_an_applied_command_is_left_unanswered_without_error() {
     assert_eq!(raw_receipt(&owner.node, &prior).await.unwrap(), receipt);
     assert_eq!(requests(&owner.node).await, effects);
 }
+
+async fn overwrite_receipt(node: &Arc<EmbeddedNode>, id: &str, raw: &str) {
+    ConfigAccess::Local(node.clone()).write("test.overwrite.receipt", &format!(r#"mutation {{ update_AgentSessionInputEdit(docID: "{}", input: {{ receipt_json: "{}" }}) {{ _docID }} }}"#,
+        escape_graphql_string(id), escape_graphql_string(raw))).await.unwrap();
+}
+
+/// Runs the reconciler until the command carries a receipt that verifies.
+async fn reconcile_until_verified(
+    home: &EmbeddedHome,
+    command: &SessionInputEdit,
+    id: &str,
+) -> SessionInputEditReceipt {
+    let cancel = CancellationToken::new();
+    let worker = tokio::spawn(run_session_input_edit_reconciler(
+        home.node.clone(),
+        home.identity.clone(),
+        cancel.clone(),
+    ));
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
+    let receipt = loop {
+        let raw = raw_receipt(&home.node, id).await;
+        if let Some(receipt) = verified_receipt(home.identity.as_ref(), command, raw.as_deref())
+            .await
+            .unwrap()
+        {
+            break receipt;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "reconciler left the command without a verified receipt"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    };
+    cancel.cancel();
+    worker.await.unwrap().unwrap();
+    receipt
+}
+
+#[tokio::test]
+async fn receipt_overwritten_while_stopped_is_reissued_at_restart() {
+    let home = temp_home(false).await;
+    let command = edit_command(&home, Utc::now() - chrono::Duration::seconds(1)).await;
+    let id = submit(&home.node, &command).await;
+    let applied = reconcile_until_verified(&home, &command, &id).await;
+    assert_eq!(applied.outcome, SessionInputEditOutcome::Applied);
+    let effects = requests(&home.node).await;
+    overwrite_receipt(&home.node, &id, "{}").await;
+
+    let reissued = reconcile_until_verified(&home, &command, &id).await;
+    assert_eq!(reissued.outcome, SessionInputEditOutcome::Applied);
+    assert_eq!(reissued.request_doc_ids, applied.request_doc_ids);
+    assert_eq!(reissued.request_ids, applied.request_ids);
+    assert_eq!(requests(&home.node).await, effects);
+}
+
+#[tokio::test]
+async fn future_issued_command_with_invalid_receipt_is_processed_at_its_deadline() {
+    let home = temp_home(false).await;
+    let issued_at = Utc::now() + chrono::Duration::seconds(2);
+    let command = edit_command(&home, issued_at).await;
+    let id = submit(&home.node, &command).await;
+    overwrite_receipt(&home.node, &id, "{}").await;
+
+    let receipt = reconcile_until_verified(&home, &command, &id).await;
+    assert!(Utc::now() >= issued_at);
+    assert_eq!(receipt.outcome, SessionInputEditOutcome::Applied);
+}

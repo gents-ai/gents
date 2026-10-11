@@ -1,4 +1,5 @@
 //! Runtime-owned application of signed pending-input commands.
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -282,31 +283,59 @@ pub(crate) async fn process_command(
     }).await
 }
 
-async fn unanswered_commands(node: &EmbeddedNode, node_did: &str) -> Result<Vec<String>> {
+#[derive(Clone, Copy)]
+enum Sweep {
+    /// Commands without any receipt; cheap enough for every tick.
+    Unanswered,
+    /// Also commands whose receipt does not verify. A replica can overwrite a
+    /// valid receipt, and only its change notification names that command, so
+    /// this runs whenever notifications may have been lost: at startup, on
+    /// resync, and on every tick once the subscription has closed.
+    Unverified,
+}
+
+async fn unanswered_commands(
+    node: &EmbeddedNode,
+    identity: &dyn NodeIdentity,
+    sweep: Sweep,
+) -> Result<Vec<String>> {
+    let receipt_filter = match sweep {
+        Sweep::Unanswered => ", receipt_json: { _eq: null }",
+        Sweep::Unverified => "",
+    };
     let response = crate::graphql::graphql_with_transaction_retry(
         node,
         &format!(
-            r#"{{ AgentSessionInputEdit(filter: {{ node_did: {{ _eq: "{}" }}, receipt_json: {{ _eq: null }} }}) {{ _docID }} }}"#,
-            escape_graphql_string(node_did)
+            r#"{{ AgentSessionInputEdit(filter: {{ node_did: {{ _eq: "{}" }}{receipt_filter} }}) {{ _docID intent_json receipt_json }} }}"#,
+            escape_graphql_string(identity.did())
         ),
         "queue.signed_edits",
     )
     .await?;
     #[derive(Deserialize)]
-    struct Id {
+    struct Row {
         #[serde(rename = "_docID")]
         doc_id: String,
+        intent_json: String,
+        receipt_json: Option<String>,
     }
-    Ok(
-        crate::graphql::rows::<Id>(&response, "AgentSessionInputEdit")?
-            .into_iter()
-            .map(|row| row.doc_id)
-            .collect(),
-    )
+    let mut unanswered = Vec::new();
+    for row in crate::graphql::rows::<Row>(&response, "AgentSessionInputEdit")? {
+        let answered = match serde_json::from_str::<SessionInputEdit>(&row.intent_json) {
+            Ok(command) => verified_receipt(identity, &command, row.receipt_json.as_deref())
+                .await?
+                .is_some(),
+            Err(_) => row.receipt_json.is_some(),
+        };
+        if !answered {
+            unanswered.push(row.doc_id);
+        }
+    }
+    Ok(unanswered)
 }
 
-/// Sweeps unanswered commands and processes each changed command, which also
-/// re-answers a command whose receipt a replica overwrote.
+/// Sweeps unanswered commands, processes each changed command, and retries each
+/// command deferred until its issuance at that instant.
 pub async fn run_session_input_edit_reconciler(
     node: Arc<EmbeddedNode>,
     identity: Arc<dyn NodeIdentity>,
@@ -319,13 +348,12 @@ pub async fn run_session_input_edit_reconciler(
     let mut changes = node.subscribe_document_changes();
     let mut interval = tokio::time::interval(super::intervals::sweep_interval());
     let mut subscription_open = true;
-    let mut deferred_until: Option<DateTime<Utc>> = None;
+    let mut deferred: HashMap<String, DateTime<Utc>> = HashMap::new();
     let mut ids = Vec::new();
-    let mut sweep = true;
+    let mut sweep = Some(Sweep::Unverified);
     loop {
-        if sweep {
-            deferred_until = None;
-            match unanswered_commands(&node, identity.did()).await {
+        if let Some(sweep) = sweep {
+            match unanswered_commands(&node, identity.as_ref(), sweep).await {
                 Ok(unanswered) => ids.extend(unanswered),
                 Err(error) => tracing::warn!(%error, "pending input edit sweep failed"),
             }
@@ -338,29 +366,39 @@ pub async fn run_session_input_edit_reconciler(
             }
             match process_command(&node, &identity, &id).await {
                 Ok(Some(issued_at)) => {
-                    deferred_until = Some(deferred_until.map_or(issued_at, |at| at.min(issued_at)));
+                    deferred.insert(id, issued_at);
                 }
-                Ok(None) => {}
+                Ok(None) => {
+                    deferred.remove(&id);
+                }
                 Err(error) => {
+                    deferred.remove(&id);
                     tracing::warn!(command_doc_id = id, %error, "pending input edit could not be processed");
                 }
             }
         }
-        let retry = deferred_until.map(|at| (at - Utc::now()).to_std().unwrap_or_default());
+        let retry = deferred
+            .values()
+            .min()
+            .map(|at| (*at - Utc::now()).to_std().unwrap_or_default());
         sweep = tokio::select! {
             _ = cancel.cancelled() => return Ok(()),
-            _ = interval.tick() => true,
-            _ = tokio::time::sleep(retry.unwrap_or_default()), if retry.is_some() => true,
+            _ = interval.tick() => Some(if subscription_open { Sweep::Unanswered } else { Sweep::Unverified }),
+            _ = tokio::time::sleep(retry.unwrap_or_default()), if retry.is_some() => {
+                let now = Utc::now();
+                ids.extend(deferred.iter().filter(|(_, at)| **at <= now).map(|(id, _)| id.clone()));
+                None
+            }
             event = changes.recv(), if subscription_open => match event {
                 Some(event) => {
                     ids.extend(event.changes.into_iter()
                         .filter(|change| change.collection_id == collection_id)
                         .map(|change| change.doc_id));
-                    event.resync_required
+                    event.resync_required.then_some(Sweep::Unverified)
                 }
                 None => {
                     subscription_open = false;
-                    true
+                    Some(Sweep::Unverified)
                 }
             },
         };
