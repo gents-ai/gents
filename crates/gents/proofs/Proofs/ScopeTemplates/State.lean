@@ -112,7 +112,7 @@ def clientOwnerProjectionCollections : List String :=
 
 def clientToRuntimeCollections : List String :=
   clientTranscriptCollections ++
-    ["PeerEndpoint", "SessionHydrationRequest"]
+    ["PeerEndpoint", "SessionHydrationRequest", "AgentSessionInputEdit"]
 
 def clientControlPlaneCollections : List String :=
   agentConfigCollections ++
@@ -129,7 +129,7 @@ def clientRouteCollections : RouteDirection → List String
 
 def machineCollections : List String :=
   conversationCollections ++
-    ["MailboxItem", "SessionHydrationRequest", "NodeDirectoryEntry"]
+    ["MailboxItem", "SessionHydrationRequest", "AgentSessionInputEdit", "NodeDirectoryEntry"]
 
 /-- A remote `agent_new` is an ordinary Peer AgentRequest authored on the
 caller node with `node_did = target` and `requester_did = caller`. The
@@ -161,6 +161,7 @@ def machineRules : List CollectionRule :=
   conversationRules ++
     [ { collection := "MailboxItem", field := "requester_did", source := .peerDid }
     , { collection := "SessionHydrationRequest", field := "requester_did", source := .peerDid }
+    , { collection := "AgentSessionInputEdit", field := "requester_did", source := .peerDid }
     , { collection := "NodeDirectoryEntry", field := "source_did", source := .homeDid } ]
 
 def agentTargetCallerRules : List CollectionRule :=

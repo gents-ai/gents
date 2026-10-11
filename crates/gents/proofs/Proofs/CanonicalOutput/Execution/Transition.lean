@@ -1032,6 +1032,24 @@ theorem reuseAuthored_requires_live_lease (world : World) (current : Generation)
 /-- Authored key of the selected queued message a publication answers. -/
 def foldedAuthoredKey (requestId : RequestId) : String := "folded:" ++ toString requestId
 
+/-- New input must arrive strictly before the request deadline. This is the
+existing execution deadline boundary, not retry scheduling: a retry wake may
+fit exactly at its deadline, but no new input is accepted then. Already
+published input can still be replayed and partial audit output can be flushed. -/
+def inputPublicationBeforeDeadline (now : Time) (deadline : Option Time) : Bool :=
+  match deadline with
+  | none => true
+  | some deadline => decide (now < deadline)
+
+theorem inputPublication_at_deadline_rejected (deadline : Time) :
+    inputPublicationBeforeDeadline deadline (some deadline) = false := by
+  simp [inputPublicationBeforeDeadline]
+
+private def freshFoldedSelectionValid (world : World) (message : MessageEnvelope) : Bool :=
+  !message.key.startsWith "folded:" ||
+    (inputPublicationBeforeDeadline world.lease.now world.retry.deadline &&
+      world.queue.folding.head?.any (fun entry => foldedAuthoredKey entry.requestId == message.key))
+
 /-- The authored-publication owner. A fresh entry takes the fenced
 publication path; an accepted entry, from this or an earlier generation of
 the request, is reused under the caller's live lease. Publishing the next
@@ -1041,6 +1059,8 @@ def publishAuthoredComposed (world : World) (generation : Generation) (closing :
     (message : MessageEnvelope) : Except Error World :=
   if authoredPublicationPresent world closing message then
     reuseAuthored world generation closing message
+  else if !freshFoldedSelectionValid world message then
+    .error .publicationIncomplete
   else match publishAuthored world generation closing message with
     | .error error => .error error
     | .ok published =>
@@ -1059,18 +1079,31 @@ theorem publishAuthoredComposed_success (world after : World) (generation : Gene
   unfold publishAuthoredComposed at h
   split at h
   · exact Or.inl (reuseAuthored_writes_nothing world after generation closing message h)
-  · split at h
-    · contradiction
-    · rename_i published h_published
-      refine Or.inr ⟨published, h_published, ?_⟩
-      split at h
-      · split at h
-        · cases h
-          exact Or.inr ⟨_, rfl⟩
-        · cases h
-          exact Or.inl rfl
-      · cases h
-        exact Or.inl rfl
+  · cases hf : freshFoldedSelectionValid world message with
+    | false =>
+        simp only [hf, Bool.not_false, ↓reduceIte] at h
+        cases h
+    | true =>
+        simp only [hf, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at h
+        cases hp : publishAuthored world generation closing message with
+        | error err =>
+            simp only [hp] at h
+            cases h
+        | ok published =>
+            simp only [hp] at h
+            refine Or.inr ⟨published, rfl, ?_⟩
+            cases hs : published.queue.folding with
+            | nil =>
+                simp only [hs] at h
+                cases h
+                exact Or.inl rfl
+            | cons entry rest =>
+                simp only [hs] at h
+                split at h
+                · cases h
+                  exact Or.inr ⟨_, rfl⟩
+                · cases h
+                  exact Or.inl rfl
 
 def publishHeaderOnly (world : World) (generation : Generation)
     (message : MessageEnvelope) (admissions : List ToolAdmission) : Except Error World :=

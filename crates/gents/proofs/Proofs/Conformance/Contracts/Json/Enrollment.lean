@@ -212,7 +212,12 @@ private def titleRequestInputJson (input : Enrollment.RequestInput) : String :=
           ",\"interrupted_request_id\":" ++
             jsonOptionalString queue.interruptedRequestId ++
           ",\"background_completion_wake_version\":" ++
-            jsonOptionalNat queue.backgroundCompletionWakeVersion ++ "}") ++ ","
+            jsonOptionalNat queue.backgroundCompletionWakeVersion ++
+          ",\"delivery\":" ++ jsonString queue.delivery.toDefraDB ++
+          ",\"position\":" ++ (match queue.position with
+            | none => "null"
+            | some p => "{\"slot_request_doc_id\":" ++ jsonString p.slotRequestDocId ++
+                ",\"replaces_request_doc_id\":" ++ jsonString p.replacesRequestDocId ++ "}") ++ "}") ++ ","
     ++ "\"goal_continuation\":" ++ (match input.goalContinuation with
       | none => "null"
       | some goal => "{\"sequence\":" ++ toString goal.sequence ++

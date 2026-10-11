@@ -94,6 +94,9 @@ def cases : List (String × List Event) :=
   , ("unverified_admission_stops_fold",
       [.enqueue (user 101), .enqueue (user 102 (some 101)), .enqueue (user 103 (some 101)),
         .claim [103]])
+  , ("expired_candidate_stops_fold",
+      [.enqueue (user 101), .enqueue { user 102 (some 101) with fresh := false },
+        .enqueue (user 103 (some 101)), .claim [102, 103]])
   , ("steering_head_folds_nothing",
       [.enqueue (steering 101 100), .enqueue (user 102 (some 100)), .claim [102]]) ]
 
@@ -105,6 +108,7 @@ example : cases.map (fun c => observation c.2) =
     , some ⟨some 101, [102, 103], [], [], [(101, [])]⟩
     , some ⟨some 101, [102, 103], [], [], [(101, [])]⟩
     , some ⟨some 101, [102], [], [], [(101, [])]⟩
+    , some ⟨some 101, [102, 103], [], [], [(101, [])]⟩
     , some ⟨some 101, [102, 103], [], [], [(101, [])]⟩
     , some ⟨some 101, [102], [], [], [(101, [])]⟩ ] := by native_decide
 
