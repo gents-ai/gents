@@ -404,11 +404,12 @@ export const TranscriptPanel = memo(function TranscriptPanel({
     ? activityStatus(session?.timelineItems ?? [], stopping)
     : null;
   const wasInterrupted = session?.turnState === "interrupted";
-  const appliedInputIds = JSON.stringify(
-    (session?.foldedInputs ?? []).map((input) => input.requestId).sort(),
-  );
+  const appliedInputIds = (session?.foldedInputs ?? [])
+    .map((input) => input.requestId)
+    .sort()
+    .join("\n");
   const appliedInputs = useMemo(
-    () => new Set<string>(JSON.parse(appliedInputIds)),
+    () => new Set(appliedInputIds ? appliedInputIds.split("\n") : []),
     [appliedInputIds],
   );
   const responseError =
