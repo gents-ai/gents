@@ -3,6 +3,20 @@ use crate::config_client::ConfigAccess;
 use crate::lean_vocab_test::LeanQueueManagementOperation;
 use std::collections::HashMap;
 
+async fn queue_image(
+    db: &TestDb,
+    session_id: &str,
+    active: Option<&super::folding::ActiveTurn>,
+) -> crate::lean_vocab_test::QueueImage {
+    crate::lean_vocab_test::native_queue_image(
+        &db.node,
+        db.node_did(),
+        session_id,
+        active.map_or(&[], |turn| turn.lifecycle.folded_selection()),
+    )
+    .await
+}
+
 #[tokio::test]
 async fn generated_pending_management_cases_bind_to_signed_replacement_owner() {
     let cases = crate::lean_vocab_test::lean_queue_management_cases();
@@ -54,24 +68,48 @@ async fn generated_pending_management_cases_bind_to_signed_replacement_owner() {
             (false, _) => Some("malformed"),
         };
         let mut bound = HashMap::new();
+        let mut names: HashMap<u64, String> = HashMap::new();
+        let signed = |id: u64, arrival: usize| {
+            gents_protocol::request_admission::AgentRequestCreate::base(
+                gents_protocol::request_admission::RequestPurpose::Normal,
+                id.to_string(),
+                db.node_did(),
+                db.node_did(),
+                TEST_AGENT_ID,
+                &session_id,
+                format!("message {id}"),
+                "interactive",
+                format!("2026-09-01T00:00:{arrival:02}Z"),
+                gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
+                    db.node_did(),
+                ),
+            )
+        };
+        if let Some(active) = case.before.active {
+            let mut create = signed(active, 0);
+            crate::sign_agent_request_create(db.identity.as_ref(), &mut create)
+                .await
+                .unwrap();
+            let response = ConfigAccess::write_local_response(
+                &db.node,
+                "test.management.active",
+                &create.graphql_mutation().unwrap(),
+            )
+            .await
+            .unwrap();
+            bound.insert(
+                active,
+                extract_single_doc_id(&response, "create_AgentRequest").unwrap(),
+            );
+            names.insert(active, active.to_string());
+        }
         for (arrival, entry) in originals.iter().enumerate() {
+            let arrival = arrival + 1;
+            names.insert(entry.request_id, entry.request_id.to_string());
             let id = if entry.requester_id == Some(2) {
                 super::folding::enqueue(&db, &session_id, entry, arrival).await
             } else {
-                let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
-                    gents_protocol::request_admission::RequestPurpose::Normal,
-                    entry.request_id.to_string(),
-                    db.node_did(),
-                    db.node_did(),
-                    TEST_AGENT_ID,
-                    &session_id,
-                    format!("message {}", entry.request_id),
-                    "interactive",
-                    format!("2026-09-01T00:00:{arrival:02}Z"),
-                    gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
-                        db.node_did(),
-                    ),
-                );
+                let mut create = signed(entry.request_id, arrival);
                 create.input = super::folding::generated_input(entry);
                 create.valid_until = ttl(entry)
                     .filter(|ttl| *ttl != "malformed")
@@ -97,6 +135,29 @@ async fn generated_pending_management_cases_bind_to_signed_replacement_owner() {
             };
             bound.insert(entry.request_id, id);
         }
+        let active = match case.before.active {
+            Some(head) => Some(
+                super::folding::claim_head(
+                    &db,
+                    &bound,
+                    head,
+                    &case
+                        .before
+                        .folding
+                        .iter()
+                        .map(|entry| entry.request_id)
+                        .collect::<Vec<_>>(),
+                )
+                .await,
+            ),
+            None => None,
+        };
+        assert_eq!(
+            queue_image(&db, &session_id, active.as_ref()).await,
+            case.before.image(|id| names[&id].clone()),
+            "{}: seeded queue",
+            case.name
+        );
         let edit = PendingQueueEdit {
             expected_request_doc_ids: expected.iter().map(|id| bound[id].clone()).collect(),
             selected_request_doc_ids: selected
@@ -189,7 +250,21 @@ async fn generated_pending_management_cases_bind_to_signed_replacement_owner() {
                 );
             }
         }
-        if let Some(after) = &case.expected {
+        if let Ok(receipt) = &result {
+            for (replacement, id) in replacements.iter().zip(&receipt.request_ids) {
+                names.insert(replacement.request_id, id.clone());
+            }
+        }
+        assert_eq!(
+            queue_image(&db, &session_id, active.as_ref()).await,
+            case.expected
+                .as_ref()
+                .unwrap_or(&case.before)
+                .image(|id| names[&id].clone()),
+            "{}: queue state",
+            case.name
+        );
+        if case.expected.is_some() {
             let receipt = result.unwrap();
             assert_eq!(
                 receipt.request_ids.len(),
@@ -204,37 +279,6 @@ async fn generated_pending_management_cases_bind_to_signed_replacement_owner() {
                     case.name
                 );
                 bound.insert(replacement.request_id, id.clone());
-            }
-            let snapshot = pending_user_queue(&access, db.node_did(), &session_id, caller_did)
-                .await
-                .unwrap();
-            let expected_ids = after
-                .folding
-                .iter()
-                .chain(&after.pending)
-                .map(|entry| bound[&entry.request_id].clone())
-                .collect::<Vec<_>>();
-            assert_eq!(
-                snapshot
-                    .entries
-                    .iter()
-                    .map(|entry| entry.request_doc_id.clone())
-                    .collect::<Vec<_>>(),
-                expected_ids,
-                "{}: logical queue order",
-                case.name
-            );
-            for original in &originals {
-                let row = actual_rows
-                    .iter()
-                    .find(|row| row["_docID"] == bound[&original.request_id])
-                    .unwrap();
-                assert_eq!(
-                    row["lifecycle_state"] != "pending",
-                    after.terminal.contains(&original.request_id),
-                    "{}: terminal requests",
-                    case.name
-                );
             }
             for (replacement, id) in replacements.iter().zip(&receipt.request_doc_ids) {
                 let row = crate::request_binding::load_agent_request_by_doc_id(&db.node, id)

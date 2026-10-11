@@ -1,8 +1,8 @@
 use super::*;
 use crate::identity::KeyIdentity;
 use crate::lean_vocab_test::{
-    LeanFoldQueueEntry, LeanSessionInputEditAuthority, LeanSessionInputEditCommand,
-    LeanSessionInputEditStep,
+    LeanQueueManagementState, LeanSessionInputEditAuthority, LeanSessionInputEditCommand,
+    LeanSessionInputEditStep, QueueImage,
 };
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
@@ -11,7 +11,7 @@ use gents_protocol::request_input::{
     QueueDelivery, QueuePolicy, QueueSource, RequestInput, RequestQueue,
 };
 use gents_protocol::session_input_edit::{PendingMessageEdit, PendingQueueEdit};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 
 const SESSION: &str = "edit-session";
 
@@ -154,42 +154,60 @@ impl Fixture {
 
 /// Native image of one modeled local queue: model request IDs bind to native
 /// request IDs, and model commands bind to signed intents and their documents.
+/// The modeled active request holds its native claim, which selected the
+/// modeled folding run.
 struct ModeledQueue {
     fixture: Fixture,
     request_ids: HashMap<u64, String>,
     doc_ids: HashMap<u64, String>,
     commands: HashMap<(u64, u64), (String, SessionInputEdit)>,
+    active: Option<crate::lifecycle::RequestLifecycle>,
     anchor: DateTime<Utc>,
     nows: Vec<u64>,
 }
 
 impl ModeledQueue {
-    async fn seed(entries: Vec<&LeanFoldQueueEntry>, nows: Vec<u64>) -> Self {
+    async fn seed(state: &LeanQueueManagementState, nows: Vec<u64>) -> Self {
         let fixture = Fixture::empty().await;
         let mut queue = Self {
             fixture,
             request_ids: HashMap::new(),
             doc_ids: HashMap::new(),
             commands: HashMap::new(),
+            active: None,
             anchor: Utc::now(),
             nows,
         };
-        for (arrival, entry) in entries.iter().enumerate() {
-            assert_eq!(entry.requester_id, Some(1), "requester 1 is the node");
-            assert_eq!(entry.turn_context, 0);
-            let did = queue.fixture.identity.did().to_owned();
-            let mut create = AgentRequestCreate::base(
+        let did = queue.fixture.identity.did().to_owned();
+        let request = |id: u64, origin: &str, arrival: usize| {
+            AgentRequestCreate::base(
                 RequestPurpose::Normal,
-                entry.request_id.to_string(),
+                id.to_string(),
                 &did,
                 &did,
                 "general",
                 SESSION,
-                format!("message {}", entry.request_id),
-                &entry.execution_origin,
+                format!("message {id}"),
+                origin,
                 format!("2026-10-10T00:00:{arrival:02}Z"),
                 AgentRequestAdmissionRecord::local_self(&did),
-            );
+            )
+        };
+        let mut arrival = 0;
+        if let Some(active) = state.active {
+            let doc = queue
+                .fixture
+                .write_request(request(active, "interactive", arrival))
+                .await;
+            queue.request_ids.insert(active, active.to_string());
+            queue.doc_ids.insert(active, doc);
+            arrival += 1;
+        }
+        for entry in state.folding.iter().chain(&state.pending) {
+            assert_eq!(entry.requester_id, Some(1), "requester 1 is the node");
+            assert_eq!(entry.turn_context, 0);
+            let mut create = request(entry.request_id, &entry.execution_origin, arrival);
+            arrival += 1;
             create.input.queue = Some(RequestQueue {
                 delivery: serde_json::from_value(serde_json::json!(entry.delivery)).unwrap(),
                 position: None,
@@ -207,8 +225,53 @@ impl ModeledQueue {
                 .insert(entry.request_id, entry.request_id.to_string());
             queue.doc_ids.insert(entry.request_id, doc);
         }
+        if let Some(active) = state.active {
+            let request = crate::request_binding::load_agent_request_by_doc_id(
+                &queue.fixture.node,
+                &queue.doc_ids[&active],
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            let mut lifecycle = crate::lifecycle::RequestLifecycle::new_with_node_did(
+                queue.fixture.node.clone(),
+                "general",
+                &did,
+                request,
+                600,
+            );
+            lifecycle.set_fold_admitted(
+                state
+                    .folding
+                    .iter()
+                    .map(|entry| queue.doc_ids[&entry.request_id].clone())
+                    .collect(),
+            );
+            assert_eq!(
+                lifecycle.claim().await.unwrap(),
+                crate::lifecycle::ClaimOutcome::Claimed
+            );
+            queue.active = Some(lifecycle);
+        }
+        assert_eq!(queue.image().await, queue.modeled(state));
         queue.anchor = Utc::now();
         queue
+    }
+
+    fn modeled(&self, state: &LeanQueueManagementState) -> QueueImage {
+        state.image(|id| self.request_ids[&id].clone())
+    }
+
+    async fn image(&self) -> QueueImage {
+        crate::lean_vocab_test::native_queue_image(
+            &self.fixture.node,
+            self.fixture.identity.did(),
+            SESSION,
+            self.active
+                .as_ref()
+                .map_or(&[], |lifecycle| lifecycle.folded_selection()),
+        )
+        .await
     }
 
     /// Maps model time monotonically onto wall time around the processing
@@ -232,21 +295,6 @@ impl ModeledQueue {
                 tokio::time::sleep(wait).await;
             }
         }
-    }
-
-    async fn pending_request_ids(&self) -> Vec<String> {
-        crate::lifecycle::pending_user_queue(
-            &ConfigAccess::Local(self.fixture.node.clone()),
-            self.fixture.identity.did(),
-            SESSION,
-            self.fixture.identity.did(),
-        )
-        .await
-        .unwrap()
-        .entries
-        .into_iter()
-        .map(|entry| entry.request_id)
-        .collect()
     }
 
     async fn intent(
@@ -413,7 +461,7 @@ async fn generated_commands_bind_to_atomic_queue_owner() {
     assert_eq!(cases.len(), 11, "local generated input-edit cases");
     for case in cases {
         let name = &case.name;
-        assert!(case.initial.receipts.is_empty() && case.initial.queue.terminal.is_empty());
+        assert!(case.initial.receipts.is_empty());
         let mut nows = case
             .history
             .iter()
@@ -423,12 +471,7 @@ async fn generated_commands_bind_to_atomic_queue_owner() {
             })
             .collect::<Vec<_>>();
         nows.push(case.now);
-        let initial = &case.initial.queue;
-        let mut queue = ModeledQueue::seed(
-            initial.folding.iter().chain(&initial.pending).collect(),
-            nows,
-        )
-        .await;
+        let mut queue = ModeledQueue::seed(&case.initial.queue, nows).await;
         for step in &case.history {
             match step {
                 LeanSessionInputEditStep::Apply {
@@ -440,18 +483,9 @@ async fn generated_commands_bind_to_atomic_queue_owner() {
                 LeanSessionInputEditStep::OtherSession { .. } => unreachable!(),
             }
         }
-        let modeled_ids =
-            |queue: &ModeledQueue, state: &crate::lean_vocab_test::LeanQueueManagementState| {
-                state
-                    .folding
-                    .iter()
-                    .chain(&state.pending)
-                    .map(|entry| queue.request_ids[&entry.request_id].clone())
-                    .collect::<Vec<_>>()
-            };
         assert_eq!(
-            queue.pending_request_ids().await,
-            modeled_ids(&queue, &case.before.queue),
+            queue.image().await,
+            queue.modeled(&case.before.queue),
             "{name}: history reaches the modeled starting queue"
         );
         let mut prior = HashMap::new();
@@ -461,33 +495,10 @@ async fn generated_commands_bind_to_atomic_queue_owner() {
         queue
             .process(case.now, &case.command, &case.authority)
             .await;
-        let expected = modeled_ids(&queue, &case.after.queue);
         assert_eq!(
-            queue.pending_request_ids().await,
-            expected,
-            "{name}: pending order"
-        );
-        let terminal = case
-            .after
-            .queue
-            .terminal
-            .iter()
-            .map(|id| queue.request_ids[id].clone())
-            .collect::<BTreeSet<_>>();
-        let rows = queue.fixture.requests().await;
-        let rows = rows.as_array().unwrap();
-        assert_eq!(
-            rows.iter()
-                .filter(|row| row["lifecycle_state"] != "pending")
-                .map(|row| row["request_id"].as_str().unwrap().to_owned())
-                .collect::<BTreeSet<_>>(),
-            terminal,
-            "{name}: terminal requests"
-        );
-        assert_eq!(
-            rows.len(),
-            expected.len() + terminal.len(),
-            "{name}: requests"
+            queue.image().await,
+            queue.modeled(&case.after.queue),
+            "{name}: queue state"
         );
         for ((id, digest), (doc, command)) in &queue.commands {
             let native = queue.receipt_json(doc).await;

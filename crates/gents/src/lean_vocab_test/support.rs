@@ -1957,6 +1957,32 @@ pub(crate) struct LeanQueueManagementState {
     pub(crate) terminal: Vec<u64>,
 }
 
+/// A session queue in native request IDs, compared whole against the model.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct QueueImage {
+    pub(crate) active: Option<String>,
+    pub(crate) folding: Vec<String>,
+    pub(crate) pending: Vec<String>,
+    pub(crate) terminal: BTreeSet<String>,
+}
+
+impl LeanQueueManagementState {
+    pub(crate) fn image(&self, native: impl Fn(u64) -> String) -> QueueImage {
+        let ids = |entries: &[LeanFoldQueueEntry]| {
+            entries
+                .iter()
+                .map(|entry| native(entry.request_id))
+                .collect()
+        };
+        QueueImage {
+            active: self.active.map(&native),
+            folding: ids(&self.folding),
+            pending: ids(&self.pending),
+            terminal: self.terminal.iter().copied().map(&native).collect(),
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum LeanQueueManagementOperation {

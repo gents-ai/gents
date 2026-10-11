@@ -175,8 +175,8 @@ fn modeled_id(row: &FoldRow) -> u64 {
 
 /// The native active turn: its lifecycle, the run its claim selected, and
 /// how many of those it has published.
-struct ActiveTurn {
-    lifecycle: RequestLifecycle,
+pub(super) struct ActiveTurn {
+    pub(super) lifecycle: RequestLifecycle,
     selected: Vec<u64>,
     consumed: usize,
     begun: bool,
@@ -191,7 +191,7 @@ impl ActiveTurn {
     }
 }
 
-async fn claim_head(
+pub(super) async fn claim_head(
     db: &TestDb,
     bound: &HashMap<u64, String>,
     head: u64,

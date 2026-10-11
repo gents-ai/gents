@@ -275,6 +275,7 @@ struct ModeledEdit {
     session_id: String,
     command: SessionInputEdit,
     request_ids: std::collections::HashMap<u64, String>,
+    _active: gents::RequestLifecycle,
 }
 
 fn model_ids(values: &serde_json::Value) -> Vec<u64> {
@@ -284,6 +285,88 @@ fn model_ids(values: &serde_json::Value) -> Vec<u64> {
         .iter()
         .map(|value| value.as_u64().unwrap())
         .collect()
+}
+
+/// A session queue in native request IDs: active, folding, pending in order,
+/// and the terminal set.
+type QueueImage = (
+    Option<String>,
+    Vec<String>,
+    Vec<String>,
+    std::collections::BTreeSet<String>,
+);
+
+impl ModeledEdit {
+    fn queue(&self, state: &serde_json::Value) -> QueueImage {
+        let entries = |key: &str| {
+            state[key]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|entry| self.request_ids[&entry["request_id"].as_u64().unwrap()].clone())
+                .collect()
+        };
+        (
+            state["active"]
+                .as_u64()
+                .map(|id| self.request_ids[&id].clone()),
+            entries("folding"),
+            entries("pending"),
+            model_ids(&state["terminal"])
+                .iter()
+                .map(|id| self.request_ids[id].clone())
+                .collect(),
+        )
+    }
+
+    async fn native_queue(&self, runtime: &TestDb) -> QueueImage {
+        let requests = rows(
+            runtime,
+            "AgentRequest",
+            &format!(
+                "{{ session_id: {{ _eq: \"{}\" }} }}",
+                escape_graphql_string(&self.session_id)
+            ),
+            "request_id lifecycle_state",
+        )
+        .await;
+        let in_state = |states: &[&str]| {
+            requests
+                .iter()
+                .filter(|row| states.contains(&row["lifecycle_state"].as_str().unwrap()))
+                .map(|row| row["request_id"].as_str().unwrap().to_owned())
+                .collect::<Vec<_>>()
+        };
+        let active = in_state(&["claimed", "processing"]);
+        assert!(active.len() <= 1, "one active request: {active:?}");
+        let pending = gents::lifecycle::pending_user_queue(
+            &ConfigAccess::Local(runtime.node.clone()),
+            runtime.node_identity.did(),
+            &self.session_id,
+            &self.command.requester_did,
+        )
+        .await
+        .unwrap()
+        .entries
+        .into_iter()
+        .map(|entry| entry.request_id)
+        .collect::<Vec<_>>();
+        let terminal = requests
+            .iter()
+            .filter(|row| {
+                gents_protocol::request_lifecycle::RequestLifecycleState::is_terminal_str(
+                    row["lifecycle_state"].as_str(),
+                )
+            })
+            .map(|row| row["request_id"].as_str().unwrap().to_owned())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            requests.len(),
+            active.len() + pending.len() + terminal.len(),
+            "every request is active, queued or terminal"
+        );
+        (active.into_iter().next(), Vec::new(), pending, terminal)
+    }
 }
 
 impl RemoteEdit<'_> {
@@ -304,7 +387,33 @@ impl RemoteEdit<'_> {
         support::create_session_document(&self.runtime.node, &session).await;
         let mut request_ids = std::collections::HashMap::new();
         let mut doc_ids = std::collections::HashMap::new();
-        for entry in case["initial"]["queue"]["pending"].as_array().unwrap() {
+        let initial = &case["initial"]["queue"];
+        // The public claim admits no folded run, so only an empty one is bound here.
+        assert_eq!(initial["folding"], serde_json::json!([]), "{name}: folding");
+        let active_id = initial["active"].as_u64().expect("modeled active request");
+        let mut active = AgentRequestCreate::base(
+            RequestPurpose::Normal,
+            format!("{name}-{active_id}"),
+            did,
+            requester,
+            "general",
+            &session_id,
+            format!("message {active_id}"),
+            "interactive",
+            (chrono::Utc::now() - chrono::Duration::minutes(1))
+                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            self.admission.clone(),
+        );
+        gents::sign_agent_request_create(self.client.node_identity.as_ref(), &mut active)
+            .await
+            .unwrap();
+        let written = ConfigAccess::Local(self.runtime.node.clone())
+            .write("test.remote_active", &active.graphql_mutation().unwrap())
+            .await
+            .unwrap();
+        let active_doc = gents::graphql::created_doc_id(&written, "AgentRequest").unwrap();
+        request_ids.insert(active_id, active.request_id.clone());
+        for entry in initial["pending"].as_array().unwrap() {
             let id = entry["request_id"].as_u64().unwrap();
             assert_eq!(
                 entry["requester_id"], 1,
@@ -355,6 +464,22 @@ impl RemoteEdit<'_> {
             )
             .await;
         }
+        let request = gents::DefraWatcher::new(self.runtime.node.clone(), did)
+            .try_fetch_request(&active_doc)
+            .await
+            .unwrap()
+            .unwrap();
+        let mut active = gents::RequestLifecycle::new_with_node_did(
+            self.runtime.node.clone(),
+            "general",
+            did,
+            request,
+            600,
+        );
+        assert_eq!(
+            active.claim().await.unwrap(),
+            gents::lifecycle::ClaimOutcome::Claimed
+        );
         let model = &case["command"];
         let authority = &case["authority"];
         let (offset, count) = (
@@ -452,11 +577,18 @@ impl RemoteEdit<'_> {
             "",
         )
         .await;
-        ModeledEdit {
+        let modeled = ModeledEdit {
             session_id,
             command,
             request_ids,
-        }
+            _active: active,
+        };
+        assert_eq!(
+            modeled.native_queue(self.runtime).await,
+            modeled.queue(initial),
+            "{name}: seeded queue"
+        );
+        modeled
     }
 
     /// Compares the observed receipt and the runtime queue with the modeled result.
@@ -506,50 +638,11 @@ impl RemoteEdit<'_> {
             mapped(model_ids(&expected["request_ids"])),
             "{name}: receipt request IDs"
         );
-        let after = &case["after"]["queue"];
-        let pending = gents::lifecycle::pending_user_queue(
-            &ConfigAccess::Local(self.runtime.node.clone()),
-            self.runtime.node_identity.did(),
-            &modeled.session_id,
-            &command.requester_did,
-        )
-        .await
-        .unwrap();
-        let modeled_pending = after["folding"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .chain(after["pending"].as_array().unwrap())
-            .map(|entry| entry["request_id"].as_u64().unwrap())
-            .collect();
         assert_eq!(
-            pending
-                .entries
-                .iter()
-                .map(|entry| entry.request_id.clone())
-                .collect::<Vec<_>>(),
-            mapped(modeled_pending),
-            "{name}: pending order"
+            modeled.native_queue(self.runtime).await,
+            modeled.queue(&case["after"]["queue"]),
+            "{name}: queue state"
         );
-        let requests = rows(
-            self.runtime,
-            "AgentRequest",
-            &format!(
-                "{{ session_id: {{ _eq: \"{}\" }} }}",
-                escape_graphql_string(&modeled.session_id)
-            ),
-            "request_id content lifecycle_state",
-        )
-        .await;
-        let terminal = mapped(model_ids(&after["terminal"]));
-        for row in &requests {
-            let request_id = row["request_id"].as_str().unwrap();
-            assert_eq!(
-                row["lifecycle_state"] != "pending",
-                terminal.iter().any(|id| id == request_id),
-                "{name}: terminal requests"
-            );
-        }
         for id in &receipt.request_ids {
             let replacement =
                 wait_row(self.client, "AgentRequest", "request_id", id, "content", "").await;
