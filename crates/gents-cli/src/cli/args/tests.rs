@@ -1619,30 +1619,6 @@ fn ordinary_message_commands_do_not_offer_delivery_modes() {
 }
 
 #[test]
-fn operator_interrupt_rejects_runtime_only_causes() {
-    for cause in ["deadline", "interrupted"] {
-        assert!(Cli::try_parse_from([
-            "gents",
-            "request",
-            "interrupt",
-            "request",
-            "--cause",
-            cause
-        ])
-        .is_err());
-    }
-    assert!(Cli::try_parse_from([
-        "gents",
-        "request",
-        "interrupt",
-        "request",
-        "--cause",
-        "userCancelled"
-    ])
-    .is_ok());
-}
-
-#[test]
 fn pending_message_commands_require_scope_snapshot_and_unambiguous_edits() {
     assert!(Cli::try_parse_from(["gents", "request", "pending"]).is_err());
     let cli = Cli::try_parse_from([

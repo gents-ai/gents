@@ -1339,7 +1339,6 @@ async fn request_interrupt(args: RequestInterruptArgs) -> Result<()> {
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let request_id =
         resolve_request_id(args.request_id.as_deref(), args.request_id_flag.as_deref())?;
-    let cancel_cause: CancelCause = args.cause.into();
 
     let before = fetch_interrupt_request_row(&graphql, &request_id).await?;
     let already_interrupted = nonempty_owned(before.interrupt_requested_at.as_deref()).is_some();
@@ -1376,7 +1375,7 @@ async fn request_interrupt(args: RequestInterruptArgs) -> Result<()> {
 
     let summary = request_interrupt_summary(
         &row,
-        cancel_cause.as_str(),
+        CancelCause::UserCancelled.as_str(),
         interrupt_landed_at.as_deref(),
         already_interrupted,
         already_terminal,

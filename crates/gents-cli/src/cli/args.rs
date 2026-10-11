@@ -3812,20 +3812,6 @@ pub(crate) struct RequestReorderPendingArgs {
     pub(crate) request_doc_ids: Vec<String>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
-pub(crate) enum RequestInterruptCauseArg {
-    #[value(name = "userCancelled")]
-    UserCancelled,
-}
-
-impl From<RequestInterruptCauseArg> for gents::tool_call_lifecycle::CancelCause {
-    fn from(value: RequestInterruptCauseArg) -> Self {
-        match value {
-            RequestInterruptCauseArg::UserCancelled => Self::UserCancelled,
-        }
-    }
-}
-
 #[derive(clap::Args)]
 pub(crate) struct RequestSubmitArgs {
     #[arg(long)]
@@ -3866,13 +3852,6 @@ pub(crate) struct RequestInterruptArgs {
     pub(crate) home: Option<PathBuf>,
     #[arg(long)]
     pub(crate) graphql: Option<String>,
-    #[arg(
-        long,
-        value_enum,
-        default_value_t = RequestInterruptCauseArg::UserCancelled,
-        help = "Operator cancellation. Deadline and propagated interruption are owned by the runtime"
-    )]
-    pub(crate) cause: RequestInterruptCauseArg,
     #[arg(long, default_value_t = false)]
     pub(crate) wait: bool,
     #[arg(

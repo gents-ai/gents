@@ -249,8 +249,6 @@ async fn request_interrupt_waits_until_running_request_is_terminal() -> Result<(
             "interrupt",
             "--graphql",
             &graphql,
-            "--cause",
-            "userCancelled",
             "--wait",
             "--timeout",
             "20s",
