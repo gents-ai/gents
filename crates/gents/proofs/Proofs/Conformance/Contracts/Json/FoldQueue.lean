@@ -204,6 +204,7 @@ def inputEditCasesJson : String :=
   jsonArray (SessionQueue.InputEditCases.cases.map fun c =>
     let result := SessionQueue.InputEditCases.run c
     "{\"name\":" ++ jsonString c.name ++
+    ",\"initial\":" ++ editStateJson SessionQueue.InputEditCases.state ++
     ",\"history\":" ++ jsonArray (c.history.map editStepJson) ++
     ",\"before\":" ++ editStateJson c.before ++
     ",\"now\":" ++ toString c.now ++ ",\"command\":" ++ editCommandJson c.command ++
