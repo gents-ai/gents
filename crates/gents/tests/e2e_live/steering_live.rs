@@ -7,7 +7,7 @@ use gents::config_client::{
 };
 use gents::graphql::escape_graphql_string;
 use gents::lifecycle::{
-    pending_user_queue, replace_pending_user_messages, PendingMessageEdit, PendingQueueEdit,
+    pending_user_queue, submit_pending_user_edit, PendingMessageEdit, PendingQueueEdit,
 };
 use gents::llm::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
 use gents::rendered_request::{decode_capture_json, CapturePayloadKind};
@@ -161,13 +161,13 @@ async fn live_steering_edits_reorders_and_removes_before_same_request_continues(
     let second = enqueue(&db, "live-steering-second", SECOND).await?;
     let dropped = enqueue(&db, "live-steering-drop", DROP).await?;
     let snapshot = pending_user_queue(&access, did, SESSION, did).await?;
-    let receipt = replace_pending_user_messages(
+    let receipt = submit_pending_user_edit(
         &access,
         db.node_identity.as_ref(),
         AgentRequestAdmissionRecord::local_self(did),
+        None,
         did,
         SESSION,
-        did,
         PendingQueueEdit {
             expected_request_doc_ids: snapshot
                 .entries
@@ -189,13 +189,13 @@ async fn live_steering_edits_reorders_and_removes_before_same_request_continues(
     )
     .await?;
     let snapshot = pending_user_queue(&access, did, SESSION, did).await?;
-    replace_pending_user_messages(
+    submit_pending_user_edit(
         &access,
         db.node_identity.as_ref(),
         AgentRequestAdmissionRecord::local_self(did),
+        None,
         did,
         SESSION,
-        did,
         PendingQueueEdit {
             expected_request_doc_ids: snapshot
                 .entries

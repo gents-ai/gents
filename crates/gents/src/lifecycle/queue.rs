@@ -18,6 +18,7 @@ use super::ExecutionOrigin;
 mod atomic_inputs;
 mod coalescing;
 mod draining;
+mod edit_submission;
 mod enqueue;
 mod folding;
 mod goal_continuation;
@@ -44,6 +45,7 @@ use coalescing::{
     parent_agent_id, queue_row_to_enqueued_request, row_matches_coalesced_source_and_key,
 };
 pub(crate) use draining::drain_automated_wakeups_in_txn;
+pub use edit_submission::submit_pending_user_edit;
 pub use enqueue::enqueue_local_steering_request;
 #[cfg(test)]
 pub(crate) use enqueue::enqueue_steering_request;
@@ -66,6 +68,8 @@ pub(crate) use input::{
 #[cfg(test)]
 use input::{queue_is_automated_wakeup, BACKGROUND_COMPLETION_WAKE_VERSION};
 pub(crate) use intake::{pending_ids_in_txn, steering_inputs, steering_snapshot};
+#[cfg(test)]
+use management::replace_pending_user_messages;
 pub(crate) use management::{
     apply_pending_user_edit_in_txn, persisted_replacements_in_txn,
     validate_pending_user_edit_in_txn, PersistedReplacements,
@@ -74,9 +78,7 @@ pub use management::{
     pending_user_queue, prepare_pending_user_edit, PendingQueueEntry, PendingQueueSnapshot,
     REPLACED_REASON,
 };
-pub use management::{
-    replace_pending_user_messages, PendingMessageEdit, PendingQueueEdit, PendingQueueReceipt,
-};
+pub use management::{PendingMessageEdit, PendingQueueEdit, PendingQueueReceipt};
 #[cfg(test)]
 use mutation::session_request_create_mutation;
 use mutation::session_request_create_mutation_at_hop;

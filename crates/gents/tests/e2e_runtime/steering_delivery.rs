@@ -4,7 +4,7 @@ use std::time::Duration;
 use gents::config_client::ConfigAccess;
 use gents::graphql::escape_graphql_string;
 use gents::lifecycle::{
-    pending_user_queue, replace_pending_user_messages, PendingMessageEdit, PendingQueueEdit,
+    pending_user_queue, submit_pending_user_edit, PendingMessageEdit, PendingQueueEdit,
 };
 use gents::llm::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
 use gents::{Gents, NodeIdentity};
@@ -169,13 +169,13 @@ async fn steering_case(hold_tool: bool) {
         .map(|entry| entry.request_doc_id.clone())
         .collect::<Vec<_>>();
     let correction = format!("{name}: accepted correction");
-    let replacement = replace_pending_user_messages(
+    let replacement = submit_pending_user_edit(
         &access,
         db.node_identity.as_ref(),
         AgentRequestAdmissionRecord::local_self(did),
+        None,
         did,
         name,
-        did,
         PendingQueueEdit {
             expected_request_doc_ids: ids,
             selected_request_doc_ids: vec![old.clone()],
@@ -188,13 +188,13 @@ async fn steering_case(hold_tool: bool) {
     .await
     .unwrap();
     let snapshot = pending_user_queue(&access, did, name, did).await.unwrap();
-    replace_pending_user_messages(
+    submit_pending_user_edit(
         &access,
         db.node_identity.as_ref(),
         AgentRequestAdmissionRecord::local_self(did),
+        None,
         did,
         name,
-        did,
         PendingQueueEdit {
             expected_request_doc_ids: snapshot
                 .entries

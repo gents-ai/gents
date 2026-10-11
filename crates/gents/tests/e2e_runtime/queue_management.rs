@@ -1,12 +1,14 @@
+use gents::agent::p2p_reconcile::session_input_edit::run_session_input_edit_reconciler;
 use gents::config_client::ConfigAccess;
 use gents::graphql::escape_graphql_string;
 use gents::lifecycle::{
-    pending_user_queue, replace_pending_user_messages, PendingMessageEdit, PendingQueueEdit,
+    pending_user_queue, submit_pending_user_edit, PendingMessageEdit, PendingQueueEdit,
 };
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
 use gents_protocol::request_input::QueueDelivery;
+use gents_protocol::session_input_edit::SessionInputEditReceipt;
 
 use crate::support::{test_db, TestDb};
 
@@ -57,6 +59,53 @@ pub(super) async fn insert_signed(db: &TestDb, mut request: AgentRequestCreate) 
     gents::graphql::created_doc_id(&response, "AgentRequest").unwrap()
 }
 
+/// Submits through the runtime command owner with only its reconciler running.
+async fn submit_edit(
+    db: &TestDb,
+    session_id: &str,
+    edit: PendingQueueEdit,
+) -> anyhow::Result<SessionInputEditReceipt> {
+    let did = db.node_identity.did();
+    let existing = ConfigAccess::Local(db.node.clone())
+        .execute(&format!(
+            r#"{{ AgentSession(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+            escape_graphql_string(session_id)
+        ))
+        .await?;
+    if existing["data"]["AgentSession"]
+        .as_array()
+        .is_none_or(Vec::is_empty)
+    {
+        let mut session = crate::support::session_document_in_scope(
+            did,
+            session_id,
+            "general",
+            "2026-10-10T00:00:00Z",
+        );
+        session.requester_did = Some(did.into());
+        crate::support::create_session_document(&db.node, &session).await;
+    }
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let worker = tokio::spawn(run_session_input_edit_reconciler(
+        db.node.clone(),
+        db.node_identity.clone(),
+        cancel.clone(),
+    ));
+    let result = submit_pending_user_edit(
+        &ConfigAccess::Local(db.node.clone()),
+        db.node_identity.as_ref(),
+        AgentRequestAdmissionRecord::local_self(did),
+        None,
+        did,
+        session_id,
+        edit,
+    )
+    .await;
+    cancel.cancel();
+    worker.await??;
+    result
+}
+
 pub(super) async fn row(db: &TestDb, doc: &str) -> serde_json::Value {
     let response = ConfigAccess::Local(db.node.clone()).execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID request_id content input lifecycle_state failure_reason admission_signature superseded_by_request_doc_id terminal_output }} }}"#, escape_graphql_string(doc))).await.unwrap();
     let rows = response["data"]["AgentRequest"].as_array().unwrap();
@@ -101,13 +150,9 @@ async fn signed_queue_edit_reorders_preserves_slots_and_cancels_atomically() {
         vec![&first, &second]
     );
     assert!(snapshot.entries.iter().all(|entry| entry.editable));
-    let receipt = replace_pending_user_messages(
-        &access,
-        db.node_identity.as_ref(),
-        AgentRequestAdmissionRecord::local_self(did),
-        did,
+    let receipt = submit_edit(
+        &db,
         "edit-session",
-        did,
         PendingQueueEdit {
             expected_request_doc_ids: vec![first.clone(), second.clone()],
             selected_request_doc_ids: vec![first.clone(), second.clone()],
@@ -175,13 +220,9 @@ async fn signed_queue_edit_reorders_preserves_slots_and_cancels_atomically() {
         .iter()
         .map(|entry| entry.request_doc_id.clone())
         .collect::<Vec<_>>();
-    let cancelled = replace_pending_user_messages(
-        &access,
-        db.node_identity.as_ref(),
-        AgentRequestAdmissionRecord::local_self(did),
-        did,
+    let cancelled = submit_edit(
+        &db,
         "edit-session",
-        did,
         PendingQueueEdit {
             expected_request_doc_ids: ids.clone(),
             selected_request_doc_ids: ids.clone(),
@@ -230,13 +271,9 @@ async fn stale_queue_snapshot_rejects_edit_without_mutating_signed_requests() {
         QueueDelivery::Queue,
     )
     .await;
-    let error = replace_pending_user_messages(
-        &access,
-        db.node_identity.as_ref(),
-        AgentRequestAdmissionRecord::local_self(did),
-        did,
+    let error = submit_edit(
+        &db,
         "stale-session",
-        did,
         PendingQueueEdit {
             expected_request_doc_ids: vec![first.clone()],
             selected_request_doc_ids: vec![first.clone()],
@@ -281,13 +318,9 @@ async fn signed_pending_replacement_authenticates_delivery_and_each_position_fie
         QueueDelivery::Steer,
     )
     .await;
-    let receipt = replace_pending_user_messages(
-        &access,
-        db.node_identity.as_ref(),
-        AgentRequestAdmissionRecord::local_self(did),
-        did,
+    let receipt = submit_edit(
+        &db,
         "signature-session",
-        did,
         PendingQueueEdit {
             expected_request_doc_ids: vec![original.clone()],
             selected_request_doc_ids: vec![original.clone()],

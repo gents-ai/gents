@@ -494,9 +494,8 @@ pub(crate) async fn apply_pending_user_edit_in_txn(
     Ok(receipt)
 }
 
-/// Atomically retire pending originals and persist newly signed replacements.
-#[allow(clippy::too_many_arguments)]
-pub async fn replace_pending_user_messages(
+#[cfg(test)]
+pub(super) async fn replace_pending_user_messages(
     access: &ConfigAccess,
     signer: &dyn NodeIdentity,
     admission: AgentRequestAdmissionRecord,

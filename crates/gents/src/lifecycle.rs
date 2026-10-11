@@ -66,7 +66,7 @@ pub use queue::validate_position as validate_queue_position;
 pub use queue::{pending_user_queue, PendingQueueEntry, PendingQueueSnapshot};
 pub use queue::{prepare_pending_user_edit, prepare_user_message_input};
 pub use queue::{
-    replace_pending_user_messages, PendingMessageEdit, PendingQueueEdit, PendingQueueReceipt,
+    submit_pending_user_edit, PendingMessageEdit, PendingQueueEdit, PendingQueueReceipt,
 };
 pub use queue::{FOLDED_REASON, REPLACED_REASON};
 pub(crate) use task_title::task_goal_session_title;
