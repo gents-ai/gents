@@ -1600,3 +1600,170 @@ fn goal_resume_on_takes_an_account_and_requires_from() {
         clap::error::ErrorKind::MissingRequiredArgument
     );
 }
+
+#[test]
+fn ordinary_message_commands_do_not_offer_delivery_modes() {
+    for delivery in ["queue", "steer"] {
+        assert!(Cli::try_parse_from(["gents", "chat", "hello", "--delivery", delivery]).is_err());
+        assert!(Cli::try_parse_from([
+            "gents",
+            "request",
+            "submit",
+            "--content",
+            "hello",
+            "--delivery",
+            delivery,
+        ])
+        .is_err());
+    }
+}
+
+#[test]
+fn operator_interrupt_rejects_runtime_only_causes() {
+    for cause in ["deadline", "interrupted"] {
+        assert!(Cli::try_parse_from([
+            "gents",
+            "request",
+            "interrupt",
+            "request",
+            "--cause",
+            cause
+        ])
+        .is_err());
+    }
+    assert!(Cli::try_parse_from([
+        "gents",
+        "request",
+        "interrupt",
+        "request",
+        "--cause",
+        "userCancelled"
+    ])
+    .is_ok());
+}
+
+#[test]
+fn pending_message_commands_require_scope_snapshot_and_unambiguous_edits() {
+    assert!(Cli::try_parse_from(["gents", "request", "pending"]).is_err());
+    let cli = Cli::try_parse_from([
+        "gents",
+        "request",
+        "pending",
+        "--session-id",
+        "session",
+        "--output",
+        "json",
+    ])
+    .unwrap();
+    let Command::Request {
+        command: RequestCommand::Pending(args),
+    } = cli.command
+    else {
+        panic!("pending command");
+    };
+    assert_eq!(args.session_id, "session");
+    assert_eq!(args.output, OutputFormat::Json);
+    assert!(Cli::try_parse_from([
+        "gents",
+        "request",
+        "edit-pending",
+        "--session-id",
+        "session",
+        "--request-doc-id",
+        "a",
+        "--content",
+        "correction"
+    ])
+    .is_err());
+    assert!(Cli::try_parse_from([
+        "gents",
+        "request",
+        "edit-pending",
+        "--session-id",
+        "session",
+        "--request-doc-id",
+        "a",
+        "--expected-request-doc-id",
+        "a"
+    ])
+    .is_err());
+    assert!(Cli::try_parse_from([
+        "gents",
+        "request",
+        "edit-pending",
+        "--session-id",
+        "session",
+        "--request-doc-id",
+        "a",
+        "--expected-request-doc-id",
+        "a",
+        "--content",
+        "correction",
+        "--content-file",
+        "input.txt"
+    ])
+    .is_err());
+    let cli = Cli::try_parse_from([
+        "gents",
+        "request",
+        "edit-pending",
+        "--session-id",
+        "session",
+        "--request-doc-id",
+        "a",
+        "--expected-request-doc-id",
+        "a",
+        "--expected-request-doc-id",
+        "b",
+        "--content",
+        "correction",
+    ])
+    .unwrap();
+    let Command::Request {
+        command: RequestCommand::EditPending(args),
+    } = cli.command
+    else {
+        panic!("edit command");
+    };
+    assert_eq!(args.queue.expected_request_doc_ids, ["a", "b"]);
+    assert_eq!(args.request_doc_id, "a");
+    assert_eq!(args.content.as_deref(), Some("correction"));
+}
+
+#[test]
+fn pending_reorder_keeps_observed_snapshot_distinct_from_requested_order() {
+    let cli = Cli::try_parse_from([
+        "gents",
+        "request",
+        "reorder-pending",
+        "--session-id",
+        "session",
+        "--expected-request-doc-id",
+        "a",
+        "--expected-request-doc-id",
+        "b",
+        "--request-doc-id",
+        "b",
+        "--request-doc-id",
+        "a",
+    ])
+    .unwrap();
+    let Command::Request {
+        command: RequestCommand::ReorderPending(args),
+    } = cli.command
+    else {
+        panic!("reorder command");
+    };
+    assert_eq!(args.queue.expected_request_doc_ids, ["a", "b"]);
+    assert_eq!(args.request_doc_ids, ["b", "a"]);
+    assert!(Cli::try_parse_from([
+        "gents",
+        "request",
+        "remove-pending",
+        "--session-id",
+        "session",
+        "--expected-request-doc-id",
+        "a"
+    ])
+    .is_err());
+}

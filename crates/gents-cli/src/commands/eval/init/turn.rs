@@ -64,7 +64,8 @@ impl Turn for LiveTurn {
                 self.timeout_secs,
                 self.poll_secs,
                 false,
-                None,
+                crate::commands::chat::ApprovalHandling::None,
+                true,
             )
             .await?
         };
