@@ -1,3 +1,4 @@
+import type { PendingQueueEditResult } from "../generated/PendingQueueEditResult.js";
 import type { DesktopTransport } from "../transport.js";
 import type { BackendHealth } from "../types/backendHealth.js";
 import type {
@@ -117,6 +118,10 @@ export function createDesktopApiAdapter(
       }),
     sendChatMessage: (request) =>
       invokeDesktop<ChatSendResult>("desktop_chat_send", { request }),
+    editPendingQueue: (request) =>
+      invokeDesktop<PendingQueueEditResult>("desktop_pending_queue_edit", {
+        request,
+      }),
     listMailbox: () => invokeDesktop<MailboxItemView[]>("desktop_mailbox_list"),
     startMailboxRequest: (itemId) =>
       invokeDesktop<MailboxItemView>("desktop_mailbox_start_request", {

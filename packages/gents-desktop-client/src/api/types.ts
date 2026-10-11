@@ -1,3 +1,5 @@
+import type { PendingQueueEditRequest } from "../generated/PendingQueueEditRequest.js";
+import type { PendingQueueEditResult } from "../generated/PendingQueueEditResult.js";
 import type { OauthProvider } from "../transport.js";
 import type { ConfigComponentsApplyRequest } from "../generated/ConfigComponentsApplyRequest.js";
 import type { ConfigComponentsPatchRequest } from "../generated/ConfigComponentsPatchRequest.js";
@@ -186,6 +188,9 @@ export type DesktopApiAdapter = {
     /** The folder the user works in for this chat. */
     cwd?: string | null;
   }) => Promise<ChatSendResult>;
+  editPendingQueue: (
+    request: PendingQueueEditRequest,
+  ) => Promise<PendingQueueEditResult>;
   listMailbox: () => Promise<MailboxItemView[]>;
   startMailboxRequest: (itemId: string) => Promise<MailboxItemView>;
   dismissMailboxItem: (itemId: string) => Promise<void>;

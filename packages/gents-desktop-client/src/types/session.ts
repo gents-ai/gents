@@ -33,3 +33,7 @@ export type RequestTimelineView = {
   child_request_ids?: string[];
   events: RunTimelineEventView[];
 };
+
+export type { PendingQueueEditRequest } from "../generated/PendingQueueEditRequest.js";
+export type { PendingQueueEditResult } from "../generated/PendingQueueEditResult.js";
+export type { PendingQueueEntryView } from "../generated/PendingQueueEntryView.js";

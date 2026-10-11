@@ -138,6 +138,8 @@ export function createBridgeHttpAdapter(
       observers.onChatResult?.(result);
       return result;
     },
+    editPendingQueue: async (request) =>
+      client.postJson("/desktop/queue/edit", request),
     renameSession: async (request) => {
       await client.postJson("/desktop/session/rename", request);
     },

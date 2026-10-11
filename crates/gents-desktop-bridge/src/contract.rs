@@ -90,6 +90,7 @@ pub fn command_inventory() -> Vec<CommandContract> {
         ("desktop_tool_surface_explain", "tool-surface-read"),
         // chat-write
         ("desktop_chat_send", "chat-write"),
+        ("desktop_pending_queue_edit", "chat-write"),
         ("desktop_session_rename", "chat-write"),
         // mailbox-read / mailbox-control
         ("desktop_mailbox_list", "mailbox-read"),
@@ -487,6 +488,7 @@ mod tests {
             ("desktop_request_timeline", "read"),
             ("desktop_tool_surface_explain", "read"),
             ("desktop_chat_send", "mutate"),
+            ("desktop_pending_queue_edit", "mutate"),
             ("desktop_session_rename", "mutate"),
             ("desktop_mailbox_list", "read"),
             ("desktop_mailbox_start_request", "mutate"),

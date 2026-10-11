@@ -623,3 +623,27 @@ impl ConfigComponentPatch {
         )
     }
 }
+
+#[derive(Debug, Clone, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingMessageEditRequest {
+    pub request_doc_id: String,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingQueueEditRequest {
+    pub node_did: String,
+    pub session_id: String,
+    pub expected_request_doc_ids: Vec<String>,
+    pub selected_request_doc_ids: Vec<String>,
+    pub messages: Vec<PendingMessageEditRequest>,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingQueueEditResult {
+    pub request_doc_ids: Vec<String>,
+    pub request_ids: Vec<String>,
+}
