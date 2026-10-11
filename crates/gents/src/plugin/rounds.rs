@@ -9,7 +9,8 @@
 //! service's key; the caller's `"state"` and result keys are stripped (only
 //! the host sets them) and a null input becomes `{}`. One round asks one
 //! service. Bounds shared by every service: [`MAX_ROUNDS`] rounds, and the
-//! call's wall clock and fuel across all rounds. When the wall clock runs out
+//! call's wall clock and fuel across all rounds; time serving `tool_calls`
+//! children is excluded from that wall clock. When the wall clock runs out
 //! while requests are served, the unanswered ones get error results and the
 //! plugin gets one final round (the last [`FINAL_ROUND_RESERVE_DIVISOR`]th of
 //! the clock) to finish with what it has; only a plugin that asks again is a
@@ -120,9 +121,9 @@ pub(super) async fn drive(
     round: Round,
 ) -> Result<PluginOutcome> {
     let started = Instant::now();
-    let deadline = started + budget.wall_clock;
-    // Requests stop here; the plugin's final round runs on the rest.
-    let serve_deadline = deadline - budget.wall_clock / FINAL_ROUND_RESERVE_DIVISOR;
+    let mut deadline = started + budget.wall_clock;
+    // Requests stop at the serve deadline; the plugin's final round runs on the rest.
+    let reserve = budget.wall_clock / FINAL_ROUND_RESERVE_DIVISOR;
     let Value::Object(base) = calls.prepare_input(input)? else {
         anyhow::bail!("a driven plugin requires host services");
     };
@@ -196,10 +197,14 @@ pub(super) async fn drive(
         }
         served += 1;
         let mut object = base.clone();
+        let serve_deadline = deadline - reserve;
         let state = match asked {
             Asked::Tools(batch) => {
                 let session = calls.tools.as_mut().expect("parsed only when offered");
-                let results = session.serve(batch.requests, serve_deadline).await;
+                let serving = Instant::now();
+                let results = session.serve(batch.requests).await;
+                // Lean `PluginCalls.chargedCompute`: children are not guest compute.
+                deadline += serving.elapsed();
                 if let Some(reason) = session.fatal.take() {
                     return Ok(refused(started, fuel, PluginVerdict::Failed, reason));
                 }
@@ -229,7 +234,7 @@ pub(super) async fn drive(
                 batch.state
             }
         };
-        last_round = Instant::now() >= serve_deadline;
+        last_round = Instant::now() >= deadline - reserve;
         if let Some(state) = state {
             object.insert("state".to_owned(), state);
         }

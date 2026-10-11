@@ -244,10 +244,42 @@ pub struct ToolCallLifecycle {
     pub(crate) await_mode: AwaitMode,
 }
 
+/// Persisted provenance of one plugin child. [`Self::decode`] is the only
+/// constructor for stored rows, so a binding in hand is already bounded,
+/// unspawned and bound to its derived stable identity.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct PluginEffectBinding {
-    parent_tool_call_doc_id: String,
-    ordinal: u32,
+pub(crate) struct PluginEffectBinding {
+    pub(crate) parent_tool_call_doc_id: String,
+    pub(crate) ordinal: u32,
+}
+
+impl PluginEffectBinding {
+    pub(crate) fn internal_id(parent_tool_call_doc_id: &str, ordinal: u32) -> String {
+        format!("plugin-effect:{parent_tool_call_doc_id}:{ordinal}")
+    }
+
+    pub(crate) fn decode(
+        parent_tool_call_doc_id: Option<&str>,
+        ordinal: Option<u32>,
+        spawned: bool,
+        tool_call_id: &str,
+    ) -> anyhow::Result<Option<Self>> {
+        match (parent_tool_call_doc_id, ordinal) {
+            (None, None) => Ok(None),
+            (Some(parent), Some(ordinal))
+                if !parent.is_empty()
+                    && (1..=crate::plugin::tool_calls::MAX_EFFECTS).contains(&ordinal)
+                    && !spawned
+                    && tool_call_id == Self::internal_id(parent, ordinal) =>
+            {
+                Ok(Some(Self {
+                    parent_tool_call_doc_id: parent.to_owned(),
+                    ordinal,
+                }))
+            }
+            _ => anyhow::bail!("invalid plugin effect provenance"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -543,39 +543,23 @@ async fn load_accepted_tool_call(
         requester_did,
     )
     .await?;
-    anyhow::ensure!(
-        call.plugin_parent_tool_call_doc_id.is_some() == call.plugin_effect_ordinal.is_some(),
-        "plugin effect provenance requires both parent and ordinal"
-    );
-    anyhow::ensure!(
-        call.plugin_parent_tool_call_doc_id.is_none() || call.spawned_by_tool_call_doc_id.is_none(),
-        "plugin effect cannot also be a spawned process"
-    );
-    let parent = if let Some(parent_doc_id) = call.plugin_parent_tool_call_doc_id.as_deref() {
-        let ordinal = call
-            .plugin_effect_ordinal
-            .context("plugin effect lacks ordinal")?;
-        let parent =
-            load_tool_call_identity(source, parent_doc_id, node_did, session_id, requester_did)
-                .await?;
-        let child_deadline = chrono::DateTime::parse_from_rfc3339(
-            call.deadline_at
-                .as_deref()
-                .context("plugin child has no deadline")?,
+    let effect = super::super::PluginEffectBinding::decode(
+        call.plugin_parent_tool_call_doc_id.as_deref(),
+        call.plugin_effect_ordinal,
+        call.spawned_by_tool_call_doc_id.is_some(),
+        &call.tool_call_id,
+    )?;
+    let parent = if let Some(effect) = effect.as_ref() {
+        let parent = load_tool_call_identity(
+            source,
+            &effect.parent_tool_call_doc_id,
+            node_did,
+            session_id,
+            requester_did,
         )
-        .context("plugin child deadline is invalid")?;
-        let parent_deadline = chrono::DateTime::parse_from_rfc3339(
-            parent
-                .deadline_at
-                .as_deref()
-                .context("plugin parent has no deadline")?,
-        )
-        .context("plugin parent deadline is invalid")?;
+        .await?;
         anyhow::ensure!(
-            (1..=64).contains(&ordinal)
-                && child_deadline <= parent_deadline
-                && call.await_mode.as_deref() == Some("foreground")
-                && call.tool_call_id == format!("plugin-effect:{parent_doc_id}:{ordinal}")
+            call.await_mode.as_deref() == Some("foreground")
                 && call.tool_call_key.as_deref() == Some(call.tool_call_id.as_str())
                 && call.request_doc_id == parent.request_doc_id
                 && call.message_sequence == parent.message_sequence
@@ -798,8 +782,6 @@ struct ToolCallIdentityRow {
     #[serde(default)]
     plugin_effect_ordinal: Option<u32>,
     #[serde(default)]
-    deadline_at: Option<String>,
-    #[serde(default)]
     await_mode: Option<String>,
     #[serde(default)]
     terminal_output: Option<PresentedPayload>,
@@ -823,7 +805,7 @@ async fn load_tool_call_identity(
                 filter: {{ {scope}, _docID: {{ _eq: "{escaped_doc_id}" }} }},
                 limit: 2
             ) {{
-                _docID node_did requester_did session_id tool_call_id tool_call_key tool_name message_sequence request_doc_id spawned_by_tool_call_doc_id plugin_parent_tool_call_doc_id plugin_effect_ordinal deadline_at await_mode terminal_output started_at lifecycle_state
+                _docID node_did requester_did session_id tool_call_id tool_call_key tool_name message_sequence request_doc_id spawned_by_tool_call_doc_id plugin_parent_tool_call_doc_id plugin_effect_ordinal await_mode terminal_output started_at lifecycle_state
             }}
         }}"#,
         scope = scope,
@@ -1365,7 +1347,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("incoherent direct-parent provenance"),
+                .contains("invalid plugin effect provenance"),
             "{error:#}"
         );
         drop(request_owner);

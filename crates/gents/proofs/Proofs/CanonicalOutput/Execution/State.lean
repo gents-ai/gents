@@ -127,8 +127,9 @@ structure OwnedTool where
   stuckSince : Option Time := none
   deriving DecidableEq, Repr
 
-/-- The selected installed plugin grant is observed by the native call owner,
-not taken from guest JSON. Input bytes and the child lifecycle commit together. -/
+/-- Input bytes and the child lifecycle commit together. The selected
+installed-plugin grant is enforced before this admission by the invocation
+owner (`ToolPolicy.PluginCalls.available`). -/
 structure PluginEffectAdmission where
   document : DocId
   parentToolDoc : DocId
@@ -136,7 +137,6 @@ structure PluginEffectAdmission where
   name : String
   context : ToolExecution.ToolCallContext
   arguments : Segment
-  delegationGranted : Bool
   deriving DecidableEq, Repr
 
 structure SpawnedToolAdmission where

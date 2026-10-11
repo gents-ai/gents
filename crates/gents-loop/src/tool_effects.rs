@@ -15,13 +15,14 @@ pub enum ToolEffectError {
 
 /// Implemented by the loop, which retains the selected tools and persistence
 /// hook. The guest never receives either object or a way to replace them.
+/// Each child runs under the parent tool call's own deadline and cancellation
+/// envelope; a child's managed terminal is that child's outcome only.
 pub trait ToolEffectDispatcher: Send + Sync {
     fn call<'a>(
         &'a self,
         ordinal: u32,
         name: &'a str,
         arguments: &'a str,
-        budget: std::time::Duration,
     ) -> BoxFuture<'a, Result<ToolOutcome, ToolEffectError>>;
 }
 

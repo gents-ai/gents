@@ -584,6 +584,19 @@ mod bound {
     }
 
     #[tokio::test]
+    async fn a_composed_child_call_is_refused_without_asking() {
+        let fx = fixture(&open_and_copy_wat("in.json", 0), BindAccess::Read);
+        let tool = tool_for(&fx.home, &fx.record);
+        let work = fx.root.join("work");
+        let target = fx.root.join("outside/in.json");
+        let error = approval::scope_composed(in_session(&tool, &target, &work, true))
+            .await
+            .unwrap_err();
+        assert!(error.contains("composed tool call"), "{error}");
+        assert!(approval::pending(fx.home.path()).unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn a_headless_call_never_asks() {
         let fx = fixture(&open_and_copy_wat("in.json", 0), BindAccess::Read);
         let executor = PluginExecutor::new(Some(fx.home.path().to_owned()));

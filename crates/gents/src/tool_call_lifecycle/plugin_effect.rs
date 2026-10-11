@@ -14,6 +14,7 @@ use crate::session::canonical_rows::{
 };
 
 use super::{ToolCallLifecycle, ToolCallState};
+use crate::plugin::tool_calls::{MAX_EFFECTS, MAX_PAYLOAD_BYTES};
 
 #[derive(Clone)]
 pub(super) struct PluginEffectTerminal {
@@ -55,9 +56,9 @@ impl ToolCallLifecycle {
             "plugin effects require a running direct parent"
         );
         anyhow::ensure!(
-            (1..=64).contains(&ordinal)
+            (1..=MAX_EFFECTS).contains(&ordinal)
                 && !name.trim().is_empty()
-                && arguments.len() <= 1024 * 1024,
+                && arguments.len() <= MAX_PAYLOAD_BYTES,
             "plugin effect exceeds its invocation bounds"
         );
         let _: serde_json::Map<String, serde_json::Value> = serde_json::from_str(arguments)
@@ -77,7 +78,7 @@ impl ToolCallLifecycle {
         let deadline = gents_loop::tool_call_lifecycle::runtime::current_tool_runtime_context()
             .and_then(|context| context.deadline_at)
             .map_or(self.deadline_at, |deadline| deadline.min(self.deadline_at));
-        let key = format!("plugin-effect:{}:{ordinal}", binding.tool_call_doc_id);
+        let key = super::PluginEffectBinding::internal_id(&binding.tool_call_doc_id, ordinal);
         let internal_id = key.clone();
         let child = ConfigAccess::transact_local_idempotent(
             &self.node, None, IdempotentTransactionRetry::Standard, "tool_call.admit_plugin_effect",
@@ -406,8 +407,8 @@ pub(super) fn arguments_from_rows(
         "plugin argument declaration changed tool identity"
     );
     anyhow::ensure!(
-        reconstructed.text.len() <= 1024 * 1024,
-        "plugin arguments exceed 1 MiB"
+        reconstructed.text.len() <= MAX_PAYLOAD_BYTES,
+        "plugin arguments exceed their payload bound"
     );
     let _: serde_json::Map<String, serde_json::Value> =
         serde_json::from_str(&reconstructed.text)
@@ -437,11 +438,6 @@ mod tests {
         let cases =
             &crate::lean_vocab_test::lean_contract_snapshot().plugin_resource_cases["tool_effects"];
         for case in cases.as_array().expect("generated plugin effect scenarios") {
-            // The selected-grant premise is exercised by the installed-plugin
-            // service's generated availability cases, before this owner is called.
-            if !case["grant"].as_bool().unwrap() {
-                continue;
-            }
             let name = case["name"].as_str().unwrap();
             let (fixture, owner) = published_admission_with_owner(PublishedAdmissionOptions {
                 name: format!("effect-{name}"),

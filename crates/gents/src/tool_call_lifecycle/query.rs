@@ -158,23 +158,12 @@ impl ToolCallLifecycle {
             .as_deref()
             .filter(|value| !value.trim().is_empty())
             .map(str::to_owned);
-        let plugin_effect = match (
+        let plugin_effect = super::PluginEffectBinding::decode(
             row.plugin_parent_tool_call_doc_id.as_deref(),
             row.plugin_effect_ordinal,
-        ) {
-            (None, None) => None,
-            (Some(parent), Some(ordinal))
-                if !parent.is_empty()
-                    && (1..=64).contains(&ordinal)
-                    && spawned_by_tool_call_doc_id.is_none() =>
-            {
-                Some(super::PluginEffectBinding {
-                    parent_tool_call_doc_id: parent.to_owned(),
-                    ordinal,
-                })
-            }
-            _ => anyhow::bail!("invalid plugin effect provenance"),
-        };
+            spawned_by_tool_call_doc_id.is_some(),
+            &row.tool_call_id,
+        )?;
         let admission_doc_id = plugin_effect
             .as_ref()
             .map(|effect| effect.parent_tool_call_doc_id.as_str())
@@ -194,12 +183,7 @@ impl ToolCallLifecycle {
             anyhow::ensure!(
                 effect.parent_tool_call_doc_id != row.doc_id
                     && row.request_doc_id.as_deref() == Some(accepted.request_doc_id.as_str())
-                    && row.message_sequence == accepted.message_sequence
-                    && row.tool_call_id
-                        == format!(
-                            "plugin-effect:{}:{}",
-                            effect.parent_tool_call_doc_id, effect.ordinal
-                        ),
+                    && row.message_sequence == accepted.message_sequence,
                 "plugin effect has incoherent accepted-parent provenance"
             );
         } else if let Some(parent_doc_id) = spawned_by_tool_call_doc_id.as_deref() {

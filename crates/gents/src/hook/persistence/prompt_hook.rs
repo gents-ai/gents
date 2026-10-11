@@ -1,6 +1,70 @@
 use super::*;
 use crate::hook::{decide_persistence_outcome, FailurePolicy, PolicyDecision};
 
+/// A tool call the session hook owns in `on_tool_call` instead of ordinary
+/// dispatch: it may commit its effect, detach, await or terminate the loop
+/// there. Every such route is a row of [`HookOwnedTool::ROUTES`], so a composed
+/// plugin child is refused for each by construction (Lean
+/// `ToolPolicy.PluginCalls.supported`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HookOwnedTool {
+    GetGoal,
+    UpdateGoal,
+    CreateGoal,
+    AgentControl,
+    SessionMessage,
+    SpawnProcess,
+    WaitProcess,
+    ListProcesses,
+    ReadProcess,
+    CancelProcess,
+}
+
+impl HookOwnedTool {
+    pub(crate) const ROUTES: [(&'static str, Self); 12] = [
+        (crate::goal::GET_GOAL_TOOL_NAME, Self::GetGoal),
+        (crate::goal::UPDATE_GOAL_TOOL_NAME, Self::UpdateGoal),
+        (crate::goal::CREATE_GOAL_TOOL_NAME, Self::CreateGoal),
+        (
+            crate::toolset::AGENT_INTERRUPT_TOOL_NAME,
+            Self::AgentControl,
+        ),
+        (crate::toolset::AGENT_LIST_TOOL_NAME, Self::AgentControl),
+        (AGENT_NEW_TOOL_NAME, Self::SessionMessage),
+        (
+            crate::toolset::AGENT_MESSAGE_TOOL_NAME,
+            Self::SessionMessage,
+        ),
+        (SPAWN_PROCESS_TOOL_NAME, Self::SpawnProcess),
+        (WAIT_PROCESS_TOOL_NAME, Self::WaitProcess),
+        (LIST_PROCESSES_TOOL_NAME, Self::ListProcesses),
+        (READ_PROCESS_TOOL_NAME, Self::ReadProcess),
+        (CANCEL_PROCESS_TOOL_NAME, Self::CancelProcess),
+    ];
+
+    pub(crate) fn of(tool_name: &str) -> Option<Self> {
+        Self::ROUTES
+            .iter()
+            .find(|(name, _)| *name == tool_name)
+            .map(|(_, route)| *route)
+    }
+
+    fn persistence_context(self) -> &'static str {
+        match self {
+            Self::GetGoal => "persist get_goal tool call",
+            Self::UpdateGoal => "persist update_goal tool call",
+            Self::CreateGoal => "persist create_goal tool call",
+            Self::AgentControl => "persist agents tool call",
+            Self::SessionMessage => "persist session-message tool call",
+            Self::SpawnProcess => "persist spawn_process tool call",
+            Self::WaitProcess => "persist wait_process tool call",
+            Self::ListProcesses => "persist list_processes tool call",
+            Self::ReadProcess => "persist read_process tool call",
+            Self::CancelProcess => "persist cancel_process tool call",
+        }
+    }
+}
+
 impl DefraSessionHook {
     pub async fn on_completion_call(&self, prompt: &Message, _history: &[Message]) -> HookAction {
         self.on_completion_call_with_context(prompt, _history, None)
@@ -27,185 +91,86 @@ impl DefraSessionHook {
         internal_call_id: &str,
         args: &str,
     ) -> ToolCallHookAction {
-        if self.goal_tools_enabled && tool_name == crate::goal::GET_GOAL_TOOL_NAME {
-            let result = self
-                .persist_get_goal_tool_call(tool_call_id, internal_call_id, args)
-                .instrument(tracing::info_span!(
-                    "tool.call",
-                    tool_name = %tool_name,
-                    tool_call_id = %internal_call_id,
-                ))
-                .await;
+        let owned = HookOwnedTool::of(tool_name).filter(|route| match route {
+            HookOwnedTool::GetGoal | HookOwnedTool::UpdateGoal => self.goal_tools_enabled,
+            HookOwnedTool::CreateGoal => self.goal_creation_enabled,
+            _ => true,
+        });
+        if let Some(route) = owned {
+            let result = async {
+                match route {
+                    HookOwnedTool::GetGoal => {
+                        self.persist_get_goal_tool_call(tool_call_id, internal_call_id, args)
+                            .await
+                    }
+                    HookOwnedTool::UpdateGoal => {
+                        self.persist_update_goal_tool_call(tool_call_id, internal_call_id, args)
+                            .await
+                    }
+                    HookOwnedTool::CreateGoal => {
+                        self.persist_create_goal_tool_call(tool_call_id, internal_call_id, args)
+                            .await
+                    }
+                    HookOwnedTool::AgentControl => {
+                        self.persist_agent_control_tool_call(
+                            tool_name,
+                            tool_call_id,
+                            internal_call_id,
+                            args,
+                        )
+                        .await
+                    }
+                    HookOwnedTool::SessionMessage => {
+                        self.persist_session_message_tool_call(
+                            tool_name,
+                            tool_call_id,
+                            internal_call_id,
+                            args,
+                        )
+                        .await
+                    }
+                    HookOwnedTool::SpawnProcess => {
+                        self.persist_background_tool_call(tool_call_id, internal_call_id, args)
+                            .await
+                    }
+                    HookOwnedTool::WaitProcess => {
+                        self.persist_wait_tool_call(tool_call_id, internal_call_id, args)
+                            .await
+                    }
+                    HookOwnedTool::ListProcesses => {
+                        self.persist_list_background_tools_tool_call(
+                            tool_call_id,
+                            internal_call_id,
+                            args,
+                        )
+                        .await
+                    }
+                    HookOwnedTool::ReadProcess => {
+                        self.persist_read_tool_output_tool_call(
+                            tool_call_id,
+                            internal_call_id,
+                            args,
+                        )
+                        .await
+                    }
+                    HookOwnedTool::CancelProcess => {
+                        self.persist_cancel_tool_call(tool_call_id, internal_call_id, args)
+                            .await
+                    }
+                }
+            }
+            .instrument(tracing::info_span!(
+                "tool.call",
+                tool_name = %tool_name,
+                tool_call_id = %internal_call_id,
+            ))
+            .await;
             return match result {
                 Ok(action) => {
                     self.record_success();
                     action
                 }
-                Err(error) => self.on_tool_persistence_error("persist get_goal tool call", &error),
-            };
-        }
-        if self.goal_tools_enabled && tool_name == crate::goal::UPDATE_GOAL_TOOL_NAME {
-            let result = self
-                .persist_update_goal_tool_call(tool_call_id, internal_call_id, args)
-                .instrument(tracing::info_span!(
-                    "tool.call",
-                    tool_name = %tool_name,
-                    tool_call_id = %internal_call_id,
-                ))
-                .await;
-            return match result {
-                Ok(action) => {
-                    self.record_success();
-                    action
-                }
-                Err(error) => {
-                    self.on_tool_persistence_error("persist update_goal tool call", &error)
-                }
-            };
-        }
-        if self.goal_creation_enabled && tool_name == crate::goal::CREATE_GOAL_TOOL_NAME {
-            let result = self
-                .persist_create_goal_tool_call(tool_call_id, internal_call_id, args)
-                .instrument(tracing::info_span!(
-                    "tool.call",
-                    tool_name = %tool_name,
-                    tool_call_id = %internal_call_id,
-                ))
-                .await;
-            return match result {
-                Ok(action) => {
-                    self.record_success();
-                    action
-                }
-                Err(error) => {
-                    self.on_tool_persistence_error("persist create_goal tool call", &error)
-                }
-            };
-        }
-        if crate::toolset::is_agent_control_tool(tool_name) {
-            let result = self
-                .persist_agent_control_tool_call(tool_name, tool_call_id, internal_call_id, args)
-                .instrument(tracing::info_span!(
-                    "tool.call",
-                    tool_name = %tool_name,
-                    tool_call_id = %internal_call_id,
-                ))
-                .await;
-
-            return match result {
-                Ok(action) => {
-                    self.record_success();
-                    action
-                }
-                Err(e) => self.on_tool_persistence_error("persist agents tool call", &e),
-            };
-        }
-        if crate::toolset::is_session_message_tool(tool_name) {
-            let result = self
-                .persist_session_message_tool_call(tool_name, tool_call_id, internal_call_id, args)
-                .instrument(tracing::info_span!(
-                    "tool.call",
-                    tool_name = %tool_name,
-                    tool_call_id = %internal_call_id,
-                ))
-                .await;
-
-            return match result {
-                Ok(action) => {
-                    self.record_success();
-                    action
-                }
-                Err(e) => self.on_tool_persistence_error("persist session-message tool call", &e),
-            };
-        }
-        if tool_name == SPAWN_PROCESS_TOOL_NAME {
-            let result = self
-                .persist_background_tool_call(tool_call_id, internal_call_id, args)
-                .instrument(tracing::info_span!(
-                    "tool.call",
-                    tool_name = %tool_name,
-                    tool_call_id = %internal_call_id,
-                ))
-                .await;
-
-            return match result {
-                Ok(action) => {
-                    self.record_success();
-                    action
-                }
-                Err(e) => self.on_tool_persistence_error("persist spawn_process tool call", &e),
-            };
-        }
-        if tool_name == WAIT_PROCESS_TOOL_NAME {
-            let result = self
-                .persist_wait_tool_call(tool_call_id, internal_call_id, args)
-                .instrument(tracing::info_span!(
-                    "tool.call",
-                    tool_name = %tool_name,
-                    tool_call_id = %internal_call_id,
-                ))
-                .await;
-
-            return match result {
-                Ok(action) => {
-                    self.record_success();
-                    action
-                }
-                Err(e) => self.on_tool_persistence_error("persist wait_process tool call", &e),
-            };
-        }
-        if tool_name == LIST_PROCESSES_TOOL_NAME {
-            let result = self
-                .persist_list_background_tools_tool_call(tool_call_id, internal_call_id, args)
-                .instrument(tracing::info_span!(
-                    "tool.call",
-                    tool_name = %tool_name,
-                    tool_call_id = %internal_call_id,
-                ))
-                .await;
-
-            return match result {
-                Ok(action) => {
-                    self.record_success();
-                    action
-                }
-                Err(e) => self.on_tool_persistence_error("persist list_processes tool call", &e),
-            };
-        }
-        if tool_name == READ_PROCESS_TOOL_NAME {
-            let result = self
-                .persist_read_tool_output_tool_call(tool_call_id, internal_call_id, args)
-                .instrument(tracing::info_span!(
-                    "tool.call",
-                    tool_name = %tool_name,
-                    tool_call_id = %internal_call_id,
-                ))
-                .await;
-
-            return match result {
-                Ok(action) => {
-                    self.record_success();
-                    action
-                }
-                Err(e) => self.on_tool_persistence_error("persist read_process tool call", &e),
-            };
-        }
-        if tool_name == CANCEL_PROCESS_TOOL_NAME {
-            let result = self
-                .persist_cancel_tool_call(tool_call_id, internal_call_id, args)
-                .instrument(tracing::info_span!(
-                    "tool.call",
-                    tool_name = %tool_name,
-                    tool_call_id = %internal_call_id,
-                ))
-                .await;
-
-            return match result {
-                Ok(action) => {
-                    self.record_success();
-                    action
-                }
-                Err(e) => self.on_tool_persistence_error("persist cancel_process tool call", &e),
+                Err(error) => self.on_tool_persistence_error(route.persistence_context(), &error),
             };
         }
 
@@ -318,7 +283,8 @@ impl DefraSessionHook {
             .contains_key(internal_call_id);
         let persist_result: anyhow::Result<HookAction> = async {
             // Managed terminals terminate the turn; they carry no model-facing
-            // text and never thread back to the provider.
+            // text and never thread back to the provider. A plugin child's
+            // terminal is its own: its parent ends only through its own envelope.
             if matches!(
                 outcome,
                 ToolOutcome::TimedOut { .. } | ToolOutcome::Cancelled
@@ -354,6 +320,9 @@ impl DefraSessionHook {
                     );
                 }
 
+                if is_plugin_effect {
+                    return Ok(HookAction::Continue);
+                }
                 let reason = match outcome {
                     ToolOutcome::TimedOut { .. } => "tool call deadline exceeded",
                     _ => "tool call cancelled",

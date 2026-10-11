@@ -32,6 +32,7 @@ mod prompt_hook;
 mod session_message;
 
 use helpers::*;
+pub(crate) use prompt_hook::HookOwnedTool;
 #[cfg(test)]
 pub(super) fn test_model_observation_for_tool_result(tool_name: &str, raw_result: &str) -> String {
     model_observation_for_tool_result(tool_name, raw_result)

@@ -146,18 +146,26 @@ private def invocationJson : Json :=
           | some current => PluginInvocation.reusable original current))]
 
 private def toolCallsJson : Json := Json.mkObj [
-  ("supported", toJson <| ["create_goal", "get_goal", "update_goal", "agent_new", "agent_message",
-    "agent_list", "agent_interrupt", "spawn_process", "wait_process", "list_processes",
-    "read_process", "cancel_process", "configure", "query", "charts", "bash", "call_tool"].map fun name =>
-      Json.mkObj [("name", toJson name), ("expected", toJson (PluginCalls.supported name))]),
+  ("supported", toJson <| [("ordinary", PluginCalls.DispatchRoute.ordinary),
+    ("hook_owned", .hookOwned)].map fun (route, value) =>
+      Json.mkObj [("route", toJson route), ("expected", toJson (PluginCalls.supported value))]),
   ("availability", toJson <| [false, true].flatMap fun grant =>
-    [false, true].flatMap fun parent => [false, true].map fun nested => Json.mkObj [
-      ("grant", toJson grant), ("parent", toJson parent), ("nested", toJson nested),
-      ("expected", toJson (PluginCalls.available grant parent nested))]),
+    [("live", true), ("absent", false), ("child", PluginCalls.childDispatcher)].map fun (scope, live) =>
+      Json.mkObj [("grant", toJson grant), ("dispatcher", toJson scope),
+        ("expected", toJson (PluginCalls.available grant live))]),
   ("reservation", toJson <| [0, 1, 63, 64, 65, 1000].map fun used => Json.mkObj [
     ("used", toJson used), ("expected", toJson (PluginCalls.reserve used))]),
   ("result_bytes", toJson <| [0, 1048575, 1048576, 1048577].map fun bytes => Json.mkObj [
-    ("bytes", toJson bytes), ("expected", toJson (PluginCalls.resultFits bytes))])]
+    ("bytes", toJson bytes), ("expected", toJson (PluginCalls.resultFits bytes))]),
+  ("settlement", toJson <| [("completed", PluginCalls.ChildOutcome.completed), ("failed", .failed),
+    ("unavailable", .unavailable), ("timed_out", .timedOut), ("cancelled", .cancelled),
+    ("fatal", .fatal)].map fun (name, outcome) => Json.mkObj [("outcome", toJson name),
+      ("expected", toJson (match PluginCalls.settle outcome with
+        | .result => "result" | .guestError => "guest_error" | .parentFatal => "parent_fatal"))]),
+  ("consent", toJson <| [false, true].flatMap fun interactive => [false, true].map fun composed =>
+    Json.mkObj [("interactive", toJson interactive), ("composed", toJson composed),
+      ("expected", toJson (match PluginCalls.consentRoute interactive composed with
+        | .ask => "ask" | .refuseComposed => "refuse_composed" | .deny => "deny"))])]
 
 def casesJson : String := (Json.mkObj [("consent", consentJson), ("budgets", budgetsJson),
   ("tool_calls", toolCallsJson), ("tool_effects", PluginEffects.casesJson),

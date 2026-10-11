@@ -2,27 +2,39 @@
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
-use std::time::Instant;
 
 use gents_loop::tool_effects::{ToolEffectDispatcher, ToolEffectError};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
-pub(super) const MAX_EFFECTS: u32 = 64;
-const MAX_RESULT_BYTES: usize = 1024 * 1024;
+use crate::tool_call_lifecycle::ToolOutcome;
 
-pub(super) fn available(granted: bool, parent: bool, nested: bool) -> bool {
-    granted && parent && !nested
+/// Child calls one invocation may attempt (Lean `PluginCalls.maxEffects`).
+pub(crate) const MAX_EFFECTS: u32 = 64;
+/// Bytes of one child's arguments or result (Lean `PluginCalls.maxPayloadBytes`).
+pub(crate) const MAX_PAYLOAD_BYTES: usize = 1024 * 1024;
+
+pub(super) fn available(granted: bool, live_dispatcher: bool) -> bool {
+    granted && live_dispatcher
 }
 
+/// Only ordinary dispatch is child-callable; see [`HookOwnedTool`].
+///
+/// [`HookOwnedTool`]: crate::hook::persistence::HookOwnedTool
 pub(crate) fn supported(name: &str) -> bool {
-    !crate::toolset::is_session_message_tool(name)
-        && !matches!(
-            name,
-            crate::goal::UPDATE_GOAL_TOOL_NAME
-                | crate::toolset::SPAWN_PROCESS_TOOL_NAME
-                | crate::toolset::WAIT_PROCESS_TOOL_NAME
-        )
+    crate::hook::persistence::HookOwnedTool::of(name).is_none()
+}
+
+/// The guest-facing sentence naming what children cannot call.
+pub(super) fn composition_note() -> String {
+    let owned = crate::hook::persistence::HookOwnedTool::ROUTES
+        .iter()
+        .map(|(name, _)| *name)
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "\nTool composition is sequential, up to {MAX_EFFECTS} granted-tool calls per invocation. Call {owned} directly outside this plugin."
+    )
 }
 
 fn reserve(used: u32) -> Option<u32> {
@@ -30,7 +42,36 @@ fn reserve(used: u32) -> Option<u32> {
 }
 
 fn result_fits(bytes: usize) -> bool {
-    bytes <= MAX_RESULT_BYTES
+    bytes <= MAX_PAYLOAD_BYTES
+}
+
+/// Lean `PluginCalls.settle`: `Err` is the parent-fatal reason; every other
+/// child outcome, including its own timeout or cancellation, is guest data.
+fn settle(outcome: Result<ToolOutcome, ToolEffectError>) -> Result<Value, String> {
+    let error = match outcome {
+        Err(ToolEffectError::Fatal(reason)) => return Err(reason),
+        Err(ToolEffectError::Unavailable(error)) => error,
+        Ok(outcome) => {
+            let text = outcome.model_facing_text();
+            if !result_fits(text.len()) {
+                format!(
+                    "the tool result exceeds {} MiB; request a smaller result",
+                    MAX_PAYLOAD_BYTES >> 20
+                )
+            } else {
+                match outcome {
+                    ToolOutcome::Completed(text) => {
+                        return Ok(json!({"result": serde_json::from_str::<Value>(&text)
+                            .unwrap_or(Value::String(text))}));
+                    }
+                    ToolOutcome::Failed { text, .. } => text,
+                    ToolOutcome::Cancelled => "the tool call was cancelled".to_owned(),
+                    ToolOutcome::TimedOut { .. } => "the tool call timed out".to_owned(),
+                }
+            }
+        }
+    };
+    Ok(json!({ "error": error }))
 }
 
 #[derive(Deserialize)]
@@ -79,7 +120,7 @@ pub(super) struct Session {
 impl Session {
     pub(super) fn for_call(granted: bool) -> Option<Self> {
         let dispatcher = gents_loop::tool_effects::current();
-        if !available(granted, dispatcher.is_some(), false) {
+        if !available(granted, dispatcher.is_some()) {
             return None;
         }
         Some(Self {
@@ -89,61 +130,30 @@ impl Session {
         })
     }
 
-    pub(super) async fn serve(
-        &mut self,
-        requests: Vec<Request>,
-        deadline: Instant,
-    ) -> Map<String, Value> {
+    /// Children run under the parent tool call's deadline and cancellation,
+    /// which preempt this whole invocation; they are not guest compute.
+    pub(super) async fn serve(&mut self, requests: Vec<Request>) -> Map<String, Value> {
         let mut results = Map::new();
         for request in requests {
             let result = match reserve(self.used) {
                 None => json!({"error": format!("the plugin used its {MAX_EFFECTS} tool calls")}),
                 Some(next) => {
                     self.used = next;
-                    if Instant::now() >= deadline {
-                        json!({"error": "the plugin's tool-call deadline expired"})
-                    } else {
-                        let arguments = Value::Object(request.arguments).to_string();
-                        // A child may itself be an installed plugin, but it receives
-                        // no delegation service and cannot recursively call tools.
-                        let outcome = gents_loop::tool_effects::scope(
-                            None,
-                            self.dispatcher.call(
-                                next,
-                                &request.tool_name,
-                                &arguments,
-                                deadline.saturating_duration_since(Instant::now()),
-                            ),
-                        )
-                        .await;
-                        match outcome {
-                            Ok(outcome) => {
-                                let text = outcome.model_facing_text();
-                                if !result_fits(text.len()) {
-                                    json!({"error": "the tool result exceeds 1 MiB; request a smaller result"})
-                                } else if matches!(
-                                    outcome,
-                                    crate::tool_call_lifecycle::ToolOutcome::Completed(..)
-                                ) {
-                                    json!({"result": serde_json::from_str::<Value>(&text).unwrap_or_else(|_| Value::String(text.to_owned()))})
-                                } else {
-                                    let error = match &outcome {
-                                        crate::tool_call_lifecycle::ToolOutcome::Cancelled => {
-                                            "the tool call was cancelled"
-                                        }
-                                        crate::tool_call_lifecycle::ToolOutcome::TimedOut {
-                                            ..
-                                        } => "the tool call timed out",
-                                        _ => text,
-                                    };
-                                    json!({"error": error})
-                                }
-                            }
-                            Err(ToolEffectError::Unavailable(error)) => json!({"error": error}),
-                            Err(ToolEffectError::Fatal(error)) => {
-                                self.fatal = Some(error);
-                                break;
-                            }
+                    let arguments = Value::Object(request.arguments).to_string();
+                    let outcome = gents_loop::tool_effects::scope(
+                        None,
+                        super::approval::scope_composed(self.dispatcher.call(
+                            next,
+                            &request.tool_name,
+                            &arguments,
+                        )),
+                    )
+                    .await;
+                    match settle(outcome) {
+                        Ok(result) => result,
+                        Err(reason) => {
+                            self.fatal = Some(reason);
+                            break;
                         }
                     }
                 }
@@ -169,7 +179,6 @@ mod tests {
             ordinal: u32,
             name: &'a str,
             arguments: &'a str,
-            _budget: std::time::Duration,
         ) -> gents_loop::tool::BoxFuture<
             'a,
             Result<crate::tool_call_lifecycle::ToolOutcome, ToolEffectError>,
@@ -329,7 +338,6 @@ mod tests {
                 _: u32,
                 _: &'a str,
                 _: &'a str,
-                _: std::time::Duration,
             ) -> gents_loop::tool::BoxFuture<
                 'a,
                 Result<crate::tool_call_lifecycle::ToolOutcome, ToolEffectError>,
@@ -358,27 +366,43 @@ mod tests {
         }).await;
     }
 
-    #[test]
-    fn generated_tool_call_bounds_and_grants() {
+    #[tokio::test]
+    async fn generated_tool_call_bounds_and_grants() {
         let cases =
             &crate::lean_vocab_test::lean_contract_snapshot().plugin_resource_cases["tool_calls"];
         for case in cases["supported"].as_array().unwrap() {
-            assert_eq!(
-                supported(case["name"].as_str().unwrap()),
-                case["expected"].as_bool().unwrap(),
-                "{case}"
-            );
+            let expected = case["expected"].as_bool().unwrap();
+            let names: Vec<&str> = match case["route"].as_str().unwrap() {
+                "hook_owned" => crate::hook::persistence::HookOwnedTool::ROUTES
+                    .iter()
+                    .map(|(name, _)| *name)
+                    .collect(),
+                "ordinary" => vec!["bash", "query", "charts", "call_tool", "configure"],
+                route => panic!("unknown route {route}"),
+            };
+            for name in names {
+                assert_eq!(supported(name), expected, "{case} {name}");
+            }
         }
         for case in cases["availability"].as_array().unwrap() {
-            assert_eq!(
-                available(
-                    case["grant"].as_bool().unwrap(),
-                    case["parent"].as_bool().unwrap(),
-                    case["nested"].as_bool().unwrap()
-                ),
-                case["expected"].as_bool().unwrap(),
-                "{case}"
-            );
+            let granted = case["grant"].as_bool().unwrap();
+            let live: Option<Arc<dyn ToolEffectDispatcher>> = match case["dispatcher"].as_str() {
+                Some("live" | "child") => Some(Arc::new(Tools::default())),
+                _ => None,
+            };
+            let child = case["dispatcher"] == "child";
+            let observed = gents_loop::tool_effects::scope(live, async {
+                if child {
+                    gents_loop::tool_effects::scope(None, async {
+                        Session::for_call(granted).is_some()
+                    })
+                    .await
+                } else {
+                    Session::for_call(granted).is_some()
+                }
+            })
+            .await;
+            assert_eq!(observed, case["expected"].as_bool().unwrap(), "{case}");
         }
         for case in cases["reservation"].as_array().unwrap() {
             let expected = case["expected"].as_u64().map(|value| value as u32);
@@ -395,6 +419,107 @@ mod tests {
                 "{case}"
             );
         }
+        for case in cases["settlement"].as_array().unwrap() {
+            let outcome = match case["outcome"].as_str().unwrap() {
+                "completed" => Ok(ToolOutcome::Completed("{}".into())),
+                "failed" => Ok(ToolOutcome::Failed {
+                    class: crate::tool_call_lifecycle::FailureClass::External,
+                    denial: None,
+                    text: "boom".into(),
+                }),
+                "unavailable" => Err(ToolEffectError::Unavailable("unselected".into())),
+                "timed_out" => Ok(ToolOutcome::TimedOut { deadline_at: None }),
+                "cancelled" => Ok(ToolOutcome::Cancelled),
+                "fatal" => Err(ToolEffectError::Fatal("durable failure".into())),
+                outcome => panic!("unknown outcome {outcome}"),
+            };
+            let observed = match settle(outcome) {
+                Err(_) => "parent_fatal",
+                Ok(value) if value.get("result").is_some() => "result",
+                Ok(value) => {
+                    assert!(value["error"].is_string(), "{case}");
+                    "guest_error"
+                }
+            };
+            assert_eq!(observed, case["expected"], "{case}");
+        }
+        for case in cases["consent"].as_array().unwrap() {
+            let interactive = case["interactive"].as_bool().unwrap();
+            let route = if case["composed"].as_bool().unwrap() {
+                crate::plugin::approval::scope_composed(async {
+                    crate::plugin::approval::consent(interactive)
+                })
+                .await
+            } else {
+                crate::plugin::approval::consent(interactive)
+            };
+            let expected = match case["expected"].as_str().unwrap() {
+                "ask" => crate::plugin::approval::Consent::Ask,
+                "refuse_composed" => crate::plugin::approval::Consent::RefuseComposed,
+                _ => crate::plugin::approval::Consent::Deny,
+            };
+            assert_eq!(route, expected, "{case}");
+        }
+    }
+
+    #[tokio::test]
+    async fn serving_children_is_not_charged_to_the_guest_clock() {
+        struct Slow;
+        impl ToolEffectDispatcher for Slow {
+            fn call<'a>(
+                &'a self,
+                _: u32,
+                _: &'a str,
+                _: &'a str,
+            ) -> gents_loop::tool::BoxFuture<'a, Result<ToolOutcome, ToolEffectError>> {
+                Box::pin(async {
+                    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+                    Ok(ToolOutcome::Completed("\"slow\"".into()))
+                })
+            }
+        }
+        gents_loop::tool_effects::scope(Some(Arc::new(Slow)), async {
+            let session = Session::for_call(true).unwrap();
+            let round: rounds::Round = Arc::new(|input, _| {
+                let output = match input.get("state") {
+                    None => json!({"tool_calls":{"requests":[
+                        {"id":"a","tool_name":"slow","arguments":{}},
+                        {"id":"b","tool_name":"slow","arguments":{}}],"state":"done"}}),
+                    Some(_) => json!([input["tool_results"]["a"], input["tool_results"]["b"]]),
+                };
+                Ok(PluginOutcome {
+                    verdict: PluginVerdict::Success,
+                    output,
+                    diagnostics: String::new(),
+                    fuel_used: 1,
+                    wall_ms: 0,
+                })
+            });
+            let budget = PluginBudget {
+                wall_clock: std::time::Duration::from_millis(200),
+                ..PluginBudget::default()
+            };
+            let result = rounds::drive(
+                rounds::HostCalls {
+                    model: None,
+                    http: None,
+                    tools: Some(session),
+                },
+                json!({}),
+                budget,
+                round,
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                result.verdict,
+                PluginVerdict::Success,
+                "{}",
+                result.diagnostics
+            );
+            assert_eq!(result.output, json!([{"result":"slow"},{"result":"slow"}]));
+        })
+        .await;
     }
 
     #[test]

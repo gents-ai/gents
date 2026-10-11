@@ -48,7 +48,7 @@ impl PluginTool {
             .clone()
             .unwrap_or_else(|| record.declaration.description.clone());
         if plugin.tool_calls {
-            description.push_str("\nTool composition is sequential, up to 64 granted-tool calls per invocation. Call agent_new, agent_message, spawn_process, wait_process, and update_goal directly outside this plugin.");
+            description.push_str(&super::tool_calls::composition_note());
         }
         let definition = ToolDefinition {
             name: plugin.tool_name().to_string(),

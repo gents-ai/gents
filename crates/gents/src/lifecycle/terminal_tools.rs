@@ -122,16 +122,16 @@ pub(super) async fn account_tools_in_txn(
     let timestamp = escape_graphql_string(timestamp);
     for tool in &tools {
         let spawned = tool.row.spawned_by_tool_call_doc_id.as_deref();
-        let plugin_parent = tool.row.plugin_parent_tool_call_doc_id.as_deref();
-        anyhow::ensure!(
-            plugin_parent.is_some() == tool.row.plugin_effect_ordinal.is_some(),
-            "plugin effect has incomplete provenance"
-        );
-        let accepted = if let Some(parent_id) = plugin_parent {
-            anyhow::ensure!(spawned.is_none(), "plugin effect cannot be spawned");
+        let plugin_parent = crate::tool_call_lifecycle::PluginEffectBinding::decode(
+            tool.row.plugin_parent_tool_call_doc_id.as_deref(),
+            tool.row.plugin_effect_ordinal,
+            spawned.is_some(),
+            tool.row.tool_call_id.as_deref().unwrap_or_default(),
+        )?;
+        let accepted = if let Some(effect) = plugin_parent.as_ref() {
             let parent = tools
                 .iter()
-                .find(|candidate| candidate.doc_id == parent_id)
+                .find(|candidate| candidate.doc_id == effect.parent_tool_call_doc_id)
                 .context("plugin effect has no direct parent in request")?;
             anyhow::ensure!(
                 parent.row.spawned_by_tool_call_doc_id.is_none()
@@ -327,12 +327,24 @@ mod tests {
             if name != "pending_cancel" {
                 child.start_running().await.unwrap();
             }
+            if name.starts_with("timed_out") {
+                child.timeout().await.unwrap();
+            } else if name.starts_with("completed") {
+                child
+                    .complete_raw_with_presentation(
+                        "child done",
+                        "child done",
+                        gents_protocol::output::PayloadPresentation::Full,
+                    )
+                    .await
+                    .unwrap();
+            }
             let child_doc = child.doc_id().unwrap().to_owned();
             let generation = parent.execution_generation().unwrap().to_owned();
             let request_doc = parent.request_doc_id().unwrap().to_owned();
             let agent = parent.node_did().to_owned();
             let session = parent.session_id().to_owned();
-            let normal = name == "running_normal";
+            let normal = name.ends_with("_normal");
             if normal {
                 parent
                     .complete("parent completed before child")

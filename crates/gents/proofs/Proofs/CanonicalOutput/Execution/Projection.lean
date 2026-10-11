@@ -1,5 +1,6 @@
 import Proofs.CanonicalOutput.Execution.State
 import Proofs.CanonicalOutput.ToolDelivery
+import Proofs.ToolPolicy.PluginCalls
 
 namespace CanonicalOutput.Execution
 
@@ -271,7 +272,7 @@ def acceptedHeaderBindsTool (world : World) (tool : OwnedTool) : Bool :=
         tool.document != parentDoc && tool.context.awaitMode == .background
   | .pluginEffect parentDoc ordinal =>
       pluginParentIntentValid world tool parentDoc && tool.document != parentDoc &&
-        ordinal > 0 && ordinal ≤ 64 && tool.context.awaitMode == .foreground
+        ordinal > 0 && ordinal ≤ ToolPolicy.PluginCalls.maxEffects && tool.context.awaitMode == .foreground
 
 def acceptedHeaderBindsToolGeneration (world : World) (tool : OwnedTool)
     (generation : Generation) : Bool :=
@@ -487,7 +488,7 @@ def pluginEffectInputValid (world : World) (generation : Generation)
     validateClosingRecord (world.segments ++ [record]) record &&
     match reconstructExtent (world.segments ++ [record]) record with
     | .ok [(declaration, bytes)] => declaration.kind == .arguments &&
-        bytes.length ≤ 1048576 && !admission.name.isEmpty &&
+        bytes.length ≤ ToolPolicy.PluginCalls.maxPayloadBytes && !admission.name.isEmpty &&
         declaration.tool.any (fun identity => identity.name == admission.name)
     | _ => false
 
@@ -504,8 +505,7 @@ def pluginEffectPresent (world : World) (admission : PluginEffectAdmission) : Bo
 /-- Effect retries belong to a live invocation, not durable workflow resumption. -/
 def pluginEffectInvocationValid (world : World) (generation : Generation)
     (admission : PluginEffectAdmission) : Bool :=
-  admission.delegationGranted &&
-    (RequestExecutionLease.step? world.lease
+  (RequestExecutionLease.step? world.lease
       (.authorizeProducerDecision .mutationWriteGate generation .dispatch)).isSome &&
     match ownedToolByDocument? world admission.parentToolDoc with
     | some parent => parent.provenance == .acceptedIntent &&
@@ -515,7 +515,7 @@ def pluginEffectInvocationValid (world : World) (generation : Generation)
 
 def pluginEffectAdmissionValid (world : World) (generation : Generation)
     (admission : PluginEffectAdmission) : Bool :=
-  admission.delegationGranted && admission.ordinal > 0 && admission.ordinal ≤ 64 &&
+  admission.ordinal > 0 && admission.ordinal ≤ ToolPolicy.PluginCalls.maxEffects &&
     admission.document != admission.parentToolDoc &&
     admission.context.state == .pending && admission.context.awaitMode == .foreground &&
     !(world.toolContexts.any (fun tool => tool.document == admission.document ||

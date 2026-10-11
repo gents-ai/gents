@@ -1068,17 +1068,7 @@ async fn terminalize_transaction(
     )
     .await?;
     if let Some(effect) = plugin_effect {
-        anyhow::ensure!(
-            spawned_by_tool_call_doc_id.is_none()
-                && call_id.is_none()
-                && (1..=64).contains(&effect.effect.ordinal)
-                && tool_call_id
-                    == format!(
-                        "plugin-effect:{}:{}",
-                        effect.parent.tool_call_doc_id, effect.effect.ordinal
-                    ),
-            "invalid plugin effect terminal identity"
-        );
+        anyhow::ensure!(call_id.is_none(), "invalid plugin effect terminal identity");
         super::plugin_effect::validate_parent(
             txn,
             &effect.parent,

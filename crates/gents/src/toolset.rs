@@ -686,11 +686,6 @@ pub(crate) fn is_session_message_tool(tool_name: &str) -> bool {
     tool_name == AGENT_NEW_TOOL_NAME || tool_name == AGENT_MESSAGE_TOOL_NAME
 }
 
-/// The foreground agents tools, answered in the calling turn.
-pub(crate) fn is_agent_control_tool(tool_name: &str) -> bool {
-    tool_name == AGENT_INTERRUPT_TOOL_NAME || tool_name == AGENT_LIST_TOOL_NAME
-}
-
 pub(crate) fn agent_tool_names(config: &AgentToolConfig) -> Vec<String> {
     if !config.tools_enabled() {
         return Vec::new();

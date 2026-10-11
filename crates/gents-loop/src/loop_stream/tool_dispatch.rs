@@ -35,7 +35,6 @@ impl<H: SessionHook + 'static> crate::tool_effects::ToolEffectDispatcher for Eff
         ordinal: u32,
         name: &'a str,
         arguments: &'a str,
-        budget: std::time::Duration,
     ) -> crate::tool::BoxFuture<'a, Result<ToolOutcome, crate::tool_effects::ToolEffectError>> {
         Box::pin(async move {
             use crate::tool_effects::ToolEffectError::{Fatal, Unavailable};
@@ -43,28 +42,30 @@ impl<H: SessionHook + 'static> crate::tool_effects::ToolEffectDispatcher for Eff
                 let scope = current_tool_runtime_context().ok_or_else(|| {
                     Unavailable("tool effects require a request execution scope".to_owned())
                 })?;
-                let limit = chrono::Utc::now()
-                    + chrono::Duration::from_std(budget)
-                        .map_err(|_| Unavailable("tool effect deadline is out of range".to_owned()))?;
-                let deadline = Some(
-                    scope
-                        .deadline_at
-                        .map_or(limit, |deadline| deadline.min(limit)),
-                );
                 scope_request_tool_execution_with_session(
-                    deadline,
+                    scope.deadline_at,
                     scope.cancellation_token,
                     scope.workspace_cwd,
                     None,
                     scope.session_id,
                     async {
-                        let internal_id = self.hook
+                        let internal_id = self
+                            .hook
                             .admit_tool_effect(&self.parent_internal_id, ordinal, name, arguments)
                             .await
                             .map_err(Unavailable)?;
-                        if let Some(outcome) = admit_tool_effect(self.tools.as_slice(), name, arguments) {
-                            let result = match self.hook
-                                .on_tool_admission_rejected(name, None, &internal_id, arguments, &outcome)
+                        if let Some(outcome) =
+                            admit_tool_effect(self.tools.as_slice(), name, arguments)
+                        {
+                            let result = match self
+                                .hook
+                                .on_tool_admission_rejected(
+                                    name,
+                                    None,
+                                    &internal_id,
+                                    arguments,
+                                    &outcome,
+                                )
                                 .await
                             {
                                 HookAction::Continue => Ok(outcome),
@@ -72,47 +73,41 @@ impl<H: SessionHook + 'static> crate::tool_effects::ToolEffectDispatcher for Eff
                             };
                             let cancelled = ToolOutcome::Cancelled;
                             self.hook
-                                .finish_tool_effect(&internal_id, result.as_ref().err().map(|_| &cancelled))
+                                .finish_tool_effect(
+                                    &internal_id,
+                                    result.as_ref().err().map(|_| &cancelled),
+                                )
                                 .await
                                 .map_err(Fatal)?;
                             return result;
                         }
-                        let before = self.hook.on_tool_call(name, None, &internal_id, arguments);
-                        let before = tokio::select! {
-                            biased;
-                            _ = current_tool_runtime_context().expect("scoped effect").cancellation_token.cancelled_owned() => Err(ToolOutcome::Cancelled),
-                            _ = tokio::time::sleep(deadline_remaining(deadline).unwrap_or_default()) => Err(ToolOutcome::TimedOut { deadline_at: deadline }),
-                            action = before => Ok(action),
-                        };
-                        let before = if before.is_ok()
-                            && deadline_remaining(deadline).is_some_and(|remaining| remaining.is_zero())
+                        // Awaited like the provider path: an effect the before hook
+                        // commits is never recorded as interrupted.
+                        let result = match self
+                            .hook
+                            .on_tool_call(name, None, &internal_id, arguments)
+                            .await
                         {
-                            Err(ToolOutcome::TimedOut { deadline_at: deadline })
-                        } else {
-                            before
-                        };
-                        let before = match before {
-                            Ok(action) => action,
-                            Err(outcome) => {
-                                self.hook
-                                    .finish_tool_effect(&internal_id, Some(&outcome))
-                                    .await
-                                    .map_err(Fatal)?;
-                                return Ok(outcome);
-                            }
-                        };
-                        let result = match before {
                             ToolCallHookAction::Terminate { reason } => Err(Fatal(reason)),
-                            ToolCallHookAction::Skip { reason } => Ok(ToolOutcome::Completed(reason)),
+                            ToolCallHookAction::Skip { reason } => {
+                                Ok(ToolOutcome::Completed(reason))
+                            }
                             ToolCallHookAction::Continue => {
-                                let writer = self.hook
-                                    .foreground_live_output_writer(&internal_id).await;
+                                let writer =
+                                    self.hook.foreground_live_output_writer(&internal_id).await;
                                 let session = self.hook.session_id().await;
                                 let outcome = dispatch_tool(
-                                    self.tools.as_slice(), name, arguments.to_owned(), Some(writer), session,
-                                ).await;
-                                match self.hook
-                                    .on_tool_result(name, None, &internal_id, arguments, &outcome).await
+                                    self.tools.as_slice(),
+                                    name,
+                                    arguments.to_owned(),
+                                    Some(writer),
+                                    session,
+                                )
+                                .await;
+                                match self
+                                    .hook
+                                    .on_tool_result(name, None, &internal_id, arguments, &outcome)
+                                    .await
                                 {
                                     HookAction::Continue => Ok(outcome),
                                     HookAction::Terminate { reason } => Err(Fatal(reason)),
@@ -121,7 +116,10 @@ impl<H: SessionHook + 'static> crate::tool_effects::ToolEffectDispatcher for Eff
                         };
                         let cancelled = ToolOutcome::Cancelled;
                         self.hook
-                            .finish_tool_effect(&internal_id, result.as_ref().err().map(|_| &cancelled))
+                            .finish_tool_effect(
+                                &internal_id,
+                                result.as_ref().err().map(|_| &cancelled),
+                            )
                             .await
                             .map_err(Fatal)?;
                         result
@@ -312,7 +310,7 @@ mod tests {
                 };
             }
             if self.block_before {
-                std::future::pending::<()>().await;
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             }
             ToolCallHookAction::Skip {
                 reason: "specialized side effect".into(),
@@ -377,12 +375,7 @@ mod tests {
         let outcome = scope_request_tool_execution(
             None,
             tokio_util::sync::CancellationToken::new(),
-            dispatcher.call(
-                1,
-                "agent_interrupt",
-                "{}",
-                std::time::Duration::from_secs(1),
-            ),
+            dispatcher.call(1, "agent_interrupt", "{}"),
         )
         .await
         .unwrap();
@@ -392,47 +385,38 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn deadline_during_before_hook_requires_durable_cleanup() {
-        use crate::tool_effects::{ToolEffectDispatcher, ToolEffectError};
-        for cleanup_fails in [false, true] {
-            let hook = Arc::new(EffectHook {
-                invoked: AtomicBool::new(false),
-                rejected: AtomicBool::new(false),
-                block_before: true,
-                cleanup_fails,
-                cleaned: AtomicBool::new(false),
-                parent_settled: AtomicBool::new(false),
-                terminate_before: false,
-            });
-            let tool = ReadyAfterWallDeadline {
+    async fn before_hook_effect_outlasting_the_deadline_is_not_interrupted() {
+        use crate::tool_effects::ToolEffectDispatcher;
+        let hook = Arc::new(EffectHook {
+            invoked: AtomicBool::new(false),
+            rejected: AtomicBool::new(false),
+            block_before: true,
+            cleanup_fails: false,
+            cleaned: AtomicBool::new(false),
+            parent_settled: AtomicBool::new(false),
+            terminate_before: false,
+        });
+        let dispatcher = EffectDispatcher {
+            tools: Arc::new(vec![Box::new(ReadyAfterWallDeadline {
                 deadline_at: Utc::now(),
                 called: Arc::new(AtomicBool::new(false)),
-            };
-            let dispatcher = EffectDispatcher {
-                tools: Arc::new(vec![Box::new(tool)]),
-                hook: hook.clone(),
-                parent_internal_id: "parent".into(),
-                fatal: tokio::sync::Mutex::new(None),
-            };
-            let result = scope_request_tool_execution(
-                None,
-                tokio_util::sync::CancellationToken::new(),
-                dispatcher.call(
-                    1,
-                    "ready_after_wall_deadline",
-                    "{}",
-                    std::time::Duration::from_millis(10),
-                ),
-            )
-            .await;
-            assert!(hook.invoked.load(Ordering::SeqCst));
-            assert!(hook.cleaned.load(Ordering::SeqCst));
-            if cleanup_fails {
-                assert!(matches!(result, Err(ToolEffectError::Fatal(_))));
-            } else {
-                assert!(matches!(result, Ok(ToolOutcome::TimedOut { .. })));
-            }
-        }
+            })]),
+            hook: hook.clone(),
+            parent_internal_id: "parent".into(),
+            fatal: tokio::sync::Mutex::new(None),
+        };
+        let outcome = scope_request_tool_execution(
+            Some(Utc::now() + chrono::Duration::milliseconds(10)),
+            tokio_util::sync::CancellationToken::new(),
+            dispatcher.call(1, "ready_after_wall_deadline", "{}"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            outcome,
+            ToolOutcome::Completed("specialized side effect".into())
+        );
+        assert!(!hook.cleaned.load(Ordering::SeqCst));
     }
 
     #[tokio::test]
@@ -461,14 +445,7 @@ mod tests {
                 None,
                 tokio_util::sync::CancellationToken::new(),
                 crate::tool_effects::scope(Some(dispatcher.clone()), async {
-                    let result = dispatcher
-                        .call(
-                            1,
-                            "ready_after_wall_deadline",
-                            "{}",
-                            std::time::Duration::from_secs(1),
-                        )
-                        .await;
+                    let result = dispatcher.call(1, "ready_after_wall_deadline", "{}").await;
                     assert!(matches!(
                         result,
                         Err(crate::tool_effects::ToolEffectError::Fatal(_))

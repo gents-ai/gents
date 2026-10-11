@@ -18,7 +18,7 @@ def arguments : Segment :=
 def admission : PluginEffectAdmission :=
   { document := 601, parentToolDoc := 600, ordinal := 1, name := "query"
     context := { foregroundToolContext with callId := 601 }
-    arguments := arguments, delegationGranted := true }
+    arguments := arguments }
 
 private def parentState (f : OwnedTool → OwnedTool) : World :=
   { baseline with toolContexts := baseline.toolContexts.map f }
@@ -30,7 +30,6 @@ private def scenarios : List (String × World × Nat × PluginEffectAdmission) :
   [ ("valid", baseline, 7, admission)
   , ("replay", admitted, 7, admission)
   , ("terminal_parent_replay", { admitted with toolContexts := admitted.toolContexts.map (fun p => if p.document == 600 then { p with context := { p.context with state := .completed } } else p) }, 7, admission)
-  , ("no_grant_replay", admitted, 7, { admission with delegationGranted := false })
   , ("conflicting_arguments", admitted, 7,
       { admission with arguments := { arguments with
           flush := some ⟨0, [⟨0, 3, some { block := 0, part := 0, kind := .arguments, tool := some ⟨"plugin-effect", none, "query"⟩ }⟩], [123, 32, 125]⟩
@@ -45,7 +44,6 @@ private def scenarios : List (String × World × Nat × PluginEffectAdmission) :
   , ("ordinal_zero", baseline, 7, { admission with ordinal := 0 })
   , ("ordinal_last", baseline, 7, { admission with ordinal := 64 })
   , ("ordinal_exceeded", baseline, 7, { admission with ordinal := 65 })
-  , ("no_grant", baseline, 7, { admission with delegationGranted := false })
   , ("extended_deadline", baseline, 7,
        { admission with context := { admission.context with deadline := 21 } }) ]
 
@@ -53,7 +51,7 @@ theorem admission_regressions :
     (scenarios.map fun (_, before, generation, call) =>
       succeeds (admitPluginEffect before generation call)) =
       [true, true, false, false, false, false, false, false, false, false, false,
-       false, true, false, false, false] := by native_decide
+       true, false, false] := by native_decide
 
 private def render (item : String × World × Nat × PluginEffectAdmission) : Json :=
   let (name, before, generation, call) := item
@@ -69,7 +67,7 @@ private def render (item : String × World × Nat × PluginEffectAdmission) : Js
           | .failed => "failed" | .cancelled => "cancelled" | .timedOut => "timed_out")), ("request", toJson p.requestDoc),
         ("session", toJson p.session), ("deadline", toJson p.context.deadline)]
   Json.mkObj [("name", toJson name), ("generation", toJson generation),
-    ("grant", toJson call.delegationGranted), ("ordinal", toJson call.ordinal),
+    ("ordinal", toJson call.ordinal),
     ("parent", parentJson), ("child", Json.mkObj [("document", toJson call.document),
       ("deadline", toJson call.context.deadline)]),
     ("arguments", (Json.parse (Conformance.Contracts.canonicalSegmentJson call.arguments)).toOption.getD Json.null),
@@ -128,17 +126,60 @@ theorem running_effect_alone_blocks_normal_completion :
       parent.context.state == .completed) = true ∧
       normalCompletionToolsReady runningWithCompletedParent 7 = false := by native_decide
 
+private def completeParent (world : World) : World :=
+  match ToolDelivery.completeAndDeliver world 600 (.native .complete)
+      ToolDelivery.Cases.toolOutputClose (ToolDelivery.Cases.foregroundResultMessage 1) with
+  | .ok post => post
+  | .error _ => world
+
+/-- A running child whose own deadline (4) has passed while its parent's (20)
+has not. -/
+private def shortChild : World :=
+  match admitPluginEffect baseline 7
+      { admission with context := { admission.context with deadline := 4 } } with
+  | .ok admitted => match dispatch admitted 7 ⟨601, true, true⟩ with
+    | .ok post => post | .error _ => admitted
+  | .error _ => baseline
+
+private def closeChild (before : World) (action : ToolExecution.ToolCallContext.Action) : World :=
+  match Gate.evaluate (.pluginEffectClose 601 (.native action) output terminalPayload) before with
+  | .ok post => post
+  | .error _ => before
+
+private def timedOutChild : World := closeChild shortChild .timeout
+private def completedChild : World := closeChild running .complete
+
+/-- A child's own deadline terminalizes that child only: the parent keeps
+running and still completes normally with the timed-out child as data. -/
+theorem child_timeout_is_child_terminal_and_parent_continues :
+    ((ownedToolByDocument? timedOutChild 601).any fun child =>
+      child.context.state == .timedOut && child.terminalOutput == some terminalPayload) = true ∧
+    ((ownedToolByDocument? timedOutChild 600).any fun parent =>
+      parent.context.state == .running) = true ∧
+    ((ownedToolByDocument? (completeParent timedOutChild) 600).any fun parent =>
+      parent.context.state == .completed) = true ∧
+    normalCompletionToolsReady (completeParent timedOutChild) 7 = true := by native_decide
+
+/-- Parent cancellation or deadline accounts the request exceptionally and
+retains every already terminal child, the completed prefix, unchanged. -/
+theorem parent_interruption_retains_completed_children :
+    ((ownedToolByDocument? (accountOwnedTools completedChild 7 true) 601).any fun child =>
+      child.context.state == .completed && child.terminalOutput == some terminalPayload) = true := by
+  native_decide
+
 def accountingCasesJson : Json := toJson <|
   [("pending_cancel", admitted, true), ("running_normal", runningWithCompletedParent, false),
-   ("running_exceptional", running, true)].map fun (name, before, exceptional) =>
-    let post := if name == "running_normal" then before else accountOwnedTools before 7 exceptional
+   ("running_exceptional", running, true),
+   ("timed_out_normal", completeParent timedOutChild, false),
+   ("completed_exceptional", completedChild, true)].map fun (name, before, exceptional) =>
+    let post := if exceptional then accountOwnedTools before 7 exceptional else before
     let child := (ownedToolByDocument? post 601).getD
       { document := 601, requestDoc := 10, session := 1, acceptedSequence := 0,
         context := admission.context }
     Json.mkObj [("name", toJson name),
       ("expected_state", toJson (match child.context.state with
         | .pending => "pending" | .running => "running" | .completed => "completed"
-        | .failed => "failed" | .cancelled => "cancelled" | .timedOut => "timed_out")),
+        | .failed => "failed" | .cancelled => "cancelled" | .timedOut => "timedOut")),
       ("expected_started", toJson child.context.startedAt.isSome),
       ("expected_stuck", toJson child.stuckSince.isSome),
       ("expected_terminal_output", toJson child.terminalOutput.isSome),
