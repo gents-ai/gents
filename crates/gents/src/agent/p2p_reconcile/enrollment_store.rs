@@ -781,6 +781,37 @@ impl GraphqlEnrollmentStore {
             "query authenticated enrollment documents",
         )
         .await?;
+        self.project_loaded_response(&response).await
+    }
+
+    /// Point-read arrival fences include concurrently added signed revocations
+    /// in the mutation transaction's conflict set (DefraDB 980190c).
+    pub(crate) async fn load_projection_in_txn(
+        &self,
+        txn: &crate::config_client::ConfigApplyTxn<'_>,
+    ) -> Result<EnrollmentProjection> {
+        for collection in [
+            "Network",
+            "NetworkEnrollmentRequest",
+            "NetworkEnrollmentDecision",
+            "NetworkAuthorizationRevision",
+            "NetworkEnrollmentRouteReceipt",
+        ] {
+            txn.execute(&format!(
+                r#"{{ _documentArrivals(collection: "{collection}", limit: 1) {{ head }} }}"#
+            ))
+            .await?;
+        }
+        let response = txn
+            .execute_local_response(ENROLLMENT_DOCUMENT_QUERY)
+            .await?;
+        self.project_loaded_response(&response).await
+    }
+
+    async fn project_loaded_response(
+        &self,
+        response: &query::QueryResponse,
+    ) -> Result<EnrollmentProjection> {
         let now = Utc::now();
         let raw_network_rows = rows::<Value>(&response, "Network")?;
         let network_id = raw_network_rows

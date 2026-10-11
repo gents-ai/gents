@@ -37,6 +37,8 @@ pub(crate) fn background_wake_queue(
     queued_after_request_id: Option<String>,
 ) -> RequestQueue {
     RequestQueue {
+        delivery: Default::default(),
+        position: None,
         source: QueueSource::BackgroundCompletion,
         policy: QueuePolicy::Coalesce,
         key: queue.key.clone(),

@@ -7,6 +7,8 @@ async fn atomic_background_completion_coalesces_keyed_agent_wakeups() {
     let mut fixture = canonical_background_fixture(&db, session_id).await;
     let parent = fixture.parent.clone();
     let hints = RequestQueue {
+        delivery: Default::default(),
+        position: None,
         source: QueueSource::BackgroundCompletion,
         policy: QueuePolicy::Coalesce,
         key: Some(format!("background_completion:{session_id}")),
@@ -107,6 +109,8 @@ async fn atomic_background_completion_ignores_append_row_with_same_source_and_ke
     let mut fixture = canonical_background_fixture(&db, session_id).await;
     let parent = fixture.parent.clone();
     let append_hints = RequestQueue {
+        delivery: Default::default(),
+        position: None,
         source: QueueSource::BackgroundCompletion,
         policy: QueuePolicy::Append,
         key: Some(format!("background_completion:{session_id}")),
@@ -172,6 +176,8 @@ async fn reconcile_coalesced_pending_request_supersedes_duplicate_race_rows() {
     let mut fixture = canonical_background_fixture(&db, session_id).await;
     let parent = fixture.parent.clone();
     let hints = RequestQueue {
+        delivery: Default::default(),
+        position: None,
         source: QueueSource::BackgroundCompletion,
         policy: QueuePolicy::Coalesce,
         key: Some(format!("background_completion:{session_id}")),
@@ -264,6 +270,8 @@ async fn atomic_background_completion_without_key_rejects_without_persisting_inp
     let mut fixture = canonical_background_fixture(&db, session_id).await;
     let parent = fixture.parent.clone();
     let hints = RequestQueue {
+        delivery: Default::default(),
+        position: None,
         source: QueueSource::BackgroundCompletion,
         policy: QueuePolicy::Coalesce,
         key: None,

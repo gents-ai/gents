@@ -1422,3 +1422,108 @@ async fn renewal_expiring_during_mutation_rolls_back_before_commit_admission() {
     assert_eq!(lease_tuple(&after), lease_tuple(&before));
     assert_eq!(after.lifecycle_state, before.lifecycle_state);
 }
+
+#[tokio::test]
+async fn natural_finish_retries_changed_pending_snapshot_and_selects_exact_saved_header() {
+    let case = crate::lean_vocab_test::lean_steering_publication_cases()
+        .iter()
+        .find(|case| case.name == "natural_completion_intakes_late_input_before_terminal")
+        .expect("executable natural completion case");
+    let finishes = case
+        .steps
+        .iter()
+        .zip(&case.expected)
+        .filter_map(|(step, expected)| {
+            matches!(
+                step,
+                crate::lean_vocab_test::LeanFoldPublicationStep::FinishOrIntake { .. }
+            )
+            .then_some(expected)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(finishes.len(), 2);
+    assert_eq!(finishes[0].active, Some(case.head));
+    assert_eq!(finishes[1].active, None);
+    assert!(finishes[1].terminal.contains(&case.head));
+    assert_eq!(case.expected.last().unwrap().active, None);
+
+    let (node, _dir) = test_node().await;
+    let mut lifecycle = owner(&node).await;
+    let writer = crate::streaming::DefraStreamWriter::new(
+        node.clone(),
+        "did:test:execution-lease",
+        Duration::ZERO,
+    );
+    writer
+        .start_provider_attempt(
+            &lifecycle.request.doc_id,
+            0,
+            0,
+            "inference.1".parse().unwrap(),
+        )
+        .await;
+    let saved = writer
+        .publish_native_turn(
+            &lifecycle,
+            0,
+            0,
+            &gents_protocol::message::Message::assistant("saved provider response"),
+        )
+        .await
+        .unwrap();
+    let mut pending = gents_protocol::request_admission::AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
+        "late-input",
+        "did:test:execution-lease",
+        "did:test:execution-lease",
+        "general",
+        &lifecycle.request.session_id,
+        "late input",
+        "interactive",
+        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
+            "did:test:execution-lease",
+        ),
+    );
+    crate::sign_agent_request_create(&LeaseTestIdentity, &mut pending)
+        .await
+        .unwrap();
+    let response = crate::config_client::ConfigAccess::write_local(
+        &node,
+        "test.same_session_pending",
+        &pending.graphql_mutation().unwrap(),
+    )
+    .await
+    .unwrap();
+    let pending_doc_id = crate::graphql::created_doc_id(&response, "AgentRequest").unwrap();
+
+    assert!(!lifecycle
+        .finish_natural_turn(&saved.message_doc_id, &[])
+        .await
+        .unwrap());
+    let active = request_row(&node, &lifecycle.request.doc_id).await;
+    assert_eq!(
+        active.lifecycle_state,
+        Some(RequestLifecycleState::Processing)
+    );
+    assert!(active.terminal_output.is_none());
+    assert!(lifecycle
+        .finish_natural_turn(&saved.message_doc_id, std::slice::from_ref(&pending_doc_id),)
+        .await
+        .unwrap());
+    let terminal = request_row(&node, &lifecycle.request.doc_id).await;
+    assert_eq!(
+        terminal.lifecycle_state,
+        Some(RequestLifecycleState::Completed)
+    );
+    assert_eq!(
+        terminal.terminal_output,
+        Some(TerminalOutput::Message {
+            message_doc_id: saved.message_doc_id,
+        })
+    );
+    assert_eq!(
+        request_row(&node, &pending_doc_id).await.lifecycle_state,
+        Some(RequestLifecycleState::Pending)
+    );
+}

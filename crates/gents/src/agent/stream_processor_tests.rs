@@ -1163,6 +1163,8 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
     // transaction allocate its header/wake alongside the running foreground
     // call. The helper does not bypass the notification publication owner.
     let queue = gents_protocol::request_input::RequestQueue {
+        delivery: Default::default(),
+        position: None,
         source: gents_protocol::request_input::QueueSource::BackgroundCompletion,
         policy: gents_protocol::request_input::QueuePolicy::Coalesce,
         key: Some(format!("background_completion:{session_id}")),
@@ -1328,6 +1330,7 @@ async fn multiple_streamed_tool_results_share_one_accumulated_assistant_turn() {
             context: None,
             prompt: user_text_message("read several files"),
             folded: Vec::new(),
+            reply: tokio::sync::oneshot::channel().0,
         }))
         .await
         .unwrap();

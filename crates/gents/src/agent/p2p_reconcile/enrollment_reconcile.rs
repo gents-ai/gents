@@ -298,8 +298,9 @@ impl EnrollmentAuthorityOwner {
 
 /// Run the sole durable enrollment projection/effect loop.
 ///
-/// Consumers only read [`EnrollmentAuthorityHandle`]. This loop alone queries
-/// the full authority set, publishes its immutable projection, owns
+/// Readers use [`EnrollmentAuthorityHandle`]; atomic mutations reuse the same
+/// authenticated projector inside their transaction. This loop publishes its
+/// immutable projection and owns
 /// `source="enrollment"` data-plane rows, and retries exact terminal delivery.
 pub async fn run_enrollment_reconciler(
     node: Arc<EmbeddedNode>,
@@ -423,7 +424,7 @@ async fn handle_authority_command(
     }
 }
 
-fn exact_authorization_fence(
+pub(crate) fn exact_authorization_fence(
     projection: &EnrollmentProjection,
     member_did: &str,
     member_peer: &str,

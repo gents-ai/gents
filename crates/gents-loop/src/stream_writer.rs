@@ -33,6 +33,30 @@ pub trait CanonicalStreamWriter<L: RequestLifecycleControl>: StreamWriter {
         message: &Message,
     ) -> impl std::future::Future<Output = anyhow::Result<String>> + Send;
 
+    /// Atomically validates and publishes one candidate. `None` fences a stale
+    /// candidate and its remaining ordered batch out of provider input.
+    fn try_publish_steering_message(
+        &self,
+        lifecycle: &L,
+        key: &str,
+        message: &Message,
+    ) -> impl std::future::Future<Output = anyhow::Result<Option<String>>> + Send {
+        async move {
+            self.publish_authored_message(lifecycle, key, message)
+                .await
+                .map(Some)
+        }
+    }
+
+    fn finish_natural_turn(
+        &self,
+        _lifecycle: &mut L,
+        _message_doc_id: &str,
+        _pending_request_doc_ids: &[String],
+    ) -> impl std::future::Future<Output = anyhow::Result<bool>> + Send {
+        async { Ok(true) }
+    }
+
     fn start_provider_attempt(
         &self,
         request_doc_id: &str,

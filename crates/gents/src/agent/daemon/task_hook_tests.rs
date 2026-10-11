@@ -1183,3 +1183,32 @@ async fn revocation_between_hooks_is_checked_before_the_next_renewal_poll() {
         "second ordinary hook launched AFTER the revocation write committed"
     );
 }
+
+#[tokio::test]
+async fn natural_finish_excludes_task_and_workspace_success_effects() {
+    let harness = Harness::new().await;
+    let mut request = harness.create_request(Lineage::ManualFire, false).await;
+    request.execution_origin = Some("interactive".into());
+    request.input = Default::default();
+    request.caused_by_trigger_id = None;
+    request.caused_by_source_doc_id = None;
+    request.caused_by_parent_tool_call_doc_id = None;
+    request.workspace_id = None;
+    request.workspace_authority = None;
+    assert!(super::permits_natural_finish(&request, false));
+    assert!(
+        !super::permits_natural_finish(&request, true),
+        "a Task without hooks still owns completion"
+    );
+    request.workspace_id = Some(WORKSPACE_ID.into());
+    for authority in ["readWrite", "integrate"] {
+        request.workspace_authority = Some(authority.into());
+        assert!(
+            !super::permits_natural_finish(&request, false),
+            "{authority} effects precede terminalization"
+        );
+    }
+    request.workspace_authority = Some("readOnly".into());
+    assert!(super::permits_natural_finish(&request, false));
+    assert!(!super::permits_natural_finish(&request, true));
+}

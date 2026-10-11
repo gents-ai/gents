@@ -16,6 +16,7 @@ use tempfile::TempDir;
 
 mod background_goal_repair;
 mod folding;
+mod management;
 mod steering;
 
 const TEST_NODE_DID: &str = "did:test:queue-test";
@@ -57,6 +58,8 @@ struct QueueRow {
 
 fn hints(source: QueueSource, policy: QueuePolicy) -> RequestQueue {
     RequestQueue {
+        delivery: Default::default(),
+        position: None,
         source,
         policy,
         key: Some("session:sess-1".to_string()),
@@ -483,6 +486,8 @@ mod pin_tests {
             "steering content",
             ExecutionOrigin::Interactive,
             wake_queue_input(RequestQueue {
+                delivery: Default::default(),
+                position: None,
                 source: QueueSource::Steering,
                 policy: QueuePolicy::Append,
                 key: None,

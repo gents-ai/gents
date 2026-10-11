@@ -1218,6 +1218,7 @@ async fn publish_claimed_authored_input(
             context,
             prompt,
             folded: Vec::new(),
+            reply: tokio::sync::oneshot::channel().0,
         }))
         .await
         .expect("publish claimed authored input");

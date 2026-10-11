@@ -106,6 +106,17 @@ impl DefraStreamWriter {
         key: &str,
         message: &gents_protocol::message::Message,
     ) -> Result<String> {
+        self.publish_authored_message_with_time(lifecycle, key, message, None)
+            .await
+    }
+
+    pub(crate) async fn publish_authored_message_with_time(
+        &self,
+        lifecycle: &crate::lifecycle::RequestLifecycle,
+        key: &str,
+        message: &gents_protocol::message::Message,
+        fixture_now: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<String> {
         use gents_protocol::output::{OutputSegment, OutputSource, OutputWriter, SegmentRun};
         let request = lifecycle.request();
         let encoded = Arc::new(native_encoding::encode_native_message(message)?);
@@ -137,24 +148,27 @@ impl DefraStreamWriter {
             close: None,
             created_at: chrono::Utc::now().to_rfc3339(),
         };
-        let published = canonical::publish_provider_turn(
+        let plan = canonical::ProviderPublicationPlan {
+            final_flush: Some(segment),
+            message_key: crate::session::canonical_rows::authored_message_key(&request.doc_id, key),
+            encoded,
+            expected: Arc::new(message.clone()),
+            tool_deadline_at: lifecycle
+                .claimed_deadline_at()
+                .context("authored publication is missing request deadline")?
+                .to_rfc3339(),
+            background_calls: Vec::new(),
+            consumes_folded: crate::lifecycle::queue::FoldedConsumption::for_key(
+                request,
+                key,
+                lifecycle.folded_selection(),
+            ),
+        };
+        let published = canonical::publish_provider_turn_with_time(
             &self.node,
             lifecycle.execution_generation()?,
-            canonical::ProviderPublicationPlan {
-                final_flush: Some(segment),
-                message_key: crate::session::canonical_rows::authored_message_key(
-                    &request.doc_id,
-                    key,
-                ),
-                encoded,
-                expected: Arc::new(message.clone()),
-                tool_deadline_at: lifecycle
-                    .claimed_deadline_at()
-                    .context("authored publication is missing request deadline")?
-                    .to_rfc3339(),
-                background_calls: Vec::new(),
-                consumes_folded: crate::lifecycle::queue::FoldedConsumption::for_key(request, key),
-            },
+            plan,
+            fixture_now,
         )
         .await?;
         Ok(published.message_doc_id)
@@ -527,6 +541,30 @@ impl gents_loop::stream_writer::CanonicalStreamWriter<crate::lifecycle::RequestL
         message: &gents_protocol::message::Message,
     ) -> Result<String> {
         DefraStreamWriter::publish_authored_message(self, lifecycle, key, message).await
+    }
+
+    async fn try_publish_steering_message(
+        &self,
+        lifecycle: &crate::lifecycle::RequestLifecycle,
+        key: &str,
+        message: &gents_protocol::message::Message,
+    ) -> Result<Option<String>> {
+        match DefraStreamWriter::publish_authored_message(self, lifecycle, key, message).await {
+            Ok(id) => Ok(Some(id)),
+            Err(error) if error.is::<crate::lifecycle::queue::PendingInputChanged>() => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    async fn finish_natural_turn(
+        &self,
+        lifecycle: &mut crate::lifecycle::RequestLifecycle,
+        message_doc_id: &str,
+        pending_request_doc_ids: &[String],
+    ) -> Result<bool> {
+        lifecycle
+            .finish_natural_turn(message_doc_id, pending_request_doc_ids)
+            .await
     }
 
     async fn start_provider_attempt(

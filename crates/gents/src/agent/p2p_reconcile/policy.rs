@@ -244,6 +244,13 @@ fn client_route_filters(
             equality_filter("node_did", owner_node_did),
         ),
     );
+    filters.insert(
+        "AgentSessionInputEdit".to_owned(),
+        combine_filters(
+            equality_filter("requester_did", requester_did),
+            equality_filter("node_did", owner_node_did),
+        ),
+    );
     if direction == PairingDirection::RuntimeToClient {
         filters.insert(
             "NodeReadiness".to_string(),
