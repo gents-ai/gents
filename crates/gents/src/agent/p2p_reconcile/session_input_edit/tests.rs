@@ -1,5 +1,9 @@
 use super::*;
 use crate::identity::KeyIdentity;
+use crate::lean_vocab_test::{
+    LeanFoldQueueEntry, LeanSessionInputEditAuthority, LeanSessionInputEditCommand,
+    LeanSessionInputEditStep,
+};
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
@@ -7,6 +11,9 @@ use gents_protocol::request_input::{
     QueueDelivery, QueuePolicy, QueueSource, RequestInput, RequestQueue,
 };
 use gents_protocol::session_input_edit::{PendingMessageEdit, PendingQueueEdit};
+use std::collections::{BTreeSet, HashMap};
+
+const SESSION: &str = "edit-session";
 
 struct Fixture {
     node: Arc<EmbeddedNode>,
@@ -16,7 +23,7 @@ struct Fixture {
 }
 
 impl Fixture {
-    async fn new() -> Self {
+    async fn empty() -> Self {
         let dir = tempfile::tempdir().unwrap();
         let identity: Arc<dyn NodeIdentity> =
             Arc::new(KeyIdentity::load_or_create(dir.path().join("node.key"), None).unwrap());
@@ -31,19 +38,29 @@ impl Fixture {
         crate::ensure_runtime_schemas(&node).await.unwrap();
         crate::test_support::install_test_agent(&node, identity.did(), "general").await;
         let access = ConfigAccess::Local(node.clone());
-        access.write("test.edit.session", &format!(r#"mutation {{ create_AgentSession(input: {{ session_id: "edit-session", node_did: "{}", requester_did: "{}", agent_id: "general", created_at: "2026-10-10T00:00:00Z" }}) {{ _docID }} }}"#,
+        access.write("test.edit.session", &format!(r#"mutation {{ create_AgentSession(input: {{ session_id: "{SESSION}", node_did: "{}", requester_did: "{}", agent_id: "general", created_at: "2026-10-10T00:00:00Z" }}) {{ _docID }} }}"#,
             escape_graphql_string(identity.did()), escape_graphql_string(identity.did()))).await.unwrap();
+        Self {
+            node,
+            identity,
+            _dir: dir,
+            original: String::new(),
+        }
+    }
+
+    async fn new() -> Self {
+        let mut fixture = Self::empty().await;
         let mut create = AgentRequestCreate::base(
             RequestPurpose::Normal,
             "original",
-            identity.did(),
-            identity.did(),
+            fixture.identity.did(),
+            fixture.identity.did(),
             "general",
-            "edit-session",
+            SESSION,
             "original content",
             "interactive",
             "2026-10-10T00:00:00Z",
-            AgentRequestAdmissionRecord::local_self(identity.did()),
+            AgentRequestAdmissionRecord::local_self(fixture.identity.did()),
         );
         create.input = RequestInput {
             queue: Some(RequestQueue {
@@ -58,20 +75,19 @@ impl Fixture {
             }),
             ..Default::default()
         };
-        crate::sign_agent_request_create(identity.as_ref(), &mut create)
+        fixture.original = fixture.write_request(create).await;
+        fixture
+    }
+
+    async fn write_request(&self, mut create: AgentRequestCreate) -> String {
+        crate::sign_agent_request_create(self.identity.as_ref(), &mut create)
             .await
             .unwrap();
-        let response = access
+        let response = ConfigAccess::Local(self.node.clone())
             .write("test.edit.request", &create.graphql_mutation().unwrap())
             .await
             .unwrap();
-        let original = crate::graphql::created_doc_id(&response, "AgentRequest").unwrap();
-        Self {
-            node,
-            identity,
-            _dir: dir,
-            original,
-        }
+        crate::graphql::created_doc_id(&response, "AgentRequest").unwrap()
     }
 
     async fn command(&self) -> SessionInputEdit {
@@ -88,7 +104,7 @@ impl Fixture {
             self.identity.as_ref(),
             AgentRequestAdmissionRecord::local_self(self.identity.did()),
             self.identity.did(),
-            "edit-session",
+            SESSION,
             self.identity.did(),
             &edit,
         )
@@ -100,7 +116,7 @@ impl Fixture {
             requester_did: self.identity.did().to_owned(),
             requester_peer_id: None,
             node_did: self.identity.did().to_owned(),
-            session_id: "edit-session".into(),
+            session_id: SESSION.into(),
             issued_at: (Utc::now() - chrono::Duration::seconds(1)).to_rfc3339(),
             expires_at: (Utc::now() + chrono::Duration::minutes(5)).to_rfc3339(),
             edit,
@@ -136,63 +152,382 @@ impl Fixture {
     }
 }
 
-#[tokio::test]
-async fn generated_commands_bind_to_atomic_queue_owner() {
-    let case = crate::lean_vocab_test::lean_session_input_edit_cases()
-        .iter()
-        .find(|case| case.name == "local_self_applied")
-        .unwrap();
-    assert!(
-        case.authority.local_self && case.authority.requester_is_node && !case.command.has_peer
-    );
-    let fixture = Fixture::new().await;
-    let command = fixture.command().await;
-    let id = fixture.submit(&command).await;
-    process_command(&fixture.node, &fixture.identity, &id)
-        .await
-        .unwrap();
-    let receipt = fixture.receipt(&id).await;
-    receipt.validate_for(&command).unwrap();
-    assert!(fixture
-        .identity
-        .verify(
-            &receipt.signer_did,
-            &receipt.signing_payload(),
-            &receipt.signature
+/// Native image of one modeled local queue: model request IDs bind to native
+/// request IDs, and model commands bind to signed intents and their documents.
+struct ModeledQueue {
+    fixture: Fixture,
+    request_ids: HashMap<u64, String>,
+    doc_ids: HashMap<u64, String>,
+    commands: HashMap<(u64, u64), (String, SessionInputEdit)>,
+    anchor: DateTime<Utc>,
+    nows: Vec<u64>,
+}
+
+impl ModeledQueue {
+    async fn seed(entries: Vec<&LeanFoldQueueEntry>, nows: Vec<u64>) -> Self {
+        let fixture = Fixture::empty().await;
+        let mut queue = Self {
+            fixture,
+            request_ids: HashMap::new(),
+            doc_ids: HashMap::new(),
+            commands: HashMap::new(),
+            anchor: Utc::now(),
+            nows,
+        };
+        for (arrival, entry) in entries.iter().enumerate() {
+            assert_eq!(entry.requester_id, Some(1), "requester 1 is the node");
+            assert_eq!(entry.turn_context, 0);
+            let did = queue.fixture.identity.did().to_owned();
+            let mut create = AgentRequestCreate::base(
+                RequestPurpose::Normal,
+                entry.request_id.to_string(),
+                &did,
+                &did,
+                "general",
+                SESSION,
+                format!("message {}", entry.request_id),
+                &entry.execution_origin,
+                format!("2026-10-10T00:00:{arrival:02}Z"),
+                AgentRequestAdmissionRecord::local_self(&did),
+            );
+            create.input.queue = Some(RequestQueue {
+                delivery: serde_json::from_value(serde_json::json!(entry.delivery)).unwrap(),
+                position: None,
+                source: serde_json::from_value(serde_json::json!(entry.source)).unwrap(),
+                policy: serde_json::from_value(serde_json::json!(entry.policy)).unwrap(),
+                key: None,
+                queued_after_request_id: entry.queued_after.map(|id| id.to_string()),
+                interrupted_request_id: None,
+                background_completion_wake_version: None,
+            });
+            create.valid_until = (!entry.fresh).then(|| "2000-01-01T00:00:00Z".into());
+            let doc = queue.fixture.write_request(create).await;
+            queue
+                .request_ids
+                .insert(entry.request_id, entry.request_id.to_string());
+            queue.doc_ids.insert(entry.request_id, doc);
+        }
+        queue.anchor = Utc::now();
+        queue
+    }
+
+    /// Maps model time monotonically onto wall time around the processing
+    /// instants: a bound reached by every processing is past, one reached by none
+    /// is future, and one between earlier and later processing elapses before the
+    /// later processing runs.
+    fn instant(&self, model: u64) -> DateTime<Utc> {
+        let offset = i64::try_from(model).unwrap();
+        if self.nows.iter().all(|now| model <= *now) {
+            self.anchor - chrono::Duration::hours(1) + chrono::Duration::seconds(offset)
+        } else if self.nows.iter().all(|now| model > *now) {
+            self.anchor + chrono::Duration::hours(1) + chrono::Duration::seconds(offset)
+        } else {
+            self.anchor + chrono::Duration::seconds(3) + chrono::Duration::milliseconds(offset)
+        }
+    }
+
+    async fn wait_until(&self, now: u64) {
+        if self.nows.iter().any(|earlier| *earlier < now) {
+            if let Ok(wait) = (self.anchor + chrono::Duration::seconds(4) - Utc::now()).to_std() {
+                tokio::time::sleep(wait).await;
+            }
+        }
+    }
+
+    async fn pending_request_ids(&self) -> Vec<String> {
+        crate::lifecycle::pending_user_queue(
+            &ConfigAccess::Local(self.fixture.node.clone()),
+            self.fixture.identity.did(),
+            SESSION,
+            self.fixture.identity.did(),
         )
         .await
-        .unwrap());
-    assert_eq!(
-        serde_json::to_value(receipt.outcome).unwrap(),
-        case.receipt.as_ref().unwrap().outcome
-    );
-    let rows = fixture.requests().await;
-    assert_eq!(rows.as_array().unwrap().len(), 2);
-    assert_eq!(
-        rows.as_array()
-            .unwrap()
+        .unwrap()
+        .entries
+        .into_iter()
+        .map(|entry| entry.request_id)
+        .collect()
+    }
+
+    async fn intent(
+        &mut self,
+        model: &LeanSessionInputEditCommand,
+        authority: &LeanSessionInputEditAuthority,
+    ) -> SessionInputEdit {
+        assert!(!model.has_peer, "remote authority is bound by e2e_runtime");
+        assert!(authority.command_identity_unique);
+        let foreign;
+        let requester: &dyn NodeIdentity = if authority.requester_is_node {
+            self.fixture.identity.as_ref()
+        } else {
+            foreign = KeyIdentity::load_or_create(
+                self.fixture
+                    ._dir
+                    .path()
+                    .join(format!("requester-{}.key", model.id)),
+                None,
+            )
+            .unwrap();
+            &foreign
+        };
+        let pending = crate::lifecycle::pending_user_queue(
+            &ConfigAccess::Local(self.fixture.node.clone()),
+            self.fixture.identity.did(),
+            SESSION,
+            self.fixture.identity.did(),
+        )
+        .await
+        .unwrap()
+        .entries;
+        let selected = pending
             .iter()
-            .find(|row| row["request_id"] == "original")
-            .unwrap()["lifecycle_state"],
-        "superseded"
-    );
-    assert_eq!(
-        rows.as_array()
-            .unwrap()
-            .iter()
-            .find(|row| row["request_id"] == command.replacements[0].request_id)
-            .unwrap()["content"],
-        "corrected content"
-    );
-    process_command(&fixture.node, &fixture.identity, &id)
+            .skip(model.offset)
+            .take(model.count)
+            .map(|entry| entry.request_doc_id.clone())
+            .collect::<Vec<_>>();
+        let mut edit = PendingQueueEdit {
+            expected_request_doc_ids: pending
+                .iter()
+                .map(|entry| entry.request_doc_id.clone())
+                .collect(),
+            messages: model
+                .replacements
+                .iter()
+                .zip(&selected)
+                .map(|(replacement, doc)| PendingMessageEdit {
+                    request_doc_id: doc.clone(),
+                    content: format!("message {} intent {}", replacement.request_id, model.digest),
+                })
+                .collect(),
+            selected_request_doc_ids: selected,
+        };
+        let mut replacements = crate::lifecycle::queue::prepare_pending_user_edit(
+            &ConfigAccess::Local(self.fixture.node.clone()),
+            self.fixture.identity.as_ref(),
+            AgentRequestAdmissionRecord::local_self(self.fixture.identity.did()),
+            self.fixture.identity.did(),
+            SESSION,
+            self.fixture.identity.did(),
+            &edit,
+        )
         .await
         .unwrap();
-    assert_eq!(
-        fixture.requests().await,
-        rows,
-        "verified replay must not apply twice"
-    );
-    assert_eq!(fixture.receipt(&id).await, receipt);
+        // Presigning requires the observed queue; the signed intent carries the modeled one.
+        edit.expected_request_doc_ids = model
+            .expected
+            .iter()
+            .map(|id| self.doc_ids[id].clone())
+            .collect();
+        if !authority.replacements_valid {
+            replacements[0].admission.signature[0] ^= 1;
+        }
+        let mut command = SessionInputEdit {
+            version: SESSION_INPUT_EDIT_VERSION,
+            command_id: format!("command-{}", model.id),
+            requester_did: requester.did().to_owned(),
+            requester_peer_id: None,
+            node_did: self.fixture.identity.did().to_owned(),
+            session_id: if authority.session_owned {
+                SESSION.into()
+            } else {
+                "another-session".into()
+            },
+            issued_at: self.instant(model.issued_at).to_rfc3339(),
+            expires_at: self.instant(model.expires_at).to_rfc3339(),
+            edit,
+            replacements,
+            signature: Vec::new(),
+        };
+        command.signature = requester.sign(&command.signing_payload()).await.unwrap();
+        if !authority.signature_valid {
+            command.signature[0] ^= 1;
+        }
+        command
+    }
+
+    async fn process(
+        &mut self,
+        now: u64,
+        model: &LeanSessionInputEditCommand,
+        authority: &LeanSessionInputEditAuthority,
+    ) {
+        self.wait_until(now).await;
+        let doc = if let Some((doc, _)) = self.commands.get(&(model.id, model.digest)) {
+            doc.clone()
+        } else {
+            let command = self.intent(model, authority).await;
+            if let Some((_, (doc, _))) = self.commands.iter().find(|((id, _), _)| *id == model.id) {
+                // A second signed intent under a recorded command ID is refused by
+                // the unique immutable command identity before any processing.
+                let doc = doc.clone();
+                let written = ConfigAccess::Local(self.fixture.node.clone()).write("test.edit.collision", &format!(r#"mutation {{ create_AgentSessionInputEdit(input: {{ command_id: "{}", requester_did: "{}", node_did: "{}", session_id: "{}", intent_json: "{}" }}) {{ _docID }} }}"#,
+                    escape_graphql_string(&command.command_id), escape_graphql_string(&command.requester_did), escape_graphql_string(&command.node_did), escape_graphql_string(&command.session_id), escape_graphql_string(&serde_json::to_string(&command).unwrap()))).await;
+                assert!(written.is_err());
+                doc
+            } else {
+                let doc = self.fixture.submit(&command).await;
+                for (model, native) in model.replacements.iter().zip(&command.replacements) {
+                    self.request_ids
+                        .insert(model.request_id, native.request_id.clone());
+                }
+                self.commands
+                    .insert((model.id, model.digest), (doc.clone(), command));
+                doc
+            }
+        };
+        process_command(&self.fixture.node, &self.fixture.identity, &doc)
+            .await
+            .unwrap();
+    }
+
+    async fn lose_receipts(&self) {
+        for (doc, _) in self.commands.values() {
+            ConfigAccess::Local(self.fixture.node.clone()).write("test.edit.lose_receipt", &format!(r#"mutation {{ update_AgentSessionInputEdit(docID: "{}", input: {{ receipt_json: null }}) {{ _docID }} }}"#, escape_graphql_string(doc))).await.unwrap();
+        }
+    }
+
+    async fn receipt_json(&self, doc: &str) -> Option<String> {
+        let value = ConfigAccess::Local(self.fixture.node.clone()).execute(&format!(r#"{{ AgentSessionInputEdit(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ receipt_json }} }}"#, escape_graphql_string(doc))).await.unwrap();
+        value["data"]["AgentSessionInputEdit"][0]["receipt_json"]
+            .as_str()
+            .map(str::to_owned)
+    }
+}
+
+#[tokio::test]
+async fn generated_commands_bind_to_atomic_queue_owner() {
+    let cases = crate::lean_vocab_test::lean_session_input_edit_cases()
+        .iter()
+        .filter(|case| {
+            !case.command.has_peer
+                && case.authority.command_identity_unique
+                && case.history.iter().all(|step| match step {
+                    LeanSessionInputEditStep::Apply {
+                        command, authority, ..
+                    } => !command.has_peer && authority.command_identity_unique,
+                    LeanSessionInputEditStep::LoseReceipts => true,
+                    LeanSessionInputEditStep::OtherSession { .. } => false,
+                })
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(cases.len(), 11, "local generated input-edit cases");
+    for case in cases {
+        let name = &case.name;
+        assert!(case.initial.receipts.is_empty() && case.initial.queue.terminal.is_empty());
+        let mut nows = case
+            .history
+            .iter()
+            .filter_map(|step| match step {
+                LeanSessionInputEditStep::Apply { now, .. } => Some(*now),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        nows.push(case.now);
+        let initial = &case.initial.queue;
+        let mut queue = ModeledQueue::seed(
+            initial.folding.iter().chain(&initial.pending).collect(),
+            nows,
+        )
+        .await;
+        for step in &case.history {
+            match step {
+                LeanSessionInputEditStep::Apply {
+                    now,
+                    authority,
+                    command,
+                } => queue.process(*now, command, authority).await,
+                LeanSessionInputEditStep::LoseReceipts => queue.lose_receipts().await,
+                LeanSessionInputEditStep::OtherSession { .. } => unreachable!(),
+            }
+        }
+        let modeled_ids =
+            |queue: &ModeledQueue, state: &crate::lean_vocab_test::LeanQueueManagementState| {
+                state
+                    .folding
+                    .iter()
+                    .chain(&state.pending)
+                    .map(|entry| queue.request_ids[&entry.request_id].clone())
+                    .collect::<Vec<_>>()
+            };
+        assert_eq!(
+            queue.pending_request_ids().await,
+            modeled_ids(&queue, &case.before.queue),
+            "{name}: history reaches the modeled starting queue"
+        );
+        let mut prior = HashMap::new();
+        for (doc, _) in queue.commands.values() {
+            prior.insert(doc.clone(), queue.receipt_json(doc).await);
+        }
+        queue
+            .process(case.now, &case.command, &case.authority)
+            .await;
+        let expected = modeled_ids(&queue, &case.after.queue);
+        assert_eq!(
+            queue.pending_request_ids().await,
+            expected,
+            "{name}: pending order"
+        );
+        let terminal = case
+            .after
+            .queue
+            .terminal
+            .iter()
+            .map(|id| queue.request_ids[id].clone())
+            .collect::<BTreeSet<_>>();
+        let rows = queue.fixture.requests().await;
+        let rows = rows.as_array().unwrap();
+        assert_eq!(
+            rows.iter()
+                .filter(|row| row["lifecycle_state"] != "pending")
+                .map(|row| row["request_id"].as_str().unwrap().to_owned())
+                .collect::<BTreeSet<_>>(),
+            terminal,
+            "{name}: terminal requests"
+        );
+        assert_eq!(
+            rows.len(),
+            expected.len() + terminal.len(),
+            "{name}: requests"
+        );
+        for ((id, digest), (doc, command)) in &queue.commands {
+            let native = queue.receipt_json(doc).await;
+            let Some(model) = case.after.receipts.iter().find(|r| r.command_id == *id) else {
+                assert!(native.is_none(), "{name}: command {id} stays undecided");
+                continue;
+            };
+            if case.before.receipts.iter().any(|r| r.command_id == *id) {
+                assert_eq!(native, prior[doc], "{name}: recorded receipt is final");
+            }
+            assert_eq!(model.digest, *digest, "{name}: receipt intent");
+            let receipt: SessionInputEditReceipt =
+                serde_json::from_str(&native.expect("modeled receipt")).unwrap();
+            receipt.validate_for(command).unwrap();
+            assert!(queue
+                .fixture
+                .identity
+                .verify(
+                    &receipt.node_did,
+                    &receipt.signing_payload(),
+                    &receipt.signature
+                )
+                .await
+                .unwrap());
+            assert_eq!(
+                serde_json::to_value(receipt.outcome).unwrap(),
+                model.outcome,
+                "{name}: outcome"
+            );
+            assert_eq!(
+                receipt.request_ids,
+                model
+                    .request_ids
+                    .iter()
+                    .map(|id| queue.request_ids[id].clone())
+                    .collect::<Vec<_>>(),
+                "{name}: receipt request IDs"
+            );
+        }
+    }
 }
 
 #[tokio::test]
@@ -250,52 +585,6 @@ async fn valid_author_signature_cannot_install_replacement_with_wrong_admission_
 }
 
 #[tokio::test]
-async fn generated_scope_and_validity_rejections_leave_queue_unchanged() {
-    for name in [
-        "future_issuance_rejected",
-        "foreign_session_rejected",
-        "local_foreign_rejected",
-    ] {
-        let case = crate::lean_vocab_test::lean_session_input_edit_cases()
-            .iter()
-            .find(|case| case.name == name)
-            .unwrap();
-        let fixture = Fixture::new().await;
-        let mut command = fixture.command().await;
-        let foreign_key;
-        let signer: &dyn NodeIdentity = if name == "local_foreign_rejected" {
-            foreign_key =
-                KeyIdentity::load_or_create(fixture._dir.path().join("foreign.key"), None).unwrap();
-            command.requester_did = foreign_key.did().to_owned();
-            &foreign_key
-        } else {
-            fixture.identity.as_ref()
-        };
-        if name == "future_issuance_rejected" {
-            command.issued_at = (Utc::now() + chrono::Duration::minutes(5)).to_rfc3339();
-            command.expires_at = (Utc::now() + chrono::Duration::minutes(10)).to_rfc3339();
-        }
-        if name == "foreign_session_rejected" {
-            command.session_id = "another-session".into();
-        }
-        command.signature = signer.sign(&command.signing_payload()).await.unwrap();
-        let id = fixture.submit(&command).await;
-        let before = fixture.requests().await;
-        process_command(&fixture.node, &fixture.identity, &id)
-            .await
-            .unwrap();
-        let receipt = fixture.receipt(&id).await;
-        receipt.validate_for(&command).unwrap();
-        assert_eq!(
-            serde_json::to_value(receipt.outcome).unwrap(),
-            case.receipt.as_ref().unwrap().outcome,
-            "{name}"
-        );
-        assert_eq!(fixture.requests().await, before, "{name}");
-    }
-}
-
-#[tokio::test]
 async fn edit_effect_and_receipt_rollback_together_after_a_write_failure() {
     let fixture = Fixture::new().await;
     let command = fixture.command().await;
@@ -321,111 +610,6 @@ async fn edit_effect_and_receipt_rollback_together_after_a_write_failure() {
 }
 
 #[tokio::test]
-async fn generated_exact_replay_preserves_signed_prior_receipt_after_expiry() {
-    let case = crate::lean_vocab_test::lean_session_input_edit_cases()
-        .iter()
-        .find(|case| case.name == "exact_replay_after_expiry")
-        .unwrap();
-    assert!(case.now >= case.command.expires_at);
-    let fixture = Fixture::new().await;
-    let mut command = fixture.command().await;
-    command.issued_at = (Utc::now() - chrono::Duration::hours(2)).to_rfc3339();
-    command.expires_at = (Utc::now() - chrono::Duration::hours(1)).to_rfc3339();
-    command.signature = fixture
-        .identity
-        .sign(&command.signing_payload())
-        .await
-        .unwrap();
-    let id = fixture.submit(&command).await;
-    let applied = ConfigAccess::Local(fixture.node.clone())
-        .transact("test.prior.edit", |txn| {
-            let command = &command;
-            Box::pin(async move {
-                let validated = crate::lifecycle::queue::validate_pending_user_edit_in_txn(
-                    txn,
-                    &command.node_did,
-                    &command.session_id,
-                    &command.requester_did,
-                    &command.edit,
-                    &command.replacements,
-                )
-                .await?
-                .map_err(anyhow::Error::msg)?;
-                crate::lifecycle::queue::apply_pending_user_edit_in_txn(txn, validated).await
-            })
-        })
-        .await
-        .unwrap();
-    let mut receipt = SessionInputEditReceipt {
-        version: SESSION_INPUT_EDIT_VERSION,
-        command_id: command.command_id.clone(),
-        command_digest: command.computed_digest(),
-        requester_did: command.requester_did.clone(),
-        node_did: command.node_did.clone(),
-        session_id: command.session_id.clone(),
-        outcome: SessionInputEditOutcome::Applied,
-        reason: String::new(),
-        request_doc_ids: applied.request_doc_ids,
-        request_ids: applied.request_ids,
-        processed_at: (Utc::now() - chrono::Duration::minutes(90)).to_rfc3339(),
-        signer_did: fixture.identity.did().to_owned(),
-        signature: Vec::new(),
-    };
-    receipt.signature = fixture
-        .identity
-        .sign(&receipt.signing_payload())
-        .await
-        .unwrap();
-    receipt.validate_for(&command).unwrap();
-    ConfigAccess::Local(fixture.node.clone()).write("test.prior.receipt", &format!(r#"mutation {{ update_AgentSessionInputEdit(docID: "{}", input: {{ receipt_json: "{}" }}) {{ _docID }} }}"#, escape_graphql_string(&id), escape_graphql_string(&serde_json::to_string(&receipt).unwrap()))).await.unwrap();
-    let before = fixture.requests().await;
-    process_command(&fixture.node, &fixture.identity, &id)
-        .await
-        .unwrap();
-    assert_eq!(fixture.requests().await, before);
-    assert_eq!(fixture.receipt(&id).await, receipt);
-    assert_eq!(
-        serde_json::to_value(receipt.outcome).unwrap(),
-        case.receipt.as_ref().unwrap().outcome
-    );
-}
-
-#[tokio::test]
-async fn generated_command_identity_collision_cannot_replace_original_intent_or_effect() {
-    let case = crate::lean_vocab_test::lean_session_input_edit_cases()
-        .iter()
-        .find(|case| case.name == "command_identity_collision")
-        .unwrap();
-    assert!(case.receipt.is_none());
-    let fixture = Fixture::new().await;
-    let command = fixture.command().await;
-    let id = fixture.submit(&command).await;
-    process_command(&fixture.node, &fixture.identity, &id)
-        .await
-        .unwrap();
-    let receipt = fixture.receipt(&id).await;
-    let before = fixture.requests().await;
-    let mut colliding = command.clone();
-    colliding.edit.messages[0].content = "conflicting replacement".into();
-    colliding.signature = fixture
-        .identity
-        .sign(&colliding.signing_payload())
-        .await
-        .unwrap();
-    assert_ne!(colliding.computed_digest(), command.computed_digest());
-    let result = ConfigAccess::Local(fixture.node.clone()).write("test.command.collision", &format!(r#"mutation {{ create_AgentSessionInputEdit(input: {{ command_id: "{}", requester_did: "{}", node_did: "{}", session_id: "{}", intent_json: "{}" }}) {{ _docID }} }}"#, escape_graphql_string(&colliding.command_id), escape_graphql_string(&colliding.requester_did), escape_graphql_string(&colliding.node_did), escape_graphql_string(&colliding.session_id), escape_graphql_string(&serde_json::to_string(&colliding).unwrap()))).await;
-    assert!(
-        result.is_err(),
-        "unique immutable command identity must reject conflicting intent"
-    );
-    process_command(&fixture.node, &fixture.identity, &id)
-        .await
-        .unwrap();
-    assert_eq!(fixture.requests().await, before);
-    assert_eq!(fixture.receipt(&id).await, receipt);
-}
-
-#[tokio::test]
 async fn cryptographically_invalid_receipt_cannot_suppress_valid_edit() {
     let fixture = Fixture::new().await;
     let command = fixture.command().await;
@@ -442,7 +626,6 @@ async fn cryptographically_invalid_receipt_cannot_suppress_valid_edit() {
         request_doc_ids: vec![],
         request_ids: vec![],
         processed_at: Utc::now().to_rfc3339(),
-        signer_did: fixture.identity.did().to_owned(),
         signature: vec![],
     };
     forged.signature = fixture
@@ -465,7 +648,7 @@ async fn cryptographically_invalid_receipt_cannot_suppress_valid_edit() {
     assert!(fixture
         .identity
         .verify(
-            &actual.signer_did,
+            &actual.node_did,
             &actual.signing_payload(),
             &actual.signature
         )
