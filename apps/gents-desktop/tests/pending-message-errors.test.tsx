@@ -1,10 +1,15 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type {
+  DesktopApiAdapter,
   PendingQueueEntryView,
   PendingTurnView,
 } from "@source-inc/gents-desktop-client";
+import { createChatActions } from "../src/hooks/chatActions";
+import type { ShellProjection } from "../src/hooks/shellProjection";
 import { QueuedInputs } from "../src/ui/screens/TranscriptInputs";
+import { deployment } from "./config-panel-wiring/fixtures";
+import { shellStores } from "./shell-fixture";
 
 const entry = (id: string, group: string | null = "same"): PendingQueueEntryView => ({
   requestDocId: `doc-${id}`,
@@ -260,5 +265,36 @@ describe("pending message failed mutations and async controls", () => {
     expect(
       after.getByRole("button", { name: "Move pending message up" }),
     ).toBeDisabled();
+  });
+
+  it("refreshes the session when the runtime rejects an edit", async () => {
+    const refreshSession = vi.fn().mockResolvedValue(null);
+    const reportFailure = vi.fn();
+    const actions = createChatActions({
+      api: {
+        editPendingQueue: vi
+          .fn()
+          .mockRejectedValue(new Error("The message queue changed.")),
+      } as unknown as DesktopApiAdapter,
+      stores: shellStores({
+        deployments: [deployment],
+        selection: { nodeDid: deployment.nodeDid, sessionId: "s1" },
+      }),
+      project: () => ({}) as ShellProjection,
+      refreshSession,
+      refreshSnapshot: vi.fn(),
+      reportFailure,
+    });
+    await expect(
+      actions.editPendingQueue({
+        nodeDid: deployment.nodeDid,
+        sessionId: "s1",
+        expectedRequestDocIds: ["doc-a"],
+        selectedRequestDocIds: ["doc-a"],
+        messages: [{ requestDocId: "doc-a", content: "corrected" }],
+      }),
+    ).rejects.toThrow();
+    expect(reportFailure).toHaveBeenCalledOnce();
+    expect(refreshSession).toHaveBeenCalledWith("s1");
   });
 });

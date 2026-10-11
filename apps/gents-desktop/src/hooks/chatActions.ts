@@ -167,14 +167,16 @@ export function createChatActions({
   async function editPendingQueue(request: PendingQueueEditRequest) {
     try {
       await api.editPendingQueue(request);
+    } catch (error) {
+      reportFailure(actionFailure("change pending messages", error));
+      throw shownFailure(error);
+    } finally {
+      /* a rejected edit usually means the queue moved; show the queue it met */
       if (
         store.getState().nodeDid === request.nodeDid &&
         store.getState().sessionId === request.sessionId
       )
         await refreshSession(request.sessionId);
-    } catch (error) {
-      reportFailure(actionFailure("change pending messages", error));
-      throw shownFailure(error);
     }
   }
 
