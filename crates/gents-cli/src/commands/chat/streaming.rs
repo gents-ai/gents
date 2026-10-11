@@ -252,14 +252,30 @@ pub(crate) enum ApprovalHandling<'a> {
     Observe(&'a std::path::Path),
 }
 
-async fn approval_progress(mode: ApprovalHandling<'_>, session: &str) -> Result<bool> {
+fn pending_approvals_home<'a>(
+    mode: ApprovalHandling<'a>,
+    session: &str,
+) -> Result<Option<&'a std::path::Path>> {
     let home = match mode {
-        ApprovalHandling::None => return Ok(false),
+        ApprovalHandling::None => return Ok(None),
         ApprovalHandling::Answer(home) | ApprovalHandling::Observe(home) => home,
     };
-    if !super::approvals::has_pending(home, session)? {
+    Ok(super::approvals::has_pending(home, session)?.then_some(home))
+}
+
+async fn approval_progress(mode: ApprovalHandling<'_>, session: &str) -> Result<bool> {
+    let Some(home) = pending_approvals_home(mode, session)? else {
         return Ok(false);
-    }
+    };
+    answer_pending_approvals(mode, home, session).await?;
+    Ok(true)
+}
+
+async fn answer_pending_approvals(
+    mode: ApprovalHandling<'_>,
+    home: &std::path::Path,
+    session: &str,
+) -> Result<()> {
     if matches!(mode, ApprovalHandling::Answer(_)) {
         let home = home.to_path_buf();
         let session = session.to_owned();
@@ -270,7 +286,7 @@ async fn approval_progress(mode: ApprovalHandling<'_>, session: &str) -> Result<
         })
         .await??;
     }
-    Ok(true)
+    Ok(())
 }
 
 pub(crate) async fn stream_turn_progress(
@@ -294,13 +310,9 @@ pub(crate) async fn stream_turn_progress(
         .flatten();
 
     loop {
-        if let ApprovalHandling::Answer(home) = approval_handling {
-            if super::approvals::has_pending(home, &submitted.session_id)? {
-                clear_indicator(&mut indicator).await;
-            }
-        }
-        if approval_progress(approval_handling, &submitted.session_id).await? {
+        if let Some(home) = pending_approvals_home(approval_handling, &submitted.session_id)? {
             clear_indicator(&mut indicator).await;
+            answer_pending_approvals(approval_handling, home, &submitted.session_id).await?;
             last_progress_at = tokio::time::Instant::now();
         }
         let query = chat_progress_query(submitted);
@@ -331,9 +343,13 @@ pub(crate) async fn stream_turn_progress(
             );
         }
 
-        if request
+        let folded = request
             .as_ref()
-            .is_some_and(|row| gents::lifecycle::folded_into(row).is_some())
+            .is_some_and(|row| gents::lifecycle::folded_into(row).is_some());
+        if folded
+            || request
+                .as_ref()
+                .is_some_and(|row| gents::lifecycle::replaced_by(row).is_some())
         {
             clear_indicator(&mut indicator).await;
             let envelope = crate::request_helpers::wait_for_terminal_response_with_progress(
@@ -361,7 +377,9 @@ pub(crate) async fn stream_turn_progress(
                     println!("[agent error] {reason}");
                 }
             }
-            println!("[input applied to the active turn]");
+            if folded {
+                println!("[input applied to the active turn]");
+            }
             io::stdout().flush()?;
             return Ok(envelope);
         }
