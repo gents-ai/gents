@@ -77,12 +77,13 @@ theorem default_queue_has_no_encoding_extension (queue : RequestQueue) :
     queueExtensionFields {queue with delivery := .queue, position := none} = [] := by
   simp [queueExtensionFields]
 
-theorem queue_position_encoding_is_injective (left right : QueuePosition)
-    (h : [left.slotRequestDocId, left.replacesRequestDocId] =
-      [right.slotRequestDocId, right.replacesRequestDocId]) : left = right := by
-  cases left
-  cases right
-  simp_all
+theorem queue_extension_encoding_is_injective (left right : RequestQueue)
+    (h : queueExtensionFields left = queueExtensionFields right) :
+    left.delivery = right.delivery ∧ left.position = right.position := by
+  rcases left with ⟨_, _, _, _, _, _, ld, lp⟩
+  rcases right with ⟨_, _, _, _, _, _, rd, rp⟩
+  cases ld <;> cases rd <;> rcases lp with _ | ⟨ls, lr⟩ <;> rcases rp with _ | ⟨rs, rr⟩ <;>
+    simp_all [queueExtensionFields, optionFields, SessionQueue.QueueDelivery.toDefraDB]
 
 /-- Existing context allowlist is the sole skill grant. Invalid activation is
 rejected rather than silently authorizing an extra node-wide skill. -/
