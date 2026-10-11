@@ -55,7 +55,7 @@ pub async fn validate_position(read: &impl ConfigRead, row: &AgentRequestRow) ->
             previous.doc_id.as_deref() == Some(position.replaces_request_doc_id.as_str())
                 && previous.lifecycle_state == Some(RequestLifecycleState::Superseded)
                 && previous.superseded_by_request_doc_id == current.doc_id
-                && previous.failure_reason.as_deref() == Some("pending message replaced")
+                && previous.failure_reason.as_deref() == Some(super::management::REPLACED_REASON)
                 && previous.admission_signer_did == previous.requester_did
                 && previous.node_did == current.node_did
                 && previous.requester_did == current.requester_did
