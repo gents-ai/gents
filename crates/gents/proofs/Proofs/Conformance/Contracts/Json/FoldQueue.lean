@@ -174,26 +174,40 @@ def editStateJson (s : SessionQueue.InputEdit.State) : String :=
   "{\"queue\":" ++ managementStateJson s.queue ++
   ",\"receipts\":" ++ jsonArray (s.receipts.map editReceiptJson) ++ "}"
 
+def editCommandJson (command : SessionQueue.InputEdit.Command) : String :=
+  "{\"id\":" ++ toString command.id ++
+  ",\"digest\":" ++ toString command.digest ++ ",\"caller\":" ++ jsonOptionalNat command.caller ++
+  ",\"has_peer\":" ++ jsonOptionalBool (some command.hasPeer) ++
+  ",\"issued_at\":" ++ toString command.issuedAt ++ ",\"expires_at\":" ++ toString command.expiresAt ++
+  ",\"expected\":" ++ jsonArray (command.expected.map toString) ++
+  ",\"offset\":" ++ toString command.offset ++ ",\"count\":" ++ toString command.count ++
+  ",\"replacements\":" ++ jsonArray (command.replacements.map entryJson) ++ "}"
+
+def editAuthorityJson (a : SessionQueue.InputEdit.Authority) : String :=
+  "{\"signature_valid\":" ++ jsonOptionalBool (some a.signatureValid) ++
+  ",\"replacements_valid\":" ++ jsonOptionalBool (some a.replacementsValid) ++
+  ",\"session_owned\":" ++ jsonOptionalBool (some a.sessionOwned) ++
+  ",\"requester_is_node\":" ++ jsonOptionalBool (some a.requesterIsNode) ++
+  ",\"enrollment_fresh\":" ++ jsonOptionalBool (some a.enrollmentFresh) ++
+  ",\"route_applied\":" ++ jsonOptionalBool (some a.routeApplied) ++
+  ",\"command_identity_unique\":" ++ jsonOptionalBool (some a.commandIdentityUnique) ++ "}"
+
+def editStepJson : SessionQueue.InputEditCases.Step → String
+  | .apply now a command =>
+      "{\"kind\":\"apply\",\"now\":" ++ toString now ++
+      ",\"authority\":" ++ editAuthorityJson a ++ ",\"command\":" ++ editCommandJson command ++ "}"
+  | .loseReceipts => "{\"kind\":\"lose_receipts\"}"
+  | .otherSession session =>
+      "{\"kind\":\"other_session\",\"session\":" ++ toString session ++ "}"
+
 def inputEditCasesJson : String :=
   jsonArray (SessionQueue.InputEditCases.cases.map fun c =>
     let result := SessionQueue.InputEditCases.run c
-    let a := c.authority
-    let command := c.command
-    "{\"name\":" ++ jsonString c.name ++ ",\"before\":" ++ editStateJson c.before ++
-    ",\"now\":" ++ toString c.now ++ ",\"command\":{\"id\":" ++ toString command.id ++
-    ",\"digest\":" ++ toString command.digest ++ ",\"caller\":" ++ jsonOptionalNat command.caller ++
-    ",\"has_peer\":" ++ jsonOptionalBool (some command.hasPeer) ++
-    ",\"issued_at\":" ++ toString command.issuedAt ++ ",\"expires_at\":" ++ toString command.expiresAt ++
-    ",\"expected\":" ++ jsonArray (command.expected.map toString) ++
-    ",\"offset\":" ++ toString command.offset ++ ",\"count\":" ++ toString command.count ++
-    ",\"replacements\":" ++ jsonArray (command.replacements.map entryJson) ++ "}" ++
-    ",\"authority\":{\"signature_valid\":" ++ jsonOptionalBool (some a.signatureValid) ++
-    ",\"replacements_valid\":" ++ jsonOptionalBool (some a.replacementsValid) ++
-    ",\"session_owned\":" ++ jsonOptionalBool (some a.sessionOwned) ++
-    ",\"requester_is_node\":" ++ jsonOptionalBool (some a.requesterIsNode) ++
-    ",\"enrollment_fresh\":" ++ jsonOptionalBool (some a.enrollmentFresh) ++
-    ",\"route_applied\":" ++ jsonOptionalBool (some a.routeApplied) ++
-    ",\"command_identity_unique\":" ++ jsonOptionalBool (some a.commandIdentityUnique) ++ "}" ++
+    "{\"name\":" ++ jsonString c.name ++
+    ",\"history\":" ++ jsonArray (c.history.map editStepJson) ++
+    ",\"before\":" ++ editStateJson c.before ++
+    ",\"now\":" ++ toString c.now ++ ",\"command\":" ++ editCommandJson c.command ++
+    ",\"authority\":" ++ editAuthorityJson c.authority ++
     ",\"after\":" ++ editStateJson result.1 ++ ",\"receipt\":" ++
     (match result.2 with | none => "null" | some r => editReceiptJson r) ++ "}")
 
