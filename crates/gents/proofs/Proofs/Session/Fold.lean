@@ -57,7 +57,15 @@ theorem folded_share_head_authority {head entry : QueueEntry}
     entry.requester = head.requester ∧ entry.turnContext = head.turnContext ∧
       entry.queuedUserMessage := by
   have h := (mem_foldRun h_mem).1
-  exact ⟨h.2.2.2.1, h.2.2.2.2, h.2.2.1⟩
+  exact ⟨h.2.2.2.1, h.2.2.2.2.1, h.2.2.1⟩
+
+theorem stale_candidate_never_folds {head entry : QueueEntry}
+    {admitted : List RequestId} {entries : List QueueEntry}
+    (h_stale : entry.fresh = false) :
+    entry ∉ foldRun head admitted entries := by
+  intro h_mem
+  have h_fresh := (mem_foldRun h_mem).1.2.2.2.2.2
+  simp [h_stale] at h_fresh
 
 theorem foreign_requester_never_folds {head entry : QueueEntry}
     {admitted : List RequestId} {entries : List QueueEntry}

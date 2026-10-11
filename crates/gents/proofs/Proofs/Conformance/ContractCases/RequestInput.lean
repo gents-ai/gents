@@ -68,6 +68,16 @@ private def workspaceCases : List RequestInputCase :=
       workspace := {ownerNodeDid := some "did:owner"}, workspaceSource := {}}
   ]
 
+def queueExtensionCases : List RequestInputCase :=
+  let queue : RequestQueue := { source := .user, policy := .append }
+  let position : QueuePosition := ⟨"physical:slot", "physical:previous"⟩
+  [ { name := "signed-queue-steer", input := { queue := some {queue with delivery := .steer} }, contextSkillIds := [] }
+  , { name := "signed-queue-position", input := { queue := some {queue with position := some position} }, contextSkillIds := [] }
+  , { name := "signed-steer-position", input := { queue := some {queue with delivery := .steer, position := some position} }, contextSkillIds := [] }
+  , { name := "signed-position-slot-mutation", input := { queue := some {queue with position := some {position with slotRequestDocId := "physical:other-slot"}} }, contextSkillIds := [] }
+  , { name := "signed-position-predecessor-mutation", input := { queue := some {queue with position := some {position with replacesRequestDocId := "physical:other-previous"}} }, contextSkillIds := [] }
+  ]
+
 def requestInputCases : List RequestInputCase :=
   [ { name := "empty-input-inherits-context", input := {}, contextSkillIds := ["rust"] }
   , { name := "explicit-skill-within-whitelist", input := { selectedSkillIds := ["rust"] },
@@ -149,12 +159,12 @@ def requestInputCases : List RequestInputCase :=
       admissionKind := .runtimeInternal
       verifiedGoalContinuation := some ⟨3, false⟩ }
 
-  ] ++ workspaceCases
+  ] ++ workspaceCases ++ queueExtensionCases
 
 theorem input_boundary_cases_pinned : requestInputCases.map RequestInputCase.accepted =
     [true, true, false, false, false, false, false, true, true, true, false,
      false, false, true, true, false, false, false, false, false, false, true,
-     true, false, false, false, false, false, true, false, false, false] := by native_decide
+     true, false, false, false, false, false, true, false, false, false, true, true, true, true, true] := by native_decide
 
 theorem title_creation_cases_pinned :
     (requestInputCases.drop 7 |>.take 3).map
@@ -173,5 +183,9 @@ theorem input_encoding_distinguishes_semantics :
     requestInputFields {} ≠ requestInputFields { goalContinuation := some ⟨1, false⟩ } ∧
     requestInputFields { goalContinuation := some ⟨1, false⟩ } ≠
       requestInputFields { goalContinuation := some ⟨1, true⟩ } := by decide
+
+theorem new_queue_fields_change_signed_encoding :
+    let encoded := queueExtensionCases.map (fun c => requestInputFields c.input)
+    encoded.Nodup := by native_decide
 
 end Conformance.ContractCases

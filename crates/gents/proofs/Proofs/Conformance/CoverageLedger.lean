@@ -1153,6 +1153,39 @@ def caseCoverage : List CoverageEntry :=
       "FoldPublicationCases"
       "lifecycle::queue::tests::folding::generated_fold_publication_scripts_bind_to_native_owners")
       "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "session_input_edit_cases"
+      "SessionInputEditCases"
+      "agent::p2p_reconcile::session_input_edit::tests::generated_commands_bind_to_atomic_queue_owner"
+      "The model composes existing authority observations with the queue replacement owner and atomic terminal receipt. Signature validity, current enrollment and applied route are supplied by their existing native owners; the command introduces no new authority kind. Native binding must exercise these facts, exact replay and identity collision through the real reconciler. Distinct physical commands sharing an ID are an observed fail-closed barrier, including before application and after a receipt on another session; existing effects and receipts remain intact.")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "session_input_edit_cases"
+      "SessionInputEditRemoteCases"
+      "e2e_runtime::session_input_edit::generated_remote_edits_replicate_signed_effect_and_receipt")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "queue_management_cases"
+      "QueueManagementCases"
+      "lifecycle::queue::tests::management::generated_pending_management_cases_bind_to_signed_replacement_owner"
+      "Ten representable replacement cases exercise signed native replacement, rejection, immutable originals and physical slot order. Reused request IDs and caller-chosen slot mutations remain executable model cases: the replacement API generates both internally, so these cases are not claimed as native management coverage. Intake cases are modeled here and bound through the composed steering publication and loop consumers.")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "queue_management_cases"
+      "QueueExpiryBarrierCases"
+      "lifecycle::queue::tests::folding::expired_or_malformed_steering_is_a_modelled_publication_barrier")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "steering_publication_cases"
+      "SteeringPublicationCases"
+      "lifecycle::queue::tests::folding::generated_fold_publication_scripts_bind_to_native_owners"
+      "Six generated scripts bind signed pending rows, native intake, authored publication, cancellation, generation fencing and natural completion. The two unsafe streaming boundary scripts are consumed by the actual loop test registered separately; this native writer adapter does not invent a safe-boundary policy.")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "steering_publication_cases"
+      "SteeringUnsafeBoundaryCases"
+      "gents_loop::end_to_end_test::modeled_unsafe_stream_boundaries_never_intake_or_finish_before_provider_publication")
+      "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "retry_selection_cases"
       "RetrySelectionCases"
