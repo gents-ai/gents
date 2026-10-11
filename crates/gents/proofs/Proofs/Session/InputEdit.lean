@@ -72,12 +72,16 @@ def appliedReceipt (c : Command) : Receipt :=
 
 def rejectedReceipt (c : Command) : Receipt := ⟨c.id, c.digest, .rejected, []⟩
 
-/-- Replica clocks skew, so a command issued after the runtime's clock is left
+/-- An invalid author signature is rejected before anything else: the effect witness
+is public replacement data, so copying it must not earn an applied receipt.
+Replica clocks skew, so a command issued after the runtime's clock is left
 undecided and reconsidered later; a future issuance must not become a permanent
 signed rejection. Only reaching `expiresAt` rejects it. -/
 def decideFresh (target : AgentSession.Scope) (now : Nat) (a : Authority)
     (c : Command) (s : State) : State × Option Receipt :=
-  if effectsApplied s.queue c then
+  if !a.signatureValid then
+    ({ s with receipts := s.receipts ++ [rejectedReceipt c] }, some (rejectedReceipt c))
+  else if effectsApplied s.queue c then
     ({ s with receipts := s.receipts ++ [appliedReceipt c] }, some (appliedReceipt c))
   else if now < c.issuedAt then (s, none)
   else
@@ -111,16 +115,19 @@ theorem decideFresh_cases (target : AgentSession.Scope) (now : Nat) (a : Authori
       decideFresh target now a c s =
         ({ s with receipts := s.receipts ++ [rejectedReceipt c] }, some (rejectedReceipt c)) := by
   unfold decideFresh
-  by_cases he : effectsApplied s.queue c
-  · exact Or.inl ⟨he, by simp [he]⟩
-  · by_cases hf : now < c.issuedAt
-    · exact Or.inr (Or.inl (by simp [he, hf]))
-    · by_cases ha : authorized a c now
-      · cases hq : replacePendingGroup? target s.queue c.caller c.expected c.offset c.count
-            c.replacements with
-        | some queue => exact Or.inr (Or.inr (Or.inl ⟨queue, ha, rfl, by simp [he, hf, ha]⟩))
-        | none => exact Or.inr (Or.inr (Or.inr (by simp [he, hf, ha, hq])))
-      · exact Or.inr (Or.inr (Or.inr (by simp [he, hf, ha])))
+  by_cases hs : a.signatureValid
+  · by_cases he : effectsApplied s.queue c
+    · exact Or.inl ⟨he, by simp [hs, he]⟩
+    · by_cases hf : now < c.issuedAt
+      · exact Or.inr (Or.inl (by simp [hs, he, hf]))
+      · by_cases ha : authorized a c now
+        · cases hq : replacePendingGroup? target s.queue c.caller c.expected c.offset c.count
+              c.replacements with
+          | some queue =>
+            exact Or.inr (Or.inr (Or.inl ⟨queue, ha, rfl, by simp [hs, he, hf, ha]⟩))
+          | none => exact Or.inr (Or.inr (Or.inr (by simp [hs, he, hf, ha, hq])))
+        · exact Or.inr (Or.inr (Or.inr (by simp [hs, he, hf, ha])))
+  · exact Or.inr (Or.inr (Or.inr (by simp [hs])))
 
 theorem apply_cases (target : AgentSession.Scope) (now : Nat) (a : Authority)
     (c : Command) (s : State) :
@@ -152,10 +159,11 @@ theorem observed_identity_collision_preserves_state (target : AgentSession.Scope
 theorem future_issuance_is_deferred (target : AgentSession.Scope) (now : Nat)
     (a : Authority) (c : Command) (s : State)
     (h_new : s.receipts.find? (fun r => r.commandId == c.id) = none)
+    (h_sig : a.signatureValid = true)
     (h_effects : effectsApplied s.queue c = false) (h_future : now < c.issuedAt) :
     apply target now a c s = (s, none) := by
   by_cases hu : a.commandIdentityUnique <;>
-    simp [apply, hu, h_new, decideFresh, h_effects, h_future]
+    simp [apply, hu, h_new, decideFresh, h_sig, h_effects, h_future]
 
 /-- A rejected or unauthorized command leaves the queue exactly as it was. -/
 theorem rejection_preserves_queue (target : AgentSession.Scope) (now : Nat)
@@ -450,7 +458,7 @@ theorem once_applied_stays_applied (target target' : AgentSession.Scope) (now no
     (h_nonempty : c.replacements ≠ [])
     (h_idle : IdleUnselected s.queue)
     (h_trace : ManagedTrace (apply target now a c s).1.queue q)
-    (h_unique : a'.commandIdentityUnique = true)
+    (h_unique : a'.commandIdentityUnique = true) (h_sig : a'.signatureValid = true)
     (h_unreceipted : receipts.find? (fun r => r.commandId == c.id) = none) :
     (apply target now a c s).2 = some (appliedReceipt c) ∧
       (apply target' now' a' c ⟨q, receipts⟩).2 = some (appliedReceipt c) := by
@@ -479,6 +487,6 @@ theorem once_applied_stays_applied (target target' : AgentSession.Scope) (now no
     simp only [effectsApplied, Bool.and_eq_true, List.all_eq_true, decide_eq_true_eq,
       Bool.not_eq_true', List.isEmpty_eq_false_iff]
     exact ⟨h_nonempty, fun e he => (managed_trace_preserves_recorded h_trace h_idle' (h_recorded.2 e he)).2⟩
-  simp [apply, h_unique, h_unreceipted, decideFresh, h_effects]
+  simp [apply, h_unique, h_unreceipted, decideFresh, h_sig, h_effects]
 
 end SessionQueue.InputEdit
