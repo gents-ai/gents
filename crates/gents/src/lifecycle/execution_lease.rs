@@ -228,11 +228,6 @@ impl RequestLifecycle {
         message_doc_id: &str,
         pending_request_doc_ids: &[String],
     ) -> Result<bool> {
-        anyhow::ensure!(
-            self.claimed_deadline_at
-                .is_none_or(|deadline| Utc::now() < deadline),
-            "request deadline expired before natural completion"
-        );
         let generation = self.execution_generation()?.to_owned();
         let result = terminalize_execution_with_time(
             &self.node,

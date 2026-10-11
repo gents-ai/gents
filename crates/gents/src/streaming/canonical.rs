@@ -705,16 +705,6 @@ pub(super) async fn publish_provider_turn_with_time(
                 return Ok(published);
             }
             anyhow::ensure!(records.iter().all(|row| row.segment.close.is_none()), "provider source is already closed");
-            if plan.consumes_folded.is_some() {
-                let deadline = DateTime::parse_from_rfc3339(&tool_deadline_at)?
-                    .with_timezone(&Utc);
-                anyhow::ensure!(
-                    crate::lifecycle::RequestLifecycle::input_publication_before_deadline(
-                        fixture_now.unwrap_or_else(Utc::now), Some(deadline),
-                    ),
-                    "request deadline expired before steering publication"
-                );
-            }
 
             let prepared = exemplar;
             let mut observations = records.iter().map(|row| ObservedSegment { doc_id: &row.doc_id, segment: &row.segment }).collect::<Vec<_>>();

@@ -654,20 +654,13 @@ impl DefraSessionHook {
         mut self,
         request: crate::watcher::AgentRequest,
         verifier: crate::request_admission::AgentRequestAdmissionVerifier,
+        natural_finish_allowed: bool,
     ) -> Self {
         self.steering_input_source = Some(Arc::new(SteeringInputSource {
             request,
             verifier,
-            natural_finish_allowed: false,
+            natural_finish_allowed,
         }));
-        self
-    }
-    pub(crate) fn with_natural_finish(mut self, allowed: bool) -> Self {
-        if let Some(source) = self.steering_input_source.as_mut() {
-            if let Some(source) = Arc::get_mut(source) {
-                source.natural_finish_allowed = allowed;
-            }
-        }
         self
     }
     /// Register provider-published physical calls before dispatch.  The next
