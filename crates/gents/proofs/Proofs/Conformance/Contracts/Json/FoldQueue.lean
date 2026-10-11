@@ -167,7 +167,8 @@ def managementCasesJson : String :=
 def editReceiptJson (r : SessionQueue.InputEdit.Receipt) : String :=
   "{\"command_id\":" ++ toString r.commandId ++
   ",\"digest\":" ++ toString r.digest ++ ",\"outcome\":" ++
-  jsonString (match r.outcome with | .applied => "applied" | .rejected => "rejected") ++ "}"
+  jsonString (match r.outcome with | .applied => "applied" | .rejected => "rejected") ++
+  ",\"request_ids\":" ++ jsonArray (r.requestIds.map toString) ++ "}"
 
 def editStateJson (s : SessionQueue.InputEdit.State) : String :=
   "{\"queue\":" ++ managementStateJson s.queue ++
@@ -189,7 +190,6 @@ def inputEditCasesJson : String :=
     ",\"authority\":{\"signature_valid\":" ++ jsonOptionalBool (some a.signatureValid) ++
     ",\"replacements_valid\":" ++ jsonOptionalBool (some a.replacementsValid) ++
     ",\"session_owned\":" ++ jsonOptionalBool (some a.sessionOwned) ++
-    ",\"local_self\":" ++ jsonOptionalBool (some a.localSelf) ++
     ",\"requester_is_node\":" ++ jsonOptionalBool (some a.requesterIsNode) ++
     ",\"enrollment_fresh\":" ++ jsonOptionalBool (some a.enrollmentFresh) ++
     ",\"route_applied\":" ++ jsonOptionalBool (some a.routeApplied) ++
