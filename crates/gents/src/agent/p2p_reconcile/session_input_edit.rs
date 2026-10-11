@@ -203,7 +203,6 @@ async fn signed_receipt(
         request_doc_ids,
         request_ids,
         processed_at: Utc::now().to_rfc3339(),
-        signer_did: identity.did().to_owned(),
         signature: Vec::new(),
     };
     receipt.signature = identity.sign(&receipt.signing_payload()).await?;
