@@ -138,11 +138,6 @@ impl SessionInputEdit {
             "session input edit selects no requests"
         );
         ensure!(
-            self.replacements.is_empty()
-                || self.replacements.len() == self.edit.selected_request_doc_ids.len(),
-            "replacement count differs from selected group"
-        );
-        ensure!(
             self.edit.messages.len() == self.replacements.len(),
             "message and presigned replacement counts differ"
         );
@@ -171,7 +166,6 @@ pub struct SessionInputEditReceipt {
     pub request_doc_ids: Vec<String>,
     pub request_ids: Vec<String>,
     pub processed_at: String,
-    pub signer_did: String,
     pub signature: Vec<u8>,
 }
 
@@ -191,7 +185,6 @@ impl SessionInputEditReceipt {
             .into(),
             self.reason.clone(),
             self.processed_at.clone(),
-            self.signer_did.clone(),
         ];
         for ids in [&self.request_doc_ids, &self.request_ids] {
             fields.push(ids.len().to_string());
@@ -206,10 +199,6 @@ impl SessionInputEditReceipt {
         ensure!(
             self.version == SESSION_INPUT_EDIT_VERSION,
             "unsupported session input edit receipt version"
-        );
-        ensure!(
-            self.signer_did == self.node_did,
-            "session input edit receipt signer does not own target node"
         );
         ensure!(
             self.signature.len() == 64,
@@ -227,7 +216,7 @@ impl SessionInputEditReceipt {
         Ok(())
     }
 
-    /// Verification still checks the target node's signature using its existing DID owner.
+    /// The receipt is signed by `node_did`; verification uses its existing DID owner.
     pub fn validate_for(&self, command: &SessionInputEdit) -> Result<()> {
         self.validate_shape()?;
         ensure!(
