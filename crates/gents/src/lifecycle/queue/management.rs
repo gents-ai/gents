@@ -1,3 +1,4 @@
+use super::intake::pending_in_txn;
 use super::*;
 use crate::config_client::ConfigAccess;
 use crate::identity::NodeIdentity;
@@ -79,50 +80,6 @@ pub async fn pending_user_queue(
             })
         })
         .await
-}
-
-fn pending_query(node_did: &str, session_id: &str) -> String {
-    format!(
-        r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{}" }},
-            session_id: {{ _eq: "{}" }}, purpose: {{ _eq: "normal" }},
-            lifecycle_state: {{ _eq: "pending" }} }}) {{
-            {} lifecycle_state interrupt_requested_at valid_until retry_parent_request
-        }} }}"#,
-        escape_graphql_string(node_did),
-        escape_graphql_string(session_id),
-        crate::request_admission::SIGNED_REQUEST_FIELDS,
-    )
-}
-
-async fn pending_in_txn(
-    txn: &ConfigApplyTxn<'_>,
-    node_did: &str,
-    session_id: &str,
-) -> Result<Vec<AgentRequestRow>> {
-    let response = txn.execute(&pending_query(node_did, session_id)).await?;
-    let rows: Vec<AgentRequestRow> =
-        serde_json::from_value(response["data"]["AgentRequest"].clone())?;
-    let ids = rows
-        .iter()
-        .map(|row| {
-            row.doc_id
-                .clone()
-                .context("pending message has no physical identity")
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let order = crate::trigger_engine::durable::request_arrival_order(txn, &ids).await?;
-    anyhow::ensure!(
-        order.len() == ids.len(),
-        "pending queue arrival is incomplete"
-    );
-    let mut by_id = rows
-        .into_iter()
-        .map(|row| (row.doc_id.clone().unwrap(), row))
-        .collect::<std::collections::HashMap<_, _>>();
-    order
-        .into_iter()
-        .map(|id| by_id.remove(&id).context("pending queue arrival changed"))
-        .collect()
 }
 
 fn editable(row: &AgentRequestRow, requester: &str) -> bool {

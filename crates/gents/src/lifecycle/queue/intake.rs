@@ -2,64 +2,81 @@ use super::*;
 use gents_protocol::request_admission::RequestPurpose;
 use gents_protocol::request_input::QueueDelivery;
 
-pub(crate) async fn steering_snapshot(
-    node: &EmbeddedNode,
-    head: &AgentRequest,
-    verifier: &crate::request_admission::AgentRequestAdmissionVerifier,
-) -> Result<gents_loop::loop_stream::SteeringSnapshot> {
-    let response = crate::graphql::graphql_with_transaction_retry(
-        node,
-        &format!(
+/// Pending normal requests of one session, in no particular order.
+pub(crate) async fn pending_rows_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    node_did: &str,
+    session_id: &str,
+) -> Result<Vec<AgentRequestRow>> {
+    let response = txn
+        .execute(&format!(
             r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{}" }},
             session_id: {{ _eq: "{}" }}, purpose: {{ _eq: "normal" }},
             lifecycle_state: {{ _eq: "pending" }} }}) {{
-            {} lifecycle_state interrupt_requested_at valid_until retry_parent_request
+            {} execution_lease_secs interrupt_requested_at
         }} }}"#,
-            escape_graphql_string(&head.node_did),
-            escape_graphql_string(&head.session_id),
-            crate::watcher::AGENT_REQUEST_FIELDS,
-        ),
-        "pending steering input",
-    )
-    .await?;
-    let rows: Vec<AgentRequestRow> = crate::graphql::rows(&response, "AgentRequest")?;
+            escape_graphql_string(node_did),
+            escape_graphql_string(session_id),
+            crate::request_admission::SIGNED_REQUEST_FIELDS,
+        ))
+        .await?;
+    serde_json::from_value(response["data"]["AgentRequest"].clone())
+        .context("decode pending session requests")
+}
+
+/// Pending normal requests of one session in native arrival order.
+pub(crate) async fn pending_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    node_did: &str,
+    session_id: &str,
+) -> Result<Vec<AgentRequestRow>> {
+    let rows = pending_rows_in_txn(txn, node_did, session_id).await?;
     let ids = rows
         .iter()
         .map(|row| {
             row.doc_id
                 .clone()
-                .context("pending input lacks physical identity")
+                .context("pending message has no physical identity")
         })
         .collect::<Result<Vec<_>>>()?;
-    let order = crate::config_client::ConfigAccess::transact_local_readonly(
-        node,
-        None,
-        "queue.steering_order",
-        |txn| {
-            let ids = &ids;
-            Box::pin(async move {
-                crate::trigger_engine::durable::request_arrival_order(txn, ids).await
-            })
-        },
-    )
-    .await?;
+    let order = crate::trigger_engine::durable::request_arrival_order(txn, &ids).await?;
     anyhow::ensure!(
         order.len() == ids.len(),
-        "pending steering queue order is incomplete"
+        "pending queue arrival is incomplete"
     );
-    let mut rows = rows
+    let mut by_id = rows
         .into_iter()
         .map(|row| (row.doc_id.clone().unwrap(), row))
         .collect::<std::collections::HashMap<_, _>>();
-    let mut pending_request_doc_ids = ids.clone();
+    order
+        .into_iter()
+        .map(|id| by_id.remove(&id).context("pending queue arrival changed"))
+        .collect()
+}
+
+pub(crate) async fn steering_snapshot(
+    node: &EmbeddedNode,
+    head: &AgentRequest,
+    verifier: &crate::request_admission::AgentRequestAdmissionVerifier,
+) -> Result<gents_loop::loop_stream::SteeringSnapshot> {
+    let rows = crate::config_client::ConfigAccess::transact_local_readonly(
+        node,
+        None,
+        "queue.steering_snapshot",
+        |txn| Box::pin(async move { pending_in_txn(txn, &head.node_did, &head.session_id).await }),
+    )
+    .await?;
+    let mut pending_request_doc_ids = rows
+        .iter()
+        .filter_map(|row| row.doc_id.clone())
+        .collect::<Vec<_>>();
     pending_request_doc_ids.sort();
     let mut inputs = Vec::new();
-    for id in order {
-        let row = rows.remove(&id).context("pending input changed identity")?;
-        let compatible = steering_compatible(head, &row, chrono::Utc::now());
-        if !compatible {
+    for row in rows {
+        if !steering_compatible(head, &row, chrono::Utc::now()) {
             break;
         }
+        let id = row.doc_id.clone().unwrap_or_default();
         let request = AgentRequest::try_from(row)?;
         match verifier.verify_fresh(&request, &head.agent_id).await {
             Ok(_) => {}
@@ -90,24 +107,8 @@ pub(crate) async fn pending_ids_in_txn(
     node_did: &str,
     session_id: &str,
 ) -> Result<Vec<String>> {
-    let response = txn
-        .execute(&format!(
-            r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{}" }},
-        session_id: {{ _eq: "{}" }}, purpose: {{ _eq: "normal" }},
-        lifecycle_state: {{ _eq: "pending" }} }}) {{ _docID }} }}"#,
-            escape_graphql_string(node_did),
-            escape_graphql_string(session_id)
-        ))
-        .await?;
-    #[derive(serde::Deserialize)]
-    struct PendingIdentity {
-        #[serde(rename = "_docID")]
-        doc_id: Option<String>,
-    }
-    let rows: Vec<PendingIdentity> =
-        serde_json::from_value(response["data"]["AgentRequest"].clone())
-            .context("decode pending input identities")?;
-    let mut ids = rows
+    let mut ids = pending_rows_in_txn(txn, node_did, session_id)
+        .await?
         .into_iter()
         .map(|row| row.doc_id.context("pending input lacks physical identity"))
         .collect::<Result<Vec<_>>>()?;

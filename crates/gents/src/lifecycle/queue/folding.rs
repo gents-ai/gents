@@ -135,25 +135,6 @@ fn folds_into(
         && !blank(row.content.as_deref())
 }
 
-const CANDIDATE_FIELDS: &str =
-    "lifecycle_state interrupt_requested_at valid_until retry_parent_request";
-
-fn pending_session_query(head: &AgentRequest) -> String {
-    format!(
-        r#"{{ AgentRequest(filter: {{
-            node_did: {{ _eq: "{}" }},
-            session_id: {{ _eq: "{}" }},
-            purpose: {{ _eq: "normal" }},
-            lifecycle_state: {{ _eq: "pending" }}
-        }}, order: [{{ created_at: ASC }}, {{ request_id: ASC }}]) {{
-            {} {CANDIDATE_FIELDS}
-        }} }}"#,
-        escape_graphql_string(&head.node_did),
-        escape_graphql_string(&head.session_id),
-        crate::watcher::AGENT_REQUEST_FIELDS,
-    )
-}
-
 /// Pending messages that may fold into `head`'s claim, for the caller
 /// to verify each one's signed admission before the claim. Queue order and
 /// contiguity are decided by the claim transaction.
@@ -164,15 +145,19 @@ pub(crate) async fn fold_candidates(
     if !heads_user_turn(head) {
         return Ok(Vec::new());
     }
-    let response = crate::graphql::graphql_with_transaction_retry(
+    let rows = crate::config_client::ConfigAccess::transact_local_readonly(
         node,
-        &pending_session_query(head),
-        "load pending messages that may fold into a claim",
+        None,
+        "queue.fold_candidates",
+        |txn| {
+            Box::pin(async move {
+                super::intake::pending_rows_in_txn(txn, &head.node_did, &head.session_id).await
+            })
+        },
     )
     .await?;
     let now = chrono::Utc::now();
-    crate::graphql::rows::<AgentRequestRow>(&response, "AgentRequest")?
-        .into_iter()
+    rows.into_iter()
         .filter(|row| row.doc_id.as_deref() != Some(head.doc_id.as_str()))
         .filter(|row| folds_into(head, row, now))
         .map(AgentRequest::try_from)
@@ -193,14 +178,12 @@ pub(crate) async fn select_fold_in_claim_txn(
     if admitted.is_empty() || !heads_user_turn(head) {
         return Ok(Vec::new());
     }
-    let response = txn.execute(&pending_session_query(head)).await?;
     let rows: Vec<AgentRequestRow> =
-        serde_json::from_value(response["data"]["AgentRequest"].clone())
-            .context("decode pending messages behind a claim")?;
-    let rows: Vec<AgentRequestRow> = rows
-        .into_iter()
-        .filter(|row| row.doc_id.as_deref() != Some(head.doc_id.as_str()))
-        .collect();
+        super::intake::pending_rows_in_txn(txn, &head.node_did, &head.session_id)
+            .await?
+            .into_iter()
+            .filter(|row| row.doc_id.as_deref() != Some(head.doc_id.as_str()))
+            .collect();
     let mut doc_ids = vec![head.doc_id.clone()];
     for row in &rows {
         doc_ids.push(
@@ -251,11 +234,12 @@ pub(crate) async fn consume_folded_in_txn(
     published_at: &str,
     expected: &gents_protocol::message::Message,
 ) -> Result<()> {
-    let response = txn
-        .execute(&pending_session_query(&consumption.head))
-        .await?;
-    let rows: Vec<AgentRequestRow> =
-        serde_json::from_value(response["data"]["AgentRequest"].clone())?;
+    let rows = super::intake::pending_rows_in_txn(
+        txn,
+        &consumption.head.node_did,
+        &consumption.head.session_id,
+    )
+    .await?;
     let mut ids = rows
         .iter()
         .map(|row| {
