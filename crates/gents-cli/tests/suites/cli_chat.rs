@@ -427,3 +427,200 @@ async fn chat_verbose_flag_prints_raw_tool_json() -> Result<()> {
 
     Ok(())
 }
+
+async fn interactive_input_drains_while_provider_is_held(
+    exit_command: bool,
+    one_shot: bool,
+) -> Result<()> {
+    use crate::support::mocks::fake_llm::{ChatAction, FakeLlm};
+    use std::sync::Arc;
+    fn is_user_text(message: &Value, text: &str) -> bool {
+        message["role"] == "user"
+            && match &message["content"] {
+                Value::String(content) => content == text,
+                Value::Array(parts) => parts.len() == 1 && parts[0]["text"] == text,
+                _ => false,
+            }
+    }
+    let home = tempfile::tempdir()?;
+    let first = "interactive-held-first";
+    let second = "interactive-held-second";
+    let third = "interactive-held-third";
+    let initial_reply = "interactive-initial-response";
+    let final_reply = "interactive-final-response";
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let responder_gate = gate.clone();
+    let model = "interactive-drain-model";
+    let endpoint = FakeLlm::start(
+        model,
+        None,
+        Arc::new(move |request| {
+            let exact_user = |text: &str| {
+                request["messages"].as_array().is_some_and(|messages| {
+                    messages.iter().any(|message| is_user_text(message, text))
+                })
+            };
+            if exact_user(third) {
+                ChatAction::Sse(completion_text_sse(final_reply))
+            } else if exact_user(first) {
+                ChatAction::WaitThenSse(responder_gate.clone(), completion_text_sse(initial_reply))
+            } else {
+                ChatAction::Sse(completion_text_sse("session title"))
+            }
+        }),
+    )?;
+    let init = run_init_json(
+        home.path(),
+        &[
+            "--node-name",
+            "interactive-drain",
+            "--model-name",
+            model,
+            "--inference-url",
+            endpoint.endpoint(),
+        ],
+    )?;
+    let node = node_did_from_init(&init)?;
+    let port = allocate_port()?;
+    let graphql = graphql_url(port);
+    let mut server = spawn_server(home.path(), port)?;
+    wait_for_port(port, &mut server)?;
+    wait_for_runtime_ready(&graphql, &node, Duration::from_secs(30)).await?;
+    wait_for_runtime_state_graphql(home.path(), &graphql, Duration::from_secs(30)).await?;
+    let mut child = Command::new(cli_bin())
+        .env("HOME", home.path())
+        .env("RUST_LOG", "error")
+        .args(["chat", "--poll-secs", "1"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    struct ChildGuard(Option<std::process::Child>);
+    impl Drop for ChildGuard {
+        fn drop(&mut self) {
+            if let Some(child) = self.0.as_mut() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        }
+    }
+    let mut child = ChildGuard(Some(child));
+    let mut stdin = child
+        .0
+        .as_mut()
+        .unwrap()
+        .stdin
+        .take()
+        .context("chat stdin")?;
+    writeln!(stdin, "{first}")?;
+    stdin.flush()?;
+    let result: Result<()> = async {
+        tokio::time::timeout(Duration::from_secs(30), async {
+            while !endpoint.captured_chat_requests().iter().any(|request| {
+                request["messages"].as_array().is_some_and(|messages| messages.iter()
+                    .any(|message| is_user_text(message, first)))
+            }) { tokio::time::sleep(Duration::from_millis(25)).await; }
+        }).await.context("initial main provider request was not held")?;
+        let mut one_shot_child = None;
+        writeln!(stdin, "{second}")?;
+        stdin.flush()?;
+        if one_shot {
+            let session_query = format!(r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{}" }}, purpose: {{ _eq: "normal" }} }}) {{ content session_id }} }}"#, escape_graphql_string(&node));
+            let session = tokio::time::timeout(Duration::from_secs(30), async {
+                loop {
+                    let value = graphql_query(&graphql, &session_query).await?;
+                    if let Some(row) = value["data"]["AgentRequest"].as_array().context("session rows")?
+                        .iter().find(|row| row["content"] == second) {
+                        break Ok::<_, anyhow::Error>(row["session_id"].as_str().context("session ID")?.to_owned());
+                    }
+                    tokio::time::sleep(Duration::from_millis(25)).await;
+                }
+            }).await.context("second input was not saved")??;
+            one_shot_child = Some(ChildGuard(Some(Command::new(cli_bin())
+                .env("HOME", home.path()).env("RUST_LOG", "error")
+                .args(["chat", "--poll-secs", "1", "--session-id", &session, third])
+                .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?)));
+        } else {
+            writeln!(stdin, "{third}")?;
+        }
+        if exit_command { writeln!(stdin, "/exit")?; }
+        stdin.flush()?;
+        drop(stdin);
+        let query = format!(r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{}" }}, purpose: {{ _eq: "normal" }} }}) {{ _docID request_id content session_id agent_id input lifecycle_state superseded_by_request superseded_by_request_doc_id failure_reason terminal_output }} }}"#, escape_graphql_string(&node));
+        let seeded = tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                let value = graphql_query(&graphql, &query).await?;
+                let rows = value["data"]["AgentRequest"].as_array().context("request rows")?;
+                if [first, second, third].iter().all(|text| rows.iter().any(|row| row["content"] == *text)) {
+                    break Ok::<_, anyhow::Error>(rows.clone());
+                }
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+        }).await.context("interactive stdin blocked behind first response")??;
+        assert!(child.0.as_mut().unwrap().try_wait()?.is_none(), "chat exited before held response completed");
+        assert_eq!(seeded.len(), 3, "expected exactly three normal submitted inputs");
+        let parent = seeded.iter().find(|row| row["content"] == first).unwrap()["_docID"].clone();
+        gate.add_permits(1);
+        tokio::time::timeout(Duration::from_secs(30), async {
+            while child.0.as_mut().unwrap().try_wait()?.is_none() { tokio::time::sleep(Duration::from_millis(25)).await; }
+            Ok::<_, anyhow::Error>(())
+        }).await.context("chat did not drain submitted turns")??;
+        let output = child.0.take().unwrap().wait_with_output()?;
+        anyhow::ensure!(output.status.success(), "chat failed: {}", String::from_utf8_lossy(&output.stderr));
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert_eq!(stdout.matches(final_reply).count(), 1, "duplicate/missing final output: {stdout}");
+        if let Some(mut single) = one_shot_child {
+            tokio::time::timeout(Duration::from_secs(30), async {
+                while single.0.as_mut().unwrap().try_wait()?.is_none() {
+                    tokio::time::sleep(Duration::from_millis(25)).await;
+                }
+                Ok::<_, anyhow::Error>(())
+            }).await.context("one-shot folded chat did not finish")??;
+            let output = single.0.take().unwrap().wait_with_output()?;
+            anyhow::ensure!(output.status.success(), "one-shot chat failed: {}", String::from_utf8_lossy(&output.stderr));
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert_eq!(stdout.matches(final_reply).count(), 1, "one-shot folded output missing or duplicated: {stdout}");
+        }
+        let value = graphql_query(&graphql, &query).await?;
+        let rows = value["data"]["AgentRequest"].as_array().context("final request rows")?;
+        for text in [second, third] {
+            let matching = rows.iter().filter(|row| row["content"] == text).collect::<Vec<_>>();
+            assert_eq!(matching.len(), 1, "duplicate submitted input {text}");
+            assert_eq!(matching[0]["lifecycle_state"], "superseded");
+            assert_eq!(matching[0]["superseded_by_request_doc_id"], parent,
+                "{text} must be consumed by the original physical request; seeded={}; final={}",
+                serde_json::to_string(&seeded)?, serde_json::to_string(rows)?);
+            assert_eq!(matching[0]["failure_reason"], "folded into claimed request");
+        }
+        let captured = endpoint.captured_chat_requests();
+        let continuation = captured.iter().find(|request| request["messages"].as_array().is_some_and(|messages|
+            messages.iter().any(|message| is_user_text(message, third))))
+            .context("provider never received queued inputs")?;
+        let messages = continuation["messages"].as_array().unwrap();
+        let positions = [first, second, third].map(|text| messages.iter().position(|message|
+            is_user_text(message, text)).expect("input missing from provider"));
+        assert!(positions[0] < positions[1] && positions[1] < positions[2]);
+        for text in [first, second, third] {
+            assert_eq!(messages.iter().filter(|message| is_user_text(message, text)).count(), 1);
+        }
+        Ok(())
+    }.await;
+    // Release the provider even when an assertion prerequisite failed.
+    gate.add_permits(1);
+    result
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn interactive_chat_accepts_input_during_response_and_drains_on_eof() -> Result<()> {
+    interactive_input_drains_while_provider_is_held(false, false).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn interactive_chat_accepts_input_during_response_and_drains_on_exit() -> Result<()> {
+    interactive_input_drains_while_provider_is_held(true, false).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn one_shot_chat_folded_into_active_turn_returns_its_output_once() -> Result<()> {
+    interactive_input_drains_while_provider_is_held(false, true).await
+}

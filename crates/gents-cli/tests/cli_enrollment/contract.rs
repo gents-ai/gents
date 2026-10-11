@@ -85,6 +85,8 @@ async fn run_contract_with_streaming_cadence(
     let model_gate = Arc::clone(&offline_gate);
     let stream_gate = streaming.then(|| Arc::new(tokio::sync::Semaphore::new(0)));
     let followup_stream_gate = streaming.then(|| Arc::new(tokio::sync::Semaphore::new(0)));
+    let (stream_emitted, stream_emission) = tokio::sync::watch::channel(None);
+    let (followup_emitted, followup_emission) = tokio::sync::watch::channel(None);
     let model_stream_gate = stream_gate.clone();
     let model_followup_stream_gate = followup_stream_gate.clone();
     let model = FakeLlm::start(
@@ -129,7 +131,12 @@ async fn run_contract_with_streaming_cadence(
                     } else {
                         vec![(Duration::ZERO, format!("{first}\n\n"))]
                     };
-                    ChatAction::GatedSse(chunks, gate.clone(), rest.to_owned())
+                    let emitted = if latest.as_deref() == Some(FOLLOWUP_PROMPT) {
+                        followup_emitted.clone()
+                    } else {
+                        stream_emitted.clone()
+                    };
+                    ChatAction::GatedSse(chunks, gate.clone(), rest.to_owned(), emitted)
                 } else {
                     ChatAction::DelayThenSse(MODEL_DELAY, completion_text_sse(reply))
                 }
@@ -260,6 +267,7 @@ async fn run_contract_with_streaming_cadence(
             &session,
             "First conversation turn",
             stream_gate.as_deref(),
+            stream_emission.clone(),
             stream_visibility_budget,
         )
         .await?;
@@ -317,6 +325,7 @@ async fn run_contract_with_streaming_cadence(
             &session,
             FOLLOWUP_PROMPT,
             followup_stream_gate.as_deref(),
+            followup_emission.clone(),
             stream_visibility_budget,
         )
         .await?;
@@ -350,6 +359,7 @@ async fn visible_turn(
     session: &str,
     prompt: &str,
     stream_gate: Option<&tokio::sync::Semaphore>,
+    stream_emission: tokio::sync::watch::Receiver<Option<std::time::Instant>>,
     stream_visibility_budget: Duration,
 ) -> Result<()> {
     let started = Instant::now();
@@ -376,6 +386,7 @@ async fn visible_turn(
                         core,
                         &request,
                         expected,
+                        stream_emission.clone(),
                         stream_visibility_budget,
                     )
                     .await;

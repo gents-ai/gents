@@ -169,6 +169,7 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
     let outbound = &connection.outbound;
     let mut current = submitted.clone();
     let mut turn_request_ids = vec![current.request_id.clone()];
+    let mut announced_consumed_inputs = BTreeSet::new();
     let mut known_tool_calls: BTreeMap<String, ToolProjectionStatus> = BTreeMap::new();
     let mut known_tool_markers: BTreeMap<String, ToolProgressMarker> = BTreeMap::new();
     let mut known_compaction_states: BTreeMap<String, String> = BTreeMap::new();
@@ -243,6 +244,22 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
                         == Some(current.request_id.as_str()),
                 "live projection crossed exact request scope"
             );
+        }
+        let mut consumed_input_error = None;
+        if options.follow_steering {
+            if let Err(error) = announce_consumed_inputs(
+                connection,
+                state,
+                projection,
+                &current,
+                &mut announced_consumed_inputs,
+            )
+            .await
+            {
+                tracing::warn!(%error, request_id = %current.request_id,
+                    "retrying consumed input presentation on the next observation");
+                consumed_input_error = Some(error);
+            }
         }
         let tool_rows = response
             .pointer("/data/AgentToolCall")
@@ -459,6 +476,13 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
             .and_then(Value::as_str)
             .unwrap_or("");
         if projection_settled {
+            if let Some(error) = consumed_input_error {
+                if last_progress_at.elapsed() >= state.timeout {
+                    return Err(error.context("timed out reconstructing consumed Codex input"));
+                }
+                tokio::time::sleep(state.poll_interval).await;
+                continue;
+            }
             // Terminal content comes only from the shared typed owner: it
             // classifies Loading/Denied/Conflicted/Invalid, distinguishes a
             // terminal NoMessage from missing dependencies, and never promotes
@@ -1189,6 +1213,93 @@ async fn finish_interrupted_turn(
     Ok(())
 }
 
+async fn announce_consumed_inputs(
+    connection: &ConnectionState,
+    state: &ShimState,
+    projection: &TurnProjection<'_>,
+    current: &SubmittedRequest,
+    announced: &mut BTreeSet<String>,
+) -> Result<()> {
+    use gents::graphql::escape_graphql_string;
+    let query = format!(
+        r#"{{ AgentRequest(filter: {{ node_did: {{_eq:"{}"}}, requester_did: {{_eq:"{}"}}, session_id: {{_eq:"{}"}}, superseded_by_request_doc_id: {{_eq:"{}"}}, lifecycle_state: {{_eq:"superseded"}}, failure_reason: {{_eq:"{}"}} }}) {{ _docID request_id node_did requester_did session_id lifecycle_state failure_reason superseded_by_request superseded_by_request_doc_id content created_at }} }}"#,
+        escape_graphql_string(&current.node_did),
+        escape_graphql_string(state.local_requester_did()),
+        escape_graphql_string(&current.session_id),
+        escape_graphql_string(&current.request_doc_id),
+        escape_graphql_string(gents::lifecycle::FOLDED_REASON)
+    );
+    let response = query_node_json(state.node.as_ref(), &query).await?;
+    let rows = response
+        .pointer("/data/AgentRequest")
+        .and_then(Value::as_array)
+        .context("consumed input query omitted rows")?;
+    let access = ConfigAccess::Local(state.node.clone());
+    let mut ready = Vec::new();
+    for raw in rows {
+        let row: gents_protocol::row::AgentRequestRow = serde_json::from_value(raw.clone())?;
+        let doc = row
+            .doc_id
+            .as_deref()
+            .context("consumed input lacks physical identity")?;
+        if announced.contains(doc) {
+            continue;
+        }
+        let (_, key) = gents::lifecycle::input_message_owner(&row)
+            .context("consumed input lacks authored owner")?;
+        let query = format!(
+            r#"{{ AgentMessage(filter: {{ message_key: {{_eq:"{}"}}, node_did: {{_eq:"{}"}}, requester_did: {{_eq:"{}"}}, session_id: {{_eq:"{}"}}, request_doc_id: {{_eq:"{}"}} }}) {{ {} }} }}"#,
+            escape_graphql_string(&key),
+            escape_graphql_string(&current.node_did),
+            escape_graphql_string(state.local_requester_did()),
+            escape_graphql_string(&current.session_id),
+            escape_graphql_string(&current.request_doc_id),
+            gents::session::canonical_rows::AGENT_MESSAGE_FIELDS
+        );
+        let headers = query_node_json(state.node.as_ref(), &query).await?;
+        let headers = headers
+            .pointer("/data/AgentMessage")
+            .and_then(Value::as_array)
+            .context("consumed message query omitted rows")?;
+        anyhow::ensure!(
+            headers.len() <= 1,
+            "consumed input has conflicting authored headers"
+        );
+        let raw_header = headers
+            .first()
+            .context("consumed input authored header is not yet visible")?;
+        let observed = gents::session::canonical_rows::decode_transcript_message_row(raw_header)?;
+        let (header, _) = gents::session::load_canonical_message(
+            &access,
+            &observed.doc_id,
+            &current.node_did,
+            current.requester_did.as_deref(),
+        )
+        .await?;
+        anyhow::ensure!(
+            header == observed.message,
+            "consumed input header changed during reconstruction"
+        );
+        ready.push((header.sequence, row));
+    }
+    ready.sort_by_key(|(sequence, _)| *sequence);
+    for (_, row) in ready {
+        let doc = row.doc_id.as_ref().unwrap();
+        let input = steering_input_for_request(connection, state, &row.request_id, doc).await?;
+        send_committed_user_message(
+            &connection.outbound,
+            state,
+            projection.thread_id,
+            projection.turn_id,
+            &input,
+            row.created_at.as_deref().and_then(timestamp_millis),
+        )
+        .await?;
+        announced.insert(doc.clone());
+    }
+    Ok(())
+}
+
 async fn cancel_pending_steering_request(
     connection: &ConnectionState,
     state: &ShimState,
@@ -1224,7 +1335,7 @@ async fn steering_input_for_request(
     let owner = gents::graphql::escape_graphql_string(state.node_did.as_ref());
     let logical = gents::graphql::escape_graphql_string(request_id);
     let query = format!(
-        r#"{{ AgentRequest(filter: {{_docID: {{_eq: "{physical}"}}, node_did: {{_eq: "{owner}"}}, requester_did: {{_eq: "{owner}"}}, request_id: {{_eq: "{logical}"}}}}, limit: 2) {{content}} }}"#
+        r#"{{ AgentRequest(filter: {{_docID: {{_eq: "{physical}"}}, node_did: {{_eq: "{owner}"}}, requester_did: {{_eq: "{owner}"}}, request_id: {{_eq: "{logical}"}}}}, limit: 2) {{content input}} }}"#
     );
     let response = query_node_json(state.node.as_ref(), &query).await?;
     let rows = response
@@ -1240,10 +1351,33 @@ async fn steering_input_for_request(
         .and_then(Value::as_str)
         .context("steering request omitted content")?
         .to_string();
-    Ok(vec![codex::UserInput::Text {
+    let input: gents_protocol::request_input::RequestInput = serde_json::from_value(
+        rows[0]
+            .get("input")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({})),
+    )
+    .context("decoding persisted steering input")?;
+    Ok(persisted_steering_input(content, input.selected_skill_ids))
+}
+
+fn persisted_steering_input(
+    content: String,
+    selected_skill_ids: Vec<String>,
+) -> Vec<codex::UserInput> {
+    let mut input = vec![codex::UserInput::Text {
         text: content,
         text_elements: Vec::new(),
-    }])
+    }];
+    input.extend(
+        selected_skill_ids
+            .into_iter()
+            .map(|id| codex::UserInput::Skill {
+                path: std::path::PathBuf::from(&id),
+                name: id,
+            }),
+    );
+    input
 }
 
 #[cfg(test)]
@@ -1254,6 +1388,16 @@ mod tests {
     };
     use gents_codex_protocol as codex;
     use serde_json::json;
+
+    #[test]
+    fn persisted_steering_recovers_selected_skills_without_connection_cache() {
+        let input = super::persisted_steering_input("correction".into(), vec!["research".into()]);
+        assert!(matches!(&input[0], codex::UserInput::Text { text, .. } if text == "correction"));
+        assert_eq!(
+            crate::commands::codex_shim::protocol::selected_skill_ids_from_input(&input),
+            vec!["research"]
+        );
+    }
 
     #[test]
     fn silent_owner_renewal_and_request_failure_change_progress() {

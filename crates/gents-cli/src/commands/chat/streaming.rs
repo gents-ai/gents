@@ -80,6 +80,8 @@ pub(super) fn chat_progress_query(request: &SubmittedRequest) -> String {
                 request_id agent_id
                 lifecycle_state
                 failure_reason
+                superseded_by_request
+                superseded_by_request_doc_id
                 execution_generation
                 execution_lease_secs
                 execution_lease_expires_at
@@ -239,6 +241,38 @@ async fn clear_indicator(indicator: &mut Option<WorkingIndicator>) {
     }
 }
 
+fn folded_input_completed(state: RequestLifecycleState, reason: &str) -> bool {
+    state == RequestLifecycleState::Superseded && reason == gents::lifecycle::FOLDED_REASON
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum ApprovalHandling<'a> {
+    None,
+    Answer(&'a std::path::Path),
+    Observe(&'a std::path::Path),
+}
+
+async fn approval_progress(mode: ApprovalHandling<'_>, session: &str) -> Result<bool> {
+    let home = match mode {
+        ApprovalHandling::None => return Ok(false),
+        ApprovalHandling::Answer(home) | ApprovalHandling::Observe(home) => home,
+    };
+    if !super::approvals::has_pending(home, session)? {
+        return Ok(false);
+    }
+    if matches!(mode, ApprovalHandling::Answer(_)) {
+        let home = home.to_path_buf();
+        let session = session.to_owned();
+        tokio::task::spawn_blocking(move || {
+            super::approvals::answer_pending(&home, &session, |request| {
+                super::approvals::ask_on_terminal(request)
+            })
+        })
+        .await??;
+    }
+    Ok(true)
+}
+
 pub(crate) async fn stream_turn_progress(
     graphql: &GraphqlEndpoint,
     submitted: &SubmittedRequest,
@@ -246,7 +280,8 @@ pub(crate) async fn stream_turn_progress(
     timeout_secs: u64,
     poll_secs: u64,
     verbose: bool,
-    approvals_home: Option<&std::path::Path>,
+    approval_handling: ApprovalHandling<'_>,
+    render_folded_output: bool,
 ) -> Result<RequestOutputEnvelope> {
     let idle_timeout = Duration::from_secs(timeout_secs);
     let mut last_progress_at = tokio::time::Instant::now();
@@ -254,23 +289,19 @@ pub(crate) async fn stream_turn_progress(
     let mut thinking_printed = false;
     let mut tool_output_fingerprints = std::collections::BTreeMap::new();
     let colors = colors_enabled();
-    let mut indicator = WorkingIndicator::start_if_tty();
+    let mut indicator = matches!(approval_handling, ApprovalHandling::Answer(_))
+        .then(WorkingIndicator::start_if_tty)
+        .flatten();
 
     loop {
-        if let Some(home) = approvals_home {
-            let session = submitted.session_id.clone();
-            let home = home.to_path_buf();
-            if super::approvals::has_pending(&home, &session)? {
+        if let ApprovalHandling::Answer(home) = approval_handling {
+            if super::approvals::has_pending(home, &submitted.session_id)? {
                 clear_indicator(&mut indicator).await;
-                tokio::task::spawn_blocking(move || {
-                    super::approvals::answer_pending(&home, &session, |request| {
-                        super::approvals::ask_on_terminal(request)
-                    })
-                })
-                .await??;
-                // The time spent answering is not the turn being idle.
-                last_progress_at = tokio::time::Instant::now();
             }
+        }
+        if approval_progress(approval_handling, &submitted.session_id).await? {
+            clear_indicator(&mut indicator).await;
+            last_progress_at = tokio::time::Instant::now();
         }
         let query = chat_progress_query(submitted);
         let response = post_graphql(graphql, &query).await?;
@@ -298,6 +329,41 @@ pub(crate) async fn stream_turn_progress(
                     && request.session_id.as_deref() == Some(submitted.session_id.as_str()),
                 "chat request scope differs from committed receipt"
             );
+        }
+
+        if request
+            .as_ref()
+            .is_some_and(|row| gents::lifecycle::folded_into(row).is_some())
+        {
+            clear_indicator(&mut indicator).await;
+            let envelope = crate::request_helpers::wait_for_terminal_response_with_progress(
+                graphql,
+                &submitted.request_id,
+                timeout_secs,
+                poll_secs,
+                || approval_progress(approval_handling, &submitted.session_id),
+            )
+            .await?;
+            if render_folded_output {
+                if let crate::CliOutputObservation::TerminalMessage { presentation, .. } =
+                    &envelope.output
+                {
+                    if !presentation.body_markdown.trim().is_empty() {
+                        println!("{}", presentation.body_markdown);
+                    }
+                }
+                if let Some(reason) = envelope
+                    .request
+                    .failure_reason
+                    .as_deref()
+                    .filter(|reason| !reason.trim().is_empty())
+                {
+                    println!("[agent error] {reason}");
+                }
+            }
+            println!("[input applied to the active turn]");
+            io::stdout().flush()?;
+            return Ok(envelope);
         }
 
         let mut observed_output = match request.as_ref() {
@@ -457,7 +523,9 @@ pub(crate) async fn stream_turn_progress(
                     }
 
                     let error_message = failure_reason.trim();
-                    if !error_message.is_empty() {
+                    if folded_input_completed(envelope.request.lifecycle_state, error_message) {
+                        println!("[input applied to the active turn]");
+                    } else if !error_message.is_empty() {
                         println!("[agent error] {error_message}");
                         let agent_id = request.agent_id.as_deref();
                         for line in
@@ -1518,5 +1586,78 @@ mod tests {
             );
             assert!(!format!("{lines:?}").contains("IDENTITY"));
         }
+    }
+}
+
+#[cfg(test)]
+mod folded_input_tests {
+    use super::*;
+
+    #[test]
+    fn only_owned_fold_supersession_is_an_informational_completion() {
+        let reason = gents::lifecycle::FOLDED_REASON;
+        assert!(folded_input_completed(
+            RequestLifecycleState::Superseded,
+            reason
+        ));
+        assert!(!folded_input_completed(
+            RequestLifecycleState::Failed,
+            reason
+        ));
+        assert!(!folded_input_completed(
+            RequestLifecycleState::Superseded,
+            "another failure"
+        ));
+    }
+}
+
+#[cfg(test)]
+mod approval_progress_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn observing_pending_approval_reports_progress_without_answering() {
+        use gents::pack::BindAccess;
+        use gents::plugin::{allowed::Resolved, approval};
+        let home = tempfile::tempdir().unwrap();
+        let request = approval::Request::new(
+            "fixture/plugin",
+            &Resolved {
+                target: home.path().join("requested-file"),
+                is_dir: false,
+            },
+            BindAccess::Read,
+            Some("held-session".into()),
+        );
+        let dir = home.path().join(gents::home::PLUGIN_APPROVALS_DIR_NAME);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(format!("{}.json", request.id)),
+            serde_json::to_vec(&request).unwrap(),
+        )
+        .unwrap();
+        assert!(!approval_progress(ApprovalHandling::None, "held-session")
+            .await
+            .unwrap());
+        assert!(
+            !approval_progress(ApprovalHandling::Observe(home.path()), "other-session")
+                .await
+                .unwrap()
+        );
+        assert!(
+            approval_progress(ApprovalHandling::Observe(home.path()), "held-session")
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            approval::pending(home.path()).unwrap(),
+            vec![request.clone()]
+        );
+        approval::decide(home.path(), &request.id, approval::Answer::Deny).unwrap();
+        assert!(
+            !approval_progress(ApprovalHandling::Observe(home.path()), "held-session")
+                .await
+                .unwrap()
+        );
     }
 }
