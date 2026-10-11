@@ -1,10 +1,15 @@
 import { invoke } from "@tauri-apps/api/core";
+import { createElement } from "react";
+import { flushSync } from "react-dom";
+import { createRoot } from "react-dom/client";
 import {
   bridgeCommand,
   type DesktopClientSnapshot,
   type DesktopSessionSnapshot,
+  type PendingQueueEditRequest,
 } from "@source-inc/gents-desktop-client";
 import { findAssistantResponseMarker } from "./nativeSimulatorE2eDom";
+import { Markdown } from "../ui/screens/Markdown";
 
 export type NativeLocalSetup = {
   endpoint: string;
@@ -26,6 +31,31 @@ type Evidence = {
   response: string;
 };
 const EVIDENCE_KEY = "gents-native-local-e2e";
+
+/** WebKit may pause animation frames while an unattended test window is covered. */
+export function emulateNativeReducedMotion(
+  target: Pick<Window, "matchMedia"> = window,
+): void {
+  const matchMedia = target.matchMedia.bind(target);
+  target.matchMedia = (query) => {
+    const media = matchMedia(query);
+    if (query === "(prefers-reduced-motion: reduce)")
+      Object.defineProperty(media, "matches", { value: true, configurable: true });
+    return media;
+  };
+}
+
+/** Compare canonical Markdown with the text produced by the actual transcript renderer. */
+export function renderedAssistantResponse(response: string): string {
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  try {
+    flushSync(() => root.render(createElement(Markdown, { children: response })));
+    return container.textContent ?? "";
+  } finally {
+    flushSync(() => root.unmount());
+  }
+}
 
 export function labelledInput(root: ParentNode, label: string) {
   const matched = Array.from(root.querySelectorAll("label")).find(
@@ -102,6 +132,7 @@ export async function runNativeLocalE2e(
   config: Config,
   report: (status: { stage: string; detail?: string }) => Promise<void>,
 ) {
+  emulateNativeReducedMotion();
   if (!["setup", "reopen"].includes(config.phase))
     throw new Error("Unknown local E2E phase");
   if (!config.toolRoot) throw new Error("Local E2E requires an isolated tool root");
@@ -263,8 +294,11 @@ export async function runNativeLocalE2e(
         "persisted session in session list",
       )
     ).click();
+    const persistedResponse = renderedAssistantResponse(prior.response);
+    if (!persistedResponse.trim())
+      throw new Error("Persisted Engineer response has no rendered text");
     await until(
-      () => findAssistantResponseMarker(document, prior.response),
+      () => findAssistantResponseMarker(document, persistedResponse),
       "persisted assistant response",
     );
     await report({ stage: "local-session-restored" });
@@ -282,6 +316,21 @@ export async function runNativeLocalE2e(
       )
     ).click();
   }
+  const previousDetail = prior
+    ? await invoke<DesktopSessionSnapshot | null>(
+        bridgeCommand("desktop_session_snapshot"),
+        {
+          sessionId: prior.sessionId,
+          nodeDid: deployment.nodeDid,
+          requestId: prior.requestId,
+        },
+      )
+    : null;
+  if (prior && !previousDetail)
+    throw new Error("Restored session has no canonical timeline before follow-up");
+  const previousItems = new Set(
+    previousDetail?.timelineItems.map((item) => item.itemKey) ?? [],
+  );
   const composer = await until(
     () => document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]'),
     "Engineer composer",
@@ -302,6 +351,185 @@ export async function runNativeLocalE2e(
     )
   ).click();
   await report({ stage: "local-chat-sent" });
+  const gateUrl = `${config.endpoint.replace(/\/$/, "")}/__e2e_gate`;
+  await until(async () => {
+    const response = await fetch(gateUrl);
+    if (!response.ok) throw new Error("Native provider gate is unavailable");
+    const state = await response.json();
+    return state.held === true && state.released === false ? true : null;
+  }, "actual main provider response held before queue editing");
+  const heldSession = await until(async () => {
+    const current = await snapshot();
+    return (
+      current.client?.deployments
+        .find((item) => item.nodeDid === deployment.nodeDid)
+        ?.sessions.find(
+          (item) =>
+            item.latestRequestId &&
+            !previous.has(item.latestRequestId) &&
+            (!prior || item.sessionId === prior.sessionId),
+        ) ?? null
+    );
+  }, "held request session");
+  const heldRequestId = heldSession.latestRequestId!;
+  const queueDetail = () =>
+    invoke<DesktopSessionSnapshot | null>(bridgeCommand("desktop_session_snapshot"), {
+      sessionId: heldSession.sessionId,
+      nodeDid: deployment.nodeDid,
+      requestId: heldRequestId,
+    });
+  const sendQueued = async (text: string) => {
+    const input = await until(
+      () =>
+        document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]'),
+      "active composer",
+    );
+    setValue(input, text);
+    (
+      await until(
+        () =>
+          document.querySelector<HTMLButtonElement>(
+            'button[aria-label="Send"]:not(:disabled)',
+          ),
+        "send while active",
+      )
+    ).click();
+    await until(
+      async () =>
+        (await queueDetail())?.pendingQueue?.some((entry) => entry.content === text)
+          ? true
+          : null,
+      "durable pending message",
+    );
+  };
+  const originalText = `QUEUE_${config.phase}_ORIGINAL`;
+  const editedText = `QUEUE_${config.phase}_EDITED`;
+  const secondText = `QUEUE_${config.phase}_SECOND`;
+  const removedText = `QUEUE_${config.phase}_REMOVED`;
+  for (const text of [originalText, secondText, removedText]) await sendQueued(text);
+  const staleQueue = (await queueDetail())?.pendingQueue;
+  const staleEntry = staleQueue?.find((entry) => entry.content === originalText);
+  if (!staleQueue || !staleEntry)
+    throw new Error("Pending edit snapshot is missing its original target");
+  const pendingCard = (text: string) =>
+    Array.from(
+      document.querySelectorAll<HTMLElement>('[data-testid="queued-input"]'),
+    ).find((item) => item.textContent?.includes(text)) ?? null;
+  (
+    await until(() => {
+      const card = pendingCard(originalText);
+      return card && exactControl(card, "button", "Edit");
+    }, "edit pending message")
+  ).click();
+  const editInput = await until(
+    () =>
+      document.querySelector<HTMLTextAreaElement>(
+        'textarea[aria-label="Edit pending message"]',
+      ),
+    "pending editor",
+  );
+  setValue(editInput, editedText);
+  (
+    await until(() => {
+      const card = pendingCard(originalText);
+      return card && exactControl(card, "button", "Save");
+    }, "save pending edit")
+  ).click();
+  await until(async () => {
+    const entries = (await queueDetail())?.pendingQueue ?? [];
+    return entries.some((entry) => entry.content === editedText) &&
+      !entries.some((entry) => entry.content === originalText)
+      ? true
+      : null;
+  }, "runtime-acknowledged pending edit");
+  const editedQueue = (await queueDetail())?.pendingQueue;
+  if (
+    !editedQueue ||
+    editedQueue.some((entry) => entry.requestDocId === staleEntry.requestDocId)
+  )
+    throw new Error("Acknowledged edit did not replace its physical request");
+  const queueIdentity = (entries: typeof editedQueue) =>
+    entries.map(({ requestDocId, content }) => ({ requestDocId, content }));
+  const beforeRejectedEdit = JSON.stringify(queueIdentity(editedQueue));
+  const staleRequest: PendingQueueEditRequest = {
+    nodeDid: deployment.nodeDid,
+    sessionId: heldSession.sessionId,
+    expectedRequestDocIds: staleQueue.map((entry) => entry.requestDocId),
+    selectedRequestDocIds: [staleEntry.requestDocId],
+    messages: [
+      { requestDocId: staleEntry.requestDocId, content: `${originalText}_STALE` },
+    ],
+  };
+  let staleError: unknown;
+  try {
+    await invoke(bridgeCommand("desktop_pending_queue_edit"), {
+      request: staleRequest,
+    });
+  } catch (error) {
+    staleError = error;
+  }
+  if (
+    typeof staleError !== "object" ||
+    staleError === null ||
+    !("message" in staleError) ||
+    typeof staleError.message !== "string" ||
+    !staleError.message.includes("The message queue changed. Refresh it and try again.")
+  )
+    throw new Error(
+      `Expected stale queue rejection, received ${JSON.stringify(staleError)}`,
+    );
+  const afterRejectedEdit = (await queueDetail())?.pendingQueue;
+  if (
+    !afterRejectedEdit ||
+    JSON.stringify(queueIdentity(afterRejectedEdit)) !== beforeRejectedEdit
+  )
+    throw new Error("Rejected stale edit changed pending queue identity or content");
+  const heldAfterRejection = await fetch(gateUrl);
+  if (!heldAfterRejection.ok)
+    throw new Error("Native provider gate is unavailable after rejection");
+  const heldState = await heldAfterRejection.json();
+  if (heldState.held !== true || heldState.released !== false)
+    throw new Error("Provider response was released during stale edit rejection");
+  const removedEntry = (await queueDetail())?.pendingQueue?.find(
+    (entry) => entry.content === removedText,
+  );
+  if (!removedEntry) throw new Error("Removal target disappeared before UI action");
+  (
+    await until(() => {
+      const card = pendingCard(removedText);
+      return card && exactControl(card, "button", "Remove");
+    }, "remove pending message")
+  ).click();
+  await until(async () => {
+    const detail = await queueDetail();
+    return detail?.pendingQueue &&
+      !detail.pendingQueue.some((entry) => entry.content === removedText)
+      ? true
+      : null;
+  }, "runtime-acknowledged removal");
+  (
+    await until(
+      () =>
+        pendingCard(secondText)?.querySelector<HTMLButtonElement>(
+          'button[aria-label="Move pending message up"]:not(:disabled)',
+        ) ?? null,
+      "reorder pending messages",
+    )
+  ).click();
+  const retainedEntries = await until(async () => {
+    const entries = (await queueDetail())?.pendingQueue ?? [];
+    return entries.length === 2 &&
+      entries[0].content === secondText &&
+      entries[1].content === editedText
+      ? entries
+      : null;
+  }, "runtime-acknowledged queue order");
+  await report({
+    stage: "local-queue-edited",
+    detail: JSON.stringify({ sessionId: heldSession.sessionId, heldRequestId }),
+  });
+  const released = await fetch(gateUrl, { method: "POST" });
+  if (!released.ok) throw new Error("Could not release real provider response");
   const session = await until(async () => {
     const current = await snapshot();
     const summary = current.client?.deployments
@@ -318,26 +546,71 @@ export async function runNativeLocalE2e(
       {
         sessionId: summary.sessionId,
         nodeDid: deployment.nodeDid,
-        requestId: summary.latestRequestId,
+        requestId: heldRequestId,
       },
     );
     if (!detail) return null;
+    if (
+      detail.nodeDid !== deployment.nodeDid ||
+      detail.sessionId !== summary.sessionId ||
+      detail.latestRequestId !== heldRequestId
+    )
+      throw new Error("Engineer response did not match the submitted request scope");
     if (["failed", "cancelled", "interrupted"].includes(detail.turnState ?? ""))
       throw new Error(`Engineer request ended ${detail.turnState}`);
     return detail.turnState === "completed" ? detail : null;
   }, "terminal Engineer response");
+  for (const entry of retainedEntries) {
+    if (
+      !session.foldedInputs.some(
+        (folded) =>
+          folded.requestId === entry.requestId &&
+          folded.foldedIntoRequestId === heldRequestId,
+      )
+    )
+      throw new Error("Retained queued input was not consumed by the held request");
+  }
+  if (
+    session.foldedInputs.some((folded) => folded.requestId === removedEntry.requestId)
+  )
+    throw new Error("Removed queued input was consumed");
+  if (
+    !session.timelineItems.some(
+      (item) =>
+        item.kind === "assistantMessage" &&
+        item.reconstruction.state === "ready" &&
+        item.content?.includes(config.expectedResponse),
+    )
+  )
+    throw new Error(
+      "The original real provider response marker is missing from the durable timeline",
+    );
   if (session.agentId !== engineer.agentId)
     throw new Error("Conversation used a different agent");
+  const responses = session.timelineItems
+    .filter(
+      (item) =>
+        item.kind === "assistantMessage" &&
+        item.reconstruction.state === "ready" &&
+        !previousItems.has(item.itemKey),
+    )
+    .map((item) => (item.kind === "assistantMessage" ? item.content : null))
+    .filter((content): content is string => Boolean(content?.trim()));
+  const response = responses[responses.length - 1];
+  if (!response) throw new Error("Completed Engineer request has no durable response");
+  const renderedResponse = renderedAssistantResponse(response);
+  if (!renderedResponse.trim())
+    throw new Error("Completed Engineer response has no rendered text");
   await until(
-    () => findAssistantResponseMarker(document, config.expectedResponse),
-    "Engineer response in native transcript",
+    () => findAssistantResponseMarker(document, renderedResponse),
+    "durable Engineer response in native transcript",
   );
   const evidence: Evidence = {
     nodeDid: deployment.nodeDid,
     sessionId: session.sessionId,
     agentId: engineer.agentId,
     requestId: session.latestRequestId!,
-    response: config.expectedResponse,
+    response,
   };
   localStorage.setItem(EVIDENCE_KEY, JSON.stringify(evidence));
   await report({

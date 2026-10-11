@@ -450,6 +450,17 @@ pub(super) fn handle_request(
                 runtime.block_on(send_chat_message(fixture.desktop_core().as_ref(), request))?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&result)?))
         }
+        ("POST", "/desktop/queue/edit") => {
+            let request = decode::<gents_desktop_bridge::types::PendingQueueEditRequest>(
+                &request.body,
+                "decoding pending queue edit",
+            )?;
+            let result = runtime.block_on(gents_desktop_bridge::commands::edit_pending_queue(
+                fixture.desktop_core().as_ref(),
+                request,
+            ))?;
+            Ok(HttpResponse::json_ok(serde_json::to_string(&result)?))
+        }
         ("POST", "/desktop/session/rename") => {
             let request = decode::<SessionRenameRequest>(&request.body, "decoding rename request")?;
             runtime.block_on(rename_session(fixture.desktop_core().as_ref(), request))?;

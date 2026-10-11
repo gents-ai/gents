@@ -277,14 +277,21 @@ pub struct RenderedToolCallView {
 
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+pub struct PendingQueueEntryView {
+    pub request_doc_id: String,
+    pub request_id: String,
+    pub content: String,
+    pub editable: bool,
+    pub edit_group: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
 pub struct PendingTurnView {
     pub request_id: String,
-    /// Internal reconciliation identity. The wire view keeps its existing
-    /// shape; canonical messages link to the physical request document, not
-    /// the caller-authored logical request id.
-    #[serde(skip)]
-    #[ts(skip)]
-    pub(crate) request_doc_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub request_doc_id: Option<String>,
     pub content: String,
     pub selected_skill_ids: Vec<String>,
     pub lifecycle_state: Option<String>,
@@ -584,6 +591,9 @@ pub struct DesktopSessionSnapshot {
     /// They have not entered the transcript: a claim either folds them into
     /// the claimed turn as its own user entries or makes one the next turn.
     pub queued_turns: Vec<PendingTurnView>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub pending_queue: Option<Vec<PendingQueueEntryView>>,
     /// Requests a claim folded, each with the request that answered it. The
     /// requests are control-plane rows, so this does not depend on the page.
     pub folded_inputs: Vec<FoldedInputView>,

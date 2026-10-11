@@ -1,5 +1,47 @@
 import { describe, expect, it } from "vitest";
-import { exactControl, labelledInput, persistedSessionControl } from "./nativeLocalE2e";
+import {
+  exactControl,
+  emulateNativeReducedMotion,
+  labelledInput,
+  persistedSessionControl,
+  renderedAssistantResponse,
+} from "./nativeLocalE2e";
+import { findAssistantResponseMarker } from "./nativeSimulatorE2eDom";
+
+it("emulates reduced motion only in the native test window", () => {
+  const target = {
+    matchMedia: (media: string) => ({ media, matches: false }) as MediaQueryList,
+  };
+  emulateNativeReducedMotion(target);
+  expect(target.matchMedia("(prefers-reduced-motion: reduce)").matches).toBe(true);
+  expect(target.matchMedia("(prefers-color-scheme: dark)").matches).toBe(false);
+});
+
+describe("native canonical response matching", () => {
+  it("matches the full rendered answer when canonical Markdown contains formatting", () => {
+    const response = "Both received: `QUEUE_SECOND` and **QUEUE_EDITED**.";
+    document.body.innerHTML =
+      '<div data-slot="assistant-message">Both received: <code>QUEUE_SECOND</code> and <strong>QUEUE_EDITED</strong>.</div>';
+    expect(findAssistantResponseMarker(document, response)).toBeNull();
+    expect(renderedAssistantResponse(response)).toBe(
+      "Both received: QUEUE_SECOND and QUEUE_EDITED.",
+    );
+    expect(
+      findAssistantResponseMarker(document, renderedAssistantResponse(response)),
+    ).not.toBeNull();
+  });
+
+  it("still rejects a rendered answer with a missing retained message", () => {
+    document.body.innerHTML =
+      '<div data-slot="assistant-message">Both received: <code>QUEUE_SECOND</code>.</div>';
+    expect(
+      findAssistantResponseMarker(
+        document,
+        renderedAssistantResponse("Both received: `QUEUE_SECOND` and `QUEUE_EDITED`."),
+      ),
+    ).toBeNull();
+  });
+});
 
 describe("native local setup selectors", () => {
   it("finds both nested setup fields and the separately labelled tool root", () => {

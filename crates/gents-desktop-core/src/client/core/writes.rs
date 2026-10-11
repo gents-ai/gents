@@ -298,6 +298,109 @@ impl ClientCore {
         }
     }
 
+    /// Read the same authority used by the displayed snapshot before signing
+    /// queue linkage; a hosted node's local replica may lag its active request.
+    /// Pure P2P peers continue to resolve linkage from the local replica.
+    pub async fn prepare_user_message_input(
+        &self,
+        node_did: &str,
+        session_id: &str,
+        input: gents_protocol::request_input::RequestInput,
+    ) -> Result<gents_protocol::request_input::RequestInput> {
+        let access = self
+            .operator_graphql(node_did)
+            .map(ConfigAccess::Graphql)
+            .unwrap_or_else(|| ConfigAccess::Local(self.node_arc()));
+        gents::lifecycle::prepare_user_message_input(
+            &access,
+            node_did,
+            session_id,
+            input,
+            gents_protocol::request_input::QueueDelivery::Steer,
+        )
+        .await
+    }
+
+    pub async fn pending_user_queue(
+        &self,
+        node_did: &str,
+        session_id: &str,
+    ) -> Result<gents::lifecycle::PendingQueueSnapshot> {
+        let peer = self
+            .peer_record_for_chat_write(node_did, Utc::now())
+            .await?;
+        let (_, _, requester_did) = self.request_authority(node_did, peer.as_ref()).await?;
+        gents::lifecycle::pending_user_queue(
+            &ConfigAccess::Local(self.node_arc()),
+            node_did,
+            session_id,
+            &requester_did,
+        )
+        .await
+    }
+
+    pub async fn replace_pending_user_messages(
+        &self,
+        node_did: &str,
+        session_id: &str,
+        edit: gents::lifecycle::PendingQueueEdit,
+    ) -> Result<gents::lifecycle::PendingQueueReceipt> {
+        let peer = self
+            .peer_record_for_chat_write(node_did, Utc::now())
+            .await?;
+        ensure_peer_chat_ready_at(node_did, peer.as_ref(), Utc::now())?;
+        let (signer, admission, requester_did) =
+            self.request_authority(node_did, peer.as_ref()).await?;
+        let access = ConfigAccess::Local(self.node_arc());
+        let result = async {
+            use gents_protocol::session_input_edit::{SessionInputEdit, SESSION_INPUT_EDIT_VERSION};
+            let replacements = gents::lifecycle::prepare_pending_user_edit(
+                &access, signer.as_ref(), admission, node_did, session_id, &requester_did, &edit,
+            ).await?;
+            let now = Utc::now();
+            let mut command = SessionInputEdit {
+                version: SESSION_INPUT_EDIT_VERSION,
+                command_id: uuid::Uuid::new_v4().to_string(),
+                requester_did,
+                requester_peer_id: (signer.did() != node_did).then(|| self.local_peer_id().to_owned()),
+                node_did: node_did.to_owned(),
+                session_id: session_id.to_owned(),
+                issued_at: now.to_rfc3339(),
+                expires_at: (now + chrono::Duration::minutes(5)).to_rfc3339(),
+                edit,
+                replacements,
+                signature: Vec::new(),
+            };
+            command.signature = signer.sign(&command.signing_payload()).await?;
+            command.validate_shape()?;
+            let intent_json = serde_json::to_string(&command)?;
+            let esc = gents::graphql::escape_graphql_string;
+            let peer = command.requester_peer_id.as_ref()
+                .map(|id| format!("\"{}\"", esc(id)))
+                .unwrap_or_else(|| "null".into());
+            let mutation = format!(r#"mutation {{ create_AgentSessionInputEdit(input: {{
+                command_id: "{}", requester_did: "{}", requester_peer_id: {},
+                node_did: "{}", session_id: "{}", intent_json: "{}"
+            }}) {{ _docID }} }}"#, esc(&command.command_id), esc(&command.requester_did), peer,
+                esc(node_did), esc(session_id), esc(&intent_json));
+            let response = access.write("desktop.pending_input_edit.submit", &mutation).await?;
+            let doc_id = gents::graphql::created_doc_id(&response, "AgentSessionInputEdit")?;
+            match tokio::time::timeout(std::time::Duration::from_secs(30),
+                wait_for_pending_edit_receipt(&access, signer.as_ref(), &doc_id, &command, &intent_json)).await {
+                Ok(result) => result,
+                Err(_) => bail!("Pending edit {} was saved and is waiting for the runtime; its outcome is not yet confirmed.", command.command_id),
+            }
+        }.await;
+        match result {
+            Ok(receipt) => {
+                self.refresh_store().await?;
+                self.clear_mutation_error();
+                Ok(receipt)
+            }
+            Err(error) => Err(self.record_mutation_error("edit pending messages", error)),
+        }
+    }
+
     /// Reconstruct a request's persisted event timeline from the local P2P
     /// replica. Bounded so an unavailable replica fails the panel instead of
     /// hanging it.
@@ -1889,6 +1992,165 @@ fn local_hydration_documents_from_response(
     Ok(ids)
 }
 
+async fn wait_for_pending_edit_receipt(
+    access: &ConfigAccess,
+    signer: &dyn NodeIdentity,
+    doc_id: &str,
+    command: &gents_protocol::session_input_edit::SessionInputEdit,
+    intent_json: &str,
+) -> Result<gents::lifecycle::PendingQueueReceipt> {
+    use gents_protocol::session_input_edit::{SessionInputEditOutcome, SessionInputEditReceipt};
+    let query = format!(
+        r#"{{ AgentSessionInputEdit(filter: {{ _docID: {{ _eq: "{}" }} }}) {{
+        command_id requester_did requester_peer_id node_did session_id intent_json receipt_json
+    }} }}"#,
+        gents::graphql::escape_graphql_string(doc_id)
+    );
+    loop {
+        let response = access.execute(&query).await?;
+        let rows = response["data"]["AgentSessionInputEdit"]
+            .as_array()
+            .context("pending edit receipt query omitted rows")?;
+        anyhow::ensure!(
+            rows.len() <= 1,
+            "pending edit physical identity is ambiguous"
+        );
+        if let Some(row) = rows.first() {
+            for (field, expected) in [
+                ("command_id", command.command_id.as_str()),
+                ("requester_did", command.requester_did.as_str()),
+                ("node_did", command.node_did.as_str()),
+                ("session_id", command.session_id.as_str()),
+                ("intent_json", intent_json),
+            ] {
+                anyhow::ensure!(
+                    row[field].as_str() == Some(expected),
+                    "pending edit {field} changed scope"
+                );
+            }
+            anyhow::ensure!(
+                row["requester_peer_id"].as_str() == command.requester_peer_id.as_deref(),
+                "pending edit requester peer changed scope"
+            );
+            if let Some(raw) = row["receipt_json"].as_str().filter(|raw| !raw.is_empty()) {
+                let receipt: SessionInputEditReceipt = serde_json::from_str(raw)?;
+                receipt.validate_for(command)?;
+                anyhow::ensure!(
+                    signer
+                        .verify(
+                            &command.node_did,
+                            &receipt.signing_payload(),
+                            &receipt.signature
+                        )
+                        .await?,
+                    "pending edit runtime receipt signature is invalid"
+                );
+                match receipt.outcome {
+                    SessionInputEditOutcome::Applied
+                        if pending_edit_effect_visible(access, command, &receipt).await? =>
+                    {
+                        return Ok(gents::lifecycle::PendingQueueReceipt {
+                            request_doc_ids: receipt.request_doc_ids,
+                            request_ids: receipt.request_ids,
+                        })
+                    }
+                    SessionInputEditOutcome::Rejected => {
+                        bail!("Runtime rejected pending edit: {}", receipt.reason)
+                    }
+                    SessionInputEditOutcome::Applied => {}
+                }
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
+}
+
+async fn pending_edit_effect_visible(
+    access: &ConfigAccess,
+    command: &gents_protocol::session_input_edit::SessionInputEdit,
+    receipt: &gents_protocol::session_input_edit::SessionInputEditReceipt,
+) -> Result<bool> {
+    let ids = gents::graphql::graphql_string_list_literal(
+        command
+            .edit
+            .selected_request_doc_ids
+            .iter()
+            .chain(&receipt.request_doc_ids)
+            .map(String::as_str),
+    );
+    let response = access
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{ _docID: {{ _in: {ids} }}, node_did: {{ _eq: "{}" }},
+        requester_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }} }}) {{
+        {} lifecycle_state superseded_by_request superseded_by_request_doc_id failure_reason
+    }} }}"#,
+            gents::graphql::escape_graphql_string(&command.node_did),
+            gents::graphql::escape_graphql_string(&command.requester_did),
+            gents::graphql::escape_graphql_string(&command.session_id),
+            gents::SIGNED_REQUEST_FIELDS
+        ))
+        .await?;
+    let rows: Vec<AgentRequestRow> =
+        serde_json::from_value(response["data"]["AgentRequest"].clone())?;
+    pending_edit_effect_rows_visible(
+        &command.edit.selected_request_doc_ids,
+        &receipt.request_doc_ids,
+        &receipt.request_ids,
+        &rows,
+    )
+}
+
+fn pending_edit_effect_rows_visible(
+    selected: &[String],
+    replacements: &[String],
+    replacement_ids: &[String],
+    rows: &[AgentRequestRow],
+) -> Result<bool> {
+    for (index, id) in selected.iter().enumerate() {
+        let matches = rows
+            .iter()
+            .filter(|row| row.doc_id.as_ref() == Some(id))
+            .collect::<Vec<_>>();
+        anyhow::ensure!(
+            matches.len() <= 1,
+            "pending edit original physical identity is ambiguous"
+        );
+        let Some(row) = matches.first() else {
+            return Ok(false);
+        };
+        if let Some(replacement) = replacements.get(index) {
+            if row.lifecycle_state != Some(RequestLifecycleState::Superseded)
+                || row.failure_reason.as_deref() != Some("pending message replaced")
+                || row.superseded_by_request_doc_id.as_ref() != Some(replacement)
+                || row.superseded_by_request.as_ref() != replacement_ids.get(index)
+            {
+                return Ok(false);
+            }
+        } else if row.lifecycle_state != Some(RequestLifecycleState::Interrupted) {
+            return Ok(false);
+        }
+    }
+    for (index, id) in replacements.iter().enumerate() {
+        let matches = rows
+            .iter()
+            .filter(|row| row.doc_id.as_ref() == Some(id))
+            .collect::<Vec<_>>();
+        anyhow::ensure!(
+            matches.len() <= 1,
+            "pending edit replacement physical identity is ambiguous"
+        );
+        let Some(row) = matches.first() else {
+            return Ok(false);
+        };
+        anyhow::ensure!(
+            Some(&row.request_id) == replacement_ids.get(index),
+            "pending edit replacement logical identity changed"
+        );
+        gents::verify_request_receipt_signature(row)?;
+    }
+    Ok(true)
+}
+
 async fn load_hydration_server_state(
     node: &EmbeddedNode,
     peer_id: &str,
@@ -2091,6 +2353,52 @@ mod delete_source_tests {
     use super::*;
     use anyhow::anyhow;
     use serde_json::json;
+
+    #[test]
+    fn pending_edit_receipt_waits_for_original_effect_and_replacement_document() {
+        let selected = vec!["old".to_owned()];
+        let row = |state: &str, target: Option<&str>| -> AgentRequestRow {
+            serde_json::from_value(json!({
+                "_docID":"old", "request_id":"original", "lifecycle_state":state,
+                "failure_reason":"pending message replaced",
+                "superseded_by_request":"replacement",
+                "superseded_by_request_doc_id":target,
+            }))
+            .unwrap()
+        };
+        assert!(!pending_edit_effect_rows_visible(&selected, &[], &[], &[]).unwrap());
+        assert!(
+            !pending_edit_effect_rows_visible(&selected, &[], &[], &[row("pending", None)])
+                .unwrap()
+        );
+        assert!(
+            pending_edit_effect_rows_visible(&selected, &[], &[], &[row("interrupted", None)])
+                .unwrap()
+        );
+        let replacements = vec!["new".to_owned()];
+        let ids = vec!["replacement".to_owned()];
+        assert!(!pending_edit_effect_rows_visible(
+            &selected,
+            &replacements,
+            &ids,
+            &[row("pending", None)]
+        )
+        .unwrap());
+        assert!(!pending_edit_effect_rows_visible(
+            &selected,
+            &replacements,
+            &ids,
+            &[row("superseded", Some("wrong"))]
+        )
+        .unwrap());
+        assert!(!pending_edit_effect_rows_visible(
+            &selected,
+            &replacements,
+            &ids,
+            &[row("superseded", Some("new"))]
+        )
+        .unwrap());
+    }
 
     #[test]
     fn request_actions_resolve_explicit_node_in_a_shared_snapshot() {

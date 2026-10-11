@@ -899,6 +899,7 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
         latest_request_outcome,
         pending_turn,
         queued_turns,
+        pending_queue: None,
         folded_inputs,
         context,
         timeline_items,
@@ -1524,6 +1525,8 @@ mod tests {
         control.created_at = Some("2026-04-21T12:00:30Z".into());
         control.input = Some(gents_protocol::request_input::RequestInput {
             queue: Some(gents_protocol::request_input::RequestQueue {
+                delivery: Default::default(),
+                position: None,
                 source: gents_protocol::request_input::QueueSource::Goal,
                 policy: gents_protocol::request_input::QueuePolicy::Append,
                 key: None,

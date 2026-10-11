@@ -48,19 +48,16 @@ pub async fn send_chat_message(
         .map(str::to_string)
         .unwrap_or_else(|| Uuid::new_v4().to_string());
 
-    let store = core.store().snapshot();
-    let mut input = gents_protocol::request_input::RequestInput {
-        cwd: chat_folder(request.cwd.as_deref())?,
-        ..Default::default()
-    };
-    let busy = store
-        .derive_turn_for_node(&session_id, &node_did)
-        .is_some_and(|turn_state| !turn_state.is_terminal());
-    if busy {
-        if let Some(newest) = store.latest_request_id_for_session_for_node(&session_id, &node_did) {
-            input.queue = Some(queued_user_turn(newest));
-        }
-    }
+    let input = core
+        .prepare_user_message_input(
+            &node_did,
+            &session_id,
+            gents_protocol::request_input::RequestInput {
+                cwd: chat_folder(request.cwd.as_deref())?,
+                ..Default::default()
+            },
+        )
+        .await?;
 
     let submitted = core
         .submit_request_with_options(
@@ -96,18 +93,6 @@ fn chat_folder(raw: Option<&str>) -> Result<Option<String>> {
         bail!("The chat folder must be an existing folder on this computer.");
     }
     Ok(Some(raw.to_string()))
-}
-
-fn queued_user_turn(active_request_id: String) -> gents_protocol::request_input::RequestQueue {
-    use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestQueue};
-    RequestQueue {
-        source: QueueSource::User,
-        policy: QueuePolicy::Append,
-        key: None,
-        queued_after_request_id: Some(active_request_id),
-        interrupted_request_id: None,
-        background_completion_wake_version: None,
-    }
 }
 
 pub async fn rename_session(core: &ClientCore, request: SessionRenameRequest) -> Result<()> {
@@ -160,4 +145,32 @@ mod tests {
             assert!(chat_folder(Some(&bad)).is_err(), "{bad}");
         }
     }
+}
+
+pub async fn edit_pending_queue(
+    core: &ClientCore,
+    request: super::super::types::PendingQueueEditRequest,
+) -> Result<super::super::types::PendingQueueEditResult> {
+    let result = core
+        .replace_pending_user_messages(
+            &request.node_did,
+            &request.session_id,
+            gents::lifecycle::PendingQueueEdit {
+                expected_request_doc_ids: request.expected_request_doc_ids,
+                selected_request_doc_ids: request.selected_request_doc_ids,
+                messages: request
+                    .messages
+                    .into_iter()
+                    .map(|message| gents::lifecycle::PendingMessageEdit {
+                        request_doc_id: message.request_doc_id,
+                        content: message.content,
+                    })
+                    .collect(),
+            },
+        )
+        .await?;
+    Ok(super::super::types::PendingQueueEditResult {
+        request_doc_ids: result.request_doc_ids,
+        request_ids: result.request_ids,
+    })
 }
