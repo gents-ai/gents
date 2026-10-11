@@ -1,6 +1,9 @@
 use super::required_nullable;
 use serde::Deserialize;
 
+pub(crate) use gents_protocol::request_input::QueueDelivery as LeanTitleQueueDelivery;
+pub(crate) use gents_protocol::request_input::QueuePosition as LeanTitleQueuePosition;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 pub(crate) enum LeanRequestPurpose {
     #[serde(rename = "normal")]
@@ -86,9 +89,9 @@ pub(crate) struct LeanTitleInitialTitle {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanTitleQueueInput {
-    pub(crate) delivery: gents_protocol::request_input::QueueDelivery,
+    pub(crate) delivery: LeanTitleQueueDelivery,
     #[serde(deserialize_with = "required_nullable")]
-    pub(crate) position: Option<gents_protocol::request_input::QueuePosition>,
+    pub(crate) position: Option<LeanTitleQueuePosition>,
     pub(crate) source: String,
     pub(crate) policy: String,
     #[serde(deserialize_with = "required_nullable")]
