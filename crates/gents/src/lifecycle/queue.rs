@@ -66,7 +66,10 @@ pub(crate) use input::{
 #[cfg(test)]
 use input::{queue_is_automated_wakeup, BACKGROUND_COMPLETION_WAKE_VERSION};
 pub(crate) use intake::{pending_ids_in_txn, steering_inputs, steering_snapshot};
-pub(crate) use management::{apply_pending_user_edit_in_txn, validate_pending_user_edit_in_txn};
+pub(crate) use management::{
+    apply_pending_user_edit_in_txn, persisted_replacements_in_txn,
+    validate_pending_user_edit_in_txn, PersistedReplacements,
+};
 pub use management::{
     pending_user_queue, prepare_pending_user_edit, PendingQueueEntry, PendingQueueSnapshot,
     REPLACED_REASON,

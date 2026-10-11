@@ -337,9 +337,7 @@ pub(crate) async fn validate_pending_user_edit_in_txn(
     edit: &PendingQueueEdit,
     creates: &[AgentRequestCreate],
 ) -> Result<std::result::Result<ValidatedPendingEdit, String>> {
-    // The arrival head fences concurrent inserts; predicate reads alone do not.
-    txn.execute(r#"{ _documentArrivals(collection: "AgentRequest", limit: 1) { head } }"#)
-        .await?;
+    crate::graphql::fence_arrivals(txn, "AgentRequest").await?;
     let current = pending_in_txn(txn, node_did, session_id).await?;
     let checked = (|| -> Result<ValidatedPendingEdit> {
         let selected = selected_group(&current, edit, requester_did)?;
@@ -350,11 +348,7 @@ pub(crate) async fn validate_pending_user_edit_in_txn(
         let mut ids = std::collections::HashSet::new();
         for ((slot, message), create) in selected.iter().zip(&edit.messages).zip(creates) {
             anyhow::ensure!(
-                ids.insert(&create.request_id)
-                    && !create.request_id.is_empty()
-                    && !current
-                        .iter()
-                        .any(|row| row.request_id == create.request_id),
+                ids.insert(&create.request_id) && !create.request_id.is_empty(),
                 "Replacement request identity is not fresh."
             );
             anyhow::ensure!(
@@ -401,19 +395,60 @@ pub(crate) async fn validate_pending_user_edit_in_txn(
         Ok(validated) => validated,
         Err(error) => return Ok(Err(error.to_string())),
     };
+    if persisted_replacements_in_txn(txn, node_did, creates).await? != PersistedReplacements::None {
+        return Ok(Err("Replacement request identity already exists.".into()));
+    }
+    Ok(Ok(validated))
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum PersistedReplacements {
+    None,
+    /// Every replacement exists with its own signed admission; holds their physical IDs.
+    Exact(Vec<String>),
+    Conflicting,
+}
+
+pub(crate) async fn persisted_replacements_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    node_did: &str,
+    creates: &[AgentRequestCreate],
+) -> Result<PersistedReplacements> {
+    let mut exact = Vec::new();
+    let mut missing = 0;
     for create in creates {
         let response = txn.execute(&format!(
-            r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{}" }}, request_id: {{ _eq: "{}" }} }}, limit: 1) {{ _docID }} }}"#,
+            r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{}" }}, request_id: {{ _eq: "{}" }} }}, limit: 1) {{ _docID admission_signature }} }}"#,
             escape_graphql_string(node_did), escape_graphql_string(&create.request_id)
         )).await?;
         let existing = response["data"]["AgentRequest"]
             .as_array()
             .context("replacement identity lookup missing")?;
-        if !existing.is_empty() {
-            return Ok(Err("Replacement request identity already exists.".into()));
+        match existing.first() {
+            None => missing += 1,
+            Some(row)
+                if row["admission_signature"].as_str()
+                    == Some(
+                        bs58::encode(&create.admission.signature)
+                            .into_string()
+                            .as_str(),
+                    ) =>
+            {
+                exact.push(
+                    row["_docID"]
+                        .as_str()
+                        .context("replacement lacks physical identity")?
+                        .to_owned(),
+                );
+            }
+            Some(_) => return Ok(PersistedReplacements::Conflicting),
         }
     }
-    Ok(Ok(validated))
+    Ok(match (missing, exact.is_empty()) {
+        (_, true) => PersistedReplacements::None,
+        (0, false) => PersistedReplacements::Exact(exact),
+        _ => PersistedReplacements::Conflicting,
+    })
 }
 
 pub(crate) async fn apply_pending_user_edit_in_txn(
