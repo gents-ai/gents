@@ -96,25 +96,11 @@ async fn request_pending(args: RequestPendingArgs) -> Result<()> {
     Ok(())
 }
 
-fn selected_queue_ids(expected: &[String], requested: &[String]) -> Result<Vec<String>> {
-    anyhow::ensure!(
-        !requested.is_empty(),
-        "Select at least one pending message."
-    );
-    let unique = requested.iter().collect::<BTreeSet<_>>();
-    anyhow::ensure!(
-        unique.len() == requested.len(),
-        "A selected physical request ID must appear only once."
-    );
-    anyhow::ensure!(
-        requested.iter().all(|id| expected.contains(id)),
-        "Selected messages must belong to the observed queue snapshot."
-    );
-    Ok(expected
-        .iter()
-        .filter(|id| requested.contains(id))
-        .cloned()
-        .collect())
+/// Selected IDs in queue order; the runtime owner validates the selection.
+fn selected_queue_ids(expected: &[String], requested: &[String]) -> Vec<String> {
+    let mut selected = requested.to_vec();
+    selected.sort_by_key(|id| expected.iter().position(|entry| entry == id));
+    selected
 }
 
 async fn apply_pending_edit(
@@ -127,18 +113,13 @@ async fn apply_pending_edit(
         &[OutputFormat::Text, OutputFormat::Json],
     )?;
     let (access, node, signer) = pending_scope(&args.scope).await?;
-    // This CLI authors local-self replacements, just as request submit does.
-    anyhow::ensure!(
-        signer.did() == node,
-        "Pending message edits require the initialized author's node; use --home for that author."
-    );
-    let receipt = gents::lifecycle::replace_pending_user_messages(
+    let receipt = gents::lifecycle::submit_pending_user_edit(
         &access,
         signer.as_ref(),
         gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(signer.did()),
+        None,
         &node,
         &args.scope.session_id,
-        signer.did(),
         gents::lifecycle::PendingQueueEdit {
             expected_request_doc_ids: args.expected_request_doc_ids,
             selected_request_doc_ids: selected,
@@ -165,10 +146,7 @@ async fn apply_pending_edit(
 
 async fn request_edit_pending(args: RequestEditPendingArgs) -> Result<()> {
     let content = resolve_request_content(args.content.as_deref(), args.content_file.as_deref())?;
-    let selected = selected_queue_ids(
-        &args.queue.expected_request_doc_ids,
-        std::slice::from_ref(&args.request_doc_id),
-    )?;
+    let selected = vec![args.request_doc_id.clone()];
     let message = gents::lifecycle::PendingMessageEdit {
         request_doc_id: args.request_doc_id,
         content,
@@ -177,12 +155,12 @@ async fn request_edit_pending(args: RequestEditPendingArgs) -> Result<()> {
 }
 
 async fn request_remove_pending(args: RequestRemovePendingArgs) -> Result<()> {
-    let selected = selected_queue_ids(&args.queue.expected_request_doc_ids, &args.request_doc_ids)?;
+    let selected = selected_queue_ids(&args.queue.expected_request_doc_ids, &args.request_doc_ids);
     apply_pending_edit(args.queue, selected, Vec::new()).await
 }
 
 async fn request_reorder_pending(args: RequestReorderPendingArgs) -> Result<()> {
-    let selected = selected_queue_ids(&args.queue.expected_request_doc_ids, &args.request_doc_ids)?;
+    let selected = selected_queue_ids(&args.queue.expected_request_doc_ids, &args.request_doc_ids);
     let (access, node, signer) = pending_scope(&args.queue.scope).await?;
     let snapshot = gents::lifecycle::pending_user_queue(
         &access,
@@ -191,14 +169,6 @@ async fn request_reorder_pending(args: RequestReorderPendingArgs) -> Result<()> 
         signer.did(),
     )
     .await?;
-    anyhow::ensure!(
-        snapshot
-            .entries
-            .iter()
-            .map(|entry| &entry.request_doc_id)
-            .eq(args.queue.expected_request_doc_ids.iter()),
-        "The message queue changed. Run request pending and retry with its complete snapshot."
-    );
     let messages = args
         .request_doc_ids
         .into_iter()
@@ -1721,15 +1691,12 @@ mod tests {
     }
 
     #[test]
-    fn pending_selection_uses_original_slots_and_rejects_unknown_or_duplicate_ids() {
+    fn pending_selection_follows_queue_order() {
         let expected = vec!["a".into(), "b".into(), "c".into()];
         assert_eq!(
-            selected_queue_ids(&expected, &["c".into(), "b".into()]).unwrap(),
+            selected_queue_ids(&expected, &["c".into(), "b".into()]),
             vec!["b", "c"]
         );
-        assert!(selected_queue_ids(&expected, &["b".into(), "b".into()]).is_err());
-        assert!(selected_queue_ids(&expected, &["other-queue".into()]).is_err());
-        assert!(selected_queue_ids(&expected, &[]).is_err());
     }
 
     #[test]
