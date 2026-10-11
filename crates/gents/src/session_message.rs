@@ -378,6 +378,8 @@ pub(crate) async fn plan(
         let queue = steering
             .as_ref()
             .map(|active| gents_protocol::request_input::RequestQueue {
+                delivery: Default::default(),
+                position: None,
                 source: gents_protocol::request_input::QueueSource::Steering,
                 policy: gents_protocol::request_input::QueuePolicy::Append,
                 key: None,

@@ -36,6 +36,23 @@ use crate::runtime_trace::{
 use crate::streaming::DefraStreamWriter;
 use crate::watcher::AgentRequest;
 
+/// Task hooks and workspace write/integration effects must finish before their
+/// request terminalizes. Those owners retain their existing completion order;
+/// only requests without such effects may finish inside the steering gate.
+fn permits_natural_finish(request: &AgentRequest, task_owned: bool) -> bool {
+    !task_owned
+        && crate::lifecycle::queue::heads_user_turn(request)
+        && (request
+            .workspace_id
+            .as_deref()
+            .is_none_or(|id| id.trim().is_empty())
+            || request
+                .workspace_authority
+                .as_deref()
+                .and_then(|authority| crate::toolset::WorkspaceAuthority::parse(authority).ok())
+                == Some(crate::toolset::WorkspaceAuthority::ReadOnly))
+}
+
 /// Only the winning terminal CAS authorizes follow-up effects. A matching
 /// durable terminal row is an observation, not a second completion event.
 async fn terminalize_request(
@@ -756,26 +773,29 @@ impl<M: ProviderModel> AgentDaemon<M> {
             }
         }
 
-        let (hooks, hook_cwd, hook_record) = match self.prepare_task_hooks(&request).await {
-            Ok(prepared) => prepared,
-            Err(error) => {
-                record_current_failure_class(&error);
-                tracing::error!(
-                    agent_id = %self.agent_config.agent_id,
-                    request_id = %request.request_id,
-                    error = %format!("{error:#}"),
-                    "refusing to run a request whose task hooks cannot be prepared"
-                );
-                self.finalize_failure_before_work(
-                    &mut lifecycle,
-                    &stream_writer,
-                    &format!("{error:#}"),
-                    &request,
-                )
-                .await;
-                return Ok(());
-            }
-        };
+        let (hooks, hook_cwd, hook_record, task_owned) =
+            match self.prepare_task_hooks(&request).await {
+                Ok(prepared) => prepared,
+                Err(error) => {
+                    record_current_failure_class(&error);
+                    tracing::error!(
+                        agent_id = %self.agent_config.agent_id,
+                        request_id = %request.request_id,
+                        error = %format!("{error:#}"),
+                        "refusing to run a request whose task hooks cannot be prepared"
+                    );
+                    self.finalize_failure_before_work(
+                        &mut lifecycle,
+                        &stream_writer,
+                        &format!("{error:#}"),
+                        &request,
+                    )
+                    .await;
+                    return Ok(());
+                }
+            };
+
+        lifecycle.allow_natural_finish(permits_natural_finish(&request, task_owned));
 
         // One observer spans the hooks and the owned work, so an interrupt
         // latched during a hook cancels that hook and reaches the work too.
@@ -981,11 +1001,12 @@ impl<M: ProviderModel> AgentDaemon<M> {
         Vec<crate::document_config::TaskHook>,
         PathBuf,
         Option<crate::task_hooks::TaskHookRecordHandle>,
+        bool,
     )> {
-        let hooks =
+        let (hooks, task_owned) =
             crate::task_hooks::resolve_request_task_hooks(self.node.as_ref(), request).await?;
         if hooks.is_empty() {
-            return Ok((hooks, PathBuf::new(), None));
+            return Ok((hooks, PathBuf::new(), None, task_owned));
         }
         let cwd = self.task_hook_cwd().await?;
         let record = self
@@ -1000,7 +1021,7 @@ impl<M: ProviderModel> AgentDaemon<M> {
                 hooks: hooks.clone(),
                 attempts: Vec::new(),
             })?;
-        Ok((hooks, cwd, Some(record)))
+        Ok((hooks, cwd, Some(record), task_owned))
     }
 
     /// Task hooks run from the agent_config's host-tools root, revalidated through
@@ -1038,6 +1059,9 @@ impl<M: ProviderModel> AgentDaemon<M> {
         match result {
             Ok(HandleRequestOutcome::Completed) => {
                 record_current_request_outcome("completed");
+                if lifecycle.natural_finish_completed() {
+                    return OwnedWorkOutcome::observed(TaskAgentResult::Success, None, false);
+                }
                 if let Err(error) = lifecycle.validate_owned_execution().await {
                     tracing::warn!(request_id = %request.request_id, %error, "stopping workspace completion after execution ownership loss");
                     return OwnedWorkOutcome::OwnershipLost;

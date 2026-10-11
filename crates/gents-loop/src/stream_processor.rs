@@ -32,6 +32,7 @@ where
     pub streamed_text: String,
     committed_text_len: usize,
     pub final_text: Option<String>,
+    pub natural_finished: bool,
     pub final_message_doc_id: Option<String>,
     pending_tool_internal_ids: Vec<String>,
     active_provider_attempt: Option<(usize, u32)>,
@@ -47,6 +48,61 @@ where
     W: CanonicalStreamWriter<L>,
     H: CanonicalSessionHook<W::AcceptedToolCall>,
 {
+    async fn publish_steering(
+        &self,
+        candidates: Vec<crate::loop_stream::FoldedPrompt>,
+    ) -> Result<Vec<crate::loop_stream::FoldedPrompt>> {
+        let mut committed = Vec::new();
+        for candidate in candidates {
+            if self
+                .stream_writer
+                .try_publish_steering_message(self.lifecycle, &candidate.key, &candidate.message)
+                .await?
+                .is_none()
+            {
+                break;
+            }
+            committed.push(candidate);
+        }
+        Ok(committed)
+    }
+
+    async fn finish_or_intake(&mut self, text: &str) -> Result<crate::loop_stream::FinishOrIntake> {
+        loop {
+            self.validate_execution().await?;
+            let Some(snapshot) = self.persistence_hook.finish_steering_snapshot().await? else {
+                return Ok(crate::loop_stream::FinishOrIntake::Finished);
+            };
+            if !snapshot.inputs.is_empty() {
+                let committed = self.publish_steering(snapshot.inputs).await?;
+                if committed.is_empty() {
+                    continue;
+                }
+                return Ok(crate::loop_stream::FinishOrIntake::Continue(committed));
+            }
+            anyhow::ensure!(
+                !text.trim().is_empty() || !self.streamed_text.trim().is_empty(),
+                "agent stream completed without producing any visible response content"
+            );
+            let message_doc_id = self
+                .final_message_doc_id
+                .as_deref()
+                .context("natural completion has no saved provider message")?;
+            if self
+                .stream_writer
+                .finish_natural_turn(
+                    self.lifecycle,
+                    message_doc_id,
+                    &snapshot.pending_request_doc_ids,
+                )
+                .await?
+            {
+                self.natural_finished = true;
+                return Ok(crate::loop_stream::FinishOrIntake::Finished);
+            }
+        }
+    }
+
     pub fn new(
         persistence_hook: &'a H,
         stream_writer: &'a W,
@@ -62,6 +118,7 @@ where
             streamed_text: String::new(),
             committed_text_len: 0,
             final_text: None,
+            natural_finished: false,
             final_message_doc_id: None,
             pending_tool_internal_ids: Vec::new(),
             active_provider_attempt: None,
@@ -243,6 +300,18 @@ where
                 self.stream_writer.reset_tail(self.doc_id).await?;
                 Ok(StreamAction::Continue)
             }
+            Ok(LoopStreamItem::FinishOrIntake { text, reply }) => {
+                let result = self.finish_or_intake(&text).await;
+                let finished = matches!(result, Ok(crate::loop_stream::FinishOrIntake::Finished));
+                let _ = reply.send(result);
+                if finished {
+                    self.assistant_turn.reconcile_text(&text);
+                    self.final_text = Some(text);
+                    Ok(StreamAction::Done)
+                } else {
+                    Ok(StreamAction::Continue)
+                }
+            }
             Ok(LoopStreamItem::Final { text }) => {
                 self.assistant_turn.reconcile_text(&text);
                 self.final_text = Some(text);
@@ -270,6 +339,7 @@ where
                 context,
                 prompt,
                 folded,
+                reply,
             }) => {
                 if let Some(context) = context.as_ref() {
                     self.stream_writer
@@ -279,11 +349,20 @@ where
                 self.stream_writer
                     .publish_authored_message(self.lifecycle, "prompt", &prompt)
                     .await?;
-                for (key, message) in &folded {
-                    self.stream_writer
-                        .publish_authored_message(self.lifecycle, key, message)
-                        .await?;
-                }
+                let candidates = folded
+                    .into_iter()
+                    .map(|(key, message)| crate::loop_stream::FoldedPrompt { key, message })
+                    .collect();
+                let result = self.publish_steering(candidates).await;
+                let _ = reply.send(result);
+                Ok(StreamAction::Continue)
+            }
+            Ok(LoopStreamItem::SteeringBoundary { reply }) => {
+                let result = match self.persistence_hook.pending_steering_inputs().await {
+                    Ok(candidates) => self.publish_steering(candidates).await,
+                    Err(error) => Err(error),
+                };
+                let _ = reply.send(result);
                 Ok(StreamAction::Continue)
             }
             Ok(LoopStreamItem::OutputObligationPending { reminder }) => {

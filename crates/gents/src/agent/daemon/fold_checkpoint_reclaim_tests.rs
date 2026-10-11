@@ -21,6 +21,8 @@ async fn create_user_message(
         ),
     );
     create.input.queue = queued_after.map(|active| gents_protocol::request_input::RequestQueue {
+        delivery: Default::default(),
+        position: None,
         source: gents_protocol::request_input::QueueSource::User,
         policy: gents_protocol::request_input::QueuePolicy::Append,
         key: None,
@@ -80,8 +82,8 @@ async fn authored_user_entries(
 #[tokio::test]
 async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_restore() {
     for (published_before_crash, persist_checkpoint) in [(0, false), (1, false), (2, true)] {
-        let data_path = std::env::temp_dir()
-            .join(format!("daemon-fold-checkpoint-{}", uuid::Uuid::new_v4()));
+        let data_path =
+            std::env::temp_dir().join(format!("daemon-fold-checkpoint-{}", uuid::Uuid::new_v4()));
         let node = Arc::new(
             defra_node::EmbeddedNode::builder()
                 .data_path(&data_path)
@@ -90,9 +92,8 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
                 .unwrap(),
         );
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-        let identity: Arc<dyn NodeIdentity> = Arc::new(
-            KeyIdentity::load_or_create(data_path.join("node.key"), None).unwrap(),
-        );
+        let identity: Arc<dyn NodeIdentity> =
+            Arc::new(KeyIdentity::load_or_create(data_path.join("node.key"), None).unwrap());
         let agent_config = test_agent_with_identity(identity);
         crate::test_support::install_test_agent(
             node.as_ref(),
@@ -110,8 +111,14 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
         )
         .await
         .unwrap();
-        let head = create_user_message(&node, &agent_config, &session_id, "how are we looking", None)
-            .await;
+        let head = create_user_message(
+            &node,
+            &agent_config,
+            &session_id,
+            "how are we looking",
+            None,
+        )
+        .await;
         let folded = create_user_message(
             &node,
             &agent_config,
@@ -164,7 +171,9 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
             )
             .await
             .unwrap();
-            let prefix = vec![crate::llm::message::Message::user("an earlier, larger history")];
+            let prefix = vec![crate::llm::message::Message::user(
+                "an earlier, larger history",
+            )];
             let suffix = vec![
                 crate::llm::message::Message::user(head.content.clone()),
                 crate::llm::message::Message::user(folded.content.clone()),
@@ -191,12 +200,11 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
                     compacted_prefix: &prefix,
                     retained_suffix: &suffix,
                     checkpoint_messages: &suffix,
-                    replay_associations:
-                        &crate::provider_context_reduction::ReplayAssociations {
-                            required: Vec::new(),
-                            prefix_rows: prefix.iter().map(row).collect(),
-                            retained_rows: suffix.iter().map(row).collect(),
-                        },
+                    replay_associations: &crate::provider_context_reduction::ReplayAssociations {
+                        required: Vec::new(),
+                        prefix_rows: prefix.iter().map(row).collect(),
+                        retained_rows: suffix.iter().map(row).collect(),
+                    },
                     summary: "",
                     original_tokens: 100,
                     compacted_tokens: 20,
@@ -269,7 +277,10 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
         )
         .unwrap();
         let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-        daemon.process_request(reclaimed, shutdown_rx).await.unwrap();
+        daemon
+            .process_request(reclaimed, shutdown_rx)
+            .await
+            .unwrap();
 
         let case = format!("published {published_before_crash}, checkpoint {persist_checkpoint}");
         assert_eq!(
@@ -294,10 +305,16 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
             "{case}: each authored key exactly once with its admitted content"
         );
         let inputs = provider_inputs.lock().unwrap().clone();
-        assert_eq!(inputs.len(), 1, "{case}: one inference answers both messages");
+        assert_eq!(
+            inputs.len(),
+            1,
+            "{case}: one inference answers both messages"
+        );
         let sent = &inputs[0];
         let first_at = sent.find(&head.content).expect("head reaches the provider");
-        let folded_at = sent.find(&folded.content).expect("folded message reaches the provider");
+        let folded_at = sent
+            .find(&folded.content)
+            .expect("folded message reaches the provider");
         assert!(first_at < folded_at, "{case}: queue order");
         if persist_checkpoint {
             assert!(
@@ -423,9 +440,8 @@ async fn generated_retry_selection_cases_bind_to_the_daemon() {
                 .unwrap(),
         );
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-        let identity: Arc<dyn NodeIdentity> = Arc::new(
-            KeyIdentity::load_or_create(data_path.join("node.key"), None).unwrap(),
-        );
+        let identity: Arc<dyn NodeIdentity> =
+            Arc::new(KeyIdentity::load_or_create(data_path.join("node.key"), None).unwrap());
         let agent_config = test_agent_with_identity(identity);
         crate::test_support::install_test_agent(
             node.as_ref(),
@@ -443,8 +459,14 @@ async fn generated_retry_selection_cases_bind_to_the_daemon() {
         )
         .await
         .unwrap();
-        let parent =
-            create_user_message(&node, &agent_config, &session_id, "how are we looking", None).await;
+        let parent = create_user_message(
+            &node,
+            &agent_config,
+            &session_id,
+            "how are we looking",
+            None,
+        )
+        .await;
         let writer = crate::streaming::DefraStreamWriter::new(
             node.clone(),
             agent_config.node_did(),
@@ -499,11 +521,18 @@ async fn generated_retry_selection_cases_bind_to_the_daemon() {
             .process_request(retry.clone(), shutdown_rx.clone())
             .await
             .unwrap();
+        let retry_diagnostic = crate::graphql::graphql_with_transaction_retry(
+            &node,
+            &format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state failure_reason }} }}"#,
+                crate::graphql::escape_graphql_string(&retry.doc_id)),
+            "retry-selection-test-diagnostic",
+        ).await.unwrap();
         assert_eq!(
             persisted_request_state(&node, &retry.doc_id).await,
             gents_protocol::request_lifecycle::RequestLifecycleState::Completed,
-            "{}",
-            case.name
+            "{}: {:?}",
+            case.name,
+            retry_diagnostic
         );
         let retry_keys = authored_user_entries(&node, &retry)
             .await
@@ -559,7 +588,12 @@ async fn generated_retry_selection_cases_bind_to_the_daemon() {
                 case.name
             );
             let inputs = provider_inputs.lock().unwrap().clone();
-            assert_eq!(inputs.len(), 2, "{}: it runs exactly once, on its own turn", case.name);
+            assert_eq!(
+                inputs.len(),
+                2,
+                "{}: it runs exactly once, on its own turn",
+                case.name
+            );
             assert!(inputs[1].contains(&queued.content), "{}", case.name);
         }
         node.shutdown().await;

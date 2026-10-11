@@ -302,6 +302,11 @@ impl AgentBuilder {
         self
     }
 
+    pub fn sampling(mut self, sampling: SamplingConfig) -> Self {
+        self.pending_agent.sampling = sampling;
+        self
+    }
+
     pub fn system_prompt(mut self, system_prompt: impl Into<String>) -> Self {
         self.pending_agent.system_prompt = system_prompt.into();
         self

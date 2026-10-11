@@ -645,6 +645,26 @@ async fn verify_request_input(
             queue.source == QueueSource::User || runtime_control || session_message_steering,
             "runtime queue source requires authenticated local-control issuance",
         )?;
+        if queue.position.is_some() {
+            crate::config_client::ConfigAccess::transact_local_readonly(
+                node,
+                None,
+                "admission.queue_position",
+                |txn| {
+                    Box::pin(
+                        async move { crate::lifecycle::queue::validate_position(txn, row).await },
+                    )
+                },
+            )
+            .await
+            .map_err(|error| {
+                if error.is::<crate::lifecycle::queue::InvalidQueuePosition>() {
+                    AgentRequestAdmissionError::denied(error)
+                } else {
+                    AgentRequestAdmissionError::unavailable(error)
+                }
+            })?;
+        }
     }
     if input.goal_continuation.is_some()
         || input

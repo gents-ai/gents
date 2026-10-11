@@ -1149,39 +1149,6 @@ fn generated_repair_cases_drive_tool_argument_repair() {
     }
 }
 
-/// Insert the pending folded requests of a generated turn under the owned test
-/// request's principal and session.
-async fn insert_folded_requests(
-    node: &defra_node::EmbeddedNode,
-    head: &crate::watcher::AgentRequest,
-    case: &crate::lean_vocab_test::LeanFoldTurnInputCase,
-) -> std::collections::HashMap<u64, String> {
-    let mut docs = std::collections::HashMap::new();
-    for folded in &case.folded {
-        let request_id = format!("{}-folded-{}", head.request_id, folded.request_id);
-        let created = crate::config_client::ConfigAccess::write_local_response(
-            node,
-            "test.folded_request",
-            &format!(
-                r#"mutation {{ create_AgentRequest(input: {{ request_id: "{}", purpose: "normal", node_did: "{}", agent_id: "general", session_id: "{}", request_hop: 0, retry_parent_request: "", retry_root_request: "{}", superseded_by_request: "", content: "{}", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", created_at: "{}", retry_count: 0, max_retries: 3 }}) {{ _docID }} }}"#,
-                crate::graphql::escape_graphql_string(&request_id),
-                crate::graphql::escape_graphql_string(&head.node_did),
-                crate::graphql::escape_graphql_string(&head.session_id),
-                crate::graphql::escape_graphql_string(&request_id),
-                crate::graphql::escape_graphql_string(&folded.content),
-                crate::graphql::escape_graphql_string(&head.created_at),
-            ),
-        )
-        .await
-        .unwrap();
-        docs.insert(
-            folded.request_id,
-            crate::graphql::created_doc_id(&serde_json::json!({ "data": created.data }), "AgentRequest").unwrap(),
-        );
-    }
-    docs
-}
-
 fn generated_authored_key(
     key: &crate::lean_vocab_test::LeanFoldAuthoredKey,
     docs: &std::collections::HashMap<u64, String>,
@@ -1201,9 +1168,13 @@ async fn drive_generated_turn_input(
     case: &crate::lean_vocab_test::LeanFoldTurnInputCase,
     first_turn_compaction: bool,
 ) {
-    let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
+    let (node, hook, writer, mut lifecycle, docs) = owned_test_hook_with_folded_case(case).await;
     let head = lifecycle.request().clone();
-    let docs = insert_folded_requests(&node, &head, case).await;
+    assert_eq!(
+        lifecycle.folded_selection().iter().map(|row| row.request_doc_id.clone()).collect::<Vec<_>>(),
+        case.folded.iter().map(|row| docs[&row.request_id].clone()).collect::<Vec<_>>(),
+        "{}: native claim selects the modeled queue", case.name,
+    );
     let model = ScriptedModel::new(vec![
         RawStreamingChoice::Message("answered".to_string()),
         RawStreamingChoice::FinalResponse(()),

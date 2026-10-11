@@ -593,6 +593,11 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
         "bafyreiebw7lxwzdcmltfz6khjz6e32utfpfwpxydnqwcnnsbtj4qqhxcmq"
     ),
     baseline_entry!(
+        gents_protocol::schemas::AGENT_SESSION_INPUT_EDIT_NAME,
+        gents_protocol::schemas::AGENT_SESSION_INPUT_EDIT,
+        "bafyreiayfxrn7hgy6xmovsmhlenwoyyb22px63mo3cjogsp4u2dapo36oe"
+    ),
+    baseline_entry!(
         gents_protocol::schemas::EVAL_DEFINITION_NAME,
         gents_protocol::schemas::EVAL_DEFINITION,
         "bafyreibeokxszqypuejna3pckyp36vujfpfg2yahl3y3u3scpngdbigjtm"
@@ -665,6 +670,7 @@ pub const CLIENT_AUTHORED_COLLECTIONS: &[&str] = &[
     gents_protocol::schemas::NETWORK_AUTHORIZATION_REVISION_NAME,
     gents_protocol::schemas::NETWORK_ENROLLMENT_ROUTE_RECEIPT_NAME,
     gents_protocol::schemas::SESSION_HYDRATION_REQUEST_NAME,
+    gents_protocol::schemas::AGENT_SESSION_INPUT_EDIT_NAME,
     gents_protocol::schemas::NODE_DIRECTORY_ENTRY_NAME,
     gents_protocol::schemas::MAILBOX_ITEM_NAME,
 ];

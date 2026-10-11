@@ -598,6 +598,8 @@ async fn a_completion_at_the_bound_returns_at_the_callers_hop() {
         "background-completion-notification:process:tool",
         crate::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT,
         crate::lifecycle::queue::RequestQueue {
+            delivery: Default::default(),
+            position: None,
             source: crate::lifecycle::queue::QueueSource::BackgroundCompletion,
             policy: crate::lifecycle::queue::QueuePolicy::Coalesce,
             key: Some(format!("background_completion:{session_id}")),

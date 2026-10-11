@@ -34,6 +34,8 @@ async fn queue_user_message(
         gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(did),
     );
     create.input.queue = Some(gents_protocol::request_input::RequestQueue {
+        delivery: Default::default(),
+        position: None,
         source: gents_protocol::request_input::QueueSource::User,
         policy: gents_protocol::request_input::QueuePolicy::Append,
         key: None,

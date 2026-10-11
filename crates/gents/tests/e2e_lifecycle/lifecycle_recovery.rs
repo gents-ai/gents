@@ -193,6 +193,8 @@ fn background_wake_input(session_id: &str) -> gents_protocol::request_input::Req
     use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestInput, RequestQueue};
     RequestInput {
         queue: Some(RequestQueue {
+            delivery: Default::default(),
+            position: None,
             source: QueueSource::BackgroundCompletion,
             policy: QueuePolicy::Coalesce,
             key: Some(format!("background_completion:{session_id}")),

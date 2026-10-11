@@ -222,7 +222,9 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                     self.agent_config.tools.goal_tools_requested(),
                     self.agent_config.tools.goal_creation_requested(),
                 )
-                .with_output_obligation_gate(output_obligation_gate.clone());
+                .with_output_obligation_gate(output_obligation_gate.clone())
+                .with_steering_inputs(request.clone(), self.request_admission.clone())
+                .with_natural_finish(lifecycle.natural_finish_allowed());
                 hook.set_active_request_binding(
                     Some(request.request_id.clone()),
                     Some(request.doc_id.clone()),
@@ -696,10 +698,10 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                                     return Err(error);
                                 }
                             };
-                            if let Err(error) = ensure_request_deadline_open(
+                            if let Err(error) = if processor.natural_finished { Ok(()) } else { ensure_request_deadline_open(
                                 request_deadline,
                                 "processing inference stream item",
-                            ) {
+                            ) } {
                                 admission::set_terminal_failure_reason(
                                     &terminal_failure_reason,
                                     error.to_string(),
@@ -758,6 +760,10 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                             return Ok(HandleRequestOutcome::FailedAfterResponse(anyhow!(
                                 "provider stream ended without an explicit terminal response"
                             )));
+                        }
+
+                        if processor.natural_finished {
+                            return Ok(HandleRequestOutcome::Completed);
                         }
 
                         let mut streamed_text = std::mem::take(&mut processor.streamed_text);

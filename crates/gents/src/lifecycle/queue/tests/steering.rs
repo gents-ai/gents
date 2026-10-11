@@ -20,6 +20,8 @@ async fn steering_admission_keeps_signed_content_queued_without_transcript_publi
         content,
         RequestInput {
             queue: Some(RequestQueue {
+                delivery: Default::default(),
+                position: None,
                 source: QueueSource::Steering,
                 policy: QueuePolicy::Append,
                 key: None,
@@ -93,6 +95,8 @@ async fn generated_pending_steering_terminals_retain_signed_admission_without_ou
             &content,
             RequestInput {
                 queue: Some(RequestQueue {
+                    delivery: Default::default(),
+                    position: None,
                     source: QueueSource::Steering,
                     policy: QueuePolicy::Append,
                     key: None,
@@ -259,6 +263,8 @@ async fn generated_owned_prepublication_terminals_retain_signed_admission_withou
             &content,
             RequestInput {
                 queue: Some(RequestQueue {
+                    delivery: Default::default(),
+                    position: None,
                     source: QueueSource::Steering,
                     policy: QueuePolicy::Append,
                     key: None,

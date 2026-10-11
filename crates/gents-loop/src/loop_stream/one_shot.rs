@@ -265,7 +265,9 @@ where
                 ensure_auxiliary_identity(active_auxiliary, identity)?;
                 emit_auxiliary(identity, AuxiliaryOutputEvent::Audit(observation.event)).await?;
             }
-            LoopStreamItem::AuthoredInputReady { .. } => {
+            LoopStreamItem::SteeringBoundary { .. }
+            | LoopStreamItem::AuthoredInputReady { .. }
+            | LoopStreamItem::FinishOrIntake { .. } => {
                 // This event carries persistence authority and may only be
                 // consumed by the owned StreamProcessor. The auxiliary has no
                 // hook, so observing it here means authority leaked past the
