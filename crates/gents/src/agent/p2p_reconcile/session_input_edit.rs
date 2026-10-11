@@ -248,7 +248,9 @@ pub(crate) async fn process_command(
             let (outcome, reason, request_doc_ids) = match intrinsic_rejection(identity.as_ref(), &command).await {
                 Some(reason) => (SessionInputEditOutcome::Rejected, reason, Vec::new()),
                 None => match crate::lifecycle::queue::persisted_replacements_in_txn(txn, &command.node_did, &command.replacements).await? {
-                    crate::lifecycle::queue::PersistedReplacements::Exact(ids) => (SessionInputEditOutcome::Applied, String::new(), ids),
+                    crate::lifecycle::queue::PersistedReplacements::Exact(ids) => {
+                        (SessionInputEditOutcome::Applied, String::new(), ids)
+                    }
                     _ => {
                         let now = Utc::now();
                         let issued_at = DateTime::parse_from_rfc3339(&command.issued_at)?.with_timezone(&Utc);
