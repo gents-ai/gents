@@ -39,6 +39,8 @@ fn queue_source_and_policy_vocabulary_round_trips_canonically() {
             ("coalesce", QueuePolicy::Coalesce),
         ] {
             let queue = RequestQueue {
+                delivery: Default::default(),
+                position: None,
                 source,
                 policy,
                 key: None,
@@ -76,6 +78,8 @@ fn rejects_invalid_queue_json_and_unknown_keys() {
 fn automated_wakeup_is_true_only_for_keyed_background_completion_coalesce() {
     assert!(!is_automated_wakeup(&RequestInput::default()));
     assert!(!is_automated_wakeup(&queue_input(RequestQueue {
+        delivery: Default::default(),
+        position: None,
         source: QueueSource::User,
         policy: QueuePolicy::Append,
         key: None,
@@ -84,6 +88,8 @@ fn automated_wakeup_is_true_only_for_keyed_background_completion_coalesce() {
         background_completion_wake_version: None,
     })));
     assert!(is_automated_wakeup(&queue_input(RequestQueue {
+        delivery: Default::default(),
+        position: None,
         source: QueueSource::BackgroundCompletion,
         policy: QueuePolicy::Coalesce,
         key: Some("background_completion:session-1".to_string()),
@@ -92,6 +98,8 @@ fn automated_wakeup_is_true_only_for_keyed_background_completion_coalesce() {
         background_completion_wake_version: None,
     })));
     assert!(!is_automated_wakeup(&queue_input(RequestQueue {
+        delivery: Default::default(),
+        position: None,
         source: QueueSource::BackgroundCompletion,
         policy: QueuePolicy::Append,
         key: Some("background_completion:session-1".to_string()),
@@ -100,6 +108,8 @@ fn automated_wakeup_is_true_only_for_keyed_background_completion_coalesce() {
         background_completion_wake_version: None,
     })));
     assert!(!is_automated_wakeup(&queue_input(RequestQueue {
+        delivery: Default::default(),
+        position: None,
         source: QueueSource::BackgroundCompletion,
         policy: QueuePolicy::Coalesce,
         key: None,
@@ -108,6 +118,8 @@ fn automated_wakeup_is_true_only_for_keyed_background_completion_coalesce() {
         background_completion_wake_version: None,
     })));
     assert!(!is_automated_wakeup(&queue_input(RequestQueue {
+        delivery: Default::default(),
+        position: None,
         source: QueueSource::Steering,
         policy: QueuePolicy::Coalesce,
         key: None,
@@ -121,6 +133,8 @@ fn automated_wakeup_is_true_only_for_keyed_background_completion_coalesce() {
 fn wake_version_is_stamped_by_the_queue_owner() {
     let queue = background_wake_queue(
         &RequestQueue {
+            delivery: Default::default(),
+            position: None,
             source: QueueSource::BackgroundCompletion,
             policy: QueuePolicy::Coalesce,
             key: Some("background_completion:session-1".to_string()),
@@ -133,6 +147,8 @@ fn wake_version_is_stamped_by_the_queue_owner() {
     assert_eq!(
         queue,
         RequestQueue {
+            delivery: Default::default(),
+            position: None,
             source: QueueSource::BackgroundCompletion,
             policy: QueuePolicy::Coalesce,
             key: Some("background_completion:session-1".to_string()),
@@ -147,6 +163,8 @@ fn wake_version_is_stamped_by_the_queue_owner() {
 fn runtime_control_projection_keeps_authored_steering_visible() {
     let input = |source| {
         queue_input(RequestQueue {
+            delivery: Default::default(),
+            position: None,
             source,
             policy: QueuePolicy::Append,
             key: None,

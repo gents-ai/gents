@@ -633,6 +633,13 @@ pub struct DefraSessionHook {
     goal_tools_enabled: bool,
     goal_creation_enabled: bool,
     output_obligation_gate: Option<crate::agent::output_obligation::OutputObligationGate>,
+    steering_input_source: Option<Arc<SteeringInputSource>>,
+}
+
+struct SteeringInputSource {
+    request: crate::watcher::AgentRequest,
+    verifier: crate::request_admission::AgentRequestAdmissionVerifier,
+    natural_finish_allowed: bool,
 }
 
 enum PolicyDecision {
@@ -641,6 +648,26 @@ enum PolicyDecision {
 }
 
 impl DefraSessionHook {
+    pub(crate) fn with_steering_inputs(
+        mut self,
+        request: crate::watcher::AgentRequest,
+        verifier: crate::request_admission::AgentRequestAdmissionVerifier,
+    ) -> Self {
+        self.steering_input_source = Some(Arc::new(SteeringInputSource {
+            request,
+            verifier,
+            natural_finish_allowed: false,
+        }));
+        self
+    }
+    pub(crate) fn with_natural_finish(mut self, allowed: bool) -> Self {
+        if let Some(source) = self.steering_input_source.as_mut() {
+            if let Some(source) = Arc::get_mut(source) {
+                source.natural_finish_allowed = allowed;
+            }
+        }
+        self
+    }
     /// Register provider-published physical calls before dispatch.  The next
     /// matching hook invocation adopts, rather than creates, that exact row.
     pub(crate) async fn adopt_accepted_tool_calls(
@@ -774,6 +801,7 @@ impl DefraSessionHook {
             goal_tools_enabled: false,
             goal_creation_enabled: false,
             output_obligation_gate: None,
+            steering_input_source: None,
         }
     }
 
@@ -819,6 +847,7 @@ impl DefraSessionHook {
             goal_tools_enabled: false,
             goal_creation_enabled: false,
             output_obligation_gate: None,
+            steering_input_source: None,
         })
     }
 
@@ -1153,6 +1182,50 @@ impl gents_loop::session_hook::CanonicalSessionHook<crate::streaming::AcceptedTo
 
 #[async_trait::async_trait]
 impl gents_loop::session_hook::SessionHook for DefraSessionHook {
+    async fn pending_steering_inputs(
+        &self,
+    ) -> anyhow::Result<Vec<gents_loop::loop_stream::FoldedPrompt>> {
+        let Some(source) = self.steering_input_source.as_ref() else {
+            return Ok(Vec::new());
+        };
+        anyhow::ensure!(
+            crate::lifecycle::RequestLifecycle::input_publication_before_deadline(
+                Utc::now(),
+                self.state.lock().await.request_deadline_at,
+            ),
+            "request deadline expired before steering intake"
+        );
+        crate::lifecycle::queue::steering_inputs(&self.node, &source.request, &source.verifier)
+            .await
+    }
+
+    async fn finish_steering_snapshot(
+        &self,
+    ) -> anyhow::Result<Option<gents_loop::loop_stream::SteeringSnapshot>> {
+        let Some(source) = self
+            .steering_input_source
+            .as_ref()
+            .filter(|source| source.natural_finish_allowed)
+        else {
+            return Ok(None);
+        };
+        anyhow::ensure!(
+            crate::lifecycle::RequestLifecycle::input_publication_before_deadline(
+                Utc::now(),
+                self.state.lock().await.request_deadline_at,
+            ),
+            "request deadline expired before steering intake"
+        );
+        Ok(Some(
+            crate::lifecycle::queue::steering_snapshot(
+                &self.node,
+                &source.request,
+                &source.verifier,
+            )
+            .await?,
+        ))
+    }
+
     async fn on_completion_call_with_context(
         &self,
         prompt: &Message,

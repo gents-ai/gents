@@ -28,3 +28,6 @@ mod steward_loop_live;
 #[cfg(target_os = "macos")]
 #[path = "e2e_live/artifact_compiler_live.rs"]
 mod artifact_compiler_live;
+
+#[path = "e2e_live/steering_live.rs"]
+mod steering_live;

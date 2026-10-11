@@ -444,6 +444,8 @@ fn root_parent(node_did: &str, session_id: &str) -> AgentRequest {
 
 fn background_hints(parent: &AgentRequest) -> RequestQueue {
     RequestQueue {
+        delivery: Default::default(),
+        position: None,
         source: QueueSource::BackgroundCompletion,
         policy: QueuePolicy::Coalesce,
         key: Some(format!("background_completion:{}", parent.session_id)),

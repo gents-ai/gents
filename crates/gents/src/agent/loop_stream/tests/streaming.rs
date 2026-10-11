@@ -303,8 +303,18 @@ async fn retry_entry_does_not_publish_recorded_prompt_again() {
             futures::pin_mut!(stream);
             let mut authored = 0;
             while let Some(item) = stream.next().await {
-                if matches!(item.unwrap(), LoopStreamItem::AuthoredInputReady { .. }) {
-                    authored += 1;
+                match item.unwrap() {
+                    LoopStreamItem::AuthoredInputReady { reply, .. } => {
+                        authored += 1;
+                        let _ = reply.send(Ok(Vec::new()));
+                    }
+                    LoopStreamItem::SteeringBoundary { reply } => {
+                        let _ = reply.send(Ok(Vec::new()));
+                    }
+                    LoopStreamItem::FinishOrIntake { reply, .. } => {
+                        let _ = reply.send(Ok(gents_loop::loop_stream::FinishOrIntake::Finished));
+                    }
+                    _ => {}
                 }
             }
             authored

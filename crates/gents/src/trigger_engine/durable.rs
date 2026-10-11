@@ -264,14 +264,22 @@ pub(crate) async fn publish_goal_outcomes(
 
 /// Read the native first-arrival journal in the caller's claim snapshot.
 /// Missing arrivals are not replaced with content-ID or wall-clock ordering.
-pub(crate) async fn request_arrival_order(
+pub async fn request_arrival_order(
     txn: &ConfigApplyTxn<'_>,
     doc_ids: &[String],
 ) -> Result<Vec<String>> {
     if doc_ids.is_empty() {
         return Ok(Vec::new());
     }
-    let ids = crate::graphql::graphql_string_list_literal(doc_ids.iter().map(String::as_str));
+    let slots = crate::lifecycle::queue::effective_slots(txn, doc_ids).await?;
+    if slots.is_empty() {
+        return Ok(Vec::new());
+    }
+    let slot_ids = slots
+        .iter()
+        .map(|(_, slot)| slot.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    let ids = crate::graphql::graphql_string_list_literal(slot_ids.into_iter());
     let mut cursor = "0".to_owned();
     let mut ordered = Vec::new();
     loop {
@@ -300,7 +308,17 @@ pub(crate) async fn request_arrival_order(
         ensure!(next != cursor, "arrival cursor did not advance");
         cursor = next.into();
     }
-    Ok(ordered)
+    let positions = ordered
+        .iter()
+        .enumerate()
+        .map(|(index, id)| (id.as_str(), index))
+        .collect::<std::collections::HashMap<_, _>>();
+    let mut slots = slots
+        .into_iter()
+        .filter(|(_, slot)| positions.contains_key(slot.as_str()))
+        .collect::<Vec<_>>();
+    slots.sort_by_key(|(_, slot)| positions[slot.as_str()]);
+    Ok(slots.into_iter().map(|(id, _)| id).collect())
 }
 
 #[derive(Clone, serde::Deserialize)]

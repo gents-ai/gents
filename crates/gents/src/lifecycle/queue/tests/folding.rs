@@ -36,12 +36,14 @@ fn requester_did(db: &TestDb, requester: Option<u64>) -> Option<String> {
 
 /// The modeled turn context is the request's execution settings; context 1
 /// differs from the head only in its working directory.
-fn generated_input(entry: &LeanFoldQueueEntry) -> RequestInput {
+pub(super) fn generated_input(entry: &LeanFoldQueueEntry) -> RequestInput {
     let source: QueueSource = serde_json::from_value(json!(entry.source)).unwrap();
     let policy: QueuePolicy = serde_json::from_value(json!(entry.policy)).unwrap();
     let queue = match (source, entry.queued_after) {
-        (QueueSource::User, None) => None,
+        (QueueSource::User, None) if entry.delivery == "queue" => None,
         (source, queued_after) => Some(RequestQueue {
+            delivery: serde_json::from_value(json!(entry.delivery)).unwrap(),
+            position: None,
             source,
             policy,
             key: None,
@@ -54,22 +56,40 @@ fn generated_input(entry: &LeanFoldQueueEntry) -> RequestInput {
         cwd: match entry.turn_context {
             0 => None,
             1 => Some(OTHER_CWD.to_owned()),
-            other => panic!("no native settings for modeled turn context {other}"),
+            other => Some(format!("/tmp/gents-fold-context-{other}")),
         },
         queue,
         ..RequestInput::default()
     }
 }
 
-async fn enqueue(
+pub(super) async fn enqueue(
     db: &TestDb,
     session_id: &str,
     entry: &LeanFoldQueueEntry,
     arrival: usize,
 ) -> String {
+    enqueue_with_ttl(
+        db,
+        session_id,
+        entry,
+        arrival,
+        (!entry.fresh).then_some("2000-01-01T00:00:00Z"),
+    )
+    .await
+}
+
+async fn enqueue_with_ttl(
+    db: &TestDb,
+    session_id: &str,
+    entry: &LeanFoldQueueEntry,
+    arrival: usize,
+    valid_until: Option<&str>,
+) -> String {
     insert_row(
         &db.node,
         json!({
+            "valid_until": valid_until,
             "request_id": entry.request_id.to_string(),
             "purpose": "normal",
             "node_did": db.node_did(),
@@ -87,6 +107,38 @@ async fn enqueue(
         }),
     )
     .await
+}
+
+async fn enqueue_signed(
+    db: &TestDb,
+    session_id: &str,
+    entry: &LeanFoldQueueEntry,
+    arrival: usize,
+) -> String {
+    let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
+        entry.request_id.to_string(),
+        db.node_did(),
+        db.node_did(),
+        TEST_AGENT_ID,
+        session_id,
+        format!("message {}", entry.request_id),
+        "interactive",
+        format!("2026-09-01T00:00:{arrival:02}Z"),
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(db.node_did()),
+    );
+    create.input = generated_input(entry);
+    crate::sign_agent_request_create(db.identity.as_ref(), &mut create)
+        .await
+        .unwrap();
+    let response = crate::config_client::ConfigAccess::write_local_response(
+        &db.node,
+        "test.fold.signed",
+        &create.graphql_mutation().unwrap(),
+    )
+    .await
+    .unwrap();
+    extract_single_doc_id(&response, "create_AgentRequest").unwrap()
 }
 
 #[derive(Debug, Deserialize)]
@@ -449,22 +501,86 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
     use crate::lean_vocab_test::LeanFoldPublicationStep as Step;
 
     let cases = crate::lean_vocab_test::lean_fold_publication_cases();
+    let steering_cases = crate::lean_vocab_test::lean_steering_publication_cases();
     assert!(!cases.is_empty());
-    for case in cases {
+    assert!(!steering_cases.is_empty());
+    let loop_boundary_cases = steering_cases
+        .iter()
+        .filter(|case| {
+            case.steps.iter().any(|step| {
+                matches!(
+                    step,
+                    Step::Intake {
+                        safe_boundary: false,
+                        ..
+                    } | Step::FinishOrIntake {
+                        safe_boundary: false,
+                        ..
+                    }
+                )
+            })
+        })
+        .map(|case| case.name.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        loop_boundary_cases,
+        [
+            "streaming_boundary_does_not_take_input",
+            "natural_completion_during_stream_refuses"
+        ],
+        "only unsafe-boundary premises are delegated to loop tests"
+    );
+    for case in cases.iter().chain(steering_cases).filter(|case| {
+        !case.steps.iter().any(|step| {
+            matches!(
+                step,
+                Step::Intake {
+                    safe_boundary: false,
+                    ..
+                } | Step::FinishOrIntake {
+                    safe_boundary: false,
+                    ..
+                }
+            )
+        })
+    }) {
         let db = test_db(&case.name).await;
         let session_id = format!("fold-publication-{}", case.name);
+        crate::session::ensure_session_with_agent_id_and_requester_did(
+            &db.node,
+            &session_id,
+            db.node_did(),
+            TEST_AGENT_ID,
+            Some(db.node_did()),
+        )
+        .await
+        .unwrap();
+        let (_authority_owner, authority) =
+            crate::agent::p2p_reconcile::enrollment_authority_channel();
+        let verifier = crate::request_admission::AgentRequestAdmissionVerifier::new(
+            db.node.clone(),
+            db.identity.clone(),
+            authority,
+        );
         let mut bound = HashMap::new();
+        let mut arrival_ids = vec![case.head, case.selected];
+        let mut saved_message = None;
+        let clock_origin = chrono::Utc::now();
+        let mut observed_now = None;
         for (arrival, id) in [case.head, case.selected].into_iter().enumerate() {
             let entry = LeanFoldQueueEntry {
                 request_id: id,
                 execution_origin: "interactive".into(),
+                delivery: "queue".into(),
+                order_key: id,
                 source: "user".into(),
                 policy: "append".into(),
                 queued_after: Some(10),
-                requester_id: None,
+                requester_id: Some(1),
                 turn_context: 0,
+                fresh: true,
             };
-            bound.insert(id, enqueue(&db, &session_id, &entry, arrival).await);
+            bound.insert(id, enqueue_signed(&db, &session_id, &entry, arrival).await);
         }
         let head_doc = bound[&case.head].clone();
         let writer = DefraStreamWriter::new(db.node.clone(), db.node_did(), Duration::ZERO);
@@ -477,6 +593,14 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
         for (index, (step, expected)) in case.steps.iter().zip(&case.expected).enumerate() {
             let before = durable_facts(&db.node, &session_id).await;
             let accepted = match step {
+                Step::ObserveDeadline { now, deadline } => {
+                    observed_now = Some(clock_origin + chrono::Duration::milliseconds(*now as i64));
+                    for turn in generations.values_mut() {
+                        turn.lifecycle.claimed_deadline_at =
+                            Some(clock_origin + chrono::Duration::milliseconds(*deadline as i64));
+                    }
+                    true
+                }
                 Step::PublishPrompt { generation } | Step::PublishChangedPrompt { generation } => {
                     let content = if matches!(step, Step::PublishPrompt { .. }) {
                         "prompt"
@@ -496,10 +620,11 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
                     generation,
                     request_id,
                 } => writer
-                    .publish_authored_message(
+                    .publish_authored_message_with_time(
                         &generations[generation].lifecycle,
                         &folded_input_key(&bound[request_id]),
                         &gents_protocol::message::Message::user(format!("message {request_id}")),
+                        observed_now,
                     )
                     .await
                     .is_ok(),
@@ -507,7 +632,7 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
                     writer
                         .start_provider_attempt(&head_doc, 0, 0, scope.clone())
                         .await;
-                    writer
+                    match writer
                         .publish_native_turn(
                             &generations[generation].lifecycle,
                             0,
@@ -515,7 +640,13 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
                             &gents_protocol::message::Message::assistant("answer"),
                         )
                         .await
-                        .is_ok()
+                    {
+                        Ok(receipt) => {
+                            saved_message = Some(receipt.message_doc_id);
+                            true
+                        }
+                        Err(_) => false,
+                    }
                 }
                 Step::Recover { expected, fresh } => {
                     let mut request = generations[expected].lifecycle.request().clone();
@@ -556,6 +687,100 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
                     .await
                     .is_ok(),
                 Step::Finish => true,
+                Step::EnqueueSteering { request_id } => {
+                    let entry = LeanFoldQueueEntry {
+                        request_id: *request_id,
+                        execution_origin: "interactive".into(),
+                        delivery: "steer".into(),
+                        order_key: *request_id,
+                        source: "user".into(),
+                        policy: "append".into(),
+                        queued_after: Some(case.head),
+                        requester_id: Some(1),
+                        turn_context: 0,
+                        fresh: true,
+                    };
+                    let id = enqueue_signed(&db, &session_id, &entry, arrival_ids.len()).await;
+                    bound.insert(*request_id, id);
+                    arrival_ids.push(*request_id);
+                    true
+                }
+                Step::Intake {
+                    generation,
+                    safe_boundary,
+                }
+                | Step::FinishOrIntake {
+                    generation,
+                    safe_boundary,
+                } => {
+                    assert!(
+                        *safe_boundary,
+                        "unsafe provider boundary belongs to loop owner"
+                    );
+                    let turn = generations.get_mut(generation).unwrap();
+                    if !turn.lifecycle.owns_execution().await.unwrap()
+                        || !crate::lifecycle::RequestLifecycle::input_publication_before_deadline(
+                            observed_now.unwrap_or_else(chrono::Utc::now),
+                            turn.lifecycle.claimed_deadline_at(),
+                        )
+                    {
+                        false
+                    } else {
+                        let snapshot = super::super::intake::steering_snapshot(
+                            &db.node,
+                            turn.lifecycle.request(),
+                            &verifier,
+                        )
+                        .await
+                        .unwrap();
+                        let selected = snapshot
+                            .inputs
+                            .iter()
+                            .map(|input| {
+                                *bound
+                                    .iter()
+                                    .find(|(_, doc)| folded_input_key(doc) == input.key)
+                                    .unwrap()
+                                    .0
+                            })
+                            .collect::<Vec<_>>();
+                        if !selected.is_empty() || matches!(step, Step::Intake { .. }) {
+                            turn.selected = selected;
+                            true
+                        } else {
+                            turn.lifecycle
+                                .finish_natural_turn(
+                                    saved_message.as_deref().expect("accepted provider turn"),
+                                    &snapshot.pending_request_doc_ids,
+                                )
+                                .await
+                                .unwrap()
+                        }
+                    }
+                }
+                Step::CancelFirstPending => {
+                    let access = crate::config_client::ConfigAccess::Local(db.node.clone());
+                    let snapshot =
+                        pending_user_queue(&access, db.node_did(), &session_id, db.node_did())
+                            .await
+                            .unwrap();
+                    if let Some(first) = snapshot.entries.first() {
+                        let result = replace_pending_user_messages(&access, db.identity.as_ref(),
+                            gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(db.node_did()),
+                            db.node_did(), &session_id, db.node_did(), PendingQueueEdit {
+                                expected_request_doc_ids: snapshot.entries.iter().map(|entry| entry.request_doc_id.clone()).collect(),
+                                selected_request_doc_ids: vec![first.request_doc_id.clone()], messages: vec![],
+                            }).await;
+                        if result.is_ok() {
+                            for turn in generations.values_mut() {
+                                turn.selected.clear();
+                            }
+                        }
+                        result.is_ok()
+                    } else {
+                        false
+                    }
+                }
             };
             let label = format!("{} step {index} {step:?}", case.name);
             assert_eq!(accepted, expected.accepted, "{label}: acceptance");
@@ -576,11 +801,11 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
                     .map(str::to_owned)
                 })
                 .map(|key| {
-                    if key == folded_input_key(&bound[&case.selected]) {
-                        format!("folded:{}", case.selected)
-                    } else {
-                        key
-                    }
+                    bound
+                        .iter()
+                        .find(|(_, doc)| key == folded_input_key(doc))
+                        .map(|(id, _)| format!("folded:{id}"))
+                        .unwrap_or(key)
                 })
                 .collect::<Vec<_>>();
             assert_eq!(keys, expected.authored_keys, "{label}: authored keys");
@@ -609,8 +834,10 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
             } else {
                 Vec::new()
             };
-            let pending = [case.selected]
-                .into_iter()
+            let pending = arrival_ids
+                .iter()
+                .copied()
+                .filter(|id| *id != case.head)
                 .filter(|id| state(*id) == RequestLifecycleState::Pending && !folding.contains(id))
                 .collect::<Vec<_>>();
             let terminal = [case.head, case.selected]
@@ -625,6 +852,151 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
             assert_eq!(folding, expected.folding, "{label}: selected");
             assert_eq!(pending, expected.pending, "{label}: pending");
             assert_eq!(terminal, expected.terminal, "{label}: terminal");
+        }
+    }
+}
+
+#[tokio::test]
+async fn claim_selected_publication_keeps_later_incompatible_pending_row() {
+    let db = test_db("fold-selected-after-head").await;
+    let session_id = "fold-selected-after-head";
+    let mut bound = HashMap::new();
+    for (arrival, (id, context, queued_after)) in
+        [(2, 0, None), (3, 0, Some(2))].into_iter().enumerate()
+    {
+        let entry = LeanFoldQueueEntry {
+            request_id: id,
+            execution_origin: "interactive".into(),
+            delivery: "queue".into(),
+            order_key: id,
+            source: "user".into(),
+            policy: "append".into(),
+            queued_after,
+            requester_id: Some(1),
+            turn_context: context,
+            fresh: true,
+        };
+        bound.insert(id, enqueue_signed(&db, session_id, &entry, arrival).await);
+    }
+    let mut active = claim_head(&db, &bound, 2, &[3]).await;
+    assert_eq!(active.selected, vec![3]);
+    let writer = DefraStreamWriter::new(db.node.clone(), db.node_did(), Duration::ZERO);
+    active.begin(&writer).await;
+    let incompatible = LeanFoldQueueEntry {
+        request_id: 1,
+        execution_origin: "interactive".into(),
+        delivery: "queue".into(),
+        order_key: 1,
+        source: "user".into(),
+        policy: "append".into(),
+        queued_after: None,
+        requester_id: Some(1),
+        turn_context: 1,
+        fresh: true,
+    };
+    bound.insert(1, enqueue_signed(&db, session_id, &incompatible, 2).await);
+    let before = fold_rows(&db.node, session_id).await;
+    assert_eq!(
+        before
+            .iter()
+            .find(|row| row.request_id == "1")
+            .unwrap()
+            .lifecycle_state,
+        RequestLifecycleState::Pending
+    );
+
+    writer
+        .publish_authored_message(
+            &active.lifecycle,
+            &folded_input_key(&bound[&3]),
+            &gents_protocol::message::Message::user("message 3"),
+        )
+        .await
+        .unwrap();
+    let rows = fold_rows(&db.node, session_id).await;
+    let incompatible = rows.iter().find(|row| row.request_id == "1").unwrap();
+    let folded = rows.iter().find(|row| row.request_id == "3").unwrap();
+    assert_eq!(incompatible.lifecycle_state, RequestLifecycleState::Pending);
+    assert!(incompatible.superseded_by_request_doc_id.is_none());
+    assert_eq!(folded.lifecycle_state, RequestLifecycleState::Superseded);
+    assert_eq!(
+        folded.superseded_by_request_doc_id.as_deref(),
+        Some(bound[&2].as_str())
+    );
+}
+
+#[tokio::test]
+async fn expired_or_malformed_steering_is_a_modelled_publication_barrier() {
+    use crate::lean_vocab_test::LeanQueueManagementOperation;
+    for (name, ttl) in [
+        ("expired_steering_is_barrier", "2000-01-01T00:00:00Z"),
+        ("malformed_ttl_steering_is_barrier", "not-a-timestamp"),
+    ] {
+        let case = crate::lean_vocab_test::lean_queue_management_cases()
+            .iter()
+            .find(|case| case.name == name)
+            .unwrap();
+        let LeanQueueManagementOperation::Intake { active: head, .. } = &case.operation else {
+            panic!("expected intake case");
+        };
+        let db = test_db(name).await;
+        let session_id = name;
+        let head_doc = enqueue_signed(&db, session_id, head, 0).await;
+        let mut bound = HashMap::from([(head.request_id, head_doc)]);
+        let mut active = claim_head(&db, &bound, head.request_id, &[]).await;
+        let writer = DefraStreamWriter::new(db.node.clone(), db.node_did(), Duration::ZERO);
+        active.begin(&writer).await;
+        for (index, entry) in case.before.pending.iter().enumerate() {
+            let doc = if entry.fresh {
+                enqueue_signed(&db, session_id, entry, index + 1).await
+            } else {
+                // Corrupt TTL cannot pass canonical signing; seed it directly to
+                // exercise the reader's fail-closed handling of stored corruption.
+                enqueue_with_ttl(&db, session_id, entry, index + 1, Some(ttl)).await
+            };
+            bound.insert(entry.request_id, doc);
+        }
+        let (_owner, authority) = crate::agent::p2p_reconcile::enrollment_authority_channel();
+        let verifier = crate::request_admission::AgentRequestAdmissionVerifier::new(
+            db.node.clone(),
+            db.identity.clone(),
+            authority,
+        );
+        let snapshot = super::super::intake::steering_snapshot(
+            &db.node,
+            active.lifecycle.request(),
+            &verifier,
+        )
+        .await
+        .unwrap();
+        let expected = case.expected.as_ref().unwrap();
+        assert_eq!(snapshot.inputs.len(), expected.folding.len(), "{name}");
+        assert!(snapshot.inputs.is_empty(), "{name}");
+        let blocked = &case.before.pending[0];
+        let error = writer
+            .publish_authored_message(
+                &active.lifecycle,
+                &folded_input_key(&bound[&blocked.request_id]),
+                &gents_protocol::message::Message::user(format!("message {}", blocked.request_id)),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            error.is::<super::super::PendingInputChanged>(),
+            "{name}: {error:#}"
+        );
+        let rows = fold_rows(&db.node, session_id).await;
+        for entry in &expected.pending {
+            let row = rows
+                .iter()
+                .find(|row| row.request_id == entry.request_id.to_string())
+                .unwrap();
+            assert_eq!(
+                row.lifecycle_state,
+                RequestLifecycleState::Pending,
+                "{name}"
+            );
+            assert!(row.superseded_by_request_doc_id.is_none(), "{name}");
         }
     }
 }

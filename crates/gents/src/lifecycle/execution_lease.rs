@@ -218,6 +218,49 @@ impl RequestLifecycle {
             .await
     }
 
+    /// Finishes an interactive request against its observed whole pending queue.
+    /// DefraDB 980190c mutates the AgentRequest arrival head for local and P2P
+    /// inserts in their document transaction. Reading that head inside the
+    /// finalizer supplies the point-read conflict fence that RepeatableRead
+    /// predicate scans alone cannot provide.
+    pub(crate) async fn finish_natural_turn(
+        &mut self,
+        message_doc_id: &str,
+        pending_request_doc_ids: &[String],
+    ) -> Result<bool> {
+        anyhow::ensure!(
+            self.claimed_deadline_at
+                .is_none_or(|deadline| Utc::now() < deadline),
+            "request deadline expired before natural completion"
+        );
+        let generation = self.execution_generation()?.to_owned();
+        let result = terminalize_execution_with_time(
+            &self.node,
+            &self.request.doc_id,
+            TerminalAuthority::Owner(&generation),
+            RequestTerminalOutcome::Completed,
+            Some(TerminalOutput::Message {
+                message_doc_id: message_doc_id.to_owned(),
+            }),
+            "",
+            None,
+            None,
+            Some((pending_request_doc_ids, self.claimed_deadline_at)),
+        )
+        .await;
+        match result {
+            Err(error) if error.is::<PendingQueueChanged>() => Ok(false),
+            Err(error) => Err(error),
+            Ok(TerminalizeResult::Lost) => {
+                anyhow::bail!("natural completion lost execution ownership")
+            }
+            Ok(_) => {
+                self.state = LocalLifecycleState::Completed;
+                Ok(true)
+            }
+        }
+    }
+
     pub async fn terminalize_owned(
         &mut self,
         outcome: RequestTerminalOutcome,
@@ -330,6 +373,7 @@ pub(crate) async fn revoke_execution_preserving_output_at(
         reason,
         Some(now),
         Some(fresh_generation),
+        None,
     )
     .await
 }
@@ -349,6 +393,7 @@ async fn terminalize_execution(
         outcome,
         selection,
         reason,
+        None,
         None,
         None,
     )
@@ -373,6 +418,7 @@ pub(crate) async fn terminalize_owned_at(
         "",
         Some(now),
         None,
+        None,
     )
     .await
 }
@@ -386,6 +432,7 @@ async fn terminalize_execution_with_time(
     reason: &str,
     fixture_now: Option<DateTime<Utc>>,
     fixture_fresh_generation: Option<&str>,
+    pending_fence: Option<(&[String], Option<DateTime<Utc>>)>,
 ) -> Result<TerminalizeResult> {
     use super::execution_policy::{
         authorize_execution_revocation, authorize_finalize, LeaseObservation,
@@ -401,6 +448,9 @@ async fn terminalize_execution_with_time(
         node, None, crate::config_client::IdempotentTransactionRetry::Standard,
         "lifecycle.terminalize_execution",
         move |txn| Box::pin(async move {
+            if pending_fence.is_some() {
+                txn.execute(r#"{ _documentArrivals(collection: "AgentRequest", limit: 1) { head } }"#).await?;
+            }
             let doc_id = escape_graphql_string(request_doc_id);
             let result = txn.execute_local_response(&format!(r#"{{ AgentRequest(
                 filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{
@@ -444,6 +494,12 @@ async fn terminalize_execution_with_time(
             }
             let agent = row.node_did.as_deref().context("missing request agent")?;
             let session_id = row.session_id.as_deref().context("missing request session")?;
+            if let Some((expected, request_deadline)) = pending_fence {
+                anyhow::ensure!(request_deadline.is_none_or(|deadline| Utc::now() < deadline), "request deadline expired before natural completion");
+                let actual = super::queue::pending_ids_in_txn(txn, agent, session_id).await?;
+                if actual != expected { return Err(PendingQueueChanged.into()); }
+            }
+
             let headers = session::load_request_headers_in_txn(
                 txn, session_id, agent, row.requester_did.as_deref(), request_doc_id
             ).await?;
@@ -636,3 +692,7 @@ pub(super) fn validate_title_sources_decided(
 
 #[cfg(test)]
 mod tests;
+
+#[derive(Debug, thiserror::Error)]
+#[error("pending input changed before natural completion")]
+struct PendingQueueChanged;

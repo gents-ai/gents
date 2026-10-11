@@ -303,6 +303,8 @@ async fn drive_redrive(case: &LeanR6BackgroundingCase) {
     let before = load_canonical_goal(node, did, session).await.unwrap();
     let input = RequestInput {
         queue: Some(RequestQueue {
+            delivery: Default::default(),
+            position: None,
             source: QueueSource::BackgroundCompletion,
             policy: QueuePolicy::Coalesce,
             key: Some(format!("background_completion:{session}")),
@@ -687,6 +689,8 @@ async fn a_retried_over_bound_wake_is_refused_again() {
     let refused_wake = "refused-over-bound-wake";
     let input = RequestInput {
         queue: Some(RequestQueue {
+            delivery: Default::default(),
+            position: None,
             source: QueueSource::BackgroundCompletion,
             policy: QueuePolicy::Coalesce,
             key: Some(format!("background_completion:{session}")),

@@ -634,7 +634,7 @@ pub(crate) async fn publish_provider_turn_at(
     publish_provider_turn_with_time(node, generation, plan, Some(now)).await
 }
 
-async fn publish_provider_turn_with_time(
+pub(super) async fn publish_provider_turn_with_time(
     node: &EmbeddedNode,
     generation: &str,
     plan: ProviderPublicationPlan,
@@ -705,6 +705,17 @@ async fn publish_provider_turn_with_time(
                 return Ok(published);
             }
             anyhow::ensure!(records.iter().all(|row| row.segment.close.is_none()), "provider source is already closed");
+            if plan.consumes_folded.is_some() {
+                let deadline = DateTime::parse_from_rfc3339(&tool_deadline_at)?
+                    .with_timezone(&Utc);
+                anyhow::ensure!(
+                    crate::lifecycle::RequestLifecycle::input_publication_before_deadline(
+                        fixture_now.unwrap_or_else(Utc::now), Some(deadline),
+                    ),
+                    "request deadline expired before steering publication"
+                );
+            }
+
             let prepared = exemplar;
             let mut observations = records.iter().map(|row| ObservedSegment { doc_id: &row.doc_id, segment: &row.segment }).collect::<Vec<_>>();
             if prepared.ordinal.is_some() {
@@ -811,7 +822,14 @@ async fn publish_provider_turn_with_time(
             anyhow::ensure!(response.data.as_ref().and_then(|data| data.get("update_AgentRequest"))
                 .is_some_and(crate::graphql::response_has_documents), "provider publication lost request CAS");
             if let Some(consumption) = plan.consumes_folded.as_ref() {
-                crate::lifecycle::queue::consume_folded_in_txn(txn, consumption, &prepared.created_at).await?;
+                anyhow::ensure!(
+                    crate::lifecycle::RequestLifecycle::input_publication_before_deadline(
+                        fixture_now.unwrap_or_else(Utc::now),
+                        Some(DateTime::parse_from_rfc3339(&tool_deadline_at)?.with_timezone(&Utc)),
+                    ),
+                    "request deadline expired before steering consumption"
+                );
+                crate::lifecycle::queue::consume_folded_in_txn(txn, consumption, &prepared.created_at, expected.as_ref()).await?;
             }
             let accepted_tools = encoded.tool_calls.iter().zip(tool_doc_ids).map(|(tool, tool_call_doc_id)| {
                 super::AcceptedToolCall {

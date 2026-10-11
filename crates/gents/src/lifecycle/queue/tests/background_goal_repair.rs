@@ -16,6 +16,8 @@ async fn fixture(name: &str) -> (TestDb, AgentRequest) {
 
 fn hints(parent: &AgentRequest) -> RequestQueue {
     RequestQueue {
+        delivery: Default::default(),
+        position: None,
         source: QueueSource::BackgroundCompletion,
         policy: QueuePolicy::Coalesce,
         key: Some(format!("background_completion:{}", parent.session_id)),

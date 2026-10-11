@@ -182,6 +182,8 @@ async fn enqueue_generated_wake(
         ),
         "review notifications",
         RequestQueue {
+            delivery: Default::default(),
+            position: None,
             source,
             policy,
             key: Some(format!("background_completion:{key}")),
@@ -211,6 +213,8 @@ async fn insert_generated_pending(
         .to_rfc3339();
     let input = RequestInput {
         queue: Some(RequestQueue {
+            delivery: Default::default(),
+            position: None,
             source,
             policy,
             key: entry
@@ -749,6 +753,8 @@ async fn interrupted_queue_drain_rolls_back_with_latch() {
         "background-completion-notification:rollback:tool",
         "review notifications",
         RequestQueue {
+            delivery: Default::default(),
+            position: None,
             source: QueueSource::BackgroundCompletion,
             policy: QueuePolicy::Coalesce,
             key: Some("background_completion:900".into()),

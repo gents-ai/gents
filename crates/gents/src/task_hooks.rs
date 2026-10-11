@@ -556,10 +556,11 @@ impl TaskHookExec for ManagedTaskHookExec {
 /// running it without the hooks it was fired under would skip the operator's
 /// gates, so the binding fails closed. Claim admission already refuses an
 /// automated request whose Trigger is gone.
+/// The owner flag remains true for a Task with no configured hooks.
 pub(crate) async fn resolve_request_task_hooks(
     node: &EmbeddedNode,
     request: &AgentRequest,
-) -> Result<Vec<TaskHook>> {
+) -> Result<(Vec<TaskHook>, bool)> {
     let task_id = match load_fire_task_id(node, &request.node_did, &request.request_id).await? {
         Some(task_id) => Some(task_id),
         None if request.has_automated_trigger_lineage() => {
@@ -572,7 +573,7 @@ pub(crate) async fn resolve_request_task_hooks(
         None => None,
     };
     let Some(task_id) = task_id else {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), false));
     };
     let task = load_task(node, &request.node_did, &task_id)
         .await?
@@ -585,7 +586,7 @@ pub(crate) async fn resolve_request_task_hooks(
     );
     task.validate()
         .with_context(|| format!("Task {task_id} hooks are not admissible"))?;
-    Ok(task.hooks)
+    Ok((task.hooks, true))
 }
 
 fn nonempty_task_id(task_id: Option<String>) -> Option<String> {

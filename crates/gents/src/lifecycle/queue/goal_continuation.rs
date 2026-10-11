@@ -56,6 +56,8 @@ pub(crate) fn prepare_goal_continuation(
         goal_continuation_identity(goal_id, &parent.request_id, continuation_sequence)?;
     let input = RequestInput {
         queue: Some(RequestQueue {
+            delivery: Default::default(),
+            position: None,
             source: QueueSource::Goal,
             policy: QueuePolicy::Coalesce,
             key: Some(continuation.queue_key),

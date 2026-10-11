@@ -212,6 +212,13 @@ pub enum LoopStreamItem {
     OutputObligationPending {
         reminder: Message,
     },
+    FinishOrIntake {
+        text: String,
+        reply: tokio::sync::oneshot::Sender<anyhow::Result<FinishOrIntake>>,
+    },
+    SteeringBoundary {
+        reply: tokio::sync::oneshot::Sender<anyhow::Result<Vec<FoldedPrompt>>>,
+    },
     /// Owned execution publishes admitted input before the first provider
     /// invocation. Tool continuation messages already have delivery owners.
     AuthoredInputReady {
@@ -219,6 +226,7 @@ pub enum LoopStreamItem {
         prompt: Message,
         /// Folded messages after the prompt, each with its authored key.
         folded: Vec<(String, Message)>,
+        reply: tokio::sync::oneshot::Sender<anyhow::Result<Vec<FoldedPrompt>>>,
     },
 }
 
@@ -286,4 +294,15 @@ pub struct AuthoredInput {
 pub struct FoldedPrompt {
     pub key: String,
     pub message: Message,
+}
+
+#[derive(Debug)]
+pub enum FinishOrIntake {
+    Finished,
+    Continue(Vec<FoldedPrompt>),
+}
+
+pub struct SteeringSnapshot {
+    pub pending_request_doc_ids: Vec<String>,
+    pub inputs: Vec<FoldedPrompt>,
 }

@@ -11,6 +11,10 @@ use gents_protocol::request_admission::RequestPurpose;
 /// `superseded_by_request_doc_id`. Other supersessions never carry it.
 pub const FOLDED_REASON: &str = "folded into claimed request";
 
+#[derive(Debug, thiserror::Error)]
+#[error("pending input was changed before it was consumed")]
+pub(crate) struct PendingInputChanged;
+
 /// Authored key of a folded message within its claimed request.
 pub(crate) fn folded_input_key(folded_request_doc_id: &str) -> String {
     format!("folded:{folded_request_doc_id}")
@@ -61,15 +65,23 @@ pub(crate) struct FoldedConsumption {
     pub(crate) head_request_id: String,
     pub(crate) head_doc_id: String,
     pub(crate) node_did: String,
+    head: AgentRequest,
+    selected_at_claim: bool,
 }
 
 impl FoldedConsumption {
-    pub(crate) fn for_key(head: &AgentRequest, key: &str) -> Option<Self> {
+    pub(crate) fn for_key(
+        head: &AgentRequest,
+        key: &str,
+        selected: &[FoldedInput],
+    ) -> Option<Self> {
         folded_request_doc_id(key).map(|folded| Self {
             folded_request_doc_id: folded.to_owned(),
             head_request_id: head.request_id.clone(),
             head_doc_id: head.doc_id.clone(),
             node_did: head.node_did.clone(),
+            head: head.clone(),
+            selected_at_claim: selected.iter().any(|entry| entry.request_doc_id == folded),
         })
     }
 }
@@ -93,11 +105,10 @@ fn folds_into(
             && queue.interrupted_request_id.is_none()
             && queue.background_completion_wake_version.is_none()
     });
-    let unexpired = row.valid_until.as_deref().is_none_or(|valid_until| {
-        valid_until.trim().is_empty()
-            || chrono::DateTime::parse_from_rfc3339(valid_until)
-                .is_ok_and(|deadline| deadline.with_timezone(&chrono::Utc) >= now)
-    });
+    let unexpired = matches!(
+        crate::lifecycle::parse_valid_until(row.valid_until.as_deref(), now),
+        crate::lifecycle::TtlOutcome::NotSet | crate::lifecycle::TtlOutcome::Live(_)
+    );
     queued_user
         && unexpired
         && row.lifecycle_state == Some(RequestLifecycleState::Pending)
@@ -238,13 +249,60 @@ pub(crate) async fn consume_folded_in_txn(
     txn: &ConfigApplyTxn<'_>,
     consumption: &FoldedConsumption,
     published_at: &str,
+    expected: &gents_protocol::message::Message,
 ) -> Result<()> {
+    let response = txn
+        .execute(&pending_session_query(&consumption.head))
+        .await?;
+    let rows: Vec<AgentRequestRow> =
+        serde_json::from_value(response["data"]["AgentRequest"].clone())?;
+    let mut ids = rows
+        .iter()
+        .map(|row| {
+            row.doc_id
+                .clone()
+                .context("pending input lacks physical identity")
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if consumption.selected_at_claim {
+        ids.push(consumption.head_doc_id.clone());
+    }
+    let order = crate::trigger_engine::durable::request_arrival_order(txn, &ids).await?;
+    anyhow::ensure!(
+        order.len() == ids.len(),
+        "pending input arrival order is incomplete"
+    );
+    let first_id = if consumption.selected_at_claim {
+        order
+            .iter()
+            .position(|id| id == &consumption.head_doc_id)
+            .and_then(|index| order.get(index + 1))
+    } else {
+        order.first()
+    };
+    let first = first_id.and_then(|id| rows.iter().find(|row| row.doc_id.as_ref() == Some(id)));
+    let Some(row) = first else {
+        return Err(PendingInputChanged.into());
+    };
+    let selected = if consumption.selected_at_claim {
+        folds_into(&consumption.head, row, chrono::Utc::now())
+    } else {
+        super::intake::steering_compatible(&consumption.head, row, chrono::Utc::now())
+    };
+    if row.doc_id.as_deref() != Some(consumption.folded_request_doc_id.as_str())
+        || !selected
+        || expected
+            != &gents_protocol::message::Message::user(row.content.clone().unwrap_or_default())
+    {
+        return Err(PendingInputChanged.into());
+    }
     let doc_id = escape_graphql_string(&consumption.folded_request_doc_id);
     let mutation = format!(
         r#"mutation {{ update_AgentRequest(docID: "{doc_id}", filter: {{
             _docID: {{ _eq: "{doc_id}" }},
             node_did: {{ _eq: "{}" }},
-            lifecycle_state: {{ _eq: "pending" }}
+            lifecycle_state: {{ _eq: "pending" }},
+            interrupt_requested_at: {{ _eq: null }}
         }}, input: {{
             lifecycle_state: "superseded",
             superseded_by_request: "{}",
@@ -262,13 +320,14 @@ pub(crate) async fn consume_folded_in_txn(
     let response = txn.execute(&mutation).await?;
     let updated = response["data"]["update_AgentRequest"]
         .as_array()
-        .filter(|rows| rows.len() == 1)
-        .with_context(|| {
-            format!(
-                "folded request {} is no longer pending",
-                consumption.folded_request_doc_id
-            )
-        })?;
+        .context("folded input publication omitted affected rows")?;
+    if updated.is_empty() {
+        return Err(PendingInputChanged.into());
+    }
+    anyhow::ensure!(
+        updated.len() == 1,
+        "folded input publication changed multiple rows"
+    );
     let request_id = updated[0]["request_id"]
         .as_str()
         .context("folded request receipt omitted request_id")?

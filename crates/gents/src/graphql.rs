@@ -219,7 +219,7 @@ pub fn single_mutation_document<'a>(
 /// Extract the exact identity of a single create from a transaction envelope.
 /// Use the same mutation normalization as other storage adapters: the pinned
 /// DefraDB accepts `create_` but returns `add_` unless explicitly aliased.
-pub(crate) fn created_doc_id(response: &Value, collection: &str) -> Result<String> {
+pub fn created_doc_id(response: &Value, collection: &str) -> Result<String> {
     anyhow::ensure!(
         response
             .get("errors")

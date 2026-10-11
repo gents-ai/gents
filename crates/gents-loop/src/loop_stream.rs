@@ -59,9 +59,10 @@ mod tool_dispatch;
 mod turn_threading;
 
 pub use contract::{
-    AuthoredInput, FoldedPrompt, LoopConfig, LoopReplayInput, LoopStreamItem, RenderedRequestSink,
-    ReplayEvidenceResolver, ReplayEvidenceRow, ReplayEvidenceViolation, StructuredOutputConfig,
-    TaggedMessage, TurnCompactionOutcome, TurnCompactionRequest,
+    AuthoredInput, FinishOrIntake, FoldedPrompt, LoopConfig, LoopReplayInput, LoopStreamItem,
+    RenderedRequestSink, ReplayEvidenceResolver, ReplayEvidenceRow, ReplayEvidenceViolation,
+    SteeringSnapshot, StructuredOutputConfig, TaggedMessage, TurnCompactionOutcome,
+    TurnCompactionRequest,
 };
 pub use one_shot::{
     run_loop_to_text, run_loop_to_typed, AuxiliaryPersistenceFailure, OneShotNoVisibleOutput,
@@ -189,12 +190,9 @@ where
         // prompt (mirrors Lean `PromptAssembly.Template.assembleWithContext`).
         let mut new_messages: Vec<TaggedMessage> =
             assemble_new_messages(config.context_message.clone(), prompt);
-        new_messages.extend(
-            config
-                .folded_prompts
-                .iter()
-                .map(|folded| TaggedMessage::unassociated(folded.message.clone())),
-        );
+        if hook.is_none() {
+            new_messages.extend(config.folded_prompts.iter().map(|row| TaggedMessage::unassociated(row.message.clone())));
+        }
         // Request-local and cumulative across turns, retries, and compaction.
         let mut invalid_tool_progress = invalid_tool_progress::InvalidToolProgress::default();
         let mut repeated_tool_failure = repeated_tool_failure::RepeatedToolFailure::default();
@@ -240,6 +238,7 @@ where
                     prompt: authored_prompt.clone(),
                     folded: config.folded_prompts.clone(),
                 });
+                let (reply, committed) = tokio::sync::oneshot::channel();
                 yield LoopStreamItem::AuthoredInputReady {
                     context: authored.context,
                     prompt: authored.prompt,
@@ -248,7 +247,14 @@ where
                         .into_iter()
                         .map(|folded| (folded.key, folded.message))
                         .collect(),
+                    reply,
                 };
+                new_messages.extend(receive_steering(committed).await?.into_iter().map(|row| TaggedMessage::unassociated(row.message)));
+            }
+            if hook.is_some() {
+                let (reply, committed) = tokio::sync::oneshot::channel();
+                yield LoopStreamItem::SteeringBoundary { reply };
+                new_messages.extend(receive_steering(committed).await?.into_iter().map(|row| TaggedMessage::unassociated(row.message)));
             }
             let preparation_started = std::time::Instant::now();
             let (mut request, turn_context_decision) = build_budgeted_request(
@@ -1189,6 +1195,24 @@ where
             }
 
             if pending_results.is_empty() {
+                if hook.is_some() {
+                    let (reply, committed) = tokio::sync::oneshot::channel();
+                    yield LoopStreamItem::SteeringBoundary { reply };
+                    let committed = receive_steering(committed).await?;
+                    if !committed.is_empty() {
+                        if let Some(mut message) = accumulator.take_message() {
+                            if let Message::Assistant { id, .. } = &mut message {
+                                *id = stream.message_id.clone();
+                            }
+                            new_messages.push(TaggedMessage {
+                                message, source: accepted_source.clone(),
+                                physical_header: None, block_indices: Vec::new(),
+                            });
+                        }
+                        new_messages.extend(committed.into_iter().map(|row| TaggedMessage::unassociated(row.message)));
+                        continue 'turns;
+                    }
+                }
                 if let Some(gate) = config.output_obligation_gate.as_ref() {
                     let unmet = gate.unmet().await.map_err(|error| {
                         StreamingError::Completion(CompletionError::ProviderError(format!(
@@ -1215,6 +1239,25 @@ where
                         continue 'turns;
                     }
                 }
+                if hook.is_some() {
+                    let (reply, decision) = tokio::sync::oneshot::channel();
+                    yield LoopStreamItem::FinishOrIntake { text: turn_text.clone(), reply };
+                    match decision.await.map_err(|error| StreamingError::Completion(CompletionError::ProviderError(format!("finish acknowledgment dropped: {error}"))))?
+                        .map_err(|error| StreamingError::Completion(CompletionError::ProviderError(format!("finish or intake failed: {error:#}"))))? {
+                        FinishOrIntake::Finished => {
+                            yield LoopStreamItem::Final { text: turn_text.clone() };
+                            break 'turns;
+                        },
+                        FinishOrIntake::Continue(inputs) => {
+                            if let Some(mut message) = accumulator.take_message() {
+                                if let Message::Assistant { id, .. } = &mut message { *id = stream.message_id.clone(); }
+                                new_messages.push(TaggedMessage { message, source: accepted_source.clone(), physical_header: None, block_indices: Vec::new() });
+                            }
+                            new_messages.extend(inputs.into_iter().map(|input| TaggedMessage::unassociated(input.message)));
+                            continue 'turns;
+                        }
+                    }
+                }
                 yield LoopStreamItem::Final { text: turn_text.clone() };
                 break 'turns;
             }
@@ -1232,6 +1275,23 @@ where
         }
         }
     }
+}
+
+async fn receive_steering(
+    committed: tokio::sync::oneshot::Receiver<anyhow::Result<Vec<FoldedPrompt>>>,
+) -> Result<Vec<FoldedPrompt>, StreamingError> {
+    committed
+        .await
+        .map_err(|error| {
+            StreamingError::Completion(CompletionError::ProviderError(format!(
+                "steering publication acknowledgment dropped: {error}"
+            )))
+        })?
+        .map_err(|error| {
+            StreamingError::Completion(CompletionError::ProviderError(format!(
+                "steering publication failed: {error:#}"
+            )))
+        })
 }
 
 async fn sleep_retry_delay(
