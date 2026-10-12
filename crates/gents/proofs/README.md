@@ -135,8 +135,9 @@ with scoped native ACP observations for every document. A missing/ambiguous inpu
 is failure, not a successfully served empty manifest. Fork dependencies may cross
 sessions; selected roots may not. Native authorization observations remain inputs,
 not a second authorization implementation. Composed plugin children enter only
-from a retained direct parent through `decodeEffect`, with their argument and
-terminal extents (`child_requires_retained_direct_parent`,
+from a retained direct parent (closure or session base) through `decodeEffect`,
+with their argument and terminal extents; unobserved children are skipped
+(`child_requires_retained_direct_parent`, `unobserved_row_is_not_a_child`,
 `children_per_parent_bounded`).
 
 Execution wrapper theorems using `checked_success` prove checked postconditions;

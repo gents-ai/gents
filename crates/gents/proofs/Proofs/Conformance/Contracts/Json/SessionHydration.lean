@@ -175,7 +175,9 @@ def hydrationClosureInputJson (input : SessionHydration.ClosureInput) : String :
     "\"access\":" ++ jsonArray (input.access.map hydrationAccessJson) ++ "," ++
     "\"denied_headers\":" ++ jsonArray (input.deniedHeaders.map toString) ++ "," ++
     "\"denied_segments\":" ++ jsonArray (input.deniedSegments.map toString) ++ "," ++
-    "\"effects\":" ++ jsonArray (input.effects.map hydrationEffectJson) ++ "}"
+    "\"bases\":" ++ jsonArray (input.bases.map (hydrationDocumentKeyJson ·.key)) ++ "," ++
+    "\"observed_effects\":" ++ jsonArray ((CanonicalOutput.Hydration.observedEffects
+      input.request.authorizationScope input.access input.effects).map hydrationEffectJson) ++ "}"
 
 def selectedDocumentsJson (cat : SessionHydration.Catalog) (request : SessionHydration.Request) : String :=
   match SessionHydration.closureInputFor cat.closureInputs request with
@@ -278,6 +280,13 @@ def hydrationEffectInput : SessionHydration.ClosureInput :=
       CanonicalOutput.Hydration.Examples.forgedChild,
       CanonicalOutput.Hydration.Examples.unreachableChild] }
 
+/-- A running or undelivered parent is only a session base. -/
+def hydrationBaseParentInput : SessionHydration.ClosureInput :=
+  { hydrationEffectInput with
+    bases := [.toolCall 300], roots := [], messages := []
+    segments := [CanonicalOutput.Hydration.Examples.childArguments,
+      CanonicalOutput.Hydration.Examples.childOutput] }
+
 def sessionHydrationClosureCasesJson : String := jsonArray
   [ closureCaseJson "exact_request_closure" hydrationClosureInput
   , closureCaseJson "hydration_twin_rejected" hydrationClosureInput hydrationTwin
@@ -298,6 +307,12 @@ def sessionHydrationClosureCasesJson : String := jsonArray
           [{ CanonicalOutput.Hydration.Examples.child with id := 403, terminal := none }]
         access := hydrationEffectInput.access ++
           [⟨hydrationRequest.authorizationScope, ⟨.agentToolCall, 403⟩, .authorized⟩] }
+  , closureCaseJson "plugin_effect_parent_base_only" hydrationBaseParentInput
+  , closureCaseJson "plugin_effect_child_denied"
+      { hydrationBaseParentInput with
+        access := hydrationBaseParentInput.access.map (fun observation =>
+          if observation.key = ⟨.agentToolCall, 400⟩
+          then { observation with state := .denied } else observation) }
   , closureCaseJson "plugin_effect_arguments_missing"
       { hydrationEffectInput with segments := [CanonicalOutput.Hydration.Examples.parentOutput,
           CanonicalOutput.Hydration.Examples.childOutput] } ]

@@ -716,7 +716,7 @@ async fn load_hydration_selection(
     .await?;
     let mut bases = Vec::new();
     let mut effects = Vec::new();
-    for row in rows::<HydrationToolCallRow>(&response, "AgentToolCall")? {
+    for row in rows::<gents_protocol::row::AgentToolCallRow>(&response, "AgentToolCall")? {
         observe_tool_call(row, &mut bases, &mut effects);
     }
     for collection in [
@@ -749,8 +749,27 @@ async fn load_hydration_selection(
     )
     .await?;
     load_effect_children(node, request, &bases, &mut effects).await?;
+    let parents = bases
+        .iter()
+        .filter(|row| {
+            row.collection
+                == gents_protocol::session_hydration::SessionHydrationCollection::AgentToolCall
+        })
+        .map(|row| row.doc_id.as_str())
+        .collect::<BTreeSet<_>>();
     let effect_requests = effects
         .iter()
+        .filter(|row| {
+            crate::tool_call_lifecycle::PluginEffectBinding::decode(
+                row.plugin_parent_tool_call_doc_id.as_deref(),
+                row.plugin_effect_ordinal,
+                row.spawned,
+                &row.tool_call_id,
+            )
+            .ok()
+            .flatten()
+            .is_some_and(|binding| parents.contains(binding.parent_tool_call_doc_id.as_str()))
+        })
         .map(|row| row.request_doc_id.clone())
         .filter(|id| {
             !output_segments
@@ -766,11 +785,17 @@ async fn load_hydration_selection(
         &request.requester_did,
     )
     .await?;
+    let session_bases = bases
+        .iter()
+        .filter(|row| row.session_id == request.session_id)
+        .cloned()
+        .collect::<Vec<_>>();
     let mut documents = build_canonical_closure(CanonicalClosureInput {
         root_header_ids: &root_header_ids,
         headers: &root_headers,
         segments: &output_segments,
         base_documents: &bases,
+        retained_bases: &session_bases,
         tool_effects: &effects,
         denied_headers: &[],
         denied_segments: &[],
@@ -780,19 +805,6 @@ async fn load_hydration_selection(
         session_id: &request.session_id,
     })
     .context("build authorized canonical hydration closure")?;
-    documents.extend(
-        bases
-            .iter()
-            .filter(|row| row.session_id == request.session_id)
-            .cloned()
-            .map(|row| HydrationDocument {
-                collection: row.collection,
-                doc_id: row.doc_id,
-                requester_did: row.requester_did,
-                node_did: row.node_did,
-                session_id: row.session_id,
-            }),
-    );
     for request_id in terminal_request_ids {
         let row = bases
             .iter()
@@ -987,7 +999,7 @@ async fn load_referenced_bases(
             r#"{{ {name}(filter: {{ _docID: {{ _eq: "{id}" }}, node_did: {{ _eq: "{agent}" }}, requester_did: {{ _eq: "{requester}" }} }}) {{ {fields} }} }}"#
         ), "query exact authorized hydration provenance").await?;
         if collection == SessionHydrationCollection::AgentToolCall {
-            let found = rows::<HydrationToolCallRow>(&response, name)?;
+            let found = rows::<gents_protocol::row::AgentToolCallRow>(&response, name)?;
             anyhow::ensure!(
                 found.len() == 1,
                 "hydration provenance is missing, denied, or conflicting"
@@ -1016,27 +1028,12 @@ async fn load_referenced_bases(
     Ok(())
 }
 
-const HYDRATION_TOOL_CALL_FIELDS: &str = "_docID requester_did node_did session_id request_doc_id tool_call_id spawned_by_tool_call_doc_id plugin_parent_tool_call_doc_id plugin_effect_ordinal terminal_output";
-
-#[derive(Deserialize)]
-struct HydrationToolCallRow {
-    #[serde(rename = "_docID")]
-    doc_id: Option<String>,
-    requester_did: Option<String>,
-    node_did: Option<String>,
-    session_id: Option<String>,
-    request_doc_id: Option<String>,
-    tool_call_id: Option<String>,
-    spawned_by_tool_call_doc_id: Option<String>,
-    plugin_parent_tool_call_doc_id: Option<String>,
-    plugin_effect_ordinal: Option<u32>,
-    terminal_output: Option<serde_json::Value>,
-}
+const HYDRATION_TOOL_CALL_FIELDS: &str = "_docID tool_call_key requester_did node_did session_id request_doc_id tool_call_id spawned_by_tool_call_doc_id plugin_parent_tool_call_doc_id plugin_effect_ordinal terminal_output";
 
 /// A row with any plugin-effect provenance is never a session base; the
 /// closure decides whether its parent reaches it.
 fn observe_tool_call(
-    row: HydrationToolCallRow,
+    row: gents_protocol::row::AgentToolCallRow,
     bases: &mut Vec<ScopedDocument>,
     effects: &mut Vec<ToolEffectRow>,
 ) {
@@ -1061,7 +1058,7 @@ fn observe_tool_call(
         spawned: row.spawned_by_tool_call_doc_id.is_some(),
         tool_call_id: row.tool_call_id.unwrap_or_default(),
         request_doc_id: row.request_doc_id.unwrap_or_default(),
-        terminal_output: row.terminal_output,
+        terminal_output: row.terminal_output.map(|terminal| terminal.output),
     });
 }
 
@@ -1093,7 +1090,7 @@ async fn load_effect_children(
         r#"{{ AgentToolCall(filter: {{ plugin_parent_tool_call_doc_id: {{ _in: {parents} }}, node_did: {{ _eq: "{agent}" }}, requester_did: {{ _eq: "{requester}" }} }}) {{ {HYDRATION_TOOL_CALL_FIELDS} }} }}"#
     ), "query hydration plugin effect children").await?;
     let mut ignored = Vec::new();
-    for row in rows::<HydrationToolCallRow>(&response, "AgentToolCall")? {
+    for row in rows::<gents_protocol::row::AgentToolCallRow>(&response, "AgentToolCall")? {
         if !effects
             .iter()
             .any(|known| row.doc_id.as_deref() == Some(&known.document.doc_id))
@@ -1642,7 +1639,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn selection_carries_composed_child_audit_records_but_not_forged_children() {
+    async fn selection_carries_running_parents_child_audit_records_but_not_forged_children() {
         use crate::tool_call_lifecycle::admission_fixture::{
             published_admission_with_owner, PublishedAdmission, PublishedAdmissionOptions,
         };
@@ -1705,6 +1702,26 @@ mod tests {
             session.clone(),
         )
         .unwrap();
+        // The parent is still running: no delivery message names it, so it is
+        // retained as a session base rather than through a ToolDelivery.
+        let messages = graphql_with_transaction_retry(
+            &node,
+            &format!(
+                r#"{{ AgentMessage(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ {AGENT_MESSAGE_FIELDS} }} }}"#,
+                escape_graphql_string(&session)
+            ),
+            "read session messages",
+        )
+        .await
+        .unwrap();
+        assert!(rows::<serde_json::Value>(&messages, "AgentMessage")
+            .unwrap()
+            .iter()
+            .map(|row| decode_transcript_message_row(row).unwrap())
+            .all(|row| !matches!(
+                row.message.publication,
+                gents_protocol::output::MessagePublication::ToolDelivery { .. }
+            )));
         let selection = load_hydration_selection(&node, &request).await.unwrap();
         let selected = |collection, doc_id: &str| {
             selection

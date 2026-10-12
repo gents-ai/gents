@@ -9,8 +9,8 @@ use gents_protocol::output::reconstruction::{
     reconstruct_message, reconstruct_stream, DependencyDenial, ObservedSegment,
 };
 use gents_protocol::output::{
-    MessageBlock, MessagePublication, OutputSource, OutputWriter, PayloadRef, PresentedPayload,
-    ReconstructionError, SourceClose,
+    MessageBlock, MessagePublication, OutputSource, OutputWriter, PayloadRef, ReconstructionError,
+    SourceClose,
 };
 use gents_protocol::session_hydration::SessionHydrationCollection;
 use std::collections::{BTreeMap, BTreeSet};
@@ -46,7 +46,7 @@ pub struct ToolEffectRow {
     pub spawned: bool,
     pub tool_call_id: String,
     pub request_doc_id: String,
-    pub terminal_output: Option<serde_json::Value>,
+    pub terminal_output: Option<PayloadRef>,
 }
 
 pub struct CanonicalClosureInput<'a> {
@@ -54,6 +54,8 @@ pub struct CanonicalClosureInput<'a> {
     pub headers: &'a [TranscriptMessageRow],
     pub segments: &'a [OutputSegmentRow],
     pub base_documents: &'a [ScopedDocument],
+    /// Lean `bases`: owner-authorized session rows retained unconditionally.
+    pub retained_bases: &'a [ScopedDocument],
     pub tool_effects: &'a [ToolEffectRow],
     pub denied_headers: &'a [String],
     pub denied_segments: &'a [String],
@@ -135,7 +137,12 @@ pub fn build_canonical_closure(
         .iter()
         .map(|row| ((row.collection, row.doc_id.as_str()), row))
         .collect::<BTreeMap<_, _>>();
-    let mut selected = BTreeSet::new();
+    let mut selected = input
+        .retained_bases
+        .iter()
+        .cloned()
+        .map(ScopedDocument::into_hydration)
+        .collect::<BTreeSet<_>>();
     for root_id in input.root_header_ids {
         let root = lookup_message(
             &headers,
@@ -205,14 +212,16 @@ fn collect_effect_children(
         .iter()
         .map(|(_, row)| row.document.doc_id.as_str())
         .collect::<BTreeSet<_>>();
+    let parents = selected
+        .iter()
+        .filter(|document| document.collection == SessionHydrationCollection::AgentToolCall)
+        .map(|document| document.doc_id.clone())
+        .collect::<BTreeSet<_>>();
     let children = decoded
         .iter()
         .filter(|(binding, _)| {
             !effects.contains(binding.parent_tool_call_doc_id.as_str())
-                && selected.iter().any(|document| {
-                    document.collection == SessionHydrationCollection::AgentToolCall
-                        && document.doc_id == binding.parent_tool_call_doc_id
-                })
+                && parents.contains(&binding.parent_tool_call_doc_id)
         })
         .collect::<Vec<_>>();
     let mut slots = BTreeMap::new();
@@ -257,14 +266,7 @@ fn collect_effect_children(
             }
         };
         let mut references = vec![arguments];
-        if let Some(terminal) = row
-            .terminal_output
-            .as_ref()
-            .filter(|value| !value.is_null())
-        {
-            let terminal = serde_json::from_value::<PresentedPayload>(terminal.clone())
-                .map_err(|error| CanonicalClosureError::Unclassified(error.into()))?
-                .output;
+        if let Some(terminal) = row.terminal_output.clone() {
             let closing = segments
                 .iter()
                 .find(|segment| segment.doc_id == terminal.close_doc_id)
@@ -671,22 +673,9 @@ mod tests {
                     }
                 })
                 .collect::<Vec<_>>();
-            let authorized = |collection: &str, id: u64| {
-                input.access.iter().any(|access| {
-                    access.peer == peer
-                        && access.requester == requester
-                        && access.node == agent
-                        && access.session == target_session
-                        && access.native_session == request.native_session
-                        && access.state == "authorized"
-                        && access.key.collection == collection
-                        && access.key.id == id
-                })
-            };
             let tool_effects = input
-                .effects
+                .observed_effects
                 .iter()
-                .filter(|effect| authorized("AgentToolCall", effect.id))
                 .map(|effect| ToolEffectRow {
                     document: ScopedDocument {
                         collection: SessionHydrationCollection::AgentToolCall,
@@ -700,16 +689,21 @@ mod tests {
                     spawned: effect.spawned,
                     tool_call_id: effect.tool_call_id.clone(),
                     request_doc_id: String::new(),
-                    terminal_output: effect.terminal.as_ref().map(|reference| {
-                        serde_json::to_value(PresentedPayload {
-                            output: PayloadRef {
-                                close_doc_id: reference.close_id.to_string(),
-                                stream: reference.stream.try_into().unwrap(),
-                            },
-                            presentation: PayloadPresentation::Full,
-                        })
-                        .unwrap()
+                    terminal_output: effect.terminal.as_ref().map(|reference| PayloadRef {
+                        close_doc_id: reference.close_id.to_string(),
+                        stream: reference.stream.try_into().unwrap(),
                     }),
+                })
+                .collect::<Vec<_>>();
+            let retained_bases = input
+                .bases
+                .iter()
+                .map(|key| ScopedDocument {
+                    collection: modeled_collection(&key.collection),
+                    doc_id: key.id.to_string(),
+                    requester_did: requester.into(),
+                    node_did: agent.into(),
+                    session_id: target_session.into(),
                 })
                 .collect::<Vec<_>>();
             let bases = input
@@ -724,7 +718,7 @@ mod tests {
                 })
                 .filter(|access| access.state == "authorized")
                 .filter(|access| {
-                    !input.effects.iter().any(|effect| {
+                    !input.observed_effects.iter().any(|effect| {
                         access.key.collection == "AgentToolCall" && effect.id == access.key.id
                     })
                 })
@@ -783,6 +777,7 @@ mod tests {
                 headers: &headers,
                 segments: &segments,
                 base_documents: &bases,
+                retained_bases: &retained_bases,
                 tool_effects: &tool_effects,
                 denied_headers: &denied_headers,
                 denied_segments: &denied_segments,
@@ -1029,6 +1024,7 @@ mod tests {
             headers: &headers,
             segments: &[],
             base_documents: &bases,
+            retained_bases: &[],
             tool_effects: &[],
             denied_headers: &[],
             denied_segments: &[],
@@ -1062,6 +1058,7 @@ mod tests {
             headers: &[child],
             segments: &[],
             base_documents: &[],
+            retained_bases: &[],
             tool_effects: &[],
             denied_headers: &[],
             denied_segments: &[],
@@ -1095,6 +1092,7 @@ mod tests {
             headers: &[child],
             segments: &[],
             base_documents: &[],
+            retained_bases: &[],
             tool_effects: &[],
             denied_headers: &denied,
             denied_segments: &[],
@@ -1226,6 +1224,7 @@ mod tests {
             headers: &headers,
             segments: &segments,
             base_documents: &bases,
+            retained_bases: &[],
             tool_effects: &[],
             denied_headers: &[],
             denied_segments: &[],
@@ -1269,6 +1268,7 @@ mod tests {
             headers: &headers,
             segments: &segments,
             base_documents: &bases,
+            retained_bases: &[],
             tool_effects: &[],
             denied_headers: &[],
             denied_segments: &[],
@@ -1308,6 +1308,7 @@ mod tests {
             headers: &headers,
             segments: &segments,
             base_documents: &bases,
+            retained_bases: &[],
             tool_effects: &[],
             denied_headers: &[],
             denied_segments: &[],
@@ -1342,6 +1343,7 @@ mod tests {
             headers: &[first, twin],
             segments: &[],
             base_documents: &[base_request()],
+            retained_bases: &[],
             tool_effects: &[],
             denied_headers: &[],
             denied_segments: &[],

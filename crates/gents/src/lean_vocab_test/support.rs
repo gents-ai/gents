@@ -864,7 +864,8 @@ pub(crate) struct LeanSessionHydrationClosureInput {
     pub(crate) access: Vec<LeanSessionHydrationAccess>,
     pub(crate) denied_headers: Vec<u64>,
     pub(crate) denied_segments: Vec<u64>,
-    pub(crate) effects: Vec<LeanSessionHydrationEffect>,
+    pub(crate) bases: Vec<LeanSessionHydrationDocumentKey>,
+    pub(crate) observed_effects: Vec<LeanSessionHydrationEffect>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

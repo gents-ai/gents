@@ -311,8 +311,22 @@ def selectedChildren (effects : List EffectRow) (retained : List DocumentKey) :
         retained.contains ⟨.agentToolCall, parent⟩ && !isEffect effects parent
     | none => false
 
+/-- Rows the native owner observes. Document ACP filters the reverse lookup, so
+a missing or denied child is unobserved: it is not hydrated and does not fail
+the manifest. -/
+def observedEffects (scope : AuthorizationScope) (provenance : List ProvenanceAccess)
+    (effects : List EffectRow) : List EffectRow :=
+  effects.filter fun row =>
+    match validateProvenance scope provenance ⟨.agentToolCall, row.id⟩ with
+    | .ok _ => true
+    | .error _ => false
+
 /-- Distinct rows may not share a physical identity or a `(parent, ordinal)`
-slot; admission replays one row per slot. -/
+slot; admission replays one row per slot. Incoherent observed children fail
+the manifest rather than being skipped: their writer is already trusted with
+the session's base rows, message and segment conflicts fail the same way, and
+skipping would leave which row is authoritative ambiguous. Missing arguments
+and a terminal naming a foreign source fail closed for the same reason. -/
 def childrenCoherent (children : List EffectRow) : Bool :=
   decide (children.map decodeEffect).Nodup && decide (children.map (·.id)).Nodup
 
@@ -343,18 +357,17 @@ def effectDocuments (scope : AuthorizationScope) (segments : List Segment)
     (deniedSegments : List DocId) (dependencyDenials : List DependencyDenial)
     (provenance : List ProvenanceAccess) (row : EffectRow) :
     Except Error (List DocumentKey) := do
-  let child ← validateProvenance scope provenance ⟨.agentToolCall, row.id⟩
   let arguments ← effectArguments segments row.id
   let terminal ← row.terminal.toList.mapM (effectTerminal segments deniedSegments row.id)
   let payload ← referenceListDocuments scope segments deniedSegments dependencyDenials
     provenance (arguments :: terminal)
-  .ok (child :: payload)
+  .ok (⟨.agentToolCall, row.id⟩ :: payload)
 
 def effectClosure (scope : AuthorizationScope) (segments : List Segment)
     (deniedSegments : List DocId) (dependencyDenials : List DependencyDenial)
     (provenance : List ProvenanceAccess) (effects : List EffectRow)
     (retained : List DocumentKey) : Except Error (List DocumentKey) := do
-  let children := selectedChildren effects retained
+  let children := selectedChildren (observedEffects scope provenance effects) retained
   if !childrenCoherent children then
     .error (.provenanceConflict ⟨.agentToolCall, childConflict children⟩)
   else
@@ -366,6 +379,19 @@ theorem undecodable_row_is_not_a_child (effects : List EffectRow)
     (retained : List DocumentKey) (row : EffectRow) (h : decodeEffect row = none) :
     row ∉ selectedChildren effects retained := by
   simp [selectedChildren, h]
+
+theorem unobserved_row_is_not_a_child (scope : AuthorizationScope)
+    (provenance : List ProvenanceAccess) (effects : List EffectRow)
+    (retained : List DocumentKey) (row : EffectRow)
+    (h : ∀ key, validateProvenance scope provenance ⟨.agentToolCall, row.id⟩ ≠ .ok key) :
+    row ∉ selectedChildren (observedEffects scope provenance effects) retained := by
+  intro hmem
+  simp only [selectedChildren, List.mem_filter, List.mem_dedup, observedEffects] at hmem
+  obtain ⟨⟨_, hobserved⟩, _⟩ := hmem
+  split at hobserved
+  · rename_i key hok
+    exact h key hok
+  · contradiction
 
 theorem child_requires_retained_direct_parent (effects : List EffectRow)
     (retained : List DocumentKey) (row : EffectRow)
@@ -701,7 +727,8 @@ example : resultMatches
       ⟨.agentOutputSegment, 100⟩]) = true := by native_decide
 
 example : resultMatches
-    (buildManifest scope 2 [] [220] [] [parentDelivery] effectSegments effectAccess [] [] []
+    (buildManifest scope 2 [] [220] [] [parentDelivery] effectSegments
+      (effectAccess ++ [⟨scope, ⟨.agentToolCall, 403⟩, .authorized⟩]) [] [] []
       [child, { child with id := 403, terminal := none }])
     (.error (.provenanceConflict ⟨.agentToolCall, 400⟩)) = true := by native_decide
 
@@ -714,6 +741,22 @@ example : resultMatches
     (buildManifest scope 2 [] [220] [] [parentDelivery] effectSegments effectAccess [] [] []
       [{ child with terminal := some ⟨301, 0⟩ }])
     (.error (.reference (.lookup .invalidReference))) = true := by native_decide
+
+/-- A running or undelivered parent is retained as a session base; its child
+is reachable without any delivery message. -/
+example : resultMatches
+    (buildManifest scope 2 [.toolCall 300] [] [] [] [childArguments, childOutput] effectAccess
+      [] [] [] [child, forgedChild])
+    (.ok [⟨.agentRequest, 10⟩, ⟨.agentToolCall, 300⟩, ⟨.agentToolCall, 400⟩,
+      ⟨.agentOutputSegment, 410⟩, ⟨.agentOutputSegment, 411⟩]) = true := by native_decide
+
+/-- A child the peer may not read is unobserved, not a failed manifest. -/
+example : resultMatches
+    (buildManifest scope 2 [.toolCall 300] [] [] [] [childArguments, childOutput]
+      (effectAccess.map fun observation =>
+        if observation.key = ⟨.agentToolCall, 400⟩ then { observation with state := .denied }
+        else observation) [] [] [] [child])
+    (.ok [⟨.agentToolCall, 300⟩]) = true := by native_decide
 
 end Examples
 end CanonicalOutput.Hydration
