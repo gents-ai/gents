@@ -1115,9 +1115,18 @@ fn reject_symlink_if_present(path: &Path, label: &str) -> Result<(), BridgeError
 pub fn lock_desktop_process(
     paths: &crate::client::DesktopPaths,
     wait: bool,
-) -> anyhow::Result<gents::file_lock::FileLock> {
-    lock_file(paths, ".desktop-process.lock", wait)
+) -> anyhow::Result<DesktopProcessLock> {
+    lock_file(paths, ".desktop-process.lock", wait).map(DesktopProcessLock)
 }
+
+/// [`lock_desktop_process`]'s lock. Tauri keeps one managed value per type,
+/// so each lock a desktop holds has its own type.
+#[derive(Debug)]
+pub struct DesktopProcessLock(gents::file_lock::FileLock);
+
+/// [`lock_browser_store`]'s lock; see [`DesktopProcessLock`].
+#[derive(Debug)]
+pub struct BrowserStoreLock(gents::file_lock::FileLock);
 
 /// A reset reserves the next process-lock acquisition before asking the app to
 /// exit. Startup takes this lock first, so it cannot overtake the waiting reset.
@@ -1155,9 +1164,7 @@ pub fn lock_client_state(
 /// lock while it runs and browser clearing takes it, so the store is never
 /// cleared under a running desktop, whatever its home. An isolated store's
 /// lock lives in the temporary directory its test run shares.
-pub fn lock_browser_store(
-    isolated_store: Option<&str>,
-) -> anyhow::Result<gents::file_lock::FileLock> {
+pub fn lock_browser_store(isolated_store: Option<&str>) -> anyhow::Result<BrowserStoreLock> {
     use anyhow::Context;
     let directory = match isolated_store {
         Some(_) => std::env::temp_dir(),
@@ -1171,12 +1178,12 @@ pub fn lock_browser_store(
 fn lock_browser_store_in(
     directory: &Path,
     isolated_store: Option<&str>,
-) -> anyhow::Result<gents::file_lock::FileLock> {
+) -> anyhow::Result<BrowserStoreLock> {
     let name = match isolated_store {
         Some(identifier) => format!("browser-store-{identifier}.lock"),
         None => "browser-store.lock".into(),
     };
-    lock_in(directory, &name, false)
+    lock_in(directory, &name, false).map(BrowserStoreLock)
 }
 
 fn lock_file(

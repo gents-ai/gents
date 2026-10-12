@@ -17,11 +17,7 @@ pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
                 home = %policy.desktop_paths.root().display(),
                 "gents-desktop-bridge initialized"
             );
-            let reservation = gents_desktop_core::home_reset::lock_reset(&policy.desktop_paths)?;
-            let process =
-                gents_desktop_core::home_reset::lock_desktop_process(&policy.desktop_paths, false)?;
-            app.manage(process);
-            drop(reservation);
+            hold_desktop_process(app, &policy.desktop_paths)?;
             app.manage(DesktopAppState::new(policy));
             // Off the setup path: reading the packaged runtime and asking the
             // service manager for its state are both blocking.
@@ -157,4 +153,45 @@ pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
             tauri_commands::operations::desktop_probe_mcp_service,
         ])
         .build()
+}
+
+/// Takes the desktop process lock through the reset reservation, so a
+/// waiting reset is never overtaken, and holds it for the app's lifetime.
+fn hold_desktop_process<R: Runtime>(
+    app: &tauri::AppHandle<R>,
+    paths: &gents_desktop_core::client::DesktopPaths,
+) -> anyhow::Result<()> {
+    let reservation = gents_desktop_core::home_reset::lock_reset(paths)?;
+    let process = gents_desktop_core::home_reset::lock_desktop_process(paths, false)?;
+    anyhow::ensure!(
+        app.manage(process),
+        "the desktop process lock is already held by this app"
+    );
+    drop(reservation);
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gents_desktop_core::client::DesktopPaths;
+    use gents_desktop_core::home_reset::{
+        lock_browser_store, lock_desktop_process, BrowserStoreLock, DesktopProcessLock,
+    };
+
+    #[test]
+    fn browser_store_and_process_locks_are_both_held_after_setup() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = DesktopPaths::from_root(temp.path().join("desktop"));
+        let store = format!("plugin-test-{}", std::process::id());
+        let app = tauri::test::mock_builder()
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        assert!(app.manage(lock_browser_store(Some(&store)).unwrap()));
+        hold_desktop_process(app.handle(), &paths).unwrap();
+        assert!(app.try_state::<BrowserStoreLock>().is_some());
+        assert!(app.try_state::<DesktopProcessLock>().is_some());
+        assert!(lock_browser_store(Some(&store)).is_err());
+        assert!(lock_desktop_process(&paths, false).is_err());
+    }
 }

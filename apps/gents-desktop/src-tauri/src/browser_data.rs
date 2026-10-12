@@ -22,7 +22,7 @@ pub(crate) fn isolated_store_identifier() -> anyhow::Result<Option<[u8; 16]>> {
 
 /// The lock on the WebKit store this process uses, shared by every desktop
 /// home (see `gents_desktop_core::home_reset::lock_browser_store`).
-pub fn lock_store() -> anyhow::Result<gents::file_lock::FileLock> {
+pub fn lock_store() -> anyhow::Result<gents_desktop_core::home_reset::BrowserStoreLock> {
     let isolated = isolated_store_identifier()?.map(|identifier| {
         identifier
             .iter()
