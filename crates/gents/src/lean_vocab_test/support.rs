@@ -790,6 +790,7 @@ pub(crate) struct LeanSessionHydrationMessage {
     pub(crate) session: u64,
     pub(crate) request: Option<u64>,
     pub(crate) origin: Option<u64>,
+    pub(crate) tool_delivery: Option<u64>,
     pub(crate) refs: Vec<LeanSessionHydrationPayloadRef>,
 }
 
@@ -807,8 +808,26 @@ pub(crate) struct LeanSessionHydrationOwner {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanSessionHydrationTool {
+    pub(crate) id: String,
+    pub(crate) name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanSessionHydrationEffect {
+    pub(crate) id: u64,
+    pub(crate) parent: Option<u64>,
+    pub(crate) ordinal: Option<u32>,
+    pub(crate) spawned: bool,
+    pub(crate) tool_call_id: String,
+    pub(crate) terminal: Option<LeanSessionHydrationPayloadRef>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanSessionHydrationSegment {
     pub(crate) id: u64,
+    pub(crate) kind: String,
+    pub(crate) tool: Option<LeanSessionHydrationTool>,
     pub(crate) request: u64,
     pub(crate) source: LeanSessionHydrationOwner,
     pub(crate) writer: LeanSessionHydrationOwner,
@@ -845,6 +864,7 @@ pub(crate) struct LeanSessionHydrationClosureInput {
     pub(crate) access: Vec<LeanSessionHydrationAccess>,
     pub(crate) denied_headers: Vec<u64>,
     pub(crate) denied_segments: Vec<u64>,
+    pub(crate) effects: Vec<LeanSessionHydrationEffect>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

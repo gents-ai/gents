@@ -28,7 +28,7 @@ use super::session_hydration::{
     VerifiedActiveMembership,
 };
 use super::session_hydration_closure::{
-    build_canonical_closure, CanonicalClosureInput, ScopedDocument,
+    build_canonical_closure, CanonicalClosureInput, ScopedDocument, ToolEffectRow,
 };
 use super::templates::{conjunctive_string_eq, decode_pairing_filters};
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
@@ -574,172 +574,7 @@ impl HydrationRequestStore for GraphqlHydrationStore {
     }
 
     async fn load_selection(&self, request: &HydrationRequest) -> Result<HydrationSelection> {
-        let session_id = escape_graphql_string(&request.session_id);
-        let node_did = escape_graphql_string(&request.node_did);
-        let requester_did = escape_graphql_string(&request.requester_did);
-        let query = hydration_selection_query(&session_id, &node_did, &requester_did);
-        let response =
-            graphql_with_transaction_retry(&self.node, &query, "query session hydration selection")
-                .await?;
-
-        let mut root_headers = rows::<serde_json::Value>(&response, "AgentMessage")?
-            .iter()
-            .map(decode_transcript_message_row)
-            .collect::<Result<Vec<_>>>()?;
-        let mut root_header_ids = root_headers
-            .iter()
-            .map(|row| row.doc_id.clone())
-            .collect::<Vec<_>>();
-        let mut terminal_request_ids = BTreeSet::new();
-        for request_row in rows::<gents_protocol::row::AgentRequestRow>(&response, "AgentRequest")?
-        {
-            if request_row.is_terminal() {
-                terminal_request_ids.insert(
-                    request_row
-                        .doc_id
-                        .clone()
-                        .context("terminal hydration request omitted physical id")?,
-                );
-                match request_row
-                    .terminal_output
-                    .context("terminal hydration request omitted terminal_output")?
-                {
-                    gents_protocol::output::TerminalOutput::Message { message_doc_id } => {
-                        let selected = root_headers
-                            .iter()
-                            .find(|row| row.doc_id == message_doc_id)
-                            .context("terminal hydration selection is missing its exact header")?;
-                        anyhow::ensure!(
-                            selected.message.session_id == request.session_id
-                                && selected.message.request_doc_id == request_row.doc_id,
-                            "terminal hydration selection does not belong to the exact request"
-                        );
-                        anyhow::ensure!(
-                            selected.message.role
-                                == gents_protocol::output::MessageRole::Assistant
-                                && matches!(
-                                    selected.message.publication,
-                                    gents_protocol::output::MessagePublication::RequestExecution {
-                                        ..
-                                    } | gents_protocol::output::MessagePublication::RequestRecovery {
-                                        ..
-                                    }
-                                ),
-                            "terminal hydration selection is not an eligible assistant header"
-                        );
-                        root_header_ids.push(message_doc_id);
-                    }
-                    gents_protocol::output::TerminalOutput::NoMessage => {}
-                }
-            }
-        }
-        root_header_ids.sort();
-        root_header_ids.dedup();
-        load_origin_headers(
-            self.node.as_ref(),
-            &mut root_headers,
-            &request.node_did,
-            &request.requester_did,
-        )
-        .await?;
-        let mut output_segments = rows::<serde_json::Value>(&response, "AgentOutputSegment")?
-            .iter()
-            .map(decode_output_segment_row)
-            .collect::<Result<Vec<_>>>()?;
-        load_referenced_segments(
-            self.node.as_ref(),
-            &root_headers,
-            &mut output_segments,
-            &request.node_did,
-            &request.requester_did,
-        )
-        .await?;
-        let mut bases = Vec::new();
-        for collection in [
-            gents_protocol::session_hydration::SessionHydrationCollection::AgentRequest,
-            gents_protocol::session_hydration::SessionHydrationCollection::AgentToolCall,
-            gents_protocol::session_hydration::SessionHydrationCollection::CompactionEntry,
-        ] {
-            let name = hydration_collection_name(collection);
-            bases.extend(
-                rows::<TranscriptRow>(&response, name)?
-                    .into_iter()
-                    .filter_map(|row| {
-                        Some(ScopedDocument {
-                            collection,
-                            doc_id: row.doc_id.filter(|value| !value.is_empty())?,
-                            requester_did: row.requester_did.unwrap_or_default(),
-                            node_did: row.node_did.unwrap_or_default(),
-                            session_id: row.session_id.unwrap_or_default(),
-                        })
-                    }),
-            );
-        }
-        load_referenced_bases(
-            self.node.as_ref(),
-            &root_headers,
-            &output_segments,
-            &mut bases,
-            &request.node_did,
-            &request.requester_did,
-        )
-        .await?;
-        let mut documents = build_canonical_closure(CanonicalClosureInput {
-            root_header_ids: &root_header_ids,
-            headers: &root_headers,
-            segments: &output_segments,
-            base_documents: &bases,
-            denied_headers: &[],
-            denied_segments: &[],
-            dependency_denials: &[],
-            node_did: &request.node_did,
-            requester_did: Some(&request.requester_did),
-            session_id: &request.session_id,
-        })
-        .context("build authorized canonical hydration closure")?;
-        documents.extend(
-            bases
-                .iter()
-                .filter(|row| row.session_id == request.session_id)
-                .cloned()
-                .map(|row| HydrationDocument {
-                    collection: row.collection,
-                    doc_id: row.doc_id,
-                    requester_did: row.requester_did,
-                    node_did: row.node_did,
-                    session_id: row.session_id,
-                }),
-        );
-        for request_id in terminal_request_ids {
-            let row = bases
-                .iter()
-                .find(|row| {
-                    row.collection
-                        == gents_protocol::session_hydration::SessionHydrationCollection::AgentRequest
-                        && row.doc_id == request_id
-                })
-                .context("terminal hydration request missing from authorized base rows")?;
-            documents.insert(HydrationDocument {
-                collection: row.collection,
-                doc_id: row.doc_id.clone(),
-                requester_did: row.requester_did.clone(),
-                node_did: row.node_did.clone(),
-                session_id: row.session_id.clone(),
-            });
-        }
-        let authorized_reference_closure = documents
-            .iter()
-            .filter(|document| document.session_id != request.session_id)
-            .map(|document| SessionHydrationDocumentKey {
-                collection: document.collection,
-                doc_id: document.doc_id.clone(),
-            })
-            .collect();
-
-        Ok(HydrationSelection {
-            documents,
-            authorized_reference_closure,
-        })
+        load_hydration_selection(&self.node, request).await
     }
 
     async fn authorization_is_current(
@@ -799,6 +634,195 @@ impl HydrationRequestStore for GraphqlHydrationStore {
         );
         Ok(())
     }
+}
+
+async fn load_hydration_selection(
+    node: &EmbeddedNode,
+    request: &HydrationRequest,
+) -> Result<HydrationSelection> {
+    let session_id = escape_graphql_string(&request.session_id);
+    let node_did = escape_graphql_string(&request.node_did);
+    let requester_did = escape_graphql_string(&request.requester_did);
+    let query = hydration_selection_query(&session_id, &node_did, &requester_did);
+    let response =
+        graphql_with_transaction_retry(node, &query, "query session hydration selection").await?;
+
+    let mut root_headers = rows::<serde_json::Value>(&response, "AgentMessage")?
+        .iter()
+        .map(decode_transcript_message_row)
+        .collect::<Result<Vec<_>>>()?;
+    let mut root_header_ids = root_headers
+        .iter()
+        .map(|row| row.doc_id.clone())
+        .collect::<Vec<_>>();
+    let mut terminal_request_ids = BTreeSet::new();
+    for request_row in rows::<gents_protocol::row::AgentRequestRow>(&response, "AgentRequest")? {
+        if request_row.is_terminal() {
+            terminal_request_ids.insert(
+                request_row
+                    .doc_id
+                    .clone()
+                    .context("terminal hydration request omitted physical id")?,
+            );
+            match request_row
+                .terminal_output
+                .context("terminal hydration request omitted terminal_output")?
+            {
+                gents_protocol::output::TerminalOutput::Message { message_doc_id } => {
+                    let selected = root_headers
+                        .iter()
+                        .find(|row| row.doc_id == message_doc_id)
+                        .context("terminal hydration selection is missing its exact header")?;
+                    anyhow::ensure!(
+                        selected.message.session_id == request.session_id
+                            && selected.message.request_doc_id == request_row.doc_id,
+                        "terminal hydration selection does not belong to the exact request"
+                    );
+                    anyhow::ensure!(
+                        selected.message.role == gents_protocol::output::MessageRole::Assistant
+                            && matches!(
+                                selected.message.publication,
+                                gents_protocol::output::MessagePublication::RequestExecution { .. }
+                                    | gents_protocol::output::MessagePublication::RequestRecovery { .. }
+                            ),
+                        "terminal hydration selection is not an eligible assistant header"
+                    );
+                    root_header_ids.push(message_doc_id);
+                }
+                gents_protocol::output::TerminalOutput::NoMessage => {}
+            }
+        }
+    }
+    root_header_ids.sort();
+    root_header_ids.dedup();
+    load_origin_headers(
+        node,
+        &mut root_headers,
+        &request.node_did,
+        &request.requester_did,
+    )
+    .await?;
+    let mut output_segments = rows::<serde_json::Value>(&response, "AgentOutputSegment")?
+        .iter()
+        .map(decode_output_segment_row)
+        .collect::<Result<Vec<_>>>()?;
+    load_referenced_segments(
+        node,
+        &root_headers,
+        &mut output_segments,
+        &request.node_did,
+        &request.requester_did,
+    )
+    .await?;
+    let mut bases = Vec::new();
+    let mut effects = Vec::new();
+    for row in rows::<HydrationToolCallRow>(&response, "AgentToolCall")? {
+        observe_tool_call(row, &mut bases, &mut effects);
+    }
+    for collection in [
+        gents_protocol::session_hydration::SessionHydrationCollection::AgentRequest,
+        gents_protocol::session_hydration::SessionHydrationCollection::CompactionEntry,
+    ] {
+        let name = hydration_collection_name(collection);
+        bases.extend(
+            rows::<TranscriptRow>(&response, name)?
+                .into_iter()
+                .filter_map(|row| {
+                    Some(ScopedDocument {
+                        collection,
+                        doc_id: row.doc_id.filter(|value| !value.is_empty())?,
+                        requester_did: row.requester_did.unwrap_or_default(),
+                        node_did: row.node_did.unwrap_or_default(),
+                        session_id: row.session_id.unwrap_or_default(),
+                    })
+                }),
+        );
+    }
+    load_referenced_bases(
+        node,
+        &root_headers,
+        &output_segments,
+        &mut bases,
+        &mut effects,
+        &request.node_did,
+        &request.requester_did,
+    )
+    .await?;
+    load_effect_children(node, request, &bases, &mut effects).await?;
+    let effect_requests = effects
+        .iter()
+        .map(|row| row.request_doc_id.clone())
+        .filter(|id| {
+            !output_segments
+                .iter()
+                .any(|segment| &segment.segment.request_doc_id == id)
+        })
+        .collect();
+    load_request_segments(
+        node,
+        effect_requests,
+        &mut output_segments,
+        &request.node_did,
+        &request.requester_did,
+    )
+    .await?;
+    let mut documents = build_canonical_closure(CanonicalClosureInput {
+        root_header_ids: &root_header_ids,
+        headers: &root_headers,
+        segments: &output_segments,
+        base_documents: &bases,
+        tool_effects: &effects,
+        denied_headers: &[],
+        denied_segments: &[],
+        dependency_denials: &[],
+        node_did: &request.node_did,
+        requester_did: Some(&request.requester_did),
+        session_id: &request.session_id,
+    })
+    .context("build authorized canonical hydration closure")?;
+    documents.extend(
+        bases
+            .iter()
+            .filter(|row| row.session_id == request.session_id)
+            .cloned()
+            .map(|row| HydrationDocument {
+                collection: row.collection,
+                doc_id: row.doc_id,
+                requester_did: row.requester_did,
+                node_did: row.node_did,
+                session_id: row.session_id,
+            }),
+    );
+    for request_id in terminal_request_ids {
+        let row = bases
+            .iter()
+            .find(|row| {
+                row.collection
+                    == gents_protocol::session_hydration::SessionHydrationCollection::AgentRequest
+                    && row.doc_id == request_id
+            })
+            .context("terminal hydration request missing from authorized base rows")?;
+        documents.insert(HydrationDocument {
+            collection: row.collection,
+            doc_id: row.doc_id.clone(),
+            requester_did: row.requester_did.clone(),
+            node_did: row.node_did.clone(),
+            session_id: row.session_id.clone(),
+        });
+    }
+    let authorized_reference_closure = documents
+        .iter()
+        .filter(|document| document.session_id != request.session_id)
+        .map(|document| SessionHydrationDocumentKey {
+            collection: document.collection,
+            doc_id: document.doc_id.clone(),
+        })
+        .collect();
+
+    Ok(HydrationSelection {
+        documents,
+        authorized_reference_closure,
+    })
 }
 
 async fn load_origin_headers(
@@ -864,6 +888,16 @@ async fn load_referenced_segments(
                 })
         }))
         .collect::<BTreeSet<_>>();
+    load_request_segments(node, request_ids, segments, node_did, requester_did).await
+}
+
+async fn load_request_segments(
+    node: &EmbeddedNode,
+    request_ids: BTreeSet<String>,
+    segments: &mut Vec<crate::session::canonical_rows::OutputSegmentRow>,
+    node_did: &str,
+    requester_did: &str,
+) -> Result<()> {
     for request_id in request_ids {
         let response = graphql_with_transaction_retry(
             node,
@@ -891,6 +925,7 @@ async fn load_referenced_bases(
     headers: &[crate::session::canonical_rows::TranscriptMessageRow],
     segments: &[crate::session::canonical_rows::OutputSegmentRow],
     bases: &mut Vec<ScopedDocument>,
+    effects: &mut Vec<ToolEffectRow>,
     node_did: &str,
     requester_did: &str,
 ) -> Result<()> {
@@ -936,14 +971,32 @@ async fn load_referenced_bases(
         if bases
             .iter()
             .any(|row| row.collection == collection && row.doc_id == doc_id)
+            || (collection == SessionHydrationCollection::AgentToolCall
+                && effects.iter().any(|row| row.document.doc_id == doc_id))
         {
             continue;
         }
         let name = hydration_collection_name(collection);
         let id = escape_graphql_string(&doc_id);
+        let fields = if collection == SessionHydrationCollection::AgentToolCall {
+            HYDRATION_TOOL_CALL_FIELDS
+        } else {
+            "_docID requester_did node_did session_id"
+        };
         let response = graphql_with_transaction_retry(node, &format!(
-            r#"{{ {name}(filter: {{ _docID: {{ _eq: "{id}" }}, node_did: {{ _eq: "{agent}" }}, requester_did: {{ _eq: "{requester}" }} }}) {{ _docID requester_did node_did session_id }} }}"#
+            r#"{{ {name}(filter: {{ _docID: {{ _eq: "{id}" }}, node_did: {{ _eq: "{agent}" }}, requester_did: {{ _eq: "{requester}" }} }}) {{ {fields} }} }}"#
         ), "query exact authorized hydration provenance").await?;
+        if collection == SessionHydrationCollection::AgentToolCall {
+            let found = rows::<HydrationToolCallRow>(&response, name)?;
+            anyhow::ensure!(
+                found.len() == 1,
+                "hydration provenance is missing, denied, or conflicting"
+            );
+            for row in found {
+                observe_tool_call(row, bases, effects);
+            }
+            continue;
+        }
         let found = rows::<TranscriptRow>(&response, name)?;
         anyhow::ensure!(
             found.len() == 1,
@@ -959,6 +1012,94 @@ async fn load_referenced_bases(
             node_did: row.node_did.unwrap_or_default(),
             session_id: row.session_id.unwrap_or_default(),
         });
+    }
+    Ok(())
+}
+
+const HYDRATION_TOOL_CALL_FIELDS: &str = "_docID requester_did node_did session_id request_doc_id tool_call_id spawned_by_tool_call_doc_id plugin_parent_tool_call_doc_id plugin_effect_ordinal terminal_output";
+
+#[derive(Deserialize)]
+struct HydrationToolCallRow {
+    #[serde(rename = "_docID")]
+    doc_id: Option<String>,
+    requester_did: Option<String>,
+    node_did: Option<String>,
+    session_id: Option<String>,
+    request_doc_id: Option<String>,
+    tool_call_id: Option<String>,
+    spawned_by_tool_call_doc_id: Option<String>,
+    plugin_parent_tool_call_doc_id: Option<String>,
+    plugin_effect_ordinal: Option<u32>,
+    terminal_output: Option<serde_json::Value>,
+}
+
+/// A row with any plugin-effect provenance is never a session base; the
+/// closure decides whether its parent reaches it.
+fn observe_tool_call(
+    row: HydrationToolCallRow,
+    bases: &mut Vec<ScopedDocument>,
+    effects: &mut Vec<ToolEffectRow>,
+) {
+    let Some(doc_id) = row.doc_id.filter(|value| !value.is_empty()) else {
+        return;
+    };
+    let document = ScopedDocument {
+        collection: gents_protocol::session_hydration::SessionHydrationCollection::AgentToolCall,
+        doc_id,
+        requester_did: row.requester_did.unwrap_or_default(),
+        node_did: row.node_did.unwrap_or_default(),
+        session_id: row.session_id.unwrap_or_default(),
+    };
+    if row.plugin_parent_tool_call_doc_id.is_none() && row.plugin_effect_ordinal.is_none() {
+        bases.push(document);
+        return;
+    }
+    effects.push(ToolEffectRow {
+        document,
+        plugin_parent_tool_call_doc_id: row.plugin_parent_tool_call_doc_id,
+        plugin_effect_ordinal: row.plugin_effect_ordinal,
+        spawned: row.spawned_by_tool_call_doc_id.is_some(),
+        tool_call_id: row.tool_call_id.unwrap_or_default(),
+        request_doc_id: row.request_doc_id.unwrap_or_default(),
+        terminal_output: row.terminal_output,
+    });
+}
+
+/// Same-session children arrive with the session's tool calls. Children of a
+/// retained parent from another session are found through the indexed parent
+/// field; the closure bounds and decodes them.
+async fn load_effect_children(
+    node: &EmbeddedNode,
+    request: &HydrationRequest,
+    bases: &[ScopedDocument],
+    effects: &mut Vec<ToolEffectRow>,
+) -> Result<()> {
+    let parents = bases
+        .iter()
+        .filter(|row| {
+            row.collection
+                == gents_protocol::session_hydration::SessionHydrationCollection::AgentToolCall
+                && row.session_id != request.session_id
+        })
+        .map(|row| row.doc_id.as_str())
+        .collect::<BTreeSet<_>>();
+    if parents.is_empty() {
+        return Ok(());
+    }
+    let parents = crate::graphql::graphql_string_list_literal(parents);
+    let agent = escape_graphql_string(&request.node_did);
+    let requester = escape_graphql_string(&request.requester_did);
+    let response = graphql_with_transaction_retry(node, &format!(
+        r#"{{ AgentToolCall(filter: {{ plugin_parent_tool_call_doc_id: {{ _in: {parents} }}, node_did: {{ _eq: "{agent}" }}, requester_did: {{ _eq: "{requester}" }} }}) {{ {HYDRATION_TOOL_CALL_FIELDS} }} }}"#
+    ), "query hydration plugin effect children").await?;
+    let mut ignored = Vec::new();
+    for row in rows::<HydrationToolCallRow>(&response, "AgentToolCall")? {
+        if !effects
+            .iter()
+            .any(|known| row.doc_id.as_deref() == Some(&known.document.doc_id))
+        {
+            observe_tool_call(row, &mut ignored, effects);
+        }
     }
     Ok(())
 }
@@ -1020,7 +1161,7 @@ fn hydration_selection_query(session_id: &str, node_did: &str, requester_did: &s
                 {AGENT_MESSAGE_FIELDS}
             }}
             AgentToolCall(filter: {{ session_id: {{ _eq: "{session_id}" }}, node_did: {{ _eq: "{node_did}" }}, requester_did: {{ _eq: "{requester_did}" }} }}) {{
-                _docID requester_did node_did session_id
+                {HYDRATION_TOOL_CALL_FIELDS}
             }}
             AgentOutputSegment(filter: {{ session_id: {{ _eq: "{session_id}" }}, node_did: {{ _eq: "{node_did}" }}, requester_did: {{ _eq: "{requester_did}" }} }}) {{
                 {AGENT_OUTPUT_SEGMENT_FIELDS}
@@ -1498,6 +1639,184 @@ mod tests {
         assert!(query.contains("AgentOutputSegment"));
         assert!(!query.contains("AgentResponse"));
         assert!(!query.contains("AgentToolResult"));
+    }
+
+    #[tokio::test]
+    async fn selection_carries_composed_child_audit_records_but_not_forged_children() {
+        use crate::tool_call_lifecycle::admission_fixture::{
+            published_admission_with_owner, PublishedAdmission, PublishedAdmissionOptions,
+        };
+        use gents_protocol::output::{OutputSource, PayloadPresentation, PresentedPayload};
+        use gents_protocol::session_hydration::SessionHydrationCollection;
+
+        let (fixture, request_owner) = published_admission_with_owner(PublishedAdmissionOptions {
+            name: "hydrate-plugin-child".into(),
+            real_identity: true,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let PublishedAdmission {
+            node,
+            path,
+            tool: parent,
+            ..
+        } = fixture;
+        let mut child = parent
+            .admit_plugin_effect(1, "fixture_effect", r#"{"value":"input"}"#)
+            .await
+            .unwrap();
+        child.start_running().await.unwrap();
+        child
+            .complete_raw_with_presentation(
+                "effect result",
+                "effect result",
+                PayloadPresentation::Full,
+            )
+            .await
+            .unwrap();
+        let parent_doc = parent.doc_id().unwrap().to_owned();
+        let child_doc = child.doc_id().unwrap().to_owned();
+        let request_doc = parent.request_doc_id().unwrap().to_owned();
+        let session = parent.session_id().to_owned();
+        let agent = parent.node_did().to_owned();
+        let requester = parent.requester_did().unwrap().to_owned();
+        let forged = node
+            .execute(&format!(
+                r#"mutation {{ create_AgentToolCall(input: {{ tool_call_key: "forged", tool_call_id: "forged", tool_name: "fixture_effect", request_id: "forged", request_doc_id: "{}", session_id: "{}", node_did: "{}", requester_did: "{}", message_sequence: 0, status: "pending", lifecycle_state: "pending", plugin_parent_tool_call_doc_id: "{}", plugin_effect_ordinal: 2 }}) {{ _docID }} }}"#,
+                escape_graphql_string(&request_doc),
+                escape_graphql_string(&session),
+                escape_graphql_string(&agent),
+                escape_graphql_string(&requester),
+                escape_graphql_string(&parent_doc),
+            ))
+            .await;
+        ensure_no_errors(&forged, "create forged plugin child").unwrap();
+        let forged_doc = crate::graphql::created_doc_id(
+            &serde_json::json!({ "data": forged.data }),
+            "AgentToolCall",
+        )
+        .unwrap();
+
+        let request = HydrationRequest::from_row(
+            format!("peer-1:{session}"),
+            requester.clone(),
+            agent.clone(),
+            session.clone(),
+        )
+        .unwrap();
+        let selection = load_hydration_selection(&node, &request).await.unwrap();
+        let selected = |collection, doc_id: &str| {
+            selection
+                .documents
+                .iter()
+                .any(|document| document.collection == collection && document.doc_id == doc_id)
+        };
+        assert!(selected(
+            SessionHydrationCollection::AgentToolCall,
+            &parent_doc
+        ));
+        assert!(selected(
+            SessionHydrationCollection::AgentToolCall,
+            &child_doc
+        ));
+        assert!(!selected(
+            SessionHydrationCollection::AgentToolCall,
+            &forged_doc
+        ));
+
+        let response = graphql_with_transaction_retry(
+            &node,
+            &crate::session::canonical_rows::request_output_segments_query(&request_doc),
+            "read child audit segments",
+        )
+        .await
+        .unwrap();
+        let segments = rows::<serde_json::Value>(&response, "AgentOutputSegment")
+            .unwrap()
+            .iter()
+            .map(decode_output_segment_row)
+            .collect::<Result<Vec<_>>>()
+            .unwrap();
+        let arguments = segments
+            .iter()
+            .filter(|row| {
+                row.segment.source
+                    == OutputSource::ToolEffectArguments {
+                        tool_call_doc_id: child_doc.clone(),
+                    }
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(arguments.len(), 1);
+        assert!(selected(
+            SessionHydrationCollection::AgentOutputSegment,
+            &arguments[0].doc_id
+        ));
+        let output = segments
+            .iter()
+            .filter(|row| {
+                row.segment.source
+                    == OutputSource::ToolCall {
+                        tool_call_doc_id: child_doc.clone(),
+                    }
+            })
+            .collect::<Vec<_>>();
+        assert!(!output.is_empty());
+        for row in &output {
+            assert!(
+                selected(SessionHydrationCollection::AgentOutputSegment, &row.doc_id),
+                "child terminal output segment {} must be hydrated",
+                row.doc_id
+            );
+        }
+        let terminal = graphql_with_transaction_retry(
+            &node,
+            &format!(
+                r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ terminal_output }} }}"#,
+                escape_graphql_string(&child_doc)
+            ),
+            "read child terminal",
+        )
+        .await
+        .unwrap();
+        let terminal: PresentedPayload = serde_json::from_value(
+            rows::<serde_json::Value>(&terminal, "AgentToolCall").unwrap()[0]["terminal_output"]
+                .clone(),
+        )
+        .unwrap();
+        assert!(output
+            .iter()
+            .any(|row| row.doc_id == terminal.output.close_doc_id));
+
+        // A parent retained from another session reaches the same rows only
+        // through the indexed parent field.
+        let mut effects = Vec::new();
+        load_effect_children(
+            &node,
+            &request,
+            &[ScopedDocument {
+                collection: SessionHydrationCollection::AgentToolCall,
+                doc_id: parent_doc.clone(),
+                requester_did: requester,
+                node_did: agent,
+                session_id: "origin-session".into(),
+            }],
+            &mut effects,
+        )
+        .await
+        .unwrap();
+        let found = effects
+            .iter()
+            .map(|row| row.document.doc_id.as_str())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            found,
+            BTreeSet::from([child_doc.as_str(), forged_doc.as_str()])
+        );
+
+        drop(request_owner);
+        node.shutdown().await;
+        let _ = std::fs::remove_dir_all(path);
     }
 
     #[test]
