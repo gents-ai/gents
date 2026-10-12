@@ -172,8 +172,11 @@ test.describe("a reader scrolled up in a transcript", () => {
     await expect(viewport).toHaveAttribute("data-following", "true");
     await restingScrollTop(page, viewport);
     await viewport.evaluate((scroller) => {
-      const writes: { from: number; to: number; foot: number }[] = [];
+      const writes: { from: number; to: number; foot: number; written: number }[] = [];
       const real = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop")!;
+      /* growth below the view leaves the position where the module last put
+         it; only the reader moves it off that */
+      let written = real.get!.call(scroller) as number;
       Object.defineProperty(scroller, "scrollTop", {
         configurable: true,
         get: () => real.get!.call(scroller) as number,
@@ -182,8 +185,10 @@ test.describe("a reader scrolled up in a transcript", () => {
             from: real.get!.call(scroller) as number,
             to: value,
             foot: scroller.scrollHeight - scroller.clientHeight,
+            written,
           });
           real.set!.call(scroller, value);
+          written = real.get!.call(scroller) as number;
         },
       });
       Object.assign(window, { __pinWrites: writes });
@@ -219,15 +224,16 @@ test.describe("a reader scrolled up in a transcript", () => {
       () =>
         (
           window as unknown as {
-            __pinWrites: { from: number; to: number; foot: number }[];
+            __pinWrites: { from: number; to: number; foot: number; written: number }[];
           }
         ).__pinWrites,
     );
-    /* a pin pulls the reader up from far above the foot; the module's own
-       following writes start within a chunk's growth of it */
+    /* a pin writes the foot over a reader who has moved the view up from
+       where the module last put it, however little the platform's wheel
+       carried them */
     const pins = writes.filter(
       (write) =>
-        write.from < write.foot - 400 &&
+        write.from < write.written - 1 &&
         write.to > write.from + 1 &&
         Math.round(write.to) === Math.round(write.foot),
     );
