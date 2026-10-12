@@ -968,6 +968,16 @@ impl RequestLifecycle {
     }
 }
 
+/// Session rows sharing the request's `(node, session)` label, decoded one
+/// row at a time so rows that fail canonical decode stay separable from the
+/// rest. The two boundaries read the same set differently: the claim boundary
+/// refuses on any undecodable row, the refusal boundary treats the label as
+/// ambiguous and leaves the session untouched.
+pub(super) struct LabeledSessionRows {
+    pub(super) decoded: Vec<session::SessionOwnerRow>,
+    pub(super) undecodable: Vec<anyhow::Error>,
+}
+
 /// Resolve the session rows sharing the request's `(node, session)` label.
 /// Requester scope is deliberately absent from the filter: the claim boundary
 /// must see a foreign-owned label to refuse it, and the refusal boundary must
@@ -975,7 +985,7 @@ impl RequestLifecycle {
 async fn labeled_session_rows_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     request: &AgentRequest,
-) -> Result<Vec<session::SessionOwnerRow>> {
+) -> Result<LabeledSessionRows> {
     let response = txn
         .execute(&format!(
             r#"{{ AgentSession(filter: {{ node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
@@ -987,7 +997,18 @@ async fn labeled_session_rows_in_txn(
     let rows = response["data"]["AgentSession"]
         .as_array()
         .context("AgentSession query omitted rows")?;
-    rows.iter().map(session::decode_session_row).collect()
+    let mut decoded = Vec::new();
+    let mut undecodable = Vec::new();
+    for row in rows {
+        match session::decode_session_row(row) {
+            Ok(row) => decoded.push(row),
+            Err(error) => undecodable.push(error),
+        }
+    }
+    Ok(LabeledSessionRows {
+        decoded,
+        undecodable,
+    })
 }
 
 /// Materialize the single session through its owner in the claim transaction.
@@ -1001,14 +1022,18 @@ pub(super) async fn apply_request_session_projection(
     // The session belongs to one requester; a request under any other scope
     // is refused rather than attached (Lean `Enrollment.runtimeRequesterScope`).
     let rows = labeled_session_rows_in_txn(txn, request).await?;
-    if rows.len() > 1 {
+    if let Some(error) = rows.undecodable.into_iter().next() {
+        return Err(error
+            .context("AgentSession row under the claimed session label failed canonical decode"));
+    }
+    if rows.decoded.len() > 1 {
         return Err(ClaimAdmissionError::SessionScopeMismatch {
             session_id: request.session_id.clone(),
             reason: "ambiguous session owner".to_owned(),
         }
         .into());
     }
-    if let Some(existing) = rows.first() {
+    if let Some(existing) = rows.decoded.first() {
         if existing.session.requester_did != request.requester_did {
             return Err(ClaimAdmissionError::SessionScopeMismatch {
                 session_id: request.session_id.clone(),
@@ -1076,7 +1101,13 @@ pub(super) async fn apply_request_session_projection(
 /// tracking it. Guards mirror `AgentSession.advance`: a title-audit request, a
 /// blank scope, an ambiguous label, a foreign requester or agent, or a request
 /// that is not the canonical latest leave the session untouched instead of
-/// failing the refusal; a refusal never reopens a closed session.
+/// failing the refusal; a refusal never reopens a closed session. A labeled
+/// row that fails canonical decode makes the label ambiguous the same way, and
+/// scoped request facts the projection cannot read skip it with a warning: the
+/// refusal boundary is guards over unrelated durable rows, never assertions,
+/// or the pending -> failed write would roll back and the turn would be lost.
+/// The projection's own writes stay atomic with the refusal and still roll it
+/// back on failure.
 pub(crate) async fn project_refused_request_session_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     request: &AgentRequest,
@@ -1090,14 +1121,33 @@ pub(crate) async fn project_refused_request_session_in_txn(
         return Ok(());
     }
     let rows = labeled_session_rows_in_txn(txn, request).await?;
-    if let Some(existing) = rows.first() {
-        if rows.len() > 1
+    if !rows.undecodable.is_empty() {
+        tracing::warn!(
+            target: session::REFUSAL_PROJECTION_EVENT_TARGET,
+            session_id = %request.session_id,
+            request_id = %request.request_id,
+            undecodable_rows = rows.undecodable.len(),
+            "refused request leaves its session untouched: an AgentSession row under the label \
+             failed canonical decode"
+        );
+        return Ok(());
+    }
+    if let Some(existing) = rows.decoded.first() {
+        if rows.decoded.len() > 1
             || existing.session.requester_did != request.requester_did
             || existing.session.agent_id != request.agent_id
         {
             return Ok(());
         }
     }
+    project_refused_request_onto_session_in_txn(txn, request, now).await
+}
+
+async fn project_refused_request_onto_session_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    request: &AgentRequest,
+    now: &str,
+) -> Result<()> {
     session::ensure_session_in_txn(
         txn,
         &request.session_id,
@@ -1123,15 +1173,33 @@ pub(crate) async fn project_refused_request_session_in_txn(
     )
     .await?
     .context("refused session disappeared")?;
-    let facts = session::load_scoped_request_facts_in_txn(txn, &owner.session, false).await?;
-    let incoming = facts
-        .iter()
-        .find(|fact| {
-            fact.observed.request_doc_id == request.doc_id
-                && fact.observed.request_id == request.request_id
-        })
-        .context("refused request missing from its exact session scope")?;
-    session::advance_session_request_observation_in_txn(txn, incoming, &request.content, now)
+    let incoming = async {
+        let facts = session::load_scoped_request_facts_in_txn(txn, &owner.session, false).await?;
+        facts
+            .iter()
+            .find(|fact| {
+                fact.observed.request_doc_id == request.doc_id
+                    && fact.observed.request_id == request.request_id
+            })
+            .cloned()
+            .context("refused request missing from its exact session scope")
+    }
+    .await;
+    let incoming = match incoming {
+        Ok(incoming) => incoming,
+        Err(error) => {
+            tracing::warn!(
+                target: session::REFUSAL_PROJECTION_EVENT_TARGET,
+                session_id = %request.session_id,
+                request_id = %request.request_id,
+                error = %error,
+                "refused request skipped its session projection; the refusal itself persists in \
+                 this transaction"
+            );
+            return Ok(());
+        }
+    };
+    session::advance_refused_request_observation_in_txn(txn, &incoming, &request.content, now)
         .await?;
     Ok(())
 }

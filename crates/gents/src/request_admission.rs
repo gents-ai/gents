@@ -273,16 +273,31 @@ pub(crate) async fn terminalize_pending_request_rejection(
                             )
                             .await?;
                         }
-                        // Malformed ingest rows do not decode; the projection
-                        // then skips them along with every other guard miss.
-                        if let Ok(request) = serde_json::from_value::<AgentRequestRow>(row.clone())
+                        // A row that fails this decode keeps its refusal but
+                        // loses the session projection: hostile ingest rows,
+                        // and version-skewed rows from a paired runtime whose
+                        // `input` carries fields this build does not know
+                        // (RequestInput denies unknown fields) or whose
+                        // content is null. The refusal already persists in
+                        // this transaction, so the skip is warned, not fatal.
+                        match serde_json::from_value::<AgentRequestRow>(row.clone())
                             .map_err(anyhow::Error::from)
                             .and_then(crate::watcher::AgentRequest::try_from)
                         {
-                            crate::lifecycle::materialize::project_refused_request_session_in_txn(
-                                txn, &request, now,
-                            )
-                            .await?;
+                            Ok(request) => {
+                                crate::lifecycle::materialize::project_refused_request_session_in_txn(
+                                    txn, &request, now,
+                                )
+                                .await?;
+                            }
+                            Err(error) => {
+                                tracing::warn!(
+                                    target: crate::session::REFUSAL_PROJECTION_EVENT_TARGET,
+                                    request_id = row["request_id"].as_str().unwrap_or(""),
+                                    error = %error,
+                                    "refused row skipped session projection: decode failed"
+                                );
+                            }
                         }
                     }
                 }
@@ -1452,6 +1467,326 @@ mod tests {
             }
         }
         node.shutdown().await;
+    }
+
+    async fn refused_pending_request_under_session(
+        node: &defra_node::EmbeddedNode,
+        identity: &crate::identity::KeyIdentity,
+        request_id: &str,
+        session_id: &str,
+    ) -> String {
+        let mut create = AgentRequestCreate::base(
+            gents_protocol::request_admission::RequestPurpose::Normal,
+            request_id,
+            identity.did(),
+            identity.did(),
+            "agent",
+            session_id,
+            "run the disallowed skill",
+            "interactive",
+            "2026-09-01T00:00:00Z",
+            AgentRequestAdmissionRecord::local_self(identity.did()),
+        );
+        create.input =
+            serde_json::from_value(serde_json::json!({"selected_skill_ids": ["unconfigured"]}))
+                .unwrap();
+        crate::sign_agent_request_create(identity, &mut create)
+            .await
+            .unwrap();
+        let result = node.execute(&create.graphql_mutation().unwrap()).await;
+        assert!(!result.has_errors(), "{:?}", result.errors);
+        crate::graphql::single_mutation_document(&result, "create_AgentRequest")
+            .unwrap()
+            .unwrap()["_docID"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    }
+
+    /// A session row sharing the refused request's label that fails canonical
+    /// decode makes the label ambiguous: the refusal persists and leaves the
+    /// row untouched instead of rolling the pending -> failed write back.
+    #[tokio::test]
+    async fn refusal_survives_undecodable_session_rows_sharing_its_label() {
+        let temp = tempfile::tempdir().unwrap();
+        let identity =
+            KeyIdentity::load_or_create(temp.path().join("corrupt-session.key"), None).unwrap();
+        let foreign =
+            KeyIdentity::load_or_create(temp.path().join("corrupt-foreign.key"), None).unwrap();
+        let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+        ensure_runtime_schemas(&node).await.unwrap();
+        let node_did = crate::graphql::escape_graphql_string(identity.did());
+        for (session_id, requester_did) in [
+            ("corrupt-foreign-scope", Some(foreign.did())),
+            ("corrupt-own-scope", Some(identity.did())),
+        ] {
+            let requester = match requester_did {
+                Some(did) => format!(
+                    r#"requester_did: "{}","#,
+                    crate::graphql::escape_graphql_string(did)
+                ),
+                None => "requester_did: null,".to_owned(),
+            };
+            let seeded = node
+                .execute(&format!(
+                    r#"mutation {{ create_AgentSession(input: {{
+                        session_id: "{}", node_did: "{node_did}", {requester} agent_id: "agent",
+                        created_at: "not-an-rfc3339-timestamp"
+                    }}) {{ _docID }} }}"#,
+                    crate::graphql::escape_graphql_string(session_id),
+                ))
+                .await;
+            assert!(!seeded.has_errors(), "{session_id}: {:?}", seeded.errors);
+
+            let request_id = format!("refused-under-{session_id}");
+            let doc_id =
+                refused_pending_request_under_session(&node, &identity, &request_id, session_id)
+                    .await;
+            super::terminalize_pending_request_rejection(
+                &node,
+                &doc_id,
+                identity.did(),
+                "request admission denied: request activates a skill outside its context allowlist",
+                "test.admission_rejection_corrupt_session_row",
+            )
+            .await
+            .unwrap_or_else(|error| panic!("{session_id}: the refusal must persist: {error}"));
+
+            let selected = node
+                .execute(&format!(
+                    r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state }} }}"#,
+                    crate::graphql::escape_graphql_string(&doc_id),
+                ))
+                .await;
+            assert!(!selected.has_errors(), "{:?}", selected.errors);
+            assert_eq!(
+                selected.data.as_ref().unwrap()["AgentRequest"][0]["lifecycle_state"],
+                "failed",
+                "{session_id}: the refused request must not stay pending"
+            );
+            let sessions = node
+                .execute(&format!(
+                    r#"{{ AgentSession(filter: {{ node_did: {{ _eq: "{node_did}" }}, session_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
+                    crate::graphql::escape_graphql_string(session_id),
+                    crate::session::AGENT_SESSION_FIELDS,
+                ))
+                .await;
+            assert!(!sessions.has_errors(), "{:?}", sessions.errors);
+            let rows = sessions.data.as_ref().unwrap()["AgentSession"]
+                .as_array()
+                .cloned()
+                .unwrap();
+            assert_eq!(
+                rows.len(),
+                1,
+                "{session_id}: the refusal must not mint beside an undecodable row"
+            );
+            assert!(
+                crate::session::decode_session_row(&rows[0]).is_err(),
+                "{session_id}: the refusal must leave the undecodable row untouched"
+            );
+        }
+        node.shutdown().await;
+    }
+
+    /// Scoped request facts the projection cannot interpret — an invalid
+    /// `created_at`, or duplicate `request_id` roots — skip the session
+    /// projection; they must not roll back the refusal write.
+    #[tokio::test]
+    async fn refusal_survives_unreadable_scoped_request_facts() {
+        let temp = tempfile::tempdir().unwrap();
+        let identity =
+            KeyIdentity::load_or_create(temp.path().join("corrupt-facts.key"), None).unwrap();
+        let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+        ensure_runtime_schemas(&node).await.unwrap();
+        let node_did = crate::graphql::escape_graphql_string(identity.did());
+        for (session_id, sibling_request_id, sibling_created_at) in [
+            ("facts-invalid-created-at", "sibling-invalid", "yesterday"),
+            (
+                "facts-duplicate-roots",
+                "refused-dup-root",
+                "2026-09-01T00:00:00Z",
+            ),
+        ] {
+            crate::session::ensure_session_with_agent_id_and_requester_did(
+                &node,
+                session_id,
+                identity.did(),
+                "agent",
+                Some(identity.did()),
+            )
+            .await
+            .unwrap();
+            let request_id = if session_id == "facts-duplicate-roots" {
+                "refused-dup-root".to_owned()
+            } else {
+                format!("refused-{session_id}")
+            };
+            let doc_id =
+                refused_pending_request_under_session(&node, &identity, &request_id, session_id)
+                    .await;
+            let sibling = node
+                .execute(&format!(
+                    r#"mutation {{ create_AgentRequest(input: {{
+                        request_id: "{}", purpose: "normal", node_did: "{node_did}",
+                        requester_did: "{node_did}", agent_id: "agent", session_id: "{}",
+                        content: "sibling turn", lifecycle_state: "pending",
+                        created_at: "{}", retry_count: 0, max_retries: 3, request_hop: 0
+                    }}) {{ _docID }} }}"#,
+                    crate::graphql::escape_graphql_string(sibling_request_id),
+                    crate::graphql::escape_graphql_string(session_id),
+                    crate::graphql::escape_graphql_string(sibling_created_at),
+                ))
+                .await;
+            assert!(!sibling.has_errors(), "{session_id}: {:?}", sibling.errors);
+
+            super::terminalize_pending_request_rejection(
+                &node,
+                &doc_id,
+                identity.did(),
+                "request admission denied: request activates a skill outside its context allowlist",
+                "test.admission_rejection_unreadable_facts",
+            )
+            .await
+            .unwrap_or_else(|error| panic!("{session_id}: the refusal must persist: {error}"));
+
+            let selected = node
+                .execute(&format!(
+                    r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state }} }}"#,
+                    crate::graphql::escape_graphql_string(&doc_id),
+                ))
+                .await;
+            assert!(!selected.has_errors(), "{:?}", selected.errors);
+            assert_eq!(
+                selected.data.as_ref().unwrap()["AgentRequest"][0]["lifecycle_state"],
+                "failed",
+                "{session_id}: the refused request must not stay pending"
+            );
+            let sessions = node
+                .execute(&format!(
+                    r#"{{ AgentSession(filter: {{ node_did: {{ _eq: "{node_did}" }}, session_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
+                    crate::graphql::escape_graphql_string(session_id),
+                    crate::session::AGENT_SESSION_FIELDS,
+                ))
+                .await;
+            assert!(!sessions.has_errors(), "{:?}", sessions.errors);
+            let rows = sessions.data.as_ref().unwrap()["AgentSession"]
+                .as_array()
+                .cloned()
+                .unwrap();
+            assert_eq!(rows.len(), 1, "{session_id}: one session row");
+            let session = crate::session::decode_session_row(&rows[0])
+                .unwrap()
+                .session;
+            assert!(
+                session.observation.is_none(),
+                "{session_id}: a projection the facts cannot order must leave the session \
+                 untouched, got {:?}",
+                session.observation
+            );
+        }
+        node.shutdown().await;
+    }
+
+    /// Capture warn-level tracing emitted on the current thread, so the
+    /// version-skew decode skip is asserted as observable, not just absent.
+    #[derive(Clone)]
+    struct WarnCapture(Arc<std::sync::Mutex<String>>);
+
+    impl std::io::Write for WarnCapture {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0
+                .lock()
+                .unwrap()
+                .push_str(&String::from_utf8_lossy(buf));
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for WarnCapture {
+        type Writer = WarnCapture;
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    /// A refused row whose `input` carries fields this build does not know —
+    /// a version-skewed paired runtime — keeps its refusal, loses the session
+    /// projection, and says so: the skip must be observable in the field.
+    #[test]
+    fn version_skewed_refused_row_keeps_its_refusal_and_warns_on_the_skipped_projection() {
+        crate::test_support::enable_scoped_event_capture();
+        let captured = Arc::new(std::sync::Mutex::new(String::new()));
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::WARN)
+            .with_writer(WarnCapture(captured.clone()))
+            .finish();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        tracing::subscriber::with_default(subscriber, || {
+            runtime.block_on(async {
+                let temp = tempfile::tempdir().unwrap();
+                let identity = KeyIdentity::load_or_create(temp.path().join("skew.key"), None)
+                    .unwrap();
+                let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+                ensure_runtime_schemas(&node).await.unwrap();
+                let node_did = crate::graphql::escape_graphql_string(identity.did());
+                let created = node
+                    .execute(&format!(
+                        r#"mutation {{ create_AgentRequest(input: {{
+                            request_id: "version-skewed", purpose: "normal", node_did: "{node_did}",
+                            requester_did: "{node_did}", agent_id: "agent",
+                            session_id: "skew-session", content: "run the disallowed skill",
+                            lifecycle_state: "pending", created_at: "2026-09-01T00:00:00Z",
+                            input: {{ future_field: "written by a newer runtime" }},
+                            retry_count: 0, max_retries: 3, request_hop: 0
+                        }}) {{ _docID }} }}"#
+                    ))
+                    .await;
+                assert!(!created.has_errors(), "{:?}", created.errors);
+                let doc_id = crate::graphql::single_mutation_document(&created, "create_AgentRequest")
+                    .unwrap()
+                    .unwrap()["_docID"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned();
+
+                super::terminalize_pending_request_rejection(
+                    &node,
+                    &doc_id,
+                    identity.did(),
+                    "request admission denied: request activates a skill outside its context allowlist",
+                    "test.admission_rejection_version_skew",
+                )
+                .await
+                .unwrap();
+
+                let selected = node
+                    .execute(&format!(
+                        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state }} AgentSession(filter: {{ session_id: {{ _eq: "skew-session" }} }}) {{ _docID }} }}"#,
+                        crate::graphql::escape_graphql_string(&doc_id),
+                    ))
+                    .await;
+                assert!(!selected.has_errors(), "{:?}", selected.errors);
+                let data = selected.data.as_ref().unwrap();
+                assert_eq!(data["AgentRequest"][0]["lifecycle_state"], "failed");
+                assert!(
+                    data["AgentSession"].as_array().unwrap().is_empty(),
+                    "an undecodable row mints no session"
+                );
+                node.shutdown().await;
+            });
+        });
+        let logs = captured.lock().unwrap().clone();
+        assert!(
+            logs.contains("refused row skipped session projection"),
+            "the version-skew skip must be observable, log: {logs}"
+        );
     }
 
     #[tokio::test]

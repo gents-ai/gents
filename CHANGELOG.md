@@ -18,7 +18,11 @@ source consistency checks, not a separate runtime compatibility version.
   transaction (#2431). The session observation names the refused request, so
   the desktop keeps the submitted text, the refusal reason and Retry after it
   stops tracking the request, and a first message refused at admission mints
-  its session instead of vanishing from the sidebar.
+  its session instead of vanishing from the sidebar. The projection is
+  best-effort: a session row or scoped request fact the runtime cannot decode
+  leaves the session untouched and warns instead of rolling the refusal back
+  to pending, and a version-skewed refused row that does not decode keeps its
+  refusal and warns that its session projection was skipped.
 - Installing or removing a plugin an Agent's Tools document names now
   re-admits an Agent that was demoted for failing to build on the missing
   tool (#2338). The resolved plugin identity (version and digest) joins the
