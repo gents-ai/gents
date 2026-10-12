@@ -60,8 +60,8 @@ mod turn_threading;
 
 pub use contract::{
     AuthoredInput, FoldedPrompt, LoopConfig, LoopReplayInput, LoopStreamItem, RenderedRequestSink,
-    ReplayEvidenceResolver, ReplayEvidenceRow, ReplayEvidenceViolation, StructuredOutputConfig,
-    TaggedMessage, TurnCompactionOutcome, TurnCompactionRequest,
+    ReplayEstimateSeed, ReplayEvidenceResolver, ReplayEvidenceRow, ReplayEvidenceViolation,
+    StructuredOutputConfig, TaggedMessage, TurnCompactionOutcome, TurnCompactionRequest,
 };
 pub use one_shot::{
     run_loop_to_text, run_loop_to_typed, AuxiliaryPersistenceFailure, OneShotNoVisibleOutput,
@@ -82,6 +82,9 @@ pub use request_assembly::{
     clamp_request_output_budget, completion_request_input_components, ensure_context_can_dispatch,
     repair_provider_input,
 };
+// Same reasoning: gents' session replay tests drive the dispatch lookup
+// directly to pin the estimate-seed window.
+pub use request_assembly::resolve_replay_evidence;
 use tool_dispatch::admit_tool;
 pub use tool_dispatch::dispatch_tool;
 

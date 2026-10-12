@@ -6,6 +6,13 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- A request's first turn no longer resolves canonical replay evidence twice.
+  The admission estimate's resolution is served to the immediately following
+  dispatch and taken once, and every later assembly re-reads the store exactly
+  as before. Within one resolution pass, the selected turns' capture rows and
+  manifest-block field-commit witnesses are read in batched statements across
+  the whole pass instead of one statement set per turn, cutting the per-turn
+  fixed store cost of reasoning replay (#2385).
 - Breaking: installations are Nodes and their configured behaviors are Agents.
   Collections, document fields, CLI commands and flags, and desktop preferences
   use the new names (`gents config agent`, `--node-name`, `node_did`, `agent_id`).

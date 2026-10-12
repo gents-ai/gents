@@ -49,6 +49,64 @@ pub type ReplayEvidenceResolver = Arc<
         + Sync,
 >;
 
+/// One-shot carrier from an admission estimate's replay evidence resolution to
+/// the immediately following dispatch lookup.
+///
+/// Native premise the model does not cover (it treats resolution as an opaque
+/// pure parameter of the tags): the slot holds ONLY the admission estimate's
+/// resolution, is consumed exactly once by the immediately following dispatch
+/// whose tags it covers, and every later assembly re-reads the store. A
+/// capture replicating between the estimate and that first dispatch is
+/// observed no earlier than the next resolution; the estimate's token count
+/// already races this way.
+#[derive(Clone, Default)]
+pub struct ReplayEstimateSeed {
+    state: std::sync::Arc<std::sync::Mutex<ReplayEstimateSeedState>>,
+}
+
+#[derive(Default)]
+struct ReplayEstimateSeedState {
+    armed: bool,
+    rows: Option<Vec<ReplayEvidenceRow>>,
+}
+
+impl ReplayEstimateSeed {
+    pub(crate) fn arm(&self) {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .armed = true;
+    }
+
+    pub(crate) fn disarm(&self) {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .armed = false;
+    }
+
+    /// Record one resolution while an admission estimate holds the seed armed;
+    /// dispatch and later resolutions resolve unarmed and record nothing.
+    pub fn record(&self, rows: Vec<ReplayEvidenceRow>) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.armed {
+            state.rows = Some(rows);
+        }
+    }
+
+    /// Take the recorded rows. Taken once: the next lookup re-reads the store.
+    pub(crate) fn take(&self) -> Option<Vec<ReplayEvidenceRow>> {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .rows
+            .take()
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct LoopReplayInput {
     /// Present only for a persisted request with a real canonical owner.
@@ -61,6 +119,26 @@ pub struct LoopReplayInput {
     /// summarize. Replay selection does not read them.
     pub required: Vec<ReplayTag>,
     pub resolve: Option<ReplayEvidenceResolver>,
+    /// Carries the admission estimate's resolution to the first dispatch.
+    pub estimate_seed: Option<ReplayEstimateSeed>,
+}
+
+impl LoopReplayInput {
+    /// Arm [`Self::estimate_seed`] so the next resolution is recorded for the
+    /// immediately following dispatch. The admission estimate brackets exactly
+    /// its own assembly with this; every other resolution stays unarmed.
+    pub fn arm_estimate_seed(&self) {
+        if let Some(seed) = &self.estimate_seed {
+            seed.arm();
+        }
+    }
+
+    /// End the bracket opened by [`Self::arm_estimate_seed`].
+    pub fn disarm_estimate_seed(&self) {
+        if let Some(seed) = &self.estimate_seed {
+            seed.disarm();
+        }
+    }
 }
 
 /// `(turn_index, attempt, request, assembly_trace)`.

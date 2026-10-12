@@ -1031,6 +1031,35 @@ async fn read_manifest_blocks<R: CaptureBaseReader + Sync>(
     Ok(())
 }
 
+/// Read the manifest blocks of many captures into one shared cache: the block
+/// rows and their field-commit witnesses batch across every manifest of the
+/// pass instead of one statement set per capture. Only positive observations
+/// enter the cache, so each capture still re-checks every entry's content key
+/// at resolution; a manifest beyond the reader ceiling is left to fail in its
+/// own capture's resolution rather than failing the whole pass here.
+pub(crate) async fn preload_manifest_blocks<R: CaptureBaseReader + Sync>(
+    reader: &R,
+    manifests: &[Vec<encoding::ManifestEntry>],
+    cache: &mut CaptureReadCache,
+) -> Result<()> {
+    let mut union = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for entries in manifests {
+        if entries.len() > encoding::MAX_MANIFEST_BLOCKS {
+            continue;
+        }
+        for entry in entries {
+            if seen.insert(entry.doc_id.clone()) {
+                union.push(entry.clone());
+            }
+        }
+    }
+    for chunk in union.chunks(encoding::MAX_MANIFEST_BLOCKS) {
+        read_manifest_blocks(reader, chunk, &mut cache.blocks).await?;
+    }
+    Ok(())
+}
+
 async fn decode_capture_json_from<R: CaptureBaseReader + Sync>(
     reader: &R,
     capture_version: u32,
