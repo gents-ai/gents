@@ -1150,6 +1150,89 @@ while True:
 }
 
 #[tokio::test]
+async fn semantic_retry_waits_for_a_busy_server_to_settle() {
+    if !python3_available() {
+        return;
+    }
+    let fixture = r#"
+import json, sys, threading
+lock = threading.Lock()
+settled = threading.Event()
+def read():
+    headers = {}
+    while True:
+        line = sys.stdin.buffer.readline()
+        if not line:
+            return None
+        if line in (b'\r\n', b'\n'):
+            break
+        key, _, value = line.decode().partition(':')
+        headers[key.strip().lower()] = value.strip()
+    n = int(headers.get('content-length', '0'))
+    return json.loads(sys.stdin.buffer.read(n) or b'null')
+def write(obj):
+    body = json.dumps(obj).encode()
+    with lock:
+        sys.stdout.buffer.write(f'Content-Length: {len(body)}\r\n\r\n'.encode())
+        sys.stdout.buffer.write(body)
+        sys.stdout.buffer.flush()
+def settle():
+    settled.set()
+    write({"jsonrpc":"2.0","method":"experimental/serverStatus","params":{"health":"ok","quiescent":True}})
+while True:
+    msg = read()
+    if msg is None:
+        break
+    method = msg.get('method')
+    mid = msg.get('id')
+    if method == 'initialize':
+        write({"jsonrpc":"2.0","id":mid,"result":{"capabilities":{}}})
+        write({"jsonrpc":"2.0","method":"experimental/serverStatus","params":{"health":"ok","quiescent":False}})
+        threading.Timer(1.5, settle).start()
+    elif method == 'textDocument/documentSymbol':
+        result = [{"name":"settled","kind":12,"range":{"start":{"line":0,"character":0}},"selectionRange":{"start":{"line":0,"character":0}}}] if settled.is_set() else None
+        write({"jsonrpc":"2.0","id":mid,"result":result})
+    elif method == 'exit':
+        break
+    elif mid is not None:
+        write({"jsonrpc":"2.0","id":mid,"result":None})
+"#;
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("lib.rs"), "fn settled() {}\n").unwrap();
+    std::fs::write(
+        root.path().join("Cargo.toml"),
+        "[package]\nname='t'\nversion='0.1.0'\n",
+    )
+    .unwrap();
+    let pool = LspPool::new();
+    let server = fixture_server(fixture.into());
+    let config = sample_config(
+        root.path().to_path_buf(),
+        FileToolMode::ReadOnly,
+        "s-busy",
+        vec![server.clone()],
+    );
+    let key = PoolKey {
+        session_id: "s-busy".into(),
+        agent_id: "b1".into(),
+        workspace_root: root.path().to_path_buf(),
+        server_name: server.name.clone(),
+        config_digest: config.digest.clone(),
+    };
+    let lease = pool.get_or_start(key, &server, &config).await.unwrap();
+    let result = super::actions::request_maybe_retry(
+        lease.client(),
+        "textDocument/documentSymbol",
+        serde_json::json!({"textDocument":{"uri": super::uri::path_to_file_uri(&root.path().join("lib.rs"))}}),
+        std::time::Duration::from_secs(10),
+        true,
+    )
+    .await
+    .expect("null from a busy server should be retried after it settles");
+    assert_eq!(result[0]["name"], "settled");
+}
+
+#[tokio::test]
 async fn ensure_open_resyncs_when_disk_text_changes_out_of_band() {
     if !python3_available() {
         return;
@@ -1587,7 +1670,7 @@ async fn rust_analyzer_starts_and_reports_ready() {
             new_name: None,
             apply: None,
             payload: None,
-            timeout: Some(40),
+            timeout: Some(120),
         })
         .await
         .expect("rust-analyzer must return document symbols after cold start");
