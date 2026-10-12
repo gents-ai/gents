@@ -1272,6 +1272,11 @@ def caseCoverage : List CoverageEntry :=
       "tool-policy" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "plugin_resource_cases"
+      "PluginChildAdmissionCases"
+      "agent::loop_stream::tests::generated_child_admission_cases_drive_real_dispatcher")
+      "tool-policy" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "plugin_resource_cases"
       "PluginEffectCases"
       "tool_call_lifecycle::plugin_effect::tests::generated_plugin_effect_admission_matches_execution_owner")
       "tool-policy" [Surface.agentFacing]

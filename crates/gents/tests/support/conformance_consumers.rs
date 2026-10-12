@@ -581,6 +581,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_schema_argument_repair_cases_drive_owned_loop",
         },
         ConformanceConsumer::RustTest {
+            id: "agent::loop_stream::tests::generated_child_admission_cases_drive_real_dispatcher",
+            package: "gents",
+            source_path: "crates/gents/src/agent/loop_stream/tests/tool_execution.rs",
+            module_path: "agent::loop_stream::tests",
+            function: "generated_child_admission_cases_drive_real_dispatcher",
+        },
+        ConformanceConsumer::RustTest {
             id: "agent::loop_stream::tests::generated_invalid_tool_progress_cases_drive_owned_loop",
             package: "gents",
             source_path: "crates/gents/src/agent/loop_stream/tests/invalid_tool_progress.rs",

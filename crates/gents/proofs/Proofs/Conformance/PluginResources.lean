@@ -167,8 +167,15 @@ private def toolCallsJson : Json := Json.mkObj [
       ("expected", toJson (match PluginCalls.consentRoute interactive composed with
         | .ask => "ask" | .refuseComposed => "refuse_composed" | .deny => "deny"))])]
 
+private def childAdmissionJson : Json := toJson <| [false, true].flatMap fun selected =>
+  [("ordinary", PluginCalls.DispatchRoute.ordinary), ("hook_owned", .hookOwned)].flatMap
+    fun (name, route) => [false, true].map fun admitted => Json.mkObj [
+      ("selected", toJson selected), ("route", toJson name), ("admitted", toJson admitted),
+      ("expected", toJson (PluginCalls.childAdmissible selected route admitted))]
+
 def casesJson : String := (Json.mkObj [("consent", consentJson), ("budgets", budgetsJson),
-  ("tool_calls", toolCallsJson), ("tool_effects", PluginEffects.casesJson),
+  ("tool_calls", toolCallsJson), ("child_admission", childAdmissionJson),
+  ("tool_effects", PluginEffects.casesJson),
   ("tool_effect_terminals", PluginEffects.terminalCasesJson),
   ("tool_effect_accounting", PluginEffects.accountingCasesJson),
   ("model_slots", modelSlotsJson), ("network", networkJson),
