@@ -272,6 +272,33 @@ impl LspClient {
         }
     }
 
+    /// Waits until the server stops reporting work, exits, or `deadline`
+    /// passes. Returns whether the server was busy. rust-analyzer answers
+    /// file requests with null while it reloads the crate graph and rescans
+    /// roots, so a null answer is not final until it settles.
+    pub async fn wait_while_busy(&self, deadline: Instant) -> bool {
+        let mut busy = false;
+        while Instant::now() < deadline && self.is_busy().await {
+            busy = true;
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        busy
+    }
+
+    /// `experimental/serverStatus` is authoritative once sent: progress such
+    /// as rust-analyzer's post-quiescence cache priming does not block
+    /// answers. Open `$/progress` tokens mean busy only for servers that
+    /// never send it.
+    async fn is_busy(&self) -> bool {
+        if !self.is_alive() {
+            return false;
+        }
+        if let Some(status) = self.server_status.lock().await.as_ref() {
+            return !status.quiescent;
+        }
+        !self.progress.lock().await.is_empty()
+    }
+
     async fn is_quiescent(&self) -> bool {
         self.server_status
             .lock()
@@ -695,11 +722,9 @@ async fn handle_server_message(
             return Ok(());
         }
         "experimental/serverStatus" => {
-            let quiescent = value
-                .pointer("/params/quiescent")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            *shared.server_status.lock().await = Some(ServerStatus { quiescent });
+            if let Some(quiescent) = value.pointer("/params/quiescent").and_then(Value::as_bool) {
+                *shared.server_status.lock().await = Some(ServerStatus { quiescent });
+            }
             return Ok(());
         }
         "$/progress" => {
