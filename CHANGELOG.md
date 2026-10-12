@@ -6,6 +6,14 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- A request's first turn no longer resolves canonical replay evidence twice.
+  The admission estimate's resolution is served to the immediately following
+  dispatch and taken once, and every later assembly re-reads the store exactly
+  as before. Within one resolution pass, the selected turns' capture rows and
+  manifest-block field-commit witnesses are read in batched statements across
+  the whole pass instead of one statement set per turn, cutting the per-turn
+  fixed store cost of reasoning replay; a capture whose pinned blocks fail
+  verification still degrades only its own turn (#2385).
 - Narrowing the operator tool root no longer strands an existing behavior: a
   stored `Tools.host.root` grant that still contains the narrowed root now
   clamps to it at the selection/ceiling meet instead of failing startup, so a

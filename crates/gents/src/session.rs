@@ -51,6 +51,8 @@ pub(crate) use observations::{
 pub use observations::{load_latest_request_in_txn, SessionRequestFact};
 pub(crate) use observations::{load_session_current_hop, load_session_current_hop_in_txn};
 #[cfg(test)]
+pub(crate) use output::count_capture_row_queries;
+#[cfg(test)]
 pub(crate) use output::count_request_output_scans;
 #[cfg(test)]
 pub(crate) use output::load_canonical_payload_from_node;
