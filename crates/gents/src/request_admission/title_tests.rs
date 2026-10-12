@@ -53,6 +53,8 @@ fn native_input(case: &LeanTitleRequestAdmissionCase) -> RequestInput {
             "source": title.source,
         })),
         "queue": modeled.queue.as_ref().map(|queue| serde_json::json!({
+            "delivery": queue.delivery,
+            "position": queue.position,
             "source": queue.source,
             "policy": queue.policy,
             "key": queue.key,

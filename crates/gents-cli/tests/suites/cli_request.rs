@@ -249,8 +249,6 @@ async fn request_interrupt_waits_until_running_request_is_terminal() -> Result<(
             "interrupt",
             "--graphql",
             &graphql,
-            "--cause",
-            "userCancelled",
             "--wait",
             "--timeout",
             "20s",
@@ -683,4 +681,365 @@ async fn request_show_expanded_view_surfaces_background_tools_and_child_lineage(
     );
 
     Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pending_message_commands_edit_reorder_and_remove_against_held_provider() -> Result<()> {
+    use crate::support::mocks::fake_llm::{ChatAction, FakeLlm};
+    use std::process::Child;
+    use std::sync::Arc;
+
+    fn is_user_text(message: &Value, text: &str) -> bool {
+        message["role"] == "user"
+            && match &message["content"] {
+                Value::String(content) => content == text,
+                Value::Array(parts) => parts.len() == 1 && parts[0]["text"] == text,
+                _ => false,
+            }
+    }
+    fn has_user_text(request: &Value, text: &str) -> bool {
+        request["messages"]
+            .as_array()
+            .is_some_and(|messages| messages.iter().any(|message| is_user_text(message, text)))
+    }
+    struct ChildGuard(Option<Child>);
+    impl Drop for ChildGuard {
+        fn drop(&mut self) {
+            if let Some(child) = self.0.as_mut() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        }
+    }
+    fn ids(snapshot: &Value) -> Vec<String> {
+        snapshot["entries"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|entry| {
+                entry["request_doc_id"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned()
+            })
+            .collect()
+    }
+    fn contents(snapshot: &Value) -> Vec<String> {
+        snapshot["entries"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|entry| entry["content"].as_str().unwrap_or_default().to_owned())
+            .collect()
+    }
+    fn doc_id_of(snapshot: &Value, content: &str) -> Result<String> {
+        snapshot["entries"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|entry| entry["content"] == content)
+            .and_then(|entry| entry["request_doc_id"].as_str())
+            .map(str::to_owned)
+            .with_context(|| format!("{content} is not pending: {snapshot}"))
+    }
+
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home = tempdir.path().join("home");
+    fs::create_dir_all(&home)?;
+    let first = "pending-cli-held-first";
+    let alpha = "pending-cli-alpha";
+    let alpha_edited = "pending-cli-alpha-edited";
+    let beta = "pending-cli-beta";
+    let gamma = "pending-cli-gamma";
+    let initial_reply = "pending-cli-initial-response";
+    let final_reply = "pending-cli-final-response";
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let responder_gate = gate.clone();
+    let model = format!("mock-pending-cli-{}", Uuid::new_v4().simple());
+    let endpoint = FakeLlm::start(
+        &model,
+        None,
+        Arc::new(move |request| {
+            if has_user_text(request, alpha_edited) || has_user_text(request, gamma) {
+                ChatAction::Sse(completion_text_sse(final_reply))
+            } else if has_user_text(request, first) {
+                ChatAction::WaitThenSse(responder_gate.clone(), completion_text_sse(initial_reply))
+            } else {
+                ChatAction::Sse(completion_text_sse("session title"))
+            }
+        }),
+    )?;
+    let init = run_init_json(
+        &home,
+        &[
+            "--node-name",
+            &format!("cli-pending-{}", Uuid::new_v4().simple()),
+            "--model-name",
+            &model,
+            "--inference-url",
+            endpoint.endpoint(),
+        ],
+    )?;
+    let node = node_did_from_init(&init)?;
+    let port = allocate_port()?;
+    let graphql = graphql_url(port);
+    let mut serve = spawn_server(&home, port)?;
+    wait_for_port(port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &node, Duration::from_secs(30)).await?;
+
+    let submitted = run_cli_json(
+        &home,
+        &[
+            "request",
+            "submit",
+            "--graphql",
+            &graphql,
+            "--node-did",
+            &node,
+            "--content",
+            first,
+            "--no-wait",
+        ],
+    )?;
+    let session = submitted["session_id"]
+        .as_str()
+        .context("request submit output missing session_id")?
+        .to_owned();
+    let scope = [
+        "--graphql",
+        graphql.as_str(),
+        "--node-did",
+        node.as_str(),
+        "--session-id",
+        session.as_str(),
+        "--output",
+        "json",
+    ];
+    let pending = || run_cli_json(&home, &[&["request", "pending"][..], &scope[..]].concat());
+    let wait_for_pending = |expected: Vec<&'static str>| {
+        let pending = &pending;
+        async move {
+            tokio::time::timeout(Duration::from_secs(30), async {
+                loop {
+                    let snapshot = pending()?;
+                    if contents(&snapshot) == expected {
+                        break Ok::<_, anyhow::Error>(snapshot);
+                    }
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+            })
+            .await
+            .with_context(|| format!("pending queue never became {expected:?}"))?
+        }
+    };
+
+    let mut waiter = ChildGuard(None);
+    let result: Result<()> = async {
+        tokio::time::timeout(Duration::from_secs(30), async {
+            while !endpoint
+                .captured_chat_requests()
+                .iter()
+                .any(|request| has_user_text(request, first))
+            {
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+        })
+        .await
+        .context("first request never reached the held provider")?;
+
+        waiter.0 = Some(spawn_cli(
+            &home,
+            &[
+                "request",
+                "submit",
+                "--graphql",
+                &graphql,
+                "--node-did",
+                &node,
+                "--session-id",
+                &session,
+                "--content",
+                alpha,
+                "--poll-secs",
+                "1",
+            ],
+        )?);
+        wait_for_pending(vec![alpha]).await?;
+        for content in [beta, gamma] {
+            run_cli_json(
+                &home,
+                &[
+                    "request",
+                    "submit",
+                    "--graphql",
+                    &graphql,
+                    "--node-did",
+                    &node,
+                    "--session-id",
+                    &session,
+                    "--content",
+                    content,
+                    "--no-wait",
+                ],
+            )?;
+        }
+        let queued = wait_for_pending(vec![alpha, beta, gamma]).await?;
+        assert!(
+            queued["entries"]
+                .as_array()
+                .is_some_and(|entries| entries.iter().all(|entry| entry["editable"] == true)),
+            "queued author messages must be editable: {queued}"
+        );
+
+        let expected_flags = |snapshot: &Value| {
+            ids(snapshot)
+                .into_iter()
+                .flat_map(|id| ["--expected-request-doc-id".to_owned(), id])
+                .collect::<Vec<_>>()
+        };
+        let mutate = |command: &str, snapshot: &Value, extra: &[&str]| {
+            let expected = expected_flags(snapshot);
+            let mut args = vec!["request", command];
+            args.extend_from_slice(&scope);
+            args.extend(expected.iter().map(String::as_str));
+            args.extend_from_slice(extra);
+            args.into_iter().map(str::to_owned).collect::<Vec<_>>()
+        };
+        let run = |args: Vec<String>| {
+            run_cli_json(&home, &args.iter().map(String::as_str).collect::<Vec<_>>())
+        };
+
+        let alpha_id = doc_id_of(&queued, alpha)?;
+        let edited = run(mutate(
+            "edit-pending",
+            &queued,
+            &["--request-doc-id", &alpha_id, "--content", alpha_edited],
+        ))?;
+        assert_eq!(
+            edited["request_doc_ids"].as_array().map(Vec::len),
+            Some(1),
+            "edit must name one replacement: {edited}"
+        );
+        let after_edit = pending()?;
+        assert_eq!(contents(&after_edit), [alpha_edited, beta, gamma]);
+        assert!(!ids(&after_edit).contains(&alpha_id));
+
+        let (beta_id, gamma_id) = (
+            doc_id_of(&after_edit, beta)?,
+            doc_id_of(&after_edit, gamma)?,
+        );
+        run(mutate(
+            "reorder-pending",
+            &after_edit,
+            &["--request-doc-id", &gamma_id, "--request-doc-id", &beta_id],
+        ))?;
+        let after_reorder = pending()?;
+        assert_eq!(contents(&after_reorder), [alpha_edited, gamma, beta]);
+
+        let removed = run(mutate(
+            "remove-pending",
+            &after_reorder,
+            &["--request-doc-id", &doc_id_of(&after_reorder, beta)?],
+        ))?;
+        assert_eq!(
+            removed["request_doc_ids"].as_array().map(Vec::len),
+            Some(0),
+            "removal creates no replacement: {removed}"
+        );
+        let settled = pending()?;
+        assert_eq!(contents(&settled), [alpha_edited, gamma]);
+
+        let stale = mutate(
+            "edit-pending",
+            &after_reorder,
+            &[
+                "--request-doc-id",
+                &doc_id_of(&settled, gamma)?,
+                "--content",
+                "pending-cli-stale",
+            ],
+        );
+        let stderr =
+            run_cli_failure_stderr(&home, &stale.iter().map(String::as_str).collect::<Vec<_>>())?;
+        assert!(
+            stderr.contains("The message queue changed"),
+            "stale snapshot must fail with a queue-changed error: {stderr}"
+        );
+        let unchanged = pending()?;
+        assert_eq!(
+            ids(&unchanged),
+            ids(&settled),
+            "stale edit changed the queue"
+        );
+        assert_eq!(contents(&unchanged), [alpha_edited, gamma]);
+
+        let child = waiter.0.as_mut().context("waiter child")?;
+        assert!(
+            child.try_wait()?.is_none(),
+            "submit --wait exited before the held provider was released"
+        );
+
+        gate.add_permits(1);
+        tokio::time::timeout(Duration::from_secs(60), async {
+            while waiter.0.as_mut().unwrap().try_wait()?.is_none() {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            Ok::<_, anyhow::Error>(())
+        })
+        .await
+        .context("submit --wait did not follow its edited message to completion")??;
+        let output = waiter.0.take().unwrap().wait_with_output()?;
+        anyhow::ensure!(
+            output.status.success(),
+            "submit --wait failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let waited: Value =
+            serde_json::from_slice(&output.stdout).context("parsing submit --wait output")?;
+        assert!(
+            waited["output"].to_string().contains(final_reply),
+            "waiter must return the output that consumed its replacement: {waited}"
+        );
+
+        let captured = endpoint.captured_chat_requests();
+        let continuation = captured
+            .iter()
+            .find(|request| has_user_text(request, gamma))
+            .context("provider never received the queued replacements")?;
+        let messages = continuation["messages"].as_array().unwrap();
+        let position = |text: &str| {
+            messages
+                .iter()
+                .position(|message| is_user_text(message, text))
+        };
+        let (Some(first_at), Some(edited_at), Some(gamma_at)) =
+            (position(first), position(alpha_edited), position(gamma))
+        else {
+            bail!("continuation is missing a delivered message: {continuation}");
+        };
+        assert!(first_at < edited_at && edited_at < gamma_at);
+        for text in [first, alpha_edited, gamma] {
+            assert_eq!(
+                messages
+                    .iter()
+                    .filter(|message| is_user_text(message, text))
+                    .count(),
+                1,
+                "{text} delivered more than once"
+            );
+        }
+        for text in [alpha, beta, "pending-cli-stale"] {
+            assert!(
+                !captured.iter().any(|request| has_user_text(request, text)),
+                "replaced or removed message {text} reached the provider"
+            );
+        }
+        assert!(contents(&pending()?).is_empty(), "queue must drain");
+        Ok(())
+    }
+    .await;
+    // Release the provider even when an assertion prerequisite failed.
+    gate.add_permits(1);
+    result
 }

@@ -1514,6 +1514,8 @@ mod tests {
         use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestInput, RequestQueue};
         let input = RequestInput {
             queue: Some(RequestQueue {
+                delivery: Default::default(),
+                position: None,
                 source: QueueSource::BackgroundCompletion,
                 policy: QueuePolicy::Coalesce,
                 key: Some(format!("background_completion:{session_id}")),

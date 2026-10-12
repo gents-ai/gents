@@ -314,7 +314,9 @@ test.describe("kit shell", () => {
     await expect(page.getByTestId("error-banner")).toHaveCount(0);
   });
 
-  test("a message sent while the turn runs queues behind it", async ({ page }) => {
+  test("messages sent while a turn runs remain visible while pending", async ({
+    page,
+  }) => {
     await gotoHarness(page, "active-turn");
     await page
       .getByTestId("sessions-screen")
@@ -335,7 +337,7 @@ test.describe("kit shell", () => {
     const queued = page.getByTestId("queued-input");
     await expect(queued).toHaveCount(2);
     await expect(queued.nth(0)).toContainText("first queued thought");
-    await expect(queued.nth(0)).toContainText("Queued");
+    await expect(queued.nth(0)).toContainText("Pending");
     await expect(queued.nth(1)).toContainText("second queued thought");
     await expect(composer(page)).toBeEnabled();
   });

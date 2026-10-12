@@ -229,6 +229,9 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) fold_turn_input_cases: Vec<LeanFoldTurnInputCase>,
     pub(crate) handover_fold_cases: Vec<LeanHandoverFoldCase>,
     pub(crate) fold_publication_cases: Vec<LeanFoldPublicationCase>,
+    pub(crate) steering_publication_cases: Vec<LeanFoldPublicationCase>,
+    pub(crate) queue_management_cases: Vec<LeanQueueManagementCase>,
+    pub(crate) session_input_edit_cases: Vec<LeanSessionInputEditCase>,
     pub(crate) retry_selection_cases: Vec<LeanRetrySelectionCase>,
     pub(crate) canonical_worker_capacity_cases: Vec<LeanWorkerCapacityCase>,
     pub(crate) canonical_payload_presentation_cases: Vec<LeanPayloadPresentationCase>,
@@ -1878,11 +1881,14 @@ pub(crate) enum LeanFoldQueueInput {
 pub(crate) struct LeanFoldQueueEntry {
     pub(crate) request_id: u64,
     pub(crate) execution_origin: String,
+    pub(crate) delivery: String,
+    pub(crate) order_key: u64,
     pub(crate) source: String,
     pub(crate) policy: String,
     pub(crate) queued_after: Option<u64>,
     pub(crate) requester_id: Option<u64>,
     pub(crate) turn_context: u64,
+    pub(crate) fresh: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1950,6 +1956,75 @@ pub(crate) struct LeanRetrySelectionCase {
     pub(crate) answered: Vec<u64>,
 }
 
+pub(crate) fn lean_queue_management_cases() -> &'static [LeanQueueManagementCase] {
+    &lean_contract_snapshot().queue_management_cases
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanQueueManagementCase {
+    pub(crate) name: String,
+    pub(crate) before: LeanQueueManagementState,
+    pub(crate) operation: LeanQueueManagementOperation,
+    pub(crate) expected: Option<LeanQueueManagementState>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanQueueManagementState {
+    pub(crate) active: Option<u64>,
+    pub(crate) pending: Vec<LeanFoldQueueEntry>,
+    pub(crate) folding: Vec<LeanFoldQueueEntry>,
+    pub(crate) terminal: Vec<u64>,
+}
+
+/// A session queue in native request IDs, compared whole against the model.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct QueueImage {
+    pub(crate) active: Option<String>,
+    pub(crate) folding: Vec<String>,
+    pub(crate) pending: Vec<String>,
+    pub(crate) terminal: BTreeSet<String>,
+}
+
+impl LeanQueueManagementState {
+    pub(crate) fn image(&self, native: impl Fn(u64) -> String) -> QueueImage {
+        let ids = |entries: &[LeanFoldQueueEntry]| {
+            entries
+                .iter()
+                .map(|entry| native(entry.request_id))
+                .collect()
+        };
+        QueueImage {
+            active: self.active.map(&native),
+            folding: ids(&self.folding),
+            pending: ids(&self.pending),
+            terminal: self.terminal.iter().copied().map(&native).collect(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum LeanQueueManagementOperation {
+    Intake {
+        active: LeanFoldQueueEntry,
+        admitted: Vec<u64>,
+        safe_boundary: bool,
+    },
+    Replace {
+        caller: Option<u64>,
+        expected: Vec<u64>,
+        offset: usize,
+        count: usize,
+        replacements: Vec<LeanFoldQueueEntry>,
+    },
+}
+
+pub(crate) fn lean_steering_publication_cases() -> &'static [LeanFoldPublicationCase] {
+    &lean_contract_snapshot().steering_publication_cases
+}
+
 pub(crate) fn lean_fold_publication_cases() -> &'static [LeanFoldPublicationCase] {
     &lean_contract_snapshot().fold_publication_cases
 }
@@ -1969,12 +2044,42 @@ pub(crate) struct LeanFoldPublicationCase {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum LeanFoldPublicationStep {
-    PublishPrompt { generation: u64 },
-    PublishChangedPrompt { generation: u64 },
-    PublishFolded { generation: u64, request_id: u64 },
-    AcceptTurn { generation: u64 },
-    Recover { expected: u64, fresh: u64 },
-    Terminalize { generation: u64 },
+    ObserveDeadline {
+        now: u64,
+        deadline: u64,
+    },
+    EnqueueSteering {
+        request_id: u64,
+    },
+    Intake {
+        generation: u64,
+        safe_boundary: bool,
+    },
+    FinishOrIntake {
+        generation: u64,
+        safe_boundary: bool,
+    },
+    CancelFirstPending,
+    PublishPrompt {
+        generation: u64,
+    },
+    PublishChangedPrompt {
+        generation: u64,
+    },
+    PublishFolded {
+        generation: u64,
+        request_id: u64,
+    },
+    AcceptTurn {
+        generation: u64,
+    },
+    Recover {
+        expected: u64,
+        fresh: u64,
+    },
+    Terminalize {
+        generation: u64,
+    },
     Finish,
 }
 
@@ -2924,4 +3029,74 @@ pub(crate) fn lean_budget_rehydration_cases() -> &'static [LeanBudgetRehydration
 
 pub(crate) fn lean_application_write_cases() -> &'static [serde_json::Value] {
     &lean_contract_snapshot().application_write_cases
+}
+
+pub(crate) fn lean_session_input_edit_cases() -> &'static [LeanSessionInputEditCase] {
+    &lean_contract_snapshot().session_input_edit_cases
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanSessionInputEditCase {
+    pub(crate) name: String,
+    pub(crate) initial: LeanSessionInputEditState,
+    pub(crate) history: Vec<LeanSessionInputEditStep>,
+    pub(crate) before: LeanSessionInputEditState,
+    pub(crate) now: u64,
+    pub(crate) command: LeanSessionInputEditCommand,
+    pub(crate) authority: LeanSessionInputEditAuthority,
+    pub(crate) after: LeanSessionInputEditState,
+    pub(crate) receipt: Option<LeanSessionInputEditReceipt>,
+}
+#[derive(Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum LeanSessionInputEditStep {
+    Apply {
+        now: u64,
+        authority: LeanSessionInputEditAuthority,
+        command: LeanSessionInputEditCommand,
+    },
+    LoseReceipts,
+    OtherSession {
+        session: u64,
+    },
+}
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanSessionInputEditState {
+    pub(crate) queue: LeanQueueManagementState,
+    pub(crate) receipts: Vec<LeanSessionInputEditReceipt>,
+}
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanSessionInputEditCommand {
+    pub(crate) id: u64,
+    pub(crate) digest: u64,
+    pub(crate) caller: Option<u64>,
+    pub(crate) has_peer: bool,
+    pub(crate) issued_at: u64,
+    pub(crate) expires_at: u64,
+    pub(crate) expected: Vec<u64>,
+    pub(crate) offset: usize,
+    pub(crate) count: usize,
+    pub(crate) replacements: Vec<LeanFoldQueueEntry>,
+}
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanSessionInputEditAuthority {
+    pub(crate) signature_valid: bool,
+    pub(crate) replacements_valid: bool,
+    pub(crate) command_identity_unique: bool,
+    pub(crate) session_owned: bool,
+    pub(crate) requester_is_node: bool,
+    pub(crate) enrollment_fresh: bool,
+    pub(crate) route_applied: bool,
+}
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanSessionInputEditReceipt {
+    pub(crate) command_id: u64,
+    pub(crate) digest: u64,
+    pub(crate) outcome: String,
+    pub(crate) request_ids: Vec<u64>,
 }

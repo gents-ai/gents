@@ -37,6 +37,12 @@ pub struct RequestInput {
 pub struct RequestQueue {
     pub source: QueueSource,
     pub policy: QueuePolicy,
+    #[serde(default, skip_serializing_if = "QueueDelivery::is_queue")]
+    pub delivery: QueueDelivery,
+    /// A replacement retains an existing queue slot. Admission checks the
+    /// predecessor's terminal replacement link before accepting this claim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<QueuePosition>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -46,6 +52,30 @@ pub struct RequestQueue {
     /// Existing durable wake format marker; not a configuration version.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub background_completion_wake_version: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QueueDelivery {
+    #[default]
+    Queue,
+    Steer,
+}
+
+impl QueueDelivery {
+    pub fn is_queue(&self) -> bool {
+        matches!(self, Self::Queue)
+    }
+}
+
+/// Native first-arrival identity, independent of replacement issuance time.
+/// The slot is immutable across edits; the predecessor is the physical request
+/// atomically superseded when this replacement was signed and published.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct QueuePosition {
+    pub slot_request_doc_id: String,
+    pub replaces_request_doc_id: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

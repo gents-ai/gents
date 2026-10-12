@@ -298,6 +298,82 @@ impl ClientCore {
         }
     }
 
+    /// The session queue authority: a co-hosted runtime's own endpoint, since
+    /// the local replica may lag its active and pending requests, otherwise
+    /// the local replica of a pure P2P peer.
+    fn session_queue_access(&self, node_did: &str) -> ConfigAccess {
+        self.operator_graphql(node_did)
+            .map(ConfigAccess::Graphql)
+            .unwrap_or_else(|| ConfigAccess::Local(self.node_arc()))
+    }
+
+    pub async fn prepare_user_message_input(
+        &self,
+        node_did: &str,
+        session_id: &str,
+        input: gents_protocol::request_input::RequestInput,
+    ) -> Result<gents_protocol::request_input::RequestInput> {
+        gents::lifecycle::prepare_user_message_input(
+            &self.session_queue_access(node_did),
+            node_did,
+            session_id,
+            input,
+            gents_protocol::request_input::QueueDelivery::Steer,
+        )
+        .await
+    }
+
+    pub async fn pending_user_queue(
+        &self,
+        node_did: &str,
+        session_id: &str,
+    ) -> Result<gents::lifecycle::PendingQueueSnapshot> {
+        let record = self
+            .sync_state
+            .records()
+            .into_iter()
+            .find(|record| record.node_did == node_did)
+            .context("no saved deployment route owns this node")?;
+        gents::lifecycle::pending_user_queue(
+            &self.session_queue_access(node_did),
+            node_did,
+            session_id,
+            &self.requester_did(&record),
+        )
+        .await
+    }
+
+    pub async fn edit_pending_queue(
+        &self,
+        node_did: &str,
+        session_id: &str,
+        edit: gents::lifecycle::PendingQueueEdit,
+    ) -> Result<gents_protocol::session_input_edit::SessionInputEditReceipt> {
+        let peer = self
+            .peer_record_for_chat_write(node_did, Utc::now())
+            .await?;
+        ensure_peer_chat_ready_at(node_did, peer.as_ref(), Utc::now())?;
+        let (signer, admission, _) = self.request_authority(node_did, peer.as_ref()).await?;
+        let result = gents::lifecycle::submit_pending_user_edit(
+            &self.session_queue_access(node_did),
+            signer.as_ref(),
+            admission,
+            Some(self.local_peer_id()),
+            node_did,
+            session_id,
+            edit,
+        )
+        .await;
+        match result {
+            Ok(receipt) => {
+                self.refresh_store().await?;
+                self.clear_mutation_error();
+                Ok(receipt)
+            }
+            Err(error) => Err(self.record_mutation_error("edit pending messages", error)),
+        }
+    }
+
     /// Reconstruct a request's persisted event timeline from the local P2P
     /// replica. Bounded so an unavailable replica fails the panel instead of
     /// hanging it.
@@ -418,7 +494,7 @@ impl ClientCore {
                 sequence,
                 expires_at,
             );
-            return Ok((signer, admission, self.node_identity.did().to_string()));
+            return Ok((signer, admission, self.requester_did(record)));
         }
         anyhow::ensure!(
             record.source.as_deref() == Some("local-standard") && record.node_did == node_did,
@@ -442,8 +518,18 @@ impl ClientCore {
         Ok((
             signer,
             AgentRequestAdmissionRecord::local_self(node_did),
-            node_did.to_string(),
+            self.requester_did(record),
         ))
+    }
+
+    /// Enrolled routes request as this desktop; a local standard runtime's
+    /// requests are its own.
+    fn requester_did(&self, record: &PeerRecord) -> String {
+        if record.is_enrollment() {
+            self.node_identity.did().to_string()
+        } else {
+            record.node_did.clone()
+        }
     }
 
     pub async fn refresh_local_request(

@@ -102,6 +102,7 @@ const RUNTIME_COLLECTIONS: &[&str] = &[
     "NodeRuntime",
     "NodeReadiness",
     "AgentRequest",
+    "AgentSessionInputEdit",
     "AgentOutputSegment",
     "AgentSession",
     "AgentMessage",
@@ -159,6 +160,7 @@ const DESKTOP_CONFIG_COLLECTIONS: &[&str] = &[
 
 const CHAT_REQUEST_COLLECTIONS: &[&str] = &[
     "AgentRequest",
+    "AgentSessionInputEdit",
     "AgentOutputSegment",
     "AgentSession",
     "AgentMessage",
@@ -261,6 +263,18 @@ mod tests {
             for secret in gents_protocol::schemas::CREDENTIAL_COLLECTION_NAMES {
                 assert!(!profile.collection_names().contains(secret));
             }
+        }
+        for profile in [
+            P2pCollectionProfile::Runtime,
+            P2pCollectionProfile::ChatRequests,
+        ] {
+            assert!(
+                profile
+                    .collection_names()
+                    .contains(&"AgentSessionInputEdit"),
+                "{} must carry signed pending-input edits and their receipts",
+                profile.id()
+            );
         }
         let operator = super::super::templates::resolve_template("agent-config").unwrap();
         for profile in [P2pCollectionProfile::Runtime, P2pCollectionProfile::Agent] {

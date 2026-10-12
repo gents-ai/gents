@@ -185,6 +185,8 @@ pub(super) async fn ensure_notification_delivery(
         message_key,
         BACKGROUND_COMPLETION_WAKE_PROMPT,
         RequestQueue {
+            delivery: Default::default(),
+            position: None,
             source: QueueSource::BackgroundCompletion,
             policy: QueuePolicy::Coalesce,
             key: Some(format!("background_completion:{}", parent.session_id)),

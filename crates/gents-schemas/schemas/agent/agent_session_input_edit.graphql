@@ -1,0 +1,12 @@
+# Author-signed queue edit intent. The runtime verifies the immutable payload
+# and current enrollment before applying it; replication alone grants no authority.
+type AgentSessionInputEdit @branchable {
+    command_id: String @index(unique: true) @immutable
+    requester_did: String @index @immutable
+    requester_peer_id: String @immutable
+    node_did: String @index @immutable
+    session_id: String @immutable
+    intent_json: String @immutable
+    # Only a verified target-runtime signature acknowledges this exact intent.
+    receipt_json: String
+}

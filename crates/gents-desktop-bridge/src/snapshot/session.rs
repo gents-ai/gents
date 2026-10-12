@@ -248,6 +248,35 @@ pub async fn build_session_snapshot_for_node_with_transcript(
         },
         None => None,
     };
+    let pending_queue = match node_did {
+        Some(node_did)
+            if include_live_tail
+                && core
+                    .session_unreadable_reason(session_id, node_did)
+                    .is_none() =>
+        {
+            match core.pending_user_queue(node_did, session_id).await {
+                Ok(queue) => Some(
+                    queue
+                        .entries
+                        .into_iter()
+                        .map(|entry| crate::types::PendingQueueEntryView {
+                            request_doc_id: entry.request_doc_id,
+                            request_id: entry.request_id,
+                            content: entry.content,
+                            editable: entry.editable,
+                            edit_group: entry.edit_group,
+                        })
+                        .collect(),
+                ),
+                Err(error) => {
+                    tracing::warn!(session_id, node_did, error = %error, "pending queue unavailable");
+                    None
+                }
+            }
+        }
+        _ => None,
+    };
     let request_ids = node_did.map_or_else(
         || store.requests_for_session(session_id),
         |node_did| store.requests_for_session_for_node(session_id, node_did),
@@ -318,6 +347,7 @@ pub async fn build_session_snapshot_for_node_with_transcript(
             provenance_version: projection_revision.provenance_version,
         });
         snapshot.hydration = hydration;
+        snapshot.pending_queue = pending_queue;
     }
     snapshot
 }
@@ -344,6 +374,7 @@ fn build_hydration_only_session_snapshot(
         latest_request_outcome: None,
         pending_turn: None,
         queued_turns: Vec::new(),
+        pending_queue: None,
         folded_inputs: Vec::new(),
         context: build_session_context_from_stores(
             store,
