@@ -332,7 +332,7 @@ impl RootAdmission {
 
 /// Resolve existing prefixes (including symlinks) and retain a normalized,
 /// nonexistent suffix. Broken or otherwise unresolvable symlinks fail closed.
-pub(crate) fn resolve_configured_tool_root(path: &Path) -> Result<PathBuf> {
+pub fn resolve_configured_tool_root(path: &Path) -> Result<PathBuf> {
     resolve_tool_root(path).map(|resolved| resolved.path)
 }
 

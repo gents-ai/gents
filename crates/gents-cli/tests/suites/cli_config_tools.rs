@@ -165,18 +165,18 @@ fn explained_tool_names(explanation: &Value, agent_id: &str) -> Result<Vec<Strin
 }
 
 /// `gents server` flags override the init.json ceiling, so a running node is
-/// explained by the ceiling it enforces, and only an unserved home falls back
-/// to init.json, labelled as such.
+/// explained by the ceiling it enforces, including its registered CLI tools
+/// and its cwd-resolved root, and only an unserved home falls back to
+/// init.json, labelled as such.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn tools_explain_reports_the_ceiling_the_running_node_enforces() -> Result<()> {
     let tempdir = tempfile::tempdir()?;
     let home = tempdir.path().join("home");
     let elsewhere = tempdir.path().join("elsewhere");
-    let tool_root = tempdir.path().join("workspace");
-    for dir in [&home, &elsewhere, &tool_root] {
+    let workspace = home.join("workspace");
+    for dir in [&home, &elsewhere, &workspace] {
         fs::create_dir_all(dir)?;
     }
-    let tool_root = tool_root.to_str().context("utf-8 tool root")?;
     let init = run_init_json(
         &home,
         &[
@@ -185,42 +185,86 @@ async fn tools_explain_reports_the_ceiling_the_running_node_enforces() -> Result
             "--tool-package",
             "write",
             "--tool-root",
-            tool_root,
+            workspace.to_str().context("utf-8 tool root")?,
         ],
     )?;
     let owner = node_did_from_init(&init)?;
     let agent_id = gents::default_agent_id_for_node(&owner);
+    let tools_path = tempdir.path().join("tools.json");
+    write_json_file(
+        &tools_path,
+        &json!({
+            "tools_id": format!("{agent_id}-tools"),
+            "node_did": owner,
+            "host": {"files": {"mode": "ReadWrite"}, "cli": [{"name": "echo"}]}
+        }),
+    )?;
+    run_cli_json(
+        &home,
+        &[
+            "config",
+            "tools",
+            "set",
+            "--file",
+            tools_path.to_str().unwrap(),
+        ],
+    )?;
+
     let port = allocate_port()?;
     let graphql = graphql_url(port);
+    // The server's cwd is `home`, so the relative root names `workspace`.
     let mut server = spawn_server_with_env(
         &home,
         port,
-        &["--tool-ceiling", "readonly", "--tool-root", tool_root],
+        &[
+            "--tool-ceiling",
+            "readonly",
+            "--tool-root",
+            "workspace",
+            "--cli-tool",
+            "echo=/bin/echo",
+        ],
         &[],
     )?;
     wait_for_port(port, &mut server)?;
     wait_for_runtime_ready(&graphql, &owner, Duration::from_secs(30)).await?;
     wait_for_runtime_state_graphql(&home, &graphql, Duration::from_secs(30)).await?;
+    let resolved_root = fs::canonicalize(&workspace)?;
+    let resolved_root = resolved_root.to_str().context("utf-8 resolved root")?;
 
     let live = run_cli_json(&home, &["tools", "explain"])?;
     assert_eq!(
         live["host_tool_ceiling"]["tool_ceiling"], "readonly",
         "{live}"
     );
-    assert_eq!(live["host_tool_ceiling"]["tool_root"], tool_root, "{live}");
+    assert_eq!(
+        live["host_tool_ceiling"]["tool_root"], resolved_root,
+        "{live}"
+    );
+    assert_eq!(
+        live["host_tool_ceiling"]["cli_tools"],
+        json!(["echo"]),
+        "{live}"
+    );
     assert_eq!(live["host_tool_ceiling"]["live"], true, "{live}");
     let live_tools = explained_tool_names(&live, &agent_id)?;
     assert!(live_tools.iter().any(|name| name == "read_file"), "{live}");
+    assert!(live_tools.iter().any(|name| name == "echo"), "{live}");
     assert!(
         !live_tools.iter().any(|name| name == "write_file"),
         "{live}"
     );
 
-    // Another home's CLI reaching the node by --graphql explains that node.
+    // Another home's CLI, on another cwd, reaching the node by --graphql
+    // explains that node under the root the server resolved.
     let remote = run_cli_json(&elsewhere, &["tools", "explain", "--graphql", &graphql])?;
     assert_eq!(remote["node_did"], owner.as_str(), "{remote}");
     assert_eq!(
         remote["host_tool_ceiling"]["tool_ceiling"], "readonly",
+        "{remote}"
+    );
+    assert_eq!(
+        remote["host_tool_ceiling"]["tool_root"], resolved_root,
         "{remote}"
     );
 
@@ -241,5 +285,44 @@ async fn tools_explain_reports_the_ceiling_the_running_node_enforces() -> Result
         offline_tools.iter().any(|name| name == "write_file"),
         "{offline}"
     );
+    assert!(
+        !offline_tools.iter().any(|name| name == "echo"),
+        "{offline}"
+    );
+    Ok(())
+}
+
+/// A home's runtime.json that names another node's runtime must not explain
+/// that node as this home's.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tools_explain_refuses_a_home_whose_runtime_serves_another_node() -> Result<()> {
+    let tempdir = tempfile::tempdir()?;
+    let home = tempdir.path().join("home");
+    let other = tempdir.path().join("other");
+    for dir in [&home, &other] {
+        fs::create_dir_all(dir)?;
+    }
+    let owner = node_did_from_init(&run_init_json(&home, &["--node-name", "explain-home"])?)?;
+    let other_owner =
+        node_did_from_init(&run_init_json(&other, &["--node-name", "explain-other"])?)?;
+    let port = allocate_port()?;
+    let graphql = graphql_url(port);
+    let mut server = spawn_server(&other, port)?;
+    wait_for_port(port, &mut server)?;
+    wait_for_runtime_ready(&graphql, &other_owner, Duration::from_secs(30)).await?;
+    let other_state =
+        wait_for_runtime_state_graphql(&other, &graphql, Duration::from_secs(30)).await?;
+    write_json_file(&home.join(".gents").join("runtime.json"), &other_state)?;
+
+    let stderr = run_cli_failure_stderr(&home, &["tools", "explain"])?;
+    assert!(
+        stderr.contains(&format!("belongs to node {owner}")),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains(&format!("serves node {other_owner}")),
+        "{stderr}"
+    );
+    assert!(stderr.contains("gents server --home"), "{stderr}");
     Ok(())
 }

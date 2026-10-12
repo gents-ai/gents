@@ -13,8 +13,8 @@ use crate::cli::args::{ToolCeilingArg, ToolExplainArgs, ToolsCommand};
 use crate::commands::status::fetch_runtime_status;
 use crate::config_writes::ConfigAccess;
 use crate::{
-    build_config_export_bundle, format_tool_ceiling, host_tool_ceiling, print_json,
-    read_init_config, resolve_config_access, resolve_node_did,
+    build_config_export_bundle, format_tool_ceiling, host_tool_ceiling, parse_cli_tool_arg,
+    print_json, read_init_config, resolve_config_access, resolve_node_did,
 };
 
 pub(crate) async fn dispatch(command: ToolsCommand) -> Result<()> {
@@ -30,6 +30,22 @@ async fn explain(args: ToolExplainArgs) -> Result<()> {
         ConfigAccess::Graphql(endpoint) => HostCeiling::live(endpoint).await?,
         ConfigAccess::Local(_) => HostCeiling::configured(&home_dir)?,
     };
+    if let (None, None, Some(live)) = (
+        args.graphql.as_deref(),
+        args.node_did.as_deref(),
+        host.live_node_did.as_deref(),
+    ) {
+        if let Some(expected) = read_init_config(&home_dir)?.map(|config| config.node_did) {
+            anyhow::ensure!(
+                expected == live,
+                "home {} belongs to node {expected}, but the runtime its runtime.json names \
+                 serves node {live}; restart `gents server --home {}` to serve this home, or \
+                 pass --graphql to explain that node",
+                home_dir.display(),
+                home_dir.display()
+            );
+        }
+    }
     let node_did = match (args.node_did.as_deref(), host.live_node_did.as_deref()) {
         (Some(explicit), Some(live)) if explicit != live => anyhow::bail!(
             "the runtime at this endpoint serves node {live}, so its tool ceiling does not \
@@ -153,10 +169,18 @@ async fn explain(args: ToolExplainArgs) -> Result<()> {
         "host_tool_ceiling": {
             "tool_ceiling": format_tool_ceiling(host.mode),
             "tool_root": host.root,
+            "cli_tools": host.ceiling.cli_tools().iter().map(|tool| &tool.name).collect::<Vec<_>>(),
             "source": host.source,
             "live": host.live_node_did.is_some(),
-            "next": (host.live_node_did.is_none()).then_some(
-                "No runtime serves this home, so this is the configured init.json ceiling; a server started with --tool-ceiling or --tool-root enforces its own. Start `gents server` and rerun for the live ceiling."
+            "next": host.live_node_did.is_none().then(|| format!(
+                "No runtime serves this home, so this is the configured init.json ceiling; a server started with --tool-ceiling, --tool-root or --cli-tool enforces its own. Start `{}` and rerun for the live ceiling.",
+                match args.home.as_deref() {
+                    Some(home) => format!("gents server --home {}", home.display()),
+                    None => "gents server".to_owned(),
+                }
+            )),
+            "agent_roots": host.live_node_did.is_some().then_some(
+                "Agent Tools roots are admitted under tool_root on this CLI host's filesystem; explained from another host, a root the server admits can appear under configuration_issues."
             ),
             "scope": "host_native_file_bash_cli_only",
             "note": "This ceiling currently clamps host-native file/bash/CLI tools, not every model-callable built-in read, MCP, agent, or operator HTTP surface."
@@ -201,8 +225,18 @@ impl HostCeiling {
         let mode = ToolCeilingArg::from_str(&mode_text, false)
             .map_err(|error| anyhow::anyhow!("runtime tool_ceiling {mode_text}: {error}"))?;
         let root = field("tool_root");
+        let mut ceiling = host_tool_ceiling(mode, root.as_deref().map(Path::new))?;
+        for registration in status
+            .get("cli_tools")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+        {
+            ceiling = ceiling.with_cli_tool(parse_cli_tool_arg(registration)?);
+        }
         Ok(Self {
-            ceiling: host_tool_ceiling(mode, root.as_deref().map(Path::new))?,
+            ceiling,
             mode,
             root,
             source: "runtime_status",

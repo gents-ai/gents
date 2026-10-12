@@ -702,8 +702,15 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
         identity.did().to_string(),
         format_tool_ceiling(effective_tool_ceiling).to_string(),
         effective_tool_root
-            .as_ref()
-            .map(|path| path.to_string_lossy().into_owned()),
+            .as_deref()
+            .map(|root| match gents::tool_surface::resolve_configured_tool_root(root) {
+                Ok(resolved) => resolved.to_string_lossy().into_owned(),
+                Err(error) => {
+                    tracing::warn!(root = %root.display(), error = %error, "tool root does not resolve; advertising it as configured");
+                    root.to_string_lossy().into_owned()
+                }
+            }),
+        args.cli_tools.clone(),
         Some(home_dir.to_string_lossy().into_owned()),
         mcp_options,
         Some(backend_health.clone()),

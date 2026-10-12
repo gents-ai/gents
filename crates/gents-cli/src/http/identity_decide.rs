@@ -315,6 +315,7 @@ mod tests {
             "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK".to_string(),
             "readwrite".to_string(),
             None,
+            Vec::new(),
             None,
             None,
             None,
