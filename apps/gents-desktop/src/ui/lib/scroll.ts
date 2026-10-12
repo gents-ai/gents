@@ -395,9 +395,14 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
       anchor = { el, key: keyOf(el), offset };
       settled.set(scroller, scroller.scrollTop);
     };
-    scroller.addEventListener("wheel", onWheel, { passive: true });
+    /* Chromium can apply a passive wheel or touch scroll on its compositor
+       before it dispatches the event, so the scroll arrives with no intent
+       behind it and reconcile writes the view back to the foot the reader
+       is leaving. Non-passive forces the dispatch first, WebKit's order.
+       Neither listener may call preventDefault: that would stop scrolling. */
+    scroller.addEventListener("wheel", onWheel, { passive: false });
     scroller.addEventListener("touchstart", onTouchStart, { passive: true });
-    scroller.addEventListener("touchmove", onTouchMove, { passive: true });
+    scroller.addEventListener("touchmove", onTouchMove, { passive: false });
     window.addEventListener("keydown", onKey);
     area?.addEventListener("pointerdown", onPointerDown);
     window.addEventListener("pointerup", onPointerUp);

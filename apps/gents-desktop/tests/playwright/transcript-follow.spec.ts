@@ -41,16 +41,12 @@ function readerRow(viewport: Locator, key?: string) {
 }
 
 /* the reader's wheel up the page from the foot, once the view has moved up
-   and come to rest. Following stops at the wheel event itself, before
-   WebKit has begun the scroll, and an older page landing above moves the
+   and come to rest. Following stops at the wheel event itself, before the
+   browser has begun the scroll, and an older page landing above moves the
    position down, so the move is read from the row under the reader. Under
    load WebKitGTK can lose a wheel to a write made before its animation
    starts (#2389); the reader wheels again. */
 async function wheelUp(page: Page, viewport: Locator) {
-  test.skip(
-    test.info().project.name !== "webkit-desktop",
-    "Chromium scrolls before the wheel event and the view is pinned back (#2388)",
-  );
   await expect(viewport).toHaveAttribute("data-following", "true");
   await restingScrollTop(page, viewport);
   const at = await readerRow(viewport);
@@ -156,6 +152,78 @@ test.describe("a reader scrolled up in a transcript", () => {
     await expect(viewport).toHaveAttribute("data-following", "false");
     await restingScrollTop(page, viewport);
     expect(await readerRow(viewport, before.key)).toEqual(before);
+  });
+
+  /* Chromium can apply a wheel's scroll on its compositor before it
+     dispatches the wheel, so the scroll arrives with no intent behind it
+     and the reconcile wrote the view back to the foot the reader was
+     leaving (#2388). The wheel listener is non-passive, which forces the
+     dispatch first. The probe watches every write to the position from the
+     wheel on: a write to the foot is the failure, not only where the view
+     ends up, because the pin cancels the reader's scroll in flight. */
+  test("is never written back to the foot while the reply streams under their wheel", async ({
+    page,
+  }, testInfo) => {
+    test.skip(
+      testInfo.project.name !== "chromium-desktop",
+      "scroll-before-wheel order is Chromium's; WebKit dispatches the wheel first",
+    );
+    const viewport = page.locator('[data-slot="scroll-area-viewport"][data-following]');
+    await expect(viewport).toHaveAttribute("data-following", "true");
+    await restingScrollTop(page, viewport);
+    await viewport.evaluate((scroller) => {
+      const writes: { from: number; to: number; foot: number }[] = [];
+      const real = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop")!;
+      Object.defineProperty(scroller, "scrollTop", {
+        configurable: true,
+        get: () => real.get!.call(scroller) as number,
+        set: (value: number) => {
+          writes.push({
+            from: real.get!.call(scroller) as number,
+            to: value,
+            foot: scroller.scrollHeight - scroller.clientHeight,
+          });
+          real.set!.call(scroller, value);
+        },
+      });
+      Object.assign(window, { __pinWrites: writes });
+    });
+    await page.evaluate(() => {
+      let chunk = 0;
+      const timer = window.setInterval(() => {
+        window.__GENTS_MOBILE_PERFORMANCE__!.streamText(
+          `\\n\\nMore of the reply, paragraph ${chunk}, long enough to wrap onto a second line in the column.`,
+        );
+        chunk += 1;
+        if (chunk === 24) window.clearInterval(timer);
+      }, 60);
+    });
+    await page.getByTestId("transcript-panel").hover();
+    await page.mouse.wheel(0, -1200);
+    await expect(viewport).toHaveAttribute("data-following", "false");
+    const top = await restingScrollTop(page, viewport);
+    const writes = await page.evaluate(
+      () =>
+        (
+          window as unknown as {
+            __pinWrites: { from: number; to: number; foot: number }[];
+          }
+        ).__pinWrites,
+    );
+    /* a pin pulls the reader up from far above the foot; the module's own
+       following writes start within a chunk's growth of it */
+    const pins = writes.filter(
+      (write) =>
+        write.from < write.foot - 400 &&
+        write.to > write.from + 1 &&
+        Math.round(write.to) === Math.round(write.foot),
+    );
+    expect(pins).toEqual([]);
+    const aboveFoot = await viewport.evaluate(
+      (scroller, top) => scroller.scrollHeight - top - scroller.clientHeight,
+      top,
+    );
+    expect(aboveFoot).toBeGreaterThan(400);
   });
 });
 
