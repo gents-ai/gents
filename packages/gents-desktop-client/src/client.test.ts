@@ -5,6 +5,25 @@ import { BridgeInvokeError } from "./errors.js";
 import { createMemoryTransport } from "./testing.js";
 
 describe("desktop client", () => {
+  it("carries the pending queue fence and physical sources unchanged", async () => {
+    const result = { requestDocIds: ["new-doc"], requestIds: ["new-request"] };
+    const transport = createMemoryTransport({
+      handlers: { desktop_pending_queue_edit: () => result },
+    });
+    const { api } = createDesktopClient(transport);
+    const request = {
+      nodeDid: "did:node",
+      sessionId: "session",
+      expectedRequestDocIds: ["doc-a", "doc-barrier", "doc-b"],
+      selectedRequestDocIds: ["doc-a"],
+      messages: [{ requestDocId: "doc-a", content: "corrected instruction" }],
+    };
+    expect(await api.editPendingQueue(request)).toEqual(result);
+    expect(transport.calls).toEqual([
+      { command: "desktop_pending_queue_edit", args: { request } },
+    ]);
+  });
+
   it("carries each view's explicit node through task, schedule and retry actions", async () => {
     const transport = createMemoryTransport({
       handlers: {

@@ -120,6 +120,8 @@ fn lean_session_rows(
                     .map(|_| gents::lifecycle::FOLDED_REASON.to_owned()),
                 input: row.queued_after.map(|after| RequestInput {
                     queue: Some(RequestQueue {
+                        delivery: Default::default(),
+                        position: None,
                         source: QueueSource::User,
                         policy: QueuePolicy::Append,
                         key: None,

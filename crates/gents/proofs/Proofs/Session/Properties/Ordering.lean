@@ -6,13 +6,13 @@ theorem canAppendAfter_true
     {entries : List QueueEntry}
     {entry : QueueEntry}
     (h_after : canAppendAfter entries entry = true) :
-    ∀ existing, existing ∈ entries → existing.createdAt ≤ entry.createdAt := by
+    ∀ existing, existing ∈ entries → existing.orderKey ≤ entry.orderKey := by
   induction entries with
   | nil =>
       intro existing h_mem
       simp at h_mem
   | cons head tail ih =>
-      by_cases h_head : head.createdAt ≤ entry.createdAt
+      by_cases h_head : head.orderKey ≤ entry.orderKey
       · simp [canAppendAfter, h_head] at h_after
         intro existing h_mem
         simp at h_mem
@@ -26,7 +26,7 @@ theorem head_earliest_of_createdOrdered
     {entry : QueueEntry}
     {rest : List QueueEntry}
     (h_order : CreatedOrdered (entry :: rest)) :
-    ∀ other, other ∈ entry :: rest → entry.createdAt ≤ other.createdAt := by
+    ∀ other, other ∈ entry :: rest → entry.orderKey ≤ other.orderKey := by
   intro other h_mem
   simp [CreatedOrdered] at h_order
   simp at h_mem
@@ -43,7 +43,7 @@ theorem claim_next_selects_earliest
     (h_pending : pre.pending = entry :: rest)
     (h_post : post = pre.claimHead entry rest) :
     Transition pre post ∧
-    ∀ other, other ∈ pre.pending → entry.createdAt ≤ other.createdAt := by
+    ∀ other, other ∈ pre.pending → entry.orderKey ≤ other.orderKey := by
   constructor
   · exact Transition.claim_next h_active h_pending h_post
   · rw [h_pending] at h_order ⊢
@@ -55,7 +55,7 @@ theorem pending_head_earliest
     {rest : List QueueEntry}
     (h_order : CreatedOrdered pre.pending)
     (h_pending : pre.pending = entry :: rest) :
-    ∀ other, other ∈ pre.pending → entry.createdAt ≤ other.createdAt := by
+    ∀ other, other ∈ pre.pending → entry.orderKey ≤ other.orderKey := by
   rw [h_pending] at h_order ⊢
   exact head_earliest_of_createdOrdered h_order
 
@@ -63,7 +63,7 @@ theorem createdOrdered_append_of_after
     {entries : List QueueEntry}
     {entry : QueueEntry}
     (h_order : CreatedOrdered entries)
-    (h_after : ∀ existing, existing ∈ entries → existing.createdAt ≤ entry.createdAt) :
+    (h_after : ∀ existing, existing ∈ entries → existing.orderKey ≤ entry.orderKey) :
     CreatedOrdered (entries ++ [entry]) := by
   induction entries with
   | nil =>

@@ -71,9 +71,26 @@ theorem fromDefraDB_toDefraDB (policy : QueuePolicy) :
 
 end QueuePolicy
 
+inductive QueueDelivery where
+  | queue
+  | steer
+  deriving DecidableEq, Repr
+
+namespace QueueDelivery
+
+def toDefraDB : QueueDelivery → String
+  | .queue => "queue"
+  | .steer => "steer"
+
+end QueueDelivery
+
 structure QueueEntry where
   requestId : RequestId
   createdAt : Time
+  /-- Signed logical slot; ordinary requests use native arrival order. A fresh
+  replacement inherits its retired predecessor’s slot without changing issuance time. -/
+  orderKey : Time := createdAt
+  delivery : QueueDelivery := .queue
   source : QueueSource
   policy : QueuePolicy
   queueKey : Option QueueKey
@@ -86,6 +103,9 @@ structure QueueEntry where
   carries besides its content: agent, working directory, selected skills
   and workspace binding. Equal values run under the same configuration. -/
   turnContext : Nat := 0
+  /-- Freshness observed through the existing TTL parser at the operation's
+  boundary; absent TTL is fresh, expired or malformed TTL is not. -/
+  fresh : Bool := true
   deriving DecidableEq, Repr
 
 namespace QueueEntry
@@ -126,7 +146,7 @@ def foldsInto (head candidate : QueueEntry) : Prop :=
   head.source = .user ∧ head.origin = .interactive ∧
     candidate.queuedUserMessage ∧
     candidate.requester = head.requester ∧
-    candidate.turnContext = head.turnContext
+    candidate.turnContext = head.turnContext ∧ candidate.fresh = true
 
 instance (head candidate : QueueEntry) : Decidable (head.foldsInto candidate) := by
   unfold QueueEntry.foldsInto
@@ -172,7 +192,7 @@ instance : Repr SessionQueueState where
 def canAppendAfter : List QueueEntry → QueueEntry → Bool
   | [], _ => true
   | existing :: rest, entry =>
-      if existing.createdAt ≤ entry.createdAt then canAppendAfter rest entry else false
+      if existing.orderKey ≤ entry.orderKey then canAppendAfter rest entry else false
 
 def CoalescedKeyMatch (entry : QueueEntry) (source : QueueSource) (key : QueueKey) : Prop :=
   entry.source = source ∧ entry.policy = .coalesce ∧ entry.queueKey = some key
@@ -281,7 +301,7 @@ theorem foldRun_append_drop (head : QueueEntry) (admitted : List RequestId)
 def CreatedOrdered : List QueueEntry → Prop
   | [] => True
   | entry :: rest =>
-      (∀ other, other ∈ rest → entry.createdAt ≤ other.createdAt) ∧
+      (∀ other, other ∈ rest → entry.orderKey ≤ other.orderKey) ∧
         CreatedOrdered rest
 
 def UniqueCoalescedQueueKeys : List QueueEntry → Prop

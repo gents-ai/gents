@@ -21,6 +21,7 @@ test.describe("desktop visual baselines", () => {
 
     await gotoHarness(page);
     await expect(page.getByTestId("sessions-screen")).toBeVisible();
+    await expect(page.locator("[data-sonner-toast]")).toHaveCount(0);
     await expect(page).toHaveScreenshot("sessions.png", {
       animations: "disabled",
       fullPage: true,

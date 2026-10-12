@@ -223,7 +223,7 @@ theorem trace_preserves_uniqueCoalescedQueueKeys
 /-- Goal continuations share queue coalescing, but never collide with a
 background-completion key or participate in its notification drain. -/
 theorem goal_queue_is_separate_from_background :
-    let entry : QueueEntry := ⟨1, 0, .goal, .coalesce, some 7, none, .scheduled, none, 0⟩
+    let entry : QueueEntry := ⟨1, 0, 0, .queue, .goal, .coalesce, some 7, none, .scheduled, none, 0, true⟩
     entry.coalesceWellFormed 7 ∧
     containsCoalescedQueueKey [entry] .goal 7 = true ∧
     containsCoalescedQueueKey [entry] .backgroundCompletion 7 = false ∧

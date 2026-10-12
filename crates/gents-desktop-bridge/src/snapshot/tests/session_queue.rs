@@ -45,6 +45,8 @@ fn queued(id: &str, after: &str, state: RequestLifecycleState, second: u32) -> A
     AgentRequestRow {
         input: Some(RequestInput {
             queue: Some(RequestQueue {
+                delivery: Default::default(),
+                position: None,
                 source: QueueSource::User,
                 policy: QueuePolicy::Append,
                 key: None,

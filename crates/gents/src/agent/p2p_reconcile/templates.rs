@@ -279,6 +279,7 @@ pub const CLIENT_COLLECTIONS: &[&str] = &[
     "MailboxItem",
     "PeerEndpoint",
     "SessionHydrationRequest",
+    "AgentSessionInputEdit",
     "Agent",
     "AgentContext",
     "CompactionConfig",
@@ -316,6 +317,7 @@ pub const CLIENT_TO_RUNTIME_COLLECTIONS: &[&str] = &[
     "MailboxItem",
     "PeerEndpoint",
     "SessionHydrationRequest",
+    "AgentSessionInputEdit",
 ];
 
 const CONVERSATION_RULES: &[CollectionRule] = &[
@@ -398,6 +400,7 @@ const MACHINE_COLLECTIONS: &[&str] = &[
     "EthTool",
     "MailboxItem",
     "SessionHydrationRequest",
+    "AgentSessionInputEdit",
     NODE_DIRECTORY_COLLECTION,
 ];
 
@@ -439,6 +442,11 @@ const MACHINE_RULES: &[CollectionRule] = &[
     },
     CollectionRule {
         collection: "SessionHydrationRequest",
+        field: "requester_did",
+        source: DidSource::PeerDid,
+    },
+    CollectionRule {
+        collection: "AgentSessionInputEdit",
         field: "requester_did",
         source: DidSource::PeerDid,
     },

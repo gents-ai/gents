@@ -402,7 +402,7 @@ describe("SessionScreen messages queued behind a running turn", () => {
     });
     renderScreen(app);
     expect(screen.getAllByTestId("queued-input").map((row) => row.textContent)).toEqual(
-      ["we should move fasterQueued", "and check the testsQueued"],
+      ["we should move fasterPending", "and check the testsPending"],
     );
     const text = screen.getByTestId("transcript-panel").textContent ?? "";
     expect(text.indexOf("how are we looking")).toBeLessThan(

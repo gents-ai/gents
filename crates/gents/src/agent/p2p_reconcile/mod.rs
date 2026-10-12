@@ -17,6 +17,7 @@ pub mod registry;
 pub mod session_hydration;
 mod session_hydration_closure;
 pub mod session_hydration_reconcile;
+pub mod session_input_edit;
 pub mod templates;
 pub mod trait_def;
 

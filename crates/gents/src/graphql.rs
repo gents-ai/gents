@@ -85,6 +85,20 @@ pub fn graphql_string_list_literal<'a>(values: impl IntoIterator<Item = &'a str>
     }
 }
 
+/// Read `collection`'s arrival head so the transaction conflicts with any
+/// concurrent insert into it; predicate reads alone do not fence inserts.
+pub(crate) async fn fence_arrivals(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    collection: &str,
+) -> Result<()> {
+    txn.execute(&format!(
+        r#"{{ _documentArrivals(collection: "{}", limit: 1) {{ head }} }}"#,
+        escape_graphql_string(collection)
+    ))
+    .await?;
+    Ok(())
+}
+
 pub async fn graphql_response_with_transaction_retry(
     node: &EmbeddedNode,
     graphql: &str,
@@ -219,7 +233,7 @@ pub fn single_mutation_document<'a>(
 /// Extract the exact identity of a single create from a transaction envelope.
 /// Use the same mutation normalization as other storage adapters: the pinned
 /// DefraDB accepts `create_` but returns `add_` unless explicitly aliased.
-pub(crate) fn created_doc_id(response: &Value, collection: &str) -> Result<String> {
+pub fn created_doc_id(response: &Value, collection: &str) -> Result<String> {
     anyhow::ensure!(
         response
             .get("errors")

@@ -43,7 +43,8 @@
     "test:live:sad-path": "node ./tests/run-live-test.mjs --suite sad-path",
     "test:live:e2e-acceptance": "node ./tests/run-live-test.mjs --suite e2e-acceptance",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "test:native:harness": "node --test tests/*.node-test.mjs"
   },
   "dependencies": {
     "@fontsource-variable/funnel-display": "^5.2.8",
