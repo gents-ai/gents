@@ -878,6 +878,17 @@ async fn initialize_runtime_home(
     let tools_id = default_tools_id_for_agent(&default_agent_id);
     let tool_ceiling = tool_ceiling_for_package(tool_package);
     let tool_root = resolve_tool_root_for_package(tool_package, args.tool_root.as_deref())?;
+    // A blank Tools.host.root inherits the operator root recorded in
+    // init.json only while no explicit WorkspaceRoot policy exists: the
+    // execution guard refuses rootless host tools under configured policy, so
+    // init pins the resolved operator root exactly when the operator has
+    // authored one, and init.json stays the single record otherwise.
+    let explicit_workspace_policy = gents::tool_surface::load_workspace_root_policy(node, None)
+        .await?
+        .configured;
+    let pinned_tool_root = explicit_workspace_policy
+        .then(|| tool_root.clone())
+        .flatten();
     // Canonical auth is a typed selection, never a raw key copy: an
     // environment-key endpoint reads the key from the runtime host at call
     // time, and agent-scoped OAuth providers keep using the node's
@@ -911,7 +922,7 @@ async fn initialize_runtime_home(
         node_did,
         &tools_id,
         tool_package,
-        tool_root.clone(),
+        pinned_tool_root,
         args.enable_memory,
         enable_defra_query,
         args.defra_query_collections.clone(),
@@ -1126,11 +1137,15 @@ fn default_context_id_for_agent(agent_id: &str) -> String {
 
 /// Canonical `Tools` document for an init tool package. Typed nested groups
 /// replace the flat selection rows: absent groups and unset flags expose no
-/// capability, `Tools.host.root` is the default cwd for files/bash, and the
-/// execution policy stays an explicit typed selection (macOS `--write` keeps
-/// the sandboxed workspace_write policy; `--yolo` is always unrestricted).
-/// Backgrounding is per-capability: only write-capable bash may run in the
-/// background, which the derived allowlist materializes as `bash_unrestricted`.
+/// capability, a blank `Tools.host.root` inherits the operator root recorded in
+/// init.json while no WorkspaceRoot policy is configured (so a narrowed
+/// operator root moves every default behavior without re-authoring documents),
+/// and an explicit policy pins the resolved operator root because the
+/// execution guard refuses rootless host tools under it. The execution policy
+/// stays an explicit typed selection (macOS `--write` keeps the sandboxed
+/// workspace_write policy; `--yolo` is always unrestricted). Backgrounding is
+/// per-capability: only write-capable bash may run in the background, which
+/// the derived allowlist materializes as `bash_unrestricted`.
 fn tools_for_package(
     node_did: &str,
     tools_id: &str,
@@ -2210,13 +2225,30 @@ mod tests {
             "did:key:z-init",
             "setup-tools",
             selected,
-            Some(PathBuf::from("/")),
+            None,
             false,
             false,
             Vec::new(),
         );
         let host = tools.host.expect("setup host tools");
-        assert_eq!(host.root.as_deref(), Some("/"));
+        assert_eq!(
+            host.root, None,
+            "without WorkspaceRoot policy the default Tools document must not pin the operator root; init.json owns it"
+        );
+        let pinned = tools_for_package(
+            "did:key:z-init",
+            "setup-tools",
+            selected,
+            Some(PathBuf::from("/")),
+            false,
+            false,
+            Vec::new(),
+        );
+        assert_eq!(
+            pinned.host.and_then(|host| host.root),
+            Some("/".to_string()),
+            "under an explicit WorkspaceRoot policy the default Tools document pins the resolved operator root so the execution guard admits requests"
+        );
         assert_eq!(host.files.unwrap().mode, FileToolMode::ReadWrite);
         assert_eq!(host.bash.unwrap().mode, BashMode::Unrestricted);
         assert_eq!(

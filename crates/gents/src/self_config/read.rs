@@ -138,7 +138,14 @@ impl SelfConfigCore {
             )
             .await?;
             if let Some(tools) = canonical_tools.as_mut() {
-                crate::tool_surface::canonicalize_tools_root(tools, &policy)?;
+                // The persisted document's root is a stored grant being
+                // re-admitted, not a fresh write.
+                let stored_root = tools.host.as_ref().and_then(|host| host.root.clone());
+                crate::tool_surface::canonicalize_tools_root(
+                    tools,
+                    &policy,
+                    stored_root.as_deref(),
+                )?;
             }
             let configured_root = canonical_tools
                 .as_ref()

@@ -106,6 +106,7 @@ pub(crate) mod test_support {
     const CAPTURED_EVENT_TARGETS: &[&str] = &[
         crate::config_client::write_telemetry::WRITE_ATTEMPT_EVENT_TARGET,
         crate::runtime_status::RECONCILE_PHASE_EVENT_TARGET,
+        crate::session::REFUSAL_PROJECTION_EVENT_TARGET,
     ];
 
     /// Keeps the captured targets enabled so a scoped subscriber observes them.

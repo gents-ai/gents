@@ -273,7 +273,7 @@ fn apply_effective_bash(
     policy
 }
 
-pub(crate) fn resolve_effective_tool_root(
+pub fn resolve_effective_tool_root(
     agent_name: &str,
     selection_root: Option<&Path>,
     ceiling_root: Option<&Path>,
@@ -290,12 +290,36 @@ pub(crate) fn resolve_effective_tool_root(
                 })?;
             match decision {
                 super::root_admission::RootAdmission::Admitted(root) => Ok(Some(root)),
-                denied @ super::root_admission::RootAdmission::Denied { .. } => Err(anyhow!(
-                    "agent {agent_name} file tool root {} escapes operator tool root {}: {}",
-                    selection_root.display(),
-                    ceiling_root.display(),
-                    denied.denial_reason().expect("denied outcome has a reason")
-                )),
+                denied @ super::root_admission::RootAdmission::Denied { .. } => {
+                    // The operator root moves independently of the authored
+                    // behavior grant: a grant that still contains the narrowed
+                    // operator root clamps to it instead of stranding the
+                    // behavior. Only a disjoint grant is refused.
+                    let operator_narrowed = super::root_admission::resolve_admitted_tool_root(
+                        ceiling_root,
+                        [selection_root],
+                    )
+                    .ok()
+                    .and_then(|decision| decision.admitted());
+                    match operator_narrowed {
+                        Some(_) => {
+                            tracing::warn!(
+                                agent_id = %agent_name,
+                                selection_root = %selection_root.display(),
+                                operator_root = %ceiling_root.display(),
+                                "clamping file tool root to the narrowed operator tool root"
+                            );
+                            super::root_admission::resolve_configured_tool_root(ceiling_root)
+                                .map(Some)
+                        }
+                        None => Err(anyhow!(
+                            "agent {agent_name} file tool root {} escapes operator tool root {}: {}",
+                            selection_root.display(),
+                            ceiling_root.display(),
+                            denied.denial_reason().expect("denied outcome has a reason")
+                        )),
+                    }
+                }
             }
         }
         (Some(selection_root), None) => {
