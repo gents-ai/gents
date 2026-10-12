@@ -839,9 +839,10 @@ describe("older transcript pages", () => {
     unmount();
   });
 
-  /* WebKit rounds the position a write lands at: a fraction of a pixel
-     short is a write that took, not one to retry */
-  it("treats an unhide write WebKit rounded by a fraction of a pixel as taken", async () => {
+  /* WebKit drops the fraction of a write to the position: the unhide is
+     rounded to the nearest pixel, within half a pixel of the reader's row,
+     and taken, not retried */
+  it("rounds an unhide of a fractional height to the nearest pixel and takes it", async () => {
     const fixture = transcriptFixture();
     fixture.viewport.scrollTop = 300;
     const native = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop")!;
@@ -877,14 +878,14 @@ describe("older transcript pages", () => {
       fixture.viewport.dispatchEvent(new Event("scroll"));
     });
     expect(fixture.content.style.marginTop).toBe("-400.875px");
-    await waitFor(() => expect(fixture.viewport.scrollTop).toBe(500), {
+    await waitFor(() => expect(fixture.viewport.scrollTop).toBe(501), {
       timeout: 2500,
     });
     expect(fixture.content.style.marginTop).toBe("");
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 1200));
     });
-    expect(fixture.viewport.scrollTop).toBe(500);
+    expect(fixture.viewport.scrollTop).toBe(501);
     expect(fixture.content.style.marginTop).toBe("");
     unmount();
   });
