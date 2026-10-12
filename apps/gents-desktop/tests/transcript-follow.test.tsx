@@ -782,6 +782,63 @@ describe("older transcript pages", () => {
     unmount();
   });
 
+  /* a view that grew while rows were hidden cannot reach the position
+     they were hidden from: the browser clamps the write to the new foot,
+     and that write took */
+  it("treats an unhide write clamped to a grown view's foot as taken", async () => {
+    const fixture = transcriptFixture();
+    fixture.viewport.scrollTop = 300;
+    let clientHeight = 200;
+    const native = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop")!;
+    Object.defineProperties(fixture.viewport, {
+      clientHeight: { configurable: true, get: () => clientHeight },
+      scrollTop: {
+        configurable: true,
+        get: () => native.get!.call(fixture.viewport),
+        set: (value: number) => {
+          const foot = fixture.viewport.scrollHeight - clientHeight;
+          native.set!.call(fixture.viewport, Math.max(0, Math.min(value, foot)));
+        },
+      },
+    });
+    let landRows!: () => void;
+    const load = vi.fn(async () => {
+      landRows();
+      return true;
+    });
+    const { unmount } = renderHook(() => {
+      const [oldest, setOldest] = useState("row-10");
+      landRows = () => {
+        fixture.setHeight(900);
+        setOldest("row-0");
+      };
+      return useOlderPages(
+        fixture.viewport,
+        fixture.content,
+        "session-1",
+        true,
+        load,
+        oldest,
+      );
+    });
+    await act(async () => {
+      fixture.viewport.scrollTop = 100;
+      fixture.viewport.dispatchEvent(new Event("scroll"));
+    });
+    expect(fixture.content.style.marginTop).toBe("-400px");
+    clientHeight = 600;
+    await waitFor(() => expect(fixture.content.style.marginTop).toBe(""), {
+      timeout: 2500,
+    });
+    expect(fixture.viewport.scrollTop).toBe(300);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+    });
+    expect(fixture.content.style.marginTop).toBe("");
+    expect(fixture.viewport.scrollTop).toBe(300);
+    unmount();
+  });
+
   /* WebKit rounds the position a write lands at: a fraction of a pixel
      short is a write that took, not one to retry */
   it("treats an unhide write WebKit rounded by a fraction of a pixel as taken", async () => {

@@ -563,13 +563,19 @@ export function useOlderPages(
       }
       const top = viewport.scrollTop;
       content.style.removeProperty("margin-top");
-      setScroll(viewport, top + hidden);
+      /* a view that grew while the rows were hidden clamps the write to
+         its foot, a position the write still reaches */
+      const target = Math.min(
+        top + hidden,
+        viewport.scrollHeight - viewport.clientHeight,
+      );
+      setScroll(viewport, target);
       /* WebKit drops a write made while its own scrolling is still under
          way, and rounds the position of one that takes: only a write that
          fell short by more than that rounding was dropped, and the rows go
          back out of sight to be retried at the next rest, rather than the
          reader left a page up with nothing compensating */
-      if (top + hidden - viewport.scrollTop > 2) {
+      if (target - viewport.scrollTop > 2) {
         content.style.marginTop = `${-hidden}px`;
         unhideTimer = window.setTimeout(unhide, TAIL_MS);
         return;

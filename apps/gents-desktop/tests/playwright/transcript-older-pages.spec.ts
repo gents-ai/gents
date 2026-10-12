@@ -222,10 +222,9 @@ test("a page landing while the reader scrolls is not put back with a write until
 
 /* One wheel up the page, an older page landing during its animation, and
    the wheel's whole travel still arriving: a write to the position while
-   WebKit is scrolling stops the animation, which is the loss the issue's
-   traces caught (a 150 ms stillness gate firing mid-flight on WebKitGTK).
-   The wheel carries the view its full 1200 px, which the landing and the
-   write that puts it back never touch. */
+   WebKit is scrolling stops the animation. The wheel carries the view its
+   full 1200 px, which the landing and the write that puts it back never
+   touch. */
 test("a page landing mid-wheel keeps the wheel's whole travel", async ({
   page,
 }, testInfo) => {
