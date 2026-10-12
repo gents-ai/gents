@@ -1,9 +1,9 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use gents_desktop_core::{
     client::DesktopPaths,
     home_reset::{
-        HomeResetDisposition, ManagedServerResetResult, lock_desktop_process, lock_reset,
-        plan_full_reset, resolve_user_home,
+        lock_desktop_process, lock_reset, plan_full_reset, resolve_user_home, HomeResetDisposition,
+        ManagedServerResetResult,
     },
 };
 
