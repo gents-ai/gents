@@ -26,9 +26,9 @@ use serde_json::Value;
 
 use crate::support::fixtures::test_identity;
 use crate::support::interrupt::{
-    create_runtime_request, wait_for_request_lifecycle_state, wait_for_runtime_ready, BootedAgent,
+    create_runtime_request, wait_for_request_lifecycle_state, wait_for_request_terminal_state,
+    wait_for_runtime_ready, BootedAgent,
 };
-use crate::support::snapshots::fetch_request_snapshot;
 use crate::support::streaming_backend::{
     MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse, StreamScript,
 };
@@ -194,7 +194,8 @@ async fn a_failing_capture_sink_issues_no_provider_request() {
     // zero-request assertion only ran after `lifecycle_state == "failed"`, a
     // fail-open sink would fail this test on a timeout instead of on the claim
     // under test, and the diagnostic would point at the wrong thing.
-    let terminal = wait_for_request_terminal_state(db.node.as_ref(), &doc_id).await;
+    let terminal =
+        wait_for_request_terminal_state(db.node.as_ref(), &doc_id, Duration::from_secs(20)).await;
 
     assert_eq!(
         backend.observed_completion_requests(),
@@ -1251,7 +1252,7 @@ async fn retry_continues_recorded_tool_progress_without_republishing_input() {
     )
     .await;
     assert_eq!(
-        wait_for_request_terminal_state(db.node.as_ref(), &parent).await,
+        wait_for_request_terminal_state(db.node.as_ref(), &parent, Duration::from_secs(20)).await,
         RequestLifecycleState::Failed
     );
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
@@ -1286,7 +1287,7 @@ async fn retry_continues_recorded_tool_progress_without_republishing_input() {
         .unwrap()
         .to_owned();
     assert_eq!(
-        wait_for_request_terminal_state(db.node.as_ref(), &doc_id).await,
+        wait_for_request_terminal_state(db.node.as_ref(), &doc_id, Duration::from_secs(20)).await,
         RequestLifecycleState::Completed
     );
     let observed = backend.observed_completion_bodies();
@@ -1567,7 +1568,8 @@ async fn a_repaired_attempt_is_a_second_fact_with_a_different_canonical_request(
     // as `failed` — the sink rejecting the rebinding, correctly — and waiting
     // for "completed" would report that as a lifecycle timeout instead of as
     // the coordinate claim this test is about.
-    let terminal = wait_for_request_terminal_state(db.node.as_ref(), &doc_id).await;
+    let terminal =
+        wait_for_request_terminal_state(db.node.as_ref(), &doc_id, Duration::from_secs(20)).await;
     assert_eq!(
         terminal,
         RequestLifecycleState::Completed,
@@ -2529,7 +2531,8 @@ async fn rolling_chunk_failure_does_not_advance_session_and_retry_commits_once()
     )
     .await;
     assert_eq!(
-        wait_for_request_terminal_state(db.node.as_ref(), &failed_doc).await,
+        wait_for_request_terminal_state(db.node.as_ref(), &failed_doc, Duration::from_secs(20))
+            .await,
         RequestLifecycleState::Failed
     );
     assert!(
@@ -2967,26 +2970,6 @@ async fn commit_set(node: &EmbeddedNode, capture_key: &str) -> Vec<(String, Stri
     );
     commits.sort();
     commits
-}
-
-/// Wait for any terminal lifecycle state and report which one it reached.
-async fn wait_for_request_terminal_state(
-    node: &EmbeddedNode,
-    request_doc_id: &str,
-) -> RequestLifecycleState {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
-    loop {
-        let snapshot = fetch_request_snapshot(node, request_doc_id).await;
-        if snapshot.lifecycle_state.is_terminal() {
-            return snapshot.lifecycle_state;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "request {request_doc_id} never reached a terminal state; last={}",
-            snapshot.lifecycle_state
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
 }
 
 async fn wait_for_rendered_requests(
