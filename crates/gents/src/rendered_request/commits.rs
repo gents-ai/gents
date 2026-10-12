@@ -91,10 +91,33 @@ where
             ));
         }
         query.push_str(" }");
+        #[cfg(test)]
+        let _ = FIELD_COMMIT_STATEMENTS
+            .try_with(|statements| statements.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
         let response = execute(query).await?;
         commits.extend(select_batched_field_commits(&response, batch, field_name)?);
     }
     Ok(commits)
+}
+
+#[cfg(test)]
+tokio::task_local! {
+    static FIELD_COMMIT_STATEMENTS: std::sync::Arc<std::sync::atomic::AtomicUsize>;
+}
+
+/// Run `future`, counting the batched `_commits` statements issued on this task.
+#[cfg(test)]
+pub(crate) async fn count_field_commit_statements<F: std::future::Future>(
+    future: F,
+) -> (F::Output, usize) {
+    let statements = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let output = FIELD_COMMIT_STATEMENTS
+        .scope(statements.clone(), future)
+        .await;
+    (
+        output,
+        statements.load(std::sync::atomic::Ordering::Relaxed),
+    )
 }
 
 /// [`field_commits`] inside the caller's transaction.

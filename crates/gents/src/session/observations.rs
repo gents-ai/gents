@@ -302,18 +302,92 @@ pub(crate) async fn advance_session_request_observation_in_txn(
     preview_content: &str,
     now: &str,
 ) -> Result<bool> {
-    let session = load_agent_session_row_in_txn(
+    advance_observation_in_txn(
         txn,
-        &incoming.node_did,
-        &incoming.session_id,
-        incoming.requester_did.as_deref(),
+        incoming,
+        preview_content,
+        now,
+        ObservationBoundary::Claim,
     )
-    .await?
-    .context("advancing observation: session disappeared")?;
-    validate_agent_session(&session.session)?;
-    validate_incoming_scope(&session.session, incoming)?;
-    let rows = load_scoped_request_facts_in_txn(txn, &session.session, false).await?;
-    if !incoming_is_canonical_latest(&session.session, &rows, incoming)? {
+    .await
+}
+
+/// Event target for the refusal projection's skip observations. A scoped test
+/// subscriber reads these back, so the target stays in
+/// `test_support::CAPTURED_EVENT_TARGETS`.
+pub(crate) const REFUSAL_PROJECTION_EVENT_TARGET: &str = "gents::refusal_projection";
+
+/// Refusal-boundary variant: a row this owner cannot read — an invalid
+/// scoped request fact, duplicate `request_id` roots, an incoming row missing
+/// from its session scope — warns and leaves the observation untouched
+/// instead of erroring, so the refusal sharing this transaction persists.
+/// Write failures still propagate; they roll the refusal back with every
+/// other mutation it owns.
+pub(crate) async fn advance_refused_request_observation_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    incoming: &SessionRequestFact,
+    preview_content: &str,
+    now: &str,
+) -> Result<bool> {
+    advance_observation_in_txn(
+        txn,
+        incoming,
+        preview_content,
+        now,
+        ObservationBoundary::Refusal,
+    )
+    .await
+}
+
+/// Which boundary the observation owner serves: read-side ambiguity errors on
+/// `Claim` (an ambiguous session refuses the claim) and no-ops on `Refusal`
+/// (Lean `AgentSession.advance` leaves the session untouched unless the
+/// incoming row is provably its canonical latest).
+#[derive(Clone, Copy)]
+enum ObservationBoundary {
+    Claim,
+    Refusal,
+}
+
+async fn advance_observation_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    incoming: &SessionRequestFact,
+    preview_content: &str,
+    now: &str,
+    boundary: ObservationBoundary,
+) -> Result<bool> {
+    let read = async {
+        let session = load_agent_session_row_in_txn(
+            txn,
+            &incoming.node_did,
+            &incoming.session_id,
+            incoming.requester_did.as_deref(),
+        )
+        .await?
+        .context("advancing observation: session disappeared")?;
+        validate_agent_session(&session.session)?;
+        validate_incoming_scope(&session.session, incoming)?;
+        let rows = load_scoped_request_facts_in_txn(txn, &session.session, false).await?;
+        let canonical = incoming_is_canonical_latest(&session.session, &rows, incoming)?;
+        Ok((session, canonical))
+    }
+    .await;
+    let (session, canonical) = match read {
+        Ok(read) => read,
+        Err(error) if matches!(boundary, ObservationBoundary::Refusal) => {
+            tracing::warn!(
+                target: REFUSAL_PROJECTION_EVENT_TARGET,
+                session_id = %incoming.session_id,
+                request_id = %incoming.observed.request_id,
+                error = %error,
+                "refused request leaves its session observation untouched; the refusal itself \
+                 persists in this transaction"
+            );
+            return Ok(false);
+        }
+        Err(error) => return Err(error),
+    };
+    if !canonical {
         return Ok(false);
     }
     let activity = touch_activity_value(&session, now);

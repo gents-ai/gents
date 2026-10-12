@@ -110,8 +110,70 @@ async fn claim_atomically_projects_the_request_owned_session() {
 }
 
 #[tokio::test]
-async fn admission_rejection_is_terminal_and_does_not_mint_a_session() {
-    let db = test_db("admission-rejection-terminal").await;
+async fn admission_rejection_persists_despite_an_undecodable_session_row_under_its_label() {
+    let db = test_db("admission-rejection-undecodable-session-row").await;
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let created_at = chrono::Utc::now().to_rfc3339();
+    let doc_id = create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
+    // Seed a row under the request's exact `(node, session)` label that fails
+    // canonical decode: the label's ownership is unknowable, so the refusal
+    // boundary must leave it untouched instead of rolling back the refusal.
+    let seeded = db
+        .node
+        .execute(&format!(
+            r#"mutation {{ create_AgentSession(input: {{
+                session_id: "{}", node_did: "{}", agent_id: "{}",
+                created_at: "not-an-rfc3339-timestamp"
+            }}) {{ _docID }} }}"#,
+            escape_graphql_string(&session_id),
+            escape_graphql_string(NODE_DID),
+            escape_graphql_string(AGENT_NAME),
+        ))
+        .await;
+    assert!(!seeded.has_errors(), "{:?}", seeded.errors);
+    let mut lifecycle = request_lifecycle_for_case(
+        &db,
+        doc_id.clone(),
+        request_id,
+        session_id.clone(),
+        created_at,
+    );
+
+    lifecycle
+        .reject_admission("session label holds an undecodable row")
+        .await
+        .unwrap();
+
+    assert_eq!(
+        fetch_request_snapshot(&db.node, &doc_id)
+            .await
+            .lifecycle_state,
+        RequestLifecycleState::Failed
+    );
+    let selected = db
+        .node
+        .execute(&format!(
+            r#"{{ AgentSession(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
+            escape_graphql_string(&session_id),
+            gents::session::AGENT_SESSION_FIELDS,
+        ))
+        .await;
+    assert!(!selected.has_errors(), "{:?}", selected.errors);
+    let rows = selected.data.as_ref().unwrap()["AgentSession"]
+        .as_array()
+        .cloned()
+        .unwrap();
+    assert_eq!(rows.len(), 1, "the refusal must not mint beside the row");
+    assert!(
+        gents::session::decode_session_row(&rows[0]).is_err(),
+        "the refusal must leave the undecodable row untouched"
+    );
+}
+
+#[tokio::test]
+async fn admission_rejection_projects_the_failed_turn_into_its_session() {
+    let db = test_db("admission-rejection-projects-session").await;
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
     let created_at = chrono::Utc::now().to_rfc3339();
@@ -131,9 +193,13 @@ async fn admission_rejection_is_terminal_and_does_not_mint_a_session() {
 
     let request = fetch_request_snapshot(&db.node, &doc_id).await;
     assert_eq!(request.lifecycle_state, RequestLifecycleState::Failed);
-    assert!(fetch_session_snapshot(&db.node, &session_id)
-        .await
-        .is_none());
+    assert_session_observes_request(
+        &db.node,
+        &session_id,
+        &request_id,
+        RequestLifecycleState::Failed,
+    )
+    .await;
     let persisted = db.node.execute(&format!(
         r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ terminal_output failure_reason }} }}"#,
         gents::graphql::escape_graphql_string(&doc_id),

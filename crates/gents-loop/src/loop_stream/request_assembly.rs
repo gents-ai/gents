@@ -54,7 +54,7 @@ pub(super) fn replay_resolution_error(error: anyhow::Error) -> StreamingError {
     }
 }
 
-pub(super) async fn resolve_replay_evidence(
+pub async fn resolve_replay_evidence(
     replay: &LoopReplayInput,
     requested: &[ReplayTag],
 ) -> Result<Vec<ReplayEvidenceRow>, StreamingError> {
@@ -67,13 +67,28 @@ pub(super) async fn resolve_replay_evidence(
     if distinct.is_empty() {
         return Ok(Vec::new());
     }
-    let resolve = replay
-        .resolve
+    // A seeded superset resolution is per-tag equivalent to a fresh pass:
+    // resolution maps each tag independently over the candidates its own
+    // filter selects, so rows outside `distinct` are simply not requested.
+    let mut evidence = replay
+        .estimate_seed
         .as_ref()
-        .ok_or_else(|| replay_input_error("reasoning replay has no canonical evidence resolver"))?;
-    let evidence = resolve(distinct.clone())
-        .await
-        .map_err(replay_resolution_error)?;
+        .and_then(|seed| seed.take())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|row| distinct.contains(&row.tag))
+        .collect::<Vec<_>>();
+    let missing = distinct
+        .iter()
+        .filter(|tag| !evidence.iter().any(|row| &row.tag == *tag))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !missing.is_empty() {
+        let resolve = replay.resolve.as_ref().ok_or_else(|| {
+            replay_input_error("reasoning replay has no canonical evidence resolver")
+        })?;
+        evidence.extend(resolve(missing).await.map_err(replay_resolution_error)?);
+    }
     if evidence.iter().any(|row| !distinct.contains(&row.tag)) {
         return Err(replay_input_error(
             "canonical resolver returned an unrequested replay source",
@@ -85,6 +100,7 @@ pub(super) async fn resolve_replay_evidence(
 #[cfg(test)]
 mod replay_error_tests {
     use super::*;
+    use crate::claude_messages_body::{ReasoningWitness, ReplayIssuer, ReplayOrigin};
     use gents_protocol::message::Text;
 
     fn provider_tag(turn_index: u32) -> ReplayTag {
@@ -355,6 +371,403 @@ mod replay_error_tests {
             .unwrap()
             .is_empty());
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    fn evidence_row(
+        tag: &ReplayTag,
+        header: &str,
+        reasoning: ReasoningWitness,
+    ) -> ReplayEvidenceRow {
+        ReplayEvidenceRow {
+            tag: tag.clone(),
+            evidence: ResolvedReplayEvidence {
+                origin: ReplayOrigin::AcceptedProvider,
+                reasoning,
+                issuer: ReplayIssuer {
+                    family: "claude".into(),
+                    endpoint: "https://provider.test".into(),
+                },
+                wire: crate::claude_messages_body::ReplayWire::ClaudeMessages,
+                physical_header: header.to_owned(),
+                complete: true,
+                captured: None,
+            },
+        }
+    }
+
+    fn counting_resolver(
+        rows: Vec<ReplayEvidenceRow>,
+        expected: Vec<ReplayTag>,
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+    ) -> crate::loop_stream::ReplayEvidenceResolver {
+        Arc::new(move |requested| {
+            assert_eq!(
+                requested, expected,
+                "the resolver sees only unresolved tags"
+            );
+            calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let rows = rows.clone();
+            Box::pin(async move { Ok(rows) })
+        })
+    }
+
+    fn armed_seed(rows: Vec<ReplayEvidenceRow>) -> ReplayEstimateSeed {
+        let seed = ReplayEstimateSeed::default();
+        seed.arm();
+        seed.record(rows);
+        seed
+    }
+
+    #[tokio::test]
+    async fn a_seeded_lookup_serves_an_identical_tag_set_without_invoking_the_resolver() {
+        let first = provider_tag(0);
+        let second = provider_tag(1);
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let replay = LoopReplayInput {
+            resolve: Some(counting_resolver(
+                Vec::new(),
+                vec![first.clone(), second.clone()],
+                calls.clone(),
+            )),
+            estimate_seed: Some(armed_seed(vec![
+                evidence_row(&first, "header-0", Vec::new()),
+                evidence_row(&second, "header-1", Vec::new()),
+            ])),
+            ..LoopReplayInput::default()
+        };
+        let served = resolve_replay_evidence(&replay, &[first.clone(), second])
+            .await
+            .unwrap();
+        assert_eq!(
+            served
+                .iter()
+                .map(|row| row.evidence.physical_header.clone())
+                .collect::<Vec<_>>(),
+            ["header-0", "header-1"],
+            "the dispatch lookup serves the estimate's rows unchanged"
+        );
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "an identical tag set needs no second canonical pass"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_seeded_lookup_resolves_only_the_tags_the_seed_does_not_cover() {
+        let seeded = provider_tag(0);
+        let missing = provider_tag(1);
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let replay = LoopReplayInput {
+            resolve: Some(counting_resolver(
+                vec![evidence_row(&missing, "header-1", Vec::new())],
+                vec![missing.clone()],
+                calls.clone(),
+            )),
+            estimate_seed: Some(armed_seed(vec![evidence_row(
+                &seeded,
+                "header-0",
+                Vec::new(),
+            )])),
+            ..LoopReplayInput::default()
+        };
+        let served = resolve_replay_evidence(&replay, &[seeded.clone(), missing.clone()])
+            .await
+            .unwrap();
+        assert_eq!(
+            served
+                .iter()
+                .map(|row| row.evidence.physical_header.clone())
+                .collect::<Vec<_>>(),
+            ["header-0", "header-1"],
+            "seeded rows and freshly resolved rows compose one answer"
+        );
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "only the uncovered tag crosses the canonical resolver"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_seed_is_taken_once_so_the_next_lookup_re_resolves() {
+        let tag = provider_tag(0);
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let replay = LoopReplayInput {
+            resolve: Some(counting_resolver(
+                vec![evidence_row(&tag, "header-0", Vec::new())],
+                vec![tag.clone()],
+                calls.clone(),
+            )),
+            estimate_seed: Some(armed_seed(vec![evidence_row(&tag, "header-0", Vec::new())])),
+            ..LoopReplayInput::default()
+        };
+        resolve_replay_evidence(&replay, &[tag.clone()])
+            .await
+            .unwrap();
+        let re_resolved = resolve_replay_evidence(&replay, &[tag.clone()])
+            .await
+            .unwrap();
+        assert_eq!(
+            re_resolved
+                .iter()
+                .map(|row| row.evidence.physical_header.clone())
+                .collect::<Vec<_>>(),
+            ["header-0"],
+            "the second lookup still answers the same evidence"
+        );
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "every lookup after the seeded dispatch revalidates the store"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_seeded_lookup_serves_only_rows_for_the_requested_tags() {
+        let requested = provider_tag(0);
+        let superset = provider_tag(1);
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let replay = LoopReplayInput {
+            resolve: Some(counting_resolver(Vec::new(), vec![], calls.clone())),
+            estimate_seed: Some(armed_seed(vec![
+                evidence_row(&requested, "header-0", Vec::new()),
+                evidence_row(&superset, "header-1", Vec::new()),
+            ])),
+            ..LoopReplayInput::default()
+        };
+        let served = resolve_replay_evidence(&replay, &[requested])
+            .await
+            .unwrap();
+        assert_eq!(
+            served
+                .iter()
+                .map(|row| row.evidence.physical_header.clone())
+                .collect::<Vec<_>>(),
+            ["header-0"],
+            "a subset dispatch never sees the estimate's other tags"
+        );
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    #[derive(Clone, Default)]
+    struct AssemblyOnlyModel;
+
+    #[allow(refining_impl_trait)]
+    impl rig::completion::CompletionModel for AssemblyOnlyModel {
+        type Response = ();
+        type StreamingResponse = ();
+        type Client = ();
+
+        fn make(_client: &Self::Client, _model: impl Into<String>) -> Self {
+            unreachable!("constructed directly")
+        }
+
+        async fn completion(
+            &self,
+            _request: rig::completion::CompletionRequest,
+        ) -> Result<
+            rig::completion::CompletionResponse<Self::Response>,
+            rig::completion::CompletionError,
+        > {
+            unreachable!("assembly tests never dispatch")
+        }
+
+        async fn stream(
+            &self,
+            _request: rig::completion::CompletionRequest,
+        ) -> Result<
+            rig::streaming::StreamingCompletionResponse<Self::StreamingResponse>,
+            rig::completion::CompletionError,
+        > {
+            unreachable!("assembly tests never dispatch")
+        }
+    }
+
+    fn replay_assembly_config() -> LoopConfig {
+        LoopConfig {
+            replay: LoopReplayInput::default(),
+            provider_input_counter: Arc::new(crate::provider_input::ProviderInputCounter::new(
+                crate::backend_provider::BackendProviderKind::ClaudeCliSubscription,
+                crate::openai_wire::OpenAiWireApi::ChatCompletions,
+                "test-model",
+            )),
+            preamble: None,
+            context_message: None,
+            temperature: None,
+            max_tokens: None,
+            aggregate_token_budget: None,
+            additional_params: None,
+            structured_output: None,
+            tool_choice: None,
+            on_rendered_request: None,
+            turn_compactor: None,
+            active_reduction_keys: Vec::new(),
+            reduction_chain_keys: Vec::new(),
+            initial_turn_index: 0,
+            resume_from_history: false,
+            context_window: 128_000,
+            compaction_threshold: 0.75,
+            retry_policy: CompletionRetryPolicy::interactive_default(),
+            provider_idle_timeout: None,
+            deadline: None,
+            max_turns: 4,
+            output_obligation_gate: None,
+            folded_prompts: Vec::new(),
+            authored_input: None,
+        }
+    }
+
+    /// The captured body of a turn is its producing request, derived through
+    /// the same builder that assembles the stage so the ordinary prefix the
+    /// replay frontier compares is byte-identical, not hand-fabricated.
+    async fn producing_capture(
+        model: &AssemblyOnlyModel,
+        config: &LoopConfig,
+        content: &[AssistantContent],
+    ) -> ResolvedReplayEvidence {
+        use crate::claude_messages_body::ReplayWire;
+        let producing = super::build_request(model, Message::user("prompt"), &[], &[], &[], config)
+            .await
+            .expect("producing request builds");
+        let body = config
+            .provider_input_counter
+            .project_body(&producing)
+            .expect("producing body projects");
+        ResolvedReplayEvidence {
+            reasoning: crate::claude_messages_body::reasoning_witness(content),
+            captured: Some(
+                crate::provider_input::replay_frontier::flatten(&body, ReplayWire::ClaudeMessages)
+                    .expect("producing body flattens"),
+            ),
+            ..evidence_row(&provider_tag(0), "header", Vec::new()).evidence
+        }
+    }
+
+    fn replay_assembly_content() -> Vec<AssistantContent> {
+        use gents_protocol::message::{Reasoning, Text};
+        vec![
+            AssistantContent::Reasoning(Reasoning::new_with_signature(
+                "thinking",
+                Some("sig".into()),
+            )),
+            AssistantContent::Text(Text {
+                text: "visible".into(),
+            }),
+        ]
+    }
+
+    fn replay_assembly_history(tag: &ReplayTag) -> Vec<TaggedMessage> {
+        vec![
+            TaggedMessage::unassociated(Message::user("prompt")),
+            TaggedMessage {
+                message: Message::Assistant {
+                    id: None,
+                    content: replay_assembly_content(),
+                },
+                source: Some(tag.clone()),
+                physical_header: Some("header".into()),
+                block_indices: vec![0, 1],
+            },
+        ]
+    }
+
+    /// The seeded dispatch and a fresh pass over the same canonical evidence
+    /// must assemble the byte-identical provider request.
+    #[tokio::test]
+    async fn a_seeded_dispatch_assembles_the_same_request_as_a_fresh_resolution() {
+        let tag = provider_tag(0);
+        let config = replay_assembly_config();
+        let issuer = ReplayIssuer {
+            family: "claude".into(),
+            endpoint: "https://provider.test".into(),
+        };
+        let evidence =
+            producing_capture(&AssemblyOnlyModel, &config, &replay_assembly_content()).await;
+        let rows = vec![ReplayEvidenceRow {
+            tag: tag.clone(),
+            evidence,
+        }];
+        let fresh_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let fresh = LoopReplayInput {
+            issuer: Some(issuer.clone()),
+            wire: Some(crate::claude_messages_body::ReplayWire::ClaudeMessages),
+            resolve: Some(counting_resolver(
+                rows.clone(),
+                vec![tag.clone()],
+                fresh_calls.clone(),
+            )),
+            ..LoopReplayInput::default()
+        };
+        let seeded_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seeded = LoopReplayInput {
+            issuer: Some(issuer),
+            wire: Some(crate::claude_messages_body::ReplayWire::ClaudeMessages),
+            resolve: Some(counting_resolver(
+                rows.clone(),
+                vec![tag.clone()],
+                seeded_calls.clone(),
+            )),
+            estimate_seed: Some(armed_seed(rows)),
+            ..LoopReplayInput::default()
+        };
+
+        let mut fresh_history = replay_assembly_history(&tag);
+        let mut fresh_new = vec![TaggedMessage::unassociated(Message::user("next"))];
+        let fresh_request = assemble_provider_request(
+            &AssemblyOnlyModel,
+            &mut fresh_history,
+            &mut fresh_new,
+            &[],
+            &config,
+            &fresh,
+        )
+        .await
+        .unwrap();
+        let mut seeded_history = replay_assembly_history(&tag);
+        let mut seeded_new = vec![TaggedMessage::unassociated(Message::user("next"))];
+        let seeded_request = assemble_provider_request(
+            &AssemblyOnlyModel,
+            &mut seeded_history,
+            &mut seeded_new,
+            &[],
+            &config,
+            &seeded,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            fresh_calls.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "the fresh pass crosses the resolver once"
+        );
+        assert_eq!(
+            seeded_calls.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "the seeded dispatch crosses the resolver zero times"
+        );
+        assert_eq!(
+            format!("{fresh_request:?}"),
+            format!("{seeded_request:?}"),
+            "seeding changes no byte of the assembled provider request"
+        );
+        let body = config
+            .provider_input_counter
+            .project_body(&fresh_request)
+            .unwrap();
+        let flat = crate::provider_input::replay_frontier::flatten(
+            &body,
+            crate::claude_messages_body::ReplayWire::ClaudeMessages,
+        )
+        .unwrap();
+        assert!(
+            flat.iter().any(|item| matches!(
+                item,
+                crate::provider_input::replay_frontier::FlatItem::Reasoning(_)
+            )),
+            "the fixture keeps the replayed reasoning so the comparison is not vacuous"
+        );
     }
 
     #[test]

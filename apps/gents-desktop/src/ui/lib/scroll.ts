@@ -395,9 +395,14 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
       anchor = { el, key: keyOf(el), offset };
       settled.set(scroller, scroller.scrollTop);
     };
-    scroller.addEventListener("wheel", onWheel, { passive: true });
+    /* Chromium can apply a passive wheel or touch scroll on its compositor
+       before it dispatches the event, so the scroll arrives with no intent
+       behind it and reconcile writes the view back to the foot the reader
+       is leaving. Non-passive forces the dispatch first, WebKit's order.
+       Neither listener may call preventDefault: that would stop scrolling. */
+    scroller.addEventListener("wheel", onWheel, { passive: false });
     scroller.addEventListener("touchstart", onTouchStart, { passive: true });
-    scroller.addEventListener("touchmove", onTouchMove, { passive: true });
+    scroller.addEventListener("touchmove", onTouchMove, { passive: false });
     window.addEventListener("keydown", onKey);
     area?.addEventListener("pointerdown", onPointerDown);
     window.addEventListener("pointerup", onPointerUp);
@@ -445,18 +450,20 @@ const OLDER_AHEAD_PX = 160;
 /* moving up this recently, the next page follows the one that landed */
 const OLDER_INTENT_MS = 1000;
 /* A page that lands while the view is moving is not put back with a write
-   to the position: WebKit drops a write made while its own scrolling (a
-   fling's momentum, a held key's glide) is under way, and stops drawing the
-   scroll area until a later write takes. Its rows are kept out of sight
-   above the content's top instead, the content pulled up by their height,
-   and that becomes one write once the view has rested this long, or once
-   the reader reaches the top, where the view has stopped against the end
-   (there is no bounce) and a write takes. Resting is no scroll, no wheel
-   event and no finger on a touchscreen: a trackpad's momentum goes on
-   sending wheel events after it is too slow to move the view a pixel, a
-   finger held still is still scrolling, and WebKit reports `scrollend` as
-   the fingers lift, before the momentum. */
-const OLDER_STILL_MS = 150;
+   to the position: a write while WebKit's own scrolling (a wheel's
+   animation, a held key's glide) is under way stops it, and one during a
+   fling's momentum is dropped. Its rows are kept out of sight above the
+   content's top instead, the content pulled up by their height, and that
+   becomes one write once the view has rested, or once the reader reaches
+   the top, where the view has stopped against the end (there is no
+   bounce) and a write takes. Resting waits out TAIL_MS — the same bound
+   the follow hook's attribution uses, because WebKitGTK under load
+   starts a wheel's animation late and stalls it between frames, so any
+   shorter silence is not rest — with no scroll, wheel or key event and
+   no finger on a touchscreen: a trackpad's momentum goes on sending
+   wheel events after it is too slow to move the view a pixel, a finger
+   held still is still scrolling, and WebKit reports `scrollend` as the
+   fingers lift, before the momentum. */
 
 /* the row under the reader when an older page was asked for, and where it was */
 type Hold = {
@@ -542,7 +549,7 @@ export function useOlderPages(
     let movedUpAt = -Infinity;
     let movedAt = -Infinity;
     let touching = false;
-    const resting = () => !touching && performance.now() - movedAt >= OLDER_STILL_MS;
+    const resting = () => !touching && performance.now() - movedAt >= TAIL_MS;
     /* the height of rows kept out of sight above the content's top */
     let hidden = 0;
     let unhideTimer = 0;
@@ -555,13 +562,29 @@ export function useOlderPages(
         if (!touching)
           unhideTimer = window.setTimeout(
             unhide,
-            OLDER_STILL_MS - (performance.now() - movedAt),
+            TAIL_MS - (performance.now() - movedAt),
           );
         return;
       }
       const top = viewport.scrollTop;
       content.style.removeProperty("margin-top");
-      setScroll(viewport, top + hidden);
+      /* a view that grew while the rows were hidden clamps the write to
+         its foot, a position the write still reaches */
+      const target = Math.min(
+        top + hidden,
+        viewport.scrollHeight - viewport.clientHeight,
+      );
+      setScroll(viewport, target);
+      /* WebKit drops a write made while its own scrolling is still under
+         way, and rounds the position of one that takes: only a write that
+         fell short by more than that rounding was dropped, and the rows go
+         back out of sight to be retried at the next rest, rather than the
+         reader left a page up with nothing compensating */
+      if (target - viewport.scrollTop > 2) {
+        content.style.marginTop = `${-hidden}px`;
+        unhideTimer = window.setTimeout(unhide, TAIL_MS);
+        return;
+      }
       hidden = 0;
       again.current();
     };
@@ -573,7 +596,7 @@ export function useOlderPages(
       }
       hidden += shift;
       content.style.marginTop = `${-hidden}px`;
-      if (!unhideTimer) unhideTimer = window.setTimeout(unhide, OLDER_STILL_MS);
+      if (!unhideTimer) unhideTimer = window.setTimeout(unhide, TAIL_MS);
     };
     hold.current = null;
     setLoading(false);
@@ -640,8 +663,7 @@ export function useOlderPages(
       if (event.touches.length) return;
       touching = false;
       movedAt = performance.now();
-      if (hidden && !unhideTimer)
-        unhideTimer = window.setTimeout(unhide, OLDER_STILL_MS);
+      if (hidden && !unhideTimer) unhideTimer = window.setTimeout(unhide, TAIL_MS);
     };
     const onTouchMove = (event: TouchEvent) => {
       movedAt = performance.now();
@@ -650,6 +672,7 @@ export function useOlderPages(
       touchY = nextY;
     };
     const onKeyDown = (event: KeyboardEvent) => {
+      movedAt = performance.now();
       if (["ArrowUp", "PageUp", "Home"].includes(event.key)) up();
     };
     viewport.addEventListener("scroll", onScroll, { passive: true });

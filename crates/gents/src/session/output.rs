@@ -117,6 +117,22 @@ pub(crate) async fn count_request_output_scans<F: std::future::Future>(
     (output, scans.load(std::sync::atomic::Ordering::Relaxed))
 }
 
+#[cfg(test)]
+tokio::task_local! {
+    static CAPTURE_ROW_QUERIES: std::sync::Arc<std::sync::atomic::AtomicUsize>;
+}
+
+/// Run `future`, counting the batched replay capture-row statements canonical
+/// replay resolution issues on this task.
+#[cfg(test)]
+pub(crate) async fn count_capture_row_queries<F: std::future::Future>(
+    future: F,
+) -> (F::Output, usize) {
+    let queries = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let output = CAPTURE_ROW_QUERIES.scope(queries.clone(), future).await;
+    (output, queries.load(std::sync::atomic::Ordering::Relaxed))
+}
+
 #[derive(Clone, Copy)]
 enum ReadAccess<'a, 'txn> {
     Node(&'a EmbeddedNode),
@@ -995,7 +1011,7 @@ pub(crate) async fn load_canonical_assistant_candidates_with(
         "canonical replay high-water header is absent from its bounded view"
     );
 
-    let mut candidates = Vec::new();
+    let mut selected = Vec::new();
     for row in headers
         .into_iter()
         .filter(|row| row.message.role == MessageRole::Assistant)
@@ -1101,29 +1117,181 @@ pub(crate) async fn load_canonical_assistant_candidates_with(
         request_facts
             .entry(request_scope)
             .or_insert_with(|| (request_id.clone(), request_commits.clone()));
-        let capture = replay_capture_for_candidate(
-            node,
-            &origin_header.node_did,
-            origin_header.requester_did.as_deref(),
-            &origin_header.session_id,
-            &request_id,
-            request_doc_id,
-            &request_commits,
+        selected.push(SelectedReplayCandidate {
+            capture_key: replay_capture_key(
+                &origin_header.node_did,
+                &origin_header.session_id,
+                request_doc_id,
+                coordinate,
+            )?,
+            header_doc_id: reconstructed.origin.doc_id,
+            request_doc_id: request_doc_id.to_owned(),
+            node_did: origin_header.node_did.clone(),
+            requester_did: origin_header.requester_did.clone(),
+            session_id: origin_header.session_id.clone(),
+            request_id,
+            request_commits,
             coordinate,
+            #[cfg(test)]
+            sequence: row.message.sequence,
+            message: reconstructed.message,
+        });
+    }
+    // Capture reads are the pass's dominant per-candidate store cost; they
+    // stay batched across the pass.
+    let capture_rows = load_replay_capture_rows(node, &selected).await?;
+    preload_replay_capture_blocks(node, &capture_rows, &mut capture_cache).await?;
+
+    let mut candidates = Vec::new();
+    for item in selected {
+        let capture = replay_capture_from_row(
+            node,
+            &capture_rows,
+            &item.capture_key,
+            &item.node_did,
+            item.requester_did.as_deref(),
+            &item.session_id,
+            &item.request_id,
+            &item.request_doc_id,
+            &item.request_commits,
+            item.coordinate,
             &mut capture_cache,
         )
         .await?;
         candidates.push(CanonicalAssistantCandidate {
-            header_doc_id: reconstructed.origin.doc_id,
-            request_doc_id: request_doc_id.to_owned(),
+            header_doc_id: item.header_doc_id,
+            request_doc_id: item.request_doc_id,
             #[cfg(test)]
-            sequence: row.message.sequence,
-            message: reconstructed.message,
-            coordinate,
+            sequence: item.sequence,
+            message: item.message,
+            coordinate: item.coordinate,
             capture,
         });
     }
     Ok(candidates)
+}
+
+/// One assistant of the bounded canonical view that passed every check a
+/// capture read does not participate in: bounded-header, coordinate, tag
+/// selection and physical-request validation.
+struct SelectedReplayCandidate {
+    capture_key: String,
+    header_doc_id: String,
+    request_doc_id: String,
+    node_did: String,
+    requester_did: Option<String>,
+    session_id: String,
+    request_id: String,
+    request_commits: BTreeSet<String>,
+    coordinate: CanonicalProviderCoordinate,
+    #[cfg(test)]
+    sequence: u32,
+    message: gents_protocol::message::Message,
+}
+
+fn replay_capture_key(
+    node_did: &str,
+    session_id: &str,
+    request_doc_id: &str,
+    coordinate: CanonicalProviderCoordinate,
+) -> Result<String> {
+    let CanonicalProviderCoordinate {
+        scope: capture_scope,
+        turn_index,
+        attempt,
+    } = coordinate;
+    gents_loop::rendered_request::capture_key(
+        node_did,
+        session_id,
+        request_doc_id,
+        &capture_scope.to_string(),
+        usize::try_from(turn_index)?,
+        attempt,
+    )
+}
+
+/// Batched `capture_key` read for the pass's selected coordinates: one chunked
+/// `_in` statement instead of one per candidate, with rows grouped per key so
+/// a key with zero or multiple rows still leaves its turn without evidence,
+/// never an error. Rows are queried by the exact key only: a contradictory row
+/// under a key must be detected, not filtered away.
+async fn load_replay_capture_rows(
+    node: &EmbeddedNode,
+    selected: &[SelectedReplayCandidate],
+) -> Result<BTreeMap<String, Vec<serde_json::Value>>> {
+    let mut keys = Vec::new();
+    for item in selected {
+        if !keys.contains(&item.capture_key) {
+            keys.push(item.capture_key.clone());
+        }
+    }
+    let mut rows: BTreeMap<String, Vec<serde_json::Value>> = BTreeMap::new();
+    for chunk in keys.chunks(crate::rendered_request::commits::FIELD_COMMIT_ALIAS_BATCH) {
+        let filter = chunk
+            .iter()
+            .map(|key| format!("\"{}\"", crate::graphql::escape_graphql_string(key)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let query = format!(
+            r#"{{ RenderedRequest(filter: {{ capture_key: {{ _in: [{filter}] }} }}) {{ capture_key capture_version request_doc_id request_commit_cid request_id session_id node_did requester_did capture_scope turn_index attempt source request_json provenance_json }} }}"#
+        );
+        #[cfg(test)]
+        let _ = CAPTURE_ROW_QUERIES
+            .try_with(|queries| queries.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+        let response = ReadAccess::Node(node)
+            .query(&query, "load_canonical_replay_captures")
+            .await?;
+        for row in rows_value(&response, "RenderedRequest")? {
+            // An `_in` on capture_key only returns rows carrying that field;
+            // a row without one is attributable to no requested key.
+            let Some(key) = row.get("capture_key").and_then(serde_json::Value::as_str) else {
+                continue;
+            };
+            rows.entry(key.to_owned()).or_default().push(row.clone());
+        }
+    }
+    Ok(rows)
+}
+
+/// Read every manifest block the pass's unambiguous captures name in one
+/// shared batched pass, so per-candidate verification resolves from positive
+/// cache observations only. A capture whose record does not decode locally is
+/// left to its verifier, which reports it per capture exactly as an unbatched
+/// read would; the shared block read isolates a verification failure per
+/// manifest the same way.
+async fn preload_replay_capture_blocks(
+    node: &EmbeddedNode,
+    capture_rows: &BTreeMap<String, Vec<serde_json::Value>>,
+    cache: &mut crate::rendered_request::CaptureReadCache,
+) -> Result<()> {
+    let mut manifests = Vec::new();
+    for rows in capture_rows.values() {
+        let [capture] = rows.as_slice() else {
+            continue;
+        };
+        let Some(version) = capture["capture_version"]
+            .as_u64()
+            .and_then(|value| u32::try_from(value).ok())
+        else {
+            continue;
+        };
+        let Some(stored) = capture
+            .get("request_json")
+            .and_then(serde_json::Value::as_str)
+        else {
+            continue;
+        };
+        if let Ok(crate::rendered_request::encoding::DecodedRecord::Manifest { blocks }) =
+            crate::rendered_request::encoding::decode_capture_record(
+                version,
+                stored,
+                crate::rendered_request::CapturePayloadKind::RequestBody,
+            )
+        {
+            manifests.push(blocks);
+        }
+    }
+    crate::rendered_request::preload_manifest_blocks(node, &manifests, cache).await
 }
 
 /// Validate a restored replay's physical request and bounded transcript view
@@ -1459,9 +1627,14 @@ fn provider_coordinate_for_candidate_inner(
     Ok(provider)
 }
 
+/// Verify the one capture row the pass's batched read returned under
+/// `capture_key`. Zero rows (no capture) and multiple rows (an ambiguous key)
+/// both leave the turn without evidence, never an error.
 #[allow(clippy::too_many_arguments)]
-async fn replay_capture_for_candidate(
+async fn replay_capture_from_row(
     node: &EmbeddedNode,
+    capture_rows: &BTreeMap<String, Vec<serde_json::Value>>,
+    capture_key: &str,
     node_did: &str,
     requester_did: Option<&str>,
     session_id: &str,
@@ -1471,41 +1644,15 @@ async fn replay_capture_for_candidate(
     coordinate: CanonicalProviderCoordinate,
     cache: &mut crate::rendered_request::CaptureReadCache,
 ) -> Result<Option<CanonicalReplayCapture>> {
-    let CanonicalProviderCoordinate {
-        scope: capture_scope,
-        turn_index,
-        attempt,
-    } = coordinate;
-    let capture_scope_label = capture_scope.to_string();
-    let capture_key = gents_loop::rendered_request::capture_key(
-        node_did,
-        session_id,
-        request_doc_id,
-        &capture_scope_label,
-        usize::try_from(turn_index)?,
-        attempt,
-    )?;
-    // Query by the existing exact key, but do not filter by the remaining
-    // tuple: a contradictory row under that key must be detected, not hidden.
-    let query = format!(
-        r#"{{ RenderedRequest(filter: {{ capture_key: {{ _eq: "{}" }} }}, limit: 2) {{ capture_key capture_version request_doc_id request_commit_cid request_id session_id node_did requester_did capture_scope turn_index attempt source request_json provenance_json }} }}"#,
-        crate::graphql::escape_graphql_string(&capture_key)
-    );
-    let response = ReadAccess::Node(node)
-        .query(&query, "load_canonical_replay_capture")
-        .await?;
-    let captures = rows_value(&response, "RenderedRequest")?;
-    let capture = match captures.as_slice() {
-        [] => return Ok(None),
-        [capture] => capture,
-        _ => return Ok(None),
+    let Some([capture]) = capture_rows.get(capture_key).map(Vec::as_slice) else {
+        return Ok(None);
     };
     // An unverifiable capture makes only this turn non-replayable; it must not
     // fail every later request in the session.
     match verify_replay_capture(
         node,
         capture,
-        &capture_key,
+        capture_key,
         node_did,
         requester_did,
         session_id,
@@ -1526,7 +1673,7 @@ async fn replay_capture_for_candidate(
             Err(error)
         }
         Err(error) => {
-            warn_unverifiable_replay_capture(&capture_key, &error);
+            warn_unverifiable_replay_capture(capture_key, &error);
             Ok(None)
         }
     }

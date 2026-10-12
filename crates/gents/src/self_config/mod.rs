@@ -261,11 +261,24 @@ fn protect_working_agent(mut request: ApplyRequest<'static>) -> ApplyRequest<'st
     });
     request
 }
+/// The `host.root` the stored Tools document already holds. An edit that
+/// leaves it unchanged re-admits a stored grant (the operator may have since
+/// narrowed below it); a patch that sets a new root is held to strict
+/// admission.
+fn stored_host_root(stored: &serde_json::Map<String, serde_json::Value>) -> Option<String> {
+    serde_json::from_value::<crate::document_config::Tools>(serde_json::Value::Object(
+        stored.clone(),
+    ))
+    .ok()?
+    .host?
+    .root
+}
+
 fn tools_request(core: &SelfConfigCore, patch: SelfConfigPatch) -> ApplyRequest<'static> {
     let mut request = anchored_request(SelfConfigTarget::Tools, "tools_id", patch);
     let ceiling_root = core.process_ceiling().root.clone();
     let held = core.held_grants().clone();
-    request.normalize = Box::new(move |txn, _, _, merged| {
+    request.normalize = Box::new(move |txn, _, stored, merged| {
         let ceiling_root = ceiling_root.clone();
         Box::pin(async move {
             let policy = crate::tool_surface::load_workspace_root_policy_in_txn(
@@ -273,8 +286,13 @@ fn tools_request(core: &SelfConfigCore, patch: SelfConfigPatch) -> ApplyRequest<
                 ceiling_root.as_deref(),
             )
             .await?;
+            let stored_root = stored_host_root(stored);
             let mut tools = decode_merged::<crate::document_config::Tools>("Tools", merged)?;
-            crate::tool_surface::canonicalize_tools_root(&mut tools, &policy)?;
+            crate::tool_surface::canonicalize_tools_root(
+                &mut tools,
+                &policy,
+                stored_root.as_deref(),
+            )?;
             let canonical = serde_json::to_value(tools)?
                 .as_object()
                 .context("canonical Tools document must be an object")?

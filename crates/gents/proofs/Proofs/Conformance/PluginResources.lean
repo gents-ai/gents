@@ -165,7 +165,7 @@ private def toolCallsJson : Json := Json.mkObj [
   ("consent", toJson <| [false, true].flatMap fun interactive => [false, true].map fun composed =>
     Json.mkObj [("interactive", toJson interactive), ("composed", toJson composed),
       ("expected", toJson (match PluginCalls.consentRoute interactive composed with
-        | .ask => "ask" | .refuseComposed => "refuse_composed" | .deny => "deny"))])]
+        | .ask => "ask" | .deny => "deny"))])]
 
 private def childAdmissionJson : Json := toJson <| [false, true].flatMap fun selected =>
   [("ordinary", PluginCalls.DispatchRoute.ordinary), ("hook_owned", .hookOwned)].flatMap

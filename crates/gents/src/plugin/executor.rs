@@ -356,12 +356,6 @@ impl PluginExecutor {
         let covered = granted.is_some_and(|granted| granted >= access);
         if !covered {
             let allowed = match approval::consent(context.interactive) {
-                approval::Consent::RefuseComposed => {
-                    return Err(refuse(format!(
-                        "operator consent cannot be requested inside another plugin's composed tool call; call {plugin} directly, or allow the folder with `gents plugin dirs add {}`",
-                        resolved.folder().display()
-                    )));
-                }
                 approval::Consent::Deny => false,
                 approval::Consent::Ask => {
                     let request = approval::Request::new(

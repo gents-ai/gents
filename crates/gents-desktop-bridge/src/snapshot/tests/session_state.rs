@@ -937,6 +937,58 @@ fn session_snapshot_projects_failed_request_reason_without_response_storage() {
     assert!(snapshot.retry_eligibility.eligible);
 }
 
+/// A request refused before claim never publishes a transcript row; once the
+/// app stops tracking it, the session observation the runtime advanced at the
+/// refusal is the only fact anchoring the failed turn, its reason and Retry.
+#[test]
+fn refused_latest_request_observation_keeps_the_failed_turn_reason_retry_and_prompt_visible() {
+    let refusal_reason =
+        "request admission denied: request activates a skill outside its context allowlist";
+    let mut refused_session = session(None);
+    refused_session.observation = Some(SessionObservation {
+        last_activity_at: "2026-04-21T12:02:00Z".into(),
+        preview: Some("run the disallowed skill".into()),
+        latest_request: Some(SessionRequestObservation {
+            request_doc_id: "req-2".into(),
+            request_id: "req-2".into(),
+            lifecycle_state: RequestLifecycleState::Failed,
+        }),
+    });
+    let mut refused = request("req-2", RequestLifecycleState::Failed);
+    refused.content = Some("run the disallowed skill".into());
+    refused.failure_reason = Some(refusal_reason.into());
+    let snapshot = build_session_snapshot_from_store(
+        &ClientStore::from_rows(ClientStoreRows {
+            sessions: vec![refused_session],
+            requests: vec![request("req-1", RequestLifecycleState::Completed), refused],
+            ..ClientStoreRows::default()
+        }),
+        "session-1",
+        None,
+    )
+    .expect("snapshot");
+    assert_eq!(
+        snapshot.latest_request_id.as_deref(),
+        Some("req-2"),
+        "the observation, not row order, anchors the post-tracking latest request"
+    );
+    assert_eq!(snapshot.turn_state.as_deref(), Some("failed"));
+    let outcome = snapshot.latest_request_outcome.expect("request outcome");
+    assert_eq!(outcome.failure_reason.as_deref(), Some(refusal_reason));
+    assert!(snapshot.retry_eligibility.eligible);
+    let pending = snapshot.pending_turn.expect("refused prompt stays visible");
+    assert_eq!(pending.request_id, "req-2");
+    assert_eq!(pending.content, "run the disallowed skill");
+    assert_eq!(pending.lifecycle_state.as_deref(), Some("failed"));
+    assert!(
+        snapshot
+            .timeline_items
+            .iter()
+            .any(|item| matches!(item, RenderedTimelineItem::PendingUserTurn { request_id, .. } if request_id == "req-2")),
+        "the timeline keeps a user-turn stand-in for the refused request"
+    );
+}
+
 #[test]
 fn session_snapshot_derives_interrupted_cause_for_caused_request() {
     let mut child = request("req-2", RequestLifecycleState::Interrupted);

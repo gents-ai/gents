@@ -378,7 +378,19 @@ async fn agent_apply_in_txn(
                     ceiling.root.as_deref(),
                 )
                 .await?;
-                crate::tool_surface::canonicalize_tools_root(&mut tools, &policy)?;
+                // A cloned source's root is a stored grant the invoker must
+                // already hold; an explicit --root authors a fresh grant and
+                // is strictly admitted.
+                let stored_root = if args.root.is_present() {
+                    None
+                } else {
+                    tools.host.as_ref().and_then(|host| host.root.clone())
+                };
+                crate::tool_surface::canonicalize_tools_root(
+                    &mut tools,
+                    &policy,
+                    stored_root.as_deref(),
+                )?;
                 apply_tool_grant_selection(
                     &mut tools,
                     args.enable_lsp,
