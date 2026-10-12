@@ -12,6 +12,13 @@ source consistency checks, not a separate runtime compatibility version.
   Persona requests are removed; Agent changes use authenticated configuration
   writes. Start with fresh stores and upgrade the desktop and all paired runtimes
   together; existing stores are not converted.
+- A request refused before it is claimed — a skill outside its context
+  allowlist, an invalid admission binding, an unavailable workspace — now
+  projects its failed turn into the session inside the same refusal
+  transaction (#2431). The session observation names the refused request, so
+  the desktop keeps the submitted text, the refusal reason and Retry after it
+  stops tracking the request, and a first message refused at admission mints
+  its session instead of vanishing from the sidebar.
 - Installing or removing a plugin an Agent's Tools document names now
   re-admits an Agent that was demoted for failing to build on the missing
   tool (#2338). The resolved plugin identity (version and digest) joins the

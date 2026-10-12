@@ -968,16 +968,14 @@ impl RequestLifecycle {
     }
 }
 
-/// Materialize the single session through its owner in the claim transaction.
-/// Creation intent is consumed once; request observations come from the exact
-/// authoritative request row after the claim mutation.
-pub(super) async fn apply_request_session_projection(
+/// Resolve the session rows sharing the request's `(node, session)` label.
+/// Requester scope is deliberately absent from the filter: the claim boundary
+/// must see a foreign-owned label to refuse it, and the refusal boundary must
+/// see it to leave it untouched.
+async fn labeled_session_rows_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     request: &AgentRequest,
-    now: &str,
-) -> Result<()> {
-    // The session belongs to one requester; a request under any other scope
-    // is refused rather than attached (Lean `Enrollment.runtimeRequesterScope`).
+) -> Result<Vec<session::SessionOwnerRow>> {
     let response = txn
         .execute(&format!(
             r#"{{ AgentSession(filter: {{ node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
@@ -989,6 +987,20 @@ pub(super) async fn apply_request_session_projection(
     let rows = response["data"]["AgentSession"]
         .as_array()
         .context("AgentSession query omitted rows")?;
+    rows.iter().map(session::decode_session_row).collect()
+}
+
+/// Materialize the single session through its owner in the claim transaction.
+/// Creation intent is consumed once; request observations come from the exact
+/// authoritative request row after the claim mutation.
+pub(super) async fn apply_request_session_projection(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    request: &AgentRequest,
+    now: &str,
+) -> Result<()> {
+    // The session belongs to one requester; a request under any other scope
+    // is refused rather than attached (Lean `Enrollment.runtimeRequesterScope`).
+    let rows = labeled_session_rows_in_txn(txn, request).await?;
     if rows.len() > 1 {
         return Err(ClaimAdmissionError::SessionScopeMismatch {
             session_id: request.session_id.clone(),
@@ -996,7 +1008,7 @@ pub(super) async fn apply_request_session_projection(
         }
         .into());
     }
-    if let Some(existing) = rows.first().map(session::decode_session_row).transpose()? {
+    if let Some(existing) = rows.first() {
         if existing.session.requester_did != request.requester_did {
             return Err(ClaimAdmissionError::SessionScopeMismatch {
                 session_id: request.session_id.clone(),
@@ -1007,7 +1019,7 @@ pub(super) async fn apply_request_session_projection(
         if existing.session.agent_id != request.agent_id {
             return Err(ClaimAdmissionError::SessionAgentMismatch {
                 session_id: request.session_id.clone(),
-                existing_agent_id: existing.session.agent_id,
+                existing_agent_id: existing.session.agent_id.clone(),
                 requested_agent_id: request.agent_id.clone(),
             }
             .into());
@@ -1054,6 +1066,71 @@ pub(super) async fn apply_request_session_projection(
                 && fact.observed.request_id == request.request_id
         })
         .context("claimed request missing from its exact session scope")?;
+    session::advance_session_request_observation_in_txn(txn, incoming, &request.content, now)
+        .await?;
+    Ok(())
+}
+
+/// Project a refused request into its session inside the refusal transaction,
+/// so the failed turn stays reachable from the session after the client stops
+/// tracking it. Guards mirror `AgentSession.advance`: a title-audit request, a
+/// blank scope, an ambiguous label, a foreign requester or agent, or a request
+/// that is not the canonical latest leave the session untouched instead of
+/// failing the refusal; a refusal never reopens a closed session.
+pub(crate) async fn project_refused_request_session_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    request: &AgentRequest,
+    now: &str,
+) -> Result<()> {
+    if request.purpose != gents_protocol::request_admission::RequestPurpose::Normal
+        || request.node_did.trim().is_empty()
+        || request.session_id.trim().is_empty()
+        || request.agent_id.trim().is_empty()
+    {
+        return Ok(());
+    }
+    let rows = labeled_session_rows_in_txn(txn, request).await?;
+    if let Some(existing) = rows.first() {
+        if rows.len() > 1
+            || existing.session.requester_did != request.requester_did
+            || existing.session.agent_id != request.agent_id
+        {
+            return Ok(());
+        }
+    }
+    session::ensure_session_in_txn(
+        txn,
+        &request.session_id,
+        &request.node_did,
+        &request.agent_id,
+        request.requester_did.as_deref(),
+        request.input.initial_title.clone(),
+        request
+            .caused_by_parent_request_doc_id
+            .as_ref()
+            .map(|parent| gents_protocol::session::SessionProvenance {
+                parent_request_doc_id: Some(parent.clone()),
+                ..Default::default()
+            }),
+        now,
+    )
+    .await?;
+    let owner = session::load_agent_session_row_in_txn(
+        txn,
+        &request.node_did,
+        &request.session_id,
+        request.requester_did.as_deref(),
+    )
+    .await?
+    .context("refused session disappeared")?;
+    let facts = session::load_scoped_request_facts_in_txn(txn, &owner.session, false).await?;
+    let incoming = facts
+        .iter()
+        .find(|fact| {
+            fact.observed.request_doc_id == request.doc_id
+                && fact.observed.request_id == request.request_id
+        })
+        .context("refused request missing from its exact session scope")?;
     session::advance_session_request_observation_in_txn(txn, incoming, &request.content, now)
         .await?;
     Ok(())

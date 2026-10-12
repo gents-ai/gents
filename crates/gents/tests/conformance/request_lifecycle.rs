@@ -110,8 +110,8 @@ async fn claim_atomically_projects_the_request_owned_session() {
 }
 
 #[tokio::test]
-async fn admission_rejection_is_terminal_and_does_not_mint_a_session() {
-    let db = test_db("admission-rejection-terminal").await;
+async fn admission_rejection_projects_the_failed_turn_into_its_session() {
+    let db = test_db("admission-rejection-projects-session").await;
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
     let created_at = chrono::Utc::now().to_rfc3339();
@@ -131,9 +131,13 @@ async fn admission_rejection_is_terminal_and_does_not_mint_a_session() {
 
     let request = fetch_request_snapshot(&db.node, &doc_id).await;
     assert_eq!(request.lifecycle_state, RequestLifecycleState::Failed);
-    assert!(fetch_session_snapshot(&db.node, &session_id)
-        .await
-        .is_none());
+    assert_session_observes_request(
+        &db.node,
+        &session_id,
+        &request_id,
+        RequestLifecycleState::Failed,
+    )
+    .await;
     let persisted = db.node.execute(&format!(
         r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ terminal_output failure_reason }} }}"#,
         gents::graphql::escape_graphql_string(&doc_id),

@@ -238,7 +238,9 @@ pub(crate) async fn terminalize_pending_request_rejection(
                     terminal_redrive_attempts: 0,
                     terminal_output: $terminal_output
                 }}
-            ) {{ _docID request_id workspace_id workspace_owner_node_did }}
+            ) {{ _docID request_id purpose node_did requester_did agent_id session_id content
+                 input created_at caused_by_parent_request_doc_id
+                 workspace_id workspace_owner_node_did }}
         }}"#
     );
     let mutation = &mutation;
@@ -268,6 +270,17 @@ pub(crate) async fn terminalize_pending_request_rejection(
                         if let Some(request_id) = row["request_id"].as_str() {
                             crate::trigger_engine::durable::publish_request_outcome(
                                 txn, owner, request_id, "failed", reason, now,
+                            )
+                            .await?;
+                        }
+                        // Malformed ingest rows do not decode; the projection
+                        // then skips them along with every other guard miss.
+                        if let Ok(request) = serde_json::from_value::<AgentRequestRow>(row.clone())
+                            .map_err(anyhow::Error::from)
+                            .and_then(crate::watcher::AgentRequest::try_from)
+                        {
+                            crate::lifecycle::materialize::project_refused_request_session_in_txn(
+                                txn, &request, now,
                             )
                             .await?;
                         }
@@ -1317,6 +1330,128 @@ mod tests {
                 super::verify_fresh_local_self_request(&node, &identity, &request, "agent").await;
             assert_eq!(admitted.is_ok(), allowed, "case {index}: {admitted:?}");
         }
+    }
+
+    #[tokio::test]
+    async fn admission_rejection_projects_the_failed_turn_into_the_request_owned_session_only() {
+        let temp = tempfile::tempdir().unwrap();
+        let identity =
+            KeyIdentity::load_or_create(temp.path().join("projection.key"), None).unwrap();
+        let foreign = KeyIdentity::load_or_create(temp.path().join("foreign.key"), None).unwrap();
+        let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+        ensure_runtime_schemas(&node).await.unwrap();
+        let owner = crate::graphql::escape_graphql_string(identity.did());
+        for mutation in [
+            format!(
+                r#"mutation {{ create_AgentContext(input: {{ context_id: "context", node_did: "{owner}", skill_ids: ["allowed"] }}) {{ _docID }} }}"#
+            ),
+            format!(
+                r#"mutation {{ create_Agent(input: {{ agent_id: "agent", node_did: "{owner}", context_id: "context", inference_profile_id: "inference", enabled: true }}) {{ _docID }} }}"#
+            ),
+        ] {
+            let result = node.execute(&mutation).await;
+            assert!(!result.has_errors(), "{:?}", result.errors);
+        }
+        crate::session::ensure_session_with_agent_id_and_requester_did(
+            &node,
+            "foreign-session",
+            identity.did(),
+            "agent",
+            Some(foreign.did()),
+        )
+        .await
+        .unwrap();
+
+        let refusal_reason =
+            "request admission denied: request activates a skill outside its context allowlist";
+        for (request_id, session_id) in [
+            ("refused-skill", "session"),
+            ("foreign-scope", "foreign-session"),
+        ] {
+            let mut create = AgentRequestCreate::base(
+                gents_protocol::request_admission::RequestPurpose::Normal,
+                request_id,
+                identity.did(),
+                identity.did(),
+                "agent",
+                session_id,
+                "run the disallowed skill",
+                "interactive",
+                "2026-09-01T00:00:00Z",
+                AgentRequestAdmissionRecord::local_self(identity.did()),
+            );
+            create.input =
+                serde_json::from_value(serde_json::json!({"selected_skill_ids": ["unconfigured"]}))
+                    .unwrap();
+            crate::sign_agent_request_create(&identity, &mut create)
+                .await
+                .unwrap();
+            let result = node.execute(&create.graphql_mutation().unwrap()).await;
+            assert!(!result.has_errors(), "{:?}", result.errors);
+            let doc_id = crate::graphql::single_mutation_document(&result, "create_AgentRequest")
+                .unwrap()
+                .unwrap()["_docID"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+
+            let request = super::load_request_for_admission_test(&node, &doc_id)
+                .await
+                .unwrap();
+            assert!(
+                super::verify_fresh_local_self_request(&node, &identity, &request, "agent")
+                    .await
+                    .is_err(),
+                "{request_id} must be denied by the context allowlist"
+            );
+
+            super::terminalize_pending_request_rejection(
+                &node,
+                &doc_id,
+                identity.did(),
+                refusal_reason,
+                "test.admission_rejection_projection",
+            )
+            .await
+            .unwrap();
+
+            let selected = node
+                .execute(&format!(
+                    r#"{{ AgentSession(filter: {{ node_did: {{ _eq: "{owner}" }}, session_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
+                    crate::graphql::escape_graphql_string(session_id),
+                    crate::session::AGENT_SESSION_FIELDS,
+                ))
+                .await;
+            assert!(!selected.has_errors(), "{:?}", selected.errors);
+            let rows = selected.data.as_ref().unwrap()["AgentSession"]
+                .as_array()
+                .cloned()
+                .unwrap();
+            assert_eq!(rows.len(), 1, "{request_id} must not add session rows");
+            let session = crate::session::decode_session_row(&rows[0])
+                .unwrap()
+                .session;
+            if session_id == "session" {
+                assert_eq!(session.requester_did.as_deref(), Some(identity.did()));
+                let latest = session
+                    .observation
+                    .expect("refused request advances the session observation")
+                    .latest_request
+                    .expect("observation names the refused request");
+                assert_eq!(latest.request_id, request_id);
+                assert_eq!(
+                    latest.lifecycle_state,
+                    gents_protocol::request_lifecycle::RequestLifecycleState::Failed
+                );
+            } else {
+                assert!(
+                    session.observation.is_none(),
+                    "a refusal must not touch a session owned by another requester"
+                );
+                assert_eq!(session.requester_did.as_deref(), Some(foreign.did()));
+            }
+        }
+        node.shutdown().await;
     }
 
     #[tokio::test]
