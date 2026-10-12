@@ -2,8 +2,8 @@ use anyhow::{bail, Context, Result};
 use gents_desktop_core::{
     client::DesktopPaths,
     home_reset::{
-        lock_desktop_process, lock_reset, plan_full_reset, resolve_user_home, HomeResetDisposition,
-        ManagedServerResetResult,
+        lock_client_state, lock_desktop_process, lock_reset, plan_full_reset, resolve_user_home,
+        HomeResetDisposition, ManagedServerResetResult,
     },
 };
 
@@ -127,20 +127,7 @@ async fn reset(
     } else {
         None
     };
-    let _client_lock = if desktop.root().exists() {
-        let file = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(desktop.peer_directory_path().with_extension("lock"))?;
-        Some(
-            gents::file_lock::FileLock::try_exclusive(file)
-                .context("Quit Gents before resetting its desktop state")?,
-        )
-    } else {
-        None
-    };
+    let _client_lock = lock_client_state(&desktop)?;
     let settled = plan_full_reset(Some(&home), &desktop, &user_home, &definition)?;
     settled.check_confirmation(&confirmation, disposition)?;
     clear_browser_data(desktop_executable.as_deref())?;

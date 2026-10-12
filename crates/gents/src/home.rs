@@ -151,21 +151,34 @@ pub fn lock_store(home_dir: &Path, data_dir: &Path) -> Result<StoreLock> {
 }
 
 /// Takes the store lock of a home's default data directory whether or not
-/// that directory exists yet, without creating it. With the directory
-/// present this is [`lock_store`]; without it, the lock sits where
-/// [`lock_store`] will look once the directory is created under the
-/// canonical home, so a runtime or `init` that creates the store afterwards
-/// is excluded by the same lock.
+/// that directory exists yet, without creating it (see [`lock_store_at`]).
 pub fn lock_home_store(home_dir: &Path) -> Result<StoreLock> {
-    let data_dir = default_data_dir(home_dir);
-    match fs::symlink_metadata(&data_dir) {
-        Ok(_) => lock_store(home_dir, &data_dir),
+    lock_store_at(home_dir, &default_data_dir(home_dir))
+}
+
+/// Takes `data_dir`'s store lock whether or not that directory exists yet,
+/// without creating it. With the directory present this is [`lock_store`];
+/// without it, the lock sits where [`lock_store`] will look once the
+/// directory is created under its canonical parent, so a holder that creates
+/// the store afterwards is excluded by the same lock.
+pub fn lock_store_at(home_dir: &Path, data_dir: &Path) -> Result<StoreLock> {
+    match fs::symlink_metadata(data_dir) {
+        Ok(_) => lock_store(home_dir, data_dir),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let (Some(parent), Some(name)) = (data_dir.parent(), data_dir.file_name()) else {
+                anyhow::bail!(
+                    "data directory {} cannot be the filesystem root",
+                    data_dir.display()
+                );
+            };
             // The lock file is deliberately not a runtime home entry: a
             // reset leaves it in place while held.
-            let lock_dir = fs::canonicalize(home_dir)
-                .with_context(|| format!("resolving home {}", home_dir.display()))?;
-            lock_path(home_dir, lock_dir.join(format!("{DATA_DIR_NAME}.lock")))
+            let lock_dir = fs::canonicalize(parent)
+                .with_context(|| format!("resolving {}", parent.display()))?;
+            lock_path(
+                home_dir,
+                lock_dir.join(format!("{}.lock", name.to_string_lossy())),
+            )
         }
         Err(error) => {
             Err(error).with_context(|| format!("inspecting data directory {}", data_dir.display()))

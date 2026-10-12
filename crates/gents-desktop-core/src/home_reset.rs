@@ -1115,6 +1115,29 @@ pub fn lock_reset(
     lock_file(paths, ".reset.lock", false)
 }
 
+/// The locks desktop bootstrap takes on the client's state: the client
+/// store's lock, taken before the store opens, then the peer directory's
+/// writer lease. A desktop without the process lock is excluded by these.
+pub fn lock_client_state(
+    paths: &crate::client::DesktopPaths,
+) -> anyhow::Result<(gents::home::StoreLock, gents::file_lock::FileLock)> {
+    use anyhow::Context;
+    let store = gents::home::lock_store_at(paths.root(), paths.node_data_dir())
+        .context("Quit Gents before resetting its desktop state")?;
+    let peers = paths.peer_directory_path().with_extension("lock");
+    reject_symlink_if_present(&peers, "peer directory lock")?;
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&peers)
+        .with_context(|| format!("opening {}", peers.display()))?;
+    let peers = gents::file_lock::FileLock::try_exclusive(file)
+        .context("Quit Gents before resetting its desktop state")?;
+    Ok((store, peers))
+}
+
 fn lock_file(
     paths: &crate::client::DesktopPaths,
     name: &str,
@@ -1501,6 +1524,28 @@ mod tests {
             .planned_paths
             .iter()
             .all(|path| !Path::new(path).starts_with(&home)));
+    }
+
+    #[test]
+    fn client_state_lock_excludes_a_bootstrapping_desktop() {
+        let temp = tempfile::tempdir().unwrap();
+        let desktop = DesktopPaths::from_root(temp.path().join("desktop"));
+        std::fs::create_dir_all(desktop.node_data_dir()).unwrap();
+        // Bootstrap takes the store lock before the peer directory lease.
+        let store = gents::home::lock_store(desktop.root(), desktop.node_data_dir()).unwrap();
+        assert!(lock_client_state(&desktop).is_err());
+        drop(store);
+        let held = lock_client_state(&desktop).unwrap();
+        assert!(gents::home::lock_store(desktop.root(), desktop.node_data_dir()).is_err());
+        drop(held);
+
+        let fresh = DesktopPaths::from_root(temp.path().join("fresh"));
+        std::fs::create_dir_all(fresh.root()).unwrap();
+        let held = lock_client_state(&fresh).unwrap();
+        assert!(!fresh.node_data_dir().exists());
+        std::fs::create_dir_all(fresh.node_data_dir()).unwrap();
+        assert!(gents::home::lock_store(fresh.root(), fresh.node_data_dir()).is_err());
+        drop(held);
     }
 
     #[test]
