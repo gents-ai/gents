@@ -24,6 +24,12 @@ pub const TEST_RUNTIME_READY_TIMEOUT: Duration = Duration::from_secs(120);
 // comfortably above the 5-second control-settle windows exercised by the
 // runtime while preserving a hard failure for a genuinely stuck agent.
 const TEST_RUNTIME_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
+// Reaching a terminal lifecycle state is scheduler-bound on a host running the
+// full parallel suite: claim lag, the request's own deadline window, and the
+// terminal publication are each DB round trips a loaded host can lag by tens
+// of seconds. Callers wait for their request's own timing envelope plus this
+// margin, not a fixed short bound that only covers an unloaded run.
+pub const REQUEST_TERMINAL_PUBLICATION_MARGIN: Duration = Duration::from_secs(60);
 
 pub struct BootedAgent {
     shutdown_tx: tokio::sync::watch::Sender<bool>,
@@ -358,6 +364,34 @@ pub async fn wait_for_request_lifecycle_state(
         assert!(
             tokio::time::Instant::now() < deadline,
             "timed out waiting for AgentRequest {request_doc_id} lifecycle_state={expected}; last={}; failure_reason={:?}",
+            snapshot.lifecycle_state,
+            snapshot.failure_reason
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// Wait for any terminal lifecycle state and report which one it reached.
+///
+/// `budget` must cover the request's own timing envelope plus
+/// [`REQUEST_TERMINAL_PUBLICATION_MARGIN`]; terminal publication is
+/// scheduler-bound on a loaded host, so a short fixed bound flakes under the
+/// full parallel suite. Terminal states absorb, so the predicate cannot fire
+/// early and cannot miss a later terminal publication.
+pub async fn wait_for_request_terminal_state(
+    node: &EmbeddedNode,
+    request_doc_id: &str,
+    budget: Duration,
+) -> RequestLifecycleState {
+    let deadline = tokio::time::Instant::now() + budget;
+    loop {
+        let snapshot = fetch_request_snapshot(node, request_doc_id).await;
+        if snapshot.lifecycle_state.is_terminal() {
+            return snapshot.lifecycle_state;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for AgentRequest {request_doc_id} terminal state; last={}; failure_reason={:?}",
             snapshot.lifecycle_state,
             snapshot.failure_reason
         );
