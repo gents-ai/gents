@@ -6,15 +6,16 @@ use crate::session::canonical_rows::{OutputSegmentRow, TranscriptMessageRow};
 use anyhow::anyhow;
 use gents_protocol::output::origin::{lookup_message, resolve_origin, ObservedMessage};
 use gents_protocol::output::reconstruction::{
-    reconstruct_message, DependencyDenial, ObservedSegment,
+    reconstruct_message, reconstruct_stream, DependencyDenial, ObservedSegment,
 };
 use gents_protocol::output::{
-    MessageBlock, MessagePublication, OutputSource, OutputWriter, ReconstructionError, SourceClose,
+    MessageBlock, MessagePublication, OutputSource, OutputWriter, PayloadRef, ReconstructionError,
+    SourceClose,
 };
 use gents_protocol::session_hydration::SessionHydrationCollection;
 use std::collections::{BTreeMap, BTreeSet};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScopedDocument {
     pub collection: SessionHydrationCollection,
     pub doc_id: String,
@@ -35,11 +36,27 @@ impl ScopedDocument {
     }
 }
 
+/// An observed AgentToolCall carrying plugin-effect provenance. Whether it is
+/// a child is decided only by `PluginEffectBinding::decode`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolEffectRow {
+    pub document: ScopedDocument,
+    pub plugin_parent_tool_call_doc_id: Option<String>,
+    pub plugin_effect_ordinal: Option<u32>,
+    pub spawned: bool,
+    pub tool_call_id: String,
+    pub request_doc_id: String,
+    pub terminal_output: Option<PayloadRef>,
+}
+
 pub struct CanonicalClosureInput<'a> {
     pub root_header_ids: &'a [String],
     pub headers: &'a [TranscriptMessageRow],
     pub segments: &'a [OutputSegmentRow],
     pub base_documents: &'a [ScopedDocument],
+    /// Lean `bases`: owner-authorized session rows retained unconditionally.
+    pub retained_bases: &'a [ScopedDocument],
+    pub tool_effects: &'a [ToolEffectRow],
     pub denied_headers: &'a [String],
     pub denied_segments: &'a [String],
     pub dependency_denials: &'a [DependencyDenial],
@@ -120,7 +137,12 @@ pub fn build_canonical_closure(
         .iter()
         .map(|row| ((row.collection, row.doc_id.as_str()), row))
         .collect::<BTreeMap<_, _>>();
-    let mut selected = BTreeSet::new();
+    let mut selected = input
+        .retained_bases
+        .iter()
+        .cloned()
+        .map(ScopedDocument::into_hydration)
+        .collect::<BTreeSet<_>>();
     for root_id in input.root_header_ids {
         let root = lookup_message(
             &headers,
@@ -160,7 +182,122 @@ pub fn build_canonical_closure(
         )?;
         collect_message_dependencies(origin, &segments, &bases, &mut selected)?;
     }
+    collect_effect_children(&input, &segments, &bases, &mut selected)?;
     Ok(selected)
+}
+
+/// CanonicalOutput/Hydration.lean `effectClosure`.
+fn collect_effect_children(
+    input: &CanonicalClosureInput<'_>,
+    segments: &[ObservedSegment<'_>],
+    bases: &BTreeMap<(SessionHydrationCollection, &str), &ScopedDocument>,
+    selected: &mut BTreeSet<HydrationDocument>,
+) -> ClosureResult<()> {
+    let decoded = input
+        .tool_effects
+        .iter()
+        .filter_map(|row| {
+            crate::tool_call_lifecycle::PluginEffectBinding::decode(
+                row.plugin_parent_tool_call_doc_id.as_deref(),
+                row.plugin_effect_ordinal,
+                row.spawned,
+                &row.tool_call_id,
+            )
+            .ok()
+            .flatten()
+            .map(|binding| (binding, row))
+        })
+        .collect::<Vec<_>>();
+    let effects = decoded
+        .iter()
+        .map(|(_, row)| row.document.doc_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let parents = selected
+        .iter()
+        .filter(|document| document.collection == SessionHydrationCollection::AgentToolCall)
+        .map(|document| document.doc_id.clone())
+        .collect::<BTreeSet<_>>();
+    let children = decoded
+        .iter()
+        .filter(|(binding, _)| {
+            !effects.contains(binding.parent_tool_call_doc_id.as_str())
+                && parents.contains(&binding.parent_tool_call_doc_id)
+        })
+        .collect::<Vec<_>>();
+    let mut slots = BTreeMap::new();
+    let mut identities = BTreeMap::new();
+    for (binding, row) in &children {
+        let slot = (binding.parent_tool_call_doc_id.as_str(), binding.ordinal);
+        if slots.insert(slot, *row).is_some_and(|other| other != *row)
+            || identities
+                .insert(row.document.doc_id.as_str(), *row)
+                .is_some_and(|other| other != *row)
+        {
+            return Err(CanonicalClosureError::StructuralConflict(anyhow!(
+                "plugin effect {} shares a physical identity or slot",
+                row.document.doc_id
+            )));
+        }
+    }
+    for (_, row) in children {
+        let child = row.document.doc_id.as_str();
+        selected.insert(row.document.clone().into_hydration());
+        let source = OutputSource::ToolEffectArguments {
+            tool_call_doc_id: child.to_owned(),
+        };
+        let arguments = segments
+            .iter()
+            .filter(|segment| segment.segment.source == source && segment.segment.close.is_some())
+            .collect::<Vec<_>>();
+        let arguments = match arguments.as_slice() {
+            [closing] => PayloadRef {
+                close_doc_id: closing.doc_id.to_owned(),
+                stream: 0,
+            },
+            [] => {
+                return Err(CanonicalClosureError::MissingObservation(anyhow!(
+                    "plugin effect {child} arguments are unavailable"
+                )))
+            }
+            _ => {
+                return Err(CanonicalClosureError::StructuralConflict(anyhow!(
+                    "plugin effect {child} has conflicting argument closures"
+                )))
+            }
+        };
+        let mut references = vec![arguments];
+        if let Some(terminal) = row.terminal_output.clone() {
+            let closing = segments
+                .iter()
+                .find(|segment| segment.doc_id == terminal.close_doc_id)
+                .ok_or_else(|| {
+                    CanonicalClosureError::MissingObservation(anyhow!(
+                        "plugin effect {child} terminal output is unavailable"
+                    ))
+                })?;
+            if closing.segment.source
+                != (OutputSource::ToolCall {
+                    tool_call_doc_id: child.to_owned(),
+                })
+            {
+                return Err(CanonicalClosureError::Unclassified(anyhow!(
+                    "plugin effect {child} terminal names a foreign source"
+                )));
+            }
+            references.push(terminal);
+        }
+        for reference in references {
+            reconstruct_stream(
+                segments,
+                input.denied_segments,
+                input.dependency_denials,
+                &reference,
+            )
+            .map_err(reconstruction_failure)?;
+            retain_reference_extent(&reference, segments, bases, selected)?;
+        }
+    }
+    Ok(())
 }
 
 fn collect_origin_chain(
@@ -236,45 +373,7 @@ fn collect_message_dependencies(
         }
     }
     for reference in message.message.payload_references() {
-        let closing = segments
-            .iter()
-            .copied()
-            .find(|row| row.doc_id == reference.close_doc_id)
-            .ok_or_else(|| {
-                CanonicalClosureError::MissingObservation(anyhow!(
-                    "validated closing segment disappeared"
-                ))
-            })?;
-        let SourceClose::Closed {
-            segments: extent, ..
-        } = closing.segment.close.as_ref().ok_or_else(|| {
-            CanonicalClosureError::Unclassified(anyhow!("validated closing segment is not closed"))
-        })?
-        else {
-            return Err(CanonicalClosureError::Unclassified(anyhow!(
-                "validated reference names a retraction"
-            )));
-        };
-        retain_base(
-            SessionHydrationCollection::AgentRequest,
-            &closing.segment.request_doc_id,
-            bases,
-            selected,
-        )?;
-        for row in segments.iter().copied().filter(|row| {
-            row.segment.request_doc_id == closing.segment.request_doc_id
-                && row.segment.source == closing.segment.source
-                && (row.doc_id == closing.doc_id
-                    || row.segment.ordinal.is_some_and(|ordinal| ordinal < *extent))
-        }) {
-            selected.insert(HydrationDocument {
-                collection: SessionHydrationCollection::AgentOutputSegment,
-                doc_id: row.doc_id.to_owned(),
-                requester_did: row.segment.requester_did.clone().unwrap_or_default(),
-                node_did: row.segment.node_did.clone(),
-                session_id: row.segment.session_id.clone(),
-            });
-        }
+        let closing = retain_reference_extent(&reference, segments, bases, selected)?;
         // CanonicalOutput/Hydration.lean `requiredProvenance`: a ToolCall
         // source names its exact AgentToolCall base regardless of writer, and
         // authored delivery derives its tool owner from a ToolExecution
@@ -298,6 +397,56 @@ fn collect_message_dependencies(
         }
     }
     Ok(())
+}
+
+/// Lean `referenceDocuments`: the request owner, closing record and exact
+/// extent of an already reconstructed reference.
+fn retain_reference_extent<'a>(
+    reference: &PayloadRef,
+    segments: &[ObservedSegment<'a>],
+    bases: &BTreeMap<(SessionHydrationCollection, &str), &ScopedDocument>,
+    selected: &mut BTreeSet<HydrationDocument>,
+) -> ClosureResult<ObservedSegment<'a>> {
+    let closing = segments
+        .iter()
+        .copied()
+        .find(|row| row.doc_id == reference.close_doc_id)
+        .ok_or_else(|| {
+            CanonicalClosureError::MissingObservation(anyhow!(
+                "validated closing segment disappeared"
+            ))
+        })?;
+    let SourceClose::Closed {
+        segments: extent, ..
+    } = closing.segment.close.as_ref().ok_or_else(|| {
+        CanonicalClosureError::Unclassified(anyhow!("validated closing segment is not closed"))
+    })?
+    else {
+        return Err(CanonicalClosureError::Unclassified(anyhow!(
+            "validated reference names a retraction"
+        )));
+    };
+    retain_base(
+        SessionHydrationCollection::AgentRequest,
+        &closing.segment.request_doc_id,
+        bases,
+        selected,
+    )?;
+    for row in segments.iter().copied().filter(|row| {
+        row.segment.request_doc_id == closing.segment.request_doc_id
+            && row.segment.source == closing.segment.source
+            && (row.doc_id == closing.doc_id
+                || row.segment.ordinal.is_some_and(|ordinal| ordinal < *extent))
+    }) {
+        selected.insert(HydrationDocument {
+            collection: SessionHydrationCollection::AgentOutputSegment,
+            doc_id: row.doc_id.to_owned(),
+            requester_did: row.segment.requester_did.clone().unwrap_or_default(),
+            node_did: row.segment.node_did.clone(),
+            session_id: row.segment.session_id.clone(),
+        });
+    }
+    Ok(closing)
 }
 
 fn retain_base(
@@ -398,41 +547,92 @@ mod tests {
                         node_did: agent.into(),
                         requester_did: Some(requester.into()),
                         request_doc_id: modeled.request.map(|id| id.to_string()),
-                        publication: modeled.origin.map_or(
-                            MessagePublication::RequestExecution {
-                                execution_generation: "7".into(),
+                        publication: match (modeled.tool_delivery, modeled.origin) {
+                            (Some(call), _) => MessagePublication::ToolDelivery {
+                                tool_call_doc_id: call.to_string(),
                             },
-                            |origin| MessagePublication::Fork {
+                            (None, Some(origin)) => MessagePublication::Fork {
                                 origin_message_doc_id: origin.to_string(),
                             },
-                        ),
+                            (None, None) => MessagePublication::RequestExecution {
+                                execution_generation: "7".into(),
+                            },
+                        },
                         outcome: OutputOutcome::Complete,
                         sequence: 0,
-                        role: MessageRole::Assistant,
-                        native_id: Some("native".into()),
-                        blocks: modeled
-                            .refs
-                            .iter()
-                            .map(|reference| MessageBlock::Text {
-                                text: PresentedPayload {
-                                    output: PayloadRef {
-                                        close_doc_id: reference.close_id.to_string(),
-                                        stream: reference.stream.try_into().unwrap(),
-                                    },
-                                    presentation: PayloadPresentation::Full,
+                        role: if modeled.tool_delivery.is_some() {
+                            MessageRole::User
+                        } else {
+                            MessageRole::Assistant
+                        },
+                        native_id: modeled.tool_delivery.is_none().then(|| "native".into()),
+                        blocks: {
+                            let payloads = modeled.refs.iter().map(|reference| PresentedPayload {
+                                output: PayloadRef {
+                                    close_doc_id: reference.close_id.to_string(),
+                                    stream: reference.stream.try_into().unwrap(),
                                 },
-                            })
-                            .collect(),
+                                presentation: PayloadPresentation::Full,
+                            });
+                            match modeled.tool_delivery {
+                                Some(call) => vec![MessageBlock::ToolResult {
+                                    tool_call_doc_id: call.to_string(),
+                                    id: format!("modeled-tool-{call}"),
+                                    call_id: None,
+                                    parts: payloads
+                                        .map(|text| ToolResultPart::Text { text })
+                                        .collect(),
+                                }],
+                                None => payloads.map(|text| MessageBlock::Text { text }).collect(),
+                            }
+                        },
                         created_at: "2026-09-21T00:00:00Z".into(),
                     },
                 })
                 .collect::<Vec<_>>();
+            let owner = |modeled: &crate::lean_vocab_test::LeanSessionHydrationOwner| {
+                modeled.owner.unwrap().to_string()
+            };
             let segments = input
                 .segments
                 .iter()
                 .map(|modeled| {
-                    assert_eq!(modeled.source.kind, "provider");
-                    assert_eq!(modeled.writer.kind, "request");
+                    let source = match modeled.source.kind.as_str() {
+                        "provider" => OutputSource::ProviderTurn {
+                            scope: CaptureScope {
+                                kind: CaptureScopeKind::Inference,
+                                seq: modeled.source.scope.unwrap(),
+                            },
+                            turn_index: modeled.source.turn.unwrap().try_into().unwrap(),
+                            attempt: modeled.source.attempt.unwrap().try_into().unwrap(),
+                        },
+                        "tool" => OutputSource::ToolCall {
+                            tool_call_doc_id: owner(&modeled.source),
+                        },
+                        "tool_effect_arguments" => OutputSource::ToolEffectArguments {
+                            tool_call_doc_id: owner(&modeled.source),
+                        },
+                        other => panic!("unmodeled hydration source {other}"),
+                    };
+                    let writer = match modeled.writer.kind.as_str() {
+                        "request" => OutputWriter::RequestExecution {
+                            execution_generation: owner(&modeled.writer),
+                        },
+                        "tool" => OutputWriter::ToolExecution {
+                            tool_call_doc_id: owner(&modeled.writer),
+                        },
+                        other => panic!("unmodeled hydration writer {other}"),
+                    };
+                    let payload = match (modeled.kind.as_str(), &modeled.tool) {
+                        ("text", None) => StreamPayload::Text,
+                        ("tool_output", None) => StreamPayload::ToolOutput,
+                        ("arguments", Some(tool)) => StreamPayload::ToolArguments {
+                            id: tool.id.clone(),
+                            call_id: None,
+                            name: tool.name.clone(),
+                        },
+                        other => panic!("unmodeled hydration payload {other:?}"),
+                    };
                     OutputSegmentRow {
                         doc_id: modeled.id.to_string(),
                         segment: OutputSegment {
@@ -450,17 +650,8 @@ mod tests {
                                 .map(|message| session_for(message.session))
                                 .unwrap_or_else(|| target_session.to_string()),
                             request_doc_id: modeled.request.to_string(),
-                            source: OutputSource::ProviderTurn {
-                                scope: CaptureScope {
-                                    kind: CaptureScopeKind::Inference,
-                                    seq: modeled.source.scope.unwrap(),
-                                },
-                                turn_index: modeled.source.turn.unwrap().try_into().unwrap(),
-                                attempt: modeled.source.attempt.unwrap().try_into().unwrap(),
-                            },
-                            writer: OutputWriter::RequestExecution {
-                                execution_generation: modeled.writer.owner.unwrap().to_string(),
-                            },
+                            source,
+                            writer,
                             ordinal: Some(0),
                             runs: vec![SegmentRun {
                                 stream: 0,
@@ -468,7 +659,7 @@ mod tests {
                                 declaration: Some(StreamDeclaration {
                                     block_index: 0,
                                     part_index: 0,
-                                    payload: StreamPayload::Text,
+                                    payload,
                                 }),
                             }],
                             payload: String::from_utf8(modeled.payload.clone()).unwrap(),
@@ -482,6 +673,39 @@ mod tests {
                     }
                 })
                 .collect::<Vec<_>>();
+            let tool_effects = input
+                .observed_effects
+                .iter()
+                .map(|effect| ToolEffectRow {
+                    document: ScopedDocument {
+                        collection: SessionHydrationCollection::AgentToolCall,
+                        doc_id: effect.id.to_string(),
+                        requester_did: requester.into(),
+                        node_did: agent.into(),
+                        session_id: target_session.into(),
+                    },
+                    plugin_parent_tool_call_doc_id: effect.parent.map(|id| id.to_string()),
+                    plugin_effect_ordinal: effect.ordinal,
+                    spawned: effect.spawned,
+                    tool_call_id: effect.tool_call_id.clone(),
+                    request_doc_id: String::new(),
+                    terminal_output: effect.terminal.as_ref().map(|reference| PayloadRef {
+                        close_doc_id: reference.close_id.to_string(),
+                        stream: reference.stream.try_into().unwrap(),
+                    }),
+                })
+                .collect::<Vec<_>>();
+            let retained_bases = input
+                .bases
+                .iter()
+                .map(|key| ScopedDocument {
+                    collection: modeled_collection(&key.collection),
+                    doc_id: key.id.to_string(),
+                    requester_did: requester.into(),
+                    node_did: agent.into(),
+                    session_id: target_session.into(),
+                })
+                .collect::<Vec<_>>();
             let bases = input
                 .access
                 .iter()
@@ -493,6 +717,11 @@ mod tests {
                         && access.native_session == request.native_session
                 })
                 .filter(|access| access.state == "authorized")
+                .filter(|access| {
+                    !input.observed_effects.iter().any(|effect| {
+                        access.key.collection == "AgentToolCall" && effect.id == access.key.id
+                    })
+                })
                 .filter(|access| {
                     matches!(
                         access.key.collection.as_str(),
@@ -548,6 +777,8 @@ mod tests {
                 headers: &headers,
                 segments: &segments,
                 base_documents: &bases,
+                retained_bases: &retained_bases,
+                tool_effects: &tool_effects,
                 denied_headers: &denied_headers,
                 denied_segments: &denied_segments,
                 dependency_denials: &[],
@@ -793,6 +1024,8 @@ mod tests {
             headers: &headers,
             segments: &[],
             base_documents: &bases,
+            retained_bases: &[],
+            tool_effects: &[],
             denied_headers: &[],
             denied_segments: &[],
             dependency_denials: &[],
@@ -825,6 +1058,8 @@ mod tests {
             headers: &[child],
             segments: &[],
             base_documents: &[],
+            retained_bases: &[],
+            tool_effects: &[],
             denied_headers: &[],
             denied_segments: &[],
             dependency_denials: &[],
@@ -857,6 +1092,8 @@ mod tests {
             headers: &[child],
             segments: &[],
             base_documents: &[],
+            retained_bases: &[],
+            tool_effects: &[],
             denied_headers: &denied,
             denied_segments: &[],
             dependency_denials: &[],
@@ -987,6 +1224,8 @@ mod tests {
             headers: &headers,
             segments: &segments,
             base_documents: &bases,
+            retained_bases: &[],
+            tool_effects: &[],
             denied_headers: &[],
             denied_segments: &[],
             dependency_denials: &[],
@@ -1029,6 +1268,8 @@ mod tests {
             headers: &headers,
             segments: &segments,
             base_documents: &bases,
+            retained_bases: &[],
+            tool_effects: &[],
             denied_headers: &[],
             denied_segments: &[],
             dependency_denials: &[],
@@ -1067,6 +1308,8 @@ mod tests {
             headers: &headers,
             segments: &segments,
             base_documents: &bases,
+            retained_bases: &[],
+            tool_effects: &[],
             denied_headers: &[],
             denied_segments: &[],
             dependency_denials: &[],
@@ -1100,6 +1343,8 @@ mod tests {
             headers: &[first, twin],
             segments: &[],
             base_documents: &[base_request()],
+            retained_bases: &[],
+            tool_effects: &[],
             denied_headers: &[],
             denied_segments: &[],
             dependency_denials: &[],

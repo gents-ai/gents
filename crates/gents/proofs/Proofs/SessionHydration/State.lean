@@ -71,6 +71,7 @@ structure ClosureInput where
   deniedHeaders : List CanonicalOutput.DocId
   deniedSegments : List CanonicalOutput.DocId
   dependencyDenials : List CanonicalOutput.DependencyDenial := []
+  effects : List CanonicalOutput.Hydration.EffectRow := []
   deriving DecidableEq
 
 structure Catalog where
@@ -155,7 +156,7 @@ def buildDocuments (input : ClosureInput) :
   let manifest ← CanonicalOutput.Hydration.buildManifest input.request.authorizationScope
     input.request.nativeSession
     input.bases input.roots input.requirements input.messages input.segments input.access
-    input.deniedHeaders input.deniedSegments input.dependencyDenials
+    input.deniedHeaders input.deniedSegments input.dependencyDenials input.effects
   pure (manifest.map canonicalDocument).toFinset
 
 /-- `none` means absent/ambiguous input or failed canonical authorization. A

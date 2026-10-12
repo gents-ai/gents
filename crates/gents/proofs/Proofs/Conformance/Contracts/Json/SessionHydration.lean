@@ -84,6 +84,9 @@ def hydrationMessageJson (message : CanonicalOutput.MessageEnvelope) : String :=
     "\"session\":" ++ toString message.header.session ++ "," ++
     "\"request\":" ++ optionalNatJson message.header.request ++ "," ++
     "\"origin\":" ++ optionalNatJson message.header.origin ++ "," ++
+    "\"tool_delivery\":" ++ optionalNatJson (match message.header.publication with
+      | .toolDelivery call => some call
+      | _ => none) ++ "," ++
     "\"refs\":" ++ jsonArray (message.header.refs.map payloadRefJson) ++ "}"
 
 def sourceJson : CanonicalOutput.Source → String
@@ -108,8 +111,24 @@ def writerJson : CanonicalOutput.Writer → String
 
 def byteListJson (bytes : List UInt8) : String := jsonArray (bytes.map (toString ·.toNat))
 
+def payloadKindJson : CanonicalOutput.PayloadKind → String
+  | .text => "text" | .reasoning => "reasoning" | .signature => "signature"
+  | .summary => "summary" | .encrypted => "encrypted" | .redacted => "redacted"
+  | .arguments => "arguments" | .toolOutput => "tool_output" | .media => "media"
+
+def segmentDeclaration (segment : CanonicalOutput.Segment) :
+    Option CanonicalOutput.Declaration :=
+  (segment.flush.bind fun flush => flush.runs.head?).bind (·.declaration)
+
+def toolIdentityJson : Option CanonicalOutput.ToolIdentity → String
+  | none => "null"
+  | some tool => "{\"id\":" ++ jsonString tool.id ++ ",\"name\":" ++ jsonString tool.name ++ "}"
+
 def hydrationSegmentJson (segment : CanonicalOutput.Segment) : String :=
   "{" ++ "\"id\":" ++ toString segment.id ++ "," ++
+    "\"kind\":" ++ jsonString ((segmentDeclaration segment).map (payloadKindJson ·.kind)
+      |>.getD "text") ++ "," ++
+    "\"tool\":" ++ toolIdentityJson ((segmentDeclaration segment).bind (·.tool)) ++ "," ++
     "\"request\":" ++ toString segment.coordinate.request ++ "," ++
     "\"source\":" ++ sourceJson segment.coordinate.source ++ "," ++
     "\"writer\":" ++ writerJson segment.writer ++ "," ++
@@ -135,6 +154,18 @@ def hydrationRequestJson (request : SessionHydration.Request) : String :=
     "\"session\":" ++ jsonString request.session ++ "," ++
     "\"native_session\":" ++ toString request.nativeSession ++ "}"
 
+def optionalPayloadRefJson : Option CanonicalOutput.PayloadRef → String
+  | none => "null"
+  | some reference => payloadRefJson reference
+
+def hydrationEffectJson (row : CanonicalOutput.Hydration.EffectRow) : String :=
+  "{" ++ "\"id\":" ++ toString row.id ++ "," ++
+    "\"parent\":" ++ optionalNatJson row.parent ++ "," ++
+    "\"ordinal\":" ++ optionalNatJson row.ordinal ++ "," ++
+    "\"spawned\":" ++ boolString row.spawned ++ "," ++
+    "\"tool_call_id\":" ++ jsonString row.toolCallId ++ "," ++
+    "\"terminal\":" ++ optionalPayloadRefJson row.terminal ++ "}"
+
 def hydrationClosureInputJson (input : SessionHydration.ClosureInput) : String :=
   "{" ++
     "\"request\":" ++ hydrationRequestJson input.request ++ "," ++
@@ -143,7 +174,10 @@ def hydrationClosureInputJson (input : SessionHydration.ClosureInput) : String :
     "\"segments\":" ++ jsonArray (input.segments.map hydrationSegmentJson) ++ "," ++
     "\"access\":" ++ jsonArray (input.access.map hydrationAccessJson) ++ "," ++
     "\"denied_headers\":" ++ jsonArray (input.deniedHeaders.map toString) ++ "," ++
-    "\"denied_segments\":" ++ jsonArray (input.deniedSegments.map toString) ++ "}"
+    "\"denied_segments\":" ++ jsonArray (input.deniedSegments.map toString) ++ "," ++
+    "\"bases\":" ++ jsonArray (input.bases.map (hydrationDocumentKeyJson ·.key)) ++ "," ++
+    "\"observed_effects\":" ++ jsonArray ((CanonicalOutput.Hydration.observedEffects
+      input.request.authorizationScope input.access input.effects).map hydrationEffectJson) ++ "}"
 
 def selectedDocumentsJson (cat : SessionHydration.Catalog) (request : SessionHydration.Request) : String :=
   match SessionHydration.closureInputFor cat.closureInputs request with
@@ -152,14 +186,15 @@ def selectedDocumentsJson (cat : SessionHydration.Catalog) (request : SessionHyd
       match CanonicalOutput.Hydration.buildManifest input.request.authorizationScope
           input.request.nativeSession input.bases input.roots input.requirements input.messages
           input.segments input.access input.deniedHeaders input.deniedSegments
-          input.dependencyDenials with
+          input.dependencyDenials input.effects with
       | .error _ => "null"
       | .ok manifest => jsonArray (manifest.map hydrationDocumentKeyJson)
 
 def closureDocumentsJson (input : SessionHydration.ClosureInput) : String :=
   match CanonicalOutput.Hydration.buildManifest input.request.authorizationScope
       input.request.nativeSession input.bases input.roots input.requirements input.messages
-      input.segments input.access input.deniedHeaders input.deniedSegments input.dependencyDenials with
+      input.segments input.access input.deniedHeaders input.deniedSegments input.dependencyDenials
+      input.effects with
   | .error _ => "null"
   | .ok manifest => jsonArray (manifest.map hydrationDocumentKeyJson)
 
@@ -232,6 +267,26 @@ def deniedClosureInput (key : CanonicalOutput.Hydration.DocumentKey) :
   { hydrationClosureInput with access := hydrationClosureInput.access.map fun observation =>
       if observation.key = key then { observation with state := .denied } else observation }
 
+/-- A tool delivery retains its parent call; that parent reaches one decodable
+child, while a forged sibling and a child of an unretained parent stay out. -/
+def hydrationEffectInput : SessionHydration.ClosureInput :=
+  { hydrationClosureInput with
+    roots := [220]
+    messages := [CanonicalOutput.Hydration.Examples.parentDelivery]
+    segments := CanonicalOutput.Hydration.Examples.effectSegments
+    access := CanonicalOutput.Hydration.Examples.effectAccess.map fun observation =>
+      { observation with scope := hydrationRequest.authorizationScope }
+    effects := [CanonicalOutput.Hydration.Examples.child,
+      CanonicalOutput.Hydration.Examples.forgedChild,
+      CanonicalOutput.Hydration.Examples.unreachableChild] }
+
+/-- A running or undelivered parent is only a session base. -/
+def hydrationBaseParentInput : SessionHydration.ClosureInput :=
+  { hydrationEffectInput with
+    bases := [.toolCall 300], roots := [], messages := []
+    segments := [CanonicalOutput.Hydration.Examples.childArguments,
+      CanonicalOutput.Hydration.Examples.childOutput] }
+
 def sessionHydrationClosureCasesJson : String := jsonArray
   [ closureCaseJson "exact_request_closure" hydrationClosureInput
   , closureCaseJson "hydration_twin_rejected" hydrationClosureInput hydrationTwin
@@ -244,7 +299,23 @@ def sessionHydrationClosureCasesJson : String := jsonArray
       (deniedClosureInput ⟨.agentOutputSegment, 100⟩)
   , closureCaseJson "foreign_scope_evidence_rejected"
       { hydrationClosureInput with access := hydrationClosureInput.access.map fun observation =>
-          { observation with scope := { observation.scope with peer := "peer-foreign" } } } ]
+          { observation with scope := { observation.scope with peer := "peer-foreign" } } }
+  , closureCaseJson "plugin_effect_children" hydrationEffectInput
+  , closureCaseJson "plugin_effect_slot_conflict"
+      { hydrationEffectInput with
+        effects := hydrationEffectInput.effects ++
+          [{ CanonicalOutput.Hydration.Examples.child with id := 403, terminal := none }]
+        access := hydrationEffectInput.access ++
+          [⟨hydrationRequest.authorizationScope, ⟨.agentToolCall, 403⟩, .authorized⟩] }
+  , closureCaseJson "plugin_effect_parent_base_only" hydrationBaseParentInput
+  , closureCaseJson "plugin_effect_child_denied"
+      { hydrationBaseParentInput with
+        access := hydrationBaseParentInput.access.map (fun observation =>
+          if observation.key = ⟨.agentToolCall, 400⟩
+          then { observation with state := .denied } else observation) }
+  , closureCaseJson "plugin_effect_arguments_missing"
+      { hydrationEffectInput with segments := [CanonicalOutput.Hydration.Examples.parentOutput,
+          CanonicalOutput.Hydration.Examples.childOutput] } ]
 
 structure SessionHydrationApplyCase where
   name : String

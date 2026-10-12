@@ -78,9 +78,10 @@ def validateSnapshot (scope : CanonicalOutput.Hydration.AuthorizationScope)
     (segments : List CanonicalOutput.Segment)
     (provenance : List CanonicalOutput.Hydration.ProvenanceAccess)
     (deniedHeaders deniedSegments : List CanonicalOutput.DocId)
-    (dependencyDenials : List CanonicalOutput.DependencyDenial := []) : ValidationResult :=
+    (dependencyDenials : List CanonicalOutput.DependencyDenial := [])
+    (effects : List CanonicalOutput.Hydration.EffectRow := []) : ValidationResult :=
   match CanonicalOutput.Hydration.buildManifest scope rootSession bases roots requirements messages segments
-      provenance deniedHeaders deniedSegments dependencyDenials with
+      provenance deniedHeaders deniedSegments dependencyDenials effects with
   | .ok manifest =>
       if (manifest.map canonicalKey).toFinset = signed then .valid else .invalid
   | .error error => if hydrationErrorIsLoading error then .loading else .invalid
