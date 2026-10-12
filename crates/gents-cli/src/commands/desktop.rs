@@ -3,7 +3,7 @@ use gents_desktop_core::{
     client::DesktopPaths,
     home_reset::{
         lock_client_state, lock_desktop_process, lock_reset, plan_full_reset, resolve_user_home,
-        HomeResetDisposition, ManagedServerResetResult,
+        HomeResetDisposition, HomeResetPlan, ManagedServerResetResult,
     },
 };
 
@@ -130,10 +130,29 @@ async fn reset(
     let _client_lock = lock_client_state(&desktop)?;
     let settled = plan_full_reset(Some(&home), &desktop, &user_home, &definition)?;
     settled.check_confirmation(&confirmation, disposition)?;
-    clear_browser_data(desktop_executable.as_deref())?;
-    let settled = plan_full_reset(Some(&home), &desktop, &user_home, &definition)?;
-    settled.check_confirmation(&confirmation, disposition)?;
-    let mut result = settled.retire(disposition, backup.as_deref())?;
+    retire_then_clear(&settled, disposition, backup.as_deref(), || {
+        clear_browser_data(desktop_executable.as_deref())
+    })
+}
+
+/// Browser clearing cannot be undone, so it follows the completed archive or
+/// deletion; a failure then names what was already retired.
+fn retire_then_clear(
+    settled: &HomeResetPlan,
+    disposition: HomeResetDisposition,
+    backup: Option<&std::path::Path>,
+    clear: impl FnOnce() -> Result<()>,
+) -> Result<ManagedServerResetResult> {
+    let mut result = settled.retire(disposition, backup)?;
+    clear().with_context(|| {
+        let retired = match &result.backup_path {
+            Some(path) => format!("Your local state was archived to {path}"),
+            None => "Your local state was permanently deleted".into(),
+        };
+        format!(
+            "{retired}, but browser data was not cleared. Quit every Gents window, then run gents desktop reset to review and clear it"
+        )
+    })?;
     result.cleared_browser_paths = result.browser_paths.clone();
     Ok(result)
 }
@@ -236,7 +255,7 @@ fn clear_browser_data_with_timeout(
             let kill_error = child.kill().err();
             let reap_error = child.wait().err();
             bail!(
-                "Gents browser clearing did not finish within its deadline ({result:?}; kill error: {kill_error:?}; reap error: {reap_error:?}). Install the matching desktop app and retry. The managed home and client state were not retired."
+                "Gents browser clearing did not finish within its deadline ({result:?}; kill error: {kill_error:?}; reap error: {reap_error:?}). Install the matching desktop app and retry."
             );
         }
     };
@@ -250,16 +269,14 @@ fn clear_browser_data_with_timeout(
         .and_then(|value| value.get("error"))
         .and_then(serde_json::Value::as_str)
     {
-        bail!(
-            "Gents could not clear browser data: {error}. The managed home and client state were not retired."
-        );
+        bail!("Gents could not clear browser data: {error}");
     }
     if !status.success() {
         stderr.seek(SeekFrom::Start(0))?;
         let mut diagnostic = String::new();
         stderr.take(64 * 1024).read_to_string(&mut diagnostic)?;
         bail!(
-            "Gents could not clear browser data: {}. Install the matching Gents desktop app and retry. The managed home and client state were not retired.",
+            "Gents could not clear browser data: {}. Install the matching Gents desktop app and retry.",
             diagnostic.trim()
         );
     }
@@ -272,9 +289,7 @@ fn clear_browser_data_with_timeout(
         .and_then(serde_json::Value::as_bool)
         != Some(true)
     {
-        bail!(
-            "Gents did not provide a valid browser-clearing completion receipt; the managed home and client state were not retired."
-        );
+        bail!("Gents did not provide a valid browser-clearing completion receipt");
     }
     Ok(())
 }
@@ -312,5 +327,64 @@ mod tests {
             std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
             assert_eq!(clear_browser_data(Some(&executable)).is_ok(), expected);
         }
+    }
+    fn initialized_reset(user: &std::path::Path) -> (std::path::PathBuf, HomeResetPlan) {
+        let home = user.join(".gents");
+        std::fs::create_dir_all(home.join("data")).unwrap();
+        std::fs::write(home.join("data/MANIFEST"), "store").unwrap();
+        std::fs::write(
+            home.join("init.json"),
+            serde_json::json!({
+                "home": home,
+                "node_name": "local",
+                "node_did": "did:key:zlocal",
+                "key_path": null,
+                "tool_ceiling": "workspace",
+                "tool_root": null,
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let desktop = DesktopPaths::from_root(user.join("desktop"));
+        let plan =
+            plan_full_reset(Some(&home), &desktop, user, &user.join("service.plist")).unwrap();
+        (home, plan)
+    }
+
+    #[test]
+    fn a_failed_archive_never_clears_browser_data() {
+        let temp = tempfile::tempdir().unwrap();
+        let user = temp.path().canonicalize().unwrap();
+        let (home, plan) = initialized_reset(&user);
+        let backup = user.join("missing-parent/backup");
+        let mut cleared = false;
+        let error = retire_then_clear(&plan, HomeResetDisposition::Archive, Some(&backup), || {
+            cleared = true;
+            Ok(())
+        })
+        .unwrap_err();
+        assert!(!cleared, "browser data was cleared after {error:#}");
+        assert!(home.join("data/MANIFEST").is_file());
+        assert!(home.join("init.json").is_file());
+    }
+
+    #[test]
+    fn browser_clearing_failure_names_the_completed_archive() {
+        let temp = tempfile::tempdir().unwrap();
+        let user = temp.path().canonicalize().unwrap();
+        let (home, plan) = initialized_reset(&user);
+        let backup = plan.backup_path("test").unwrap();
+        let error = retire_then_clear(&plan, HomeResetDisposition::Archive, Some(&backup), || {
+            assert!(backup.join("home/data/MANIFEST").is_file());
+            bail!("WebKit refused")
+        })
+        .unwrap_err();
+        let message = format!("{error:#}");
+        assert!(message.contains(&backup.display().to_string()), "{message}");
+        assert!(
+            message.contains("browser data was not cleared"),
+            "{message}"
+        );
+        assert!(!home.join("data").exists());
     }
 }
