@@ -28,7 +28,7 @@ pub(crate) fn supported(name: &str) -> bool {
 /// The model-facing composition rule; a refused child's error names the tool.
 pub(super) fn composition_note() -> String {
     format!(
-        "\nThis plugin may call up to {MAX_EFFECTS} of this request's other tools in sequence, except tools that control request, session or process lifecycle; call those directly."
+        "\nThis plugin may call up to {MAX_EFFECTS} of this request's other tools in sequence, except the session's own goal, agent and process tools; call those directly."
     )
 }
 
