@@ -181,12 +181,29 @@ The root-selection contracts belong to the root-admission owner so conformance
 and canonical root consumers reference this namespace directly.
 -/
 
+/-- A behavior selection that contains a published root overlaps operator
+authority: the operator narrowed below a grant the behavior already holds.
+Selection then stays valid, because the selection/ceiling meet
+(`effectiveSelectionOk`) clamps the effective root to operator authority before
+use. Publication itself (`admitted`) stays strictly descendant-or-equal; an
+operator row is authority, not a behavior grant. -/
+def overlapping (published : Finset CanonicalPath) (candidate : Option CanonicalPath) : Prop :=
+  match candidate with
+  | none => False
+  | some path => ∃ root ∈ published, contains path root
+
+instance (published : Finset CanonicalPath) (candidate : Option CanonicalPath) :
+    Decidable (overlapping published candidate) := by
+  unfold overlapping
+  cases candidate <;> infer_instance
+
 /-- Root-selection contract. A blank root may inherit the
 runtime default only when the operator has not authored explicit workspace-root
 policy. If there is neither policy nor a process ceiling (an empty publication),
 a successfully resolved authored root is its own narrowing. Under explicit
 policy, a request must select an admitted root so omission cannot widen to the
-process ceiling. The host execution owner resolves again before use; this
+process ceiling, or a root overlapping a published one that the meet then
+clamps. The host execution owner resolves again before use; this
 admission contract does not claim TOCTOU safety. -/
 abbrev rootSelectionOk
     (policyConfigured : Bool)
@@ -195,7 +212,62 @@ abbrev rootSelectionOk
     (resolved : Option CanonicalPath) : Prop :=
   (blank = true ∧ policyConfigured = false) ∨
     (blank = false ∧ policyConfigured = false ∧ published = ∅ ∧ resolved.isSome) ∨
-    admitted published resolved
+    admitted published resolved ∨
+    overlapping published resolved
+
+/-- Selection/ceiling meet for the effective tool root. The behavior root is a
+grant and the operator ceiling is a cap: a selection inside the ceiling keeps
+its narrower grant, a selection containing the narrowed ceiling clamps down to
+the ceiling, and only a selection disjoint from the ceiling is refused. A blank
+selection may inherit the ceiling only while the operator has not authored
+explicit workspace-root policy. Whether the selection itself is admitted
+against published policy is owned by `rootSelectionOk`; this contract owns only
+the containment meet. The behavior root is authored once while the operator
+root moves independently, so refusing every overlap would strand a narrowed
+deployment's only behavior. -/
+def effectiveSelectionOk
+    (policyConfigured : Bool)
+    (ceiling : Option CanonicalPath)
+    (selection : Option CanonicalPath)
+    (effective : Option CanonicalPath) : Prop :=
+  match ceiling, selection with
+  | _, none => policyConfigured = false ∧ effective = ceiling
+  | none, some sel => effective = some sel
+  | some c, some sel =>
+      (contains c sel ∧ effective = some sel) ∨ (contains sel c ∧ effective = some c)
+
+instance (policyConfigured : Bool) (ceiling selection effective : Option CanonicalPath) :
+    Decidable (effectiveSelectionOk policyConfigured ceiling selection effective) := by
+  unfold effectiveSelectionOk
+  cases ceiling <;> cases selection <;> infer_instance
+
+/-- The meet never widens authority: every outcome stays at or below the
+process ceiling. -/
+theorem effective_selection_never_widens (policyConfigured : Bool)
+    (ceiling : CanonicalPath) (selection : Option CanonicalPath)
+    (effective : Option CanonicalPath)
+    (hok : effectiveSelectionOk policyConfigured (some ceiling) selection effective) :
+    ∃ admittedRoot, effective = some admittedRoot ∧ contains ceiling admittedRoot := by
+  simp only [effectiveSelectionOk] at hok
+  cases selection with
+  | none => exact ⟨ceiling, hok.2, rfl, [], by simp⟩
+  | some sel =>
+    rcases hok with ⟨hcontains, heffective⟩ | ⟨_, heffective⟩
+    · exact ⟨sel, heffective, hcontains⟩
+    · exact ⟨ceiling, heffective, rfl, [], by simp⟩
+
+/-- Clamping only narrows: when the selection contains the ceiling, the meet
+lands at or below the selection itself. -/
+theorem clamped_selection_only_narrows (policyConfigured : Bool)
+    (ceiling sel : CanonicalPath)
+    (hcontains : contains sel ceiling)
+    (effective : Option CanonicalPath)
+    (hok : effectiveSelectionOk policyConfigured (some ceiling) (some sel) effective) :
+    ∃ admittedRoot, effective = some admittedRoot ∧ contains sel admittedRoot := by
+  simp only [effectiveSelectionOk] at hok
+  rcases hok with ⟨_, heffective⟩ | ⟨_, heffective⟩
+  · exact ⟨sel, heffective, rfl, [], by simp⟩
+  · exact ⟨ceiling, heffective, hcontains⟩
 
 /-- Root-patch contract: `none` is an omitted edit, `some none` a clear and
 `some (some r)` a set. Omission preserves the stored value but must re-admit it

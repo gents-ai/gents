@@ -6,6 +6,15 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- Narrowing the operator tool root no longer strands an existing behavior: a
+  `Tools.host.root` grant that still contains the narrowed root now clamps to
+  it at the selection/ceiling meet instead of failing startup, so a desktop
+  "Change access" narrowing takes effect instead of crash-looping the service
+  (#2410). `gents init` no longer copies the operator root into the default
+  Tools document (init.json stays the single record the server ceiling
+  inherits), service mode mirrors the startup root-admission diagnostic to the
+  stderr sink runtime-errors.log captures — naming both roots — and a grant
+  disjoint from the operator root still refuses.
 - Breaking: installations are Nodes and their configured behaviors are Agents.
   Collections, document fields, CLI commands and flags, and desktop preferences
   use the new names (`gents config agent`, `--node-name`, `node_did`, `agent_id`).

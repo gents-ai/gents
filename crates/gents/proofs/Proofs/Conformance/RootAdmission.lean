@@ -20,6 +20,7 @@ structure Case where
   published : List CanonicalPath
   candidate : Option CanonicalPath
   expected : Bool
+  effective : Option CanonicalPath
   deriving DecidableEq, Repr
 
 private def path (components : List String) : CanonicalPath := ⟨"sandbox", components⟩
@@ -31,43 +32,55 @@ private def nested := path ["workspace", "root", "project"]
 abstract canonical-path case must refine. They do not model filesystem effects. -/
 def cases : List Case :=
   [ ⟨"exact_create", "create", "configured", false, "existing", true, some workspace,
-      [root], [root], some root, true⟩
+      [root], [root], some root, true, none⟩
   , ⟨"descendant_create", "create", "configured", false, "existing", true, some workspace,
-      [root], [root], some nested, true⟩
+      [root], [root], some nested, true, none⟩
   , ⟨"whitespace_create_explicit", "create", "   ", true, "blank", true, some workspace,
-      [root], [root], none, false⟩
+      [root], [root], none, false, none⟩
   , ⟨"whitespace_create_unconfigured", "create", "   ", true, "blank", false, some root,
-      [], [root], none, true⟩
+      [], [root], none, true, none⟩
   , ⟨"no_documents_uses_ceiling", "create", "configured", false, "existing", false, some root,
-      [], [root], some root, true⟩
+      [], [root], some root, true, none⟩
   , ⟨"no_policy_no_ceiling_authored_root", "create", "configured", false, "existing", false, none,
-      [], [], some root, true⟩
+      [], [], some root, true, none⟩
   , ⟨"all_disabled_does_not_fallback", "create", "configured", false, "existing", true, some root,
-      [], [], some root, false⟩
+      [], [], some root, false, none⟩
   , ⟨"invalid_ceiling_does_not_fallback", "create", "configured", false, "invalid_ceiling",
-      true, none, [], [], some root, false⟩
+      true, none, [], [], some root, false, none⟩
   , ⟨"prefix_sibling", "create", "configured", false, "existing", true, some workspace,
-      [root], [root], some (path ["workspace", "root-other"]), false⟩
+      [root], [root], some (path ["workspace", "root-other"]), false, none⟩
   , ⟨"traversal_normalizes_inside", "create", "configured", false, "traversal", true, some workspace,
-      [root], [root], some nested, true⟩
+      [root], [root], some nested, true, none⟩
   , ⟨"traversal_normalizes_outside", "create", "configured", false, "traversal", true, some workspace,
-      [root], [root], some (path ["workspace", "outside"]), false⟩
+      [root], [root], some (path ["workspace", "outside"]), false, none⟩
   , ⟨"symlink_target_inside", "create", "configured", false, "symlink", true, some workspace,
-      [root], [root], some nested, true⟩
+      [root], [root], some nested, true, none⟩
   , ⟨"symlink_target_outside", "create", "configured", false, "symlink", true, some workspace,
-      [root], [root], some (path ["outside", "project"]), false⟩
+      [root], [root], some (path ["outside", "project"]), false, none⟩
   , ⟨"nonexistent_suffix", "create", "configured", false, "nonexistent", true, some workspace,
-      [root], [root], some (path ["workspace", "root", "future", "project"]), true⟩
+      [root], [root], some (path ["workspace", "root", "future", "project"]), true, none⟩
   , ⟨"resolution_failure", "create", "configured", false, "unresolved", true, some workspace,
-      [root], [root], none, false⟩
+      [root], [root], none, false, none⟩
   , ⟨"explicit_restriction_does_not_widen", "create", "configured", false,
       "explicit_restriction", true, some root, [nested], [nested],
-      some (path ["workspace", "root", "other"]), false⟩
+      some (path ["workspace", "root", "other"]), false, none⟩
   , ⟨"one_of_multiple_published_roots", "create", "configured", false, "existing", true,
       some (path []), [root, path ["srv", "source"]], [root, path ["srv", "source"]],
-      some (path ["srv", "source", "repo"]), true⟩
+      some (path ["srv", "source", "repo"]), true, none⟩
   , ⟨"different_anchor", "create", "configured", false, "existing", true, none,
-      [root], [root], some ⟨"other-volume", ["workspace", "root"]⟩, false⟩
+      [root], [root], some ⟨"other-volume", ["workspace", "root"]⟩, false, none⟩
+  , ⟨"containing_create_overlaps_policy", "create", "configured", false, "existing", true,
+      some workspace, [nested], [nested], some root, true, none⟩
+  , ⟨"meet_selection_inside_ceiling_keeps_selection", "meet", "configured", false, "existing",
+      false, some root, [], [root], some nested, true, some nested⟩
+  , ⟨"meet_selection_contains_ceiling_clamps", "meet", "configured", false, "existing",
+      false, some nested, [], [nested], some root, true, some nested⟩
+  , ⟨"meet_disjoint_refused", "meet", "configured", false, "existing",
+      false, some root, [], [root], some (path ["outside", "project"]), false, none⟩
+  , ⟨"meet_blank_unconfigured_inherits_ceiling", "meet", "   ", true, "blank",
+      false, some root, [], [root], none, true, some root⟩
+  , ⟨"meet_blank_configured_refused", "meet", "   ", true, "blank",
+      true, some root, [], [], none, false, none⟩
   ]
 
 private def policy (c : Case) : PublicationPolicy :=
@@ -80,6 +93,8 @@ def evaluates (c : Case) : Bool :=
     | "create" =>
         decide (rootSelectionOk c.configured (publishedRoots (policy c))
           (c.authored.trim == "") c.candidate)
+    | "meet" =>
+        decide (effectiveSelectionOk c.configured c.ceiling c.candidate c.effective)
     | _ => false
 
 theorem cases_replay : ∀ c ∈ cases, evaluates c = c.expected := by native_decide
@@ -105,7 +120,8 @@ private def caseJson (c : Case) : String :=
   ",\"enabled\":" ++ jsonArray (c.enabled.map pathJson) ++
   ",\"published\":" ++ jsonArray (c.published.map pathJson) ++
   ",\"candidate\":" ++ candidateJson c.candidate ++
-  ",\"expected\":" ++ boolJson c.expected ++ "}"
+  ",\"expected\":" ++ boolJson c.expected ++
+  ",\"effective\":" ++ candidateJson c.effective ++ "}"
 
 def casesJson : String := jsonArray (cases.map caseJson)
 

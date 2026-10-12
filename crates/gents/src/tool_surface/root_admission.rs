@@ -201,11 +201,26 @@ pub fn admit_authored_root(
     }
     match policy.admit(Path::new(root))? {
         RootAdmission::Admitted(root) => Ok(Some(root)),
-        denied @ RootAdmission::Denied { .. } => anyhow::bail!(
-            "Tools.host.root {:?} is not admitted by published WorkspaceRoot policy: {}",
-            root,
-            denied.denial_reason().expect("denied outcome has a reason")
-        ),
+        denied @ RootAdmission::Denied { .. } => {
+            // A grant containing a published root stays admitted unclamped:
+            // the operator narrowed authority below a grant the behavior
+            // already holds, and the selection/ceiling meet narrows the
+            // effective root before use. Only a disjoint grant is refused.
+            let overlaps = policy.published.iter().any(|published| {
+                matches!(
+                    resolve_admitted_tool_root(published, [Path::new(root)]),
+                    Ok(RootAdmission::Admitted(_))
+                )
+            });
+            if overlaps {
+                return resolve_configured_tool_root(Path::new(root)).map(Some);
+            }
+            anyhow::bail!(
+                "Tools.host.root {:?} is not admitted by published WorkspaceRoot policy: {}",
+                root,
+                denied.denial_reason().expect("denied outcome has a reason")
+            )
+        }
     }
 }
 
@@ -213,7 +228,7 @@ pub fn admit_authored_root(
 /// published policy. This mutates only the canonical Tools document shape; it
 /// does not introduce a parallel root field. Active host tools under explicit
 /// policy must name a root instead of inheriting the broader process ceiling.
-pub(crate) fn canonicalize_tools_root(
+pub fn canonicalize_tools_root(
     tools: &mut crate::document_config::Tools,
     policy: &WorkspaceRootPolicy,
 ) -> Result<()> {
@@ -624,6 +639,43 @@ mod tests {
         let error = canonicalize_tools_root(&mut tools, &policy)
             .expect_err("CLI uses the shared root and cannot inherit cwd under explicit policy");
         assert!(error.to_string().contains("require an explicit root"));
+    }
+
+    #[test]
+    fn containing_authored_root_canonicalizes_unclamped_under_default_policy() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let project = workspace.path().join("project");
+        std::fs::create_dir_all(&project).expect("narrowed operator root");
+        let policy = project_workspace_root_policy(Vec::new(), Some(&project));
+
+        assert_eq!(
+            admit_authored_root(&policy, workspace.path().to_str().expect("utf-8 root"))
+                .expect("an authored grant containing the operator root stays admitted"),
+            Some(std::fs::canonicalize(workspace.path()).expect("canonical workspace")),
+            "the grant is canonicalized unclamped; the selection/ceiling meet narrows it before use"
+        );
+    }
+
+    #[test]
+    fn disjoint_authored_root_still_refuses_under_configured_policy() {
+        let allowed = tempfile::tempdir().expect("allowed root");
+        let elsewhere = tempfile::tempdir().expect("disjoint root");
+        let policy = project_workspace_root_policy(
+            vec![WorkspaceRootDocument {
+                root_path: Some(allowed.path().to_string_lossy().into_owned()),
+                enabled: Some(true),
+            }],
+            None,
+        );
+
+        let error = admit_authored_root(&policy, elsewhere.path().to_str().expect("utf-8 root"))
+            .expect_err("a grant disjoint from every published root must be refused");
+        assert!(
+            error
+                .to_string()
+                .contains("is not admitted by published WorkspaceRoot policy"),
+            "{error:#}"
+        );
     }
 
     #[test]

@@ -6,7 +6,11 @@
 //! materializes its abstract canonical paths as a sandbox filesystem, projects
 //! the published roots through `project_workspace_root_policy`, and replays the
 //! authored root through `admit_authored_root`, the owner shared by Agent
-//! creation and the canonical `Tools.host.root` writer.
+//! creation and the canonical `Tools.host.root` writer. `meet` cases replay the
+//! selection/ceiling contract (`effectiveSelectionOk`) through
+//! `resolve_effective_tool_root`; blank selections pass the canonical
+//! `Tools.host.root` gate first because the policy gate for a blank root is
+//! owned there, not by the meet.
 
 use std::collections::BTreeSet;
 
@@ -26,10 +30,11 @@ fn generated_root_admission_case_inventory_is_complete() {
             case.name
         );
         assert_eq!(case.blank, case.authored.trim().is_empty(), "{}", case.name);
-        assert_eq!(
-            case.operation, "create",
+        assert!(
+            matches!(case.operation.as_str(), "create" | "meet"),
             "unknown operation {} in {}",
-            case.operation, case.name
+            case.operation,
+            case.name
         );
         assert!(
             !case.observation.trim().is_empty(),
@@ -189,15 +194,82 @@ fn generated_root_admission_cases_drive_production_root_policy() {
             case.authored.clone()
         } else {
             candidate
+                .clone()
                 .expect("nonblank case has a filesystem candidate")
                 .to_string_lossy()
                 .into_owned()
         };
-        let admitted = gents::tool_surface::admit_authored_root(&policy, &authored_root).is_ok();
-        assert_eq!(
-            admitted, case.expected,
-            "production root admission disagrees with generated case {} ({})",
-            case.name, case.observation
-        );
+        match case.operation.as_str() {
+            "create" => {
+                let admitted =
+                    gents::tool_surface::admit_authored_root(&policy, &authored_root).is_ok();
+                assert_eq!(
+                    admitted, case.expected,
+                    "production root admission disagrees with generated case {} ({})",
+                    case.name, case.observation
+                );
+            }
+            "meet" => {
+                let ceiling = ceiling
+                    .as_deref()
+                    .expect("meet case models a process ceiling");
+                let meet = match candidate.as_deref() {
+                    Some(selection) => gents::tool_surface::resolve_effective_tool_root(
+                        "conformance",
+                        Some(selection),
+                        Some(ceiling),
+                    ),
+                    None => {
+                        let mut tools = gents::document_config::Tools {
+                            host: Some(gents::document_config::HostTools {
+                                root: Some(case.authored.clone()),
+                                files: Some(gents::document_config::FileTools {
+                                    mode: gents::tool_surface::FileToolMode::ReadOnly,
+                                    ..Default::default()
+                                }),
+                                ..Default::default()
+                            }),
+                            ..Default::default()
+                        };
+                        gents::tool_surface::canonicalize_tools_root(&mut tools, &policy).and_then(
+                            |()| {
+                                let configured = tools
+                                    .host
+                                    .and_then(|host| host.root)
+                                    .filter(|root| !root.trim().is_empty());
+                                gents::tool_surface::resolve_effective_tool_root(
+                                    "conformance",
+                                    configured.as_deref().map(std::path::Path::new),
+                                    Some(ceiling),
+                                )
+                            },
+                        )
+                    }
+                };
+                let modeled_effective = case.effective.as_ref().map(|path| {
+                    std::fs::canonicalize(materialize(&path.anchor, &path.components))
+                        .expect("canonical modeled effective root")
+                });
+                match (meet, modeled_effective) {
+                    (Ok(effective), Some(modeled)) => assert_eq!(
+                        effective,
+                        Some(modeled),
+                        "production meet disagrees with the modeled effective root for {}",
+                        case.name
+                    ),
+                    (Ok(effective), None) => panic!(
+                        "meet case {} produced an effective root {effective:?} the model refuses",
+                        case.name
+                    ),
+                    (Err(error), Some(modeled)) => panic!(
+                        "meet case {} refused a selection the model admits at {}: {error:#}",
+                        case.name,
+                        modeled.display()
+                    ),
+                    (Err(_), None) => {}
+                }
+            }
+            other => panic!("unhandled Lean root operation {other}"),
+        }
     }
 }

@@ -911,7 +911,6 @@ async fn initialize_runtime_home(
         node_did,
         &tools_id,
         tool_package,
-        tool_root.clone(),
         args.enable_memory,
         enable_defra_query,
         args.defra_query_collections.clone(),
@@ -1126,16 +1125,17 @@ fn default_context_id_for_agent(agent_id: &str) -> String {
 
 /// Canonical `Tools` document for an init tool package. Typed nested groups
 /// replace the flat selection rows: absent groups and unset flags expose no
-/// capability, `Tools.host.root` is the default cwd for files/bash, and the
-/// execution policy stays an explicit typed selection (macOS `--write` keeps
-/// the sandboxed workspace_write policy; `--yolo` is always unrestricted).
-/// Backgrounding is per-capability: only write-capable bash may run in the
-/// background, which the derived allowlist materializes as `bash_unrestricted`.
+/// capability, a blank `Tools.host.root` inherits the operator root recorded in
+/// init.json (so a narrowed operator root moves every default behavior without
+/// re-authoring documents), and the execution policy stays an explicit typed
+/// selection (macOS `--write` keeps the sandboxed workspace_write policy;
+/// `--yolo` is always unrestricted). Backgrounding is per-capability: only
+/// write-capable bash may run in the background, which the derived allowlist
+/// materializes as `bash_unrestricted`.
 fn tools_for_package(
     node_did: &str,
     tools_id: &str,
     tool_package: ToolPackageArg,
-    tool_root: Option<PathBuf>,
     enable_memory: bool,
     enable_defra_query: bool,
     defra_query_collections: Vec<String>,
@@ -1144,7 +1144,7 @@ fn tools_for_package(
         ToolPackageArg::Minimal | ToolPackageArg::Introspection => None,
         ToolPackageArg::Readonly | ToolPackageArg::Write | ToolPackageArg::Yolo => {
             Some(HostTools {
-                root: tool_root.map(|path| path.to_string_lossy().to_string()),
+                root: None,
                 files: Some(FileTools {
                     mode: match tool_package {
                         ToolPackageArg::Readonly => FileToolMode::ReadOnly,
@@ -1758,7 +1758,6 @@ mod tests {
             "did:key:z-drift",
             "drift-tools",
             ToolPackageArg::Readonly,
-            None,
             false,
             false,
             Vec::new(),
@@ -2175,7 +2174,6 @@ mod tests {
             "did:key:z-init",
             "default-tools",
             ToolPackageArg::Readonly,
-            None,
             true,
             true,
             vec!["AgentRequest".to_string(), "AgentMessage".to_string()],
@@ -2210,13 +2208,15 @@ mod tests {
             "did:key:z-init",
             "setup-tools",
             selected,
-            Some(PathBuf::from("/")),
             false,
             false,
             Vec::new(),
         );
         let host = tools.host.expect("setup host tools");
-        assert_eq!(host.root.as_deref(), Some("/"));
+        assert_eq!(
+            host.root, None,
+            "the default Tools document must not pin the operator root; init.json owns it"
+        );
         assert_eq!(host.files.unwrap().mode, FileToolMode::ReadWrite);
         assert_eq!(host.bash.unwrap().mode, BashMode::Unrestricted);
         assert_eq!(
@@ -2240,7 +2240,6 @@ mod tests {
             "did:key:z-init",
             "setup-tools",
             ToolPackageArg::Write,
-            None,
             false,
             false,
             Vec::new(),
@@ -2313,7 +2312,6 @@ mod tests {
                 "did:key:z-init",
                 "default-tools",
                 package,
-                None,
                 false,
                 false,
                 Vec::new(),
@@ -2391,7 +2389,6 @@ mod tests {
                 "did:key:z-init",
                 "default-tools",
                 case.package,
-                None,
                 false,
                 init_enable_defra_query(case.package, false, false),
                 Vec::new(),
@@ -2434,7 +2431,6 @@ mod tests {
             "did:key:z-init",
             "default-tools",
             ToolPackageArg::Write,
-            None,
             false,
             init_enable_defra_query(ToolPackageArg::Write, false, true),
             Vec::new(),
@@ -2493,7 +2489,6 @@ mod tests {
             "did:key:z-init",
             "default-tools",
             ToolPackageArg::Introspection,
-            None,
             true,
             init_enable_defra_query(ToolPackageArg::Introspection, false, false),
             scoped_introspection.defra_query_collections.clone(),
@@ -2514,7 +2509,6 @@ mod tests {
             "did:key:z-init",
             "default-tools",
             ToolPackageArg::Yolo,
-            None,
             false,
             init_enable_defra_query(ToolPackageArg::Yolo, false, false),
             Vec::new(),
@@ -2531,7 +2525,6 @@ mod tests {
             "did:key:z-init",
             "default-tools",
             ToolPackageArg::Write,
-            None,
             false,
             false,
             Vec::new(),

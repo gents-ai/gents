@@ -452,6 +452,79 @@ fn readonly_selection_file_tool_root_rejects_escape_outside_operator_root() {
 }
 
 #[test]
+fn containing_selection_root_clamps_to_operator_root() {
+    let workspace = temp_root("gents-containing-selection-workspace");
+    let project = workspace.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let config = AgentToolSurfaceConfig::from_selection(
+        "ops",
+        ResolvedToolSelection {
+            file_tools: FileToolMode::ReadWrite,
+            file_tool_root: Some(workspace.clone()),
+            bash: BashMode::Unrestricted,
+            command_policy: None,
+            cli_tool_names: Vec::new(),
+            command_output_limits: Default::default(),
+            timeouts: Default::default(),
+            file_limits: Default::default(),
+            enable_meta_tools: false,
+            enable_goal_tools: false,
+            enable_goal_creation: false,
+            allowed_mcp_service_ids: Vec::new(),
+            required_mcp_service_ids: Vec::new(),
+            backgroundable_tool_names: Vec::new(),
+            enable_memory: false,
+            enable_session_history_tool: false,
+            enable_schema_tool: false,
+            enable_p2p_tool: false,
+            enable_p2p_mutations: false,
+            p2p_collections: Vec::new(),
+            enable_context_budget: true,
+            enable_defra_query: false,
+            defra_query_collections: Vec::new(),
+            application_write_collections: Vec::new(),
+            write_tools: Vec::new(),
+            query_tools: Vec::new(),
+            surface_of_tool: Default::default(),
+            enable_self_config: false,
+            self_config_categories: None,
+            self_config_no_lockout: false,
+            self_config_preview: false,
+            enable_pack_install: false,
+            enable_graph_tools: false,
+            enable_lsp: false,
+            lsp_config: None,
+            eth_queries: Vec::new(),
+            eth_calls: Vec::new(),
+            plugin_tools: Vec::new(),
+            remote_tools: None,
+        },
+        &ToolCeiling::readwrite(project.clone()),
+        Vec::new(),
+    )
+    .expect("a selection containing the operator root clamps instead of refusing");
+
+    let canonical_project = std::fs::canonicalize(&project).unwrap();
+    assert_eq!(
+        config.host_tools().read_root(),
+        Some(canonical_project.as_path()),
+        "the effective root must be the narrowed operator root, not the wider authored grant"
+    );
+    let surface = config.resolve_with_agent_tools_for_runtime_availability(
+        RuntimeToolAvailability::all(),
+        AgentToolConfig::default(),
+    );
+    assert_eq!(
+        surface
+            .root_execution_guard()
+            .and_then(|guard| guard.selected_root.as_deref()),
+        Some(canonical_project.as_path()),
+        "the execution guard must pin the clamped root so request-time policy re-admits it"
+    );
+}
+
+#[test]
 fn downgraded_off_selection_ignores_stale_file_tool_root() {
     let stale_root =
         std::env::temp_dir().join(format!("gents-stale-root-{}", uuid::Uuid::new_v4()));

@@ -1201,7 +1201,9 @@ async fn validate_startup_snapshot(
         if !blocking.is_empty() {
             // The bail and the persisted runtime status carry only the
             // presentation-safe reason; the diagnostic is operator-local and
-            // must not leak into either, so it is only logged here.
+            // must not leak into either, so it is only logged here (and, in
+            // service mode, mirrored to the stderr sink the service manager
+            // captures).
             for (agent_id, reason) in &blocking {
                 tracing::error!(
                     agent_id = %agent_id,
@@ -1209,6 +1211,10 @@ async fn validate_startup_snapshot(
                     diagnostic = %reason.diagnostic,
                     "agent_config unavailable at startup blocks the agent from starting"
                 );
+                crate::native_logging::mirror_service_diagnostic(&format!(
+                    "gents runtime: agent_config {agent_id} unavailable at startup: {}",
+                    reason.diagnostic
+                ));
             }
             let blocking = blocking
                 .iter()
