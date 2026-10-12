@@ -217,7 +217,10 @@ pub async fn ux_module(home: PathBuf, id: String) -> Result<gents::ux_plugin::Ux
 
 /// Runs one of pack `coordinate`'s installed `.afb` plugins with `input`,
 /// for a UX plugin's `ctx.plugin`. The plugin must belong to that pack: a
-/// UX plugin may call its own pack's capabilities and nothing else.
+/// UX plugin may call its own pack's capabilities and nothing else. The
+/// call is a person's action in the desktop, so a folder the input names
+/// outside the allowed ones is asked of them (the plugin access prompt)
+/// rather than refused, as an interactive chat's tool call is.
 pub async fn plugin_call(
     home: PathBuf,
     coordinate: String,
@@ -231,7 +234,11 @@ pub async fn plugin_call(
         "pack {coordinate} ships no plugin named {name:?}; a ux plugin may only call its own pack's plugins"
     );
     let (namespace, _) = gents::pack_registry::split_pack_coordinate(&coordinate);
-    crate::commands::plugin::call_installed(&home, namespace, &name, input).await
+    gents::plugin::approval::scope_interactive(
+        true,
+        crate::commands::plugin::call_installed(&home, namespace, &name, input),
+    )
+    .await
 }
 
 /* ---- registries: the index the Packs panel's picker reads ---- */
