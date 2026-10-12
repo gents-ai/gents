@@ -722,11 +722,9 @@ async fn handle_server_message(
             return Ok(());
         }
         "experimental/serverStatus" => {
-            let quiescent = value
-                .pointer("/params/quiescent")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            *shared.server_status.lock().await = Some(ServerStatus { quiescent });
+            if let Some(quiescent) = value.pointer("/params/quiescent").and_then(Value::as_bool) {
+                *shared.server_status.lock().await = Some(ServerStatus { quiescent });
+            }
             return Ok(());
         }
         "$/progress" => {
