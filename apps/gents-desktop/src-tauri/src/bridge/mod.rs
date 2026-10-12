@@ -160,17 +160,9 @@ fn native_local_e2e_context(mut context: tauri::Context<tauri::Wry>) -> tauri::C
     if std::env::var("GENTS_NATIVE_E2E").ok().as_deref() == Some("1")
         && std::env::var("GENTS_E2E_LOCAL_MODEL").is_ok()
     {
-        let value = std::env::var("GENTS_E2E_WEBVIEW_STORE_ID")
-            .expect("GENTS_E2E_WEBVIEW_STORE_ID is required for isolated native local E2E");
-        assert!(
-            value.len() == 32 && value.is_ascii(),
-            "WebView store ID must contain 32 hex digits"
-        );
-        let mut identifier = [0; 16];
-        for (index, byte) in identifier.iter_mut().enumerate() {
-            *byte = u8::from_str_radix(&value[index * 2..index * 2 + 2], 16)
-                .expect("WebView store ID must contain 32 hex digits");
-        }
+        let identifier = crate::browser_data::isolated_store_identifier()
+            .expect("valid isolated WebView store identifier")
+            .expect("native E2E requires an isolated WebView store");
         for window in &mut context.config_mut().app.windows {
             window.data_store_identifier = Some(identifier);
         }

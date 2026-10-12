@@ -47,6 +47,10 @@ pub struct ManagedServerRestartRequest {
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ManagedServerResetRequest {
+    /// Include healthy stores, the managed service and browser state.
+    #[serde(default)]
+    #[ts(optional)]
+    pub full_reset: Option<bool>,
     /// Omit to preview what would be retired and the required confirmation.
     pub confirmation: Option<String>,
     /// Archive (the default) or delete. Each has its own confirmation text.

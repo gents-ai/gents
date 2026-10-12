@@ -23,6 +23,10 @@ export type IncompatibleHome = {
   /** The bridge's account of the home: a preview until a reset completes. */
   report: ManagedServerResetResult | null;
   busy: boolean;
+  fullReset: boolean;
+  canReset: boolean;
+  previewReset: () => Promise<void>;
+  cancel: () => void;
   /** Increments each time the user continues from a completed reset. */
   generation: number;
   /**
@@ -71,7 +75,7 @@ export function createIncompatibleHomeOps({
     const resetManagedServer = api.resetManagedServer;
     const pending = (async () => {
       try {
-        setReport(await resetManagedServer());
+        setHome({ report: await resetManagedServer(), fullReset: false });
         return true;
       } catch (previewError) {
         setError(
@@ -86,16 +90,43 @@ export function createIncompatibleHomeOps({
     return pending;
   }
 
+  async function previewReset() {
+    if (!api.resetManagedServer || home().busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const report = await api.resetManagedServer(undefined, undefined, true);
+      setHome({ report, fullReset: true });
+    } catch (error) {
+      setError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function cancel() {
+    if (home().busy || home().report?.completed) return;
+    setHome({ report: null, fullReset: false });
+    setError(null);
+  }
+
   async function retire(disposition: "archive" | "delete") {
     const report = home().report;
-    if (!report || report.completed || !api.resetManagedServer) return;
+    if (!report || report.completed || home().busy || !api.resetManagedServer) return;
     const confirmation =
       disposition === "archive" ? report.confirmation : report.deleteConfirmation;
     if (!confirmation) return;
     setBusy(true);
     setError(null);
+    let handedOff = false;
     try {
-      const result = await api.resetManagedServer(confirmation, disposition);
+      const result = home().fullReset
+        ? await api.resetManagedServer(confirmation, disposition, true)
+        : await api.resetManagedServer(confirmation, disposition);
+      if (home().fullReset && !result.completed) {
+        handedOff = true;
+        return;
+      }
       if (!result.completed) throw new Error("the home was not reset");
       if (disposition === "archive" && !result.backupPath) {
         throw new Error("the home was not backed up");
@@ -107,13 +138,17 @@ export function createIncompatibleHomeOps({
       // show the current plan so the user reviews what would change now.
       if (error instanceof BridgeInvokeError && error.code === "invalidArgument") {
         try {
-          setReport(await api.resetManagedServer());
+          setReport(
+            home().fullReset
+              ? await api.resetManagedServer(undefined, undefined, true)
+              : await api.resetManagedServer(),
+          );
         } catch {
           /* The refusal above already explains the failure. */
         }
       }
     } finally {
-      setBusy(false);
+      if (!handedOff) setBusy(false);
     }
   }
 
@@ -136,6 +171,9 @@ export function createIncompatibleHomeOps({
 
   return {
     adopt,
+    canReset: Boolean(api.resetManagedServer),
+    previewReset,
+    cancel,
     backUp: () => retire("archive"),
     remove: () => retire("delete"),
     keep,

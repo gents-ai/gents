@@ -3,6 +3,10 @@ import type { HomeResetDisposition } from "./HomeResetDisposition.js";
 
 export type ManagedServerResetRequest = {
 /**
+ * Include healthy stores, the managed service and browser state.
+ */
+fullReset?: boolean,
+/**
  * Omit to preview what would be retired and the required confirmation.
  */
 confirmation: string | null,

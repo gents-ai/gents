@@ -17,6 +17,11 @@ pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
                 home = %policy.desktop_paths.root().display(),
                 "gents-desktop-bridge initialized"
             );
+            let reservation = gents_desktop_core::home_reset::lock_reset(&policy.desktop_paths)?;
+            let process =
+                gents_desktop_core::home_reset::lock_desktop_process(&policy.desktop_paths, false)?;
+            app.manage(process);
+            drop(reservation);
             app.manage(DesktopAppState::new(policy));
             // Off the setup path: reading the packaged runtime and asking the
             // service manager for its state are both blocking.

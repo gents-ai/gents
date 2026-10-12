@@ -45,6 +45,11 @@ pub(crate) struct Cli {
 pub(crate) enum Command {
     #[command(about = "Print build and release metadata")]
     Version,
+    #[command(about = "Manage local desktop state")]
+    Desktop {
+        #[command(subcommand)]
+        command: DesktopCommand,
+    },
     #[command(about = "Initialize a local node home directory", after_help = INIT_AFTER_HELP)]
     Init(InitArgs),
     #[command(
@@ -4893,6 +4898,30 @@ pub(crate) struct OptimizationRmArgs {
     pub(crate) force: bool,
     #[command(flatten)]
     pub(crate) scope: EvalScopeArgs,
+}
+
+#[derive(Subcommand)]
+pub(crate) enum DesktopCommand {
+    #[command(
+        about = "Preview or reset the managed home, desktop state, service and browser caches on this Mac; quit Gents first"
+    )]
+    Reset {
+        /// Managed home; defaults to GENTS_HOME, the desktop's reviewed home, then ~/.gents.
+        #[arg(long)]
+        home: Option<PathBuf>,
+        /// Delete node/client/service data instead of backing it up; browser data is always cleared.
+        #[arg(long)]
+        delete: bool,
+        /// Exact confirmation returned by the preview for the chosen action.
+        #[arg(long)]
+        confirm: Option<String>,
+        #[arg(long, hide = true, requires = "confirm")]
+        wait_for_desktop: bool,
+        #[arg(long, hide = true, requires = "wait_for_desktop")]
+        desktop_pid: Option<u32>,
+        #[arg(long, hide = true, requires = "wait_for_desktop")]
+        desktop_executable: Option<PathBuf>,
+    },
 }
 
 #[cfg(test)]
