@@ -155,7 +155,13 @@ test.describe("a reader scrolled up in a transcript", () => {
     }
     await expect(viewport).toHaveAttribute("data-following", "false");
     await restingScrollTop(page, viewport);
-    expect(await readerRow(viewport, before.key)).toEqual(before);
+    const after = await readerRow(viewport, before.key);
+    expect(after.key).toBe(before.key);
+    /* a page that landed above while the reader scrolled is put back by a
+       compensating write once the view rests, which can be while the reply
+       streams; WebKit rounds the position it takes, so the row may end a
+       sub-pixel (a rounded pixel) from where it was */
+    expect(Math.abs(after.offset - before.offset)).toBeLessThanOrEqual(1);
   });
 });
 
