@@ -1,10 +1,8 @@
 use crate::commands::mcp_health::load_mcp_services_with_health_for_node;
 use crate::error::BridgeError;
-use std::collections::HashSet;
-use std::path::PathBuf;
-
-use gents::{AgentToolSurfaceConfig, ToolCeiling};
+use gents::AgentToolSurfaceConfig;
 use serde_json::{json, Value};
+use std::collections::HashSet;
 use tauri::State;
 
 use crate::state::{current_core, require_node_home, DesktopAppState};
@@ -28,7 +26,8 @@ pub async fn desktop_tool_surface_explain(
         .ok_or_else(|| format!("agent {agent_id} not found for {node_did}"))?;
 
     let node_home = require_node_home(&state)?;
-    let (ceiling, ceiling_source) = resolve_desktop_tool_ceiling(&node_home)?;
+    let (ceiling, ceiling_source) = crate::snapshot::resolve_node_home_tool_ceiling(&node_home)
+        .map_err(BridgeError::untyped)?;
     let mcp_services_online = load_mcp_services_with_health_for_node(core.as_ref(), &node_did)
         .await
         .map_err(|error| BridgeError::untyped(error.to_string()))?
@@ -110,53 +109,4 @@ pub async fn desktop_tool_surface_explain(
         "mcpServicesOnline": mcp_services_online,
         "surface": serde_json::to_value(&explanation).map_err(|error| BridgeError::untyped(error.to_string()))?,
     }))
-}
-
-fn resolve_desktop_tool_ceiling(
-    node_home: &std::path::Path,
-) -> Result<(ToolCeiling, &'static str), BridgeError> {
-    #[derive(serde::Deserialize)]
-    struct InitCeilingView {
-        #[serde(default)]
-        tool_ceiling: Option<String>,
-        #[serde(default)]
-        tool_root: Option<String>,
-    }
-
-    let Some(config) = std::fs::read(node_home.join("init.json"))
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<InitCeilingView>(&bytes).ok())
-    else {
-        return Ok((ToolCeiling::meta_only(), "default_no_init_json"));
-    };
-
-    let tool_root = config
-        .tool_root
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
-    match config
-        .tool_ceiling
-        .as_deref()
-        .map(str::trim)
-        .map(str::to_ascii_lowercase)
-        .as_deref()
-    {
-        None | Some("metaonly") | Some("meta_only") => Ok((ToolCeiling::meta_only(), "init_json")),
-        Some("readonly") => Ok((
-            match tool_root.as_deref() {
-                Some(root) => ToolCeiling::readonly_at(PathBuf::from(root)),
-                None => ToolCeiling::readonly(),
-            },
-            "init_json",
-        )),
-        Some("readwrite") => {
-            let root = tool_root.ok_or_else(|| {
-                "init.json has readwrite tool_ceiling but no tool_root".to_string()
-            })?;
-            Ok((ToolCeiling::readwrite(PathBuf::from(root)), "init_json"))
-        }
-        Some(other) => Err(format!("init.json has unrecognized tool_ceiling {other:?}").into()),
-    }
 }

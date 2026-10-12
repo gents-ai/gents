@@ -185,7 +185,10 @@ and canonical root consumers reference this namespace directly.
 authority: the operator narrowed below a grant the behavior already holds.
 Selection then stays valid, because the selection/ceiling meet
 (`effectiveSelectionOk`) clamps the effective root to operator authority before
-use. Publication itself (`admitted`) stays strictly descendant-or-equal; an
+use. This tolerance is owned by `storedRootSelectionOk` only: a freshly
+authored root must be strictly admitted, so a behavior cannot pre-position a
+wide grant that silently activates when the operator later widens authority.
+Publication itself (`admitted`) stays strictly descendant-or-equal; an
 operator row is authority, not a behavior grant. -/
 def overlapping (published : Finset CanonicalPath) (candidate : Option CanonicalPath) : Prop :=
   match candidate with
@@ -197,14 +200,13 @@ instance (published : Finset CanonicalPath) (candidate : Option CanonicalPath) :
   unfold overlapping
   cases candidate <;> infer_instance
 
-/-- Root-selection contract. A blank root may inherit the
-runtime default only when the operator has not authored explicit workspace-root
-policy. If there is neither policy nor a process ceiling (an empty publication),
-a successfully resolved authored root is its own narrowing. Under explicit
-policy, a request must select an admitted root so omission cannot widen to the
-process ceiling, or a root overlapping a published one that the meet then
-clamps. The host execution owner resolves again before use; this
-admission contract does not claim TOCTOU safety. -/
+/-- Root-selection contract for a freshly authored root. A blank root may
+inherit the runtime default only when the operator has not authored explicit
+workspace-root policy. If there is neither policy nor a process ceiling (an
+empty publication), a successfully resolved authored root is its own narrowing.
+Under explicit policy, a request must select an admitted root so omission
+cannot widen to the process ceiling. The host execution owner resolves again
+before use; this admission contract does not claim TOCTOU safety. -/
 abbrev rootSelectionOk
     (policyConfigured : Bool)
     (published : Finset CanonicalPath)
@@ -212,7 +214,22 @@ abbrev rootSelectionOk
     (resolved : Option CanonicalPath) : Prop :=
   (blank = true ∧ policyConfigured = false) ∨
     (blank = false ∧ policyConfigured = false ∧ published = ∅ ∧ resolved.isSome) ∨
-    admitted published resolved ∨
+    admitted published resolved
+
+/-- Root-selection contract for a stored grant being re-admitted against
+current policy. The behavior root is authored once while the operator root
+moves independently, so a stored grant that now contains a published root
+(the operator narrowed below it) stays selectable: the selection/ceiling meet
+(`effectiveSelectionOk`) clamps the effective root to operator authority before
+use, and refusing every overlap would strand a narrowed deployment's only
+behavior. Only a re-admitted stored grant gets this tolerance; a write that
+changes the root follows `rootSelectionOk` strictly. -/
+abbrev storedRootSelectionOk
+    (policyConfigured : Bool)
+    (published : Finset CanonicalPath)
+    (blank : Bool)
+    (resolved : Option CanonicalPath) : Prop :=
+  rootSelectionOk policyConfigured published blank resolved ∨
     overlapping published resolved
 
 /-- Selection/ceiling meet for the effective tool root. The behavior root is a
@@ -221,10 +238,18 @@ its narrower grant, a selection containing the narrowed ceiling clamps down to
 the ceiling, and only a selection disjoint from the ceiling is refused. A blank
 selection may inherit the ceiling only while the operator has not authored
 explicit workspace-root policy. Whether the selection itself is admitted
-against published policy is owned by `rootSelectionOk`; this contract owns only
-the containment meet. The behavior root is authored once while the operator
-root moves independently, so refusing every overlap would strand a narrowed
-deployment's only behavior. -/
+against published policy is owned by `rootSelectionOk`/`storedRootSelectionOk`;
+this contract owns only the containment meet. The behavior root is authored
+once while the operator root moves independently, so refusing every overlap
+would strand a narrowed deployment's only behavior.
+
+Premise the meet alone cannot close: under a configured multi-root policy that
+publishes roots strictly inside the process ceiling, the clamp arm lands at the
+raw ceiling, which is admitted by neither `admitted` nor any published root.
+The meet is only guaranteed to stay inside published authority under the
+unconfigured default (`unconfigured_meet_stays_published`); with configured
+policy, the execution-boundary re-admission (the native root execution guard)
+is the owner that refuses such an effective root before use. -/
 def effectiveSelectionOk
     (policyConfigured : Bool)
     (ceiling : Option CanonicalPath)
@@ -269,12 +294,40 @@ theorem clamped_selection_only_narrows (policyConfigured : Bool)
   · exact ⟨sel, heffective, rfl, [], by simp⟩
   · exact ⟨ceiling, heffective, hcontains⟩
 
+/-- Composition of the meet with publication under the unconfigured default:
+with no operator documents the ceiling is the only published root, so every
+effective root the meet produces — including the clamp of a stored overlapping
+grant — is inside published authority. Under configured policy this can fail
+(see the premise on `effectiveSelectionOk`); the execution-boundary
+re-admission owns that case. -/
+theorem unconfigured_meet_stays_published (ceiling : CanonicalPath)
+    (selection effective : Option CanonicalPath)
+    (hok : effectiveSelectionOk false (some ceiling) selection effective) :
+    admitted (publishedRoots ⟨false, ∅, some ceiling⟩) effective := by
+  have hpublished : publishedRoots ⟨false, ∅, some ceiling⟩ = {ceiling} := by
+    simp [publishedRoots, defaultRoots]
+  rw [hpublished]
+  simp only [effectiveSelectionOk] at hok
+  cases selection with
+  | none =>
+      obtain ⟨_, heffective⟩ := hok
+      rw [heffective]
+      exact exact_root_admitted _ ceiling (by simp)
+  | some sel =>
+      rcases hok with ⟨hcontains, heffective⟩ | ⟨_, heffective⟩
+      · rw [heffective]
+        exact ⟨ceiling, by simp, hcontains⟩
+      · rw [heffective]
+        exact exact_root_admitted _ ceiling (by simp)
+
 /-- Root-patch contract: `none` is an omitted edit, `some none` a clear and
 `some (some r)` a set. Omission preserves the stored value but must re-admit it
 against current policy, so a stale, blank or revoked stored root cannot bypass
-the gate; rootless Tools (`storedRootRequired = false`) gain no filesystem
+the gate; a stored grant the operator narrowed below keeps the overlap
+tolerance (`storedRootSelectionOk`) because the meet clamps it before use.
+Rootless Tools (`storedRootRequired = false`) gain no filesystem
 authority and do not fail an unrelated edit. Clear is allowed only without
-explicit policy, and set follows the create rule. -/
+explicit policy, and set follows the create rule strictly. -/
 abbrev rootEditSelectionOk
     (policyConfigured : Bool)
     (published : Finset CanonicalPath)
@@ -286,7 +339,7 @@ abbrev rootEditSelectionOk
   match update with
   | none =>
       storedRootRequired = false ∨
-        rootSelectionOk policyConfigured published (storedRoot.trim == "") resolvedStored
+        storedRootSelectionOk policyConfigured published (storedRoot.trim == "") resolvedStored
   | some none => policyConfigured = false
   | some (some root) =>
       rootSelectionOk policyConfigured published (root.trim == "") resolved

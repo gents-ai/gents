@@ -1159,6 +1159,110 @@ async fn serve_clamps_the_default_tools_root_to_a_narrowed_operator_root() -> Re
     Ok(())
 }
 
+/// A home initialized while an explicit WorkspaceRoot policy exists must pin
+/// the operator root into `Tools.host.root`: the per-request execution guard
+/// refuses rootless host tools under configured policy, so a blank root would
+/// leave the home ready at startup but refuse every request.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn init_pins_the_tool_root_under_an_explicit_workspace_root_policy() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    let workspace_root = tempdir.path().join("workspace");
+    fs::create_dir_all(&home_dir)?;
+    fs::create_dir_all(&workspace_root)?;
+    let workspace_root = workspace_root.to_str().context("utf-8 workspace root")?;
+
+    let expected_reply = format!("pinned-root-{}", Uuid::new_v4().simple());
+    let model_name = format!("pinned-root-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockChatEndpoint::start(&model_name, &expected_reply)?;
+    let agent_name = format!("cli-pinned-root-{}", Uuid::new_v4().simple());
+    let port = allocate_port()?;
+    let graphql = graphql_url(port);
+    let init_args = [
+        "--node-name",
+        agent_name.as_str(),
+        "--model-name",
+        model_name.as_str(),
+        "--tool-root",
+        workspace_root,
+        "--inference-url",
+        mock_endpoint.endpoint(),
+    ];
+
+    let init = run_init_json(&home_dir, &init_args)?;
+    let node_did = node_did_from_init(&init)?;
+
+    // Author the explicit policy publishing the workspace root, then re-run
+    // init on the configured home.
+    let mut serve = spawn_server(&home_dir, port)?;
+    wait_for_port(port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
+    run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "workspace-root",
+            "set",
+            "--graphql",
+            &graphql,
+            "--path",
+            workspace_root,
+        ],
+    )?;
+    serve.child.kill()?;
+    serve.child.wait()?;
+
+    run_init_json(&home_dir, &init_args)?;
+
+    // The pinned Tools root keeps the home servable, so a request must pass
+    // the per-request WorkspaceRoot guard and reach the model.
+    let mut serve = spawn_server(&home_dir, port)?;
+    wait_for_port(port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_state_graphql(&home_dir, &graphql, Duration::from_secs(30)).await?;
+    let reply = run_cli_text(
+        &home_dir,
+        &["chat", "Reply with exactly the configured token."],
+    )?;
+    assert!(
+        reply.contains(&expected_reply),
+        "expected the pinned-root chat round trip to deliver the model reply, got:\n{reply}"
+    );
+    let tools_id = generated_tools_id_for_agent(&node_did);
+    let response = graphql_query(
+        &graphql,
+        &format!(
+            r#"{{ Tools(filter: {{ node_did: {{ _eq: "{}" }} }}) {{ tools_id host }} }}"#,
+            gents::graphql::escape_graphql_string(&node_did)
+        ),
+    )
+    .await?;
+    serve.child.kill()?;
+    serve.child.wait()?;
+
+    let pinned_root = response
+        .pointer("/data/Tools")
+        .and_then(Value::as_array)
+        .context("Tools rows")?
+        .iter()
+        .find(|row| row.get("tools_id").and_then(Value::as_str) == Some(&tools_id))
+        .and_then(|row| {
+            let host = row.get("host")?;
+            let decoded = host
+                .as_str()
+                .and_then(|encoded| serde_json::from_str::<Value>(encoded).ok())
+                .unwrap_or_else(|| host.clone());
+            decoded.get("root").cloned()
+        })
+        .and_then(|root| root.as_str().map(str::to_string))
+        .context("the Tools document init re-authored under explicit policy")?;
+    assert_eq!(
+        pinned_root, workspace_root,
+        "init must pin the resolved operator root into Tools.host.root under explicit policy"
+    );
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn init_with_write_tools_bootstraps_write_defaults() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;

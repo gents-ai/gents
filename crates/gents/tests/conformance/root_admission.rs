@@ -2,11 +2,14 @@
 //! (`proofs/Proofs/PeerRegistryDiscovery/RootAdmission.lean`, emitted through
 //! `Conformance.RootAdmissionContracts`).
 //!
-//! Lean `rootSelectionOk` is the only policy owner. Each emitted case
-//! materializes its abstract canonical paths as a sandbox filesystem, projects
-//! the published roots through `project_workspace_root_policy`, and replays the
-//! authored root through `admit_authored_root`, the owner shared by Agent
-//! creation and the canonical `Tools.host.root` writer. `meet` cases replay the
+//! Lean `rootSelectionOk`/`storedRootSelectionOk` are the only policy owners.
+//! Each emitted case materializes its abstract canonical paths as a sandbox
+//! filesystem, projects the published roots through
+//! `project_workspace_root_policy`, and replays the authored root through
+//! `admit_authored_root`, the owner shared by Agent creation and the canonical
+//! `Tools.host.root` writer: a case marked `stored` is a pre-existing grant
+//! being re-admitted (the overlap tolerance), anything else a freshly
+//! authored root held to strict admission. `meet` cases replay the
 //! selection/ceiling contract (`effectiveSelectionOk`) through
 //! `resolve_effective_tool_root`; blank selections pass the canonical
 //! `Tools.host.root` gate first because the policy gate for a blank root is
@@ -202,7 +205,8 @@ fn generated_root_admission_cases_drive_production_root_policy() {
         match case.operation.as_str() {
             "create" => {
                 let admitted =
-                    gents::tool_surface::admit_authored_root(&policy, &authored_root).is_ok();
+                    gents::tool_surface::admit_authored_root(&policy, &authored_root, case.stored)
+                        .is_ok();
                 assert_eq!(
                     admitted, case.expected,
                     "production root admission disagrees with generated case {} ({})",
@@ -231,8 +235,8 @@ fn generated_root_admission_cases_drive_production_root_policy() {
                             }),
                             ..Default::default()
                         };
-                        gents::tool_surface::canonicalize_tools_root(&mut tools, &policy).and_then(
-                            |()| {
+                        gents::tool_surface::canonicalize_tools_root(&mut tools, &policy, None)
+                            .and_then(|()| {
                                 let configured = tools
                                     .host
                                     .and_then(|host| host.root)
@@ -242,8 +246,7 @@ fn generated_root_admission_cases_drive_production_root_policy() {
                                     configured.as_deref().map(std::path::Path::new),
                                     Some(ceiling),
                                 )
-                            },
-                        )
+                            })
                     }
                 };
                 let modeled_effective = case.effective.as_ref().map(|path| {
