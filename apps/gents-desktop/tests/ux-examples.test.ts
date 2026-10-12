@@ -41,7 +41,6 @@ const host: UxHost = {
     selectedSessionId: () => null,
     send: async () => {},
   },
-  bridge: async () => ({}) as never,
   plugin: async () => ({ tasks: [] }),
   os: {
     openExternal: async () => true,

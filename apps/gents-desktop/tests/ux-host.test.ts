@@ -16,17 +16,17 @@ import { node, testApp } from "./app-fixture";
 const route = () => ({ name: "sessions" as const });
 
 describe("buildUxHost: bridge verbs", () => {
-  it("calls a pack's .afb plugin with its fields under `request` and unwraps `output`", async () => {
+  it("calls a pack's .afb plugin under the caller's listing, fields under `request`", async () => {
     call.mockReset();
     call.mockResolvedValue({ output: { tasks: [{ id: "1" }] } });
     const host = buildUxHost(testApp(), route);
-    const output = await host.plugin!("examples/board_pack", "board_store", {
+    const output = await host.plugin!("examples/board_pack/board", "board_store", {
       action: "list",
     });
     expect(call).toHaveBeenCalledTimes(1);
     expect(call).toHaveBeenCalledWith("desktop_plugin_call", {
       request: {
-        pack: "examples/board_pack",
+        ux: "examples/board_pack/board",
         name: "board_store",
         input: { action: "list" },
       },
@@ -39,7 +39,7 @@ describe("buildUxHost: bridge verbs", () => {
     call.mockRejectedValue(new Error("pack examples/board_pack is not installed"));
     const host = buildUxHost(testApp(), route);
     await expect(
-      host.plugin!("examples/board_pack", "board_store", {}),
+      host.plugin!("examples/board_pack/board", "board_store", {}),
     ).rejects.toThrow("not installed");
   });
 
@@ -55,12 +55,10 @@ describe("buildUxHost: bridge verbs", () => {
     expect(await host.os.openExternal("javascript:1")).toBe(false);
   });
 
-  it("forwards a raw bridge command untouched", async () => {
-    call.mockReset();
-    call.mockResolvedValue({ dirs: [] });
+  it("exposes no raw bridge verb", () => {
     const host = buildUxHost(testApp(), route);
-    await host.bridge("desktop_allowed_dirs_list", {});
-    expect(call).toHaveBeenCalledWith("desktop_allowed_dirs_list", {});
+    expect("bridge" in host).toBe(false);
+    expect(Object.keys(host).sort()).toEqual(["os", "plugin", "shell"]);
   });
 });
 

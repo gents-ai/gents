@@ -60,8 +60,9 @@ pub async fn desktop_ux_plugin_source(
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PluginCallRequest {
-    /// The pack the calling ux plugin ships in, as `namespace/name`.
-    pub pack: String,
+    /// The runtime listing of the calling ux plugin (`<ns>/<pack>/<name>`);
+    /// the pack is resolved from it here, never named by the webview.
+    pub ux: String,
     /// One of that pack's `.afb` plugins.
     pub name: String,
     #[serde(default)]
@@ -75,6 +76,6 @@ pub async fn desktop_plugin_call(
 ) -> Result<Value, BridgeError> {
     let home = home(&state)?;
     let output =
-        run(move || packs::plugin_call(home, request.pack, request.name, request.input)).await?;
+        run(move || packs::plugin_call(home, request.ux, request.name, request.input)).await?;
     Ok(serde_json::json!({ "output": output }))
 }

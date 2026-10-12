@@ -215,25 +215,38 @@ pub async fn ux_module(home: PathBuf, id: String) -> Result<gents::ux_plugin::Ux
     .await
 }
 
-/// Runs one of pack `coordinate`'s installed `.afb` plugins with `input`,
-/// for a UX plugin's `ctx.plugin`. The plugin must belong to that pack: a
-/// UX plugin may call its own pack's capabilities and nothing else. The
-/// call is a person's action in the desktop, so a folder the input names
-/// outside the allowed ones is asked of them (the plugin access prompt)
-/// rather than refused, as an interactive chat's tool call is.
-pub async fn plugin_call(
-    home: PathBuf,
-    coordinate: String,
-    name: String,
-    input: Value,
-) -> Result<Value> {
-    let record = gents::pack::read_home_install(&home, &coordinate)?
+/// The pack behind the UX plugin listed as `ux`, once it ships an `.afb`
+/// plugin named `name`: the `namespace/name` coordinate `ctx.plugin` may
+/// run under. A UX plugin outside a pack has nothing to call. The webview
+/// names the listing and nothing crossing that boundary says which code
+/// asked, so this binds a call to a pack, not to a caller; the webview
+/// keeps a plugin to its own listing by offering it no other verb.
+pub fn plugin_call_target(home: &std::path::Path, ux: &str, name: &str) -> Result<String> {
+    let listing = gents::ux_plugin::find(home, ux)?;
+    let coordinate = listing.pack.ok_or_else(|| {
+        anyhow::anyhow!(
+            "ux plugin {ux:?} ships in no pack; ctx.plugin reaches a pack's own .afb plugins only"
+        )
+    })?;
+    let record = gents::pack::read_home_install(home, &coordinate)?
         .ok_or_else(|| anyhow::anyhow!("pack {coordinate} is not installed"))?;
     anyhow::ensure!(
         record.plugins.iter().any(|p| p.name == name),
-        "pack {coordinate} ships no plugin named {name:?}; a ux plugin may only call its own pack's plugins"
+        "pack {coordinate} ships no plugin named {name:?}; ux plugin {ux:?} may call only its own pack's plugins"
     );
+    Ok(coordinate)
+}
+
+/// Runs the `.afb` plugin `name` of the pack behind the UX plugin listed as
+/// `ux`, with `input`, for that UX plugin's `ctx.plugin` (see
+/// [`plugin_call_target`]). The call is a person's action in the desktop,
+/// so a folder the input names outside the allowed ones is asked of them
+/// (the plugin access prompt) rather than refused, as an interactive chat's
+/// tool call is.
+pub async fn plugin_call(home: PathBuf, ux: String, name: String, input: Value) -> Result<Value> {
+    let coordinate = plugin_call_target(&home, &ux, &name)?;
     let (namespace, _) = gents::pack_registry::split_pack_coordinate(&coordinate);
+    tracing::info!(ux = %ux, pack = %coordinate, plugin = %name, "ux plugin call");
     gents::plugin::approval::scope_interactive(
         true,
         crate::commands::plugin::call_installed(&home, namespace, &name, input),
@@ -278,6 +291,76 @@ mod tests {
         .unwrap();
         assert_eq!(report, serde_json::json!({"last": true}));
         assert!(capture_report(async { Ok(()) }).await.is_err());
+    }
+
+    /// `ctx.plugin` resolves its pack from the caller's own listing: an
+    /// unknown listing, a plugin outside a pack and a plugin the pack does
+    /// not ship are each refused by name; the pack's own plugin resolves.
+    #[test]
+    fn a_plugin_call_resolves_the_pack_from_the_callers_listing() {
+        use gents::pack::{
+            write_home_install, HomePackInstall, InstalledPackPlugin, PackKind, PackUxPlugin,
+            UxContributions,
+        };
+        let home = tempfile::tempdir().unwrap();
+        let dev = home
+            .path()
+            .join(gents::home::UX_PLUGINS_DIR_NAME)
+            .join("loose");
+        std::fs::create_dir_all(&dev).unwrap();
+        std::fs::write(dev.join(gents::ux_plugin::DEV_ENTRY), "export default {}").unwrap();
+        let assets = "packs/.materialized/examples/board_pack/deadbeef";
+        std::fs::create_dir_all(home.path().join(assets).join("ux/board")).unwrap();
+        std::fs::write(
+            home.path().join(assets).join("ux/board/plugin.js"),
+            "export default {}",
+        )
+        .unwrap();
+        write_home_install(
+            home.path(),
+            &HomePackInstall {
+                coordinate: "examples/board_pack".into(),
+                version: "0.1.0".into(),
+                digest: format!("sha256:{}", "b".repeat(64)),
+                kind: PackKind::Plugins,
+                assets: assets.into(),
+                plugins: vec![InstalledPackPlugin {
+                    name: "board_store".into(),
+                    digest: format!("sha256:{}", "c".repeat(64)),
+                }],
+                installed_at: "2026-01-01T00:00:00Z".into(),
+                ux: vec![PackUxPlugin {
+                    name: "board".into(),
+                    description: "the board".into(),
+                    entry: Some("ux/board/plugin.js".into()),
+                    css: None,
+                    plugin: None,
+                    contributes: UxContributions {
+                        areas: vec!["nav".into()],
+                        directives: vec![],
+                    },
+                    default_enabled: None,
+                }],
+                registry: None,
+            },
+        )
+        .unwrap();
+
+        let refused = |ux: &str, name: &str| {
+            format!(
+                "{:#}",
+                plugin_call_target(home.path(), ux, name).unwrap_err()
+            )
+        };
+        assert!(refused("nope", "board_store").contains("no ux plugin \"nope\""));
+        assert!(refused("loose", "board_store").contains("ships in no pack"));
+        let other = refused("examples/board_pack/board", "other");
+        assert!(other.contains("ships no plugin named \"other\""), "{other}");
+        assert!(other.contains("examples/board_pack/board"), "{other}");
+        assert_eq!(
+            plugin_call_target(home.path(), "examples/board_pack/board", "board_store").unwrap(),
+            "examples/board_pack"
+        );
     }
 
     #[tokio::test]

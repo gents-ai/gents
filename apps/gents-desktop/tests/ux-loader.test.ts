@@ -25,7 +25,6 @@ const host: UxHost = {
     selectedSessionId: () => null,
     send: async () => {},
   },
-  bridge: async () => ({}) as never,
   os: {
     openExternal: async () => true,
     revealPath: async () => true,

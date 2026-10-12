@@ -49,14 +49,15 @@ export interface UxShell {
   send: (content: string) => Promise<void>;
 }
 
-/** the app installs these once; a plugin reaches them only through ctx */
+/** the app installs these once; a plugin reaches them only through ctx.
+    No raw bridge verb: a plugin reaches the runtime through these names
+    alone, so what a plugin may do is what this interface lists. */
 export interface UxHost {
   shell: UxShell;
-  /** one bridge command, as bridgeCall.call does */
-  bridge: <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
-  /** run one of the plugin's own pack's .afb plugins; absent for a plugin
-      that ships in no pack */
-  plugin?: (pack: string, name: string, input: unknown) => Promise<unknown>;
+  /** run a pack's .afb plugin `name`, keyed by the runtime listing
+      (`<ns>/<pack>/<name>`) of the UX plugin calling; the bridge resolves
+      the pack from the listing. Absent where no runtime is reachable. */
+  plugin?: (listing: string, name: string, input: unknown) => Promise<unknown>;
   os: UxOs;
 }
 
@@ -78,7 +79,6 @@ export interface UxContext {
     listener: EventListenerOrEventListenerObject,
     options?: AddEventListenerOptions | boolean,
   ) => () => void;
-  bridge: <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
   /** one of this pack's .afb plugins by name; rejects for a plugin outside a pack */
   plugin: (name: string, input: unknown) => Promise<unknown>;
   /** a hidden user turn: the reverse channel of a transcript directive */
@@ -219,8 +219,10 @@ export interface CreateContextOptions {
   onDispose?: (dispose: () => void) => void;
   /** the manifest's declared contributions; absent means ungated (bundled) */
   declared?: UxDeclaredContributions;
-  /** `namespace/name` of the pack whose .afb plugins ctx.plugin may call */
-  pack?: string;
+  /** the runtime listing id (`<ns>/<pack>/<name>`) of a pack-shipped
+      plugin: the key ctx.plugin calls under, which the bridge resolves to
+      the pack; absent for a plugin outside a pack */
+  listing?: string;
 }
 
 export function createUxContext(
@@ -245,15 +247,14 @@ export function createUxContext(
     onDispose: (fn) => void track(fn),
     onEvent: (type, listener) => track(onUxEvent(type, listener)),
     ...createLifetime(track),
-    bridge: (command, args) => host().bridge(command, args),
     plugin: (name, input) => {
       const h = host();
-      if (!options.pack || !h.plugin) {
+      if (!options.listing || !h.plugin) {
         return Promise.reject(
           new Error(`${pluginId}: ctx.plugin needs a pack; this plugin ships in none`),
         );
       }
-      return h.plugin(options.pack, name, input);
+      return h.plugin(options.listing, name, input);
     },
     send: (content) => host().shell.send(content),
     get shell() {

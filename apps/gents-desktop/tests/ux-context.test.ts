@@ -31,11 +31,7 @@ function fakeHost(): UxHost & { sent: string[]; calls: Array<[string, unknown]> 
         sent.push(content);
       },
     },
-    bridge: async (command, args) => {
-      calls.push([command, args]);
-      return { ok: true } as never;
-    },
-    plugin: async (pack, name, input) => ({ pack, name, input }),
+    plugin: async (listing, name, input) => ({ listing, name, input }),
     os: {
       openExternal: async () => true,
       revealPath: async () => true,
@@ -138,20 +134,41 @@ describe("ux plugin context", () => {
     ).not.toThrow();
   });
 
-  it("routes bridge, send and plugin through the installed host", async () => {
+  it("routes send and plugin through the installed host, plugin under its listing", async () => {
     const ctx = createUxContext("acme", {
       onDispose: (d) => collected.push(d),
-      pack: "ns/pack",
+      listing: "ns/pack/acme",
     });
-    await ctx.bridge("desktop_something", { a: 1 });
-    expect(host.calls).toEqual([["desktop_something", { a: 1 }]]);
     await ctx.send("hi");
     expect(host.sent).toEqual(["hi"]);
     await expect(ctx.plugin("tool", { x: 1 })).resolves.toEqual({
-      pack: "ns/pack",
+      listing: "ns/pack/acme",
       name: "tool",
       input: { x: 1 },
     });
+  });
+
+  it("offers no raw bridge verb: the host's names are the whole surface", () => {
+    const ctx = createUxContext("acme", { onDispose: (d) => collected.push(d) });
+    expect("bridge" in ctx).toBe(false);
+    expect(Object.keys(ctx).sort()).toEqual(
+      [
+        "addEventListener",
+        "onDispose",
+        "onEvent",
+        "os",
+        "plugin",
+        "pluginId",
+        "register",
+        "registerMany",
+        "send",
+        "setInterval",
+        "setTimeout",
+        "shell",
+        "source",
+        "storage",
+      ].sort(),
+    );
   });
 
   it("rejects ctx.plugin for a plugin that ships in no pack", async () => {

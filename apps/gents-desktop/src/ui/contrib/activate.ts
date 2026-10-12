@@ -19,6 +19,8 @@ export interface ActivateOptions {
   file?: string;
   producer?: UxPluginProducer;
   pack?: string;
+  /** the runtime listing id, for a pack-shipped plugin: what ctx.plugin calls under */
+  listing?: string;
   declared?: UxDeclaredContributions;
   /** a root-level cap: false ships the plugin opt-in whatever it says */
   defaultEnabled?: boolean;
@@ -81,7 +83,7 @@ export function activateUxPlugin(
         createUxContext(plugin.id, {
           onDispose: (dispose) => disposers.push(dispose),
           declared: options.declared,
-          pack: options.pack,
+          listing: options.listing,
         }),
       );
     } catch (error) {

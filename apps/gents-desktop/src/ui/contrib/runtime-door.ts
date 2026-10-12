@@ -65,6 +65,7 @@ async function loadListing(entry: UxPluginListing): Promise<void> {
       file: entry.file,
       producer: entry.producer,
       pack: entry.pack ?? undefined,
+      listing: entry.pack ? entry.id : undefined,
       declared: entry.contributes ?? undefined,
       defaultEnabled: entry.defaultEnabled ?? undefined,
     },

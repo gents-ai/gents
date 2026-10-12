@@ -36,11 +36,10 @@ export function buildUxHost(app: DesktopApp, route: () => Route): UxHost {
         await app.actions.sendMessage(content, selection().behaviorId);
       },
     },
-    bridge: (command, args) => call(command, args),
     /* the bridge takes its fields under `request`, as desktop_pack_install does */
-    plugin: (pack, name, input) =>
+    plugin: (listing, name, input) =>
       call<{ output: unknown }>("desktop_plugin_call", {
-        request: { pack, name, input },
+        request: { ux: listing, name, input },
       }).then((r) => r.output),
     os: {
       openExternal: async (url) => {
