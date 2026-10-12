@@ -14,8 +14,8 @@ use serde_json::Value;
 use crate::support::fixtures::test_identity;
 use crate::support::interrupt::{
     create_runtime_request, create_runtime_request_with_execution_origin,
-    wait_for_request_lifecycle_state, wait_for_request_terminal_state, wait_for_runtime_ready,
-    BootedAgent, REQUEST_TERMINAL_PUBLICATION_MARGIN,
+    wait_for_request_terminal_state, wait_for_runtime_ready, BootedAgent,
+    REQUEST_TERMINAL_PUBLICATION_MARGIN,
 };
 use crate::support::snapshots::fetch_request_snapshot;
 use crate::support::streaming_backend::{
@@ -132,12 +132,13 @@ async fn retry_backoff_cannot_renew_an_expired_execution_lease() {
     )
     .unwrap();
     let db = test_db("completion-retry-backoff-liveness").await;
+    let deadline_duration_secs = 60u64;
     let agent = boot_retry_agent_with_liveness(
         &db,
         "completion-retry-backoff-liveness",
         backend.endpoint(),
         1,
-        60,
+        deadline_duration_secs,
         Some(30),
     )
     .await;
@@ -209,7 +210,17 @@ async fn retry_backoff_cannot_renew_an_expired_execution_lease() {
         "observed execution lease must be expired by the fixture"
     );
 
-    wait_for_request_lifecycle_state(db.node.as_ref(), &doc_id, "failed").await;
+    let terminal_state = wait_for_request_terminal_state(
+        db.node.as_ref(),
+        &doc_id,
+        Duration::from_secs(deadline_duration_secs) + REQUEST_TERMINAL_PUBLICATION_MARGIN,
+    )
+    .await;
+    assert_eq!(
+        terminal_state,
+        RequestLifecycleState::Failed,
+        "an expired execution lease must fail the request, not run the planned retry"
+    );
     let rows = db
         .node
         .execute(&format!(
@@ -364,12 +375,13 @@ async fn interactive_budget_is_quick() {
     )
     .unwrap();
     let db = test_db("completion-retry-interactive-budget").await;
+    let deadline_duration_secs = 30u64;
     let agent = boot_retry_agent(
         &db,
         "completion-retry-interactive-budget",
         backend.endpoint(),
         1,
-        30,
+        deadline_duration_secs,
     )
     .await;
 
@@ -385,7 +397,19 @@ async fn interactive_budget_is_quick() {
     )
     .await;
 
-    wait_for_request_lifecycle_state(db.node.as_ref(), &request_doc_id, "failed").await;
+    // The observation window follows the request's timing envelope; the
+    // elapsed assert below is the property under test and stays fixed.
+    let terminal_state = wait_for_request_terminal_state(
+        db.node.as_ref(),
+        &request_doc_id,
+        Duration::from_secs(deadline_duration_secs) + REQUEST_TERMINAL_PUBLICATION_MARGIN,
+    )
+    .await;
+    assert_eq!(
+        terminal_state,
+        RequestLifecycleState::Failed,
+        "the interactive default should spend its one retry and fail, not complete"
+    );
     assert!(
         started.elapsed() < Duration::from_secs(6),
         "interactive default should spend one short retry, not the scheduled ladder; elapsed={:?}",
