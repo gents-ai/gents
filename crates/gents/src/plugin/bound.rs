@@ -98,7 +98,7 @@ impl BoundDir {
     /// directory is opened once and its path read back from that handle, so a
     /// component swapped since `dir` was resolved is refused here.
     pub(crate) fn folder(dir: &Path, access: BindAccess) -> Result<Self> {
-        pin(dir)?;
+        pin(dir, PinKind::Folder)?;
         Ok(Self {
             dir: dir.to_path_buf(),
             target: dir.to_path_buf(),
@@ -130,7 +130,7 @@ impl BoundDir {
         let name = file
             .file_name()
             .with_context(|| format!("{} has no file name", file.display()))?;
-        let identity = pin(file)?;
+        let identity = pin(file, PinKind::File)?;
         let mut last = None;
         for root in link_roots(file) {
             let private = match private_folder(&root) {
@@ -281,13 +281,22 @@ fn opened_path(_: &File) -> Option<PathBuf> {
     None
 }
 
+/// The kind of filesystem object a pin insists on: the kind the scope
+/// resolved, so a path swapped to the other kind between the scope check and
+/// the pin is refused by the pin itself.
+enum PinKind {
+    File,
+    Folder,
+}
+
 /// Opens `path` once and requires the handle's own path to be `path`, the
 /// canonical path that was checked against the scope; returns its identity.
 /// Where the platform cannot name an open handle's path, the inode check on
 /// the link is the remaining pin. Opening a FIFO for reading blocks until a
-/// writer appears, so on unix the open is nonblocking and any handle that is
-/// not a file or folder is refused.
-fn pin(path: &Path) -> Result<Identity> {
+/// writer appears, so on unix the open is nonblocking, and the handle must be
+/// `kind`, the kind the scope resolved, so a path swapped to the other kind
+/// between the scope check and here is refused.
+fn pin(path: &Path, kind: PinKind) -> Result<Identity> {
     let mut options = std::fs::OpenOptions::new();
     options.read(true);
     #[cfg(unix)]
@@ -298,14 +307,13 @@ fn pin(path: &Path) -> Result<Identity> {
     let handle = options
         .open(path)
         .with_context(|| format!("{} cannot be read", path.display()))?;
-    let kind = handle
+    let meta = handle
         .metadata()
         .with_context(|| format!("{} cannot be read", path.display()))?;
-    anyhow::ensure!(
-        kind.is_file() || kind.is_dir(),
-        "{} is not a file or folder",
-        path.display()
-    );
+    match kind {
+        PinKind::File => anyhow::ensure!(meta.is_file(), "{} is not a file", path.display()),
+        PinKind::Folder => anyhow::ensure!(meta.is_dir(), "{} is not a folder", path.display()),
+    }
     let identity = handle_identity(&handle);
     if let Some(opened) = opened_path(&handle) {
         anyhow::ensure!(
@@ -331,11 +339,12 @@ fn named_in_pinned_folder(path: &Path, identity: Identity) -> bool {
     let (Some(folder), Some(name), Some(_)) = (path.parent(), path.file_name(), identity) else {
         return false;
     };
-    // O_NONBLOCK keeps a FIFO swapped into the folder from parking this check;
-    // O_DIRECTORY fails the open when the folder itself was swapped.
+    // O_NONBLOCK keeps a FIFO swapped into the folder from parking this check.
+    // No O_DIRECTORY is needed: the openat below fails ENOTDIR on any handle
+    // that is not a directory, which is what refuses a swapped-in folder.
     let Ok(dir) = std::fs::OpenOptions::new()
         .read(true)
-        .custom_flags(libc::O_NONBLOCK | libc::O_DIRECTORY)
+        .custom_flags(libc::O_NONBLOCK)
         .open(folder)
     else {
         return false;

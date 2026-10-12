@@ -123,7 +123,7 @@ fn a_bound_dir_swapped_to_a_fifo_is_refused() {
     let error = BoundDir::folder(&base.join("d"), BindAccess::Read)
         .expect_err("a FIFO read-open blocks until a writer appears");
     assert!(
-        format!("{error:#}").contains("is not a file or folder"),
+        format!("{error:#}").contains("is not a folder"),
         "{error:#}"
     );
 }
@@ -136,10 +136,30 @@ fn a_bound_file_swapped_to_a_fifo_is_refused() {
     make_fifo(&base.join("f.txt"));
     let error = BoundDir::for_file(&base.join("f.txt"), BindAccess::Read)
         .expect_err("a FIFO read-open blocks until a writer appears");
+    assert!(format!("{error:#}").contains("is not a file"), "{error:#}");
+}
+
+#[test]
+fn a_bound_dir_swapped_to_a_file_is_refused() {
+    let root = tempfile::tempdir().unwrap();
+    let base = root.path().canonicalize().unwrap();
+    std::fs::write(base.join("d"), "x").unwrap();
+    let error = BoundDir::folder(&base.join("d"), BindAccess::Read)
+        .expect_err("a regular file cannot be bound as a folder");
     assert!(
-        format!("{error:#}").contains("is not a file or folder"),
+        format!("{error:#}").contains("is not a folder"),
         "{error:#}"
     );
+}
+
+#[test]
+fn a_bound_file_swapped_to_a_folder_is_refused() {
+    let root = tempfile::tempdir().unwrap();
+    let base = root.path().canonicalize().unwrap();
+    std::fs::create_dir(base.join("f.txt")).unwrap();
+    let error = BoundDir::for_file(&base.join("f.txt"), BindAccess::Read)
+        .expect_err("a folder cannot be shared as a file");
+    assert!(format!("{error:#}").contains("is not a file"), "{error:#}");
 }
 
 #[cfg(unix)]
@@ -166,6 +186,6 @@ fn a_pinned_folder_swapped_to_a_fifo_is_not_the_pinned_folder() {
     let identity = identity_of(&base.join("a.txt"));
     assert!(
         !named_in_pinned_folder(&base.join("folderpipe/x.txt"), identity),
-        "a FIFO cannot be opened as the pinned folder"
+        "a FIFO swapped in as the pinned folder does not name the pinned file"
     );
 }
