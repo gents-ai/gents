@@ -4909,6 +4909,9 @@ pub(crate) enum DesktopCommand {
         /// Managed home; defaults to GENTS_HOME, the desktop's reviewed home, then ~/.gents.
         #[arg(long)]
         home: Option<PathBuf>,
+        /// Desktop client state; defaults to GENTS_DESKTOP_HOME, then the platform's app data folder.
+        #[arg(long)]
+        desktop_home: Option<PathBuf>,
         /// Delete node/client/service data instead of backing it up; browser data is always cleared.
         #[arg(long)]
         delete: bool,

@@ -18,6 +18,7 @@ pub(crate) async fn run(command: DesktopCommand) -> Result<()> {
     }
     let DesktopCommand::Reset {
         home,
+        desktop_home,
         delete,
         confirm,
         wait_for_desktop,
@@ -25,14 +26,17 @@ pub(crate) async fn run(command: DesktopCommand) -> Result<()> {
         desktop_executable,
     } = command;
     let mut ready = false;
+    let mut retry = "gents desktop reset".to_owned();
     let result = reset(
         home,
+        desktop_home,
         delete,
         confirm,
         wait_for_desktop,
         desktop_pid,
         desktop_executable,
         &mut ready,
+        &mut retry,
     )
     .await;
     if wait_for_desktop && ready {
@@ -44,7 +48,7 @@ pub(crate) async fn run(command: DesktopCommand) -> Result<()> {
                 None => "Reset finished. Reopen Gents to set up a new node.".into(),
             },
             Err(error) => format!(
-                "Reset could not finish: {error:#}. Run gents desktop reset to review the remaining state and retry."
+                "Reset could not finish: {error:#}. Run {retry} to review the remaining state and retry."
             ),
         };
         notify(&message);
@@ -56,16 +60,22 @@ pub(crate) async fn run(command: DesktopCommand) -> Result<()> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn reset(
     home: Option<std::path::PathBuf>,
+    desktop_home: Option<std::path::PathBuf>,
     delete: bool,
     confirm: Option<String>,
     wait_for_desktop: bool,
     desktop_pid: Option<u32>,
     desktop_executable: Option<std::path::PathBuf>,
     ready: &mut bool,
+    retry: &mut String,
 ) -> Result<ManagedServerResetResult> {
-    let desktop = DesktopPaths::discover()?;
+    let desktop = match desktop_home {
+        Some(root) => DesktopPaths::from_root(crate::absolutize(root)?),
+        None => DesktopPaths::discover()?,
+    };
     let explicit_home = home.or_else(|| {
         std::env::var_os("GENTS_HOME")
             .filter(|value| !value.is_empty())
@@ -77,6 +87,9 @@ async fn reset(
             .unwrap_or_else(|| crate::resolve_home_dir(None)),
     };
     let home = crate::absolutize(home)?;
+    // Retirement removes the preference that names the reviewed home, so a
+    // retry must name both roots explicitly.
+    *retry = retry_command(&home, desktop.root())?;
     let config = NativeServiceConfig::new(home.clone(), std::env::current_exe()?)?;
     let user_home = resolve_user_home(Some(config.user_home.clone()))?;
     let definition = config.definition_path(NativeServicePlatform::current()?);
@@ -136,7 +149,7 @@ async fn reset(
     let _client_lock = lock_client_state(&desktop)?;
     let settled = plan_full_reset(Some(&home), &desktop, &user_home, &definition)?;
     settled.check_confirmation(&confirmation, disposition)?;
-    retire_then_clear(&settled, disposition, backup.as_deref(), || {
+    retire_then_clear(&settled, disposition, backup.as_deref(), retry, || {
         run_browser_helper(&executable, BrowserHelper::Clear, BROWSER_CLEAR_TIMEOUT)
     })
 }
@@ -147,6 +160,7 @@ fn retire_then_clear(
     settled: &HomeResetPlan,
     disposition: HomeResetDisposition,
     backup: Option<&std::path::Path>,
+    retry: &str,
     clear: impl FnOnce() -> Result<()>,
 ) -> Result<ManagedServerResetResult> {
     let mut result = settled.retire(disposition, backup)?;
@@ -156,11 +170,27 @@ fn retire_then_clear(
             None => "Your local state was permanently deleted".into(),
         };
         format!(
-            "{retired}, but browser data was not cleared. Quit every Gents window, then run gents desktop reset to review and clear it"
+            "{retired}, but browser data was not cleared. Quit every Gents window, then run `{retry}` to review and clear it"
         )
     })?;
     result.cleared_browser_paths = result.browser_paths.clone();
     Ok(result)
+}
+
+fn retry_command(home: &std::path::Path, desktop: &std::path::Path) -> Result<String> {
+    let quote = |path: &std::path::Path| -> Result<String> {
+        let path = path
+            .to_str()
+            .with_context(|| format!("{} is not valid UTF-8", path.display()))?;
+        Ok(shlex::try_quote(path)
+            .with_context(|| format!("{path} cannot be quoted for a shell"))?
+            .into_owned())
+    };
+    Ok(format!(
+        "gents desktop reset --home {} --desktop-home {}",
+        quote(home)?,
+        quote(desktop)?
+    ))
 }
 
 fn notify(message: &str) {
@@ -396,26 +426,41 @@ mod tests {
         let (home, plan) = initialized_reset(&user);
         let backup = user.join("missing-parent/backup");
         let mut cleared = false;
-        let error = retire_then_clear(&plan, HomeResetDisposition::Archive, Some(&backup), || {
-            cleared = true;
-            Ok(())
-        })
+        let retry = retry_command(&home, &user.join("desktop")).unwrap();
+        let error = retire_then_clear(
+            &plan,
+            HomeResetDisposition::Archive,
+            Some(&backup),
+            &retry,
+            || {
+                cleared = true;
+                Ok(())
+            },
+        )
         .unwrap_err();
         assert!(!cleared, "browser data was cleared after {error:#}");
         assert!(home.join("data/MANIFEST").is_file());
         assert!(home.join("init.json").is_file());
     }
 
-    #[test]
-    fn browser_clearing_failure_names_the_completed_archive() {
+    #[tokio::test]
+    async fn browser_clearing_failure_advertises_a_retry_that_reviews_the_same_state() {
         let temp = tempfile::tempdir().unwrap();
         let user = temp.path().canonicalize().unwrap();
         let (home, plan) = initialized_reset(&user);
+        let desktop = user.join("desktop");
         let backup = plan.backup_path("test").unwrap();
-        let error = retire_then_clear(&plan, HomeResetDisposition::Archive, Some(&backup), || {
-            assert!(backup.join("home/data/MANIFEST").is_file());
-            bail!("WebKit refused")
-        })
+        let retry = retry_command(&home, &desktop).unwrap();
+        let error = retire_then_clear(
+            &plan,
+            HomeResetDisposition::Archive,
+            Some(&backup),
+            &retry,
+            || {
+                assert!(backup.join("home/data/MANIFEST").is_file());
+                bail!("WebKit refused")
+            },
+        )
         .unwrap_err();
         let message = format!("{error:#}");
         assert!(message.contains(&backup.display().to_string()), "{message}");
@@ -424,5 +469,62 @@ mod tests {
             "{message}"
         );
         assert!(!home.join("data").exists());
+
+        let advertised = message.split('`').nth(1).expect("retry command");
+        let argv = shlex::split(advertised).expect("shell words");
+        let crate::cli::Command::Desktop {
+            command:
+                DesktopCommand::Reset {
+                    home: retry_home,
+                    desktop_home,
+                    delete,
+                    confirm,
+                    ..
+                },
+        } = <crate::cli::Cli as clap::Parser>::try_parse_from(argv)
+            .unwrap()
+            .command
+        else {
+            panic!("the retry is not a desktop reset: {advertised}");
+        };
+        let mut ready = false;
+        let mut next_retry = String::new();
+        let preview = reset(
+            retry_home,
+            desktop_home,
+            delete,
+            confirm,
+            false,
+            None,
+            None,
+            &mut ready,
+            &mut next_retry,
+        )
+        .await
+        .unwrap();
+        assert!(!preview.completed);
+        assert_eq!(preview.managed_home.as_deref(), home.to_str());
+        assert_eq!(next_retry, retry);
+    }
+
+    #[test]
+    fn retry_command_quotes_paths_with_spaces() {
+        let command = retry_command(
+            std::path::Path::new("/Users/a b/.gents"),
+            std::path::Path::new("/Users/a b/Library/Application Support/gents/desktop"),
+        )
+        .unwrap();
+        assert_eq!(
+            shlex::split(&command).unwrap(),
+            [
+                "gents",
+                "desktop",
+                "reset",
+                "--home",
+                "/Users/a b/.gents",
+                "--desktop-home",
+                "/Users/a b/Library/Application Support/gents/desktop",
+            ]
+        );
     }
 }
