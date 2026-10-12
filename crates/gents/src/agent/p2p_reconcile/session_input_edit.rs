@@ -350,12 +350,23 @@ pub async fn run_session_input_edit_reconciler(
     let mut subscription_open = true;
     let mut deferred: HashMap<String, DateTime<Utc>> = HashMap::new();
     let mut ids = Vec::new();
+    // Discovered commands and full sweeps that failed are owed to the next
+    // tick: unanswered-only ticks cannot rediscover a command whose invalid
+    // receipt is non-null.
+    let mut failed = Vec::new();
+    let mut full_sweep_owed = false;
     let mut sweep = Some(Sweep::Unverified);
     loop {
         if let Some(sweep) = sweep {
             match unanswered_commands(&node, identity.as_ref(), sweep).await {
-                Ok(unanswered) => ids.extend(unanswered),
-                Err(error) => tracing::warn!(%error, "pending input edit sweep failed"),
+                Ok(unanswered) => {
+                    full_sweep_owed &= matches!(sweep, Sweep::Unanswered);
+                    ids.extend(unanswered);
+                }
+                Err(error) => {
+                    full_sweep_owed |= matches!(sweep, Sweep::Unverified);
+                    tracing::warn!(%error, "pending input edit sweep failed");
+                }
             }
         }
         ids.sort();
@@ -374,6 +385,7 @@ pub async fn run_session_input_edit_reconciler(
                 Err(error) => {
                     deferred.remove(&id);
                     tracing::warn!(command_doc_id = id, %error, "pending input edit could not be processed");
+                    failed.push(id);
                 }
             }
         }
@@ -383,7 +395,10 @@ pub async fn run_session_input_edit_reconciler(
             .map(|at| (*at - Utc::now()).to_std().unwrap_or_default());
         sweep = tokio::select! {
             _ = cancel.cancelled() => return Ok(()),
-            _ = interval.tick() => Some(if subscription_open { Sweep::Unanswered } else { Sweep::Unverified }),
+            _ = interval.tick() => {
+                ids.append(&mut failed);
+                Some(if subscription_open && !full_sweep_owed { Sweep::Unanswered } else { Sweep::Unverified })
+            }
             _ = tokio::time::sleep(retry.unwrap_or_default()), if retry.is_some() => {
                 let now = Utc::now();
                 ids.extend(deferred.iter().filter(|(_, at)| **at <= now).map(|(id, _)| id.clone()));
