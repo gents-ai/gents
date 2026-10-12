@@ -527,16 +527,28 @@ fn plan_reset(
         None => false,
     };
     let mut client_entries = Vec::new();
+    // Like a runtime home, a desktop home proves itself only through records
+    // the desktop writes; its store and log directory names also occur in
+    // user projects.
+    let mut desktop_owned = client.is_some();
     if retires_client_state {
         // Entries are derived from the canonical root, never from the raw
         // configured path.
         let canonical = crate::client::DesktopPaths::from_root(&desktop_root);
+        let preference = desktop_root.join(MANAGED_SERVER_CONFIG);
+        for record in canonical
+            .client_records()
+            .into_iter()
+            .chain(std::iter::once(preference.as_path()))
+        {
+            desktop_owned |= present(record)?;
+        }
         for entry in canonical
             .client_state_entries()
             .into_iter()
-            .chain(std::iter::once(desktop_root.join(MANAGED_SERVER_CONFIG)))
+            .chain(std::iter::once(preference))
         {
-            if present(&entry)? {
+            if (desktop_owned || entry != canonical.node_data_dir()) && present(&entry)? {
                 client_entries.push(entry);
             }
         }
@@ -547,7 +559,7 @@ fn plan_reset(
             .with_extension("lock");
         client_entries.retain(|entry| *entry != lock);
     }
-    if full_reset && present(&desktop_root.join("logs"))? {
+    if full_reset && desktop_owned && present(&desktop_root.join("logs"))? {
         client_entries.push(desktop_root.join("logs"));
     }
     let mut delete_home_entries = Vec::new();
@@ -1370,6 +1382,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let user = temp.path().canonicalize().unwrap();
         let desktop = DesktopPaths::from_root(user.join("desktop"));
+        write(desktop.principal_metadata_path(), "client identity");
         let home = desktop.node_data_dir().join("managed");
         write(&home.join("other-node/init.json"), "retained node");
         assert!(
@@ -1508,6 +1521,25 @@ mod tests {
                 assert!(project.join(entry).is_file(), "{entry}");
             }
         }
+    }
+
+    #[test]
+    fn full_reset_keeps_store_and_log_names_in_an_unrelated_desktop_folder() {
+        let temp = tempfile::tempdir().unwrap();
+        let user = temp.path().canonicalize().unwrap();
+        let (home, _, service) = fixture(&user);
+        let project = DesktopPaths::from_root(user.join("project"));
+        write(&project.node_data_dir().join("index.js"), "user file");
+        write(&project.root().join("logs/build.log"), "user file");
+        let plan = plan_full_reset(Some(&home), &project, &user, &service).unwrap();
+        let preview = plan.preview();
+        for path in preview.planned_paths.iter().chain(&preview.delete_paths) {
+            assert!(!Path::new(path).starts_with(project.root()), "{path}");
+        }
+        plan.retire(HomeResetDisposition::Delete, None).unwrap();
+        assert!(project.node_data_dir().join("index.js").is_file());
+        assert!(project.root().join("logs/build.log").is_file());
+        assert!(!home.join("init.json").exists());
     }
 
     #[test]
