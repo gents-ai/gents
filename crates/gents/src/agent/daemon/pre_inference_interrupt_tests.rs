@@ -501,6 +501,8 @@ async fn interrupt_while_restoring_the_provider_checkpoint_terminalizes_through_
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn interrupt_while_hashing_a_sealed_workspace_kills_git_and_keeps_its_index() {
+    use crate::managed_exec::ownership::{ProcessIdentity, ProcessObservation};
+
     fn git(dir: &std::path::Path, args: &[&str]) {
         let status = std::process::Command::new("git")
             .args(args)
@@ -567,6 +569,7 @@ async fn interrupt_while_hashing_a_sealed_workspace_kills_git_and_keeps_its_inde
     .await
     .expect("git add must reach the parking clean filter");
 
+    let filter = ProcessIdentity::of_live(filter_pid).expect("the parked clean filter is running");
     interrupt_tx
         .send(Some(crate::interrupt::InterruptIntent {
             at: chrono::Utc::now(),
@@ -578,13 +581,13 @@ async fn interrupt_while_hashing_a_sealed_workspace_kills_git_and_keeps_its_inde
         .expect("hashing task joins");
     assert!(outcome.is_none(), "the interrupt wins over hashing: {outcome:?}");
 
-    tokio::time::timeout(Duration::from_secs(10), async {
-        while unsafe { libc::kill(filter_pid, 0) } == 0 {
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    })
-    .await
-    .expect("abandoned hashing must kill Git's process group");
+    assert_ne!(
+        filter
+            .await_leader_exit(Duration::from_secs(10))
+            .await,
+        ProcessObservation::Running,
+        "abandoned hashing must kill Git's process group"
+    );
     assert_eq!(
         std::fs::read(dir.join(".git/index")).unwrap(),
         index_before,
