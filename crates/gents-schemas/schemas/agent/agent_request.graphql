@@ -62,6 +62,10 @@ type AgentRequest @branchable {
     # Missing on a terminal replica means incomplete, never implicit no_message.
     # Excluded from requester signatures, like other execution-owned fields.
     terminal_output: JSON
+    # Terminal-owner certificate: interrupted while still Claimed, before the
+    # Processing fence for title dispatch, compaction and inference. Missing
+    # or false is unknown, never evidence from absent replica provider rows.
+    stopped_before_running: Boolean
     terminal_redrive_attempts: Int @index
     created_at: String @index @immutable
     claimed_at: String

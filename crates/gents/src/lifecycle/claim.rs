@@ -267,7 +267,10 @@ impl RequestLifecycle {
 
     /// Commit the modeled claimed → processing boundary before allocating a
     /// local stream buffer. Beginning creates no output document and does not
-    /// renew the lease. A committed begin is the durable replay fact.
+    /// renew the lease. A committed begin is the durable replay fact. Every
+    /// provider-capable path, including title dispatch and pre-inference
+    /// compaction, must cross this fence before starting: terminalization uses
+    /// an owned Claimed state as positive evidence of no provider work.
     pub async fn begin_owned_execution(
         &mut self,
         stream_writer: &crate::streaming::DefraStreamWriter,

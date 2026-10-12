@@ -567,6 +567,8 @@ async fn terminalize_execution_with_time(
             let timestamp_gql = escape_graphql_string(&timestamp);
             let outcome_reason = reason;
             let reason = escape_graphql_string(reason);
+            let stopped_before_running = state.certifies_stopped_before_running(
+                effective_outcome.request_state(), matches!(authority, TerminalAuthority::Owner(_)));
             let target = escape_graphql_string(effective_outcome.request_state().as_str());
             let state = escape_graphql_string(state.as_str());
             let mutation = format!(r#"mutation($terminal_output: JSON) {{ update_AgentRequest(
@@ -575,7 +577,7 @@ async fn terminalize_execution_with_time(
                 input: {{ lifecycle_state: "{target}", execution_generation: "{next_generation}",
                     execution_lease_expires_at: "{timestamp_gql}", failure_reason: "{reason}",
                     terminalized_at: "{timestamp_gql}", terminal_redrive_attempts: 0,
-                    terminal_output: $terminal_output }}
+                    terminal_output: $terminal_output, stopped_before_running: {stopped_before_running} }}
             ) {{ _docID }} }}"#);
             let result = txn.execute_with_variables(&mutation, &serde_json::json!({
                 "terminal_output": selection

@@ -371,7 +371,7 @@ struct RequestTransitionView {
 #[derive(Debug, Clone, Serialize)]
 struct RequestCancelCauseView {
     cause: String,
-    cancel_initiated_at: Option<String>,
+    interrupt_requested_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -616,7 +616,6 @@ fn request_show_request_query(request_id: &str, schema: &RequestShowSchema) -> S
         &schema.agent_request,
         &[
             "cancel_cause",
-            "cancel_initiated_at",
             "terminal_output",
             "execution_generation",
             "execution_lease_secs",
@@ -885,21 +884,17 @@ fn cause_suffix(cause: Option<&str>) -> String {
 
 fn request_cancel_cause_view(request: &Value) -> Option<RequestCancelCauseView> {
     let request_cause = string_field(request, "cancel_cause");
-    let request_cancel_at = string_field(request, "cancel_initiated_at");
     let interrupt_at = string_field(request, "interrupt_requested_at");
     let lifecycle_state = string_field(request, "lifecycle_state").unwrap_or_default();
     let is_interrupted = RequestLifecycleState::parse_opt(Some(lifecycle_state.as_str()))
         == Some(RequestLifecycleState::Interrupted);
-    let was_cancelled = is_interrupted
-        || request_cause.is_some()
-        || request_cancel_at.is_some()
-        || interrupt_at.is_some();
+    let was_cancelled = is_interrupted || request_cause.is_some() || interrupt_at.is_some();
     if !was_cancelled {
         return None;
     }
     Some(RequestCancelCauseView {
         cause: request_cause.unwrap_or_else(|| "unknown".to_string()),
-        cancel_initiated_at: request_cancel_at.or(interrupt_at),
+        interrupt_requested_at: interrupt_at,
     })
 }
 
@@ -1180,8 +1175,11 @@ fn render_request_show_text(
         lines.push("CancelCause:".to_string());
         lines.push(format!("  cause: {}", cancel.cause));
         lines.push(format!(
-            "  cancel_initiated_at: {}",
-            cancel.cancel_initiated_at.as_deref().unwrap_or("unknown")
+            "  interrupt_requested_at: {}",
+            cancel
+                .interrupt_requested_at
+                .as_deref()
+                .unwrap_or("unknown")
         ));
     }
 
@@ -2001,7 +1999,7 @@ mod tests {
         let cancel = request_cancel_cause_view(&request)
             .expect("interrupted requests should render CancelCause");
         assert_eq!(cancel.cause, "unknown");
-        assert_eq!(cancel.cancel_initiated_at, None);
+        assert_eq!(cancel.interrupt_requested_at, None);
 
         let request = json!({
             "lifecycle_state": "interrupted",
@@ -2012,7 +2010,7 @@ mod tests {
             .expect("interrupted requests should render CancelCause");
         assert_eq!(cancel.cause, "operator_interrupt");
         assert_eq!(
-            cancel.cancel_initiated_at.as_deref(),
+            cancel.interrupt_requested_at.as_deref(),
             Some("2026-05-20T10:00:03Z")
         );
     }

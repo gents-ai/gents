@@ -837,6 +837,38 @@ fn session_snapshot_stays_renderable_across_single_turn_observation_updates() {
 }
 
 #[test]
+fn session_snapshot_retains_modeled_terminal_provider_evidence() {
+    for case in lean_vocab_test::lean_request_transition_cases()
+        .iter()
+        .filter(|case| case.to == "interrupted" && case.classification == "legal")
+    {
+        for certificate in [None, Some(case.stopped_before_running)] {
+            let mut row = request("req-2", RequestLifecycleState::Interrupted);
+            row.stopped_before_running = certificate;
+            let snapshot = build_session_snapshot_from_store(
+                &ClientStore::from_rows(ClientStoreRows {
+                    sessions: vec![session(None)],
+                    requests: vec![row],
+                    ..ClientStoreRows::default()
+                }),
+                "session-1",
+                Some("req-2"),
+            )
+            .expect("snapshot");
+            assert_eq!(
+                snapshot
+                    .latest_request_outcome
+                    .unwrap()
+                    .stopped_before_running,
+                certificate,
+                "{}",
+                case.name
+            );
+        }
+    }
+}
+
+#[test]
 fn session_snapshot_derives_cancel_causes_from_request_and_tool() {
     let mut interrupted = request("req-2", RequestLifecycleState::Interrupted);
     interrupted.failure_reason = Some("completion cancelled".into());

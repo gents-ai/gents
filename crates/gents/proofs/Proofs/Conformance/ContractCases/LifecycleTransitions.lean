@@ -83,7 +83,8 @@ def requestTransitionCase (source target : RequestState) : LifecycleTransitionCa
   let targetName := target.toDefraDB
   let action := requestTransitionAction? sourceName targetName
   let classification := requestTransitionClassification source target action
-  { name := lifecycleTransitionCaseName "Request" sourceName targetName
+  { stoppedBeforeRunning := Request.Projection.stoppedBeforeRunning true source target
+  , name := lifecycleTransitionCaseName "Request" sourceName targetName
   , domain := "Request"
   , fromState := sourceName
   , toState := targetName

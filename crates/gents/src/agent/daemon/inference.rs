@@ -2038,6 +2038,7 @@ pub(super) mod tests {
         node.shutdown().await;
         let _ = std::fs::remove_dir_all(data_path);
     }
+    include!("pre_inference_interrupt_tests.rs");
     include!("execution_lease_regression_tests.rs");
     include!("fold_checkpoint_reclaim_tests.rs");
 }

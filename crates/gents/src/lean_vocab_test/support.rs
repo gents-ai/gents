@@ -1207,6 +1207,7 @@ pub(crate) struct LeanCausalHopCallCase {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanLifecycleTransitionCase {
+    pub(crate) stopped_before_running: bool,
     pub(crate) name: String,
     pub(crate) domain: String,
     pub(crate) from: String,

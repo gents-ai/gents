@@ -423,6 +423,19 @@ async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) 
         ),
     }
 
+    let response = gents::graphql::graphql_with_transaction_retry(
+        &db.node,
+        &format!(
+            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ stopped_before_running }} }}"#,
+            gents::graphql::escape_graphql_string(&doc_id)
+        ),
+        "test.interrupt_evidence",
+    ).await.unwrap();
+    let evidence: serde_json::Value = gents::graphql::first_row(&response, "AgentRequest")
+        .unwrap()
+        .unwrap();
+    let certified = evidence["stopped_before_running"].as_bool() == Some(true);
+    assert_eq!(certified, case.stopped_before_running, "{}", case.name);
     let snap = fetch_request_snapshot(&db.node, &doc_id).await;
     assert_eq!(
         snap.lifecycle_state,
@@ -443,6 +456,13 @@ pub(super) async fn generated_request_transition_cases_cover_lifecycle_policy() 
     let mut recovery_reachable_count = 0;
 
     for case in lean_request_transition_cases() {
+        let source = parsed_request_state(&case.from);
+        let target = parsed_request_state(&case.to);
+        assert_eq!(
+            source.certifies_stopped_before_running(target, true),
+            case.stopped_before_running
+        );
+        assert!(!source.certifies_stopped_before_running(target, false));
         match case.classification.as_str() {
             "legal" => {
                 legal_count += 1;

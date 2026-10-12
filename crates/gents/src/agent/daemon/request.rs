@@ -11,6 +11,48 @@ use gents_loop::loop_stream::{provider_messages, provider_view_tagged, TaggedMes
 
 const CANCELLATION_GRACE_PERIOD: std::time::Duration = std::time::Duration::from_millis(100);
 
+/// Callers must flush received auxiliary output after interruption. The future
+/// must not own an executing host command or a terminal transaction, whose
+/// completion has separate drain and fencing obligations.
+pub(super) async fn prepare_unless_interrupted<T>(
+    interrupt_rx: &mut tokio::sync::watch::Receiver<Option<crate::interrupt::InterruptIntent>>,
+    preparation: impl std::future::Future<Output = T>,
+) -> Option<T> {
+    if interrupt_rx.borrow_and_update().is_some() {
+        return None;
+    }
+    tokio::pin!(preparation);
+    loop {
+        tokio::select! {
+            biased;
+            changed = interrupt_rx.changed() => {
+                if changed.is_err() {
+                    return Some(preparation.await);
+                }
+                if interrupt_rx.borrow_and_update().is_some() {
+                    return None;
+                }
+            }
+            result = &mut preparation => return Some(result),
+        }
+    }
+}
+
+pub(super) async fn flush_received_preparation_partial(context: &str) -> Result<()> {
+    match tokio::time::timeout(
+        crate::config_client::EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
+        crate::rendered_request::scope::flush_received_auxiliary_partial(),
+    ).await {
+        Ok(Ok(_)) => Ok(()),
+        Ok(Err(error)) => Err(super::ShutdownDrainFailure {
+            reason: format!("{context} partial output persistence failed: {error:#}"),
+        }.into()),
+        Err(_) => Err(super::ShutdownDrainFailure {
+            reason: format!("{context} partial output persistence exceeded the embedded storage-step deadline; commit outcome must be recovered from durable state"),
+        }.into()),
+    }
+}
+
 impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
     /// Size the exact first-turn provider request for session-compaction
     /// admission through the owned loop's assembly owner, including its
@@ -83,26 +125,35 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
         mut shutdown: tokio::sync::watch::Receiver<bool>,
         mut interrupt_rx: tokio::sync::watch::Receiver<Option<crate::interrupt::InterruptIntent>>,
     ) -> Result<HandleRequestOutcome> {
-        if let Some(guard) = &self.root_execution_guard {
-            guard
-                .validate(&self.node)
-                .await
-                .context("validating current WorkspaceRoot policy for fresh request")?;
-        }
         let request_token = tokio_util::sync::CancellationToken::new();
         let request = lifecycle.request().clone();
-        let resume_from_history = session::retry_has_published_input(&self.node, &request).await?;
         let effective_sampling = self.agent_config.sampling;
         effective_sampling.validate_for_provider(
             self.agent_config.backend_provider_kind,
             self.agent_config.openai_wire_api,
         )?;
         let effective_seed = effective_sampling.seed;
-        let aggregate_token_budget = crate::completion_factory::aggregate_token_budget_for_request(
-            self.node.as_ref(),
-            &request,
-        )
-        .await?;
+        let admitted = async {
+            if let Some(guard) = &self.root_execution_guard {
+                guard
+                    .validate(&self.node)
+                    .await
+                    .context("validating current WorkspaceRoot policy for fresh request")?;
+            }
+            let resume_from_history =
+                session::retry_has_published_input(&self.node, &request).await?;
+            let aggregate_token_budget =
+                crate::completion_factory::aggregate_token_budget_for_request(
+                    self.node.as_ref(),
+                    &request,
+                )
+                .await?;
+            Ok::<_, anyhow::Error>((resume_from_history, aggregate_token_budget))
+        };
+        let Some(admitted) = prepare_unless_interrupted(&mut interrupt_rx, admitted).await else {
+            return Ok(HandleRequestOutcome::Interrupted);
+        };
+        let (resume_from_history, aggregate_token_budget) = admitted?;
         let trace_attrs = RequestTraceAttrs::from_request(&request);
         let agent_name = self.agent_config.agent_id.clone();
         let admission_context = AdmissionCallContext::for_request(
@@ -177,68 +228,68 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                     request_hop = trace_attrs.request_hop,
                 ))
                 .await?;
-            self.spawn_conversation_title_generation(&request);
-
-            let selected_skill_ids = &request.input.selected_skill_ids;
-            let skill_reminders = self
-                .prompt_builder
-                .selected_skill_reminders(selected_skill_ids);
-            let overlay = crate::workspace::resolve_request_workspace_overlay(
-                &self.node,
-                &request,
-                lifecycle.execution_generation()?,
-                self.agent_config.tools.static_policy().bash.execution_mode
-                    == crate::toolset::CommandExecutionMode::ArtifactWrite,
-                self.operator_tool_root.as_deref(),
-            )
-            .await?;
-            // Some even when empty: bound requests must not fall through to a live walk.
-            let frozen_instruction_manifest =
-                crate::workspace::frozen_instruction_manifest_from_overlay(overlay.as_ref())
-                    .map(str::to_owned);
-            let request_context_message = super::inference::render_request_context_message(
-                self.node.as_ref(),
-                &self.agent_config,
-                &request,
-                frozen_instruction_manifest.as_deref(),
-            )?;
-            let prompt = |folded: crate::lifecycle::queue::FoldedInput| {
-                crate::agent::loop_stream::FoldedPrompt {
-                    key: folded.key(),
-                    message: crate::llm::message::Message::user(folded.content),
-                }
-            };
-            let consumed_prompts =
-                crate::lifecycle::queue::load_consumed_folded_inputs(&self.node, &request)
-                    .await?
-                    .into_iter()
-                    .map(prompt)
+            let preparation = async {
+                self.spawn_conversation_title_generation(&request);
+                let selected_skill_ids = &request.input.selected_skill_ids;
+                let skill_reminders = self
+                    .prompt_builder
+                    .selected_skill_reminders(selected_skill_ids);
+                let overlay = crate::workspace::resolve_request_workspace_overlay(
+                    &self.node,
+                    &request,
+                    lifecycle.execution_generation()?,
+                    self.agent_config.tools.static_policy().bash.execution_mode
+                        == crate::toolset::CommandExecutionMode::ArtifactWrite,
+                    self.operator_tool_root.as_deref(),
+                )
+                .await?;
+                // Some even when empty: bound requests must not fall through to a live walk.
+                let frozen_instruction_manifest =
+                    crate::workspace::frozen_instruction_manifest_from_overlay(overlay.as_ref())
+                        .map(str::to_owned);
+                let request_context_message = super::inference::render_request_context_message(
+                    self.node.as_ref(),
+                    &self.agent_config,
+                    &request,
+                    frozen_instruction_manifest.as_deref(),
+                )?;
+                let prompt = |folded: crate::lifecycle::queue::FoldedInput| {
+                    crate::agent::loop_stream::FoldedPrompt {
+                        key: folded.key(),
+                        message: crate::llm::message::Message::user(folded.content),
+                    }
+                };
+                let consumed_prompts =
+                    crate::lifecycle::queue::load_consumed_folded_inputs(&self.node, &request)
+                        .await?
+                        .into_iter()
+                        .map(prompt)
+                        .collect::<Vec<_>>();
+                // A retry resuming its parent's published progress sends that
+                // history as its input and publishes nothing, so it answers no
+                // newly selected message; the selection waits for the next turn.
+                let selection = if resume_from_history {
+                    &[][..]
+                } else {
+                    lifecycle.folded_selection()
+                };
+                let folded_prompts = consumed_prompts
+                    .iter()
+                    .cloned()
+                    .chain(selection.iter().cloned().map(prompt))
                     .collect::<Vec<_>>();
-            // A retry resuming its parent's published progress sends that
-            // history as its input and publishes nothing, so it answers no
-            // newly selected message; the selection waits for the next turn.
-            let selection = if resume_from_history {
-                &[][..]
-            } else {
-                lifecycle.folded_selection()
-            };
-            let folded_prompts = consumed_prompts
-                .iter()
-                .cloned()
-                .chain(selection.iter().cloned().map(prompt))
-                .collect::<Vec<_>>();
-            let workspace = match overlay {
-                Some(overlay) => crate::tool_call_lifecycle::runtime::ToolWorkspaceScope {
-                    workspace_cwd: Some(overlay.cwd),
-                    workspace_root: Some(overlay.root),
-                    workspace_authority: Some(overlay.authority),
-                    workspace_artifact: overlay.workspace_artifact,
-                },
-                None => crate::tool_call_lifecycle::runtime::ToolWorkspaceScope::cwd_only(
-                    crate::workspace::request_workspace_cwd(&request),
-                ),
-            };
-            let (mut built, replay) = async {
+                let workspace = match overlay {
+                    Some(overlay) => crate::tool_call_lifecycle::runtime::ToolWorkspaceScope {
+                        workspace_cwd: Some(overlay.cwd),
+                        workspace_root: Some(overlay.root),
+                        workspace_authority: Some(overlay.authority),
+                        workspace_artifact: overlay.workspace_artifact,
+                    },
+                    None => crate::tool_call_lifecycle::runtime::ToolWorkspaceScope::cwd_only(
+                        crate::workspace::request_workspace_cwd(&request),
+                    ),
+                };
+                let (mut built, replay) = async {
                 for assembly_attempt in 0..=1 {
                     let background_cutoff =
                         lifecycle.background_completion_input_through_sequence();
@@ -551,14 +602,37 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
             ))
             .await?;
 
-            if !skill_reminders.is_empty() {
-                let mut reminders = skill_reminders
-                    .into_iter()
-                    .map(TaggedMessage::unassociated)
-                    .collect::<Vec<_>>();
-                reminders.append(&mut built.messages);
-                built.messages = reminders;
-            }
+                if !skill_reminders.is_empty() {
+                    let mut reminders = skill_reminders
+                        .into_iter()
+                        .map(TaggedMessage::unassociated)
+                        .collect::<Vec<_>>();
+                    reminders.append(&mut built.messages);
+                    built.messages = reminders;
+                }
+
+                Ok::<_, anyhow::Error>((
+                    workspace,
+                    request_context_message,
+                    built,
+                    replay,
+                    consumed_prompts,
+                    folded_prompts,
+                ))
+            };
+            let Some(prepared) = prepare_unless_interrupted(&mut interrupt_rx, preparation).await
+            else {
+                flush_received_preparation_partial("interrupted request preparation").await?;
+                return Ok(HandleRequestOutcome::Interrupted);
+            };
+            let (
+                workspace,
+                request_context_message,
+                built,
+                replay,
+                consumed_prompts,
+                folded_prompts,
+            ) = prepared?;
 
             let doc_id = lifecycle.request().doc_id.clone();
 
