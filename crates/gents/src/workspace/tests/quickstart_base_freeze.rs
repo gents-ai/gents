@@ -46,7 +46,9 @@ async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts
     let placed = Path::new(&outcome.placement.host_path);
     assert_eq!(git(placed, &["rev-parse", "HEAD"]), fx.base_sha);
     assert_eq!(
-        super::super::adapter::working_tree_hash(placed).unwrap(),
+        super::super::adapter::working_tree_hash(placed)
+            .await
+            .unwrap(),
         base_tree
     );
 

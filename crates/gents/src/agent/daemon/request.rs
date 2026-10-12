@@ -12,8 +12,9 @@ use gents_loop::loop_stream::{provider_messages, provider_view_tagged, TaggedMes
 const CANCELLATION_GRACE_PERIOD: std::time::Duration = std::time::Duration::from_millis(100);
 
 /// Callers must flush received auxiliary output after interruption. The future
-/// must not own an executing host command or a terminal transaction, whose
-/// completion has separate drain and fencing obligations.
+/// must not own a recorded host command (task hook, tool call) or a terminal
+/// transaction, whose completion has separate drain and fencing obligations;
+/// an unrecorded managed process is killed with its group when dropped.
 pub(super) async fn prepare_unless_interrupted<T>(
     interrupt_rx: &mut tokio::sync::watch::Receiver<Option<crate::interrupt::InterruptIntent>>,
     preparation: impl std::future::Future<Output = T>,

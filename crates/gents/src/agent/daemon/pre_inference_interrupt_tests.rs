@@ -400,3 +400,195 @@ async fn interrupt_latched_at_the_claim_terminalizes_before_execution_begins() {
     );
     node.shutdown().await;
 }
+
+/// The paused read is the provider-context checkpoint restoration inside
+/// `run_inference`, after its initial latch check; it never completes, so only
+/// observing the latch across that preparation lets the owner terminalize.
+#[tokio::test]
+async fn interrupt_while_restoring_the_provider_checkpoint_terminalizes_through_the_owner() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+    let agent_config = pre_inference_agent();
+    let node_did = agent_config.node_did().to_owned();
+    let identity = agent_config.node_identity().clone();
+    let prompt = LayeredPromptBuilder::for_agent(
+        &agent_config.system_prompt,
+        &agent_config.agent_id,
+        &[],
+        false,
+        &[],
+    );
+    let provider_calls = Arc::new(AtomicUsize::new(0));
+    let mut daemon = AgentDaemon::new(
+        node.clone(),
+        agent_config.clone(),
+        None,
+        Arc::new(ProviderCallCountingModel(provider_calls.clone())),
+        prompt.preamble().to_owned(),
+        Arc::new(Vec::<Box<dyn crate::llm::tool::ToolDyn>>::new()),
+        prompt,
+        FailurePolicy::default(),
+        None,
+        BackgroundToolRegistry::default(),
+        BackgroundExecutionRegistry::default(),
+        Arc::new(StartupBarrier::ready_for_test()),
+        crate::runtime_status::RuntimeStatusHandle::new(node.clone(), node_did.clone()),
+        1,
+        crate::request_admission::AgentRequestAdmissionVerifier::new(
+            node.clone(),
+            identity,
+            crate::agent::p2p_reconcile::enrollment_authority_channel().1,
+        ),
+    )
+    .unwrap();
+    let request = create_routed_request(&node, &agent_config, &node_did).await;
+    let request_doc_id = request.doc_id.clone();
+    let requester_did = request.requester_did.clone();
+    seed_titled_session(node.as_ref(), &request, &agent_config)
+        .await
+        .expect("seed a titled session through the session writer");
+
+    let reached = Arc::new(tokio::sync::Notify::new());
+    let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let process = crate::config_client::ConfigApplyTxn::with_read_pause(
+        "reduction_index: ASC",
+        reached.clone(),
+        daemon.process_request(request, shutdown_rx),
+    );
+    tokio::pin!(process);
+
+    let settled_in = tokio::time::timeout(Duration::from_secs(20), async {
+        tokio::select! {
+            _ = reached.notified() => {},
+            _ = &mut process => panic!("daemon exited before restoring its provider checkpoint"),
+        }
+        let row = request_terminal_row(node.as_ref(), &request_doc_id).await.unwrap();
+        assert_eq!(row["lifecycle_state"], "processing");
+
+        crate::interrupt::interrupt_request_by_doc_id(
+            node.as_ref(),
+            &request_doc_id,
+            &node_did,
+            requester_did.as_deref(),
+        )
+        .await
+        .expect("latch interrupt");
+        let latched_at = std::time::Instant::now();
+
+        (&mut process).await.expect("request owner completes");
+        latched_at.elapsed()
+    })
+    .await
+    .expect("owner must terminalize without waiting for the parked checkpoint read");
+    assert!(
+        settled_in < Duration::from_secs(10),
+        "owner terminalization took {settled_in:?}"
+    );
+
+    let row = request_terminal_row(node.as_ref(), &request_doc_id)
+        .await
+        .expect("read the terminalized request row");
+    assert_eq!(row["lifecycle_state"], "interrupted", "{row}");
+    assert_eq!(row["failure_reason"], "interrupted", "{row}");
+    assert_eq!(row["stopped_before_running"], false, "{row}");
+    assert!(!row["terminalized_at"].is_null(), "{row}");
+    assert_eq!(provider_calls.load(Ordering::SeqCst), 0);
+    node.shutdown().await;
+}
+
+/// A Git clean filter parks `git add -A` inside sealed-workspace hashing, so
+/// the interrupt arrives while Git, not the runtime, holds the preparation.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn interrupt_while_hashing_a_sealed_workspace_kills_git_and_keeps_its_index() {
+    fn git(dir: &std::path::Path, args: &[&str]) {
+        let status = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_INDEX_FILE")
+            .env_remove("GIT_WORK_TREE")
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {args:?}");
+    }
+
+    let repo = tempfile::tempdir().unwrap();
+    let probe = tempfile::tempdir().unwrap();
+    let dir = repo.path();
+    git(dir, &["init", "-q"]);
+    git(dir, &["config", "user.email", "test@example.com"]);
+    git(dir, &["config", "user.name", "test"]);
+    std::fs::write(dir.join("tracked.txt"), "sealed\n").unwrap();
+    git(dir, &["add", "tracked.txt"]);
+    git(dir, &["commit", "-q", "-m", "base"]);
+
+    let marker = probe.path().join("filter.pid");
+    let filter = probe.path().join("park-filter");
+    std::fs::write(
+        &filter,
+        format!(
+            "#!/bin/sh\necho $$ > '{}.tmp' && mv '{0}.tmp' '{0}'\nexec sleep 30\n",
+            marker.display()
+        ),
+    )
+    .unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&filter, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    git(dir, &["config", "filter.park.clean", filter.to_str().unwrap()]);
+    std::fs::write(dir.join(".git/info/attributes"), "* filter=park\n").unwrap();
+    let index_before = std::fs::read(dir.join(".git/index")).unwrap();
+
+    let (interrupt_tx, mut interrupt_rx) =
+        tokio::sync::watch::channel::<Option<crate::interrupt::InterruptIntent>>(None);
+    let dest = dir.to_path_buf();
+    let hashing = tokio::spawn(async move {
+        super::super::request::prepare_unless_interrupted(
+            &mut interrupt_rx,
+            crate::workspace::adapter::working_tree_hash(&dest),
+        )
+        .await
+        .map(|hashed| hashed.map_err(|error| format!("{error:#}")))
+    });
+
+    let filter_pid = tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            if let Some(pid) = std::fs::read_to_string(&marker)
+                .ok()
+                .and_then(|pid| pid.trim().parse::<i32>().ok())
+            {
+                return pid;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("git add must reach the parking clean filter");
+
+    interrupt_tx
+        .send(Some(crate::interrupt::InterruptIntent {
+            at: chrono::Utc::now(),
+        }))
+        .unwrap();
+    let outcome = tokio::time::timeout(Duration::from_secs(10), hashing)
+        .await
+        .expect("an interrupt during hashing must not wait for Git")
+        .expect("hashing task joins");
+    assert!(outcome.is_none(), "the interrupt wins over hashing: {outcome:?}");
+
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while unsafe { libc::kill(filter_pid, 0) } == 0 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("abandoned hashing must kill Git's process group");
+    assert_eq!(
+        std::fs::read(dir.join(".git/index")).unwrap(),
+        index_before,
+        "hashing stages into a temporary index only"
+    );
+    assert!(!dir.join(".git/index.lock").exists());
+}
