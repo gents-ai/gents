@@ -1,16 +1,20 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
-use std::path::PathBuf;
+use std::path::Path;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
+use clap::ValueEnum;
+use gents::config_client::GraphqlEndpoint;
 use gents::tool_surface::{measured_mcp_services_for_access, RuntimeToolAvailability};
 use gents::{AgentToolSurfaceConfig, ToolCeiling};
 use serde_json::{json, Value};
 
 use crate::cli::args::{ToolCeilingArg, ToolExplainArgs, ToolsCommand};
-use crate::shared::StoredInitConfig;
+use crate::commands::status::fetch_runtime_status;
+use crate::config_writes::ConfigAccess;
 use crate::{
-    build_config_export_bundle, format_tool_ceiling, print_json, read_init_config,
-    resolve_config_access, resolve_node_did,
+    build_config_export_bundle, format_tool_ceiling, host_tool_ceiling, print_json,
+    read_init_config, resolve_config_access, resolve_node_did,
 };
 
 pub(crate) async fn dispatch(command: ToolsCommand) -> Result<()> {
@@ -22,10 +26,19 @@ pub(crate) async fn dispatch(command: ToolsCommand) -> Result<()> {
 async fn explain(args: ToolExplainArgs) -> Result<()> {
     let (access, home_dir) =
         resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
-    let node_did = resolve_node_did(args.home.as_deref(), args.node_did.as_deref())?;
-    let init_config = read_init_config(&home_dir)?;
-    let (ceiling_arg, ceiling_source, tool_root, tool_ceiling) =
-        resolve_tool_ceiling(init_config.as_ref())?;
+    let host = match &*access {
+        ConfigAccess::Graphql(endpoint) => HostCeiling::live(endpoint).await?,
+        ConfigAccess::Local(_) => HostCeiling::configured(&home_dir)?,
+    };
+    let node_did = match (args.node_did.as_deref(), host.live_node_did.as_deref()) {
+        (Some(explicit), Some(live)) if explicit != live => anyhow::bail!(
+            "the runtime at this endpoint serves node {live}, so its tool ceiling does not \
+             apply to --node-did {explicit}; omit --node-did or point --graphql at that node"
+        ),
+        (None, Some(live)) => live.to_owned(),
+        (explicit, _) => resolve_node_did(args.home.as_deref(), explicit)?,
+    };
+    let tool_ceiling = &host.ceiling;
     let bundle = build_config_export_bundle(&access, &node_did).await?;
     let available_services = measured_mcp_services_for_access(
         &access,
@@ -83,7 +96,7 @@ async fn explain(args: ToolExplainArgs) -> Result<()> {
                     &bundle.config.datastore_tool_surfaces,
                     &bundle.config.eth_tools,
                     &bundle.config.agent_targets,
-                    &tool_ceiling,
+                    tool_ceiling,
                     Vec::new(),
                 )?
             } else {
@@ -93,7 +106,7 @@ async fn explain(args: ToolExplainArgs) -> Result<()> {
                     &[],
                     &[],
                     &[],
-                    &tool_ceiling,
+                    tool_ceiling,
                     Vec::new(),
                 )?
             };
@@ -136,11 +149,15 @@ async fn explain(args: ToolExplainArgs) -> Result<()> {
     let output = json!({
         "node_did": node_did,
         "access_mode": access.mode(),
-        "home": home_dir,
+        "home": host.home.clone().unwrap_or_else(|| home_dir.display().to_string()),
         "host_tool_ceiling": {
-            "tool_ceiling": format_tool_ceiling(ceiling_arg),
-            "source": ceiling_source,
-            "tool_root": tool_root,
+            "tool_ceiling": format_tool_ceiling(host.mode),
+            "tool_root": host.root,
+            "source": host.source,
+            "live": host.live_node_did.is_some(),
+            "next": (host.live_node_did.is_none()).then_some(
+                "No runtime serves this home, so this is the configured init.json ceiling; a server started with --tool-ceiling or --tool-root enforces its own. Start `gents server` and rerun for the live ceiling."
+            ),
             "scope": "host_native_file_bash_cli_only",
             "note": "This ceiling currently clamps host-native file/bash/CLI tools, not every model-callable built-in read, MCP, agent, or operator HTTP surface."
         },
@@ -163,30 +180,59 @@ async fn explain(args: ToolExplainArgs) -> Result<()> {
     Ok(())
 }
 
-fn resolve_tool_ceiling(
-    init_config: Option<&StoredInitConfig>,
-) -> Result<(ToolCeilingArg, &'static str, Option<String>, ToolCeiling)> {
-    let Some(config) = init_config else {
-        return Ok((
-            ToolCeilingArg::MetaOnly,
-            "default_no_init_json",
-            None,
-            ToolCeiling::meta_only(),
-        ));
-    };
-    let tool_root = config.tool_root.clone();
-    let ceiling = match config.tool_ceiling {
-        ToolCeilingArg::MetaOnly => ToolCeiling::meta_only(),
-        ToolCeilingArg::Readonly => match tool_root.as_deref() {
-            Some(root) => ToolCeiling::readonly_at(PathBuf::from(root)),
-            None => ToolCeiling::readonly(),
-        },
-        ToolCeilingArg::Readwrite => {
-            let root = tool_root.as_deref().ok_or_else(|| {
-                anyhow::anyhow!("init.json has readwrite tool_ceiling but no tool_root")
-            })?;
-            ToolCeiling::readwrite(PathBuf::from(root))
-        }
-    };
-    Ok((config.tool_ceiling, "init_json", tool_root, ceiling))
+/// The host ceiling explained agents are clamped by: the serving runtime's
+/// own when one answers, since `gents server` flags override init.json.
+struct HostCeiling {
+    mode: ToolCeilingArg,
+    root: Option<String>,
+    ceiling: ToolCeiling,
+    source: &'static str,
+    live_node_did: Option<String>,
+    home: Option<String>,
+}
+
+impl HostCeiling {
+    async fn live(endpoint: &GraphqlEndpoint) -> Result<Self> {
+        let status = fetch_runtime_status(endpoint, Duration::from_secs(10))
+            .await
+            .context("the GraphQL endpoint has no gents runtime status to read its tool ceiling")?;
+        let field = |name: &str| status.get(name).and_then(Value::as_str).map(str::to_owned);
+        let mode_text = field("tool_ceiling").context("runtime status has no tool_ceiling")?;
+        let mode = ToolCeilingArg::from_str(&mode_text, false)
+            .map_err(|error| anyhow::anyhow!("runtime tool_ceiling {mode_text}: {error}"))?;
+        let root = field("tool_root");
+        Ok(Self {
+            ceiling: host_tool_ceiling(mode, root.as_deref().map(Path::new))?,
+            mode,
+            root,
+            source: "runtime_status",
+            live_node_did: Some(field("node_did").context("runtime status has no node_did")?),
+            home: field("home"),
+        })
+    }
+
+    fn configured(home_dir: &Path) -> Result<Self> {
+        let Some(config) = read_init_config(home_dir)? else {
+            return Ok(Self {
+                mode: ToolCeilingArg::MetaOnly,
+                root: None,
+                ceiling: ToolCeiling::meta_only(),
+                source: "default_no_init_json",
+                live_node_did: None,
+                home: None,
+            });
+        };
+        Ok(Self {
+            ceiling: host_tool_ceiling(
+                config.tool_ceiling,
+                config.tool_root.as_deref().map(Path::new),
+            )
+            .context("init.json tool ceiling")?,
+            mode: config.tool_ceiling,
+            root: config.tool_root,
+            source: "init_json",
+            live_node_did: None,
+            home: None,
+        })
+    }
 }
