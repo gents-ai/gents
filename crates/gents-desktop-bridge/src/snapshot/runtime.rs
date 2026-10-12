@@ -364,6 +364,19 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                     .map(str::to_owned);
             }
 
+            // The managed runtime's operator root (init.json tool_root) is
+            // the ceiling the snapshot clamps observed grants against; a
+            // paired remote peer keeps its stored grant, which is the only
+            // authority this client can observe for it.
+            let operator_root = peer
+                .local_node_home
+                .as_deref()
+                .map(std::path::Path::new)
+                .and_then(|home| {
+                    super::resolve_node_home_tool_ceiling(home)
+                        .ok()
+                        .and_then(|(ceiling, _)| ceiling.root().map(ToOwned::to_owned))
+                });
             let agent_environments = resolve_agent_environments(
                 &agents,
                 &inference_profiles,
@@ -371,6 +384,7 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                 &tools,
                 &skills,
                 &sessions,
+                operator_root.as_deref(),
             );
 
             let chat_safe = peer.is_chat_ready_at(Utc::now());
@@ -710,6 +724,7 @@ fn resolve_agent_environments(
     tools: &[Tools],
     skills: &[SkillView],
     sessions: &[SessionSummary],
+    operator_root: Option<&std::path::Path>,
 ) -> Vec<AgentEnvironmentView> {
     agents
         .iter()
@@ -762,7 +777,27 @@ fn resolve_agent_environments(
                 inference_profile_name: profile
                     .and_then(|profile| profile.display_name.clone())
                     .or_else(|| agent.inference_profile_id.clone()),
-                workspace_root: host.and_then(|host| host.root.clone()),
+                // Project the root the runtime would actually use, not the
+                // raw stored grant: the selection/ceiling meet clamps a grant
+                // the operator narrowed below, a rootless default inherits the
+                // operator root, and a disjoint grant (refused by the runtime)
+                // claims no authority here.
+                workspace_root: host.and_then(|host| {
+                    let stored_root = host
+                        .root
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|root| !root.is_empty())
+                        .map(std::path::Path::new);
+                    gents::tool_surface::resolve_effective_tool_root(
+                        &agent.agent_id,
+                        stored_root,
+                        operator_root,
+                    )
+                    .ok()
+                    .flatten()
+                    .map(|root| root.to_string_lossy().into_owned())
+                }),
                 file_access: if unresolved_tools {
                     "unknown"
                 } else {
@@ -954,6 +989,7 @@ mod agent_environment_tests {
                 status_only_active,
                 unassigned,
             ],
+            None,
         );
 
         let environment = &environments[0];
@@ -972,6 +1008,73 @@ mod agent_environment_tests {
         assert_eq!(environment.skill_names, vec!["Host diagnostics"]);
         assert_eq!(environment.session_count, 3);
         assert_eq!(environment.active_session_count, 1);
+    }
+
+    #[test]
+    fn environment_workspace_root_projects_the_meet_not_the_stored_grant() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let project = workspace.path().join("project");
+        std::fs::create_dir_all(&project).expect("narrowed operator root");
+        let canonical_project = std::fs::canonicalize(&project).unwrap();
+        let canonical_project = canonical_project.to_str().expect("utf-8 root");
+
+        // A stored grant wider than the narrowed operator root clamps to it,
+        // so the view reports the root the runtime actually enforces.
+        let mut wide = tools();
+        wide.host.as_mut().unwrap().root = Some(workspace.path().to_string_lossy().into_owned());
+        let environments = resolve_agent_environments(
+            &[agent()],
+            &[profile()],
+            &[context()],
+            &[wide],
+            &[skill()],
+            &[],
+            Some(&project),
+        );
+        assert_eq!(
+            environments[0].workspace_root.as_deref(),
+            Some(canonical_project),
+            "the view must agree with the clamped root the runtime uses"
+        );
+
+        // A rootless default inherits the operator root instead of reporting
+        // no authority.
+        let mut rootless = tools();
+        rootless.host.as_mut().unwrap().root = None;
+        let environments = resolve_agent_environments(
+            &[agent()],
+            &[profile()],
+            &[context()],
+            &[rootless],
+            &[skill()],
+            &[],
+            Some(&project),
+        );
+        assert_eq!(
+            environments[0].workspace_root.as_deref(),
+            Some(canonical_project),
+            "a rootless default inherits the operator root in the view"
+        );
+
+        // A grant disjoint from the operator root is refused by the runtime;
+        // the view claims no authority for it.
+        let elsewhere = tempfile::tempdir().expect("elsewhere");
+        let mut disjoint = tools();
+        disjoint.host.as_mut().unwrap().root =
+            Some(elsewhere.path().to_string_lossy().into_owned());
+        let environments = resolve_agent_environments(
+            &[agent()],
+            &[profile()],
+            &[context()],
+            &[disjoint],
+            &[skill()],
+            &[],
+            Some(&project),
+        );
+        assert_eq!(
+            environments[0].workspace_root, None,
+            "a grant the runtime refuses must not appear as authority"
+        );
     }
 
     #[test]
@@ -996,6 +1099,7 @@ mod agent_environment_tests {
             &[foreign_tools],
             &[],
             &[],
+            None,
         );
         assert_eq!(environments[0].model_name, None);
         assert_eq!(environments[0].file_access, "unknown");
