@@ -219,6 +219,7 @@ async fn run_file_action(
         method,
         params,
         request_timeout(req),
+        config.action_timeout.maximum,
         retry_empty,
     )
     .await
@@ -436,6 +437,7 @@ pub(crate) async fn request_maybe_retry(
     method: &str,
     params: Value,
     timeout: std::time::Duration,
+    max_timeout: std::time::Duration,
     retry_empty: bool,
 ) -> Result<Value, String> {
     const MAX_EMPTY_ATTEMPTS: usize = 3;
@@ -456,7 +458,8 @@ pub(crate) async fn request_maybe_retry(
         if client.wait_while_busy(deadline).await {
             if std::time::Instant::now() >= deadline {
                 return Err(format!(
-                    "LSP request {method} timed out while the language server is indexing; retry with a longer timeout"
+                    "LSP request {method} timed out while the language server is indexing; call lsp again with a larger timeout (maximum {} seconds)",
+                    max_timeout.as_secs()
                 ));
             }
             continue;
