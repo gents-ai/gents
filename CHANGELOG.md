@@ -163,6 +163,15 @@ source consistency checks, not a separate runtime compatibility version.
   unchanged.
 - iOS builds again: the DB Explorer window keeps its desktop-only title, size and
   focus calls off mobile targets, and CI checks the iOS simulator build on main.
+- An older transcript page that lands while the reader scrolls is put back by a
+  write only once the view has rested a full second (#2389). WebKitGTK starts a
+  wheel's scroll late and stalls it between frames under load, so the previous
+  150 ms stillness gate fired mid-flight, and WebKit, which stops its own
+  scrolling at any write, cut the wheel short by up to a page. The rest bound is
+  now the one the follow hook's attribution already uses, a late-starting key
+  scroll holds the gate too, and a write WebKit drops leaves the rows hidden and
+  is retried at the next rest rather than throwing the reader a page up. At
+  rest the chained page fetch waits for a further upward move.
 
 - Pack scenarios can allow folders for plugins (#2303). `experiment.json`
   takes `allowed_folders: [{"path", "access"}]`. Each path is relative to
