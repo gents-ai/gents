@@ -490,6 +490,42 @@ fn plan_reset(
         }
         None => gents::home::HomeEntries::default(),
     };
+    // A home proves it is a Gents home only through a readable init marker;
+    // names from the runtime inventory alone also occur in user projects.
+    let initialized = match runtime.as_ref() {
+        Some((home, _)) => {
+            let record =
+                gents::home::read_init_config::<serde_json::Value, serde_json::Value>(home)
+                    .ok()
+                    .flatten();
+            if let Some(tool_root) = record
+                .as_ref()
+                .and_then(|record| record.tool_root.as_deref())
+                .map(str::trim)
+                .filter(|root| !root.is_empty())
+            {
+                let tool_root =
+                    std::fs::canonicalize(tool_root).unwrap_or_else(|_| PathBuf::from(tool_root));
+                if tool_root == *home
+                    || runtime_entries
+                        .owned
+                        .iter()
+                        .any(|entry| tool_root.starts_with(entry))
+                {
+                    return Err(BridgeError::new(
+                        BridgeErrorCode::InvalidArgument,
+                        format!(
+                            "The managed home {} shares its files with the tool root {}; resetting it could remove workspace files, so reset was refused.",
+                            home.display(),
+                            tool_root.display()
+                        ),
+                    ));
+                }
+            }
+            record.is_some()
+        }
+        None => false,
+    };
     let mut client_entries = Vec::new();
     if retires_client_state {
         // Entries are derived from the canonical root, never from the raw
@@ -578,11 +614,25 @@ fn plan_reset(
                     delete_home_entries.push(key);
                 }
             }
-            delete_prunes_keys = Some(keys.clone());
+            if initialized || !full_reset {
+                delete_prunes_keys = Some(keys.clone());
+            }
         }
     }
     delete_home_entries.sort();
     delete_home_entries.dedup();
+    if let Some((home, _)) = runtime.as_ref().filter(|_| full_reset && !initialized) {
+        if let Some(entry) = delete_home_entries.first() {
+            return Err(BridgeError::new(
+                BridgeErrorCode::InvalidArgument,
+                format!(
+                    "{} has no readable Gents init.json, so {} cannot be shown to belong to Gents; reset was refused.",
+                    home.display(),
+                    entry.display()
+                ),
+            ));
+        }
+    }
     let mut archive_home_entries = Vec::new();
     let mut archive_keys = Vec::new();
     if full_reset {
@@ -1106,9 +1156,24 @@ mod tests {
         std::fs::write(path, value).unwrap();
     }
 
+    fn init_record(home: &Path, tool_root: Option<&Path>) {
+        write(
+            &home.join("init.json"),
+            &serde_json::json!({
+                "home": home,
+                "node_name": "local",
+                "node_did": "did:key:zlocal",
+                "key_path": null,
+                "tool_ceiling": "workspace",
+                "tool_root": tool_root,
+            })
+            .to_string(),
+        );
+    }
+
     fn fixture(user: &Path) -> (PathBuf, DesktopPaths, PathBuf) {
         let home = user.join(".gents");
-        write(&home.join("init.json"), r#"{"node_name":"local"}"#);
+        init_record(&home, None);
         write(&home.join("keys/local.key"), "local identity");
         write(&home.join("keys/other.key"), "another home's identity");
         write(&home.join("other-node/init.json"), "other home");
@@ -1366,6 +1431,76 @@ mod tests {
         );
         write(&temp.path().join(MANAGED_SERVER_CONFIG), "invalid json");
         assert!(reviewed_reset_home(&paths).is_err());
+    }
+
+    #[test]
+    fn full_reset_refuses_a_directory_without_a_gents_init_marker() {
+        for marker in [None, Some("{}")] {
+            let temp = tempfile::tempdir().unwrap();
+            let user = temp.path().canonicalize().unwrap();
+            let (_, desktop, service) = fixture(&user);
+            let project = user.join("project");
+            for entry in ["data/rows.csv", "plugins/mine.txt", "eval/notes.md"] {
+                write(&project.join(entry), "user file");
+            }
+            if let Some(marker) = marker {
+                write(&project.join("init.json"), marker);
+            }
+            let error = plan_full_reset(Some(&project), &desktop, &user, &service).unwrap_err();
+            assert!(error.message.contains("init.json"), "{}", error.message);
+            for entry in ["data/rows.csv", "plugins/mine.txt", "eval/notes.md"] {
+                assert!(project.join(entry).is_file(), "{entry}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_home_sharing_its_tool_root_keeps_the_users_files() {
+        for shared in ["", "plugins/work"] {
+            let temp = tempfile::tempdir().unwrap();
+            let user = temp.path().canonicalize().unwrap();
+            let (home, desktop, service) = fixture(&user);
+            write(&home.join("plugins/work/mine.txt"), "user file");
+            write(&home.join("eval/notes.md"), "user file");
+            let tool_root = if shared.is_empty() {
+                home.clone()
+            } else {
+                home.join(shared)
+            };
+            init_record(&home, Some(&tool_root));
+            assert!(plan_full_reset(Some(&home), &desktop, &user, &service).is_err());
+            assert!(plan_home_reset(
+                Some(&home),
+                Some(gents::storage_backend::IncompatibleStore {
+                    kind: gents::storage_backend::IncompatibleStoreKind::LegacyLark,
+                    data_path: home.join("data"),
+                }),
+                None,
+                &desktop,
+                &user,
+                ClientBinding::Unbound,
+            )
+            .is_err());
+            assert!(home.join("plugins/work/mine.txt").is_file());
+            assert!(home.join("eval/notes.md").is_file());
+        }
+    }
+
+    #[test]
+    fn a_retired_home_can_be_reviewed_again_to_finish_browser_clearing() {
+        let temp = tempfile::tempdir().unwrap();
+        let user = temp.path().canonicalize().unwrap();
+        let (home, desktop, service) = fixture(&user);
+        let plan = plan_full_reset(Some(&home), &desktop, &user, &service).unwrap();
+        let backup = plan.backup_path("first").unwrap();
+        plan.retire(HomeResetDisposition::Archive, Some(&backup))
+            .unwrap();
+        let again = plan_full_reset(Some(&home), &desktop, &user, &service).unwrap();
+        assert!(again
+            .preview()
+            .planned_paths
+            .iter()
+            .all(|path| !Path::new(path).starts_with(&home)));
     }
 
     #[test]
