@@ -79,6 +79,15 @@ pub fn command_inventory() -> Vec<CommandContract> {
         ("desktop_allowed_dirs_add", "allowed-dirs-admin"),
         ("desktop_allowed_dirs_remove", "allowed-dirs-admin"),
         ("desktop_plugin_approval_decide", "allowed-dirs-admin"),
+        // ux-plugins-read / ux-plugins-call
+        ("desktop_ux_plugins_list", "ux-plugins-read"),
+        ("desktop_ux_plugin_source", "ux-plugins-read"),
+        ("desktop_plugin_call", "ux-plugins-call"),
+        // registries-read / registries-admin
+        ("desktop_registry_list", "registries-read"),
+        ("desktop_registry_refresh", "registries-admin"),
+        ("desktop_registry_add", "registries-admin"),
+        ("desktop_registry_remove", "registries-admin"),
         // session-read
         ("desktop_session_snapshot", "session-read"),
         ("desktop_session_live_delta", "session-read"),
@@ -202,6 +211,10 @@ pub fn permission_set_inventory() -> Vec<PermissionSetContract> {
         ("packs-admin", "mutate"),
         ("allowed-dirs-read", "read"),
         ("allowed-dirs-admin", "mutate"),
+        ("ux-plugins-read", "read"),
+        ("ux-plugins-call", "mutate"),
+        ("registries-read", "read"),
+        ("registries-admin", "mutate"),
         ("fleet-admin", "mutate"),
         ("operations-read", "read"),
         ("interrupt-control", "mutate"),
@@ -481,6 +494,15 @@ mod tests {
             ("desktop_allowed_dirs_add", "mutate"),
             ("desktop_allowed_dirs_remove", "mutate"),
             ("desktop_plugin_approval_decide", "mutate"),
+            // the source read may run a sealed, budgeted producer; it changes
+            // nothing of the operator's, so it reads
+            ("desktop_ux_plugins_list", "read"),
+            ("desktop_ux_plugin_source", "read"),
+            ("desktop_plugin_call", "mutate"),
+            ("desktop_registry_list", "read"),
+            ("desktop_registry_refresh", "mutate"),
+            ("desktop_registry_add", "mutate"),
+            ("desktop_registry_remove", "mutate"),
             ("desktop_session_snapshot", "read"),
             ("desktop_session_live_delta", "read"),
             ("desktop_session_hydration_retry", "mutate"),
