@@ -313,9 +313,13 @@ export function ContextsPanel({
           >
             <ArrowLeft className="size-3.5" /> Agents
           </a>
-          <p className="mt-3 max-w-prose text-sm text-muted-foreground">
-            Each agent keeps its instructions and tools in a context. Contexts no agent
-            uses can be deleted.
+          <p
+            data-testid="contexts-intro"
+            className="mt-3 max-w-prose text-sm text-muted-foreground"
+          >
+            A context holds the system prompt, tools, skills and compaction for the
+            agents that use it; its system prompt is sent with every request they make.
+            The model is chosen on the agent. Contexts no agent uses can be deleted.
           </p>
         </div>
       )}
