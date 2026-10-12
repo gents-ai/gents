@@ -593,6 +593,12 @@ impl RequestLifecycle {
                             outcome_time,
                         )
                         .await?;
+                        super::materialize::project_refused_request_session_in_txn(
+                            txn,
+                            request,
+                            outcome_time,
+                        )
+                        .await?;
                     }
                     Ok::<_, anyhow::Error>(updated)
                 })

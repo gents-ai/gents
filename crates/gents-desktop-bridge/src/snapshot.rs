@@ -205,6 +205,66 @@ fn read_stored_init_config(node_home: &std::path::Path) -> Option<StoredInitConf
     serde_json::from_slice(&bytes).ok()
 }
 
+/// The tool ceiling a managed node home records in `init.json`, with the
+/// provenance label of the resolution. Shared by the tools-explain command
+/// and the runtime snapshot so both meet observed grants against the same
+/// operator authority.
+pub(crate) fn resolve_node_home_tool_ceiling(
+    node_home: &std::path::Path,
+) -> Result<(gents::ToolCeiling, &'static str), String> {
+    let Some(config) = read_init_ceiling(node_home) else {
+        return Ok((gents::ToolCeiling::meta_only(), "default_no_init_json"));
+    };
+
+    let tool_root = config
+        .tool_root
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    match config
+        .tool_ceiling
+        .as_deref()
+        .map(str::trim)
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        None | Some("metaonly") | Some("meta_only") => {
+            Ok((gents::ToolCeiling::meta_only(), "init_json"))
+        }
+        Some("readonly") => Ok((
+            match tool_root.as_deref() {
+                Some(root) => gents::ToolCeiling::readonly_at(std::path::PathBuf::from(root)),
+                None => gents::ToolCeiling::readonly(),
+            },
+            "init_json",
+        )),
+        Some("readwrite") => {
+            let root = tool_root.ok_or_else(|| {
+                "init.json has readwrite tool_ceiling but no tool_root".to_string()
+            })?;
+            Ok((
+                gents::ToolCeiling::readwrite(std::path::PathBuf::from(root)),
+                "init_json",
+            ))
+        }
+        Some(other) => Err(format!("init.json has unrecognized tool_ceiling {other:?}")),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct InitCeilingView {
+    #[serde(default)]
+    tool_ceiling: Option<String>,
+    #[serde(default)]
+    tool_root: Option<String>,
+}
+
+fn read_init_ceiling(node_home: &std::path::Path) -> Option<InitCeilingView> {
+    let bytes = std::fs::read(node_home.join("init.json")).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
 #[path = "snapshot/runtime_tasks.rs"]
 mod runtime_tasks;
 #[cfg(test)]

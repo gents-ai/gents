@@ -1031,6 +1031,67 @@ async fn read_manifest_blocks<R: CaptureBaseReader + Sync>(
     Ok(())
 }
 
+/// Read the manifest blocks of many captures into one shared cache: the block
+/// rows and their field-commit witnesses batch across every manifest of the
+/// pass instead of one statement set per capture. Only positive observations
+/// enter the cache, so each capture still re-checks every entry's content key
+/// at resolution; a manifest beyond the reader ceiling, and a manifest whose
+/// blocks fail verification, are left to fail in their own capture's
+/// resolution rather than failing the whole pass here, while a
+/// [`CaptureStoreReadError`] stays fatal.
+pub(crate) async fn preload_manifest_blocks<R: CaptureBaseReader + Sync>(
+    reader: &R,
+    manifests: &[Vec<encoding::ManifestEntry>],
+    cache: &mut CaptureReadCache,
+) -> Result<()> {
+    let mut union = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for entries in manifests {
+        if entries.len() > encoding::MAX_MANIFEST_BLOCKS {
+            continue;
+        }
+        for entry in entries {
+            if seen.insert(entry.doc_id.clone()) {
+                union.push(entry.clone());
+            }
+        }
+    }
+    for chunk in union.chunks(encoding::MAX_MANIFEST_BLOCKS) {
+        if let Err(error) = read_manifest_blocks(reader, chunk, &mut cache.blocks).await {
+            return preload_isolate_verification_failures(reader, manifests, error, cache).await;
+        }
+    }
+    Ok(())
+}
+
+/// A verification failure in the shared batched read names one manifest's
+/// pinned blocks but aborts the batch before anything is cached, so it cannot
+/// be attributed there. Re-read per manifest: the offending manifest stays
+/// uncached and fails verification in its own capture's resolution, every
+/// healthy manifest keeps its blocks. A [`CaptureStoreReadError`] says the
+/// store is broken, not that one capture is unverifiable, and stays fatal.
+async fn preload_isolate_verification_failures<R: CaptureBaseReader + Sync>(
+    reader: &R,
+    manifests: &[Vec<encoding::ManifestEntry>],
+    error: anyhow::Error,
+    cache: &mut CaptureReadCache,
+) -> Result<()> {
+    if error.downcast_ref::<CaptureStoreReadError>().is_some() {
+        return Err(error);
+    }
+    for entries in manifests {
+        if entries.len() > encoding::MAX_MANIFEST_BLOCKS {
+            continue;
+        }
+        if let Err(error) = read_manifest_blocks(reader, entries, &mut cache.blocks).await {
+            if error.downcast_ref::<CaptureStoreReadError>().is_some() {
+                return Err(error);
+            }
+        }
+    }
+    Ok(())
+}
+
 async fn decode_capture_json_from<R: CaptureBaseReader + Sync>(
     reader: &R,
     capture_version: u32,

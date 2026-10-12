@@ -494,11 +494,18 @@ describe("older transcript pages", () => {
       const content = fixture.viewport.firstElementChild as HTMLElement;
       expect(fixture.viewport.scrollTop).toBe(100);
       expect(content.style.marginTop).toBe("-400px");
-      await waitFor(() => expect(fixture.viewport.scrollTop).toBe(500));
+      await waitFor(() => expect(fixture.viewport.scrollTop).toBe(500), {
+        timeout: 2500,
+      });
       expect(content.style.marginTop).toBe("");
-      /* still within three views of the top and moving up: the next page
-         follows without another scroll */
-      await waitFor(() => expect(load).toHaveBeenCalledTimes(2));
+      /* the unhide came at rest, so the reader's move-up intent has
+         expired: the next page follows only a further upward input, which
+         finds nothing left hidden and asks through up() */
+      expect(load).toHaveBeenCalledTimes(1);
+      act(() => {
+        fixture.viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -20 }));
+      });
+      expect(load).toHaveBeenCalledTimes(2);
       expect(result.current).toBe(true);
       unmount();
     },
@@ -532,7 +539,9 @@ describe("older transcript pages", () => {
       fixture.viewport.dispatchEvent(new Event("scroll"));
       fixture.viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -20 }));
     });
-    await waitFor(() => expect(fixture.viewport.scrollTop).toBe(900));
+    await waitFor(() => expect(fixture.viewport.scrollTop).toBe(900), {
+      timeout: 2500,
+    });
     expect(load).toHaveBeenCalledTimes(1);
     expect(result.current).toBe(false);
     unmount();
@@ -576,7 +585,9 @@ describe("older transcript pages", () => {
     }
     expect(fixture.content.style.marginTop).toBe("-400px");
     expect(fixture.viewport.scrollTop).toBe(100);
-    await waitFor(() => expect(fixture.viewport.scrollTop).toBe(500));
+    await waitFor(() => expect(fixture.viewport.scrollTop).toBe(500), {
+      timeout: 2500,
+    });
     expect(fixture.content.style.marginTop).toBe("");
     unmount();
   });
@@ -621,7 +632,298 @@ describe("older transcript pages", () => {
     act(() => {
       touch("touchend", []);
     });
-    await waitFor(() => expect(fixture.viewport.scrollTop).toBe(500));
+    await waitFor(() => expect(fixture.viewport.scrollTop).toBe(500), {
+      timeout: 2500,
+    });
+    expect(fixture.content.style.marginTop).toBe("");
+    unmount();
+  });
+
+  /* WebKitGTK under load stalls a wheel's animation between frames: event
+     silence well past a few hundred ms is not rest, for a write then would
+     stop the scroll still under way */
+  it("keeps rows that landed mid-scroll hidden through event silence shorter than the rest bound", async () => {
+    const fixture = transcriptFixture();
+    fixture.viewport.scrollTop = 300;
+    let landRows!: () => void;
+    const load = vi.fn(async () => {
+      landRows();
+      return true;
+    });
+    const { unmount } = renderHook(() => {
+      const [oldest, setOldest] = useState("row-10");
+      landRows = () => {
+        fixture.setHeight(900);
+        setOldest("row-0");
+      };
+      return useOlderPages(
+        fixture.viewport,
+        fixture.content,
+        "session-1",
+        true,
+        load,
+        oldest,
+      );
+    });
+    await act(async () => {
+      fixture.viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -20 }));
+      fixture.viewport.scrollTop = 100;
+      fixture.viewport.dispatchEvent(new Event("scroll"));
+    });
+    expect(fixture.content.style.marginTop).toBe("-400px");
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 400));
+    });
+    expect(fixture.content.style.marginTop).toBe("-400px");
+    expect(fixture.viewport.scrollTop).toBe(100);
+    await waitFor(() => expect(fixture.viewport.scrollTop).toBe(500), {
+      timeout: 2500,
+    });
+    expect(fixture.content.style.marginTop).toBe("");
+    unmount();
+  });
+
+  /* WebKitGTK can start a wheel's scroll late: the wheel has come and gone
+     and no scroll event has been seen at all, and a write must wait all the
+     same */
+  it("keeps rows that landed after a wheel hidden while its scroll has not begun", async () => {
+    const fixture = transcriptFixture();
+    fixture.viewport.scrollTop = 300;
+    let landRows!: () => void;
+    const load = vi.fn(async () => {
+      landRows();
+      return true;
+    });
+    const { unmount } = renderHook(() => {
+      const [oldest, setOldest] = useState("row-10");
+      landRows = () => {
+        fixture.setHeight(900);
+        setOldest("row-0");
+      };
+      return useOlderPages(
+        fixture.viewport,
+        fixture.content,
+        "session-1",
+        true,
+        load,
+        oldest,
+      );
+    });
+    await act(async () => {
+      fixture.viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -20 }));
+    });
+    expect(fixture.content.style.marginTop).toBe("-400px");
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    });
+    expect(fixture.content.style.marginTop).toBe("-400px");
+    expect(fixture.viewport.scrollTop).toBe(300);
+    await waitFor(() => expect(fixture.viewport.scrollTop).toBe(700), {
+      timeout: 2500,
+    });
+    expect(fixture.content.style.marginTop).toBe("");
+    unmount();
+  });
+
+  /* WebKit drops a write made while its own scrolling is under way: the
+     margin comes back and the write is retried at the next rest, rather
+     than the reader left a page up with nothing compensating */
+  it("restores the hidden margin and retries the write when WebKit drops it", async () => {
+    const fixture = transcriptFixture();
+    fixture.viewport.scrollTop = 300;
+    const native = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop")!;
+    let dropWrites = 0;
+    Object.defineProperty(fixture.viewport, "scrollTop", {
+      configurable: true,
+      get: () => native.get!.call(fixture.viewport),
+      set: (value: number) => {
+        if (dropWrites > 0) {
+          dropWrites -= 1;
+          return;
+        }
+        native.set!.call(fixture.viewport, value);
+      },
+    });
+    let landRows!: () => void;
+    const load = vi.fn(async () => {
+      landRows();
+      return true;
+    });
+    const { unmount } = renderHook(() => {
+      const [oldest, setOldest] = useState("row-10");
+      landRows = () => {
+        fixture.setHeight(900);
+        setOldest("row-0");
+      };
+      return useOlderPages(
+        fixture.viewport,
+        fixture.content,
+        "session-1",
+        true,
+        load,
+        oldest,
+      );
+    });
+    await act(async () => {
+      fixture.viewport.scrollTop = 100;
+      fixture.viewport.dispatchEvent(new Event("scroll"));
+    });
+    expect(fixture.content.style.marginTop).toBe("-400px");
+    dropWrites = 1;
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 1100));
+    });
+    expect(fixture.content.style.marginTop).toBe("-400px");
+    expect(fixture.viewport.scrollTop).toBe(100);
+    await waitFor(() => expect(fixture.viewport.scrollTop).toBe(500), {
+      timeout: 2500,
+    });
+    expect(fixture.content.style.marginTop).toBe("");
+    unmount();
+  });
+
+  /* a view that grew while rows were hidden cannot reach the position
+     they were hidden from: the browser clamps the write to the new foot,
+     and that write took */
+  it("treats an unhide write clamped to a grown view's foot as taken", async () => {
+    const fixture = transcriptFixture();
+    fixture.viewport.scrollTop = 300;
+    let clientHeight = 200;
+    const native = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop")!;
+    Object.defineProperties(fixture.viewport, {
+      clientHeight: { configurable: true, get: () => clientHeight },
+      scrollTop: {
+        configurable: true,
+        get: () => native.get!.call(fixture.viewport),
+        set: (value: number) => {
+          const foot = fixture.viewport.scrollHeight - clientHeight;
+          native.set!.call(fixture.viewport, Math.max(0, Math.min(value, foot)));
+        },
+      },
+    });
+    let landRows!: () => void;
+    const load = vi.fn(async () => {
+      landRows();
+      return true;
+    });
+    const { unmount } = renderHook(() => {
+      const [oldest, setOldest] = useState("row-10");
+      landRows = () => {
+        fixture.setHeight(900);
+        setOldest("row-0");
+      };
+      return useOlderPages(
+        fixture.viewport,
+        fixture.content,
+        "session-1",
+        true,
+        load,
+        oldest,
+      );
+    });
+    await act(async () => {
+      fixture.viewport.scrollTop = 100;
+      fixture.viewport.dispatchEvent(new Event("scroll"));
+    });
+    expect(fixture.content.style.marginTop).toBe("-400px");
+    clientHeight = 600;
+    await waitFor(() => expect(fixture.content.style.marginTop).toBe(""), {
+      timeout: 2500,
+    });
+    expect(fixture.viewport.scrollTop).toBe(300);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+    });
+    expect(fixture.content.style.marginTop).toBe("");
+    expect(fixture.viewport.scrollTop).toBe(300);
+    unmount();
+  });
+
+  /* WebKit drops the fraction of a write to the position: the unhide is
+     rounded to the nearest pixel, within half a pixel of the reader's row,
+     and taken, not retried */
+  it("rounds an unhide of a fractional height to the nearest pixel and takes it", async () => {
+    const fixture = transcriptFixture();
+    fixture.viewport.scrollTop = 300;
+    const native = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop")!;
+    Object.defineProperty(fixture.viewport, "scrollTop", {
+      configurable: true,
+      get: () => native.get!.call(fixture.viewport),
+      set: (value: number) => {
+        native.set!.call(fixture.viewport, Math.floor(value));
+      },
+    });
+    let landRows!: () => void;
+    const load = vi.fn(async () => {
+      landRows();
+      return true;
+    });
+    const { unmount } = renderHook(() => {
+      const [oldest, setOldest] = useState("row-10");
+      landRows = () => {
+        fixture.setHeight(900.875);
+        setOldest("row-0");
+      };
+      return useOlderPages(
+        fixture.viewport,
+        fixture.content,
+        "session-1",
+        true,
+        load,
+        oldest,
+      );
+    });
+    await act(async () => {
+      fixture.viewport.scrollTop = 100;
+      fixture.viewport.dispatchEvent(new Event("scroll"));
+    });
+    expect(fixture.content.style.marginTop).toBe("-400.875px");
+    await waitFor(() => expect(fixture.viewport.scrollTop).toBe(501), {
+      timeout: 2500,
+    });
+    expect(fixture.content.style.marginTop).toBe("");
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+    });
+    expect(fixture.viewport.scrollTop).toBe(501);
+    expect(fixture.content.style.marginTop).toBe("");
+    unmount();
+  });
+
+  /* a key's scroll starts late like a wheel's: the gate must see the key
+     itself, or rows landing before the scroll has begun are written
+     straight back */
+  it("keeps rows that landed after a key press hidden until its scroll has had its chance", async () => {
+    const fixture = transcriptFixture();
+    fixture.viewport.scrollTop = 300;
+    let landRows!: () => void;
+    const load = vi.fn(async () => {
+      landRows();
+      return true;
+    });
+    const { unmount } = renderHook(() => {
+      const [oldest, setOldest] = useState("row-10");
+      landRows = () => {
+        fixture.setHeight(900);
+        setOldest("row-0");
+      };
+      return useOlderPages(
+        fixture.viewport,
+        fixture.content,
+        "session-1",
+        true,
+        load,
+        oldest,
+      );
+    });
+    await act(async () => {
+      fireEvent.keyDown(fixture.viewport, { key: "ArrowUp" });
+    });
+    expect(fixture.content.style.marginTop).toBe("-400px");
+    expect(fixture.viewport.scrollTop).toBe(300);
+    await waitFor(() => expect(fixture.viewport.scrollTop).toBe(700), {
+      timeout: 2500,
+    });
     expect(fixture.content.style.marginTop).toBe("");
     unmount();
   });

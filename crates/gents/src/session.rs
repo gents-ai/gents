@@ -43,13 +43,15 @@ pub(crate) use history::{
 };
 pub use observations::apply_title_in_txn;
 pub(crate) use observations::{
-    advance_session_request_observation_in_txn, derive_session_preview,
-    load_recent_titles_for_agent, load_scoped_request_facts_in_txn,
+    advance_refused_request_observation_in_txn, advance_session_request_observation_in_txn,
+    derive_session_preview, load_recent_titles_for_agent, load_scoped_request_facts_in_txn,
     refresh_session_request_observation_in_txn, session_needs_generated_title,
-    update_session_title_with_source,
+    update_session_title_with_source, REFUSAL_PROJECTION_EVENT_TARGET,
 };
 pub use observations::{load_latest_request_in_txn, SessionRequestFact};
 pub(crate) use observations::{load_session_current_hop, load_session_current_hop_in_txn};
+#[cfg(test)]
+pub(crate) use output::count_capture_row_queries;
 #[cfg(test)]
 pub(crate) use output::count_request_output_scans;
 #[cfg(test)]

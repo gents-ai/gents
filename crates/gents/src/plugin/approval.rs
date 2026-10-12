@@ -1,7 +1,9 @@
 //! The operator's per-call answer to "Allow this plugin to read this path?".
 //!
 //! A model's plugin call that names a path outside the working folder and the
-//! allowed folders waits here when its request came from an interactive chat.
+//! allowed folders waits here when its request came from an interactive chat,
+//! including a child another plugin composes: the gate belongs to the
+//! operator, not the composition.
 //! The question is one request file in the gents home, the answer one decision
 //! file; the desktop app and `gents chat` list the pending questions and write
 //! the decision. This is operator consent within the existing host trust
@@ -69,8 +71,9 @@ pub fn interactive() -> bool {
     INTERACTIVE.try_with(|_| ()).is_ok()
 }
 
-/// Runs `future` as a child call composed by another plugin, which cannot
-/// suspend its parent invocation to wait for the operator.
+/// Runs `future` as a child call composed by another plugin. The marker is
+/// the composed axis of `consentRoute`: the generated cases run a real
+/// composed scope and prove composition does not change the operator's gate.
 pub(crate) async fn scope_composed<F: std::future::Future>(future: F) -> F::Output {
     COMPOSED.scope((), future).await
 }
@@ -82,15 +85,14 @@ fn composed() -> bool {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Consent {
     Ask,
-    RefuseComposed,
     Deny,
 }
 
-/// Lean `ToolPolicy.PluginCalls.consentRoute`.
-pub(crate) fn consent_route(interactive: bool, composed: bool) -> Consent {
-    if composed {
-        Consent::RefuseComposed
-    } else if interactive {
+/// Lean `ToolPolicy.PluginCalls.consentRoute`. The composed axis is the
+/// owner's input; a child another plugin composes waits on the operator like
+/// a directly issued call.
+pub(crate) fn consent_route(interactive: bool, _composed: bool) -> Consent {
+    if interactive {
         Consent::Ask
     } else {
         Consent::Deny

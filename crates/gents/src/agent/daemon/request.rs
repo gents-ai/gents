@@ -104,16 +104,23 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                 .iter()
                 .map(|folded| TaggedMessage::unassociated(folded.message.clone())),
         );
-        let provider_request = gents_loop::loop_stream::assemble_provider_request(
-            self.model.as_ref(),
-            &mut provider_history,
-            &mut new_messages,
-            self.loop_tools.as_ref(),
-            &config,
-            replay,
-        )
-        .await
-        .map_err(anyhow::Error::new)?;
+        // The estimate resolves the same canonical evidence the first dispatch
+        // resolves again; record it so that dispatch serves this pass. The
+        // guard's scope ends the bracket before the token estimate so nothing
+        // later records.
+        let assembled = {
+            let _estimate_seed = replay.arm_estimate_seed();
+            gents_loop::loop_stream::assemble_provider_request(
+                self.model.as_ref(),
+                &mut provider_history,
+                &mut new_messages,
+                self.loop_tools.as_ref(),
+                &config,
+                replay,
+            )
+            .await
+        };
+        let provider_request = assembled.map_err(anyhow::Error::new)?;
         Ok(config
             .provider_input_counter
             .estimate_request(&provider_request)?)

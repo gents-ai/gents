@@ -15,14 +15,18 @@ pub(crate) fn owned_replay_input(
     issuer: Option<gents_loop::claude_messages_body::ReplayIssuer>,
     profile: super::ProviderInputProfile,
 ) -> LoopReplayInput {
+    let estimate_seed = gents_loop::loop_stream::ReplayEstimateSeed::default();
+    let recording_seed = estimate_seed.clone();
     LoopReplayInput {
         request_doc_id: Some(request.doc_id.clone()),
         issuer,
         wire: profile.replay_wire(),
+        estimate_seed: Some(estimate_seed),
         resolve: Some(Arc::new(move |tags| {
             let node = node.clone();
             let request = request.clone();
             let request_commit_cid = request_commit_cid.clone();
+            let recording_seed = recording_seed.clone();
             Box::pin(async move {
                 let started = std::time::Instant::now();
                 let boundary = crate::provider_context_reduction::capture_source_boundary(
@@ -60,7 +64,7 @@ pub(crate) fn owned_replay_input(
                     elapsed_ms = started.elapsed().as_millis() as u64,
                     "resolved canonical provider replay evidence"
                 );
-                Ok(resolved
+                let rows = resolved
                     .into_iter()
                     .flat_map(|(tag, evidence)| {
                         evidence.into_iter().map(move |evidence| {
@@ -70,7 +74,9 @@ pub(crate) fn owned_replay_input(
                             }
                         })
                     })
-                    .collect())
+                    .collect::<Vec<_>>();
+                recording_seed.record(rows.clone());
+                Ok(rows)
             })
         })),
         ..LoopReplayInput::default()

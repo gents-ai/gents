@@ -332,6 +332,7 @@ pub(crate) struct LeanRootAdmissionCase {
     pub(crate) operation: String,
     pub(crate) authored: String,
     pub(crate) blank: bool,
+    pub(crate) stored: bool,
     pub(crate) observation: String,
     pub(crate) configured: bool,
     pub(crate) ceiling: Option<LeanCanonicalPath>,
@@ -339,6 +340,7 @@ pub(crate) struct LeanRootAdmissionCase {
     pub(crate) published: Vec<LeanCanonicalPath>,
     pub(crate) candidate: Option<LeanCanonicalPath>,
     pub(crate) expected: bool,
+    pub(crate) effective: Option<LeanCanonicalPath>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

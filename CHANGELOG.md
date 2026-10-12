@@ -6,12 +6,48 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- A request's first turn no longer resolves canonical replay evidence twice.
+  The admission estimate's resolution is served to the immediately following
+  dispatch and taken once, and every later assembly re-reads the store exactly
+  as before. Within one resolution pass, the selected turns' capture rows and
+  manifest-block field-commit witnesses are read in batched statements across
+  the whole pass instead of one statement set per turn, cutting the per-turn
+  fixed store cost of reasoning replay; a capture whose pinned blocks fail
+  verification still degrades only its own turn (#2385).
+- Narrowing the operator tool root no longer strands an existing behavior: a
+  stored `Tools.host.root` grant that still contains the narrowed root now
+  clamps to it at the selection/ceiling meet instead of failing startup, so a
+  desktop "Change access" narrowing takes effect instead of crash-looping the
+  service (#2410). The containing-grant tolerance applies only to a document's
+  existing root being re-admitted; a write that sets a wider root stays
+  strictly admitted, so a behavior cannot pre-position a grant that activates
+  when the operator later widens authority. `gents init` stops copying the
+  operator root into the default Tools document only while no WorkspaceRoot
+  policy is configured (init.json stays the single record the server ceiling
+  inherits); under an explicit policy init pins the resolved operator root,
+  because the per-request execution guard refuses rootless host tools there.
+  The desktop environment view now projects the meet-resolved effective root
+  instead of the raw stored grant, service mode mirrors the startup
+  root-admission diagnostic to the stderr sink runtime-errors.log captures —
+  naming both roots — and a grant disjoint from the operator root still
+  refuses.
 - Breaking: installations are Nodes and their configured behaviors are Agents.
   Collections, document fields, CLI commands and flags, and desktop preferences
   use the new names (`gents config agent`, `--node-name`, `node_did`, `agent_id`).
   Persona requests are removed; Agent changes use authenticated configuration
   writes. Start with fresh stores and upgrade the desktop and all paired runtimes
   together; existing stores are not converted.
+- A request refused before it is claimed — a skill outside its context
+  allowlist, an invalid admission binding, an unavailable workspace — now
+  projects its failed turn into the session inside the same refusal
+  transaction (#2431). The session observation names the refused request, so
+  the desktop keeps the submitted text, the refusal reason and Retry after it
+  stops tracking the request, and a first message refused at admission mints
+  its session instead of vanishing from the sidebar. The projection is
+  best-effort: a session row or scoped request fact the runtime cannot decode
+  leaves the session untouched and warns instead of rolling the refusal back
+  to pending, and a version-skewed refused row that does not decode keeps its
+  refusal and warns that its session projection was skipped.
 - Installing or removing a plugin an Agent's Tools document names now
   re-admits an Agent that was demoted for failing to build on the missing
   tool (#2338). The resolved plugin identity (version and digest) joins the
@@ -127,6 +163,15 @@ source consistency checks, not a separate runtime compatibility version.
   unchanged.
 - iOS builds again: the DB Explorer window keeps its desktop-only title, size and
   focus calls off mobile targets, and CI checks the iOS simulator build on main.
+- An older transcript page that lands while the reader scrolls is put back by a
+  write only once the view has rested a full second (#2389). WebKitGTK starts a
+  wheel's scroll late and stalls it between frames under load, so the previous
+  150 ms stillness gate fired mid-flight, and WebKit, which stops its own
+  scrolling at any write, cut the wheel short by up to a page. The rest bound is
+  now the one the follow hook's attribution already uses, a late-starting key
+  scroll holds the gate too, and a write WebKit drops leaves the rows hidden and
+  is retried at the next rest rather than throwing the reader a page up. At
+  rest the chained page fetch waits for a further upward move.
 
 - Pack scenarios can allow folders for plugins (#2303). `experiment.json`
   takes `allowed_folders: [{"path", "access"}]`. Each path is relative to
@@ -182,6 +227,12 @@ source consistency checks, not a separate runtime compatibility version.
 
 ### Fixed
 
+- An interactive run's composed plugin children no longer fail up front when
+  their call names a path outside the working and allowed folders; they file
+  the operator's approval question and resume like a directly issued call,
+  bounded by the parent request's deadline and the listening guard (#2453).
+  Headless (graph or background) composed children are still denied without
+  asking.
 - Self-configuration no longer refuses edits of Tools that already carry
   `self_config.enable_pack_install`; a write may still raise the grant only
   when the invoking agent holds it.
@@ -193,6 +244,16 @@ source consistency checks, not a separate runtime compatibility version.
   are listed and observed. The graph collections carry no per-caller policy,
   so this restricts no access, and the flag cannot be combined with
   `--mcp-query-collection`.
+
+### Fixed
+
+- A plugin bind path swapped to a FIFO between the scope check and the bind
+  is now refused as not a file or folder instead of hanging the call on a
+  read-open that only a writer would end (#2383). The bind's pin, the pinned
+  folder and the name opened inside it all use nonblocking opens now, and the
+  pin refuses any handle that is not the kind the scope resolved, so the swap
+  race the pin already caught for symlinks fails closed promptly for FIFOs
+  and kind swaps too.
 
 ## 0.20.0 - 2026-10-05
 

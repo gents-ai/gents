@@ -326,6 +326,8 @@ async fn trace_project_exports_live_inference_turn_as_adapter_artifacts() -> Res
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
+    // The shared config helper addresses the node by `--home`.
+    let home_arg = home_dir.to_str().context("home is not UTF-8")?;
 
     let files_dir = home_dir.join("live-projection-files");
     fs::create_dir_all(&files_dir)?;
@@ -347,6 +349,8 @@ async fn trace_project_exports_live_inference_turn_as_adapter_artifacts() -> Res
     let model_name = std::env::var("GENTS_CLI_E2E_MODEL_NAME")
         .unwrap_or_else(|_| DEFAULT_MODEL_NAME.to_string());
     let mut init_args = vec![
+        "--home".to_string(),
+        home_arg.to_string(),
         "--node-name".to_string(),
         agent_name,
         "--model-name".to_string(),
@@ -376,7 +380,7 @@ async fn trace_project_exports_live_inference_turn_as_adapter_artifacts() -> Res
         .ok_or_else(|| anyhow!("init output missing tools_id: {init}"))?
         .to_string();
 
-    let mut serve = spawn_server(&home_dir, port)?;
+    let mut serve = spawn_server_with_env(&home_dir, port, &["--home", home_arg], &[])?;
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
 
@@ -401,6 +405,8 @@ async fn trace_project_exports_live_inference_turn_as_adapter_artifacts() -> Res
         &[
             "request",
             "submit",
+            "--home",
+            home_arg,
             "--graphql",
             &graphql,
             "--node-did",
@@ -709,6 +715,8 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
+    // The shared config helper addresses the node by `--home`.
+    let home_arg = home_dir.to_str().context("home is not UTF-8")?;
 
     struct LiveRequestSpec {
         agent_id: String,
@@ -757,6 +765,8 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
     let model_name = std::env::var("GENTS_CLI_E2E_MODEL_NAME")
         .unwrap_or_else(|_| DEFAULT_MODEL_NAME.to_string());
     let mut init_args = vec![
+        "--home".to_string(),
+        home_arg.to_string(),
         "--node-name".to_string(),
         agent_name.clone(),
         "--model-name".to_string(),
@@ -785,7 +795,7 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("init output missing tools_id: {init}"))?
         .to_string();
-    let mut serve = spawn_server(&home_dir, port)?;
+    let mut serve = spawn_server_with_env(&home_dir, port, &["--home", home_arg], &[])?;
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
 
@@ -812,6 +822,8 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
             &[
                 "request",
                 "submit",
+                "--home",
+                home_arg,
                 "--graphql",
                 &graphql,
                 "--node-did",

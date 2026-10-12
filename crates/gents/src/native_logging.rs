@@ -39,6 +39,16 @@ pub fn service_logging_enabled() -> bool {
     std::env::var_os("GENTS_SYSTEM_LOG").is_some_and(|value| value == "1")
 }
 
+/// Mirror an operator-local diagnostic to stderr when running as a service.
+/// Service mode drops the console tracing layer, so without this the exit-error
+/// sink (the only stderr the service manager captures) would carry just the
+/// presentation-safe bail and never the diagnostic an operator needs.
+pub fn mirror_service_diagnostic(diagnostic: &str) {
+    if service_logging_enabled() {
+        eprintln!("{diagnostic}");
+    }
+}
+
 /// Human-readable diagnostic instructions, not a pretend file path.
 ///
 /// The macOS command is spelled by absolute path: zsh, the default shell,
