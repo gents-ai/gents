@@ -584,16 +584,49 @@ mod bound {
     }
 
     #[tokio::test]
-    async fn a_composed_child_call_is_refused_without_asking() {
+    async fn a_composed_child_asks_and_resumes_on_the_operator() {
         let fx = fixture(&open_and_copy_wat("in.json", 0), BindAccess::Read);
         let tool = tool_for(&fx.home, &fx.record);
         let work = fx.root.join("work");
         let target = fx.root.join("outside/in.json");
+        let asked = answer(fx.home.path(), true, false);
+        let output = approval::scope_composed(in_session(&tool, &target, &work, true))
+            .await
+            .unwrap();
+        assert_eq!(output, r#"{"read":true}"#);
+        let prompt = asked.await.unwrap();
+        assert_eq!(
+            prompt,
+            format!("Allow team/plugin to read {}?", target.display())
+        );
+        assert!(approval::pending(fx.home.path()).unwrap().is_empty());
+        assert!(
+            allowed::list(fx.home.path()).unwrap().is_empty(),
+            "allow once remembers nothing"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_composed_child_the_operator_denies_fails_and_stores_nothing() {
+        let fx = fixture(&open_and_copy_wat("in.json", 0), BindAccess::Read);
+        let tool = tool_for(&fx.home, &fx.record);
+        let work = fx.root.join("work");
+        let target = fx.root.join("outside/in.json");
+        let asked = answer(fx.home.path(), false, true);
         let error = approval::scope_composed(in_session(&tool, &target, &work, true))
             .await
             .unwrap_err();
-        assert!(error.contains("composed tool call"), "{error}");
+        let prompt = tokio::time::timeout(std::time::Duration::from_secs(10), asked)
+            .await
+            .expect("the operator was asked about the child's path")
+            .unwrap();
+        assert_eq!(
+            prompt,
+            format!("Allow team/plugin to read {}?", target.display())
+        );
+        assert!(error.contains("declined"), "{error}");
         assert!(approval::pending(fx.home.path()).unwrap().is_empty());
+        assert!(allowed::list(fx.home.path()).unwrap().is_empty());
     }
 
     #[tokio::test]

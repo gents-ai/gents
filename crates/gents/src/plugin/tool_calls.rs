@@ -450,7 +450,6 @@ mod tests {
             };
             let expected = match case["expected"].as_str().unwrap() {
                 "ask" => crate::plugin::approval::Consent::Ask,
-                "refuse_composed" => crate::plugin::approval::Consent::RefuseComposed,
                 _ => crate::plugin::approval::Consent::Deny,
             };
             assert_eq!(route, expected, "{case}");
@@ -515,6 +514,124 @@ mod tests {
             assert_eq!(result.output, json!([{"result":"slow"},{"result":"slow"}]));
         })
         .await;
+    }
+
+    #[tokio::test]
+    async fn a_child_parked_on_operator_consent_is_not_charged_to_the_guest_clock() {
+        struct Asking(std::path::PathBuf, std::path::PathBuf);
+        impl ToolEffectDispatcher for Asking {
+            fn call<'a>(
+                &'a self,
+                _: u32,
+                _: &'a str,
+                _: &'a str,
+            ) -> gents_loop::tool::BoxFuture<'a, Result<ToolOutcome, ToolEffectError>> {
+                let home = self.0.clone();
+                let target = self.1.clone();
+                Box::pin(async move {
+                    let resolved = crate::plugin::allowed::resolve(
+                        &target.display().to_string(),
+                        None,
+                        None,
+                        &home,
+                    )
+                    .unwrap();
+                    let request = crate::plugin::approval::Request::new(
+                        "team/plugin",
+                        &resolved,
+                        crate::pack::BindAccess::Read,
+                        None,
+                    );
+                    let allowed = crate::plugin::approval::ask(
+                        &home,
+                        &request,
+                        crate::plugin::approval::WAIT,
+                    )
+                    .await
+                    .unwrap();
+                    assert!(allowed, "the operator allowed the child's path");
+                    Ok(ToolOutcome::Completed("\"allowed\"".into()))
+                })
+            }
+        }
+        let home = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let target = outside.path().join("in.json");
+        std::fs::write(&target, "{}").unwrap();
+        let answer_home = home.path().to_owned();
+        // The operator answers only after more than the plugin's whole wall
+        // clock, so completing at all proves the wait is serving time.
+        tokio::spawn(async move {
+            let started = tokio::time::Instant::now();
+            loop {
+                if let Some(request) = crate::plugin::approval::pending(&answer_home)
+                    .unwrap()
+                    .into_iter()
+                    .next()
+                {
+                    if started.elapsed() >= std::time::Duration::from_millis(400) {
+                        crate::plugin::approval::decide(
+                            &answer_home,
+                            &request.id,
+                            crate::plugin::approval::Answer::Once,
+                        )
+                        .unwrap();
+                        return;
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        });
+        gents_loop::tool_effects::scope(
+            Some(Arc::new(Asking(home.path().to_owned(), target))),
+            async {
+                let session = Session::for_call(true).unwrap();
+                let round: rounds::Round = Arc::new(|input, _| {
+                    let output = match input.get("state") {
+                        None => json!({"tool_calls":{"requests":[
+                            {"id":"gate","tool_name":"asking","arguments":{}}],"state":"done"}}),
+                        Some(_) => input["tool_results"]["gate"].clone(),
+                    };
+                    Ok(PluginOutcome {
+                        verdict: PluginVerdict::Success,
+                        output,
+                        diagnostics: String::new(),
+                        fuel_used: 1,
+                        wall_ms: 0,
+                    })
+                });
+                let budget = PluginBudget {
+                    wall_clock: std::time::Duration::from_millis(200),
+                    ..PluginBudget::default()
+                };
+                let result = rounds::drive(
+                    rounds::HostCalls {
+                        model: None,
+                        http: None,
+                        tools: Some(session),
+                    },
+                    json!({}),
+                    budget,
+                    round,
+                )
+                .await
+                .unwrap();
+                assert_eq!(
+                    result.verdict,
+                    PluginVerdict::Success,
+                    "{}",
+                    result.diagnostics
+                );
+                assert_eq!(result.output, json!({"result":"allowed"}));
+            },
+        )
+        .await;
+        assert!(
+            crate::plugin::approval::pending(home.path())
+                .unwrap()
+                .is_empty(),
+            "the answered question is removed from the queue"
+        );
     }
 
     #[test]

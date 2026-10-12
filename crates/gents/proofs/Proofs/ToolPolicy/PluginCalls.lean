@@ -108,19 +108,27 @@ theorem serving_children_is_not_charged (rounds : List (Nat × Nat)) (served : N
       chargedCompute rounds := by
   simp [chargedCompute, Function.comp_def]
 
-/-- Path consent waits for the operator only for an interactive caller. A
-composed child cannot suspend its parent invocation for consent, so it is
-refused up front with a reason that names the composition. -/
+/-- Path consent waits for the operator only for an interactive caller; a
+headless caller is denied. The gate belongs to the operator, not the
+composition (#1318 approval preservation): a child another plugin composes
+suspends and resumes on the approval owner, equivalent to the same gate on a
+directly issued call. Its wait is host serving time, excluded from the guest
+compute clock by `chargedCompute`, and a waiter interrupted by the parent
+request's deadline or cancellation settles child-scoped through `settle`.
+The composed axis stays a parameter so that equivalence is statable. -/
 inductive ConsentRoute where
   | ask
-  | refuseComposed
   | deny
   deriving DecidableEq, Repr
 
 def consentRoute (interactive composed : Bool) : ConsentRoute :=
-  if composed then .refuseComposed else if interactive then .ask else .deny
+  if interactive then .ask else .deny
 
-theorem composed_child_never_waits (interactive : Bool) :
-    consentRoute interactive true = .refuseComposed := by simp [consentRoute]
+theorem composed_child_waits_like_a_direct_call (interactive : Bool) :
+    consentRoute interactive true = consentRoute interactive false := by
+  simp [consentRoute]
+
+theorem interactive_composed_child_is_asked : consentRoute true true = .ask := by
+  simp [consentRoute]
 
 end ToolPolicy.PluginCalls
