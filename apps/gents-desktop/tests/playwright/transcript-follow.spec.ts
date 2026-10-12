@@ -203,7 +203,10 @@ test.describe("a reader scrolled up in a transcript", () => {
         if (chunk === 24) window.clearInterval(timer);
       }, 60);
     });
-    await page.getByTestId("transcript-panel").hover();
+    /* the scroller, not the panel: the panel is taller than the view, so
+       hovering it scrolls it into view, a move with no reader input behind
+       it that following rightly writes back to the foot */
+    await viewport.hover();
     /* one wheel's travel differs per platform build; wheel until the reader
        is well clear of the foot, then hold the position under the stream.
        The gap between wheels outlasts the reader-intent window, so every
