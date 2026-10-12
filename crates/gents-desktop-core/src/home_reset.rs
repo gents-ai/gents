@@ -1304,9 +1304,10 @@ mod tests {
         let (home, desktop, service) = fixture(&user);
         let lock = desktop.peer_directory_path().with_extension("lock");
         write(&lock, "");
-        let alias = user.join("desktop-alias");
-        std::os::unix::fs::symlink(desktop.root(), &alias).unwrap();
-        let alias = DesktopPaths::from_root(alias);
+        let alias = user.join("user-alias");
+        std::os::unix::fs::symlink(&user, &alias).unwrap();
+        let alias =
+            DesktopPaths::from_root(alias.join(desktop.root().strip_prefix(&user).unwrap()));
         let plan = plan_full_reset(Some(&home), &alias, &user, &service).unwrap();
         assert!(!plan
             .preview()
