@@ -182,6 +182,12 @@ source consistency checks, not a separate runtime compatibility version.
 
 ### Fixed
 
+- An interactive run's composed plugin children no longer fail up front when
+  their call names a path outside the working and allowed folders; they file
+  the operator's approval question and resume like a directly issued call,
+  bounded by the parent request's deadline and the listening guard (#2453).
+  Headless (graph or background) composed children are still denied without
+  asking.
 - Self-configuration no longer refuses edits of Tools that already carry
   `self_config.enable_pack_install`; a write may still raise the grant only
   when the invoking agent holds it.
