@@ -194,6 +194,15 @@ source consistency checks, not a separate runtime compatibility version.
   so this restricts no access, and the flag cannot be combined with
   `--mcp-query-collection`.
 
+### Fixed
+
+- A plugin bind path swapped to a FIFO between the scope check and the bind
+  is now refused as not a file or folder instead of hanging the call on a
+  read-open that only a writer would end (#2383). The bind's pin, the pinned
+  folder and the name opened inside it all use nonblocking opens now, so the
+  swap race the pin already caught for symlinks fails closed promptly for
+  FIFOs too.
+
 ## 0.20.0 - 2026-10-05
 
 - Trimmed tool results are recoverable: `sessions` gains an `output`

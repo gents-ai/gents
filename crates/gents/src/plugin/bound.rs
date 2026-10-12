@@ -284,9 +284,28 @@ fn opened_path(_: &File) -> Option<PathBuf> {
 /// Opens `path` once and requires the handle's own path to be `path`, the
 /// canonical path that was checked against the scope; returns its identity.
 /// Where the platform cannot name an open handle's path, the inode check on
-/// the link is the remaining pin.
+/// the link is the remaining pin. Opening a FIFO for reading blocks until a
+/// writer appears, so on unix the open is nonblocking and any handle that is
+/// not a file or folder is refused.
 fn pin(path: &Path) -> Result<Identity> {
-    let handle = File::open(path).with_context(|| format!("{} cannot be read", path.display()))?;
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(libc::O_NONBLOCK);
+    }
+    let handle = options
+        .open(path)
+        .with_context(|| format!("{} cannot be read", path.display()))?;
+    let kind = handle
+        .metadata()
+        .with_context(|| format!("{} cannot be read", path.display()))?;
+    anyhow::ensure!(
+        kind.is_file() || kind.is_dir(),
+        "{} is not a file or folder",
+        path.display()
+    );
     let identity = handle_identity(&handle);
     if let Some(opened) = opened_path(&handle) {
         anyhow::ensure!(
@@ -308,10 +327,17 @@ fn pin(path: &Path) -> Result<Identity> {
 fn named_in_pinned_folder(path: &Path, identity: Identity) -> bool {
     use std::os::fd::{AsRawFd, FromRawFd};
     use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::OpenOptionsExt as _;
     let (Some(folder), Some(name), Some(_)) = (path.parent(), path.file_name(), identity) else {
         return false;
     };
-    let Ok(dir) = File::open(folder) else {
+    // O_NONBLOCK keeps a FIFO swapped into the folder from parking this check;
+    // O_DIRECTORY fails the open when the folder itself was swapped.
+    let Ok(dir) = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK | libc::O_DIRECTORY)
+        .open(folder)
+    else {
         return false;
     };
     if opened_path(&dir).as_deref() != Some(folder) {
@@ -325,7 +351,7 @@ fn named_in_pinned_folder(path: &Path, identity: Identity) -> bool {
         libc::openat(
             dir.as_raw_fd(),
             name.as_ptr(),
-            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC,
         )
     };
     if fd < 0 {

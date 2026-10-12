@@ -100,3 +100,72 @@ fn a_file_bound_beside_exposes_its_folder_and_names_the_file() {
     assert_eq!(bound.path(), base);
     assert_eq!(bound.target(), base.join("a.txt"));
 }
+
+#[cfg(unix)]
+fn make_fifo(path: &Path) {
+    use std::os::unix::ffi::OsStrExt;
+    let name = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+    // The pathname is NUL-terminated and remains alive for this call.
+    assert_eq!(
+        unsafe { libc::mkfifo(name.as_ptr(), 0o600) },
+        0,
+        "{}",
+        std::io::Error::last_os_error()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_bound_dir_swapped_to_a_fifo_is_refused() {
+    let root = tempfile::tempdir().unwrap();
+    let base = root.path().canonicalize().unwrap();
+    make_fifo(&base.join("d"));
+    let error = BoundDir::folder(&base.join("d"), BindAccess::Read)
+        .expect_err("a FIFO read-open blocks until a writer appears");
+    assert!(
+        format!("{error:#}").contains("is not a file or folder"),
+        "{error:#}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_bound_file_swapped_to_a_fifo_is_refused() {
+    let root = tempfile::tempdir().unwrap();
+    let base = root.path().canonicalize().unwrap();
+    make_fifo(&base.join("f.txt"));
+    let error = BoundDir::for_file(&base.join("f.txt"), BindAccess::Read)
+        .expect_err("a FIFO read-open blocks until a writer appears");
+    assert!(
+        format!("{error:#}").contains("is not a file or folder"),
+        "{error:#}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_fifo_in_a_pinned_folder_is_not_the_pinned_name() {
+    let root = tempfile::tempdir().unwrap();
+    let base = root.path().canonicalize().unwrap();
+    std::fs::write(base.join("a.txt"), "a").unwrap();
+    make_fifo(&base.join("pipe"));
+    let identity = identity_of(&base.join("a.txt"));
+    assert!(
+        !named_in_pinned_folder(&base.join("pipe"), identity),
+        "a FIFO is not a regular file, and opening it must not block"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_pinned_folder_swapped_to_a_fifo_is_not_the_pinned_folder() {
+    let root = tempfile::tempdir().unwrap();
+    let base = root.path().canonicalize().unwrap();
+    std::fs::write(base.join("a.txt"), "a").unwrap();
+    make_fifo(&base.join("folderpipe"));
+    let identity = identity_of(&base.join("a.txt"));
+    assert!(
+        !named_in_pinned_folder(&base.join("folderpipe/x.txt"), identity),
+        "a FIFO cannot be opened as the pinned folder"
+    );
+}
