@@ -711,6 +711,8 @@ mod tests {
         let queue = |after: &str| {
             Some(RequestInput {
                 queue: Some(RequestQueue {
+                    delivery: Default::default(),
+                    position: None,
                     source: QueueSource::User,
                     policy: QueuePolicy::Append,
                     key: None,

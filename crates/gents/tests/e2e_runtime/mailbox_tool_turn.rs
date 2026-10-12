@@ -440,6 +440,8 @@ async fn a_question_answered_while_its_session_is_busy_is_queued_behind_the_turn
     );
     create.caused_by_source_doc_id = Some(item.doc_id.clone());
     create.input.queue = Some(gents_protocol::request_input::RequestQueue {
+        delivery: Default::default(),
+        position: None,
         source: gents_protocol::request_input::QueueSource::User,
         policy: gents_protocol::request_input::QueuePolicy::Append,
         key: None,

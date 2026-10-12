@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Bot, ChevronDown, Clock, Play, Timer, Workflow, Zap } from "lucide-react";
 import type {
   PendingTurnView,
+  PendingQueueEntryView,
   RenderedTimelineItem,
   RequestOriginView,
 } from "@source-inc/gents-desktop-client";
@@ -22,6 +23,7 @@ import {
 import { UserMessage } from "@gents/ui/conversation";
 import { cn } from "@gents/ui/lib/utils";
 import { href } from "@/lib/router";
+import { PendingControls, type QueueEdit } from "./PendingMessageControls";
 
 /** A transcript input that ended without being sent. A folded request was
     consumed when its entry was published, so it was delivered; an input
@@ -213,10 +215,16 @@ export function UserInputWithState({
 }) {
   if (!state) return <UserMessage actions={actions}>{content}</UserMessage>;
   return (
-    <div className={cn("relative mb-2", state === "Queued" && "opacity-70")}>
+    <div
+      className={cn(
+        "relative mb-2",
+        (state === "Queued" || state === "Pending") && "opacity-70",
+      )}
+    >
       <UserMessage actions={actions}>{content}</UserMessage>
       <Badge
         variant="outline"
+        title={state === "Pending" ? "Waiting for the next safe step" : undefined}
         className="absolute right-4 bottom-0 translate-y-1/2 border-border/60 bg-background text-[10px] font-normal text-muted-foreground"
       >
         {state}
@@ -225,15 +233,33 @@ export function UserInputWithState({
   );
 }
 
-export function QueuedInputs({ queued }: { queued: PendingTurnView[] }) {
+export function QueuedInputs({
+  queued,
+  queue = null,
+  onEdit,
+}: {
+  queued: PendingTurnView[];
+  queue?: PendingQueueEntryView[] | null;
+  onEdit?: (edit: QueueEdit) => Promise<void>;
+}) {
   if (queued.length === 0) return null;
+  // Runtime-managed entries take their queue order, which is the order the
+  // controls move them in; other queued inputs keep their place.
+  const entries = new Map(queue?.map((entry) => [entry.requestId, entry]));
+  const byQueue = (queue ?? []).flatMap(
+    (entry) => queued.find((turn) => turn.requestId === entry.requestId) ?? [],
+  );
+  let next = 0;
+  const ordered = queued.map((turn) =>
+    entries.has(turn.requestId) ? byQueue[next++] : turn,
+  );
   return (
     <div
       className="grid gap-3"
       data-testid="queued-inputs"
-      aria-label="Queued messages"
+      aria-label="Pending messages"
     >
-      {queued.map((turn) => (
+      {ordered.map((turn) => (
         <div key={turn.requestId} data-testid="queued-input">
           {turn.origin ? (
             <AutomatedInput
@@ -242,7 +268,14 @@ export function QueuedInputs({ queued }: { queued: PendingTurnView[] }) {
               state="Queued"
             />
           ) : (
-            <UserInputWithState content={turn.content} state="Queued" />
+            <UserInputWithState content={turn.content} state="Pending" />
+          )}
+          {onEdit && queue && entries.get(turn.requestId)?.editable && (
+            <PendingControls
+              entry={entries.get(turn.requestId)!}
+              queue={queue}
+              onEdit={onEdit}
+            />
           )}
         </div>
       ))}

@@ -21,6 +21,7 @@ pub(crate) use execution_renewal::{renew_in_transaction, RenewalAttemptOutcome};
 mod terminal_binding;
 pub(crate) use terminal_binding::is_exact_invocation_reply;
 mod terminal_tools;
+pub use crate::trigger_engine::durable::request_arrival_order;
 #[cfg(test)]
 pub(crate) use execution_lease::revoke_execution_preserving_output_at;
 #[cfg(test)]
@@ -61,7 +62,13 @@ pub(crate) use materialize::{
     write_trigger_delivery, SessionMessageCause, SessionMessageTarget,
 };
 pub use queue::enqueue_local_steering_request;
-pub use queue::FOLDED_REASON;
+pub use queue::validate_position as validate_queue_position;
+pub use queue::{pending_user_queue, PendingQueueEntry, PendingQueueSnapshot};
+pub use queue::{prepare_pending_user_edit, prepare_user_message_input};
+pub use queue::{
+    submit_pending_user_edit, PendingMessageEdit, PendingQueueEdit, PendingQueueReceipt,
+};
+pub use queue::{FOLDED_REASON, REPLACED_REASON};
 pub(crate) use task_title::task_goal_session_title;
 pub use task_title::task_session_title;
 
@@ -140,6 +147,16 @@ pub fn folded_into(row: &gents_protocol::row::AgentRequestRow) -> Option<&str> {
     .then_some(row.superseded_by_request.as_deref())
     .flatten()
     .filter(|head| !head.trim().is_empty())
+}
+
+/// The pending request that replaced this one when its author edited it.
+pub fn replaced_by(row: &gents_protocol::row::AgentRequestRow) -> Option<&str> {
+    (row.lifecycle_state
+        == Some(gents_protocol::request_lifecycle::RequestLifecycleState::Superseded)
+        && row.failure_reason.as_deref() == Some(queue::REPLACED_REASON))
+    .then_some(row.superseded_by_request.as_deref())
+    .flatten()
+    .filter(|replacement| !replacement.trim().is_empty())
 }
 
 /// The transcript key under which the claimed request publishes a message
@@ -535,9 +552,20 @@ pub struct RequestLifecycle {
     renewal_task: Option<execution_renewal::RenewalTask>,
     fold_admitted: Vec<String>,
     folded_selection: Vec<queue::FoldedInput>,
+    natural_finish_allowed: bool,
 }
 
 impl RequestLifecycle {
+    pub(crate) fn allow_natural_finish(&mut self, allowed: bool) {
+        self.natural_finish_allowed = allowed;
+    }
+    pub(crate) fn natural_finish_allowed(&self) -> bool {
+        self.natural_finish_allowed
+    }
+    pub(crate) fn natural_finish_completed(&self) -> bool {
+        self.natural_finish_allowed && self.state == LocalLifecycleState::Completed
+    }
+
     /// Pending requests whose signed admission the caller verified for this
     /// claim. The claim selects the contiguous run of them directly behind
     /// it (Lean `SessionQueue.claimFolding`); empty claims only this request.
@@ -565,6 +593,13 @@ impl RequestLifecycle {
             "configure token limit before claim"
         );
         self.configured_max_total_tokens = limit;
+    }
+
+    pub(crate) fn input_publication_before_deadline(
+        now: chrono::DateTime<chrono::Utc>,
+        deadline: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> bool {
+        deadline.is_none_or(|deadline| now < deadline)
     }
 
     pub(crate) fn claimed_deadline_at(&self) -> Option<chrono::DateTime<chrono::Utc>> {

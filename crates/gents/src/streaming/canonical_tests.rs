@@ -186,6 +186,7 @@ async fn owned_input_handoff_publishes_context_and_prompt_once_before_provider_o
                     context: Some(context.clone()),
                     prompt: prompt.clone(),
                     folded: Vec::new(),
+                    reply: tokio::sync::oneshot::channel().0,
                 }))
                 .await
                 .unwrap();

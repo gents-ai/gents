@@ -28,7 +28,12 @@ pub enum ChatAction {
     Sse(String),
     DelayThenSse(Duration, String),
     WaitThenSse(Arc<tokio::sync::Semaphore>, String),
-    GatedSse(Vec<(Duration, String)>, Arc<tokio::sync::Semaphore>, String),
+    GatedSse(
+        Vec<(Duration, String)>,
+        Arc<tokio::sync::Semaphore>,
+        String,
+        tokio::sync::watch::Sender<Option<std::time::Instant>>,
+    ),
     Hang,
 }
 
@@ -208,13 +213,21 @@ async fn handle_chat(
 
     match (state.responder)(&request_json) {
         ChatAction::Sse(body) => sse_response(body),
-        ChatAction::GatedSse(first, gate, rest) => {
+        ChatAction::GatedSse(first, gate, rest, emitted) => {
             let stopped = state.stopped.clone();
             let chunks = futures_util::stream::unfold(
-                (first.into_iter(), Some(rest), gate, stopped),
-                |(mut first, mut rest, gate, stopped)| async move {
+                (first.into_iter(), Some(rest), gate, stopped, emitted),
+                |(mut first, mut rest, gate, stopped, emitted)| async move {
                     let chunk = if let Some((delay, first)) = first.next() {
                         tokio::time::sleep(delay).await;
+                        emitted.send_if_modified(|timestamp| {
+                            if timestamp.is_some() {
+                                false
+                            } else {
+                                *timestamp = Some(std::time::Instant::now());
+                                true
+                            }
+                        });
                         tracing::info!(
                             target: "cli_enrollment::streaming_fixture",
                             bytes = first.len(),
@@ -239,7 +252,7 @@ async fn handle_chat(
                     };
                     Some((
                         Ok::<_, std::convert::Infallible>(chunk),
-                        (first, rest, gate, stopped),
+                        (first, rest, gate, stopped, emitted),
                     ))
                 },
             );

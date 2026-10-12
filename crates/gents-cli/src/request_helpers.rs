@@ -128,6 +128,8 @@ pub(crate) fn request_terminal_query(request_id: &str, physical: Option<&str>) -
                 lifecycle_state
                 failure_reason
                 terminal_output
+                superseded_by_request
+                superseded_by_request_doc_id
                 terminalized_at
                 interrupt_requested_at
                 valid_until
@@ -383,6 +385,7 @@ pub(crate) async fn create_goal_backed_agent_request(
     agent_id: Option<&str>,
     objective: &str,
     token_budget: Option<i64>,
+    input: RequestInput,
 ) -> Result<SubmittedRequest> {
     use sha2::{Digest, Sha256};
 
@@ -414,6 +417,7 @@ pub(crate) async fn create_goal_backed_agent_request(
         Some(request_id),
         RequestSubmitOptions {
             retry_key: Some(retry_key.clone()),
+            input: Some(input),
             ..Default::default()
         },
     )
@@ -723,22 +727,71 @@ fn wait_progress_marker(
     }
 }
 
+fn successor_output_target(row: &AgentRequestRow) -> Result<Option<(String, String)>> {
+    let Some(logical) =
+        gents::lifecycle::folded_into(row).or_else(|| gents::lifecycle::replaced_by(row))
+    else {
+        return Ok(None);
+    };
+    let physical = row
+        .superseded_by_request_doc_id
+        .as_deref()
+        .filter(|id| !id.trim().is_empty())
+        .context("superseded request has no physical output target")?;
+    anyhow::ensure!(
+        row.doc_id.as_deref() != Some(physical),
+        "superseded request targets itself"
+    );
+    Ok(Some((logical.to_owned(), physical.to_owned())))
+}
+
 pub(crate) async fn wait_for_terminal_response(
     graphql: &GraphqlEndpoint,
     request_id: &str,
     timeout_secs: u64,
     poll_secs: u64,
 ) -> Result<RequestOutputEnvelope> {
+    wait_for_terminal_response_with_progress(
+        graphql,
+        request_id,
+        timeout_secs,
+        poll_secs,
+        || async { Ok(false) },
+    )
+    .await
+}
+
+pub(crate) async fn wait_for_terminal_response_with_progress<F, Fut>(
+    graphql: &GraphqlEndpoint,
+    request_id: &str,
+    timeout_secs: u64,
+    poll_secs: u64,
+    mut progress: F,
+) -> Result<RequestOutputEnvelope>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<bool>>,
+{
     let idle_timeout = Duration::from_secs(timeout_secs);
     let mut last_progress_at = tokio::time::Instant::now();
     let mut last_progress_marker: Option<WaitProgressMarker> = None;
 
     let mut pinned: Option<AgentRequestRow> = None;
+    let mut current_request_id = request_id.to_owned();
+    let mut target_physical: Option<String> = None;
+    let mut followed = std::collections::BTreeSet::new();
+    let mut original_scope: Option<AgentRequestRow> = None;
     loop {
+        if progress().await? {
+            last_progress_at = tokio::time::Instant::now();
+        }
         let request_row = {
             let query = request_terminal_query(
-                request_id,
-                pinned.as_ref().and_then(|row| row.doc_id.as_deref()),
+                &current_request_id,
+                pinned
+                    .as_ref()
+                    .and_then(|row| row.doc_id.as_deref())
+                    .or(target_physical.as_deref()),
             );
             let response = post_graphql(graphql, &query).await?;
             let rows = response
@@ -762,6 +815,27 @@ pub(crate) async fn wait_for_terminal_response(
                 request.doc_id.is_some(),
                 "terminal request has no physical identity"
             );
+            anyhow::ensure!(
+                request.request_id == current_request_id,
+                "successor output target changed logical identity"
+            );
+            if let Some(expected) = target_physical.as_deref() {
+                anyhow::ensure!(
+                    request.doc_id.as_deref() == Some(expected),
+                    "successor output changed physical target"
+                );
+            }
+            if let Some(original) = original_scope.as_ref() {
+                anyhow::ensure!(
+                    request.node_did == original.node_did
+                        && request.requester_did == original.requester_did
+                        && request.session_id == original.session_id
+                        && request.agent_id == original.agent_id,
+                    "successor output target crossed request scope"
+                );
+            } else {
+                original_scope = Some(request.clone());
+            }
             if let Some(original) = pinned.as_ref() {
                 anyhow::ensure!(
                     request.node_did == original.node_did
@@ -772,6 +846,19 @@ pub(crate) async fn wait_for_terminal_response(
                 );
             } else {
                 pinned = Some(request.clone());
+            }
+        }
+        if let Some(request) = request_row.as_ref() {
+            if let Some((logical, physical)) = successor_output_target(request)? {
+                followed.insert(request.doc_id.clone().unwrap());
+                anyhow::ensure!(
+                    !followed.contains(&physical),
+                    "cycle in successor output targets"
+                );
+                current_request_id = logical;
+                target_physical = Some(physical);
+                pinned = None;
+                continue;
             }
         }
         let mut observed_output = match request_row.as_ref() {
@@ -1101,6 +1188,7 @@ mod tests {
         content_and_input_with_prompt_selected_skill_ids, submit_prepared_agent_request_committed,
         PreparedAgentRequest, RequestSubmitOptions,
     };
+    use super::{successor_output_target, CliOutputObservation};
     use axum::{
         body::{Body, Bytes},
         extract::State,
@@ -1109,6 +1197,8 @@ mod tests {
         Json, Router,
     };
     use futures_util::stream;
+    use gents::config_client::GraphqlEndpoint;
+    use gents_protocol::row::AgentRequestRow;
     use serde_json::{json, Value};
     use std::collections::BTreeSet;
     use std::sync::{Arc, Mutex};
@@ -1642,5 +1732,120 @@ mod tests {
             content_and_input_with_prompt_selected_skill_ids(None, "/vuln-scan\nReview /work");
         assert_eq!(content, "Review /work");
         assert_eq!(input.selected_skill_ids, ["vuln-scan"]);
+    }
+    #[tokio::test]
+    async fn terminal_wait_follows_only_exact_same_scope_successor_output_owner(
+    ) -> anyhow::Result<()> {
+        for (cross_scope, reason) in [
+            (false, gents::lifecycle::FOLDED_REASON),
+            (true, gents::lifecycle::FOLDED_REASON),
+            (false, gents::lifecycle::REPLACED_REASON),
+        ] {
+            let queries = Arc::new(Mutex::new(Vec::<String>::new()));
+            let target_polls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let app = Router::new().route("/graphql", post({
+                let queries = queries.clone();
+                let target_polls = target_polls.clone();
+                move |Json(body): Json<Value>| {
+                    let queries = queries.clone();
+                    let target_polls = target_polls.clone();
+                    async move {
+                        let query = body["query"].as_str().unwrap().to_owned();
+                        queries.lock().unwrap().push(query.clone());
+                        if query.contains("AgentOutputSegment") {
+                            return Json(json!({"data":{"AgentOutputSegment":[],"AgentMessage":[]}}));
+                        }
+                        let target = query.contains("active-physical");
+                        let output_visible = !target || target_polls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) > 0;
+                        Json(json!({"data":{"AgentRequest":[{
+                            "_docID": if target {"active-physical"} else {"input-physical"},
+                            "request_id": if target {"active"} else {"input"},
+                            "node_did":"did:test:owner", "requester_did":"did:test:author",
+                            "session_id": if target && cross_scope {"other-session"} else {"same-session"},
+                            "agent_id":"engineer", "lifecycle_state": if target {"completed"} else {"superseded"},
+                            "failure_reason": if target {Value::Null} else {json!(reason)},
+                            "superseded_by_request": if target {Value::Null} else {json!("active")},
+                            "superseded_by_request_doc_id": if target {Value::Null} else {json!("active-physical")},
+                            "terminal_output":if output_visible {json!({"kind":"no_message"})} else {Value::Null},
+                            "terminalized_at":"2026-10-10T00:00:00Z"
+                        }]}}))
+                    }
+                }
+            }));
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+            let endpoint =
+                GraphqlEndpoint::anonymous(format!("http://{}/graphql", listener.local_addr()?));
+            let server = tokio::spawn(async move {
+                let _ = axum::serve(listener, app).await;
+            });
+            let progress_calls = std::sync::atomic::AtomicUsize::new(0);
+            let result = super::wait_for_terminal_response_with_progress(
+                &endpoint,
+                "input",
+                5,
+                0,
+                || async {
+                    progress_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    Ok(true)
+                },
+            )
+            .await;
+            assert!(progress_calls.load(std::sync::atomic::Ordering::SeqCst) >= 2);
+
+            server.abort();
+            if cross_scope {
+                assert!(result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("crossed request scope"));
+            } else {
+                let result = result?;
+                assert!(
+                    target_polls.load(std::sync::atomic::Ordering::SeqCst) >= 2,
+                    "terminal output lag must be retried"
+                );
+                assert_eq!(result.request.request_id, "active");
+                assert_eq!(result.request.request_doc_id, "active-physical");
+                assert!(matches!(
+                    result.output,
+                    CliOutputObservation::TerminalNoMessage
+                ));
+            }
+            let queries = queries.lock().unwrap();
+            assert!(
+                queries
+                    .iter()
+                    .any(|query| query.contains("_docID:{_eq:\"active-physical\"}")),
+                "{queries:?}"
+            );
+            assert!(
+                !queries
+                    .iter()
+                    .any(|query| query.contains("request_id:{_eq:\"active\"}")),
+                "target must be selected physically"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn successor_output_target_rejects_missing_physical_identity_and_self_cycles() {
+        let mut row: AgentRequestRow = serde_json::from_value(json!({
+            "_docID":"input", "request_id":"input", "lifecycle_state":"superseded",
+            "failure_reason":gents::lifecycle::FOLDED_REASON, "superseded_by_request":"active"
+        }))
+        .unwrap();
+        assert!(successor_output_target(&row).is_err());
+        row.superseded_by_request_doc_id = Some("input".into());
+        assert!(successor_output_target(&row).is_err());
+        row.failure_reason = Some(gents::lifecycle::REPLACED_REASON.into());
+        row.superseded_by_request_doc_id = Some("replacement".into());
+        assert_eq!(
+            successor_output_target(&row).unwrap(),
+            Some(("active".into(), "replacement".into())),
+            "an edited input is answered by its replacement"
+        );
+        row.failure_reason = Some("other supersession".into());
+        assert!(successor_output_target(&row).unwrap().is_none());
     }
 }

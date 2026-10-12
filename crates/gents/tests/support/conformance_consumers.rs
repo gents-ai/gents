@@ -56,6 +56,41 @@ impl ConformanceConsumer {
 pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
     &[
         ConformanceConsumer::RustTest {
+            id: "e2e_runtime::session_input_edit::generated_remote_edits_replicate_signed_effect_and_receipt",
+            package: "gents",
+            source_path: "crates/gents/tests/e2e_runtime/session_input_edit.rs",
+            module_path: "e2e_runtime::session_input_edit",
+            function: "generated_remote_edits_replicate_signed_effect_and_receipt",
+        },
+        ConformanceConsumer::RustTest {
+            id: "lifecycle::queue::tests::management::generated_pending_management_cases_bind_to_signed_replacement_owner",
+            package: "gents",
+            source_path: "crates/gents/src/lifecycle/queue/tests/management.rs",
+            module_path: "lifecycle::queue::tests::management",
+            function: "generated_pending_management_cases_bind_to_signed_replacement_owner",
+        },
+        ConformanceConsumer::RustTest {
+            id: "lifecycle::queue::tests::folding::expired_or_malformed_steering_is_a_modelled_publication_barrier",
+            package: "gents",
+            source_path: "crates/gents/src/lifecycle/queue/tests/folding.rs",
+            module_path: "lifecycle::queue::tests::folding",
+            function: "expired_or_malformed_steering_is_a_modelled_publication_barrier",
+        },
+        ConformanceConsumer::RustTest {
+            id: "gents_loop::end_to_end_test::modeled_unsafe_stream_boundaries_never_intake_or_finish_before_provider_publication",
+            package: "gents-loop",
+            source_path: "crates/gents-loop/src/end_to_end_test.rs",
+            module_path: "gents_loop::end_to_end_test",
+            function: "modeled_unsafe_stream_boundaries_never_intake_or_finish_before_provider_publication",
+        },
+        ConformanceConsumer::RustTest {
+            id: "agent::p2p_reconcile::session_input_edit::tests::generated_commands_bind_to_atomic_queue_owner",
+            package: "gents",
+            source_path: "crates/gents/src/agent/p2p_reconcile/session_input_edit/tests.rs",
+            module_path: "agent::p2p_reconcile::session_input_edit::tests",
+            function: "generated_commands_bind_to_atomic_queue_owner",
+        },
+        ConformanceConsumer::RustTest {
             id: "lean_vocab_test::support::session_documents::tests::generated_pending_timeline_cases_preserve_request_identities_and_order",
             package: "gents",
             source_path: "crates/gents/src/lean_vocab_test/session_documents.rs",

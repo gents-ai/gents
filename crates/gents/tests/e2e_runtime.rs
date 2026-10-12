@@ -49,3 +49,11 @@ fn provider_wire_fixture_replay_rejects_unmatched_and_leftover_requests() {
 
 #[path = "e2e_runtime/field_recovery_turn.rs"]
 mod field_recovery_turn;
+
+#[path = "e2e_runtime/queue_management.rs"]
+mod queue_management;
+#[path = "e2e_runtime/steering_delivery.rs"]
+mod steering_delivery;
+
+#[path = "e2e_runtime/session_input_edit.rs"]
+mod session_input_edit;
