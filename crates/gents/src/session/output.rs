@@ -1137,8 +1137,8 @@ pub(crate) async fn load_canonical_assistant_candidates_with(
             message: reconstructed.message,
         });
     }
-    // The capture reads are the only per-candidate store cost left; batch them
-    // across the whole pass instead of paying them once per candidate.
+    // Capture reads are the pass's dominant per-candidate store cost; they
+    // stay batched across the pass.
     let capture_rows = load_replay_capture_rows(node, &selected).await?;
     preload_replay_capture_blocks(node, &capture_rows, &mut capture_cache).await?;
 
@@ -1257,7 +1257,8 @@ async fn load_replay_capture_rows(
 /// shared batched pass, so per-candidate verification resolves from positive
 /// cache observations only. A capture whose record does not decode locally is
 /// left to its verifier, which reports it per capture exactly as an unbatched
-/// read would.
+/// read would; the shared block read isolates a verification failure per
+/// manifest the same way.
 async fn preload_replay_capture_blocks(
     node: &EmbeddedNode,
     capture_rows: &BTreeMap<String, Vec<serde_json::Value>>,

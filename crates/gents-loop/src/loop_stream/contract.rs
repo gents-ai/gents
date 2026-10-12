@@ -124,18 +124,30 @@ pub struct LoopReplayInput {
 }
 
 impl LoopReplayInput {
-    /// Arm [`Self::estimate_seed`] so the next resolution is recorded for the
-    /// immediately following dispatch. The admission estimate brackets exactly
-    /// its own assembly with this; every other resolution stays unarmed.
-    pub fn arm_estimate_seed(&self) {
-        if let Some(seed) = &self.estimate_seed {
+    /// Arm [`Self::estimate_seed`] so the resolutions run while the returned
+    /// guard is held are recorded for the immediately following dispatch.
+    /// Dropping the guard ends the bracket, so an assembly that unwinds or is
+    /// cancelled still leaves later resolutions unarmed. The admission
+    /// estimate brackets exactly its own assembly with this.
+    pub fn arm_estimate_seed(&self) -> EstimateSeedGuard {
+        let seed = self.estimate_seed.clone();
+        if let Some(seed) = &seed {
             seed.arm();
         }
+        EstimateSeedGuard { seed }
     }
+}
 
-    /// End the bracket opened by [`Self::arm_estimate_seed`].
-    pub fn disarm_estimate_seed(&self) {
-        if let Some(seed) = &self.estimate_seed {
+/// Ends the estimate-seed bracket opened by
+/// [`LoopReplayInput::arm_estimate_seed`] when dropped, on every exit path
+/// including panics, unwinds and cancellation.
+pub struct EstimateSeedGuard {
+    seed: Option<ReplayEstimateSeed>,
+}
+
+impl Drop for EstimateSeedGuard {
+    fn drop(&mut self) {
+        if let Some(seed) = &self.seed {
             seed.disarm();
         }
     }

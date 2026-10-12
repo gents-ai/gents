@@ -59,9 +59,10 @@ mod tool_dispatch;
 mod turn_threading;
 
 pub use contract::{
-    AuthoredInput, FoldedPrompt, LoopConfig, LoopReplayInput, LoopStreamItem, RenderedRequestSink,
-    ReplayEstimateSeed, ReplayEvidenceResolver, ReplayEvidenceRow, ReplayEvidenceViolation,
-    StructuredOutputConfig, TaggedMessage, TurnCompactionOutcome, TurnCompactionRequest,
+    AuthoredInput, EstimateSeedGuard, FoldedPrompt, LoopConfig, LoopReplayInput, LoopStreamItem,
+    RenderedRequestSink, ReplayEstimateSeed, ReplayEvidenceResolver, ReplayEvidenceRow,
+    ReplayEvidenceViolation, StructuredOutputConfig, TaggedMessage, TurnCompactionOutcome,
+    TurnCompactionRequest,
 };
 pub use one_shot::{
     run_loop_to_text, run_loop_to_typed, AuxiliaryPersistenceFailure, OneShotNoVisibleOutput,

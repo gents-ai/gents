@@ -1676,10 +1676,8 @@ async fn the_dispatch_after_an_admission_estimate_serves_its_resolution_without_
     );
     let resolve = replay.resolve.clone().expect("canonical resolver");
     let (estimate, estimate_scans) = crate::session::count_request_output_scans(async {
-        replay.arm_estimate_seed();
-        let estimate = resolve(vec![tag.clone()]).await.unwrap();
-        replay.disarm_estimate_seed();
-        estimate
+        let _estimate_seed = replay.arm_estimate_seed();
+        resolve(vec![tag.clone()]).await.unwrap()
     })
     .await;
     assert_eq!(estimate.len(), 1);
@@ -1744,9 +1742,10 @@ async fn a_header_twin_arriving_between_the_admission_estimate_and_dispatch_wait
         crate::provider_input::ProviderInputProfile::ClaudeMessages,
     );
     let resolve = replay.resolve.clone().expect("canonical resolver");
-    replay.arm_estimate_seed();
-    let estimate = resolve(vec![tag.clone()]).await.unwrap();
-    replay.disarm_estimate_seed();
+    let estimate = {
+        let _estimate_seed = replay.arm_estimate_seed();
+        resolve(vec![tag.clone()]).await.unwrap()
+    };
     assert_eq!(estimate.len(), 1);
 
     let mut duplicate = fixture.header.clone();
@@ -1912,5 +1911,175 @@ async fn a_pass_with_many_selected_turns_batches_capture_rows_and_block_commits(
             batched[index].1, singleton,
             "the batched pass answers exactly the per-tag singleton owner"
         );
+    }
+}
+
+/// A capture whose manifest pins a block whose stored payload does not hash to
+/// the pinned key is a verification failure of that capture alone. The pass's
+/// shared block preload must isolate it per manifest — skipping only that
+/// capture's blocks — so the pass completes and every healthy turn stays
+/// replayable, exactly as the per-capture reader always classified it.
+#[tokio::test]
+async fn a_capture_pinning_a_block_that_does_not_hash_drops_only_its_own_turn() {
+    let turns = 3u32;
+    let corrupt_turn = turns - 1;
+    let marker = "corrupt-block-payload-marker";
+    let mut fixture = signed_fixture().await;
+    fixture
+        .insert_capture(RenderedRequestSource::ClaudeCliSubscription)
+        .await
+        .unwrap();
+    fixture
+        .insert_provider_turn(
+            1,
+            serde_json::json!({
+                "model": "claude-test",
+                "messages": [
+                    {"role": "user", "content": [{"type": "text", "text": "prompt"}]},
+                    {"role": "assistant", "content": [
+                        {"type": "thinking", "thinking": "think-0", "signature": "sig-0"},
+                        {"type": "text", "text": "answer-0"}
+                    ]},
+                    {"role": "user", "content": [{"type": "text", "text": "x".repeat(16 * 1024)}]}
+                ]
+            }),
+        )
+        .await;
+    // The corrupt turn's body carries bytes no healthy capture shares, so the
+    // block poisoned below is pinned by its manifest alone.
+    let body = serde_json::json!({
+        "model": "claude-test",
+        "messages": [
+            {"role": "user", "content": [{"type": "text", "text": "prompt"}]},
+            {"role": "user", "content": [
+                {"type": "text", "text": format!("{marker}{}", "z".repeat(16 * 1024))}
+            ]}
+        ]
+    });
+    // The exact bytes the sink will chunk for this body, so the poisoned block
+    // lands under the content key the sink's manifest will pin.
+    let canonical = gents_loop::rendered_request::canonical_json_string(&body).unwrap();
+    let chunks = crate::rendered_request::encoding::chunk_capture_body(&canonical);
+    let index = chunks
+        .iter()
+        .position(|chunk| {
+            std::str::from_utf8(&chunk.bytes)
+                .expect("canonical block bytes are UTF-8")
+                .contains(marker)
+        })
+        .expect("the marker lands in a block");
+    // Same length, different bytes: byte_len still pins, the content key does not.
+    let mut poisoned = chunks[index].bytes.clone();
+    let at = std::str::from_utf8(&poisoned)
+        .expect("canonical block bytes are UTF-8")
+        .find(marker)
+        .expect("the marker is in this block");
+    poisoned[at] = b'k';
+    assert_ne!(
+        crate::rendered_request::encoding::block_content_key(&poisoned),
+        chunks[index].content_key
+    );
+    let created = fixture
+        .node
+        .execute_request_with_retry(
+            defra_node::QueryRequest::new(
+                "mutation($input: RenderedRequestBlockMutationInputArg!) { \
+                 create_RenderedRequestBlock(input: $input) { _docID } }",
+            )
+            .with_variables(serde_json::json!({ "input": {
+                "content_key": chunks[index].content_key,
+                "payload": String::from_utf8(poisoned.clone()).unwrap(),
+                "byte_len": chunks[index].bytes.len(),
+                "created_at": chrono::Utc::now().to_rfc3339(),
+            }})),
+            defra_node::ExecuteRetryPolicy::default(),
+        )
+        .await;
+    assert!(!created.has_errors(), "{:?}", created.errors);
+    let poisoned_doc =
+        crate::graphql::single_mutation_document(&created, "create_RenderedRequestBlock")
+            .unwrap()
+            .unwrap()["_docID"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+    fixture.insert_provider_turn(corrupt_turn, body).await;
+
+    // Fixture guarantee: the poisoned document is pinned by the corrupt turn's
+    // manifest only, so a degraded turn is the corrupt turn and nothing else.
+    let response = fixture
+        .node
+        .execute(r#"{ RenderedRequest { capture_version request_json } }"#)
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    let mut referencing = 0usize;
+    for row in response.data.unwrap()["RenderedRequest"]
+        .as_array()
+        .unwrap()
+    {
+        let version = row["capture_version"].as_u64().unwrap() as u32;
+        let stored = row["request_json"].as_str().unwrap();
+        let pins_poison = [
+            crate::rendered_request::CapturePayloadKind::RequestBody,
+            crate::rendered_request::CapturePayloadKind::ProvenancePayload,
+        ]
+        .into_iter()
+        .any(|kind| {
+            matches!(
+                crate::rendered_request::encoding::decode_capture_record(version, stored, kind),
+                Ok(crate::rendered_request::encoding::DecodedRecord::Manifest { blocks })
+                    if blocks.iter().any(|entry| entry.doc_id == poisoned_doc)
+            )
+        });
+        referencing += pins_poison as usize;
+    }
+    assert_eq!(
+        referencing, 1,
+        "only the corrupt turn pins the poisoned block"
+    );
+
+    let candidates = fixture
+        .candidates()
+        .await
+        .expect("a corrupt capture must degrade only its own turn");
+    assert_eq!(candidates.len() as u32, turns);
+    let tags = candidates
+        .iter()
+        .map(|candidate| ReplayTag {
+            request_doc_id: candidate.request_doc_id.clone(),
+            source: OutputSource::ProviderTurn {
+                scope: candidate.coordinate.scope,
+                turn_index: candidate.coordinate.turn_index,
+                attempt: candidate.coordinate.attempt,
+            },
+        })
+        .collect::<Vec<_>>();
+    let resolved = super::output::resolve_canonical_replay_tags(
+        &fixture.node,
+        fixture.scope(),
+        &fixture.boundary,
+        &tags,
+    )
+    .await
+    .expect("a corrupt capture must degrade only its own turn");
+    assert_eq!(resolved.len(), tags.len());
+    for (tag, evidence) in &resolved {
+        let OutputSource::ProviderTurn { turn_index, .. } = tag.source else {
+            unreachable!("tags are provider turns");
+        };
+        if turn_index == corrupt_turn {
+            assert!(evidence.is_empty(), "the corrupt turn is non-replayable");
+        } else {
+            assert_eq!(
+                evidence.len(),
+                1,
+                "the healthy turn {turn_index} keeps its evidence"
+            );
+            assert!(
+                evidence[0].captured.is_some(),
+                "the healthy turn {turn_index} still replays its captured body"
+            );
+        }
     }
 }
