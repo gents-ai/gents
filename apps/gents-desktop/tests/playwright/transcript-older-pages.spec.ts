@@ -329,7 +329,11 @@ test("a page landing mid-wheel keeps the wheel's whole travel", async ({
     return last;
   };
 
-  await panel.hover();
+  /* the scroller, not the panel: the panel is taller than the view, so
+     hovering it scrolls it into view, near the top, and that move asks for
+     an older page before the wheel; held out of sight, it blocks the page
+     the wheel asks for */
+  await page.locator('[data-slot="scroll-area-viewport"][data-following]').hover();
   const rowsBefore = await rowCount();
   const reader = await rowAtLine();
   await page.mouse.wheel(0, -1200);
