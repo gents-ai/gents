@@ -20,6 +20,30 @@ pub(crate) fn isolated_store_identifier() -> anyhow::Result<Option<[u8; 16]>> {
     Ok(None)
 }
 
+/// The lock on the WebKit store this process uses, shared by every desktop
+/// home (see `gents_desktop_core::home_reset::lock_browser_store`).
+pub fn lock_store() -> anyhow::Result<gents::file_lock::FileLock> {
+    let isolated = isolated_store_identifier()?.map(|identifier| {
+        identifier
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    });
+    gents_desktop_core::home_reset::lock_browser_store(isolated.as_deref())
+}
+
+/// Confirms no running desktop, whatever its home, holds the store, so a
+/// reset can stop before it retires anything.
+pub fn check_to_receipt(receipt: &Path) -> anyhow::Result<()> {
+    let result = lock_store().map(drop);
+    let value = match &result {
+        Ok(()) => serde_json::json!({"completed": true}),
+        Err(error) => serde_json::json!({"completed": false, "error": format!("{error:#}")}),
+    };
+    write_receipt(receipt, &value)?;
+    result
+}
+
 /// WebKit owns clearing its website data and signals completion asynchronously.
 /// Parent-process death does not acknowledge its network process's final writes.
 /// This helper creates no webviews and writes its receipt only after the public
@@ -139,6 +163,7 @@ mod macos {
             !receipt.try_exists()?,
             "browser clear receipt already exists"
         );
+        let _store = super::lock_store()?;
         let mtm = MainThreadMarker::new().context("browser reset must run on the main thread")?;
         let app = NSApplication::sharedApplication(mtm);
         app.setActivationPolicy(NSApplicationActivationPolicy::Prohibited);

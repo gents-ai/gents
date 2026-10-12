@@ -23,11 +23,22 @@ fn main() {
             .with_writer(std::io::stderr)
             .try_init();
         let result = (|| -> anyhow::Result<()> {
-            let receipt = args
+            let mut receipt = args
                 .next()
                 .ok_or_else(|| anyhow::anyhow!("missing browser clear receipt path"))?;
+            let check = receipt == "--check";
+            if check {
+                receipt = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("missing browser check receipt path"))?;
+            }
             anyhow::ensure!(args.next().is_none(), "unexpected browser clear argument");
-            gents_desktop_tauri_lib::browser_data::clear_to_receipt(std::path::Path::new(&receipt))
+            let receipt = std::path::Path::new(&receipt);
+            if check {
+                gents_desktop_tauri_lib::browser_data::check_to_receipt(receipt)
+            } else {
+                gents_desktop_tauri_lib::browser_data::clear_to_receipt(receipt)
+            }
         })();
         if let Err(error) = result {
             tracing::error!(%error, "browser data reset failed");

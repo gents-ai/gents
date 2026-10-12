@@ -48,6 +48,8 @@ pub fn run() {
     // Registered first so a second launch exits before it sets anything up.
     #[cfg(desktop)]
     let builder = builder.plugin(single_instance());
+    #[cfg(target_os = "macos")]
+    let builder = builder.plugin(browser_store_lock());
     let builder = builder
         .plugin(init(platform_bridge_config()))
         .plugin(tauri_plugin_dialog::init())
@@ -168,6 +170,18 @@ fn native_local_e2e_context(mut context: tauri::Context<tauri::Wry>) -> tauri::C
         }
     }
     context
+}
+
+/// Held for the process lifetime from before any webview opens the shared
+/// WebKit store, so no reset clears it under this desktop.
+#[cfg(target_os = "macos")]
+fn browser_store_lock<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
+    tauri::plugin::Builder::new("gents-browser-store")
+        .setup(|app, _api| {
+            app.manage(crate::browser_data::lock_store()?);
+            Ok(())
+        })
+        .build()
 }
 
 /// A second copy of the app would share this one's service label, service

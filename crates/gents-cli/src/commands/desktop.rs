@@ -101,6 +101,12 @@ async fn reset(
     if let Some(pid) = desktop_pid {
         wait_for_exit(pid).await?;
     }
+    let executable = match desktop_executable {
+        Some(path) => path,
+        None => installed_desktop_executable()?,
+    };
+    run_browser_helper(&executable, BrowserHelper::Check, BROWSER_CHECK_TIMEOUT)
+        .context("Browser storage is in use or cannot be checked; nothing was retired")?;
     let backup = if delete {
         None
     } else {
@@ -131,7 +137,7 @@ async fn reset(
     let settled = plan_full_reset(Some(&home), &desktop, &user_home, &definition)?;
     settled.check_confirmation(&confirmation, disposition)?;
     retire_then_clear(&settled, disposition, backup.as_deref(), || {
-        clear_browser_data(desktop_executable.as_deref())
+        run_browser_helper(&executable, BrowserHelper::Clear, BROWSER_CLEAR_TIMEOUT)
     })
 }
 
@@ -203,15 +209,18 @@ async fn wait_for_exit(pid: u32) -> Result<()> {
     }
 }
 
+const BROWSER_CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+const BROWSER_CLEAR_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(75);
+
 /// WebKit chooses its store by the owning app identity. The CLI therefore asks
-/// the installed desktop executable to clear it and requires a native completion
-/// receipt; it never removes browser directories itself.
-fn clear_browser_data(executable: Option<&std::path::Path>) -> Result<()> {
-    let executable = match executable {
-        Some(path) => path.to_path_buf(),
-        None => installed_desktop_executable()?,
-    };
-    clear_browser_data_with_timeout(&executable, std::time::Duration::from_secs(75))
+/// the installed desktop executable, which owns that identity and the store's
+/// lock, to check or clear it, and requires a native completion receipt; it
+/// never removes browser directories itself.
+#[derive(Debug, Clone, Copy)]
+enum BrowserHelper {
+    /// Confirms no desktop of any home holds the shared store.
+    Check,
+    Clear,
 }
 
 #[cfg(target_os = "macos")]
@@ -233,8 +242,9 @@ fn installed_desktop_executable() -> Result<std::path::PathBuf> {
     bail!("desktop browser reset is unsupported on this platform")
 }
 
-fn clear_browser_data_with_timeout(
+fn run_browser_helper(
     executable: &std::path::Path,
+    helper: BrowserHelper,
     timeout: std::time::Duration,
 ) -> Result<()> {
     use std::io::{Read as _, Seek as _, SeekFrom};
@@ -245,8 +255,13 @@ fn clear_browser_data_with_timeout(
     let mut stderr = tempfile::tempfile().context("creating browser clearing stderr capture")?;
     // Launch the executable directly so timeout cleanup owns the exact process,
     // including an older app that does not recognize the headless command.
-    let mut child = Command::new(executable)
-        .arg("__clear-browser-data").arg(&receipt)
+    let mut command = Command::new(executable);
+    command.arg("__clear-browser-data");
+    if matches!(helper, BrowserHelper::Check) {
+        command.arg("--check");
+    }
+    let mut child = command
+        .arg(&receipt)
         .stdin(Stdio::null()).stdout(Stdio::null()).stderr(stderr.try_clone()?)
         .spawn().context("starting Gents to clear browser data; install the matching Gents desktop app before resetting")?;
     let status = match child.wait_timeout(timeout) {
@@ -306,9 +321,12 @@ mod tests {
         std::fs::write(&executable, "#!/bin/sh\nexec sleep 30\n").unwrap();
         std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
         let start = std::time::Instant::now();
-        let error =
-            clear_browser_data_with_timeout(&executable, std::time::Duration::from_millis(50))
-                .unwrap_err();
+        let error = run_browser_helper(
+            &executable,
+            BrowserHelper::Clear,
+            std::time::Duration::from_millis(50),
+        )
+        .unwrap_err();
         assert!(error.to_string().contains("deadline"));
         assert!(error.to_string().contains("reap error: None"));
         assert!(start.elapsed() < std::time::Duration::from_secs(5));
@@ -325,9 +343,29 @@ mod tests {
         ] {
             std::fs::write(&executable, format!("#!/bin/sh\n{body}")).unwrap();
             std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
-            assert_eq!(clear_browser_data(Some(&executable)).is_ok(), expected);
+            assert_eq!(
+                run_browser_helper(&executable, BrowserHelper::Clear, BROWSER_CLEAR_TIMEOUT)
+                    .is_ok(),
+                expected
+            );
         }
     }
+
+    #[test]
+    fn browser_check_reports_a_store_held_by_another_desktop() {
+        let directory = tempfile::tempdir().unwrap();
+        let executable = directory.path().join("desktop");
+        std::fs::write(
+            &executable,
+            "#!/bin/sh\n[ \"$2\" = --check ] || exit 9\nprintf '%s' '{\"completed\":false,\"error\":\"store held\"}' > \"$3\"\nexit 1\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let error = run_browser_helper(&executable, BrowserHelper::Check, BROWSER_CHECK_TIMEOUT)
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("store held"), "{error:#}");
+    }
+
     fn initialized_reset(user: &std::path::Path) -> (std::path::PathBuf, HomeResetPlan) {
         let home = user.join(".gents");
         std::fs::create_dir_all(home.join("data")).unwrap();

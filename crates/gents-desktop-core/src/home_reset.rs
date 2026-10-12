@@ -1138,21 +1138,54 @@ pub fn lock_client_state(
     Ok((store, peers))
 }
 
+/// WebKit keeps one website-data store per app identity (or per isolated
+/// store identifier), shared by every desktop home. Each desktop holds this
+/// lock while it runs and browser clearing takes it, so the store is never
+/// cleared under a running desktop, whatever its home. An isolated store's
+/// lock lives in the temporary directory its test run shares.
+pub fn lock_browser_store(
+    isolated_store: Option<&str>,
+) -> anyhow::Result<gents::file_lock::FileLock> {
+    use anyhow::Context;
+    let directory = match isolated_store {
+        Some(_) => std::env::temp_dir(),
+        None => dirs::data_local_dir()
+            .context("unable to resolve a local application data directory")?
+            .join("gents"),
+    };
+    lock_browser_store_in(&directory, isolated_store)
+}
+
+fn lock_browser_store_in(
+    directory: &Path,
+    isolated_store: Option<&str>,
+) -> anyhow::Result<gents::file_lock::FileLock> {
+    let name = match isolated_store {
+        Some(identifier) => format!("browser-store-{identifier}.lock"),
+        None => "browser-store.lock".into(),
+    };
+    lock_in(directory, &name, false)
+}
+
 fn lock_file(
     paths: &crate::client::DesktopPaths,
     name: &str,
     wait: bool,
 ) -> anyhow::Result<gents::file_lock::FileLock> {
+    lock_in(paths.root(), name, wait)
+}
+
+fn lock_in(directory: &Path, name: &str, wait: bool) -> anyhow::Result<gents::file_lock::FileLock> {
     use anyhow::Context;
-    let mut directory = std::fs::DirBuilder::new();
-    directory.recursive(true);
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::DirBuilderExt;
-        directory.mode(0o700);
+        builder.mode(0o700);
     }
-    directory.create(paths.root())?;
-    let path = paths.root().join(name);
+    builder.create(directory)?;
+    let path = directory.join(name);
     reject_symlink_if_present(&path, "desktop lock")?;
     let mut options = std::fs::OpenOptions::new();
     options.read(true).write(true).create(true).truncate(false);
@@ -1546,6 +1579,20 @@ mod tests {
         std::fs::create_dir_all(fresh.node_data_dir()).unwrap();
         assert!(gents::home::lock_store(fresh.root(), fresh.node_data_dir()).is_err());
         drop(held);
+    }
+
+    #[test]
+    fn browser_store_exclusion_spans_desktop_homes() {
+        let temp = tempfile::tempdir().unwrap();
+        let shared = temp.path().join("app-data");
+        let running = DesktopPaths::from_root(temp.path().join("running"));
+        let resetting = DesktopPaths::from_root(temp.path().join("resetting"));
+        let _process = lock_desktop_process(&running, false).unwrap();
+        let _browser = lock_browser_store_in(&shared, None).unwrap();
+        let _reservation = lock_reset(&resetting).unwrap();
+        let _resetting = lock_desktop_process(&resetting, false).unwrap();
+        assert!(lock_browser_store_in(&shared, None).is_err());
+        assert!(lock_browser_store_in(&shared, Some("00112233445566778899aabbccddeeff")).is_ok());
     }
 
     #[test]
