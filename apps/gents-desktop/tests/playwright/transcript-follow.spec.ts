@@ -199,7 +199,20 @@ test.describe("a reader scrolled up in a transcript", () => {
       }, 60);
     });
     await page.getByTestId("transcript-panel").hover();
-    await page.mouse.wheel(0, -1200);
+    /* one wheel's travel differs per platform build; wheel until the reader
+       is well clear of the foot, then hold the position under the stream.
+       The gap between wheels outlasts the reader-intent window, so every
+       wheel meets the attribution machine from rest, as a reader returning
+       to the transcript does */
+    for (let guard = 0; guard < 12; guard++) {
+      const clear = await viewport.evaluate(
+        (scroller) =>
+          scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight,
+      );
+      if (clear > 600) break;
+      await page.mouse.wheel(0, -1200);
+      await page.waitForTimeout(400);
+    }
     await expect(viewport).toHaveAttribute("data-following", "false");
     const top = await restingScrollTop(page, viewport);
     const writes = await page.evaluate(
