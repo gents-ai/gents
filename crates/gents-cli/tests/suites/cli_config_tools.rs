@@ -270,7 +270,23 @@ async fn tools_explain_reports_the_ceiling_the_running_node_enforces() -> Result
 
     server.child.kill()?;
     server.child.wait()?;
-    let offline = run_cli_json(&home, &["tools", "explain"])?;
+    let offline_text = run_cli_text(&home, &["tools", "explain"])?;
+    assert_keys_in_order(
+        &offline_text,
+        &[
+            "\"node_did\"",
+            "\"host_tool_ceiling\"",
+            "\"tool_ceiling\"",
+            "\"tool_root\"",
+            "\"live\"",
+            "\"next\"",
+            "\"source\"",
+            "\"scope\"",
+            "\"agents\"",
+            "\"access_mode\"",
+        ],
+    );
+    let offline: Value = serde_json::from_str(&offline_text)?;
     assert_eq!(
         offline["host_tool_ceiling"]["tool_ceiling"], "readwrite",
         "{offline}"
@@ -292,17 +308,90 @@ async fn tools_explain_reports_the_ceiling_the_running_node_enforces() -> Result
     Ok(())
 }
 
+fn assert_keys_in_order(report: &str, keys: &[&str]) {
+    let positions = keys
+        .iter()
+        .map(|key| {
+            report
+                .find(&format!("{key}:"))
+                .unwrap_or_else(|| panic!("{key} missing from {report}"))
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        positions.windows(2).all(|pair| pair[0] < pair[1]),
+        "keys out of reading order {keys:?}: {report}"
+    );
+}
+
+/// A root the server cannot resolve builds no host tools, so explain must
+/// not project one from however that path resolves on the CLI host.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tools_explain_refuses_a_live_root_the_server_cannot_resolve() -> Result<()> {
+    let tempdir = tempfile::tempdir()?;
+    let home = tempdir.path().join("home");
+    fs::create_dir_all(&home)?;
+    let dangling = home.join("dangling");
+    std::os::unix::fs::symlink(home.join("missing"), &dangling)?;
+    // Without host tools the agent needs no root, so the node still serves.
+    run_init_json(
+        &home,
+        &[
+            "--node-name",
+            "explain-dangling",
+            "--tool-package",
+            "minimal",
+        ],
+    )?;
+    let port = allocate_port()?;
+    let graphql = graphql_url(port);
+    let mut server = spawn_server_with_env(
+        &home,
+        port,
+        &[
+            "--tool-ceiling",
+            "readonly",
+            "--tool-root",
+            dangling.to_str().context("utf-8 dangling root")?,
+        ],
+        &[],
+    )?;
+    wait_for_port(port, &mut server)?;
+    wait_for_runtime_state_graphql(&home, &graphql, Duration::from_secs(30)).await?;
+
+    let stderr = run_cli_failure_stderr(&home, &["tools", "explain"])?;
+    assert!(stderr.contains("has no usable root"), "{stderr}");
+    assert!(stderr.contains(dangling.to_str().unwrap()), "{stderr}");
+    assert!(stderr.contains("restart the server"), "{stderr}");
+    Ok(())
+}
+
 /// A home's runtime.json that names another node's runtime must not explain
 /// that node as this home's.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn tools_explain_refuses_a_home_whose_runtime_serves_another_node() -> Result<()> {
     let tempdir = tempfile::tempdir()?;
-    let home = tempdir.path().join("home");
+    let cwd = tempdir.path().join("cwd");
+    let home = tempdir.path().join("my home");
     let other = tempdir.path().join("other");
-    for dir in [&home, &other] {
+    for dir in [&cwd, &other] {
         fs::create_dir_all(dir)?;
     }
-    let owner = node_did_from_init(&run_init_json(&home, &["--node-name", "explain-home"])?)?;
+    let home_arg = home.to_str().context("utf-8 home")?;
+    let quoted_home = format!("'{home_arg}'");
+    let owner = node_did_from_init(&run_init_json(
+        &cwd,
+        &["--node-name", "explain-home", "--home", home_arg],
+    )?)?;
+
+    let offline = run_cli_json(&cwd, &["tools", "explain", "--home", home_arg])?;
+    let next = offline["host_tool_ceiling"]["next"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(
+        next.contains(&format!("gents server --home {quoted_home}")),
+        "{offline}"
+    );
+
     let other_owner =
         node_did_from_init(&run_init_json(&other, &["--node-name", "explain-other"])?)?;
     let port = allocate_port()?;
@@ -312,9 +401,9 @@ async fn tools_explain_refuses_a_home_whose_runtime_serves_another_node() -> Res
     wait_for_runtime_ready(&graphql, &other_owner, Duration::from_secs(30)).await?;
     let other_state =
         wait_for_runtime_state_graphql(&other, &graphql, Duration::from_secs(30)).await?;
-    write_json_file(&home.join(".gents").join("runtime.json"), &other_state)?;
+    write_json_file(&home.join("runtime.json"), &other_state)?;
 
-    let stderr = run_cli_failure_stderr(&home, &["tools", "explain"])?;
+    let stderr = run_cli_failure_stderr(&cwd, &["tools", "explain", "--home", home_arg])?;
     assert!(
         stderr.contains(&format!("belongs to node {owner}")),
         "{stderr}"
@@ -323,6 +412,9 @@ async fn tools_explain_refuses_a_home_whose_runtime_serves_another_node() -> Res
         stderr.contains(&format!("serves node {other_owner}")),
         "{stderr}"
     );
-    assert!(stderr.contains("gents server --home"), "{stderr}");
+    assert!(
+        stderr.contains(&format!("gents server --home {quoted_home}")),
+        "{stderr}"
+    );
     Ok(())
 }

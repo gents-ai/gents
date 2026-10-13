@@ -314,7 +314,7 @@ mod tests {
             "identity-test-agent".to_string(),
             "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK".to_string(),
             "readwrite".to_string(),
-            None,
+            Ok(None),
             Vec::new(),
             None,
             None,

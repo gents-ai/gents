@@ -7,6 +7,7 @@ use clap::ValueEnum;
 use gents::config_client::GraphqlEndpoint;
 use gents::tool_surface::{measured_mcp_services_for_access, RuntimeToolAvailability};
 use gents::{AgentToolSurfaceConfig, ToolCeiling};
+use serde::Serialize;
 use serde_json::{json, Value};
 
 use crate::cli::args::{ToolCeilingArg, ToolExplainArgs, ToolsCommand};
@@ -42,7 +43,7 @@ async fn explain(args: ToolExplainArgs) -> Result<()> {
                  serves node {live}; restart `gents server --home {}` to serve this home, or \
                  pass --graphql to explain that node",
                 home_dir.display(),
-                home_dir.display()
+                shell_quoted_path(&home_dir)?
             );
         }
     }
@@ -162,46 +163,100 @@ async fn explain(args: ToolExplainArgs) -> Result<()> {
         }
     }
 
-    let output = json!({
-        "node_did": node_did,
-        "access_mode": access.mode(),
-        "home": host.home.clone().unwrap_or_else(|| home_dir.display().to_string()),
-        "host_tool_ceiling": {
-            "tool_ceiling": format_tool_ceiling(host.mode),
-            "tool_root": host.root,
-            "cli_tools": host.ceiling.cli_tools().iter().map(|tool| &tool.name).collect::<Vec<_>>(),
-            "source": host.source,
-            "live": host.live_node_did.is_some(),
-            "next": host.live_node_did.is_none().then(|| format!(
-                "No runtime serves this home, so this is the configured init.json ceiling; a server started with --tool-ceiling, --tool-root or --cli-tool enforces its own. Start `{}` and rerun for the live ceiling.",
-                match args.home.as_deref() {
-                    Some(home) => format!("gents server --home {}", home.display()),
+    let home_hint = args.home.as_deref().map(shell_quoted_path).transpose()?;
+    let output = ExplainReport {
+        node_did: &node_did,
+        host_tool_ceiling: HostCeilingReport {
+            tool_ceiling: format_tool_ceiling(host.mode),
+            tool_root: host.root.as_deref(),
+            cli_tools: host
+                .ceiling
+                .cli_tools()
+                .iter()
+                .map(|tool| tool.name.as_str())
+                .collect(),
+            live: host.live_node_did.is_some(),
+            next: host.live_node_did.is_none().then(|| {
+                let server = match &home_hint {
+                    Some(home) => format!("gents server --home {home}"),
                     None => "gents server".to_owned(),
-                }
-            )),
-            "agent_roots": host.live_node_did.is_some().then_some(
-                "Agent Tools roots are admitted under tool_root on this CLI host's filesystem; explained from another host, a root the server admits can appear under configuration_issues."
+                };
+                format!(
+                    "No runtime serves this home, so this is the configured init.json ceiling; a \
+                     server started with --tool-ceiling, --tool-root or --cli-tool enforces its \
+                     own. Start `{server}` and rerun for the live ceiling."
+                )
+            }),
+            source: host.source,
+            agent_roots: host.live_node_did.is_some().then_some(
+                "Agent Tools roots are admitted under tool_root on this CLI host's filesystem; \
+                 explained from another host, a root the server admits can appear under \
+                 configuration_issues.",
             ),
-            "scope": "host_native_file_bash_cli_only",
-            "note": "This ceiling currently clamps host-native file/bash/CLI tools, not every model-callable built-in read, MCP, agent, or operator HTTP surface."
+            scope: "host_native_file_bash_cli_only",
+            note: "This ceiling currently clamps host-native file/bash/CLI tools, not every \
+                   model-callable built-in read, MCP, agent, or operator HTTP surface.",
         },
-        "runtime_availability": {
+        agents,
+        configuration_issues,
+        runtime_availability: json!({
             "measured_available_mcp_service_ids": available_services,
             "local_target_eligibility": {
                 "source": "enabled_agent_configuration",
                 "enabled_agent_ids": enabled_agent_ids.iter().cloned().collect::<Vec<_>>(),
                 "runtime_readiness_verified": false
             },
-        },
-        "agents": agents,
-        "configuration_issues": configuration_issues,
-        "operator_surfaces": {
+        }),
+        operator_surfaces: json!({
             "included_in_model_tool_surface": false,
             "note": "Server HTTP routes and optional external /mcp are binary/operator surfaces; they are not included in per-agent model-callable tool_names."
-        },
-    });
+        }),
+        access_mode: access.mode(),
+        home: host
+            .home
+            .clone()
+            .unwrap_or_else(|| home_dir.display().to_string()),
+    };
     print_json(&output)?;
     Ok(())
+}
+
+/// Fields in reading order: the explained surfaces, how to proceed, then
+/// provenance.
+#[derive(Serialize)]
+struct ExplainReport<'a> {
+    node_did: &'a str,
+    host_tool_ceiling: HostCeilingReport<'a>,
+    agents: Vec<Value>,
+    configuration_issues: BTreeMap<String, String>,
+    runtime_availability: Value,
+    operator_surfaces: Value,
+    access_mode: &'static str,
+    home: String,
+}
+
+#[derive(Serialize)]
+struct HostCeilingReport<'a> {
+    tool_ceiling: &'static str,
+    tool_root: Option<&'a str>,
+    cli_tools: Vec<&'a str>,
+    live: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next: Option<String>,
+    source: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent_roots: Option<&'static str>,
+    scope: &'static str,
+    note: &'static str,
+}
+
+fn shell_quoted_path(path: &Path) -> Result<String> {
+    let text = path
+        .to_str()
+        .with_context(|| format!("home {} is not UTF-8", path.display()))?;
+    Ok(shlex::try_quote(text)
+        .with_context(|| format!("home {text} cannot be shell-quoted"))?
+        .into_owned())
 }
 
 /// The host ceiling explained agents are clamped by: the serving runtime's
@@ -225,6 +280,13 @@ impl HostCeiling {
         let mode = ToolCeilingArg::from_str(&mode_text, false)
             .map_err(|error| anyhow::anyhow!("runtime tool_ceiling {mode_text}: {error}"))?;
         let root = field("tool_root");
+        if let (Some(error), false) = (field("tool_root_error"), mode == ToolCeilingArg::MetaOnly) {
+            anyhow::bail!(
+                "the runtime's {mode_text} ceiling has no usable root ({error}), so it builds no \
+                 host tools to explain; fix --tool-root (or tool_root in init.json) and restart \
+                 the server"
+            );
+        }
         let mut ceiling = host_tool_ceiling(mode, root.as_deref().map(Path::new))?;
         for registration in status
             .get("cli_tools")

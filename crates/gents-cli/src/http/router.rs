@@ -48,6 +48,8 @@ pub(crate) struct RuntimeHttpState {
     /// Resolved against the server's cwd and filesystem, so a client on
     /// another cwd or host reads the root the runtime admits paths under.
     pub(crate) tool_root: Option<String>,
+    /// Why the configured root does not resolve; `tool_root` is then unset.
+    pub(crate) tool_root_error: Option<String>,
     /// The `--cli-tool NAME=/path` registrations the ceiling admits, as given.
     pub(crate) cli_tools: Vec<String>,
     /// The home this runtime serves, so a client that finds a different
@@ -130,7 +132,7 @@ pub(crate) fn runtime_contract_router(
     node_name: String,
     node_did: String,
     tool_ceiling: String,
-    tool_root: Option<String>,
+    tool_root: Result<Option<String>, String>,
     cli_tools: Vec<String>,
     home: Option<String>,
     // `Some` mounts `/mcp`: the read-only `defra_query` tool always (an
@@ -155,7 +157,8 @@ pub(crate) fn runtime_contract_router(
         node_name,
         node_did,
         tool_ceiling,
-        tool_root,
+        tool_root_error: tool_root.as_ref().err().cloned(),
+        tool_root: tool_root.ok().flatten(),
         cli_tools,
         home,
         started_at: chrono::Utc::now().to_rfc3339(),
@@ -569,6 +572,7 @@ async fn status_handler(State(state): State<RuntimeHttpState>) -> Response {
                 "node_did": state.node_did,
                 "tool_ceiling": state.tool_ceiling,
                 "tool_root": state.tool_root,
+            "tool_root_error": state.tool_root_error,
             "cli_tools": state.cli_tools,
                 "home": state.home,
                 "runtime": runtime,
@@ -590,6 +594,7 @@ async fn status_handler(State(state): State<RuntimeHttpState>) -> Response {
             "node_did": state.node_did,
             "tool_ceiling": state.tool_ceiling,
             "tool_root": state.tool_root,
+            "tool_root_error": state.tool_root_error,
             "cli_tools": state.cli_tools,
             "home": state.home,
             "runtime": Value::Null,
@@ -610,6 +615,7 @@ async fn status_handler(State(state): State<RuntimeHttpState>) -> Response {
             "node_did": state.node_did,
             "tool_ceiling": state.tool_ceiling,
             "tool_root": state.tool_root,
+            "tool_root_error": state.tool_root_error,
             "cli_tools": state.cli_tools,
             "home": state.home,
             "runtime": Value::Null,
@@ -904,6 +910,7 @@ mod tests {
             node_did: "did:key:zAgent".to_string(),
             tool_ceiling: "readwrite".to_string(),
             tool_root: Some("/Users/test".to_string()),
+            tool_root_error: None,
             cli_tools: Vec::new(),
             home: None,
             started_at: "2026-06-04T00:00:00Z".to_string(),
