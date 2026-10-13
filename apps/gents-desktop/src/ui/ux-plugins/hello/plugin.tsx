@@ -34,7 +34,7 @@ function HelloPage({ agentDid, ctx }: AgentSectionProps & { ctx: UxContext }) {
       </Row>
       <Row
         label="Ask the agent"
-        description="posts a hidden user turn into the selected session"
+        description="posts a user turn into the selected session"
       >
         <Button
           size="sm"

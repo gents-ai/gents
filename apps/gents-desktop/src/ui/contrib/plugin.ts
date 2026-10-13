@@ -45,7 +45,9 @@ export interface UxShell {
   deployments: () => readonly NodeView[];
   selectedDeployment: () => NodeView | null;
   selectedSessionId: () => string | null;
-  /** a user turn in the selected session, attributed to the plugin */
+  /** posts `content` as the user's next turn in the selected session, in
+   *  the user's name (the app records no plugin provenance yet); rejects
+   *  without a selected session or outside a user gesture */
   send: (content: string) => Promise<void>;
 }
 
@@ -81,7 +83,11 @@ export interface UxContext {
   ) => () => void;
   /** one of this pack's .afb plugins by name; rejects for a plugin outside a pack */
   plugin: (name: string, input: unknown) => Promise<unknown>;
-  /** a hidden user turn: the reverse channel of a transcript directive */
+  /** posts `content` as the user's next turn in the selected session,
+   *  visibly and in the user's name; the reverse channel of a transcript
+   *  directive. Rejects without a selected session or outside a user
+   *  gesture (a click or a key press): never from a timer, an effect or a
+   *  directive's mount. */
   send: (content: string) => Promise<void>;
   shell: UxShell;
   storage: UxStorage;

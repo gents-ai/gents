@@ -2,7 +2,7 @@
    verb sends across the bridge and what it reads. The bridge commands take
    their arguments by Rust parameter name, so the shape of every `call` is the
    contract under test. */
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 const call = vi.fn();
 vi.mock("../src/ui/screens/agent/bridgeCall", () => ({
@@ -14,6 +14,47 @@ import { buildUxHost } from "../src/ui/hooks/useUxHost";
 import { node, testApp } from "./app-fixture";
 
 const route = () => ({ name: "sessions" as const });
+
+describe("buildUxHost: ctx.send", () => {
+  const gesture = (active: boolean) => {
+    Object.defineProperty(navigator, "userActivation", {
+      configurable: true,
+      value: { isActive: active, hasBeenActive: active },
+    });
+  };
+  afterEach(() => {
+    delete (navigator as { userActivation?: unknown }).userActivation;
+  });
+
+  it("refuses without a selected session, so a plugin never opens one", async () => {
+    gesture(true);
+    const app = testApp({ selection: { sessionId: null } });
+    const sendMessage = vi.spyOn(app.actions, "sendMessage");
+    const host = buildUxHost(app, route);
+    await expect(host.shell.send("hi")).rejects.toThrow("no session is selected");
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("refuses outside a user gesture: a timer, an effect or a mount cannot send", async () => {
+    gesture(false);
+    const app = testApp({ selection: { sessionId: "s1", agentDid: "did:a" } });
+    const sendMessage = vi.spyOn(app.actions, "sendMessage");
+    const host = buildUxHost(app, route);
+    await expect(host.shell.send("hi")).rejects.toThrow("user gesture");
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("sends in the selected session from a gesture, with the selected behavior", async () => {
+    gesture(true);
+    const app = testApp({
+      selection: { sessionId: "s1", agentDid: "did:a", behaviorId: "b1" },
+    });
+    const sendMessage = vi.spyOn(app.actions, "sendMessage").mockResolvedValue(null);
+    const host = buildUxHost(app, route);
+    await host.shell.send("hi");
+    expect(sendMessage).toHaveBeenCalledWith("hi", "b1");
+  });
+});
 
 describe("buildUxHost: bridge verbs", () => {
   it("calls a pack's .afb plugin under the caller's listing, fields under `request`", async () => {

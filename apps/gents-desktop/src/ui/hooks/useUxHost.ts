@@ -18,6 +18,17 @@ import { installUxHost, type UxHost } from "@/contrib/plugin";
 import { scanRuntimeUxPlugins } from "@/contrib/runtime-door";
 import type { DesktopClientUpdatedEvent } from "@source-inc/gents-desktop-client";
 
+/* the gate on ctx.send: a plugin posts a turn in the user's name, so it
+   must follow the user's own gesture (a click or a key press), never a
+   timer, an effect or a directive's mount, or the model could prompt
+   itself through a plugin it addressed */
+function withinUserGesture(): boolean {
+  const activation = (
+    navigator as Navigator & { userActivation?: { isActive: boolean } }
+  ).userActivation;
+  return activation?.isActive === true;
+}
+
 export function buildUxHost(app: DesktopApp, route: () => Route): UxHost {
   const selection = () => app.stores.selection.getState();
   const fleet = () => app.stores.fleet.getState();
@@ -33,6 +44,14 @@ export function buildUxHost(app: DesktopApp, route: () => Route): UxHost {
       selectedDeployment: selectedNode,
       selectedSessionId: () => selection().sessionId,
       send: async (content) => {
+        if (selection().sessionId === null) {
+          throw new Error("ctx.send: no session is selected");
+        }
+        if (!withinUserGesture()) {
+          throw new Error(
+            "ctx.send: only from a user gesture (a click or a key press)",
+          );
+        }
         await app.actions.sendMessage(content, selection().behaviorId);
       },
     },
