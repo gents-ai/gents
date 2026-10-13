@@ -152,7 +152,7 @@ struct ReadCache {
     /// each still passes coordinate validation before it enters `headers`.
     observed: BTreeMap<String, super::canonical_rows::TranscriptMessageRow>,
     /// Bulk readers cache scoped session headers; single-header readers query twins only.
-    sessions: Option<BTreeMap<String, Vec<serde_json::Value>>>,
+    sessions: Option<BTreeMap<String, SessionHeaderRows>>,
     /// One bounded bulk pass reconstructs every message of a request
     /// against the same scan. A reused scan that lacks a referenced close is
     /// dropped and re-read, so replication filling that gap is still observed.
@@ -166,6 +166,59 @@ struct RequestOutputRows {
     rows: Vec<super::canonical_rows::OutputSegmentRow>,
     by_doc_id: HashMap<String, Vec<usize>>,
     by_source: HashMap<OutputSource, Vec<usize>>,
+}
+
+/// Unrelated malformed headers remain undecoded. Coordinate matches retain
+/// their original order and every physical occurrence, even identical IDs.
+struct SessionHeaderRows {
+    rows: Vec<serde_json::Value>,
+    by_key: HashMap<String, Vec<usize>>,
+    by_sequence: HashMap<u64, Vec<usize>>,
+}
+
+impl From<Vec<serde_json::Value>> for SessionHeaderRows {
+    fn from(rows: Vec<serde_json::Value>) -> Self {
+        let mut by_key: HashMap<String, Vec<usize>> = HashMap::with_capacity(rows.len());
+        let mut by_sequence: HashMap<u64, Vec<usize>> = HashMap::with_capacity(rows.len());
+        for (index, row) in rows.iter().enumerate() {
+            if let Some(key) = row.get("message_key").and_then(serde_json::Value::as_str) {
+                by_key.entry(key.to_owned()).or_default().push(index);
+            }
+            if let Some(sequence) = row.get("sequence").and_then(serde_json::Value::as_u64) {
+                by_sequence.entry(sequence).or_default().push(index);
+            }
+        }
+        Self {
+            rows,
+            by_key,
+            by_sequence,
+        }
+    }
+}
+
+impl SessionHeaderRows {
+    fn coordinate_matches(
+        &self,
+        key: &str,
+        sequence: u32,
+    ) -> impl Iterator<Item = &serde_json::Value> {
+        let mut indices = self
+            .by_key
+            .get(key)
+            .into_iter()
+            .flatten()
+            .chain(
+                self.by_sequence
+                    .get(&u64::from(sequence))
+                    .into_iter()
+                    .flatten(),
+            )
+            .copied()
+            .collect::<Vec<_>>();
+        indices.sort_unstable();
+        indices.dedup();
+        indices.into_iter().map(|index| &self.rows[index])
+    }
 }
 
 impl From<Vec<super::canonical_rows::OutputSegmentRow>> for RequestOutputRows {
@@ -650,15 +703,10 @@ async fn coordinate_twins(
             .query(&query, "validate_canonical_header_coordinate")
             .await?;
         let rows = rows_value(&response, "AgentMessage")?.clone();
-        sessions.insert(session_id.clone(), rows);
+        sessions.insert(session_id.clone(), SessionHeaderRows::from(rows));
     }
     sessions[session_id]
-        .iter()
-        .filter(|row| {
-            row.get("message_key").and_then(serde_json::Value::as_str) == Some(key.as_str())
-                || row.get("sequence").and_then(serde_json::Value::as_u64)
-                    == Some(u64::from(sequence))
-        })
+        .coordinate_matches(key, sequence)
         .map(decode_transcript_message_row)
         .collect()
 }
@@ -2038,6 +2086,111 @@ pub(super) async fn load_sequenced_messages(
 mod tests {
     use super::*;
     use gents_protocol::output::{MessageRole, OutputOutcome, TranscriptMessage};
+
+    #[test]
+    fn session_header_index_preserves_coordinate_observations() {
+        let rows = vec![
+            serde_json::json!({"_docID": "duplicate", "message_key": "key", "sequence": 1}),
+            serde_json::json!({"_docID": "duplicate", "message_key": "key", "sequence": 2}),
+            serde_json::json!({"_docID": "sequence-twin", "message_key": "other", "sequence": 1}),
+            serde_json::json!({"message_key": false, "sequence": -1, "blocks": "malformed"}),
+            serde_json::json!({"message_key": "key", "sequence": "1", "blocks": "malformed"}),
+            serde_json::json!({"message_key": 1, "sequence": 1, "blocks": "malformed"}),
+        ];
+        let indexed = SessionHeaderRows::from(rows.clone());
+        for (key, sequence, expected) in [
+            ("key", 1, vec![0, 1, 2, 4, 5]),
+            ("other", 2, vec![1, 2]),
+            ("missing", 3, vec![]),
+        ] {
+            assert_eq!(
+                indexed
+                    .coordinate_matches(key, sequence)
+                    .collect::<Vec<_>>(),
+                expected
+                    .iter()
+                    .map(|&index| &rows[index])
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "manual canonical session-coordinate benchmark"]
+    fn session_coordinate_lookup_size_benchmark() {
+        let mut measurements = Vec::new();
+        for count in [1_usize, 500, 10_000] {
+            let rows = (0..count)
+                .map(|sequence| {
+                    serde_json::json!({
+                        "_docID": format!("header-{sequence}"),
+                        "message_key": format!("key-{sequence}"),
+                        "sequence": sequence,
+                    })
+                })
+                .collect::<Vec<_>>();
+            let coordinates = (0..count)
+                .map(|sequence| (format!("key-{sequence}"), u32::try_from(sequence).unwrap()))
+                .collect::<Vec<_>>();
+            let mut baseline = Vec::new();
+            let mut indexed = Vec::new();
+            let mut construction = Vec::new();
+            for iteration in 0..6 {
+                let start = std::time::Instant::now();
+                let cache = SessionHeaderRows::from(rows.clone());
+                let build_ms = start.elapsed().as_secs_f64() * 1000.0;
+                let scan = || {
+                    let start = std::time::Instant::now();
+                    for (key, sequence) in &coordinates {
+                        let matches = rows
+                            .iter()
+                            .filter(|row| {
+                                row.get("message_key").and_then(serde_json::Value::as_str)
+                                    == Some(key.as_str())
+                                    || row.get("sequence").and_then(serde_json::Value::as_u64)
+                                        == Some(u64::from(*sequence))
+                            })
+                            .collect::<Vec<_>>();
+                        assert_eq!(std::hint::black_box(matches).len(), 1);
+                    }
+                    start.elapsed().as_secs_f64() * 1000.0
+                };
+                let lookup = || {
+                    let start = std::time::Instant::now();
+                    for (key, sequence) in &coordinates {
+                        let matches = cache.coordinate_matches(key, *sequence).collect::<Vec<_>>();
+                        assert_eq!(std::hint::black_box(matches).len(), 1);
+                    }
+                    start.elapsed().as_secs_f64() * 1000.0
+                };
+                let (scan_ms, lookup_ms) = if iteration % 2 == 0 {
+                    (scan(), lookup())
+                } else {
+                    let lookup_ms = lookup();
+                    (scan(), lookup_ms)
+                };
+                if iteration > 0 {
+                    baseline.push(scan_ms);
+                    indexed.push(lookup_ms);
+                    construction.push(build_ms);
+                }
+            }
+            for values in [&mut baseline, &mut indexed, &mut construction] {
+                values.sort_by(f64::total_cmp);
+            }
+            measurements.push(serde_json::json!({
+                "headers": count, "lookups": count,
+                "baseline_median_ms": baseline[2], "indexed_median_ms": indexed[2],
+                "construction_with_row_clone_median_ms": construction[2],
+            }));
+        }
+        let result =
+            serde_json::json!({"measurements": measurements, "includes_database_reads": false});
+        if let Some(path) = std::env::var_os("GENTS_COORDINATE_BENCHMARK_OUTPUT") {
+            std::fs::write(path, serde_json::to_vec_pretty(&result).unwrap()).unwrap();
+        }
+        tracing::info!(%result, "session coordinate lookup benchmark");
+    }
 
     #[tokio::test]
     #[ignore = "manual canonical request-size benchmark"]
