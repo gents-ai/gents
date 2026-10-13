@@ -719,6 +719,17 @@ impl HomeResetPlan {
         self.full_reset || self.client.is_some() || self.runtime.is_some() || self.orphaned_client
     }
 
+    /// The records that prove a root belongs to Gents: the home's init
+    /// marker and the desktop client's own records.
+    fn is_ownership_record(&self, path: &Path) -> bool {
+        let desktop = crate::client::DesktopPaths::from_root(&self.desktop_root);
+        self.runtime
+            .as_ref()
+            .is_some_and(|(home, _)| path == gents::home::init_config_path(home))
+            || path == self.desktop_root.join(MANAGED_SERVER_CONFIG)
+            || desktop.client_records().contains(&path)
+    }
+
     fn refused_stores(&self) -> impl Iterator<Item = &gents::storage_backend::IncompatibleStore> {
         self.runtime
             .iter()
@@ -1045,6 +1056,24 @@ impl HomeResetPlan {
                     entries: std::slice::from_ref(path),
                 }),
         );
+        // Ownership records go last: an interrupted retirement keeps the
+        // evidence that lets the next plan finish the remaining entries.
+        let (dependents, records): (Vec<_>, Vec<_>) = groups
+            .iter()
+            .map(|group| {
+                let (records, dependents): (Vec<_>, Vec<_>) = group
+                    .entries
+                    .iter()
+                    .cloned()
+                    .partition(|path| self.is_ownership_record(path));
+                ((group.name, dependents), (group.name, records))
+            })
+            .unzip();
+        let ordered: Vec<_> = dependents.into_iter().chain(records).collect();
+        let groups: Vec<_> = ordered
+            .iter()
+            .map(|(name, entries)| gents::home::RetireGroup { name, entries })
+            .collect();
         let mut retired = gents::home::retire_entries(&groups, retire_as)
             .map_err(|error| BridgeError::new(BridgeErrorCode::Backend, format!("{error:#}")))?;
         for key in keychain_keys {
@@ -1609,6 +1638,31 @@ mod tests {
                 assert!(record.exists());
             }
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn interrupted_retirement_keeps_evidence_so_a_retry_finishes_logs() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let user = temp.path().canonicalize().unwrap();
+        let (home, desktop, service) = fixture(&user);
+        let logs = desktop.root().join("logs");
+        std::fs::set_permissions(&logs, std::fs::Permissions::from_mode(0o500)).unwrap();
+        let plan = plan_full_reset(Some(&home), &desktop, &user, &service).unwrap();
+        assert!(plan.retire(HomeResetDisposition::Delete, None).is_err());
+        std::fs::set_permissions(&logs, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(desktop.principal_metadata_path().is_file());
+        assert!(home.join("init.json").is_file());
+        let retry = plan_full_reset(Some(&home), &desktop, &user, &service).unwrap();
+        assert!(retry
+            .preview()
+            .delete_paths
+            .contains(&logs.display().to_string()));
+        retry.retire(HomeResetDisposition::Delete, None).unwrap();
+        assert!(!logs.exists());
+        assert!(!desktop.principal_metadata_path().exists());
+        assert!(!home.join("init.json").exists());
     }
 
     #[test]

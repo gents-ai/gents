@@ -524,10 +524,16 @@ fn retire_entries_with(
             private_dir(backup).with_context(|| format!("creating backup {}", backup.display()))?;
             let mut moved: Vec<(PathBuf, PathBuf)> = Vec::new();
             let result = (|| -> Result<()> {
+                let mut created: Vec<&str> = Vec::new();
                 for group in groups {
                     let target_dir = backup.join(group.name);
-                    private_dir(&target_dir)
-                        .with_context(|| format!("creating {}", target_dir.display()))?;
+                    // A group may recur, so entries other entries depend on
+                    // can be retired after them.
+                    if !created.contains(&group.name) {
+                        private_dir(&target_dir)
+                            .with_context(|| format!("creating {}", target_dir.display()))?;
+                        created.push(group.name);
+                    }
                     for entry in group.entries {
                         if present(entry)?.is_none() {
                             continue;
@@ -732,6 +738,30 @@ mod tests {
             home_entries(&temp.path().join("absent"), &[]).unwrap(),
             HomeEntries::default()
         );
+    }
+
+    #[test]
+    fn archive_accepts_a_group_retired_in_two_passes() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(temp.path()).unwrap();
+        let (logs, record) = (root.join("logs"), root.join("init.json"));
+        write(&logs.join("a.log"), "log");
+        write(&record, "{}");
+        let backup = root.join("backup");
+        let (first, second) = (vec![logs.clone()], vec![record.clone()]);
+        let groups = [
+            RetireGroup {
+                name: "home",
+                entries: &first,
+            },
+            RetireGroup {
+                name: "home",
+                entries: &second,
+            },
+        ];
+        retire_entries(&groups, RetireDisposition::Archive { backup: &backup }).unwrap();
+        assert!(backup.join("home/logs/a.log").is_file());
+        assert!(backup.join("home/init.json").is_file());
     }
 
     #[test]
