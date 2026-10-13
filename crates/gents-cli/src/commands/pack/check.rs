@@ -77,6 +77,9 @@ pub(crate) async fn check_dir(dir: &Path) -> CheckReport {
     if !report.problems.is_empty() {
         return report;
     }
+    // Before the unbuilt early return: a scaffolded pack is linted on its
+    // first `check`, not only once its .afb plugins have been built.
+    check_ux_plugins(dir, &manifest, &mut report.problems);
     if !unbuilt.is_empty() {
         // `gents pack build` compiles these; the digest exists only after it.
         if let Err(error) = gents::pack::validate_manifest(&manifest.name, &manifest) {
@@ -128,7 +131,6 @@ pub(crate) async fn check_dir(dir: &Path) -> CheckReport {
             report.problems.push(format!("{error:#}"));
         }
     }
-    check_ux_plugins(dir, &manifest, &mut report.problems);
     check_readme(dir, &mut report.problems);
     report
 }

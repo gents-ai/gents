@@ -30,7 +30,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::pack::{list_home_installs, HomePackInstall, PackUxPlugin, UxContributions};
+use crate::pack::{list_readable_home_installs, HomePackInstall, PackUxPlugin, UxContributions};
 
 pub mod lint;
 
@@ -152,7 +152,7 @@ pub fn list(home: &Path) -> Result<Vec<UxListing>> {
             });
         }
     }
-    for record in list_home_installs(home)? {
+    for record in list_readable_home_installs(home)? {
         for ux in &record.ux {
             match pack_listing(home, &record, ux) {
                 Ok(listing) => out.push(listing),

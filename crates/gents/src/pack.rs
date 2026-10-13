@@ -11,7 +11,8 @@ pub mod interpolate;
 mod loader;
 mod provenance;
 pub use home_install::{
-    forget_home_install, list_home_installs, read_home_install, write_home_install, HomePackInstall,
+    forget_home_install, list_home_installs, list_readable_home_installs, read_home_install,
+    write_home_install, HomePackInstall,
 };
 pub use inference::{
     bind_pack_install_config, inference_profile_options, inspect_pack_inference_bindings,
@@ -928,6 +929,15 @@ pub fn validate_pack_manifest(manifest: &PackManifest) -> Result<()> {
         "a plugins pack must declare at least one plugin"
     );
 
+    // Only a pack that installs as a home file record (assets, plugins) is
+    // scanned for UX plugins; a documents or graph pack installs into a
+    // node, where its ux[] would never be listed.
+    anyhow::ensure!(
+        manifest.metadata.ux.is_empty()
+            || matches!(manifest.metadata.kind, PackKind::Assets | PackKind::Plugins),
+        "ux plugins ship in an assets or plugins pack; a {:?} pack is never listed for them",
+        manifest.metadata.kind
+    );
     let mut ux_names = BTreeSet::new();
     for ux in &manifest.metadata.ux {
         ux.validate(&plugin_names)?;
@@ -1727,6 +1737,24 @@ mod tests {
         ))
         .unwrap_err();
         assert!(format!("{error:#}").contains("twice"), "{error:#}");
+    }
+
+    #[test]
+    fn ux_plugins_ship_only_in_a_pack_that_installs_as_a_home_record() {
+        let ux = serde_json::to_value(valid_ux()).unwrap();
+        let mut manifest = documents_manifest(vec![]);
+        manifest.metadata.ux = vec![serde_json::from_value(ux).unwrap()];
+        manifest
+            .metadata
+            .assets
+            .push("ux/board/plugin.js".to_owned());
+        let error = validate_pack_manifest(&manifest).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("assets or plugins pack"),
+            "{error:#}"
+        );
+        manifest.metadata.ux.clear();
+        validate_pack_manifest(&manifest).expect("a documents pack without ux is unchanged");
     }
 
     #[test]

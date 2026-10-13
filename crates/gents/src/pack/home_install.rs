@@ -106,6 +106,47 @@ pub fn forget_home_install(home: &Path, coordinate: &str) -> Result<()> {
 }
 
 /// Every file-recorded install under `home`, sorted by coordinate.
+/// Every readable record under `home`, sorted by coordinate; a record that
+/// does not parse (one a newer gents wrote) is skipped with a warning, so
+/// one bad install cannot hide the rest from a listing.
+pub fn list_readable_home_installs(home: &Path) -> Result<Vec<HomePackInstall>> {
+    let root = home.join(crate::home::PACK_INSTALLS_DIR_NAME);
+    if !root.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut records = Vec::new();
+    for namespace_entry in
+        std::fs::read_dir(&root).with_context(|| format!("reading {}", root.display()))?
+    {
+        let namespace_path = namespace_entry?.path();
+        if !namespace_path.is_dir() {
+            continue;
+        }
+        for record_entry in std::fs::read_dir(&namespace_path)
+            .with_context(|| format!("reading {}", namespace_path.display()))?
+        {
+            let path = record_entry?.path();
+            if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
+                continue;
+            }
+            let parsed = std::fs::read(&path)
+                .with_context(|| format!("reading {}", path.display()))
+                .and_then(|bytes| {
+                    serde_json::from_slice::<HomePackInstall>(&bytes)
+                        .with_context(|| format!("parsing {}", path.display()))
+                });
+            match parsed {
+                Ok(record) => records.push(record),
+                Err(error) => {
+                    tracing::warn!(path = %path.display(), error = %format!("{error:#}"), "unreadable pack install record; skipped")
+                }
+            }
+        }
+    }
+    records.sort_by(|a, b| a.coordinate.cmp(&b.coordinate));
+    Ok(records)
+}
+
 pub fn list_home_installs(home: &Path) -> Result<Vec<HomePackInstall>> {
     let root = home.join(crate::home::PACK_INSTALLS_DIR_NAME);
     if !root.is_dir() {
@@ -197,6 +238,30 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["acme/tools".to_owned(), "zeta/tools".to_owned()]
         );
+    }
+
+    #[test]
+    fn the_readable_listing_skips_a_record_it_cannot_parse_and_the_strict_one_fails() {
+        let home = tempfile::tempdir().unwrap();
+        write_home_install(home.path(), &sample("acme/tools")).unwrap();
+        write_home_install(home.path(), &sample("zeta/tools")).unwrap();
+        let newer = home
+            .path()
+            .join(crate::home::PACK_INSTALLS_DIR_NAME)
+            .join("acme")
+            .join("future.json");
+        std::fs::write(&newer, b"{\"coordinate\": 7, \"from\": \"a newer gents\"}").unwrap();
+
+        let readable = list_readable_home_installs(home.path()).unwrap();
+        assert_eq!(
+            readable
+                .iter()
+                .map(|r| r.coordinate.clone())
+                .collect::<Vec<_>>(),
+            vec!["acme/tools".to_owned(), "zeta/tools".to_owned()]
+        );
+        let strict = list_home_installs(home.path()).unwrap_err();
+        assert!(format!("{strict:#}").contains("future.json"), "{strict:#}");
     }
 
     #[test]
