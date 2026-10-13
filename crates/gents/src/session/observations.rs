@@ -124,14 +124,12 @@ async fn load_request_facts_in_txn(
         scoped_request_filter(node_did, session_id, requester_scope)
     );
     let response = txn.execute(&query).await?;
-    let rows: Vec<serde_json::Value> = serde_json::from_value(
-        response
-            .get("data")
-            .and_then(|data| data.get("AgentRequest"))
-            .cloned()
-            .context("request facts query omitted AgentRequest rows")?,
-    )
-    .context("decoding request fact rows")?;
+    let rows = response
+        .get("data")
+        .and_then(|data| data.get("AgentRequest"))
+        .context("request facts query omitted AgentRequest rows")?
+        .as_array()
+        .context("decoding request fact rows")?;
     rows.iter()
         .map(|row| {
             chrono::DateTime::parse_from_rfc3339(

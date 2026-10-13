@@ -11,7 +11,8 @@ use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
 use crate::document_config::{
-    load_trigger_next_run_at, update_trigger_runtime_fields, TriggerRuntimeUpdate,
+    load_trigger_next_run_at_batch, update_trigger_runtime_fields, TriggerRuntimeUpdate,
+    TRIGGER_CURSOR_BATCH_SIZE,
 };
 use crate::runtime_snapshot::ActiveRuntimeSnapshot;
 use crate::trigger_engine::{FireIntent, FireResult, TriggerKind, TriggerSource};
@@ -65,20 +66,109 @@ impl TriggerSource for ScheduleSource {
                 let snapshot = self.snapshot_rx.borrow().clone();
                 let now = Utc::now();
 
-                for (trigger_id, resolved) in snapshot.active_schedules() {
-                    let Some(behavior) = snapshot.agent(&resolved.task.agent_id) else {
-                        continue;
-                    };
-                    let node_did = behavior.node_did();
-                    let next_run_at = match load_trigger_next_run_at(
-                        &self.node, node_did, trigger_id,
-                    )
-                    .await
+                let schedules = snapshot
+                    .active_schedules()
+                    .iter()
+                    .filter_map(|(trigger_id, resolved)| {
+                        snapshot
+                            .agent(&resolved.task.agent_id)
+                            .map(|behavior| (trigger_id, resolved, behavior.node_did()))
+                    })
+                    .collect::<Vec<_>>();
+                for schedule_chunk in schedules.chunks(TRIGGER_CURSOR_BATCH_SIZE) {
+                    let cursor_scopes = schedule_chunk
+                        .iter()
+                        .map(|&(trigger_id, _, node_did)| {
+                            (node_did.to_owned(), trigger_id.to_string())
+                        })
+                        .collect::<Vec<_>>();
+                    let cursors = load_trigger_next_run_at_batch(&self.node, &cursor_scopes).await;
+
+                    for ((trigger_id, resolved, node_did), next_run_at_result) in
+                        schedule_chunk.iter().copied().zip(cursors)
                     {
-                        Ok(Some(s)) => s,
-                        Ok(None) => {
-                            let seeded_dt = match crate::runtime_snapshot::seed_schedule_next_run_at(
+                        let next_run_at = match next_run_at_result {
+                            Ok(Some(s)) => s,
+                            Ok(None) => {
+                                let seeded_dt =
+                                    match crate::runtime_snapshot::seed_schedule_next_run_at(
+                                        &resolved.cadence,
+                                        now,
+                                    ) {
+                                        Ok(next) => next,
+                                        Err(e) => {
+                                            tracing::warn!(
+                                                trigger_id = %trigger_id,
+                                                error = %e,
+                                                "failed to compute initial Trigger.next_run_at; skipping this tick"
+                                            );
+                                            continue;
+                                        }
+                                    };
+                                let seeded = seeded_dt.to_rfc3339_opts(SecondsFormat::Secs, true);
+                                if let Err(e) = update_trigger_runtime_fields(
+                                    &self.node,
+                                    node_did,
+                                    trigger_id,
+                                    TriggerRuntimeUpdate {
+                                        last_fired_source_doc_id: None,
+                                        next_run_at: Some(seeded.clone()),
+                                        last_attempt_at: None,
+                                        last_status: None,
+                                        last_error: None,
+                                        fire_count_delta: None,
+                                    },
+                                )
+                                .await
+                                {
+                                    tracing::warn!(
+                                        trigger_id = %trigger_id,
+                                        error = %e,
+                                        "failed to seed Trigger.next_run_at on first-seen; \
+                                         will retry next tick"
+                                    );
+                                    continue;
+                                }
+                                seeded
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    trigger_id = %trigger_id,
+                                    error = %e,
+                                    "failed to load Trigger.next_run_at; skipping this tick"
+                                );
+                                continue;
+                            }
+                        };
+
+                        let parsed = match DateTime::parse_from_rfc3339(&next_run_at) {
+                            Ok(dt) => dt.with_timezone(&Utc),
+                            Err(e) => {
+                                tracing::warn!(
+                                    trigger_id = %trigger_id,
+                                    next_run_at = %next_run_at,
+                                    error = %e,
+                                    "Trigger.next_run_at is not valid RFC3339; skipping"
+                                );
+                                continue;
+                            }
+                        };
+
+                        if parsed > now {
+                            continue;
+                        }
+
+                        let fired_at = now.to_rfc3339_opts(SecondsFormat::Secs, true);
+                        let event_vars = serde_json::json!({
+                            "fired_at": fired_at,
+                            "trigger_id": trigger_id,
+                            "trigger_kind": "schedule",
+                        });
+
+                        let advanced_next_run_at =
+                            match crate::runtime_snapshot::advance_schedule_next_run_at(
                                 &resolved.cadence,
+                                parsed,
                                 now,
                             ) {
                                 Ok(next) => next,
@@ -86,173 +176,97 @@ impl TriggerSource for ScheduleSource {
                                     tracing::warn!(
                                         trigger_id = %trigger_id,
                                         error = %e,
-                                        "failed to compute initial Trigger.next_run_at; skipping this tick"
+                                        "failed to compute advanced Trigger.next_run_at; skipping this tick"
                                     );
                                     continue;
                                 }
                             };
-                            let seeded = seeded_dt.to_rfc3339_opts(SecondsFormat::Secs, true);
-                            if let Err(e) = update_trigger_runtime_fields(
-                                &self.node,
-                                node_did,
-                                trigger_id,
-                                TriggerRuntimeUpdate {
-                                    last_fired_source_doc_id: None,
-                                    next_run_at: Some(seeded.clone()),
-                                    last_attempt_at: None,
-                                    last_status: None,
-                                    last_error: None,
-                                    fire_count_delta: None,
-                                },
-                            )
-                            .await
-                            {
-                                tracing::warn!(
-                                    trigger_id = %trigger_id,
-                                    error = %e,
-                                    "failed to seed Trigger.next_run_at on first-seen; \
-                                     will retry next tick"
-                                );
-                                continue;
-                            }
-                            seeded
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                trigger_id = %trigger_id,
-                                error = %e,
-                                "failed to load Trigger.next_run_at; skipping this tick"
-                            );
-                            continue;
-                        }
-                    };
+                        let advanced_next_run_at_str =
+                            advanced_next_run_at.to_rfc3339_opts(SecondsFormat::Secs, true);
+                        let last_attempt_at = now.to_rfc3339_opts(SecondsFormat::Secs, true);
 
-                    let parsed = match DateTime::parse_from_rfc3339(&next_run_at) {
-                        Ok(dt) => dt.with_timezone(&Utc),
-                        Err(e) => {
-                            tracing::warn!(
-                                trigger_id = %trigger_id,
-                                next_run_at = %next_run_at,
-                                error = %e,
-                                "Trigger.next_run_at is not valid RFC3339; skipping"
-                            );
-                            continue;
-                        }
-                    };
+                        let node_for_callback = self.node.clone();
+                        let trigger_id_for_callback = trigger_id.clone();
+                        let owner_for_callback = node_did.to_owned();
 
-                    if parsed > now {
-                        continue;
-                    }
-
-                    let fired_at = now.to_rfc3339_opts(SecondsFormat::Secs, true);
-                    let event_vars = serde_json::json!({
-                        "fired_at": fired_at,
-                        "trigger_id": trigger_id,
-                        "trigger_kind": "schedule",
-                    });
-
-                    let advanced_next_run_at =
-                        match crate::runtime_snapshot::advance_schedule_next_run_at(
-                            &resolved.cadence,
-                            parsed,
-                            now,
-                        ) {
-                            Ok(next) => next,
-                            Err(e) => {
-                                tracing::warn!(
-                                    trigger_id = %trigger_id,
-                                    error = %e,
-                                    "failed to compute advanced Trigger.next_run_at; skipping this tick"
-                                );
-                                continue;
-                            }
-                        };
-                    let advanced_next_run_at_str =
-                        advanced_next_run_at.to_rfc3339_opts(SecondsFormat::Secs, true);
-                    let last_attempt_at = now.to_rfc3339_opts(SecondsFormat::Secs, true);
-
-                    let node_for_callback = self.node.clone();
-                    let trigger_id_for_callback = trigger_id.clone();
-                    let owner_for_callback = node_did.to_owned();
-
-                    return Some(FireIntent {
-                        trigger_id: Some(trigger_id.clone()),
-                        trigger_kind: TriggerKind::Schedule,
-                        task: resolved.task.clone(),
-                        concurrency: resolved.concurrency,
-                        event_vars,
-                        doc_vars: None,
-                        correlation: None,
-                        group_vars: None,
-                        trigger_context: None,
-                        args_vars: None,
-                        durable_fire_key: crate::trigger_engine::durable_fire_key(
-                            "schedule",
-                            &[&trigger_id, &next_run_at],
-                        ),
-                        pre_materialized_request_id: None,
-                        on_result: Box::new(move |result| {
-                            let updates = match &result {
-                                FireResult::Fired { request_id } => {
-                                    tracing::debug!(
-                                        trigger_id = %trigger_id_for_callback,
-                                        request_id = %request_id,
-                                        "schedule fire materialized request"
-                                    );
-                                    TriggerRuntimeUpdate {
+                        return Some(FireIntent {
+                            trigger_id: Some(trigger_id.clone()),
+                            trigger_kind: TriggerKind::Schedule,
+                            task: resolved.task.clone(),
+                            concurrency: resolved.concurrency,
+                            event_vars,
+                            doc_vars: None,
+                            correlation: None,
+                            group_vars: None,
+                            trigger_context: None,
+                            args_vars: None,
+                            durable_fire_key: crate::trigger_engine::durable_fire_key(
+                                "schedule",
+                                &[&trigger_id, &next_run_at],
+                            ),
+                            pre_materialized_request_id: None,
+                            on_result: Box::new(move |result| {
+                                let updates = match &result {
+                                    FireResult::Fired { request_id } => {
+                                        tracing::debug!(
+                                            trigger_id = %trigger_id_for_callback,
+                                            request_id = %request_id,
+                                            "schedule fire materialized request"
+                                        );
+                                        TriggerRuntimeUpdate {
+                                            last_fired_source_doc_id: None,
+                                            next_run_at: Some(advanced_next_run_at_str.clone()),
+                                            last_attempt_at: Some(last_attempt_at.clone()),
+                                            last_status: Some("fired".to_string()),
+                                            last_error: None,
+                                            fire_count_delta: Some(1),
+                                        }
+                                    }
+                                    FireResult::Duplicate { .. } => TriggerRuntimeUpdate {
                                         last_fired_source_doc_id: None,
                                         next_run_at: Some(advanced_next_run_at_str.clone()),
                                         last_attempt_at: Some(last_attempt_at.clone()),
-                                        last_status: Some("fired".to_string()),
+                                        last_status: Some("duplicate".to_string()),
                                         last_error: None,
-                                        fire_count_delta: Some(1),
-                                    }
-                                }
-                                FireResult::Duplicate { .. } => TriggerRuntimeUpdate {
-                                    last_fired_source_doc_id: None,
-                                    next_run_at: Some(advanced_next_run_at_str.clone()),
-                                    last_attempt_at: Some(last_attempt_at.clone()),
-                                    last_status: Some("duplicate".to_string()),
-                                    last_error: None,
-                                    fire_count_delta: None,
-                                },
-                                FireResult::Skipped { .. } => TriggerRuntimeUpdate {
-                                    last_fired_source_doc_id: None,
-                                    next_run_at: Some(advanced_next_run_at_str.clone()),
-                                    last_attempt_at: Some(last_attempt_at.clone()),
-                                    last_status: Some("skipped".to_string()),
-                                    last_error: None,
-                                    fire_count_delta: None,
-                                },
-                                FireResult::Errored { error } | FireResult::Rejected { error } => {
-                                    TriggerRuntimeUpdate {
+                                        fire_count_delta: None,
+                                    },
+                                    FireResult::Skipped { .. } => TriggerRuntimeUpdate {
+                                        last_fired_source_doc_id: None,
+                                        next_run_at: Some(advanced_next_run_at_str.clone()),
+                                        last_attempt_at: Some(last_attempt_at.clone()),
+                                        last_status: Some("skipped".to_string()),
+                                        last_error: None,
+                                        fire_count_delta: None,
+                                    },
+                                    FireResult::Errored { error }
+                                    | FireResult::Rejected { error } => TriggerRuntimeUpdate {
                                         last_fired_source_doc_id: None,
                                         next_run_at: None,
                                         last_attempt_at: Some(last_attempt_at.clone()),
                                         last_status: Some("error".to_string()),
                                         last_error: Some(error.clone()),
                                         fire_count_delta: None,
+                                    },
+                                };
+                                tokio::spawn(async move {
+                                    if let Err(e) = update_trigger_runtime_fields(
+                                        &node_for_callback,
+                                        &owner_for_callback,
+                                        &trigger_id_for_callback,
+                                        updates,
+                                    )
+                                    .await
+                                    {
+                                        tracing::warn!(
+                                            trigger_id = %trigger_id_for_callback,
+                                            error = %e,
+                                            "failed to write Trigger runtime fields after fire",
+                                        );
                                     }
-                                }
-                            };
-                            tokio::spawn(async move {
-                                if let Err(e) = update_trigger_runtime_fields(
-                                    &node_for_callback,
-                                    &owner_for_callback,
-                                    &trigger_id_for_callback,
-                                    updates,
-                                )
-                                .await
-                                {
-                                    tracing::warn!(
-                                        trigger_id = %trigger_id_for_callback,
-                                        error = %e,
-                                        "failed to write Trigger runtime fields after fire",
-                                    );
-                                }
-                            });
-                        }),
-                    });
+                                });
+                            }),
+                        });
+                    }
                 }
             }
         })

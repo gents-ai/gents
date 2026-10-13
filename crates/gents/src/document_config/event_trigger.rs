@@ -1,8 +1,11 @@
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use defra_node::EmbeddedNode;
 use serde::{Deserialize, Serialize};
 
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+
+/// Maximum cursors read ahead before ScheduleSource evaluates this tick's batch.
+pub(crate) const TRIGGER_CURSOR_BATCH_SIZE: usize = 64;
 
 /// Sparse runtime observations for the canonical Trigger. Setting a status
 /// clears a previous error unless a replacement error is supplied. Fire counts
@@ -17,37 +20,145 @@ pub(crate) struct TriggerRuntimeUpdate {
     pub(crate) fire_count_delta: Option<i64>,
 }
 
-/// Read the scheduling cursor of an exact owner-scoped trigger. The reusable
-/// Schedule contains cadence only; another trigger may reference the same cadence.
-pub(crate) async fn load_trigger_next_run_at(
+/// Load cursors for the exact owner/trigger scopes in bounded alias batches.
+/// Results stay aligned with `scopes`, so one malformed owner, ambiguous
+/// trigger, or aliased GraphQL error cannot hide another trigger's outcome.
+pub(crate) async fn load_trigger_next_run_at_batch(
     node: &EmbeddedNode,
-    node_did: &str,
-    trigger_id: &str,
-) -> Result<Option<String>> {
-    anyhow::ensure!(
-        !node_did.is_empty(),
-        "trigger observation owner is required"
-    );
-    let query = format!(
-        r#"{{ Trigger(filter: {{ node_did: {{ _eq: "{}" }}, trigger_id: {{ _eq: "{}" }} }}, limit: 2) {{ next_run_at }} }}"#,
-        escape_graphql_string(node_did),
-        escape_graphql_string(trigger_id)
-    );
-    let response = graphql_with_transaction_retry(node, &query, "query Trigger cursor").await?;
-    let rows = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("Trigger"))
-        .and_then(|rows| rows.as_array());
-    anyhow::ensure!(
-        rows.map_or(0, Vec::len) <= 1,
-        "ambiguous scoped trigger observation"
-    );
-    Ok(rows
-        .and_then(|rows| rows.first())
-        .and_then(|row| row.get("next_run_at"))
-        .and_then(|value| value.as_str())
-        .map(str::to_owned))
+    scopes: &[(String, String)],
+) -> Vec<Result<Option<String>>> {
+    let mut results = std::iter::repeat_with(|| None)
+        .take(scopes.len())
+        .collect::<Vec<Option<Result<Option<String>>>>>();
+
+    for (chunk_index, chunk) in scopes.chunks(TRIGGER_CURSOR_BATCH_SIZE).enumerate() {
+        let chunk_start = chunk_index * TRIGGER_CURSOR_BATCH_SIZE;
+        let mut selections = Vec::new();
+        let mut aliases = Vec::new();
+        for (index, (node_did, trigger_id)) in chunk.iter().enumerate() {
+            let result_index = chunk_start + index;
+            if node_did.is_empty() {
+                results[result_index] = Some(Err(anyhow!("trigger observation owner is required")));
+                continue;
+            }
+            let alias = format!("trigger_{index}");
+            selections.push(format!(
+                r#"{alias}: Trigger(filter: {{ node_did: {{ _eq: "{}" }}, trigger_id: {{ _eq: "{}" }} }}, limit: 2) {{ next_run_at }}"#,
+                escape_graphql_string(node_did),
+                escape_graphql_string(trigger_id),
+            ));
+            aliases.push((result_index, alias));
+        }
+        if selections.is_empty() {
+            continue;
+        }
+        let query = format!("{{ {} }}", selections.join("\n"));
+        #[cfg(test)]
+        record_trigger_cursor_batch_query();
+        let response = match crate::graphql::graphql_response_with_transaction_retry(
+            node,
+            &query,
+            "query Trigger cursor batch",
+        )
+        .await
+        {
+            Ok(response) => response,
+            Err(error) => {
+                for (result_index, _) in aliases {
+                    results[result_index] =
+                        Some(Err(anyhow!("query Trigger cursor failed: {error:#}")));
+                }
+                continue;
+            }
+        };
+        let known_aliases = aliases
+            .iter()
+            .map(|(_, alias)| alias.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        let global_errors = response
+            .errors
+            .iter()
+            .filter(|error| {
+                error
+                    .path
+                    .as_ref()
+                    .and_then(|path| path.first())
+                    .is_none_or(|alias| !known_aliases.contains(alias.as_str()))
+            })
+            .map(|error| error.message.as_str())
+            .collect::<Vec<_>>();
+
+        for (result_index, alias) in aliases {
+            let alias_errors = response
+                .errors
+                .iter()
+                .filter(|error| {
+                    error
+                        .path
+                        .as_ref()
+                        .and_then(|path| path.first())
+                        .is_some_and(|path_alias| path_alias == &alias)
+                })
+                .map(|error| error.message.as_str())
+                .collect::<Vec<_>>();
+            if !alias_errors.is_empty() || !global_errors.is_empty() {
+                let messages = alias_errors
+                    .into_iter()
+                    .chain(global_errors.iter().copied())
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                results[result_index] = Some(Err(anyhow!(
+                    "query Trigger cursor for {alias} failed: {messages}"
+                )));
+                continue;
+            }
+
+            let rows = response
+                .data
+                .as_ref()
+                .and_then(|data| data.get(alias.as_str()))
+                .and_then(serde_json::Value::as_array);
+            if let Some(rows) = rows {
+                if rows.len() > 1 {
+                    results[result_index] =
+                        Some(Err(anyhow!("ambiguous scoped trigger observation")));
+                    continue;
+                }
+            }
+            results[result_index] = Some(Ok(rows
+                .and_then(|rows| rows.first())
+                .and_then(|row| row.get("next_run_at"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)));
+        }
+    }
+
+    results
+        .into_iter()
+        .map(|result| result.unwrap_or_else(|| Err(anyhow!("trigger cursor result was omitted"))))
+        .collect()
+}
+
+#[cfg(test)]
+tokio::task_local! {
+    static TRIGGER_CURSOR_BATCH_QUERIES: std::sync::Arc<std::sync::atomic::AtomicUsize>;
+}
+
+#[cfg(test)]
+fn record_trigger_cursor_batch_query() {
+    let _ = TRIGGER_CURSOR_BATCH_QUERIES
+        .try_with(|queries| queries.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+}
+
+#[cfg(test)]
+pub(crate) async fn count_trigger_cursor_batch_queries<F: std::future::Future>(
+    future: F,
+) -> (F::Output, usize) {
+    let queries = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let output = TRIGGER_CURSOR_BATCH_QUERIES
+        .scope(queries.clone(), future)
+        .await;
+    (output, queries.load(std::sync::atomic::Ordering::Relaxed))
 }
 
 /// Update only runtime observations on the exact owner-scoped trigger.
