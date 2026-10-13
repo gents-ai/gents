@@ -176,26 +176,6 @@ async fn explain(args: ToolExplainArgs) -> Result<()> {
                 .map(|tool| tool.name.as_str())
                 .collect(),
             live: host.live_node_did.is_some(),
-            next: host.live_node_did.is_none().then(|| {
-                let server = match &home_hint {
-                    Some(home) => format!("gents server --home {home}"),
-                    None => "gents server".to_owned(),
-                };
-                format!(
-                    "No runtime serves this home, so this is the configured init.json ceiling; a \
-                     server started with --tool-ceiling, --tool-root or --cli-tool enforces its \
-                     own. Start `{server}` and rerun for the live ceiling."
-                )
-            }),
-            source: host.source,
-            agent_roots: host.live_node_did.is_some().then_some(
-                "Agent Tools roots are admitted under tool_root on this CLI host's filesystem; \
-                 explained from another host, a root the server admits can appear under \
-                 configuration_issues.",
-            ),
-            scope: "host_native_file_bash_cli_only",
-            note: "This ceiling currently clamps host-native file/bash/CLI tools, not every \
-                   model-callable built-in read, MCP, agent, or operator HTTP surface.",
         },
         agents,
         configuration_issues,
@@ -211,6 +191,26 @@ async fn explain(args: ToolExplainArgs) -> Result<()> {
             "included_in_model_tool_surface": false,
             "note": "Server HTTP routes and optional external /mcp are binary/operator surfaces; they are not included in per-agent model-callable tool_names."
         }),
+        next: host.live_node_did.is_none().then(|| {
+            let server = match &home_hint {
+                Some(home) => format!("gents server --home {home}"),
+                None => "gents server".to_owned(),
+            };
+            format!(
+                "No runtime serves this home, so this is the configured init.json ceiling; a \
+                 server started with --tool-ceiling, --tool-root or --cli-tool enforces its \
+                 own. Start `{server}` and rerun for the live ceiling."
+            )
+        }),
+        ceiling_source: host.source,
+        agent_roots: host.live_node_did.is_some().then_some(
+            "Agent Tools roots are admitted under tool_root on this CLI host's filesystem; \
+             explained from another host, a root the server admits can appear under \
+             configuration_issues.",
+        ),
+        ceiling_scope: "host_native_file_bash_cli_only",
+        ceiling_note: "This ceiling currently clamps host-native file/bash/CLI tools, not every \
+                       model-callable built-in read, MCP, agent, or operator HTTP surface.",
         access_mode: access.mode(),
         home: host
             .home
@@ -221,8 +221,8 @@ async fn explain(args: ToolExplainArgs) -> Result<()> {
     Ok(())
 }
 
-/// Fields in reading order: the explained surfaces, how to proceed, then
-/// provenance.
+/// Fields in reading order: the ceiling and the surfaces it clamps, how to
+/// proceed, then provenance.
 #[derive(Serialize)]
 struct ExplainReport<'a> {
     node_did: &'a str,
@@ -231,6 +231,13 @@ struct ExplainReport<'a> {
     configuration_issues: BTreeMap<String, String>,
     runtime_availability: Value,
     operator_surfaces: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next: Option<String>,
+    ceiling_source: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent_roots: Option<&'static str>,
+    ceiling_scope: &'static str,
+    ceiling_note: &'static str,
     access_mode: &'static str,
     home: String,
 }
@@ -241,13 +248,6 @@ struct HostCeilingReport<'a> {
     tool_root: Option<&'a str>,
     cli_tools: Vec<&'a str>,
     live: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    next: Option<String>,
-    source: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    agent_roots: Option<&'static str>,
-    scope: &'static str,
-    note: &'static str,
 }
 
 fn shell_quoted_path(path: &Path) -> Result<String> {

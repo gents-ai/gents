@@ -279,11 +279,14 @@ async fn tools_explain_reports_the_ceiling_the_running_node_enforces() -> Result
             "\"tool_ceiling\"",
             "\"tool_root\"",
             "\"live\"",
-            "\"next\"",
-            "\"source\"",
-            "\"scope\"",
             "\"agents\"",
+            "\"tool_names\"",
+            "\"configuration_issues\"",
+            "\"next\"",
+            "\"ceiling_source\"",
+            "\"ceiling_scope\"",
             "\"access_mode\"",
+            "\"home\"",
         ],
     );
     let offline: Value = serde_json::from_str(&offline_text)?;
@@ -291,10 +294,7 @@ async fn tools_explain_reports_the_ceiling_the_running_node_enforces() -> Result
         offline["host_tool_ceiling"]["tool_ceiling"], "readwrite",
         "{offline}"
     );
-    assert_eq!(
-        offline["host_tool_ceiling"]["source"], "init_json",
-        "{offline}"
-    );
+    assert_eq!(offline["ceiling_source"], "init_json", "{offline}");
     assert_eq!(offline["host_tool_ceiling"]["live"], false, "{offline}");
     let offline_tools = explained_tool_names(&offline, &agent_id)?;
     assert!(
@@ -384,9 +384,7 @@ async fn tools_explain_refuses_a_home_whose_runtime_serves_another_node() -> Res
     )?)?;
 
     let offline = run_cli_json(&cwd, &["tools", "explain", "--home", home_arg])?;
-    let next = offline["host_tool_ceiling"]["next"]
-        .as_str()
-        .unwrap_or_default();
+    let next = offline["next"].as_str().unwrap_or_default();
     assert!(
         next.contains(&format!("gents server --home {quoted_home}")),
         "{offline}"
