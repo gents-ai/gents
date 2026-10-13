@@ -14,11 +14,20 @@ const HTTP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 /// [`GraphqlEndpoint::authorize`], because DefraDB binds a transaction to
 /// the acting DID rather than to one token, and a transaction may outlive a
 /// single bearer.
-fn http_client() -> Result<reqwest::Client> {
-    reqwest::Client::builder()
-        .timeout(HTTP_TIMEOUT)
-        .build()
-        .context("building DefraDB transaction HTTP client")
+pub(super) async fn http_client() -> Result<&'static reqwest::Client> {
+    static CLIENT: tokio::sync::OnceCell<reqwest::Client> = tokio::sync::OnceCell::const_new();
+    CLIENT
+        .get_or_try_init(|| async {
+            tokio::task::spawn_blocking(|| {
+                reqwest::Client::builder()
+                    .timeout(HTTP_TIMEOUT)
+                    .build()
+                    .context("building DefraDB configuration HTTP client")
+            })
+            .await
+            .context("joining DefraDB configuration HTTP client initialization")?
+        })
+        .await
 }
 
 /// Submit an auto-commit mutation exactly once. DefraDB's HTTP handler owns
@@ -26,7 +35,7 @@ fn http_client() -> Result<reqwest::Client> {
 /// result could apply a mutation twice.
 pub(super) async fn auto_commit(endpoint: &GraphqlEndpoint, mutation: &str) -> Result<Value> {
     let response = endpoint
-        .authorize(http_client()?.post(endpoint.url()))?
+        .authorize(http_client().await?.post(endpoint.url()))?
         .json(&serde_json::json!({"query": mutation}))
         .send()
         .await
@@ -55,7 +64,7 @@ pub(super) async fn query_with_options(
 }
 
 pub(super) async fn txn_begin(endpoint: &GraphqlEndpoint) -> Result<(reqwest::Client, String)> {
-    let client = http_client()?;
+    let client = http_client().await?.clone();
     let response = endpoint
         .authorize(client.post(format!("{}/tx", graphql_api_base(endpoint.url())?)))?
         .send()
@@ -253,16 +262,50 @@ mod tests {
         let server = tokio::spawn(async move {
             axum::serve(listener, app).await.unwrap();
         });
+        let client = http_client().await.unwrap().clone();
         let result = txn_execute(
             &GraphqlEndpoint::anonymous(endpoint),
             "same-transaction",
-            &http_client().unwrap(),
+            &client,
             "mutation($input: JSON) { test(input: $input) { _docID } }",
             &expected,
         )
         .await;
         server.abort();
         assert_eq!(result.unwrap()["data"]["test"][0]["_docID"], "written");
+    }
+
+    #[tokio::test]
+    async fn consecutive_config_writes_reuse_the_http_connection() {
+        use axum::{extract::ConnectInfo, routing::post, Json, Router};
+        use std::net::SocketAddr;
+
+        let app = Router::new().route(
+            "/graphql",
+            post(
+                |ConnectInfo(peer): ConnectInfo<SocketAddr>, Json(_body): Json<Value>| async move {
+                    Json(serde_json::json!({"data": {"peer_port": peer.port()}}))
+                },
+            ),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = GraphqlEndpoint::anonymous(format!(
+            "http://{}/graphql",
+            listener.local_addr().unwrap()
+        ));
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .await
+            .unwrap();
+        });
+
+        let first = auto_commit(&endpoint, "mutation { first }").await.unwrap();
+        let second = auto_commit(&endpoint, "mutation { second }").await.unwrap();
+        server.abort();
+        assert_eq!(first["data"]["peer_port"], second["data"]["peer_port"]);
     }
 
     /// A transaction can outlive one bearer, so begin, statements and commit

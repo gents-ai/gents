@@ -50,8 +50,9 @@ impl ConfigAccess {
             Self::Local(node) => node.set_active_collection_version(version_id).await,
             Self::Graphql(endpoint) => {
                 let url = format!("{}/collections/default", graphql_api_base(endpoint.url())?);
+                let client = super::graphql::http_client().await?;
                 endpoint
-                    .authorize(reqwest::Client::new().post(&url))?
+                    .authorize(client.post(&url))?
                     .timeout(std::time::Duration::from_secs(120))
                     .body(version_id.to_owned())
                     .send()
@@ -116,8 +117,9 @@ impl ConfigAccess {
             anyhow::bail!("schema HTTP request requires an HTTP endpoint")
         };
         let url = format!("{}/{}", graphql_api_base(endpoint.url())?, route);
+        let client = super::graphql::http_client().await?;
         let mut request = endpoint
-            .authorize(reqwest::Client::new().request(method, &url))?
+            .authorize(client.request(method, &url))?
             .timeout(std::time::Duration::from_secs(120));
         if let Some(body) = body {
             request = request.json(&body);
