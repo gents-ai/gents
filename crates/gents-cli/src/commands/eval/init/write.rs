@@ -22,6 +22,9 @@ use tempfile::TempDir;
 use super::dossier::{read_pack, Dossier};
 use super::validate::Assembled;
 
+mod recovery;
+pub(crate) use recovery::recover_output;
+
 const CONFIG: &str = "pack_config.json";
 const README: &str = "README.md";
 /// The manifest author of every pack `write_files` writes; `--force`
@@ -103,24 +106,10 @@ pub(crate) fn commit(
     force: bool,
     gents_home: &Path,
 ) -> Result<Written> {
-    let replaced = if out.symlink_metadata().is_ok() {
-        anyhow::ensure!(
-            force,
-            "{} already exists; pass --force to replace it",
-            out.display()
-        );
-        // $HOME first, then the password database, as `gents init` does.
-        let user_home = std::env::home_dir();
-        let cwd = std::env::current_dir().context("resolving the working directory")?;
-        Some(replaceable_out(
-            out,
-            user_home.as_deref(),
-            gents_home,
-            &cwd,
-        )?)
-    } else {
-        None
-    };
+    replaceable_destination(out, force, gents_home)?;
+    let _output_lock = recovery::lock_output(out)?;
+    recovery::recover_locked(out, gents_home)?;
+    let replaced = replaceable_destination(out, force, gents_home)?;
     if let Some(parent) = out.parent().filter(|parent| !parent.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("creating {}", parent.display()))?;
@@ -140,7 +129,8 @@ pub(crate) fn commit(
     // The old pack moves aside, is checked again where no other path names
     // it, and is removed only once the new one is in place; an error between
     // the renames restores it. Only a process killed between the two renames
-    // leaves `out` absent, with both packs in hidden siblings of it.
+    // leaves `out` absent; the next writer restores the validated old pack
+    // under the same output lock before checking replacement eligibility.
     let aside = match &replaced {
         Some(existing) => {
             let holder = private_sibling(existing, "replaced")?;
@@ -206,6 +196,22 @@ pub(crate) fn commit(
     })
 }
 
+fn replaceable_destination(out: &Path, force: bool, gents_home: &Path) -> Result<Option<PathBuf>> {
+    match out.symlink_metadata() {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error).context("inspecting eval output"),
+        Ok(_) => {}
+    }
+    anyhow::ensure!(
+        force,
+        "{} already exists; pass --force to replace it",
+        out.display()
+    );
+    let user_home = std::env::home_dir();
+    let cwd = std::env::current_dir().context("resolving the working directory")?;
+    replaceable_out(out, user_home.as_deref(), gents_home, &cwd).map(Some)
+}
+
 /// Move the pack set aside in `holder` back to `existing`. If that fails the
 /// holder is kept, never removed, so the old pack survives where the error
 /// names it.
@@ -227,12 +233,9 @@ fn private_sibling(path: &Path, step: &str) -> Result<TempDir> {
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
-    let name = path
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_default();
+    let prefix = recovery::sibling_name(path, &format!(".{step}-"))?;
     tempfile::Builder::new()
-        .prefix(&format!(".{name}.{step}-"))
+        .prefix(&prefix)
         .tempdir_in(parent)
         .with_context(|| format!("creating a directory beside {}", path.display()))
 }
@@ -921,7 +924,115 @@ mod tests {
             .unwrap()
             .map(|entry| entry.unwrap().file_name())
             .collect();
-        assert_eq!(siblings, vec![std::ffi::OsString::from("canary_eval")]);
+        assert_eq!(
+            siblings
+                .into_iter()
+                .collect::<std::collections::BTreeSet<_>>(),
+            ["canary_eval", ".canary_eval.eval-init.lock"]
+                .into_iter()
+                .map(std::ffi::OsString::from)
+                .collect()
+        );
+    }
+
+    fn interrupted_replacement(out: &Path) -> PathBuf {
+        let assembled = validated(&good());
+        write_files(out, "canary_quality", &assembled, SUMMARY, &dossier(), None).unwrap();
+        let holder = private_sibling(out, "replaced").unwrap();
+        std::fs::rename(out, holder.path().join("pack")).unwrap();
+        holder.keep()
+    }
+
+    #[test]
+    fn interrupted_replacement_restores_the_old_pack_without_consuming_staging() {
+        let root = tempfile::tempdir().unwrap();
+        let out = root.path().join("canary_eval");
+        let holder = interrupted_replacement(&out);
+        let expected = load(&holder.join("pack"));
+        let staged = private_sibling(&out, "new").unwrap();
+        std::fs::write(staged.path().join("keep.txt"), "staged").unwrap();
+        recover_output(&out, &root.path().join("home")).unwrap();
+        assert!(
+            out.join("manifest.json").exists(),
+            "interrupted replacement must restore its published output"
+        );
+        assert_eq!(load(&out), expected);
+        assert!(!holder.exists());
+        assert_eq!(
+            std::fs::read(staged.path().join("keep.txt")).unwrap(),
+            b"staged"
+        );
+        recover_output(&out, &root.path().join("home")).unwrap();
+        assert_eq!(load(&out), expected);
+    }
+
+    #[test]
+    fn recovery_cannot_take_a_pack_from_an_active_replacement() {
+        let root = tempfile::tempdir().unwrap();
+        let out = root.path().join("canary_eval");
+        let holder = interrupted_replacement(&out);
+        let guard = recovery::lock_output(&out).unwrap();
+        let error = recover_output(&out, &root.path().join("home")).unwrap_err();
+        assert!(error.to_string().contains("another eval init"), "{error:#}");
+        assert!(holder.join("pack/manifest.json").exists());
+        assert!(!out.exists());
+        drop(guard);
+        recover_output(&out, &root.path().join("home")).unwrap();
+        assert!(out.join("manifest.json").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recovery_preserves_output_names_and_refuses_symlink_locks() {
+        use std::os::unix::fs::symlink;
+        let root = tempfile::tempdir().unwrap();
+        #[cfg(target_os = "macos")]
+        let out = root.path().join("eval-界");
+        #[cfg(not(target_os = "macos"))]
+        use std::os::unix::ffi::OsStringExt;
+        #[cfg(not(target_os = "macos"))]
+        let out = root
+            .path()
+            .join(std::ffi::OsString::from_vec(b"eval-\xff".to_vec()));
+        let holder = interrupted_replacement(&out);
+        let lock = root
+            .path()
+            .join(recovery::sibling_name(&out, ".eval-init.lock").unwrap());
+        let unrelated = root.path().join("unrelated");
+        std::fs::write(&unrelated, "keep").unwrap();
+        symlink(&unrelated, &lock).unwrap();
+        assert!(recover_output(&out, &root.path().join("home")).is_err());
+        assert!(holder.join("pack/manifest.json").exists());
+        assert_eq!(std::fs::read(&unrelated).unwrap(), b"keep");
+        std::fs::remove_file(lock).unwrap();
+        recover_output(&out, &root.path().join("home")).unwrap();
+        assert!(out.join("manifest.json").exists());
+        assert!(!holder.exists());
+    }
+
+    #[test]
+    fn recovery_refuses_ambiguous_or_modified_backups() {
+        let root = tempfile::tempdir().unwrap();
+        let out = root.path().join("canary_eval");
+        let first = interrupted_replacement(&out);
+        let second = interrupted_replacement(&out);
+        let error = recover_output(&out, &root.path().join("home")).unwrap_err();
+        assert!(
+            error.to_string().contains("several interrupted"),
+            "{error:#}"
+        );
+        assert!(!out.exists());
+        assert!(first.join("pack/manifest.json").exists());
+        assert!(second.join("pack/manifest.json").exists());
+        std::fs::rename(second, root.path().join("another-output")).unwrap();
+        std::fs::write(first.join("pack/keep.txt"), "mine").unwrap();
+        let error = recover_output(&out, &root.path().join("home")).unwrap_err();
+        assert!(
+            error.to_string().contains("not part of the pack"),
+            "{error:#}"
+        );
+        assert!(!out.exists());
+        assert_eq!(std::fs::read(first.join("pack/keep.txt")).unwrap(), b"mine");
     }
 
     #[tokio::test]
