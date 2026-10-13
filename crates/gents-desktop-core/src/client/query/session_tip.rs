@@ -705,6 +705,7 @@ mod tests {
                     };
                     let owner = escape_graphql_string(&owner);
                     let key = escape_graphql_string(&key);
+                    let role = escape_graphql_string(role);
                     format!(r#"m{sequence}: create_AgentMessage(input: {{
                         message_key: "{key}", session_id: "session", node_did: "agent",
                         request_doc_id: "{owner}", requester_did: null,
