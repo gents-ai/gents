@@ -66,6 +66,45 @@ describe("contributed nav rows", () => {
     );
   });
 
+  it("drop a malformed row and keep a throwing one to itself", () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    disposers.push(
+      registry.registerMany([
+        { id: "p:noto", area: NAV_AREA, data: { ...boardRow, to: "/nowhere" } },
+        { id: "p:nolabel", area: NAV_AREA, data: { ...boardRow, label: 7 } },
+        { id: "p:place", area: NAV_AREA, data: { ...boardRow, placement: "top" } },
+        {
+          id: "p:throws",
+          area: NAV_AREA,
+          data: {
+            ...boardRow,
+            label: "Throws",
+            active: () => {
+              throw new Error("active");
+            },
+            count: () => {
+              throw new Error("count");
+            },
+          },
+        },
+        { id: "p:ok", area: NAV_AREA, data: { ...boardRow, label: "Fine" } },
+      ]),
+    );
+    const app = testApp({ deployments: [node({ agentDid: "did:key:a" })] });
+    renderIn(
+      app,
+      <TooltipProvider>
+        <Rail route={{ name: "sessions" }} settings={null} />
+        <NavPanel route={{ name: "sessions" }} settings={null} syncRow={false} />
+      </TooltipProvider>,
+    );
+    expect(screen.getAllByRole("link", { name: /Fine/ })).toHaveLength(2);
+    const throwing = screen.getAllByRole("link", { name: /Throws/ });
+    expect(throwing).toHaveLength(2);
+    expect(throwing.every((a) => a.getAttribute("aria-current") !== "page")).toBe(true);
+    expect(screen.queryByRole("link", { name: /nowhere/ })).toBeNull();
+  });
+
   it("light for the route the row claims", () => {
     disposers.push(
       registry.register({

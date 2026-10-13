@@ -63,6 +63,21 @@ describe("contribution registry", () => {
     expect(registry.getArea(AREA).map((c) => c.id)).toEqual(["on"]);
   });
 
+  it("hides an entry whose when() throws instead of throwing from the snapshot", () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    disposers.push(
+      registry.registerMany([
+        make("on"),
+        make("broken", {
+          when: () => {
+            throw new Error("no");
+          },
+        }),
+      ]),
+    );
+    expect(registry.getArea(AREA).map((c) => c.id)).toEqual(["on"]);
+  });
+
   it("replaces on re-register, and a stale disposer leaves the replacement alone", () => {
     const first = make("same", { title: "one" });
     const second = make("same", { title: "two" });

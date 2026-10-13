@@ -114,6 +114,43 @@ describe("activation and the plugin store", () => {
     }
   });
 
+  it("disposes at once what an async register() adds after its deactivate", async () => {
+    let finish!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    activateUxPlugin(
+      {
+        id: "late",
+        async register(ctx) {
+          ctx.register({
+            id: "early",
+            area: SESSION_HEADER_ACTIONS_AREA,
+            render: () => null,
+          });
+          await gate;
+          ctx.register({
+            id: "after",
+            area: SESSION_HEADER_ACTIONS_AREA,
+            render: () => null,
+          });
+          ctx.setInterval(() => {}, 60_000);
+        },
+      },
+      { door: "bundled" },
+    );
+    expect(registry.getArea(SESSION_HEADER_ACTIONS_AREA).map((c) => c.id)).toEqual([
+      "late:early",
+    ]);
+    await setUxPluginEnabled("late", false);
+    expect(registry.getArea(SESSION_HEADER_ACTIONS_AREA)).toHaveLength(0);
+    finish();
+    await gate;
+    await Promise.resolve();
+    expect(registry.getArea(SESSION_HEADER_ACTIONS_AREA)).toHaveLength(0);
+    expect(isUxPluginLive("late")).toBe(false);
+  });
+
   it("rolls back a register() that throws and reports on the plugin's row", () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     activateUxPlugin(

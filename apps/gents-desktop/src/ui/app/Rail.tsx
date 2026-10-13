@@ -7,7 +7,8 @@ import { AgentAvatar } from "@/screens/AgentAvatar";
 import { AgentHoverCard } from "@/screens/HoverCards";
 import { FlyoutOpenContext } from "./RailFlyout";
 import { SyncHealth } from "./SyncHealth";
-import { useNavItems, type NavItem } from "./navRegistry";
+import { navRowState, useNavItems, type NavItem } from "./navRegistry";
+import { ContribBoundary } from "@/contrib/react/boundary";
 import {
   useMailboxCount,
   useOnline,
@@ -130,17 +131,18 @@ export function Rail({ route, settings }: { route: Route; settings: ReactNode })
   const primary = useNavItems("primary");
   const footer = useNavItems("footer");
   const navContext = { mailboxCount };
-  const contributed = (item: NavItem) => (
-    <RailItem
-      key={item.id}
-      label={item.label}
-      to={item.to}
-      active={item.active(route)}
-      count={item.count?.(navContext)}
-    >
-      {item.icon}
-    </RailItem>
-  );
+  /* a row a UX plugin contributed: its predicates are evaluated apart and
+     its icon drawn behind a boundary, so one bad row costs that row */
+  const contributed = (item: NavItem) => {
+    const { active, count } = navRowState(item, route, navContext);
+    return (
+      <ContribBoundary key={item.id} id={item.id} variant="chip">
+        <RailItem label={item.label} to={item.to} active={active} count={count}>
+          {item.icon}
+        </RailItem>
+      </ContribBoundary>
+    );
+  };
   return (
     <nav className="flex h-full flex-col items-center gap-2 pt-3">
       <RailNode route={route} />

@@ -81,7 +81,13 @@ export function activateUxPlugin(
     try {
       result = plugin.register(
         createUxContext(plugin.id, {
-          onDispose: (dispose) => disposers.push(dispose),
+          /* a registration made after this incarnation was retired (a
+             register() still pending across a deactivate) is disposed at
+             once rather than pushed into a list nobody will run */
+          onDispose: (dispose) => {
+            if (live.get(plugin.id) === disposers) disposers.push(dispose);
+            else dispose();
+          },
           declared: options.declared,
           listing: options.listing,
         }),

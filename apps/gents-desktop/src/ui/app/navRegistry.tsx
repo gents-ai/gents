@@ -8,7 +8,7 @@
    referentially stable until a mutation so useSyncExternalStore does not
    loop. */
 import { useSyncExternalStore, type ReactNode } from "react";
-import type { Route } from "@/lib/router";
+import { pathFor, type Route } from "@/lib/router";
 import { registry } from "@/contrib/registry";
 import { NAV_AREA, type Contribution } from "@/contrib/types";
 
@@ -34,14 +34,50 @@ export interface NavItem {
   order?: number;
 }
 
+/* the whole payload, so one bad row is dropped here rather than thrown
+   from the Rail: a label, a route pathFor can print, a predicate, a
+   placement, and a badge that is a function if it is anything */
 function isNavItem(data: unknown): data is NavItem {
-  return (
-    typeof data === "object" &&
-    data !== null &&
-    typeof (data as NavItem).id === "string" &&
-    typeof (data as NavItem).active === "function" &&
-    typeof (data as NavItem).placement === "string"
-  );
+  if (typeof data !== "object" || data === null) return false;
+  const item = data as Partial<NavItem>;
+  if (typeof item.label !== "string" || item.label.length === 0) return false;
+  if (typeof item.active !== "function") return false;
+  if (item.placement !== "primary" && item.placement !== "footer") return false;
+  if (item.count !== undefined && typeof item.count !== "function") return false;
+  if (
+    typeof item.to !== "object" ||
+    item.to === null ||
+    typeof item.to.name !== "string"
+  )
+    return false;
+  try {
+    return typeof pathFor(item.to) === "string";
+  } catch {
+    return false;
+  }
+}
+
+/** a row's live state, with the plugin's predicates kept to themselves:
+    a throw reads as inactive / no badge, and is logged once per call */
+export function navRowState(
+  item: NavItem,
+  route: Route,
+  ctx: NavContext,
+): { active: boolean; count: number | undefined } {
+  let active = false;
+  let count: number | undefined;
+  try {
+    active = item.active(route) === true;
+  } catch (error) {
+    console.error(`[ux-plugins] nav:${item.id} active() threw`, error);
+  }
+  try {
+    const value = item.count?.(ctx);
+    if (typeof value === "number" && Number.isFinite(value)) count = value;
+  } catch (error) {
+    console.error(`[ux-plugins] nav:${item.id} count() threw`, error);
+  }
+  return { active, count };
 }
 
 export function registerNavItem(item: NavItem): () => void {

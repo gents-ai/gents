@@ -10,6 +10,18 @@ type Listener = () => void;
 
 const EMPTY: readonly Contribution[] = Object.freeze([]);
 
+/* a `when` that throws hides its contribution; the snapshot is read from
+   hooks and render paths that no boundary protects */
+function shown(c: Contribution): boolean {
+  if (!c.when) return true;
+  try {
+    return c.when() === true;
+  } catch (error) {
+    console.error(`[ux-plugins] contrib:${c.id} when() threw; hidden`, error);
+    return false;
+  }
+}
+
 class ContributionRegistry {
   private byArea = new Map<string, Contribution[]>();
   private snapshot = new Map<string, readonly Contribution[]>();
@@ -36,7 +48,7 @@ class ContributionRegistry {
         ? EMPTY
         : raw
             .map((c, index) => ({ c, index }))
-            .filter(({ c }) => c.enabled !== false && (c.when ? c.when() : true))
+            .filter(({ c }) => c.enabled !== false && shown(c))
             .sort((a, b) => (a.c.order ?? 0) - (b.c.order ?? 0) || a.index - b.index)
             .map(({ c }) => c);
     this.snapshot.set(area, resolved);

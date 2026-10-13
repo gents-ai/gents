@@ -18,7 +18,8 @@ import type { NavMode } from "@/preferences";
 import { AgentAvatar } from "@/screens/AgentAvatar";
 import { SessionStatus } from "@/screens/SessionStatus";
 import { SyncHealth } from "./SyncHealth";
-import { useNavItems, type NavItem } from "./navRegistry";
+import { navRowState, useNavItems, type NavItem } from "./navRegistry";
+import { ContribBoundary } from "@/contrib/react/boundary";
 import {
   useMailboxCount,
   useNodeCount,
@@ -88,18 +89,19 @@ export function NavPanel({
   const primary = useNavItems("primary");
   const footer = useNavItems("footer");
   const navContext = { mailboxCount };
-  /* a row a UX plugin contributed, drawn like the app's own */
-  const contributed = (item: NavItem) => (
-    <Item
-      key={item.id}
-      to={href(item.to)}
-      active={item.active(route)}
-      count={item.count?.(navContext)}
-      icon={item.icon}
-    >
-      {item.label}
-    </Item>
-  );
+  /* a row a UX plugin contributed, drawn like the app's own; its
+     predicates are evaluated apart and its icon drawn behind a boundary,
+     so one bad row costs that row */
+  const contributed = (item: NavItem) => {
+    const { active, count } = navRowState(item, route, navContext);
+    return (
+      <ContribBoundary key={item.id} id={item.id} variant="chip">
+        <Item to={href(item.to)} active={active} count={count} icon={item.icon}>
+          {item.label}
+        </Item>
+      </ContribBoundary>
+    );
+  };
   const currentSession = route.name === "session" ? route.sessionId : null;
   const workingCurrent =
     working !== null && route.name === "agent" && route.agentDid === working.agentDid;
