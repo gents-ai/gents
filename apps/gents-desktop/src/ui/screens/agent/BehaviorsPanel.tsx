@@ -229,6 +229,21 @@ export function AgentsPanel({
     );
   return (
     <>
+      {!agentId && (
+        <p
+          data-testid="agents-intro"
+          className="mb-6 max-w-prose text-sm text-muted-foreground"
+        >
+          Each session runs on one agent. An agent chooses the model and a context, the
+          instructions, tools and skills it works with.{" "}
+          <a
+            href={href({ ...base, section: "contexts" })}
+            className="text-foreground underline-offset-2 hover:underline"
+          >
+            Contexts
+          </a>
+        </p>
+      )}
       <ListDetail
         base={base}
         item={agentId}
@@ -255,7 +270,7 @@ export function AgentsPanel({
             ),
           }))}
         createLabel="New agent"
-        empty="No agents yet. A agent is what an agent is told, what it may use, and what runs it."
+        empty="No agents yet. An agent is what a session is told, what it may use, and what model runs it."
         onCreate={() => setDraft(newAgentView(deployment))}
         detail={(id) => {
           const agent = agentOf(deployment, id)!;

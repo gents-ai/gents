@@ -1464,6 +1464,26 @@ describe("configuration panels", () => {
     expect(api.saveNodeConfig).not.toHaveBeenCalled();
   });
 
+  it("says what an agent and a context each control, and links between them", () => {
+    const { app } = harness();
+    const agents = renderIn(app, <AgentsPanel deployment={deployment} />);
+    const agentsIntro = screen.getByTestId("agents-intro");
+    expect(agentsIntro).toHaveTextContent("An agent chooses the model and a context");
+    expect(within(agentsIntro).getByRole("link", { name: "Contexts" })).toHaveAttribute(
+      "href",
+      href({ name: "agent", nodeDid: deployment.nodeDid, section: "contexts" }),
+    );
+    agents.unmount();
+    renderIn(app, <ContextsPanel deployment={deployment} />);
+    expect(screen.getByTestId("contexts-intro")).toHaveTextContent(
+      "its system prompt is sent with every request",
+    );
+    expect(screen.getByRole("link", { name: "Agents" })).toHaveAttribute(
+      "href",
+      href({ name: "agent", nodeDid: deployment.nodeDid, section: "agents" }),
+    );
+  });
+
   describe("a default agent is enabled", () => {
     const withOps = (changes: Partial<(typeof deployment.agents)[number]>) => ({
       ...deployment,
