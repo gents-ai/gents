@@ -713,7 +713,7 @@ fn observe_latest_response_completion(current: &mut Option<i64>, observed: Optio
 
 #[cfg(test)]
 #[path = "../../../../gents/src/lean_vocab_test/support.rs"]
-mod lean_reasoning_contracts;
+pub(super) mod lean_reasoning_contracts;
 
 #[cfg(test)]
 pub(in crate::commands::codex_shim) mod tests {
