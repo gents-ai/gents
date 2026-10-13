@@ -94,7 +94,7 @@ async fn codex_shim_thread_list_reconstructs_turned_threads_from_durable_data() 
         ))
         .await?;
 
-    let pending_session_id = Uuid::new_v4().to_string();
+    let request_only_session_id = Uuid::new_v4().to_string();
     serve
         .capturing(graphql_query(
             &graphql,
@@ -103,17 +103,38 @@ async fn codex_shim_thread_list_reconstructs_turned_threads_from_durable_data() 
                     request_id: "{request}", node_did: "{node_did}",
                     requester_did: "{node_did}",
                     agent_id: "{agent_id}", session_id: "{session}",
-                    content: "pending projection",
-                    lifecycle_state: "pending", execution_origin: "interactive",
+                    content: "request without a session",
+                    lifecycle_state: "completed", execution_origin: "interactive",
                     created_at: "2026-01-01T00:00:01Z"
                 }}) {{ _docID }} }}"#,
                 request = escape_graphql_string(&Uuid::new_v4().to_string()),
                 node_did = escape_graphql_string(&node_did),
                 agent_id = escape_graphql_string(&agent_id),
-                session = escape_graphql_string(&pending_session_id),
+                session = escape_graphql_string(&request_only_session_id),
             ),
         ))
         .await?;
+    let request_only_sessions = serve
+        .capturing(graphql_query(
+            &graphql,
+            &format!(
+                r#"{{ AgentSession(filter: {{
+                    node_did: {{ _eq: "{node_did}" }},
+                    session_id: {{ _eq: "{session}" }}
+                }}) {{ _docID }} }}"#,
+                node_did = escape_graphql_string(&node_did),
+                session = escape_graphql_string(&request_only_session_id),
+            ),
+        ))
+        .await?;
+    assert!(
+        request_only_sessions
+            .pointer("/data/AgentSession")
+            .and_then(Value::as_array)
+            .context("request-only session query omitted rows")?
+            .is_empty(),
+        "the request-only fixture must have no canonical session: {request_only_sessions}"
+    );
 
     let (mut ws, _) = serve
         .capturing(async {
@@ -172,7 +193,7 @@ async fn codex_shim_thread_list_reconstructs_turned_threads_from_durable_data() 
         !listed
             .data
             .iter()
-            .any(|thread| thread.id == pending_session_id),
+            .any(|thread| thread.id == request_only_session_id),
         "a request alone must not invent a thread before the canonical session document exists: {listed:?}"
     );
 
