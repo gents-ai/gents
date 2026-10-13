@@ -25,6 +25,13 @@ const POLLED_COMMANDS = new Set(["listPendingPluginApprovals"]);
 const args = process.argv.slice(2);
 const runs = integerArgument("--runs", DEFAULT_RUNS);
 const port = integerArgument("--port", DEFAULT_PORT);
+const sessionIndexCount =
+  valueArgument("--sessions") == null ? null : integerArgument("--sessions", 0);
+if (
+  sessionIndexCount !== null &&
+  (sessionIndexCount < 2 || sessionIndexCount > 100_000)
+)
+  throw new Error("--sessions must be an integer from 2 to 100000");
 const enforceResponsiveBudgets = args.includes("--enforce-responsive-budgets");
 const outputArgument = valueArgument("--output");
 const outputRoot = resolve(
@@ -168,7 +175,7 @@ async function runSample(browserInstance, sampleIndex) {
 
   const navigationStartedAt = process.hrtime.bigint();
   await page.goto(
-    `${baseUrl}/tests/ui-harness/harness.html?scenario=mobile-performance`,
+    `${baseUrl}/tests/ui-harness/harness.html?scenario=mobile-performance${sessionIndexCount === null ? "" : `&sessions=${sessionIndexCount}`}`,
     { waitUntil: "domcontentloaded" },
   );
   await page.locator('[data-testid="app-shell"]').waitFor({ state: "visible" });
