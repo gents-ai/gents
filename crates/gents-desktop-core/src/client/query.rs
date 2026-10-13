@@ -231,13 +231,17 @@ pub(super) async fn execute_access_graphql_query(
         .execute(query)
         .await
         .with_context(|| operation.to_string())?;
+    into_access_graphql_data(body, operation)
+}
+
+fn into_access_graphql_data(mut body: Value, operation: &str) -> Result<Value> {
     if let Some(errors) = body.get("errors") {
         if errors.as_array().is_some_and(|rows| !rows.is_empty()) {
             anyhow::bail!("{operation} returned errors: {errors}");
         }
     }
-    body.get("data")
-        .cloned()
+    body.as_object_mut()
+        .and_then(|root| root.remove("data"))
         .with_context(|| format!("{operation} returned no data"))
 }
 

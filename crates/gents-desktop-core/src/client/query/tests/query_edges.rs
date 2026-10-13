@@ -4,6 +4,53 @@ use defra_node::NodeBuilder;
 use gents_protocol::schemas::AGENT_MESSAGE_NAME;
 use std::sync::Arc;
 
+#[test]
+fn access_query_data_keeps_the_owned_payload_allocation() {
+    let body = serde_json::json!({
+        "data": {"AgentOutputSegment": [{"payload": "x".repeat(65_536)}]},
+        "errors": [],
+        "extensions": {"trace": "query"},
+    });
+    let payload = body["data"]["AgentOutputSegment"][0]["payload"]
+        .as_str()
+        .unwrap()
+        .as_ptr();
+    let data = into_access_graphql_data(body, "query").unwrap();
+    assert_eq!(
+        data["AgentOutputSegment"][0]["payload"]
+            .as_str()
+            .unwrap()
+            .as_ptr(),
+        payload
+    );
+}
+
+#[test]
+fn access_query_data_preserves_response_errors_and_null_data() {
+    let partial = serde_json::json!({
+        "data": {"AgentMessage": []},
+        "errors": [{"message": "denied"}],
+    });
+    let error = into_access_graphql_data(partial, "session page").unwrap_err();
+    assert!(error.to_string().contains("session page returned errors"));
+    assert!(error.to_string().contains("denied"));
+    for body in [serde_json::json!({}), Value::Null, serde_json::json!([])] {
+        assert_eq!(
+            into_access_graphql_data(body, "session page")
+                .unwrap_err()
+                .to_string(),
+            "session page returned no data"
+        );
+    }
+    for errors in [Value::Null, serde_json::json!([]), serde_json::json!({})] {
+        assert_eq!(
+            into_access_graphql_data(serde_json::json!({"data": null, "errors": errors}), "query")
+                .unwrap(),
+            Value::Null
+        );
+    }
+}
+
 #[tokio::test]
 async fn fetch_doc_patch_returns_empty_store_for_no_matches() {
     let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
