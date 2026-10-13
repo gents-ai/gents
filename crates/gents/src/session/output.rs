@@ -13,7 +13,8 @@ use gents_protocol::output::{
     MessagePublication, MessageRole, OutputOutcome, OutputSource, OutputWriter, PayloadRef,
     SourceClose,
 };
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::sync::Arc;
 
 use super::canonical_rows::{
     decode_output_segment_row, decode_scoped_request_output_segments,
@@ -146,7 +147,7 @@ enum ReadAccess<'a, 'txn> {
 #[derive(Default)]
 struct ReadCache {
     headers: BTreeMap<String, super::canonical_rows::TranscriptMessageRow>,
-    requests: BTreeMap<String, Vec<super::canonical_rows::OutputSegmentRow>>,
+    requests: BTreeMap<String, Arc<RequestOutputRows>>,
     /// Rows the caller read by an exact scoped query in the same transaction;
     /// each still passes coordinate validation before it enters `headers`.
     observed: BTreeMap<String, super::canonical_rows::TranscriptMessageRow>,
@@ -156,6 +157,58 @@ struct ReadCache {
     /// against the same scan. A reused scan that lacks a referenced close is
     /// dropped and re-read, so replication filling that gap is still observed.
     reuse_node_scans: bool,
+}
+
+/// Indexes retain every occurrence, including contradictory observations of
+/// one physical document. They must not turn canonical integrity checks into
+/// last-writer-wins selection.
+struct RequestOutputRows {
+    rows: Vec<super::canonical_rows::OutputSegmentRow>,
+    by_doc_id: HashMap<String, Vec<usize>>,
+    by_source: HashMap<OutputSource, Vec<usize>>,
+}
+
+impl From<Vec<super::canonical_rows::OutputSegmentRow>> for RequestOutputRows {
+    fn from(rows: Vec<super::canonical_rows::OutputSegmentRow>) -> Self {
+        let mut by_doc_id: HashMap<String, Vec<usize>> = HashMap::with_capacity(rows.len());
+        let mut by_source: HashMap<OutputSource, Vec<usize>> = HashMap::new();
+        for (index, row) in rows.iter().enumerate() {
+            by_doc_id.entry(row.doc_id.clone()).or_default().push(index);
+            by_source
+                .entry(row.segment.source.clone())
+                .or_default()
+                .push(index);
+        }
+        Self {
+            rows,
+            by_doc_id,
+            by_source,
+        }
+    }
+}
+
+impl RequestOutputRows {
+    fn with_doc_id(
+        &self,
+        doc_id: &str,
+    ) -> impl Iterator<Item = &super::canonical_rows::OutputSegmentRow> {
+        self.by_doc_id
+            .get(doc_id)
+            .into_iter()
+            .flatten()
+            .map(|&index| &self.rows[index])
+    }
+
+    fn for_source(
+        &self,
+        source: &OutputSource,
+    ) -> impl Iterator<Item = &super::canonical_rows::OutputSegmentRow> {
+        self.by_source
+            .get(source)
+            .into_iter()
+            .flatten()
+            .map(|&index| &self.rows[index])
+    }
 }
 
 impl ReadAccess<'_, '_> {
@@ -669,14 +722,14 @@ async fn request_rows(
     node_did: &str,
     requester_did: Option<&str>,
     cache: &ReadCache,
-    local: &mut BTreeMap<String, Vec<super::canonical_rows::OutputSegmentRow>>,
-) -> Result<Vec<super::canonical_rows::OutputSegmentRow>> {
+    local: &mut BTreeMap<String, Arc<RequestOutputRows>>,
+) -> Result<Arc<RequestOutputRows>> {
     if let Some(rows) = cache
         .requests
         .get(request_doc_id)
         .or_else(|| local.get(request_doc_id))
     {
-        return Ok(rows.clone());
+        return Ok(Arc::clone(rows));
     }
     #[cfg(test)]
     let _ = REQUEST_OUTPUT_SCANS
@@ -693,7 +746,8 @@ async fn request_rows(
         None,
         requester_did,
     )?;
-    local.insert(request_doc_id.to_owned(), rows.clone());
+    let rows = Arc::new(RequestOutputRows::from(rows));
+    local.insert(request_doc_id.to_owned(), Arc::clone(&rows));
     Ok(rows)
 }
 
@@ -720,15 +774,15 @@ async fn load_referenced_segments(
     let mut local = BTreeMap::new();
     let hinted = match request_hint {
         Some(request) if !close_ids.is_empty() => {
-            request_rows(access, request, node_did, requester_did, cache, &mut local).await?
+            Some(request_rows(access, request, node_did, requester_did, cache, &mut local).await?)
         }
-        _ => Vec::new(),
+        _ => None,
     };
     let mut closures = Vec::new();
     for close_id in close_ids {
         let found = hinted
             .iter()
-            .filter(|row| row.doc_id == close_id)
+            .flat_map(|rows| rows.with_doc_id(&close_id))
             .cloned()
             .collect::<Vec<_>>();
         if !found.is_empty() {
@@ -752,18 +806,15 @@ async fn load_referenced_segments(
         if cache
             .requests
             .get(&closure.segment.request_doc_id)
-            .is_some_and(|rows| !rows.iter().any(|row| row.doc_id == closure.doc_id))
+            .is_some_and(|rows| rows.with_doc_id(&closure.doc_id).next().is_none())
         {
             cache.requests.remove(&closure.segment.request_doc_id);
         }
     }
     let mut sources = Vec::new();
+    let mut seen = HashSet::new();
     for closure in &closures {
-        if !sources.iter().any(
-            |(request, source): &(String, gents_protocol::output::OutputSource)| {
-                request == &closure.segment.request_doc_id && source == &closure.segment.source
-            },
-        ) {
+        if seen.insert((&closure.segment.request_doc_id, &closure.segment.source)) {
             sources.push((
                 closure.segment.request_doc_id.clone(),
                 closure.segment.source.clone(),
@@ -784,7 +835,7 @@ async fn load_referenced_segments(
             &mut local,
         )
         .await?;
-        records.extend(rows.into_iter().filter(|row| row.segment.source == source));
+        records.extend(rows.for_source(&source).cloned());
     }
     // A transaction has a fixed view; a node read may still be receiving
     // additional facts, so reuse its scan only within one opted-in pass.
@@ -1987,6 +2038,92 @@ pub(super) async fn load_sequenced_messages(
 mod tests {
     use super::*;
     use gents_protocol::output::{MessageRole, OutputOutcome, TranscriptMessage};
+
+    #[tokio::test]
+    #[ignore = "manual canonical request-size benchmark"]
+    async fn cached_output_reconstruction_request_size_benchmark() {
+        use gents_protocol::output::{MessageBlock, PayloadPresentation, PresentedPayload};
+        let _ = tracing_subscriber::fmt().with_test_writer().try_init();
+        let node = EmbeddedNode::builder().build().await.unwrap();
+        let request = "request-size-benchmark";
+        let payload = "x".repeat(64 * 1024);
+        for sources in [1, 32, 128] {
+            let mut rows = Vec::new();
+            let mut headers = Vec::new();
+            for index in 0..sources {
+                let key = format!("source-{index}");
+                let doc_id = format!("close-{index}");
+                let segment = authored_segments(request, &key, &[&payload]).pop().unwrap();
+                let mut message = header(
+                    &format!("header-{index}"),
+                    &segment.session_id,
+                    Some(request),
+                    MessagePublication::RequestExecution {
+                        execution_generation: "observed-generation".into(),
+                    },
+                );
+                message.message.node_did = segment.node_did.clone();
+                message.message.requester_did = None;
+                message.message.role = MessageRole::User;
+                message.message.native_id = None;
+                message.message.sequence = index;
+                message.message.blocks = vec![MessageBlock::Text {
+                    text: PresentedPayload {
+                        output: PayloadRef {
+                            close_doc_id: doc_id.clone(),
+                            stream: 0,
+                        },
+                        presentation: PayloadPresentation::Full,
+                    },
+                }];
+                rows.push(super::super::canonical_rows::OutputSegmentRow { doc_id, segment });
+                headers.push(message);
+            }
+            let mut cache = ReadCache::default();
+            cache.requests.insert(request.into(), Arc::new(rows.into()));
+            let expected = gents_protocol::message::Message::user(&payload);
+            let mut samples = Vec::new();
+            for pass in 0..6 {
+                let started = std::time::Instant::now();
+                for message in &headers {
+                    let selected = load_referenced_segments(
+                        ReadAccess::Node(&node),
+                        message,
+                        Some(request),
+                        "did:test:test",
+                        None,
+                        &mut cache,
+                    )
+                    .await
+                    .unwrap();
+                    let observed = selected
+                        .iter()
+                        .map(|row| ObservedSegment {
+                            doc_id: &row.doc_id,
+                            segment: &row.segment,
+                        })
+                        .collect::<Vec<_>>();
+                    assert_eq!(
+                        reconstruct_message(&observed, &[], &[], &message.message).unwrap(),
+                        expected
+                    );
+                }
+                if pass > 0 {
+                    samples.push(started.elapsed().as_secs_f64() * 1_000.0);
+                }
+            }
+            samples.sort_by(f64::total_cmp);
+            tracing::info!(
+                sources,
+                payload_bytes = payload.len(),
+                median_ms = samples[2],
+                min_ms = samples[0],
+                max_ms = samples[4],
+                "cached canonical reconstruction benchmark"
+            );
+        }
+        node.shutdown().await;
+    }
 
     #[test]
     fn current_input_selection_matches_lean_owner() {
