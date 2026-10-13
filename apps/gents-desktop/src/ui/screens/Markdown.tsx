@@ -86,17 +86,29 @@ function paragraphText(children: ReactNode): string | null {
   return parts.join("");
 }
 
-/* a paragraph that is exactly one claimed directive renders as the plugin's
-   component, inside its own boundary; everything else is prose. The
-   `streaming` flag is unknown here, so a directive is rendered as settled.
-   Subscribing to the area means a plugin enabled after the message rendered
-   claims its directives without a re-mount. */
+/* only a paragraph shaped like a directive subscribes to the area: a long
+   reply has hundreds of paragraphs and one toggle would re-render them all */
 function Paragraph({ children }: { children?: ReactNode }) {
   const text = paragraphText(children);
   const directive = text ? parseTranscriptDirective(text) : null;
+  if (!directive) return <p>{children}</p>;
+  return <DirectiveParagraph directive={directive}>{children}</DirectiveParagraph>;
+}
+
+/* claimed: the plugin's component inside its own boundary; unclaimed: the
+   prose it was. The `streaming` flag is unknown here, so a directive is
+   rendered as settled. Subscribing means a plugin enabled after the message
+   rendered claims its directives without a re-mount. */
+function DirectiveParagraph({
+  directive,
+  children,
+}: {
+  directive: ParsedTranscriptDirective;
+  children?: ReactNode;
+}) {
   const area = useContributions(TRANSCRIPT_DIRECTIVE_AREA);
-  const claimed = directive ? resolveDirective(directive.name, area) : null;
-  if (!directive || !claimed) return <p>{children}</p>;
+  const claimed = resolveDirective(directive.name, area);
+  if (!claimed) return <p>{children}</p>;
   return (
     <ContribBoundary id={`directive:${directive.name}`} variant="chip">
       <DirectiveRender claimed={claimed} directive={directive} />
@@ -147,19 +159,26 @@ const remarkSoftBreaks = () => softBreaks;
 
 const PLUGINS = [remarkGfm];
 const PLUGINS_WITH_BREAKS = [remarkGfm, remarkSoftBreaks];
-const COMPONENTS = { pre: CodeBlock, table: Table, p: Paragraph };
+const COMPONENTS = { pre: CodeBlock, table: Table };
+const COMPONENTS_WITH_DIRECTIVES = { ...COMPONENTS, p: Paragraph };
 
 export const Markdown = memo(function Markdown({
   children,
   breaks = false,
+  directives = false,
 }: {
   children: string;
   breaks?: boolean;
+  /** render `::name{…}` paragraphs through the plugins that claim them.
+      Only for the model's own replies in this session: a mailbox body or a
+      reasoning trace is not the model addressing this UI, and a plugin
+      must not be reachable from text a third party put there. */
+  directives?: boolean;
 }) {
   return (
     <ReactMarkdown
       remarkPlugins={breaks ? PLUGINS_WITH_BREAKS : PLUGINS}
-      components={COMPONENTS}
+      components={directives ? COMPONENTS_WITH_DIRECTIVES : COMPONENTS}
     >
       {children}
     </ReactMarkdown>

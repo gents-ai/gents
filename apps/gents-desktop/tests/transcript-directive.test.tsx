@@ -1,10 +1,32 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 
 import { parseTranscriptDirective, resolveDirective } from "@/contrib/directives";
 import { registry } from "@/contrib/registry";
 import { TRANSCRIPT_DIRECTIVE_AREA } from "@/contrib/types";
 import { Markdown } from "@/screens/Markdown";
+import { TranscriptPanel } from "@/screens/Transcript";
+import { NO_PARENT } from "@/screens/parentWork";
+import { NO_WORKERS } from "@/screens/workers";
+import { renderIn, testApp } from "./app-fixture";
+import { assistantMessage, sessionSnapshot } from "./timeline-fixture";
+
+/* a plugin that claims `::hello` for the span of one test */
+function claimHello() {
+  disposers.push(
+    registry.register({
+      id: "t:hello",
+      area: TRANSCRIPT_DIRECTIVE_AREA,
+      source: "plugin:t",
+      data: {
+        name: "hello",
+        render: ({ attrs }: { attrs: Readonly<Record<string, string>> }) => (
+          <b data-testid="hello-card">hi {attrs.name}</b>
+        ),
+      },
+    }),
+  );
+}
 
 const disposers: Array<() => void> = [];
 afterEach(() => {
@@ -82,7 +104,11 @@ describe("Markdown directive rendering", () => {
         },
       }),
     );
-    render(<Markdown>{`Intro line.\n\n::hello{name="world"}\n\nAfter.`}</Markdown>);
+    render(
+      <Markdown
+        directives
+      >{`Intro line.\n\n::hello{name="world"}\n\nAfter.`}</Markdown>,
+    );
     expect(screen.getByTestId("hello-card")).toHaveTextContent("hi world");
     expect(screen.getByTestId("transcript-directive")).toHaveAttribute(
       "data-directive",
@@ -91,8 +117,18 @@ describe("Markdown directive rendering", () => {
     expect(screen.getByText("Intro line.")).toBeInTheDocument();
   });
 
+  it("is off by default: a claimed directive stays prose where nothing opted in", () => {
+    claimHello();
+    render(<Markdown>{`::hello{name="world"}`}</Markdown>);
+    expect(screen.queryByTestId("hello-card")).toBeNull();
+    expect(screen.getByText(`::hello{name="world"}`)).toBeInTheDocument();
+    /* the mailbox's shape: soft breaks on, directives not asked for */
+    render(<Markdown breaks>{`::hello{name="peer"}`}</Markdown>);
+    expect(screen.queryByTestId("hello-card")).toBeNull();
+  });
+
   it("leaves an unclaimed directive as the prose it was", () => {
-    render(<Markdown>{`::nobody{x="1"}`}</Markdown>);
+    render(<Markdown directives>{`::nobody{x="1"}`}</Markdown>);
     expect(screen.queryByTestId("transcript-directive")).toBeNull();
     expect(screen.getByText(`::nobody{x="1"}`)).toBeInTheDocument();
   });
@@ -106,7 +142,7 @@ describe("Markdown directive rendering", () => {
         data: { name: "inline", render: () => <i data-testid="no" /> },
       }),
     );
-    render(<Markdown>{`Try ::inline{} here.`}</Markdown>);
+    render(<Markdown directives>{`Try ::inline{} here.`}</Markdown>);
     expect(screen.queryByTestId("no")).toBeNull();
   });
 
@@ -125,11 +161,49 @@ describe("Markdown directive rendering", () => {
         },
       }),
     );
-    render(<Markdown>{`Before.\n\n::boom\n\nAfter.`}</Markdown>);
+    render(<Markdown directives>{`Before.\n\n::boom\n\nAfter.`}</Markdown>);
     expect(screen.getByTestId("contrib-error-chip")).toHaveAttribute(
       "title",
       "directive:boom: kaboom",
     );
     expect(screen.getByText("After.")).toBeInTheDocument();
+  });
+});
+
+describe("where a directive may render", () => {
+  const panel = (items: Parameters<typeof sessionSnapshot>[0]["timelineItems"]) =>
+    renderIn(
+      testApp(),
+      <TranscriptPanel
+        inFlight={false}
+        stopping={false}
+        scroller={null}
+        session={sessionSnapshot({ timelineItems: items })}
+        workers={NO_WORKERS}
+        parentWork={NO_PARENT}
+        workerActions={{} as never}
+      />,
+    );
+
+  it("renders in the model's reply", () => {
+    claimHello();
+    panel([assistantMessage({ sequence: 1, content: `::hello{name="reply"}` })]);
+    expect(screen.getByTestId("hello-card")).toHaveTextContent("hi reply");
+  });
+
+  it("stays prose in the model's reasoning", () => {
+    claimHello();
+    panel([
+      assistantMessage({
+        sequence: 1,
+        reasoning: `::hello{name="thought"}`,
+        content: "Done.",
+      }),
+    ]);
+    /* reasoning starts folded; unfold it so the text is really drawn */
+    fireEvent.click(screen.getByRole("button", { name: /Thinking/ }));
+    expect(screen.getByText(`::hello{name="thought"}`)).toBeInTheDocument();
+    expect(screen.queryByTestId("hello-card")).toBeNull();
+    expect(screen.getByText("Done.")).toBeInTheDocument();
   });
 });

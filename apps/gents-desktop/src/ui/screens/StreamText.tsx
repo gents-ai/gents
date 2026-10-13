@@ -19,7 +19,14 @@ function smoothingOn() {
   }
 }
 
-export function StreamText({ text }: { text: string }) {
+export function StreamText({
+  text,
+  directives = false,
+}: {
+  text: string;
+  /** as Markdown's: the caller says whether this is the model's own reply */
+  directives?: boolean;
+}) {
   const [enabled] = useState(smoothingOn);
   /* The pace advances every frame, in a ref; React hears about it only when
      a frame reaches the next word boundary and the drawn text changes. A
@@ -65,5 +72,8 @@ export function StreamText({ text }: { text: string }) {
   /* a frame that did not reach the next word boundary changes nothing */
   /* returned bare, for the reason in ReplyText: a wrapper here
      takes the spacing off every block inside it */
-  return useMemo(() => (display ? <Markdown>{display}</Markdown> : null), [display]);
+  return useMemo(
+    () => (display ? <Markdown directives={directives}>{display}</Markdown> : null),
+    [display, directives],
+  );
 }

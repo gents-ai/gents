@@ -252,8 +252,10 @@ function ReplyText({ content, live }: { content: string; live: boolean }) {
   /* No wrapper: prose-app spaces its blocks with `& > * + *`, so anything
      between it and the markdown makes every paragraph, heading and list
      lose its margins at once — silently, because the text still renders. */
-  if (!revealing) return <Markdown>{content}</Markdown>;
-  return <StreamText text={content} />;
+  /* the one Markdown that is the model's own reply, so the one that may
+     hand a `::name{}` paragraph to a plugin */
+  if (!revealing) return <Markdown directives>{content}</Markdown>;
+  return <StreamText text={content} directives />;
 }
 
 /* Under a finished response the actions sit on the line below the answer
