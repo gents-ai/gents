@@ -12,6 +12,7 @@ import type {
 vi.mock("@/lib/router", () => ({ href: () => "#", navigate: vi.fn() }));
 
 import {
+  isWorkerStep,
   WorkerList,
   WorkerStep,
   failureLine,
@@ -50,6 +51,23 @@ const call = (
       output: null,
     },
   }) as unknown as RenderedToolCallView;
+
+it("keeps session discovery and inspection in ordinary tool steps", () => {
+  for (const [toolName, action] of [
+    ["agent_list", "list"],
+    ["agent_session_list", "sessions"],
+  ]) {
+    const tool = call("success");
+    tool.toolName = toolName;
+    tool.awaitMode = "foreground";
+    if (tool.presentation.kind !== "agent")
+      throw new Error("expected agent presentation");
+    tool.presentation.action = action;
+    expect(isWorkerStep(tool)).toBe(false);
+  }
+  expect(isWorkerStep(call("running", "start"))).toBe(true);
+  expect(isWorkerStep(call("success", "message"))).toBe(true);
+});
 
 /* what the bridge sends in production: message_count is always None */
 const summary = (turnState: string | null): SessionSummary =>

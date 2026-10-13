@@ -1745,6 +1745,11 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "CausalHopContract".to_string(),
         ));
     }
+    assert!(!snapshot.causal_hop_contract.session_target_cases.is_empty());
+    emitted.insert((
+        "causal_hop_contract".into(),
+        "SessionTargetAuthorityCases".into(),
+    ));
     if !snapshot.title_request_admission_cases.is_empty() {
         emitted.insert((
             "title_request_admission_cases".to_string(),

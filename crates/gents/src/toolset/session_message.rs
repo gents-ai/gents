@@ -7,14 +7,16 @@ use crate::background_tools::{
     BackgroundToolArgs, CancelToolArgs, WaitToolArgs, DEFAULT_WAIT_PROCESS_TIMEOUT_SECS,
     MAX_WAIT_PROCESS_TIMEOUT_SECS,
 };
-use crate::session_message::{AgentInterruptArgs, AgentListArgs, AgentMessageArgs, AgentNewArgs};
+use crate::session_message::{
+    AgentInterruptArgs, AgentListArgs, AgentMessageArgs, AgentNewArgs, AgentSessionListArgs,
+};
 use crate::tool_surface::{AgentToolConfig, BackgroundToolConfig};
 
 use super::shared::ToolError;
 use super::{
     AGENT_INTERRUPT_TOOL_NAME, AGENT_LIST_TOOL_NAME, AGENT_MESSAGE_TOOL_NAME, AGENT_NEW_TOOL_NAME,
-    CANCEL_PROCESS_TOOL_NAME, LIST_PROCESSES_TOOL_NAME, READ_PROCESS_TOOL_NAME,
-    SPAWN_PROCESS_TOOL_NAME, WAIT_PROCESS_TOOL_NAME,
+    AGENT_SESSION_LIST_TOOL_NAME, CANCEL_PROCESS_TOOL_NAME, LIST_PROCESSES_TOOL_NAME,
+    READ_PROCESS_TOOL_NAME, SPAWN_PROCESS_TOOL_NAME, WAIT_PROCESS_TOOL_NAME,
 };
 
 const SESSION_SERVICE_ID: &str = "session";
@@ -32,6 +34,9 @@ pub(super) struct AgentInterruptTool;
 
 #[derive(Clone, Copy)]
 pub(super) struct AgentListTool;
+
+#[derive(Clone, Copy)]
+pub(super) struct AgentSessionListTool;
 
 #[derive(Clone)]
 pub(super) struct SpawnProcessTool {
@@ -172,7 +177,7 @@ impl Tool for AgentMessageTool {
         let mut properties = message_body_schema("message");
         properties["session_id"] = serde_json::json!({
             "type": "string",
-            "description": "An agent session you can reach (see agent_list), never this conversation's own session."
+            "description": "An agent session you can reach (see agent_session_list), never this conversation's own session."
         });
         properties["interrupt"] = serde_json::json!({
             "type": "boolean",
@@ -251,13 +256,53 @@ impl Tool for AgentListTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "List the agents you can start with agent_new, and the agent sessions you can reach: each with how it relates to this conversation (started_by_you, started_you or messaged), whether it is busy, and whether you can message or interrupt it."
+            description: "List the configured agents you can start with agent_new, with their names and descriptions. Find existing sessions with agent_session_list."
                 .to_string(),
             parameters: serde_json::json!({ "type": "object", "properties": {} }),
         }
     }
 
     async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
+        Err(not_yet_executable_error(Self::NAME))
+    }
+}
+
+impl Tool for AgentSessionListTool {
+    const NAME: &'static str = AGENT_SESSION_LIST_TOOL_NAME;
+
+    type Error = ToolError;
+    type Args = AgentSessionListArgs;
+    type Output = String;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_owned(),
+            description: "Find existing sessions you may message, including trigger-started work. Returns activity, relationship and message/interrupt permissions. Continue with next_cursor and the same filter; a stale cursor restarts the listing.".to_owned(),
+            parameters: serde_json::json!({
+                "type": "object", "additionalProperties": false,
+                "properties": {
+                    "filter": {
+                        "type": "object", "additionalProperties": false,
+                        "properties": {
+                            "agent": {"type": "string", "description": "Target name or agent ID."},
+                            "status": {"type": "string", "enum": ["busy", "idle"]},
+                            "relationship": {"type": "string", "enum": ["started_by_you", "started_you", "messaged", "messaged_you", "same_node", "allowed_target"]},
+                            "caused_by_trigger_id": {"type": "string"},
+                            "caused_by_correlation": {"type": "string"},
+                            "created_after": {"type": "string", "format": "date-time"},
+                            "updated_after": {"type": "string", "format": "date-time"}
+                        }
+                    },
+                    "cursor": {"type": "string"},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20}
+                }
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        args.validate()
+            .map_err(|error| invalid_arguments_error(Self::NAME, "/", error.to_string()))?;
         Err(not_yet_executable_error(Self::NAME))
     }
 }

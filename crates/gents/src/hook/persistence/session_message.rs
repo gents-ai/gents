@@ -372,6 +372,30 @@ impl DefraSessionHook {
                 crate::session_message::agent_list(&self.node, &caller, &tools).await?,
             ));
         }
+        if tool_name == crate::toolset::AGENT_SESSION_LIST_TOOL_NAME {
+            let parsed =
+                match serde_json::from_str::<crate::session_message::AgentSessionListArgs>(args) {
+                    Ok(parsed) => parsed,
+                    Err(error) => {
+                        return Ok(invalid_tool_arguments_payload(
+                            tool_name,
+                            "/",
+                            format!("invalid agent_session_list arguments: {error}"),
+                        ))
+                    }
+                };
+            if let Err(error) = parsed.validate() {
+                return Ok(invalid_tool_arguments_payload(
+                    tool_name,
+                    "/",
+                    error.to_string(),
+                ));
+            }
+            return Ok(json_string(
+                crate::session_message::agent_session_list(&self.node, &caller, &tools, &parsed)
+                    .await?,
+            ));
+        }
         let parsed = match serde_json::from_str::<crate::session_message::AgentInterruptArgs>(args)
         {
             Ok(parsed) => parsed,

@@ -181,7 +181,12 @@ fn session_message_tools_follow_enabled_and_agent_new_needs_a_target() {
             .iter()
             .map(|tool| tool.name())
             .collect::<Vec<_>>(),
-        ["agent_message", "agent_interrupt", "agent_list"]
+        [
+            "agent_message",
+            "agent_interrupt",
+            "agent_list",
+            "agent_session_list",
+        ]
     );
 
     let enabled = AgentToolConfig {

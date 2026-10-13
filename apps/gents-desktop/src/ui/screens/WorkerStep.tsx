@@ -231,12 +231,11 @@ function Row({
   );
 }
 
-/* agent_new, agent_message and agent_interrupt name a session and read as
-   work on it; agent_list is a plain step */
 export function isWorkerStep(tool: RenderedToolCallView) {
   const p = tool.presentation;
   return (
-    (p.kind === "agent" && p.action !== "list") ||
+    (p.kind === "agent" &&
+      (p.action === "start" || p.action === "message" || p.action === "interrupt")) ||
     (p.kind === "process" && tool.awaitMode === "background")
   );
 }
