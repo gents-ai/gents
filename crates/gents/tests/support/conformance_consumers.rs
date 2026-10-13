@@ -343,6 +343,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_enrollment_durable_cases_drive_current_projection",
         },
         ConformanceConsumer::RustTest {
+            id: "client::core::enrollment::tests::generated_pending_request_satisfaction_matches_lean",
+            package: "gents-desktop-core",
+            source_path: "crates/gents-desktop-core/src/client/core/enrollment.rs",
+            module_path: "client::core::enrollment::tests",
+            function: "generated_pending_request_satisfaction_matches_lean",
+        },
+        ConformanceConsumer::RustTest {
             id: "conformance::live_overlay::pending_user_turn_cases_match_lean_table",
             package: "gents",
             source_path: "crates/gents/tests/conformance/live_overlay.rs",

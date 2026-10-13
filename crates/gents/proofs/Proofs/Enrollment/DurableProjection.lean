@@ -2,6 +2,52 @@ import Proofs.Enrollment.Properties
 
 namespace Enrollment
 
+/-- An enrollment's requested authority, independent of the one-shot offer,
+challenge and nonce. Equality requires the same client identity, server and
+profile; a route for another authority cannot satisfy a pending request. -/
+structure RequestAuthority where
+  networkId : String
+  adminDid : Did
+  serverPeer : PeerId
+  candidateDid : Did
+  candidatePeer : PeerId
+  ownerNode : Did
+  profile : String
+  deriving DecidableEq, Repr
+
+def requestAuthority (request : Request) : RequestAuthority :=
+  ⟨request.networkId, request.adminDid, request.serverPeer, request.candidateDid,
+    request.candidatePeer, request.ownerNode, request.profile⟩
+
+/-- This is a pending-list projection, never membership or request authority.
+`currentApproval` comes from `durableCurrentApproval`, including the current
+signed revision and authorization expiry. `routeApplied` means the route owner
+has applied that exact approved request/digest/sequence/expiry. An expired
+one-shot request may still own an unexpired authorization. A decided request
+stays visible until its own route is ready, even when older authority suffices.
+-/
+def pendingRequestSatisfied (requested current : RequestAuthority)
+    (hasDecision currentApproval routeApplied : Bool) : Bool :=
+  !hasDecision && currentApproval && routeApplied && decide (requested = current)
+
+theorem pending_request_satisfied_requires_exact_authority
+    {requested current : RequestAuthority} {hasDecision currentApproval routeApplied : Bool}
+    (h : pendingRequestSatisfied requested current hasDecision currentApproval routeApplied = true) :
+    requested = current := by
+  by_contra unequal
+  simp [pendingRequestSatisfied, unequal] at h
+
+theorem decided_request_is_not_satisfied_by_another_route
+    (requested current : RequestAuthority) (currentApproval routeApplied : Bool) :
+    pendingRequestSatisfied requested current true currentApproval routeApplied = false := by
+  simp [pendingRequestSatisfied]
+
+theorem pending_request_requires_current_applied_authority
+    (requested current : RequestAuthority) (hasDecision : Bool) :
+    pendingRequestSatisfied requested current hasDecision false true = false ∧
+      pendingRequestSatisfied requested current hasDecision true false = false := by
+  simp [pendingRequestSatisfied]
+
 /-- Unordered durable documents restored from DefraDB. -/
 structure DurableDocuments where
   offers : Finset Offer := ∅

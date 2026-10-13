@@ -727,6 +727,11 @@ def caseCoverage : List CoverageEntry :=
       "conformance::enrollment::generated_enrollment_durable_cases_drive_current_projection")
       "authenticated-enrollment" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "enrollment_pending_request_cases"
+      "EnrollmentPendingRequests"
+      "client::core::enrollment::tests::generated_pending_request_satisfaction_matches_lean")
+      "authenticated-enrollment" [Surface.operatorUi]
+  , tagged (consumerCoverage
       "pending_user_turn_cases"
       "PendingUserTurnCases"
       "conformance::live_overlay::pending_user_turn_cases_match_lean_table")
