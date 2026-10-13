@@ -10,6 +10,7 @@ use crate::graphql::escape_graphql_string;
 use crate::lean_vocab_test::{
     lean_r6_backgrounding_case, lean_r6_backgrounding_cases, LeanR6BackgroundingCase,
 };
+use anyhow::Context;
 use defra_node::EmbeddedNode;
 use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestInput, RequestQueue};
 use serde_json::{json, Value};
@@ -454,6 +455,12 @@ pub(crate) struct SelectedBackgroundWake {
 /// leaving the actual wake claim to the caller: an `agent_new` row settles
 /// from its caused request's terminal after a later assistant call.
 pub(crate) async fn selected_background_wake() -> SelectedBackgroundWake {
+    selected_background_wake_with_successor(false).await.0
+}
+
+pub(crate) async fn selected_background_wake_with_successor(
+    prepare_successor: bool,
+) -> (SelectedBackgroundWake, Option<String>) {
     use super::admission_fixture::{
         complete_child, publish_accepted_on_claimed_request, published_session_message_with_owner,
     };
@@ -503,6 +510,33 @@ pub(crate) async fn selected_background_wake() -> SelectedBackgroundWake {
     )
     .await
     .unwrap();
+    let successor = if prepare_successor {
+        let mut call = publish_accepted_on_claimed_request(
+            node.clone(),
+            &mut owner,
+            did,
+            2,
+            crate::toolset::AGENT_NEW_TOOL_NAME,
+            "completion-order-successor",
+            json!({"agent": "general", "prompt": "second work"}),
+            AwaitMode::Background,
+            false,
+        )
+        .await
+        .unwrap();
+        let receipt = super::admission_fixture::materialize_session_message(
+            node,
+            &owner,
+            &mut call,
+            did,
+            "second work",
+        )
+        .await
+        .unwrap();
+        Some(receipt.request_id)
+    } else {
+        None
+    };
     let wait_header = wait.accepted_header_doc_id().unwrap().to_owned();
     complete_child(
         node,
@@ -585,23 +619,35 @@ pub(crate) async fn selected_background_wake() -> SelectedBackgroundWake {
         TerminalizeResult::Won
     );
     let mut watcher = DefraWatcher::new(node.clone(), did);
-    let selected = tokio::time::timeout(Duration::from_secs(2), watcher.next_request())
-        .await
-        .expect("queued completion becomes available")
-        .unwrap()
-        .unwrap();
+    let selected = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let selected = watcher
+                .next_request()
+                .await
+                .context("queued completion disappeared")??;
+            if selected.request_id == wake.request_id {
+                return Ok::<_, anyhow::Error>(selected);
+            }
+        }
+    })
+    .await
+    .expect("queued completion becomes available")
+    .unwrap();
     assert_eq!(selected.request_id, wake.request_id);
     assert_eq!(selected.session_id, session);
     drop(watcher);
     drop(owner);
-    SelectedBackgroundWake {
-        admission,
-        wake: selected,
-        notification_text: notifications[0].1.clone(),
-        wait_header,
-        wait_native,
-        notifications,
-    }
+    (
+        SelectedBackgroundWake {
+            admission,
+            wake: selected,
+            notification_text: notifications[0].1.clone(),
+            wait_header,
+            wait_native,
+            notifications,
+        },
+        successor,
+    )
 }
 
 /// The composed continuation witness goes through publication and the real

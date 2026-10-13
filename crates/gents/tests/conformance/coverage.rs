@@ -1290,6 +1290,8 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "RoutingAffinityCases".to_string(),
         ));
     }
+    assert!(!snapshot.wake_input_cases.is_empty());
+    emitted.insert(("wake_input_cases".into(), "WakeInputCases".into()));
     if !snapshot.current_input_cases.is_empty() {
         emitted.insert((
             "current_input_cases".to_string(),
