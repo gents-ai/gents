@@ -46,6 +46,12 @@ fn removed_authority_collections_are_absent_from_schema_and_replication_inventor
 fn hydration_repair_and_cli_sources_cannot_reference_removed_authorities() {
     let production = [
         include_str!("../../src/agent/p2p_reconcile/engine.rs"),
+        include_str!("../../src/agent/p2p_reconcile/engine/desired.rs"),
+        include_str!("../../src/agent/p2p_reconcile/engine/enrollment.rs"),
+        include_str!("../../src/agent/p2p_reconcile/engine/reconcile.rs"),
+        include_str!("../../src/agent/p2p_reconcile/engine/rows.rs"),
+        include_str!("../../src/agent/p2p_reconcile/engine/store.rs"),
+        include_str!("../../src/agent/p2p_reconcile/engine/sweep.rs"),
         include_str!("../../src/agent/p2p_reconcile/enrollment_reconcile.rs"),
         include_str!("../../src/agent/p2p_reconcile/session_hydration_reconcile.rs"),
         include_str!("../../../gents-cli/src/commands/p2p/mod.rs"),
@@ -251,13 +257,13 @@ fn production_pending_request_writers_use_the_signed_canonical_builder() {
 #[test]
 fn clean_break_has_no_legacy_pairing_or_remote_snapshot_authority() {
     let policy = include_str!("../../src/agent/p2p_reconcile/policy.rs");
-    let engine = include_str!("../../src/agent/p2p_reconcile/engine.rs");
+    let desired = include_str!("../../src/agent/p2p_reconcile/engine/desired.rs");
     let topology = include_str!("../../src/agent/p2p_reconcile/engine/remote_topology.rs");
     let observer = include_str!("../../../gents-desktop-core/src/client/observe.rs");
     let merges = include_str!("../../../gents-desktop-core/src/client/store/merges.rs");
     let writes = include_str!("../../../gents-desktop-core/src/client/core/writes.rs");
 
-    assert!(!engine.contains("unwrap_or(super::policy::PairingDirection::ClientToRuntime)"));
+    assert!(!desired.contains("unwrap_or(policy::PairingDirection::ClientToRuntime)"));
     assert!(!topology.contains("teardown_unowned_replicators_at_endpoint"));
     assert!(!observer.contains("selected_is_legacy_remote"));
     assert!(!merges.contains("replace_remote_agent_scope"));
