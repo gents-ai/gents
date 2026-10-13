@@ -21,14 +21,7 @@ pub struct ManagedServerStartRequest {
     pub tool_root: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, TS)]
-#[serde(rename_all = "kebab-case")]
-#[ts(rename_all = "kebab-case")]
-pub enum ManagedServerToolCeiling {
-    MetaOnly,
-    Readonly,
-    Readwrite,
-}
+pub use gents_desktop_core::preference::ManagedServerToolCeiling;
 
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -47,6 +40,10 @@ pub struct ManagedServerRestartRequest {
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ManagedServerResetRequest {
+    /// Include healthy stores, the managed service and browser state.
+    #[serde(default)]
+    #[ts(optional)]
+    pub full_reset: Option<bool>,
     /// Omit to preview what would be retired and the required confirmation.
     pub confirmation: Option<String>,
     /// Archive (the default) or delete. Each has its own confirmation text.

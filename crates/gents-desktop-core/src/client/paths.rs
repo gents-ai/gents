@@ -107,6 +107,21 @@ impl DesktopPaths {
             && self.node_data_dir.join("MANIFEST").is_file()
     }
 
+    /// Records only the desktop client writes: its identity, P2P key, store
+    /// custody record and key, and peer directory. Their presence shows the
+    /// root is a desktop home; generic names such as the store directory do
+    /// not.
+    pub fn client_records(&self) -> [&Path; 6] {
+        [
+            &self.principal_metadata_path,
+            &self.identity_key_path,
+            &self.iroh_secret_key_path,
+            &self.store_encryption_path,
+            &self.store_key_path,
+            &self.peer_directory_path,
+        ]
+    }
+
     /// Every entry of the desktop client's durable state: its store and the
     /// store's encryption record and key file, peer directory (and lease),
     /// desktop identity and P2P key. The packaged runtime copied under the

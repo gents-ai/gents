@@ -157,7 +157,8 @@ fn contract_source_paths() -> Vec<PathBuf> {
     let source_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut paths = vec![
         source_root.join("contract.rs"),
-        source_root.join("error.rs"),
+        source_root.join("../../gents-desktop-core/src/error.rs"),
+        source_root.join("../../gents-desktop-core/src/home_reset.rs"),
         source_root.join("tauri_commands/chat.rs"),
         source_root.join("tauri_commands/inference_setup.rs"),
         source_root.join("tauri_commands/lifecycle.rs"),

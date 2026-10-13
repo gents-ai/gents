@@ -112,10 +112,11 @@ export type DesktopApiAdapter = {
     nodeName: string,
     authority: ManagedServerAuthorityInput,
   ) => Promise<ManagedServerStatus>;
-  /** Omit `confirmation` to preview a home this version cannot open. */
+  /** Omit `confirmation` to preview the entries the reset will retire. */
   resetManagedServer?: (
     confirmation?: string,
     disposition?: HomeResetDisposition,
+    fullReset?: boolean,
   ) => Promise<ManagedServerResetResult>;
   /** Quits the application, leaving all local state untouched. */
   quitDesktop?: () => Promise<void>;

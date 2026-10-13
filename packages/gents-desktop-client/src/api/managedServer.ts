@@ -31,11 +31,12 @@ export function createManagedServerCommands(
       invokeDesktop<ManagedServerStatus>("desktop_managed_server_restart", {
         request: { nodeName, ...authority },
       }),
-    resetManagedServer: (confirmation, disposition) =>
+    resetManagedServer: (confirmation, disposition, fullReset) =>
       invokeDesktop<ManagedServerResetResult>("desktop_managed_server_reset", {
         request: {
           confirmation: confirmation ?? null,
           disposition: disposition ?? null,
+          fullReset: fullReset ?? false,
         },
       }),
     validateManagedServerRoot: (path) =>

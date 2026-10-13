@@ -28,6 +28,7 @@ export type ClientState = {
     report: ManagedServerResetResult | null;
     busy: boolean;
     generation: number;
+    fullReset: boolean;
   };
 };
 
@@ -54,7 +55,7 @@ export function createClientStore(
       stopping: false,
       managedServerFailure: null,
       startupDiagnosticsHint: null,
-      home: { report: null, busy: false, generation: 0 },
+      home: { report: null, busy: false, generation: 0, fullReset: false },
     })),
   );
 }

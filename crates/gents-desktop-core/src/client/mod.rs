@@ -23,7 +23,7 @@ pub use observe::{
     ObservedStore, ObserverHandle, ObserverMetricsSnapshot, StoreProjectionRevision,
     StoreUpdateNotice,
 };
-pub use paths::DesktopPaths;
+pub use paths::{DesktopPaths, DESKTOP_HOME_ENV};
 #[cfg(test)]
 pub(crate) use peer_directory::load_peer_directory_snapshot;
 pub(crate) use peer_directory::PeerDirectory;

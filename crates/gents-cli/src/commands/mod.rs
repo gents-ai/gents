@@ -42,3 +42,5 @@ pub(crate) mod tools;
 pub(crate) mod trace;
 
 pub(crate) mod write;
+
+pub(crate) mod desktop;

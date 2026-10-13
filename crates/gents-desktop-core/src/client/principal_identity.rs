@@ -74,6 +74,18 @@ impl PrincipalIdentity {
         })
     }
 
+    /// The DID a desktop home's identity record names, when `path` is a
+    /// regular file that decodes as one.
+    pub fn recorded_did(path: &Path) -> Option<String> {
+        if !std::fs::symlink_metadata(path).ok()?.is_file() {
+            return None;
+        }
+        let metadata: NodeIdentityMetadata =
+            serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
+        (metadata.did.starts_with("did:key:") && !metadata.public_key_bytes.is_empty())
+            .then_some(metadata.did)
+    }
+
     pub fn did(&self) -> &str {
         &self.did
     }

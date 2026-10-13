@@ -423,6 +423,7 @@ async fn async_main() -> Result<()> {
         }
         Command::Init(args) => commands::init::init(args).await,
         Command::Provision(args) => commands::provision::provision(args).await,
+        Command::Desktop { command } => commands::desktop::run(command).await,
         Command::Reset(args) => commands::reset::reset(args).await,
         Command::Server(args) => commands::serve::serve(args).await,
         Command::Service { command } => service_command(command),
