@@ -13,7 +13,7 @@ export const turnLabel = (turnState: string | null | undefined): string | null =
     case "failed":
       return "Failed";
     case "interrupted":
-      return "Interrupted";
+      return "Stopped";
     case "superseded":
       return "Superseded";
     default:

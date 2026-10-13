@@ -426,6 +426,10 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
             normalize_optional(request.terminalized_at.as_deref()),
         );
         (failure_reason.is_some() || cancel_cause.is_some()).then_some(RequestOutcomeView {
+            stopped_before_running: (request.lifecycle_state
+                == Some(gents_protocol::request_lifecycle::RequestLifecycleState::Interrupted))
+            .then_some(request.stopped_before_running)
+            .flatten(),
             failure_reason,
             cancel_cause,
         })

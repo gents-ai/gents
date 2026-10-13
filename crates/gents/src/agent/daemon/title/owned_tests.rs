@@ -1354,6 +1354,63 @@ async fn owned_title_shutdown_drains_buffered_reasoning_before_join() {
 }
 
 #[tokio::test]
+async fn owned_title_interrupt_drains_buffered_reasoning_before_terminal() {
+    let mut fixture = TitleFixture::new().await;
+    Arc::get_mut(&mut fixture.agent_config)
+        .unwrap()
+        .stream_batch_ms = 5_000;
+    fixture.terminalize_parent().await;
+    let (provider, before_second, third_poll) = buffered_reasoning_title_provider();
+    let calls = provider.calls.clone();
+    let task = fixture.task(provider, true);
+    let title_request = fixture.title.clone();
+    let (_shutdown, shutdown_rx) = tokio::sync::watch::channel(false);
+    let running = tokio::spawn(async move { task.run(title_request, shutdown_rx).await });
+    wait_for_first_title_reasoning(&fixture).await;
+    before_second.notify_one();
+    tokio::time::timeout(Duration::from_secs(10), third_poll.notified())
+        .await
+        .expect("title provider did not process both reasoning chunks");
+    assert_eq!(open_title_reasoning(&fixture).await, ["first"]);
+    assert_eq!(
+        fixture.terminal_row().await.0,
+        RequestLifecycleState::Processing
+    );
+    crate::interrupt::interrupt_request_by_doc_id(
+        fixture.node.as_ref(),
+        &fixture.title.doc_id,
+        &fixture.title.node_did,
+        fixture.title.requester_did.as_deref(),
+    )
+    .await
+    .unwrap();
+    tokio::time::timeout(Duration::from_secs(10), running)
+        .await
+        .expect("title interrupt did not settle promptly")
+        .unwrap()
+        .unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_title_audit(
+        &fixture,
+        &[
+            (StreamPayload::Reasoning, "first".into(), 0, 0),
+            (StreamPayload::Reasoning, " second".into(), 0, 1),
+        ],
+        OutputOutcome::Partial,
+        1,
+        false,
+    )
+    .await;
+    assert_eq!(
+        fixture.terminal_row().await,
+        (
+            RequestLifecycleState::Interrupted,
+            Some(gents_protocol::output::TerminalOutput::NoMessage)
+        )
+    );
+}
+
+#[tokio::test]
 async fn owned_title_shutdown_reports_fenced_partial_without_terminalizing() {
     let mut fixture = TitleFixture::new().await;
     Arc::get_mut(&mut fixture.agent_config)

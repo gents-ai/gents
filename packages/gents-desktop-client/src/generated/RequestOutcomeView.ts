@@ -5,4 +5,4 @@ import type { DerivedCancelCauseView } from "./DerivedCancelCauseView.js";
  * Read-only presentation of the latest request's terminal facts. The request
  * remains the owner; this is not response storage or a second lifecycle.
  */
-export type RequestOutcomeView = { failureReason: string | null, cancelCause?: DerivedCancelCauseView | null, };
+export type RequestOutcomeView = { stoppedBeforeRunning?: boolean | null, failureReason: string | null, cancelCause?: DerivedCancelCauseView | null, };

@@ -167,6 +167,10 @@ pub struct AgentRequestRow {
     pub max_retries: Option<i64>,
     #[serde(default)]
     pub interrupt_requested_at: Option<String>,
+    /// Positive terminal-owner evidence that no provider-capable work began.
+    /// Missing/false never licenses inference from absent provider rows.
+    #[serde(default)]
+    pub stopped_before_running: Option<bool>,
     #[serde(default)]
     pub valid_until: Option<String>,
     #[serde(default)]

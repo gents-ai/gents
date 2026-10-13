@@ -671,6 +671,17 @@ impl<M: ProviderModel> AgentDaemon<M> {
             }
         }
 
+        let (interrupt_tx, mut interrupt_rx) =
+            tokio::sync::watch::channel::<Option<crate::interrupt::InterruptIntent>>(None);
+        let observer = tokio_util::task::AbortOnDropHandle::new(
+            crate::interrupt::spawn_request_interrupt_observer(
+                self.node.clone(),
+                request.doc_id.clone(),
+                interrupt_tx,
+                shutdown.clone(),
+            ),
+        );
+
         let requested_agent_id = request.agent_id.as_str();
         if requested_agent_id != self.agent_config.agent_id {
             let error = anyhow::anyhow!(
@@ -697,7 +708,17 @@ impl<M: ProviderModel> AgentDaemon<M> {
             return Ok(());
         }
 
-        match crate::workspace::writer_request_already_sealed(self.node.as_ref(), &request).await {
+        let sealed = request::prepare_unless_interrupted(
+            &mut interrupt_rx,
+            crate::workspace::writer_request_already_sealed(self.node.as_ref(), &request),
+        )
+        .await;
+        let Some(sealed) = sealed else {
+            self.finalize_interrupt_before_work(&mut lifecycle, &stream_writer, &request)
+                .await?;
+            return Ok(());
+        };
+        match sealed {
             // An earlier execution already ran and sealed this work. Its task
             // hooks are not rerun: host commands are never replayed, and that
             // execution's remaining cleanup belongs to task hook recovery.
@@ -773,40 +794,39 @@ impl<M: ProviderModel> AgentDaemon<M> {
             }
         }
 
-        let (hooks, hook_cwd, hook_record, task_owned) =
-            match self.prepare_task_hooks(&request).await {
-                Ok(prepared) => prepared,
-                Err(error) => {
-                    record_current_failure_class(&error);
-                    tracing::error!(
-                        agent_id = %self.agent_config.agent_id,
-                        request_id = %request.request_id,
-                        error = %format!("{error:#}"),
-                        "refusing to run a request whose task hooks cannot be prepared"
-                    );
-                    self.finalize_failure_before_work(
-                        &mut lifecycle,
-                        &stream_writer,
-                        &format!("{error:#}"),
-                        &request,
-                    )
-                    .await;
-                    return Ok(());
-                }
-            };
+        let prepared_hooks = request::prepare_unless_interrupted(
+            &mut interrupt_rx,
+            self.prepare_task_hooks(&request),
+        )
+        .await;
+        let Some(prepared_hooks) = prepared_hooks else {
+            self.finalize_interrupt_before_work(&mut lifecycle, &stream_writer, &request)
+                .await?;
+            return Ok(());
+        };
+        let (hooks, hook_cwd, hook_record, task_owned) = match prepared_hooks {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                record_current_failure_class(&error);
+                tracing::error!(
+                    agent_id = %self.agent_config.agent_id,
+                    request_id = %request.request_id,
+                    error = %format!("{error:#}"),
+                    "refusing to run a request whose task hooks cannot be prepared"
+                );
+                self.finalize_failure_before_work(
+                    &mut lifecycle,
+                    &stream_writer,
+                    &format!("{error:#}"),
+                    &request,
+                )
+                .await;
+                return Ok(());
+            }
+        };
 
         lifecycle.allow_natural_finish(permits_natural_finish(&request, task_owned));
 
-        // One observer spans the hooks and the owned work, so an interrupt
-        // latched during a hook cancels that hook and reaches the work too.
-        let (interrupt_tx, interrupt_rx) =
-            tokio::sync::watch::channel::<Option<crate::interrupt::InterruptIntent>>(None);
-        let observer = crate::interrupt::spawn_request_interrupt_observer(
-            self.node.clone(),
-            request.doc_id.clone(),
-            interrupt_tx,
-            shutdown.clone(),
-        );
         let ownership_lost = lifecycle.ownership_lost();
         let hook_cancellation = crate::task_hooks::TaskHookCancellation::default();
         let hook_cancellation_follower = (!hooks.is_empty()).then(|| {
@@ -990,6 +1010,26 @@ impl<M: ProviderModel> AgentDaemon<M> {
                 "failed to release writer workspace binding after failure"
             );
         }
+    }
+
+    async fn finalize_interrupt_before_work(
+        &self,
+        lifecycle: &mut RequestLifecycle,
+        stream_writer: &DefraStreamWriter,
+        request: &AgentRequest,
+    ) -> Result<()> {
+        if terminalize_request(
+            lifecycle,
+            stream_writer,
+            RequestTerminalOutcome::Interrupted,
+            Some("interrupted"),
+        )
+        .await?
+        {
+            record_current_request_outcome("interrupted");
+            crate::workspace::release_writer_binding(self.node.as_ref(), request).await?;
+        }
+        Ok(())
     }
 
     /// The request's Task hooks, the admitted cwd they run from and the claim
