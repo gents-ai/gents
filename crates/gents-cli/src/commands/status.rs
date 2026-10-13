@@ -189,17 +189,32 @@ pub(crate) async fn load_liveness_value(graphql: &GraphqlEndpoint, node_did: &st
 }
 
 async fn load_live_http_liveness_value(graphql: &GraphqlEndpoint) -> Option<Value> {
-    let status_url = runtime_status_url(graphql).ok()?;
+    fetch_runtime_status(graphql, std::time::Duration::from_secs(2))
+        .await
+        .ok()?
+        .get("liveness")
+        .cloned()
+}
+
+/// The serving runtime's `/status` body, beside the GraphQL endpoint.
+pub(crate) async fn fetch_runtime_status(
+    graphql: &GraphqlEndpoint,
+    timeout: std::time::Duration,
+) -> Result<Value> {
+    let status_url = runtime_status_url(graphql)?;
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(2))
+        .timeout(timeout)
         .build()
-        .ok()?;
-    let response = client.get(status_url).send().await.ok()?;
-    if !response.status().is_success() {
-        return None;
-    }
-    let body: Value = response.json().await.ok()?;
-    body.get("liveness").cloned()
+        .context("building runtime status client")?;
+    client
+        .get(&status_url)
+        .send()
+        .await
+        .and_then(reqwest::Response::error_for_status)
+        .with_context(|| format!("reading runtime status from {status_url}"))?
+        .json()
+        .await
+        .with_context(|| format!("decoding runtime status from {status_url}"))
 }
 
 fn runtime_status_url(graphql: &GraphqlEndpoint) -> Result<String> {
