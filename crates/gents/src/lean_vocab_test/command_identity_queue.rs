@@ -80,6 +80,8 @@ pub(crate) struct LeanPendingUserTurnCase {
     pub(crate) name: String,
     #[serde(rename = "hasDurableUserOwner")]
     pub(crate) has_durable_user_owner: bool,
+    #[serde(rename = "retiredByAuthor")]
+    pub(crate) retired_by_author: bool,
     #[serde(rename = "unrelatedUserTurns")]
     pub(crate) unrelated_user_turns: u64,
     #[serde(rename = "expectPendingTurn")]
