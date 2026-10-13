@@ -72,10 +72,11 @@ async fn reset(
     ready: &mut bool,
     retry: &mut String,
 ) -> Result<ManagedServerResetResult> {
-    let desktop = match desktop_home {
-        Some(root) => DesktopPaths::from_root(crate::absolutize(root)?),
-        None => DesktopPaths::discover()?,
-    };
+    let desktop = select_desktop(
+        desktop_home,
+        std::env::var_os(gents_desktop_core::client::DESKTOP_HOME_ENV),
+        &std::env::current_dir().context("resolving current directory")?,
+    )?;
     let explicit_home = home.or_else(|| {
         std::env::var_os("GENTS_HOME")
             .filter(|value| !value.is_empty())
@@ -175,6 +176,21 @@ fn retire_then_clear(
     })?;
     result.cleared_browser_paths = result.browser_paths.clone();
     Ok(result)
+}
+
+/// The desktop root from `--desktop-home`, else `GENTS_DESKTOP_HOME`, else
+/// the platform default, made absolute against `cwd` so a retry run from
+/// another directory selects the same state.
+fn select_desktop(
+    flag: Option<std::path::PathBuf>,
+    env: Option<std::ffi::OsString>,
+    cwd: &std::path::Path,
+) -> Result<DesktopPaths> {
+    let root = match flag.or_else(|| env.filter(|value| !value.is_empty()).map(Into::into)) {
+        Some(root) => root,
+        None => DesktopPaths::discover()?.root().to_path_buf(),
+    };
+    Ok(DesktopPaths::from_root(cwd.join(root)))
 }
 
 fn retry_command(home: &std::path::Path, desktop: &std::path::Path) -> Result<String> {
@@ -505,6 +521,25 @@ mod tests {
         assert!(!preview.completed);
         assert_eq!(preview.managed_home.as_deref(), home.to_str());
         assert_eq!(next_retry, retry);
+    }
+
+    #[test]
+    fn an_env_selected_relative_desktop_is_retried_from_another_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let (first, second) = (temp.path().join("first"), temp.path().join("second"));
+        let selected = select_desktop(None, Some("rel/desktop".into()), &first).unwrap();
+        assert_eq!(selected.root(), first.join("rel/desktop"));
+        let retry = retry_command(&temp.path().join("home"), selected.root()).unwrap();
+        let crate::cli::Command::Desktop {
+            command: DesktopCommand::Reset { desktop_home, .. },
+        } = <crate::cli::Cli as clap::Parser>::try_parse_from(shlex::split(&retry).unwrap())
+            .unwrap()
+            .command
+        else {
+            panic!("the retry is not a desktop reset: {retry}");
+        };
+        let retried = select_desktop(desktop_home, None, &second).unwrap();
+        assert_eq!(retried.root(), selected.root());
     }
 
     #[test]
