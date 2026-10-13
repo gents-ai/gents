@@ -11,10 +11,10 @@
    inventory row; a broken plugin can never take the app down.
 
    This is error isolation, not a capability boundary: a loaded plugin runs
-   in the webview with the app's full authority. The allowlist is the one
-   tripwire: a plugin cannot pull a second stage from a URL. After
-   hermes-agent's contrib/runtime-loader.ts (the pipeline; the on-disk scan
-   lives in Rust here, behind desktop_ux_plugins_list). */
+   in the webview with the app's full authority. The allowlist is an
+   honest-author lint over a lexer that cannot settle every `)` followed by
+   `/`; the webview's CSP (`script-src 'self' blob:`) is what keeps a module
+   from loading code this loader did not hand it. */
 import { activateUxPlugin, unloadUxPlugin, type ActivateOptions } from "./activate";
 import { isGentsUxPlugin, type GentsUxPlugin } from "./plugin";
 import { dropUxPlugin, publishUxPlugin, uxPluginRecords } from "./plugins-store";
@@ -25,9 +25,15 @@ import { installUxSdk, sdkImportMap } from "@/sdk/runtime";
 export const IMPORT_TIMEOUT_MS = 10_000;
 
 /* the specifier of a static `from '…'`, a side-effect `import '…'`, or a
-   dynamic `import('…')`; deliberately loose, so a match counts only when it
-   sits in code (see codeRanges), never in a string or comment */
-const importSpecifierRe = () => /(from\s*|import\s*\(\s*|import\s+)(['"])([^'"]+)\2/g;
+   dynamic `import('…')`: the quoted literal up to its own closing quote (the
+   other quote is a plain character inside it); a match counts only when it
+   sits in code (see scan), never in a string or comment */
+const importSpecifierRe = () =>
+  /(from\s*|import\s*\(\s*|import\s+)(['"])((?:(?!\2)[^\n])+)\2/g;
+
+/* a dynamic import whose argument is not a quoted literal alone: the
+   specifier is computed, which no allowlist can read */
+const computedImportRe = () => /\bimport\s*\((?!\s*(['"])(?:(?!\1)[^\n])*\1\s*\))/g;
 
 const regexKeywordRe =
   /^(?:await|case|delete|do|else|in|instanceof|new|of|return|throw|typeof|void|yield)$/;
@@ -76,53 +82,76 @@ function regexEnd(source: string, slash: number): number {
   return -1;
 }
 
-/* the character ranges of `source` that are code: strings, template text,
-   comments and regex literals excluded (a template's ${…} is code) */
-export function codeRanges(source: string): Array<[number, number]> {
+/* one pass over `source`: the character ranges that are code (strings,
+   template text, comments and regex literals excluded; a template's ${…} is
+   code), and `text`, the source with comments, template text and regex
+   literals blanked, index for index, so the import regexes read specifiers
+   with nothing between `from` and the quote but whitespace */
+export function scan(source: string): {
+  ranges: Array<[number, number]>;
+  text: string;
+} {
   const ranges: Array<[number, number]> = [];
+  const blanked: Array<[number, number]> = [];
   const stack: Array<"expr" | "template"> = [];
   let state:
     "block-comment" | "code" | "double" | "line-comment" | "single" | "template" =
     "code";
   let codeStart = 0;
+  let blankStart = -1;
+  /* set when a slash that could open a regex found no close on its line:
+     the rest of the line divides, without a rescan per slash, so a line of
+     slashes costs one pass; code stays code, which only adds findings */
+  let deadLine = false;
   let i = 0;
-  const closeCode = (end: number) => {
+  const closeCode = (end: number, keep: boolean) => {
     if (end > codeStart) ranges.push([codeStart, end]);
+    blankStart = keep ? -1 : end;
+  };
+  const openCode = (at: number) => {
+    if (blankStart >= 0 && at > blankStart) blanked.push([blankStart, at]);
+    blankStart = -1;
+    codeStart = at;
   };
   while (i < source.length) {
     const ch = source[i]!;
     const next = i + 1 < source.length ? source[i + 1]! : "";
+    if (ch === "\n") deadLine = false;
     if (state === "code") {
       if (ch === "/" && next === "/") {
-        closeCode(i);
+        closeCode(i, false);
         state = "line-comment";
         i += 2;
       } else if (ch === "/" && next === "*") {
-        closeCode(i);
+        closeCode(i, false);
         state = "block-comment";
         i += 2;
       } else if (ch === "'") {
-        closeCode(i);
+        closeCode(i, true);
         state = "single";
         i += 1;
       } else if (ch === '"') {
-        closeCode(i);
+        closeCode(i, true);
         state = "double";
         i += 1;
       } else if (ch === "`") {
-        closeCode(i);
+        closeCode(i, false);
         stack.push("template");
         state = "template";
         i += 1;
       } else if (ch === "/") {
-        const end = isRegexStart(source, i) ? regexEnd(source, i) : -1;
+        const opens = !deadLine && isRegexStart(source, i);
+        const end = opens ? regexEnd(source, i) : -1;
         if (end > 0) {
-          closeCode(i);
+          closeCode(i, false);
           i = end;
-          codeStart = i;
-        } else i += 1;
+          openCode(i);
+        } else {
+          if (opens) deadLine = true;
+          i += 1;
+        }
       } else if (ch === "}" && stack[stack.length - 1] === "expr") {
-        closeCode(i);
+        closeCode(i, false);
         stack.pop();
         state = "template";
         i += 1;
@@ -132,7 +161,7 @@ export function codeRanges(source: string): Array<[number, number]> {
     if (state === "line-comment") {
       if (ch === "\n") {
         state = "code";
-        codeStart = i;
+        openCode(i);
       }
       i += 1;
       continue;
@@ -141,7 +170,7 @@ export function codeRanges(source: string): Array<[number, number]> {
       if (ch === "*" && next === "/") {
         i += 2;
         state = "code";
-        codeStart = i;
+        openCode(i);
       } else i += 1;
       continue;
     }
@@ -150,13 +179,13 @@ export function codeRanges(source: string): Array<[number, number]> {
       else if (ch === (state === "single" ? "'" : '"')) {
         i += 1;
         state = "code";
-        codeStart = i;
+        openCode(i);
       } else if (ch === "\n") {
         /* unterminated: recover as code so one stray quote cannot swallow
            the rest of the file */
         i += 1;
         state = "code";
-        codeStart = i;
+        openCode(i);
       } else i += 1;
       continue;
     }
@@ -166,16 +195,31 @@ export function codeRanges(source: string): Array<[number, number]> {
       stack.push("expr");
       state = "code";
       i += 2;
-      codeStart = i;
+      openCode(i);
     } else if (ch === "`") {
       stack.pop();
       state = "code";
       i += 1;
-      codeStart = i;
+      openCode(i);
     } else i += 1;
   }
-  closeCode(source.length);
-  return ranges;
+  if (state === "code") closeCode(source.length, true);
+  else openCode(source.length);
+  let text = source;
+  if (blanked.length) {
+    const chars = source.split("");
+    for (const [start, end] of blanked) {
+      for (let k = start; k < end && k < chars.length; k += 1) {
+        if (chars[k] !== "\n") chars[k] = " ";
+      }
+    }
+    text = chars.join("");
+  }
+  return { ranges, text };
+}
+
+export function codeRanges(source: string): Array<[number, number]> {
+  return scan(source).ranges;
 }
 
 function inCode(ranges: Array<[number, number]>, at: number): boolean {
@@ -186,30 +230,51 @@ function inCode(ranges: Array<[number, number]>, at: number): boolean {
   return false;
 }
 
-/* only mapped specifiers are rewritten, and only in code */
+/* only mapped specifiers are rewritten, and only in code; the match is
+   found on the blanked text and replaced at the same index in the source */
 export function rewriteSpecifiers(source: string, map: Record<string, string>): string {
-  const ranges = codeRanges(source);
-  return source.replace(importSpecifierRe(), (whole, pre, quote, spec, offset) =>
-    map[spec] && inCode(ranges, Number(offset))
-      ? `${pre}${quote}${map[spec]}${quote}`
-      : whole,
-  );
+  const { ranges, text } = scan(source);
+  const edits: Array<{ start: number; end: number; replacement: string }> = [];
+  for (const m of text.matchAll(importSpecifierRe())) {
+    const [whole, pre, quote, spec] = m;
+    const at = m.index ?? 0;
+    if (!spec || !map[spec] || !inCode(ranges, at)) continue;
+    edits.push({
+      start: at + pre!.length,
+      end: at + whole.length,
+      replacement: `${quote}${map[spec]}${quote}`,
+    });
+  }
+  let out = "";
+  let last = 0;
+  for (const edit of edits) {
+    out += source.slice(last, edit.start) + edit.replacement;
+    last = edit.end;
+  }
+  return out + source.slice(last);
 }
+
+/** what a computed dynamic import is reported as */
+export const COMPUTED_IMPORT = "import(<computed>)";
 
 /* every import specifier outside the allowlist: a bare package would only
    fail later as a cryptic native error, a relative path cannot resolve
-   against a blob: base, and a URL scheme is a second stage the admission
-   lint must never be able to wave through */
+   against a blob: base, and a URL scheme is a second stage; a dynamic
+   import whose argument is anything but one quoted literal is reported as
+   computed, since no list can read it */
 export function unsupportedImports(
   source: string,
   allowed: readonly string[],
 ): string[] {
   const unsupported = new Set<string>();
-  const ranges = codeRanges(source);
-  for (const m of source.matchAll(importSpecifierRe())) {
+  const { ranges, text } = scan(source);
+  for (const m of text.matchAll(importSpecifierRe())) {
     const spec = m[3];
     if (!spec || !inCode(ranges, m.index ?? 0)) continue;
     if (!allowed.includes(spec)) unsupported.add(spec);
+  }
+  for (const m of text.matchAll(computedImportRe())) {
+    if (inCode(ranges, m.index ?? 0)) unsupported.add(COMPUTED_IMPORT);
   }
   return [...unsupported];
 }

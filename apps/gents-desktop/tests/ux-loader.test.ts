@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { isUxPluginLive } from "@/contrib/activate";
 import {
+  COMPUTED_IMPORT,
   codeRanges,
   loadRuntimeUxPlugin,
   retireRuntimeUxPlugin,
@@ -86,6 +87,41 @@ describe("import lexing", () => {
     const src = `import r from 'react'\nconst msg = "import r from 'react'"`;
     const out = rewriteSpecifiers(src, map);
     expect(out).toBe(`import r from 'blob:r'\nconst msg = "import r from 'react'"`);
+  });
+
+  it("reads a specifier through a comment and up to its own quote, and names a computed import", () => {
+    expect(unsupportedImports(`import x from/**/'https://evil/s.js'`, ALLOWED)).toEqual(
+      ["https://evil/s.js"],
+    );
+    expect(
+      unsupportedImports(`export * from /* sdk */ 'https://evil/s.js'`, ALLOWED),
+    ).toEqual(["https://evil/s.js"]);
+    expect(unsupportedImports(`import x from "https://evil/s.js?'"`, ALLOWED)).toEqual([
+      "https://evil/s.js?'",
+    ]);
+    expect(unsupportedImports("import(`https://evil/s.js`)", ALLOWED)).toEqual([
+      COMPUTED_IMPORT,
+    ]);
+    expect(unsupportedImports(`import(u)`, ALLOWED)).toEqual([COMPUTED_IMPORT]);
+    expect(unsupportedImports(`import('react' + x)`, ALLOWED)).toEqual([
+      COMPUTED_IMPORT,
+    ]);
+    expect(unsupportedImports(`await import( 'react' )`, ALLOWED)).toEqual([]);
+    expect(unsupportedImports(`const s = "import(x)"; // import(y)`, ALLOWED)).toEqual(
+      [],
+    );
+  });
+
+  it("scans a line of unclosed regexes once, not once per slash", () => {
+    const source = "/[ ".repeat(200_000);
+    const started = performance.now();
+    expect(codeRanges(source).length).toBeGreaterThan(0);
+    expect(performance.now() - started).toBeLessThan(2_000);
+  });
+
+  it("rewrites a specifier that a comment precedes, keeping the comment", () => {
+    const out = rewriteSpecifiers(`import r from/*v*/'react'`, { react: "blob:r" });
+    expect(out).toBe(`import r from/*v*/'blob:r'`);
   });
 
   it("treats a division as code and a regex as not-code", () => {

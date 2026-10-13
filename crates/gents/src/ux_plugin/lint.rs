@@ -1,14 +1,18 @@
 //! The static lint a UX plugin's module must pass at `gents pack check`
-//! and `gents pack build`: the admission tripwire, not a sandbox. A plugin
-//! runs in the webview with the app's authority, so what is refused here
-//! is the set of things a reviewer should never have to look for: reaching
-//! into the app through prototypes, evaluating a second stage, importing
-//! anything but the SDK, injecting script tags. After hermes-agent's
-//! `hermes_cli/plugin_validate_desktop.py`, rule for rule.
+//! and `gents pack build`: an honest-author tripwire, not a sandbox. A
+//! plugin runs in the webview with the app's authority; the webview's CSP
+//! (`script-src 'self' blob:`) is what keeps a module from loading code the
+//! loader did not hand it. What is refused here is the set of things a
+//! reviewer should never have to look for: reaching into the app through
+//! prototypes, evaluating a second stage, importing anything but the SDK,
+//! injecting script tags.
 //!
-//! Strings and comments are masked before matching, so a plugin's own
-//! help text may mention `eval` without being refused; a regex literal is
-//! masked too, so a pattern like `/a\/script/` is not read as markup.
+//! One pass tokenizes the source into two byte-for-byte haystacks: `code`,
+//! where comments, string contents and regex literals are blanked, so a
+//! plugin's help text may mention `eval` and a sanitizer may match
+//! `/<script/`; and `text`, where strings stay, because an import specifier
+//! and the payload of an `innerHTML` write are strings the rule must read.
+//! A template literal's `${…}` is code in both.
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -26,89 +30,307 @@ pub struct Finding {
 struct Rule {
     name: &'static str,
     pattern: &'static str,
+    /// Matched against the haystack that keeps strings.
+    reads_strings: bool,
 }
 
 const RULES: &[Rule] = &[
     Rule {
         name: "prototype patching",
         pattern: r"\b[A-Za-z_$][\w$]*\.prototype\.[\w$]+\s*=[^=]",
+        reads_strings: false,
     },
     Rule {
         name: "prototype patching",
         pattern: r"\bObject\.definePropert(?:y|ies)\(\s*[\w$.]+\.prototype\b",
+        reads_strings: false,
     },
     Rule {
         name: "prototype patching",
         pattern: r"\b(?:Reflect|Object)\.setPrototypeOf\(|\.__proto__\s*=",
+        reads_strings: false,
     },
     Rule {
         name: "dynamic code",
         pattern: r"(?:^|[^\w$.])eval\(|\bnew\s+Function\(",
+        reads_strings: false,
     },
     Rule {
-        // a dynamic import of anything but the SDK (a URL, an app chunk):
-        // matched as "any import(" and then filtered by `is_sdk_dynamic_import`
-        // because the regex crate has no lookahead
+        // every dynamic import, through its closing paren; the SDK ones are
+        // let through by `is_sdk_import` (the regex crate has no lookahead)
         name: "non-sdk import",
-        pattern: r#"\bimport\(\s*(?:[^'"\s)][^)]*|['"][^'"]*['"])"#,
+        pattern: r"\bimport\s*\([^)]*\)?",
+        reads_strings: true,
     },
     Rule {
-        // a static import of a URL scheme (`https:`, `blob:`, `data:`)
+        // every static import and re-export with a specifier; the SDK ones
+        // are let through by `is_sdk_import`
         name: "non-sdk import",
-        pattern: r#"\bimport\s+(?:[^;'"]*?\bfrom\s*)?['"][a-zA-Z][\w+.-]*:"#,
+        pattern: r#"\b(?:import|export)\s+(?:[^;'"`]*?\bfrom\s*)?['"][^'"\n]*['"]"#,
+        reads_strings: true,
     },
     Rule {
         name: "script injection",
         pattern: r#"createElement\(\s*['"]script['"]\s*\)|<script\b"#,
+        reads_strings: true,
     },
 ];
 
-static COMPILED: LazyLock<Vec<(&'static str, Regex)>> = LazyLock::new(|| {
+static COMPILED: LazyLock<Vec<(&'static Rule, Regex)>> = LazyLock::new(|| {
     RULES
         .iter()
         .map(|rule| {
             (
-                rule.name,
+                rule,
                 Regex::new(rule.pattern).expect("a lint rule is a valid regex"),
             )
         })
         .collect()
 });
 
-/* `(?<![\w)\]])` has no equivalent in the regex crate (no lookbehind), so
-the regex-literal mask is a small hand lexer instead: a `/` that opens a
-regex literal is one that follows nothing a value could end with. */
-fn mask_regex_literals(source: &str) -> String {
-    let bytes = source.as_bytes();
-    let mut out = String::with_capacity(source.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        let c = bytes[i];
-        if c == b'/' && i + 1 < bytes.len() && bytes[i + 1] != b'/' && bytes[i + 1] != b'*' {
-            let prev = source[..i].trim_end().bytes().last();
-            let opens = !matches!(prev, Some(b) if b.is_ascii_alphanumeric() || b == b'_' || b == b'$' || b == b')' || b == b']');
-            if opens {
-                if let Some(end) = regex_end(bytes, i) {
-                    out.push_str(&" ".repeat(end - i));
-                    i = end;
-                    continue;
-                }
-            }
-        }
-        let ch = source[i..].chars().next().unwrap();
-        out.push(ch);
-        i += ch.len_utf8();
+/// What a plugin may import, static or dynamic: the SDK and the React the
+/// app runs. The same list the desktop loader rewrites to its shims.
+pub const SDK_SPECIFIERS: &[&str] = &["@gents/ux-sdk", "react", "react/jsx-runtime"];
+
+static QUOTED_SPECIFIER: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"['"]([^'"\n]*)['"]"#).unwrap());
+
+/* an import match is fine when its one specifier is an SDK name and, for a
+dynamic import, that literal is the whole argument */
+fn is_sdk_import(matched: &str) -> bool {
+    let Some(caps) = QUOTED_SPECIFIER.captures(matched) else {
+        return false;
+    };
+    let specifier = &caps[1];
+    if !SDK_SPECIFIERS.contains(&specifier) {
+        return false;
     }
-    out
+    if !matched.trim_start().starts_with("import") || !matched.contains('(') {
+        return true;
+    }
+    let inside = matched
+        .split_once('(')
+        .map(|(_, rest)| rest.trim_end_matches(')').trim())
+        .unwrap_or("");
+    inside == caps.get(0).map(|m| m.as_str()).unwrap_or("")
 }
 
+/// The source as two haystacks of the same byte length and line breaks.
+struct Masked {
+    /// Comments, string contents and regex literals blanked.
+    code: String,
+    /// Comments and regex literals blanked; strings kept.
+    text: String,
+}
+
+enum Frame {
+    /// Inside a template literal's text.
+    Template,
+    /// Inside a `${…}` of a template, `depth` braces deep.
+    Expr { depth: usize },
+}
+
+/* words after which a `/` opens a regex literal rather than dividing */
+const REGEX_AFTER_WORDS: &[&str] = &[
+    "return",
+    "typeof",
+    "instanceof",
+    "in",
+    "of",
+    "new",
+    "delete",
+    "void",
+    "throw",
+    "case",
+    "do",
+    "else",
+    "yield",
+    "await",
+];
+
+fn mask(source: &str) -> Masked {
+    let bytes = source.as_bytes();
+    let n = bytes.len();
+    let mut code = Vec::with_capacity(n);
+    let mut text = Vec::with_capacity(n);
+    let mut frames: Vec<Frame> = Vec::new();
+    /* the last byte of code emitted that was not whitespace, and the word
+    it ended, for the regex-or-division decision */
+    let mut prev: Option<u8> = None;
+    let mut word = String::new();
+    /* set when a slash that could open a regex found no close on its line:
+    the rest of the line divides, without a rescan per slash, so a line of
+    slashes costs one pass; code stays code, which only adds findings */
+    let mut dead_line = false;
+    let blank_both = |code: &mut Vec<u8>, text: &mut Vec<u8>, b: u8| {
+        let out = if b == b'\n' { b'\n' } else { b' ' };
+        code.push(out);
+        text.push(out);
+    };
+    let mut i = 0;
+    while i < n {
+        let b = bytes[i];
+        if b == b'\n' {
+            dead_line = false;
+        }
+        if matches!(frames.last(), Some(Frame::Template)) {
+            /* template text: blanked in code, kept in text, until a `${`
+            opens an expression or the backtick closes it */
+            match b {
+                b'\\' if i + 1 < n => {
+                    code.push(b' ');
+                    code.push(if bytes[i + 1] == b'\n' { b'\n' } else { b' ' });
+                    text.push(b);
+                    text.push(bytes[i + 1]);
+                    i += 2;
+                }
+                b'$' if i + 1 < n && bytes[i + 1] == b'{' => {
+                    code.extend_from_slice(b"${");
+                    text.extend_from_slice(b"${");
+                    frames.push(Frame::Expr { depth: 0 });
+                    prev = Some(b'{');
+                    word.clear();
+                    i += 2;
+                }
+                b'`' => {
+                    code.push(b);
+                    text.push(b);
+                    frames.pop();
+                    prev = Some(b']');
+                    word.clear();
+                    i += 1;
+                }
+                _ => {
+                    code.push(if b == b'\n' { b'\n' } else { b' ' });
+                    text.push(b);
+                    i += 1;
+                }
+            }
+            continue;
+        }
+        /* code */
+        match b {
+            b'/' if i + 1 < n && bytes[i + 1] == b'/' => {
+                while i < n && bytes[i] != b'\n' {
+                    blank_both(&mut code, &mut text, bytes[i]);
+                    i += 1;
+                }
+            }
+            b'/' if i + 1 < n && bytes[i + 1] == b'*' => {
+                let close = source[i + 2..].find("*/").map_or(n, |at| i + 2 + at + 2);
+                while i < close {
+                    blank_both(&mut code, &mut text, bytes[i]);
+                    i += 1;
+                }
+            }
+            b'"' | b'\'' => {
+                code.push(b);
+                text.push(b);
+                i += 1;
+                while i < n && bytes[i] != b && bytes[i] != b'\n' {
+                    let take = if bytes[i] == b'\\' && i + 1 < n { 2 } else { 1 };
+                    for k in 0..take {
+                        let c = bytes[i + k];
+                        code.push(if c == b'\n' { b'\n' } else { b' ' });
+                        text.push(c);
+                    }
+                    i += take;
+                }
+                if i < n && bytes[i] == b {
+                    code.push(b);
+                    text.push(b);
+                    i += 1;
+                }
+                /* a string is a value: a `/` after it divides */
+                prev = Some(b']');
+                word.clear();
+            }
+            b'`' => {
+                code.push(b);
+                text.push(b);
+                frames.push(Frame::Template);
+                i += 1;
+            }
+            b'/' => {
+                let opens = !dead_line
+                    && match prev {
+                        None => true,
+                        Some(p) if p.is_ascii_alphanumeric() || p == b'_' || p == b'$' => {
+                            REGEX_AFTER_WORDS.contains(&word.as_str())
+                        }
+                        Some(b')') | Some(b']') => false,
+                        Some(_) => true,
+                    };
+                let end = opens.then(|| regex_end(bytes, i)).flatten();
+                match end {
+                    Some(end) => {
+                        while i < end {
+                            blank_both(&mut code, &mut text, bytes[i]);
+                            i += 1;
+                        }
+                        prev = Some(b']');
+                        word.clear();
+                    }
+                    None => {
+                        dead_line |= opens;
+                        code.push(b);
+                        text.push(b);
+                        prev = Some(b);
+                        word.clear();
+                        i += 1;
+                    }
+                }
+            }
+            b'{' | b'}' if matches!(frames.last(), Some(Frame::Expr { .. })) => {
+                code.push(b);
+                text.push(b);
+                if let Some(Frame::Expr { depth }) = frames.last_mut() {
+                    if b == b'{' {
+                        *depth += 1;
+                    } else if *depth == 0 {
+                        frames.pop();
+                    } else {
+                        *depth -= 1;
+                    }
+                }
+                prev = Some(b);
+                word.clear();
+                i += 1;
+            }
+            _ => {
+                code.push(b);
+                text.push(b);
+                if !b.is_ascii_whitespace() {
+                    prev = Some(b);
+                    if b.is_ascii_alphanumeric() || b == b'_' || b == b'$' {
+                        word.push(b as char);
+                    } else {
+                        word.clear();
+                    }
+                }
+                i += 1;
+            }
+        }
+    }
+    let lossless = |out: Vec<u8>| match String::from_utf8(out) {
+        Ok(s) => s,
+        Err(e) => String::from_utf8_lossy(e.as_bytes()).into_owned(),
+    };
+    Masked {
+        code: lossless(code),
+        text: lossless(text),
+    }
+}
+
+/* the byte after a regex literal that opens at `slash`, or `None` when the
+line ends first (then the slash divides): one scan, never a rescan */
 fn regex_end(bytes: &[u8], slash: usize) -> Option<usize> {
     let mut j = slash + 1;
     let mut in_class = false;
     while j < bytes.len() {
         match bytes[j] {
-            b'\\' => j += 2,
-            b'\n' => return None,
+            b'\\' if j + 1 < bytes.len() && bytes[j + 1] != b'\n' => j += 2,
+            b'\\' | b'\n' => return None,
             b'[' => {
                 in_class = true;
                 j += 1;
@@ -130,63 +352,18 @@ fn regex_end(bytes: &[u8], slash: usize) -> Option<usize> {
     None
 }
 
-static COMMENT: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?s)/\*.*?\*/|(?:^|[^:\w])//[^\n]*").unwrap());
-static STRING: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#""(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|`(?:[^`\\]|\\.)*`"#).unwrap()
-});
-
-/* replace a span with spaces so line numbers survive */
-fn blank(text: &str, re: &Regex, keep_first_char: bool) -> String {
-    re.replace_all(text, |caps: &regex::Captures| {
-        let m = caps.get(0).unwrap().as_str();
-        let mut masked = String::with_capacity(m.len());
-        for (idx, ch) in m.chars().enumerate() {
-            masked.push(if ch == '\n' || (keep_first_char && idx == 0) {
-                ch
-            } else {
-                ' '
-            });
-        }
-        masked
-    })
-    .into_owned()
-}
-
-static SDK_DYNAMIC_IMPORT: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"^import\(\s*['"](?:@gents/ux-sdk|react|react/jsx-runtime)['"]"#).unwrap()
-});
-
-/* whether byte `at` of the strings-blanked text is code: blanked text is a
-space where a string was, so a non-space there means code */
-fn inside_code(no_strings: &str, at: usize) -> bool {
-    no_strings.as_bytes().get(at).is_some_and(|b| *b != b' ')
-}
-
 /// The lint findings for one module's source; empty means admitted.
 pub fn lint(source: &str) -> Vec<Finding> {
-    let masked = mask_regex_literals(source);
-    let masked = blank(&masked, &COMMENT, true);
-    /* import specifiers are strings, and the import rules need to read
-    them; the other rules read code only */
-    let no_strings = blank(&masked, &STRING, false);
+    let masked = mask(source);
     let mut findings = Vec::new();
-    for (name, re) in COMPILED.iter() {
-        /* an import specifier and `createElement('script')` are strings the
-        rule has to read; the other rules read code only */
-        let reads_strings = *name == "non-sdk import" || *name == "script injection";
-        let haystack = if reads_strings { &masked } else { &no_strings };
+    for (rule, re) in COMPILED.iter() {
+        let haystack = if rule.reads_strings {
+            &masked.text
+        } else {
+            &masked.code
+        };
         for m in re.find_iter(haystack) {
-            if *name == "non-sdk import" && SDK_DYNAMIC_IMPORT.is_match(m.as_str()) {
-                continue;
-            }
-            /* `<script` inside a plain string is content (an innerHTML
-            template, a help message), not an injection: only the
-            createElement form, or markup in code, counts */
-            if *name == "script injection"
-                && m.as_str().starts_with('<')
-                && !inside_code(&no_strings, m.start())
-            {
+            if rule.name == "non-sdk import" && is_sdk_import(m.as_str()) {
                 continue;
             }
             let line = haystack[..m.start()].matches('\n').count() + 1;
@@ -199,7 +376,7 @@ pub fn lint(source: &str) -> Vec<Finding> {
                 .take(120)
                 .collect();
             findings.push(Finding {
-                rule: name,
+                rule: rule.name,
                 line,
                 excerpt,
             });
@@ -271,15 +448,86 @@ export default { id: 'ok', register(ctx) { ctx.register({ id: 'x', area: NAV_ARE
             rules("import x from 'https://cdn/x.js'"),
             vec!["non-sdk import"]
         );
+        assert_eq!(rules("import x from 'lodash'"), vec!["non-sdk import"]);
+        assert_eq!(rules("export * from 'lodash'"), vec!["non-sdk import"]);
         assert_eq!(
             rules("document.createElement('script')"),
             vec!["script injection"]
         );
         assert_eq!(
             rules("el.innerHTML = `<script>`"),
-            Vec::<&str>::new(),
-            "markup in a string is content"
+            vec!["script injection"],
+            "markup in a string is the payload of an innerHTML write"
         );
+        assert_eq!(
+            rules("const re = /<script[\\s\\S]*?<\\/script>/gi; html.replace(re, '')"),
+            Vec::<&str>::new(),
+            "a sanitizer's regex literal matches markup, it cannot inject any"
+        );
+    }
+
+    /// Each shape that once slipped past: a `/` after a string divides
+    /// (the regex mask may not swallow the code after it); a template's
+    /// `${}` is code; a string may not open a comment; a dynamic import's
+    /// argument must be the SDK literal alone; a comment between `from` and
+    /// the specifier is nothing; a specifier may not borrow the other quote.
+    #[test]
+    fn masking_does_not_hide_code() {
+        assert_eq!(
+            rules("const n = \"8\" / 2; eval(x); const re = /x/"),
+            vec!["dynamic code"]
+        );
+        assert_eq!(rules("const s = `${eval(x)}`"), vec!["dynamic code"]);
+        assert_eq!(
+            rules("const s = `a ${ `b ${eval(x)}` } c`"),
+            vec!["dynamic code"],
+            "nested templates"
+        );
+        assert_eq!(rules("const a = \"a //\"; eval(x)"), vec!["dynamic code"]);
+        assert_eq!(
+            rules("const a = \"/*\"; eval(x); const b = \"*/\""),
+            vec!["dynamic code"]
+        );
+        assert_eq!(rules("import('react' + x)"), vec!["non-sdk import"]);
+        assert_eq!(rules("import(`react`)"), vec!["non-sdk import"]);
+        assert_eq!(
+            rules("import x from/**/'https://evil/s.js'"),
+            vec!["non-sdk import"]
+        );
+        assert_eq!(
+            rules("import x from \"https://evil/s.js?'\""),
+            vec!["non-sdk import"]
+        );
+        assert_eq!(
+            rules("const t = 'eval(' ; const u = `eval(`"),
+            Vec::<&str>::new()
+        );
+        assert_eq!(
+            rules("// eval(\nreturn /eval(/.test(x)"),
+            Vec::<&str>::new()
+        );
+    }
+
+    /// Both haystacks keep every byte offset and line break, so a finding
+    /// after a non-ASCII string lands on its own line.
+    #[test]
+    fn findings_after_non_ascii_text_keep_their_line() {
+        let f = lint(
+            "const s = \"ééééééééééé\";\nconst t = `日本語 ${1}`;\nel.innerHTML = '<script>'\n",
+        );
+        assert_eq!(f.len(), 1, "{}", describe(&f));
+        assert_eq!(f[0].rule, "script injection");
+        assert_eq!(f[0].line, 3);
+    }
+
+    /// An unclosed character class on a long line is one pass, not one per
+    /// slash.
+    #[test]
+    fn an_unclosed_regex_is_scanned_once() {
+        let source = "/[ ".repeat(200_000);
+        let started = std::time::Instant::now();
+        let _ = lint(&source);
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
     }
 
     #[test]
