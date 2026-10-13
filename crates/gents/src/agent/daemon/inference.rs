@@ -28,8 +28,10 @@ pub(super) fn request_entry(
     content: &str,
     resume: bool,
     context: Option<&Message>,
+    wake_notifications: &[TaggedMessage],
 ) -> Result<(Vec<TaggedMessage>, TaggedMessage)> {
     if !resume {
+        history = super::wake_input::project(history, wake_notifications);
         history.push(TaggedMessage::unassociated(Message::user(
             content.to_owned(),
         )));
@@ -152,6 +154,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
         request: &crate::watcher::AgentRequest,
         doc_id: &str,
         history: &[TaggedMessage],
+        wake_notifications: &[TaggedMessage],
         mut replay: LoopReplayInput,
         lifecycle: &mut crate::lifecycle::RequestLifecycle,
         stream_writer: &crate::streaming::DefraStreamWriter,
@@ -483,6 +486,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                             &request.content,
                             resume_from_history,
                             loop_config.context_message.as_ref(),
+                            wake_notifications,
                         )?;
                         if resume_from_history {
                             loop_config.context_message = None;
@@ -903,6 +907,7 @@ pub(super) mod tests {
     use crate::prompt::LayeredPromptBuilder;
     use crate::tool_surface::AgentToolSurfaceConfig;
     use crate::watcher::AgentRequest;
+    use anyhow::Context;
     use futures::stream;
     use rig::completion::{
         CompletionError, CompletionModel, CompletionRequest, CompletionResponse,
@@ -994,6 +999,7 @@ pub(super) mod tests {
         provider_inputs: Arc<std::sync::Mutex<Vec<String>>>,
         title_calls: Arc<AtomicUsize>,
         title_shape_mismatches: Arc<AtomicUsize>,
+        successor: Option<(Arc<defra_node::EmbeddedNode>, String, String)>,
     }
 
     #[allow(refining_impl_trait)]
@@ -1034,13 +1040,36 @@ pub(super) mod tests {
                     "background-completion-review"
                 }
                 (false, false) => {
-                    self.provider_inputs
-                        .lock()
-                        .expect("wake provider input capture")
-                        .push(
+                    let first = {
+                        let mut inputs = self
+                            .provider_inputs
+                            .lock()
+                            .expect("wake provider input capture");
+                        inputs.push(
                             serde_json::to_string(&request.chat_history)
                                 .expect("serialize provider input"),
                         );
+                        inputs.len() == 1
+                    };
+                    if first {
+                        if let Some((node, request_id, did)) = &self.successor {
+                            crate::tool_call_lifecycle::admission_fixture::complete_child(
+                                node,
+                                request_id,
+                                did,
+                                "successor native output",
+                            )
+                            .await;
+                            assert_eq!(
+                                crate::background_completion::settle_running_session_message_rows(
+                                    node, did
+                                )
+                                .await
+                                .unwrap(),
+                                1
+                            );
+                        }
+                    }
                     "wake handled"
                 }
                 _ => {
@@ -1451,6 +1480,7 @@ pub(super) mod tests {
                 &case["authored"].to_string(),
                 case["resume"].as_bool().unwrap(),
                 context.as_ref(),
+                &[],
             )
             .unwrap();
             actual.push(prompt);
@@ -1616,11 +1646,11 @@ pub(super) mod tests {
     /// spawned shell process. Its selected wake remains pending until the
     /// daemon's ordinary admission and claim path runs here.
     #[tokio::test]
-    async fn background_completion_wake_reaches_daemon_provider_input() {
+    async fn successor_background_wake_moves_notification_after_previous_answer() {
         use gents_protocol::request_lifecycle::RequestLifecycleState;
 
-        let selected =
-            crate::tool_call_lifecycle::completion_owner_conformance::selected_background_wake()
+        let (selected, successor) =
+            crate::tool_call_lifecycle::completion_owner_conformance::selected_background_wake_with_successor(true)
                 .await;
         let admission = selected.admission;
         let wake = selected.wake;
@@ -1674,6 +1704,8 @@ pub(super) mod tests {
                 provider_inputs: provider_inputs.clone(),
                 title_calls: title_calls.clone(),
                 title_shape_mismatches: title_shape_mismatches.clone(),
+                successor: successor
+                    .map(|request| (node.clone(), request, admission.node_did.clone())),
             }),
             preamble,
             Arc::new(Vec::<Box<dyn ToolDyn>>::new()),
@@ -1772,6 +1804,114 @@ pub(super) mod tests {
             RequestLifecycleState::Completed,
             "wake must complete through the daemon's owned request path"
         );
+
+        let mut watcher = crate::watcher::DefraWatcher::new(node.clone(), &admission.node_did);
+        let successor = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let request = crate::watcher::Watcher::next_request(&mut watcher)
+                    .await
+                    .context("successor wake disappeared")??;
+                if request.session_id == wake.session_id
+                    && request.input.queue.as_ref().is_some_and(|queue| {
+                        queue.source
+                            == gents_protocol::request_input::QueueSource::BackgroundCompletion
+                    })
+                {
+                    return Ok::<_, anyhow::Error>(request);
+                }
+            }
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        assert_ne!(successor.doc_id, wake.doc_id);
+        let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        daemon
+            .process_request(successor.clone(), shutdown_rx)
+            .await
+            .unwrap();
+        let captured = provider_inputs.lock().unwrap();
+        assert_eq!(captured.len(), 2);
+        let input = &captured[1];
+        let answer = input
+            .find("wake handled")
+            .expect("previous wake answer remains in history");
+        let new_notification = input
+            .find("successor native output")
+            .expect("successor notification reaches provider input");
+        let contract = crate::lean_vocab_test::lean_contract_snapshot()
+            .wake_input_cases
+            .iter()
+            .find(|case| case.name == "successor_wake_moves_only_new_notification")
+            .unwrap();
+        let labels = ["notification-a", "notification-b", "answer-0"];
+        let mut observed = [
+            (
+                "notification-a",
+                input.find("durable native output").unwrap(),
+            ),
+            ("notification-b", new_notification),
+            ("answer-0", answer),
+        ];
+        observed.sort_by_key(|(_, position)| *position);
+        let expected = contract
+            .expected_order
+            .iter()
+            .map(String::as_str)
+            .filter(|header| labels.contains(header))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            observed.map(|(header, _)| header).as_slice(),
+            expected,
+            "current wake order must match the model: {input}"
+        );
+        assert_eq!(input.matches("successor native output").count(), 1);
+        assert_eq!(input.matches("durable native output").count(), 1);
+        drop(captured);
+        let history = crate::session::load_history(
+            &node,
+            &wake.session_id,
+            &admission.node_did,
+            wake.requester_did.as_deref(),
+        )
+        .await
+        .unwrap();
+        let transcript = history
+            .iter()
+            .map(gents_protocol::transcript::render_message_body_markdown)
+            .collect::<Vec<_>>();
+        let notification = transcript
+            .iter()
+            .position(|text| text.contains("successor native output"))
+            .unwrap();
+        let answer = transcript
+            .iter()
+            .position(|text| text == "wake handled")
+            .unwrap();
+        let mut durable = [
+            (
+                "notification-a",
+                transcript
+                    .iter()
+                    .position(|text| text.contains("durable native output"))
+                    .unwrap(),
+            ),
+            ("notification-b", notification),
+            ("answer-0", answer),
+        ];
+        durable.sort_by_key(|(_, position)| *position);
+        let expected = contract
+            .rows
+            .iter()
+            .map(|row| row.header.as_str())
+            .filter(|header| labels.contains(header))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            durable.map(|(header, _)| header).as_slice(),
+            expected,
+            "provider projection must preserve durable append order"
+        );
+        drop(watcher);
 
         drop(daemon);
         node.shutdown().await;

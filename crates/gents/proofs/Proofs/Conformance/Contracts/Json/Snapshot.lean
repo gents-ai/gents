@@ -466,6 +466,7 @@ def snapshotJson : String :=
     ++ "\"retry_frontier_cases\":" ++ retryFrontierCasesJson ++ ","
     ++ "\"retry_entry_cases\":" ++ retryEntryCasesJson ++ ","
     ++ "\"current_input_cases\":" ++ currentInputCasesJson ++ ","
+    ++ "\"wake_input_cases\":" ++ wakeInputCasesJson ++ ","
     ++ "\"prompt_assembly_sanitize_cases\":"
       ++ promptAssemblySanitizeCasesJson ++ ","
     ++ "\"prompt_assembly_assistant_order_cases\":"

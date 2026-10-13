@@ -247,6 +247,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) retry_frontier_cases: Vec<serde_json::Value>,
     pub(crate) retry_entry_cases: Vec<serde_json::Value>,
     pub(crate) current_input_cases: Vec<LeanCurrentInputCase>,
+    pub(crate) wake_input_cases: Vec<LeanWakeInputCase>,
     pub(crate) prompt_assembly_layer_cases: Vec<LeanPromptAssemblyLayerCase>,
     pub(crate) prompt_assembly_repair_cases: Vec<LeanPromptAssemblyRepairCase>,
     pub(crate) prompt_assembly_budget_cases: Vec<LeanPromptAssemblyBudgetCase>,
@@ -1135,6 +1136,25 @@ pub(crate) struct LeanCausalHopContract {
     pub(crate) call_cases: Vec<LeanCausalHopCallCase>,
     pub(crate) interrupt_cases: Vec<LeanAgentInterruptCase>,
     pub(crate) write_cases: Vec<LeanSessionMessageWriteCase>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanWakeInputCase {
+    pub(crate) name: String,
+    pub(crate) claimed: Vec<String>,
+    pub(crate) acknowledged: Vec<String>,
+    pub(crate) rows: Vec<LeanWakeInputRow>,
+    pub(crate) notifications: Vec<LeanWakeInputRow>,
+    pub(crate) current_keys: Vec<String>,
+    pub(crate) expected_order: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanWakeInputRow {
+    pub(crate) header: String,
+    pub(crate) notification_key: Option<String>,
 }
 
 /// One delivered session message (`DurableLineage.sessionMessageWrite`).

@@ -266,6 +266,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "routing_affinity_matches_lean_owner",
         },
         ConformanceConsumer::RustTest {
+            id: "agent::daemon::wake_input::tests::current_wake_input_matches_lean_owner",
+            package: "gents",
+            source_path: "crates/gents/src/agent/daemon/wake_input.rs",
+            module_path: "agent::daemon::wake_input::tests",
+            function: "current_wake_input_matches_lean_owner",
+        },
+        ConformanceConsumer::RustTest {
             id: "session::output::tests::current_input_selection_matches_lean_owner",
             package: "gents",
             source_path: "crates/gents/src/session/output.rs",
