@@ -104,7 +104,7 @@ use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use futures::future::BoxFuture;
 use gents_protocol::graphql::GraphqlRequestOptions;
-use serde_json::{json, Value};
+use serde_json::Value;
 
 /// A served node's HTTP GraphQL endpoint and the DID its requests act as.
 ///
@@ -280,9 +280,7 @@ impl ConfigAccess {
                         "config GraphQL",
                     )
                     .await?;
-                    Ok(json!({
-                        "data": response.data.unwrap_or(Value::Null),
-                    }))
+                    Ok(crate::graphql::into_data_envelope(response.data))
                 }
             }
         })

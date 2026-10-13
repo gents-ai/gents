@@ -956,7 +956,7 @@ impl<'a> ConfigApplyTxn<'a> {
                         response.errors
                     )));
                 }
-                json!({"data": response.data.unwrap_or(Value::Null)})
+                crate::graphql::into_data_envelope(response.data)
             }
         };
         if document.trim_start().starts_with("mutation") {
@@ -1038,9 +1038,10 @@ impl<'a> ConfigApplyTxn<'a> {
             )));
         }
         if document.trim_start().starts_with("mutation") {
-            let envelope = json!({"data": response.data.as_ref().unwrap_or(&Value::Null)});
-            self.affected_documents
-                .fetch_add(graphql::affected_documents(&envelope), Ordering::Relaxed);
+            self.affected_documents.fetch_add(
+                crate::graphql::mutation_affected_documents(&response) as u64,
+                Ordering::Relaxed,
+            );
             #[cfg(test)]
             after_successful_mutation_for_test().await?;
         }
@@ -1753,7 +1754,7 @@ impl ConfigAccess {
         mutation: &str,
     ) -> Result<Value> {
         let response = Self::write_local_response_inner(node, operation, mutation).await?;
-        Ok(json!({"data": response.data.unwrap_or(Value::Null)}))
+        Ok(crate::graphql::into_data_envelope(response.data))
     }
 
     async fn write_local_response_inner(

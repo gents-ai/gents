@@ -674,7 +674,12 @@ pub(super) async fn publish_provider_turn_with_time(
                 LeaseObservation { request: state, generation: owner, deadline_ms: deadline },
                 generation, fixture_now.unwrap_or_else(Utc::now).timestamp_millis()), "provider publication lost its live lease");
 
-            let records = load_source_in_txn(txn, exemplar).await?;
+            let mut reader = crate::session::TxnCanonicalReader::new_single(
+                txn, &exemplar.node_did, exemplar.requester_did.as_deref(),
+            );
+            let records = reader.load_source(
+                &exemplar.request_doc_id, &exemplar.session_id, &exemplar.source,
+            ).await?;
             if records.iter().any(|row| row.segment.close.is_some()) {
                 if let Some(candidate) = exemplar.close.as_ref() {
                     let accepted = records
@@ -691,6 +696,7 @@ pub(super) async fn publish_provider_turn_with_time(
                     .map(|row| row.segment.writer.clone());
                 let published = replay_publication_in_txn(
                     txn,
+                    &mut reader,
                     exemplar,
                     generation,
                     accepted_writer.as_ref(),
@@ -791,9 +797,7 @@ pub(super) async fn publish_provider_turn_with_time(
                 CREATE_AGENT_MESSAGE_MUTATION, &transcript_message_create_variables(&message)?,
             ).await?;
             let message_doc_id = created_doc_id(&created, "AgentMessage")?;
-            let (_, reconstructed) = crate::session::load_canonical_message_in_txn(
-                txn, &message_doc_id, &prepared.node_did, prepared.requester_did.as_deref(),
-            ).await?;
+            let (_, reconstructed) = reader.load_created_message(&message_doc_id, &close_doc_id).await?;
             anyhow::ensure!(
                 &reconstructed == expected.as_ref(),
                 "first publication native message changed"
@@ -852,6 +856,7 @@ pub(super) async fn publish_provider_turn_with_time(
 
 async fn replay_publication_in_txn(
     txn: &ConfigApplyTxn<'_>,
+    reader: &mut crate::session::TxnCanonicalReader<'_, '_>,
     exemplar: &OutputSegment,
     generation: &str,
     accepted_writer: Option<&OutputWriter>,
@@ -898,13 +903,8 @@ async fn replay_publication_in_txn(
                     })),
         "publication replay generation changed"
     );
-    let (_, reconstructed) = crate::session::load_canonical_message_in_txn(
-        txn,
-        &row.doc_id,
-        &exemplar.node_did,
-        exemplar.requester_did.as_deref(),
-    )
-    .await?;
+    reader.observe_headers(std::slice::from_ref(&row));
+    let (_, reconstructed) = reader.load_message(&row.doc_id).await?;
     anyhow::ensure!(
         &reconstructed == expected,
         "publication replay native message changed"
@@ -1184,6 +1184,8 @@ async fn load_source_in_txn(
     txn: &ConfigApplyTxn<'_>,
     prepared: &OutputSegment,
 ) -> Result<Vec<OutputSegmentRow>> {
+    #[cfg(test)]
+    crate::session::record_request_output_scan();
     let response = txn
         .execute_local_response(
             &crate::session::canonical_rows::request_output_segments_query(
