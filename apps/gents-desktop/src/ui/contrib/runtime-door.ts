@@ -6,6 +6,7 @@
 import { call } from "@/screens/agent/bridgeCall";
 import { loadRuntimeUxPlugin, retireRuntimeUxPlugin } from "./loader";
 import {
+  publishUxPlugin,
   uxPluginRecords,
   type UxDeclaredContributions,
   type UxPluginDoor,
@@ -34,7 +35,8 @@ export interface UxPluginSource {
 
 /* live runtime plugins by listing id -> loaded plugin id (null while broken) */
 const known = new Map<string, string | null>();
-let scanning = false;
+/* the scan in flight; a scan asked for meanwhile runs after it */
+let inFlight: Promise<void> | null = null;
 
 export async function listRuntimeUxPlugins(): Promise<UxPluginListing[]> {
   const { plugins } = await call<{ plugins: UxPluginListing[] }>(
@@ -43,18 +45,37 @@ export async function listRuntimeUxPlugins(): Promise<UxPluginListing[]> {
   return plugins;
 }
 
+/* the inventory row for an entry whose source never arrived: published as
+   a row, not evaluated as a module */
+function publishUnreadable(entry: UxPluginListing, error: unknown): void {
+  publishUxPlugin({
+    id: entry.id,
+    name: entry.id,
+    door: entry.door,
+    file: entry.file,
+    pack: entry.pack ?? undefined,
+    status: "error",
+    error: error instanceof Error ? error.message : String(error),
+  });
+}
+
 async function loadListing(entry: UxPluginListing): Promise<void> {
   const previous = known.get(entry.id) ?? null;
-  let module: UxPluginSource;
+  let module: UxPluginSource | null = null;
+  let unreadable: unknown = null;
   try {
     module = await call<UxPluginSource>("desktop_ux_plugin_source", { id: entry.id });
   } catch (error) {
-    /* a vanished file lands on its own row; the next scan retires it */
-    const id = await loadRuntimeUxPlugin(
-      { source: `throw new Error(${JSON.stringify(String(error))})` },
-      { origin: entry.id, door: entry.door, file: entry.file },
-    );
-    known.set(entry.id, id);
+    unreadable = error;
+  }
+  /* the previous incarnation goes before anything is published for this
+     entry: a plugin that no longer loads must not stay registered beside
+     its error row, and when its id is the entry's own, that row must not
+     be swept away with it */
+  if (previous) retireRuntimeUxPlugin(previous);
+  if (!module) {
+    publishUnreadable(entry, unreadable);
+    known.set(entry.id, null);
     return;
   }
   const id = await loadRuntimeUxPlugin(
@@ -70,39 +91,42 @@ async function loadListing(entry: UxPluginListing): Promise<void> {
       defaultEnabled: entry.defaultEnabled ?? undefined,
     },
   );
-  /* the loader only disposes the new id; a file that no longer yields the
-     old one is retired here */
-  if (previous && previous !== id) retireRuntimeUxPlugin(previous);
   known.set(entry.id, id);
 }
 
-/* reconcile disk with the inventory; `reloadKnown` re-reads every entry */
-export async function scanRuntimeUxPlugins(reloadKnown = false): Promise<void> {
-  if (scanning) return;
-  scanning = true;
+/* reconcile disk with the inventory; `reloadKnown` re-reads every entry,
+   a plain scan re-reads only what is new or broken */
+async function reconcile(reloadKnown: boolean): Promise<void> {
+  let listings: UxPluginListing[];
   try {
-    let listings: UxPluginListing[];
-    try {
-      listings = await listRuntimeUxPlugins();
-    } catch {
-      /* no local agent home (mobile, or not started): nothing to scan */
-      return;
-    }
-    const seen = new Set<string>();
-    for (const entry of listings.sort((a, b) => a.id.localeCompare(b.id))) {
-      seen.add(entry.id);
-      if (known.has(entry.id) && !reloadKnown) continue;
-      await loadListing(entry);
-    }
-    for (const [id, loaded] of known) {
-      if (seen.has(id)) continue;
-      if (loaded) retireRuntimeUxPlugin(loaded);
-      else if (uxPluginRecords()[id]) retireRuntimeUxPlugin(id);
-      known.delete(id);
-    }
-  } finally {
-    scanning = false;
+    listings = await listRuntimeUxPlugins();
+  } catch {
+    /* no local agent home (mobile, or not started): nothing to scan */
+    return;
   }
+  const seen = new Set<string>();
+  for (const entry of listings.sort((a, b) => a.id.localeCompare(b.id))) {
+    seen.add(entry.id);
+    if (known.get(entry.id) && !reloadKnown) continue;
+    await loadListing(entry);
+  }
+  for (const [id, loaded] of known) {
+    if (seen.has(id)) continue;
+    if (loaded) retireRuntimeUxPlugin(loaded);
+    else if (uxPluginRecords()[id]) retireRuntimeUxPlugin(id);
+    known.delete(id);
+  }
+}
+
+/** scan the doors; a scan asked for while one runs follows it, never drops */
+export function scanRuntimeUxPlugins(reloadKnown = false): Promise<void> {
+  const run = () => reconcile(reloadKnown);
+  const scan: Promise<void> = (inFlight ?? Promise.resolve()).then(run, run);
+  inFlight = scan;
+  void scan.finally(() => {
+    if (inFlight === scan) inFlight = null;
+  });
+  return scan;
 }
 
 /** the panel's Reload button */
@@ -111,5 +135,5 @@ export const reloadRuntimeUxPlugins = (): Promise<void> => scanRuntimeUxPlugins(
 /** test seam */
 export function resetRuntimeDoor(): void {
   known.clear();
-  scanning = false;
+  inFlight = null;
 }
