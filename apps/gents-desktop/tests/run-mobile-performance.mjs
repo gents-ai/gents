@@ -706,6 +706,11 @@ function evaluateStructuralAssertions(samples) {
   const all = (id) =>
     samples.map((sample) => sample.scenarios.find((scenario) => scenario.id === id));
   const tip = all("open_large_local_transcript_tip");
+  const index = all("paired_launch_to_session_index");
+  const indexLimit =
+    samples[0].fixture.sessionIndexCount > 200
+      ? 80
+      : samples[0].fixture.sessionIndexCount;
   const pageOlder = all("page_older_transcript_rows");
   const sustained = all("sustained_streamed_response");
   const burst = all("update_coalescing_burst");
@@ -717,6 +722,16 @@ function evaluateStructuralAssertions(samples) {
   const typingWithoutLiveDeltas = [...typingActiveTurn, ...typingIdle];
   const typing = [...typingWithoutLiveDeltas, ...typingConcurrent];
   return [
+    {
+      id: "session_index_mounts_a_bounded_window",
+      policy: "hard",
+      limit: indexLimit,
+      observedMax: Math.max(...index.map((scenario) => scenario.dom.sessionRows)),
+      passed: index.every(
+        (scenario) =>
+          scenario.dom.sessionRows > 0 && scenario.dom.sessionRows <= indexLimit,
+      ),
+    },
     {
       id: "large_tip_mounts_one_page",
       policy: "hard",
