@@ -58,6 +58,8 @@ pub(crate) use output::count_request_output_scans;
 pub(crate) use output::load_canonical_payload_from_node;
 pub(crate) use output::load_canonical_payload_in_txn;
 pub(crate) use output::load_canonical_payload_with_access;
+#[cfg(test)]
+pub(crate) use output::record_request_output_scan;
 pub use output::{
     load_canonical_message, load_canonical_message_from_node, CanonicalOutputReadError,
 };

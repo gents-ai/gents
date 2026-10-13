@@ -107,6 +107,12 @@ tokio::task_local! {
     static REQUEST_OUTPUT_SCANS: std::sync::Arc<std::sync::atomic::AtomicUsize>;
 }
 
+#[cfg(test)]
+pub(crate) fn record_request_output_scan() {
+    let _ = REQUEST_OUTPUT_SCANS
+        .try_with(|scans| scans.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+}
+
 /// Run `future`, counting the request-wide output segment scans canonical
 /// reconstruction issues on this task.
 #[cfg(test)]
@@ -162,6 +168,7 @@ struct ReadCache {
 /// Indexes retain every occurrence, including contradictory observations of
 /// one physical document. They must not turn canonical integrity checks into
 /// last-writer-wins selection.
+#[derive(Clone)]
 struct RequestOutputRows {
     rows: Vec<super::canonical_rows::OutputSegmentRow>,
     by_doc_id: HashMap<String, Vec<usize>>,
@@ -241,6 +248,19 @@ impl From<Vec<super::canonical_rows::OutputSegmentRow>> for RequestOutputRows {
 }
 
 impl RequestOutputRows {
+    fn push(&mut self, row: super::canonical_rows::OutputSegmentRow) {
+        let index = self.rows.len();
+        self.by_doc_id
+            .entry(row.doc_id.clone())
+            .or_default()
+            .push(index);
+        self.by_source
+            .entry(row.segment.source.clone())
+            .or_default()
+            .push(index);
+        self.rows.push(row);
+    }
+
     fn with_doc_id(
         &self,
         doc_id: &str,
@@ -322,9 +342,10 @@ pub(crate) async fn load_canonical_message_in_txn(
 /// it validates every accepted tool reply, and a fresh read per header scans
 /// the request's whole output once per tool, starving lease renewal.
 ///
-/// Its cache is a snapshot: once the transaction creates an `AgentMessage` or
-/// `AgentOutputSegment`, the reader must not be used again. A caller that
-/// publishes canonical output constructs a new reader after publishing.
+/// Its cache is a transaction snapshot. A publication that appends exactly
+/// one segment and header may consume it through `load_created_message`,
+/// which reads the two new rows under ACP and invalidates coordinate checks.
+/// Every other canonical mutation requires a new reader. No facts survive a retry.
 pub(crate) struct TxnCanonicalReader<'a, 'txn> {
     txn: &'a ConfigApplyTxn<'txn>,
     node_did: &'a str,
@@ -333,6 +354,19 @@ pub(crate) struct TxnCanonicalReader<'a, 'txn> {
 }
 
 impl<'a, 'txn> TxnCanonicalReader<'a, 'txn> {
+    pub(crate) fn new_single(
+        txn: &'a ConfigApplyTxn<'txn>,
+        node_did: &'a str,
+        requester_did: Option<&'a str>,
+    ) -> Self {
+        Self {
+            txn,
+            node_did,
+            requester_did,
+            cache: ReadCache::default(),
+        }
+    }
+
     pub(crate) fn new(
         txn: &'a ConfigApplyTxn<'txn>,
         node_did: &'a str,
@@ -361,6 +395,97 @@ impl<'a, 'txn> TxnCanonicalReader<'a, 'txn> {
                 .observed
                 .insert(header.doc_id.clone(), header.clone());
         }
+    }
+
+    pub(crate) async fn load_source(
+        &mut self,
+        request_doc_id: &str,
+        session_id: &str,
+        source: &OutputSource,
+    ) -> Result<Vec<super::canonical_rows::OutputSegmentRow>> {
+        let rows = request_rows(
+            ReadAccess::Txn(self.txn),
+            request_doc_id,
+            self.node_did,
+            self.requester_did,
+            &self.cache,
+            &mut BTreeMap::new(),
+        )
+        .await?;
+        self.cache
+            .requests
+            .insert(request_doc_id.to_owned(), Arc::clone(&rows));
+        Ok(rows
+            .for_source(source)
+            .filter(|row| row.segment.session_id == session_id)
+            .cloned()
+            .collect())
+    }
+
+    /// DefraDB transaction reads are snapshots with read-your-writes. Only
+    /// these two creates may have changed canonical output since this reader's
+    /// last use. Read both exact rows through ACP before extending the complete
+    /// request snapshot; mutation receipts and prepared inputs are not read
+    /// authorization. Consume the reader so the extended snapshot cannot escape
+    /// this publication.
+    pub(crate) async fn load_created_message(
+        mut self,
+        header_doc_id: &str,
+        output_doc_id: &str,
+    ) -> Result<(
+        gents_protocol::output::TranscriptMessage,
+        gents_protocol::message::Message,
+    )> {
+        let requester = self
+            .requester_did
+            .map(|did| format!(r#""{}""#, crate::graphql::escape_graphql_string(did)))
+            .unwrap_or_else(|| "null".into());
+        let scope = format!(
+            r#"node_did: {{ _eq: "{}" }}, requester_did: {{ _eq: {requester} }}"#,
+            crate::graphql::escape_graphql_string(self.node_did)
+        );
+        let query = format!(
+            r#"{{
+            created_output: AgentOutputSegment(filter: {{ _docID: {{ _eq: "{}" }}, {scope} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }}
+            created_header: AgentMessage(filter: {{ _docID: {{ _eq: "{}" }}, {scope} }}) {{ {AGENT_MESSAGE_FIELDS} }}
+        }}"#,
+            crate::graphql::escape_graphql_string(output_doc_id),
+            crate::graphql::escape_graphql_string(header_doc_id)
+        );
+        let response = ReadAccess::Txn(self.txn)
+            .query(&query, "load_created_canonical_message")
+            .await?;
+        let output = rows_value(&response, "created_output")?;
+        anyhow::ensure!(
+            output.len() == 1,
+            "created canonical output is not uniquely readable"
+        );
+        let output = decode_output_segment_row(&output[0])?;
+        let headers = rows_value(&response, "created_header")?;
+        anyhow::ensure!(
+            headers.len() == 1,
+            "created canonical header is not uniquely readable"
+        );
+        let header = decode_transcript_message_row(&headers[0])?;
+        anyhow::ensure!(
+            output.doc_id == output_doc_id
+                && output.segment.node_did == self.node_did
+                && output.segment.requester_did.as_deref() == self.requester_did
+                && header.doc_id == header_doc_id
+                && header.message.node_did == self.node_did
+                && header.message.requester_did.as_deref() == self.requester_did,
+            "created canonical rows crossed their authorized scope"
+        );
+        if let Some(rows) = self.cache.requests.get_mut(&output.segment.request_doc_id) {
+            Arc::make_mut(rows).push(output);
+        }
+        self.cache.headers.clear();
+        self.cache.observed.clear();
+        if let Some(sessions) = self.cache.sessions.as_mut() {
+            sessions.clear();
+        }
+        self.observe_headers(std::slice::from_ref(&header));
+        self.load_message(header_doc_id).await
     }
 
     pub(crate) async fn load_message(
@@ -780,8 +905,7 @@ async fn request_rows(
         return Ok(Arc::clone(rows));
     }
     #[cfg(test)]
-    let _ = REQUEST_OUTPUT_SCANS
-        .try_with(|scans| scans.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+    record_request_output_scan();
     let response = access
         .query(
             &request_output_segments_query(request_doc_id),
