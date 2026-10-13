@@ -1,3 +1,36 @@
+use tracing::instrument::WithSubscriber;
+
+#[derive(Clone, Default)]
+pub(in crate::agent::daemon) struct InterruptionCapture(Arc<std::sync::Mutex<Vec<String>>>);
+
+impl InterruptionCapture {
+    pub(in crate::agent::daemon) fn subscriber(&self) -> impl tracing::Subscriber + Send + Sync {
+        use tracing_subscriber::layer::SubscriberExt;
+        tracing_subscriber::Registry::default().with(self.clone())
+    }
+
+    pub(in crate::agent::daemon) fn assert_source(&self, source: &str) {
+        assert_eq!(*self.0.lock().unwrap(), [source]);
+    }
+}
+
+impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for InterruptionCapture {
+    fn on_event(&self, event: &tracing::Event<'_>, _: tracing_subscriber::layer::Context<'_, S>) {
+        struct SourceVisitor<'a>(&'a mut Vec<String>);
+        impl tracing::field::Visit for SourceVisitor<'_> {
+            fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+                if field.name() == "cancellation_source" {
+                    self.0.push(value.to_owned());
+                }
+            }
+
+            fn record_debug(&mut self, _: &tracing::field::Field, _: &dyn std::fmt::Debug) {}
+        }
+        if event.metadata().target() == "gents::agent::daemon" {
+            event.record(&mut SourceVisitor(&mut self.0.lock().unwrap()));
+        }
+    }
+}
 
 /// Parks the request inside provider-input estimation. `build_request` awaits
 /// every tool definition, so this future holds the daemon in the window between
@@ -182,7 +215,10 @@ async fn interrupt_while_preparing_provider_input_terminalizes_through_the_owner
         .expect("seed a titled session through the session writer");
 
     let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    let process = daemon.process_request(request, shutdown_rx);
+    let capture = InterruptionCapture::default();
+    let process = daemon
+        .process_request(request, shutdown_rx)
+        .with_subscriber(capture.subscriber());
     tokio::pin!(process);
 
     let settled_in = tokio::time::timeout(Duration::from_secs(20), async {
@@ -190,7 +226,9 @@ async fn interrupt_while_preparing_provider_input_terminalizes_through_the_owner
             _ = entered.notified() => {},
             _ = &mut process => panic!("daemon exited before reaching the pre-inference window"),
         }
-        let row = request_terminal_row(node.as_ref(), &request_doc_id).await.unwrap();
+        let row = request_terminal_row(node.as_ref(), &request_doc_id)
+            .await
+            .unwrap();
         assert_eq!(row["lifecycle_state"], "processing");
 
         crate::interrupt::interrupt_request_by_doc_id(
@@ -226,8 +264,7 @@ async fn interrupt_while_preparing_provider_input_terminalizes_through_the_owner
         "owner terminalization must stamp terminalized_at: {row}"
     );
     assert_eq!(
-        row["failure_reason"],
-        "interrupted",
+        row["failure_reason"], "interrupted",
         "interruption uses the ordinary owner terminal reason: {row}"
     );
     assert_eq!(
@@ -235,6 +272,7 @@ async fn interrupt_while_preparing_provider_input_terminalizes_through_the_owner
         0,
         "no provider call may run in the pre-inference window"
     );
+    capture.assert_source("preparation");
     node.shutdown().await;
 }
 
@@ -358,10 +396,22 @@ async fn interrupt_latched_at_the_claim_terminalizes_before_execution_begins() {
     );
 
     let outcome = daemon
-        .handle_request(&mut lifecycle, &stream_writer, shutdown_rx, interrupt_rx)
-        .await
-        .expect("the claimed request's owner returns an outcome");
-    let crate::agent::daemon::HandleRequestOutcome::Interrupted = outcome else {
+        .observe_owned_work(
+            &mut lifecycle,
+            &stream_writer,
+            &request,
+            shutdown_rx,
+            interrupt_rx,
+        )
+        .await;
+    assert_eq!(
+        outcome.observation(),
+        crate::task_hooks::TaskAgentResult::Cancelled
+    );
+    let crate::agent::daemon::OwnedWorkOutcome::Interrupted(
+        crate::agent::daemon::RequestInterruptionSource::Claimed,
+    ) = outcome
+    else {
         panic!("an observable latch must interrupt the claimed request");
     };
 
@@ -373,8 +423,13 @@ async fn interrupt_latched_at_the_claim_terminalizes_before_execution_begins() {
         "the admission window must decide before execution begins: {undecided}"
     );
 
-    daemon.finalize_interrupt_before_work(&mut lifecycle, &stream_writer, &request)
-        .await.expect("owner terminalizes the request");
+    let capture = InterruptionCapture::default();
+    daemon
+        .finalize_interrupt_before_work(&mut lifecycle, &stream_writer, &request)
+        .with_subscriber(capture.subscriber())
+        .await
+        .expect("owner terminalizes the request");
+    capture.assert_source("claimed");
 
     let terminal = request_terminal_row(node.as_ref(), &request_doc_id)
         .await
@@ -389,8 +444,7 @@ async fn interrupt_latched_at_the_claim_terminalizes_before_execution_begins() {
         "owner terminalization must stamp terminalized_at: {terminal}"
     );
     assert_eq!(
-        terminal["failure_reason"],
-        "interrupted",
+        terminal["failure_reason"], "interrupted",
         "interruption uses the ordinary owner terminal reason: {terminal}"
     );
     assert_eq!(
@@ -450,11 +504,13 @@ async fn interrupt_while_restoring_the_provider_checkpoint_terminalizes_through_
 
     let reached = Arc::new(tokio::sync::Notify::new());
     let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let capture = InterruptionCapture::default();
     let process = crate::config_client::ConfigApplyTxn::with_read_pause(
         "reduction_index: ASC",
         reached.clone(),
         daemon.process_request(request, shutdown_rx),
-    );
+    )
+    .with_subscriber(capture.subscriber());
     tokio::pin!(process);
 
     let settled_in = tokio::time::timeout(Duration::from_secs(20), async {
@@ -462,7 +518,9 @@ async fn interrupt_while_restoring_the_provider_checkpoint_terminalizes_through_
             _ = reached.notified() => {},
             _ = &mut process => panic!("daemon exited before restoring its provider checkpoint"),
         }
-        let row = request_terminal_row(node.as_ref(), &request_doc_id).await.unwrap();
+        let row = request_terminal_row(node.as_ref(), &request_doc_id)
+            .await
+            .unwrap();
         assert_eq!(row["lifecycle_state"], "processing");
 
         crate::interrupt::interrupt_request_by_doc_id(
@@ -493,6 +551,7 @@ async fn interrupt_while_restoring_the_provider_checkpoint_terminalizes_through_
     assert_eq!(row["stopped_before_running"], false, "{row}");
     assert!(!row["terminalized_at"].is_null(), "{row}");
     assert_eq!(provider_calls.load(Ordering::SeqCst), 0);
+    capture.assert_source("mid_flight");
     node.shutdown().await;
 }
 
@@ -539,7 +598,10 @@ async fn interrupt_while_hashing_a_sealed_workspace_kills_git_and_keeps_its_inde
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&filter, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
-    git(dir, &["config", "filter.park.clean", filter.to_str().unwrap()]);
+    git(
+        dir,
+        &["config", "filter.park.clean", filter.to_str().unwrap()],
+    );
     std::fs::write(dir.join(".git/info/attributes"), "* filter=park\n").unwrap();
     let index_before = std::fs::read(dir.join(".git/index")).unwrap();
 
@@ -579,12 +641,13 @@ async fn interrupt_while_hashing_a_sealed_workspace_kills_git_and_keeps_its_inde
         .await
         .expect("an interrupt during hashing must not wait for Git")
         .expect("hashing task joins");
-    assert!(outcome.is_none(), "the interrupt wins over hashing: {outcome:?}");
+    assert!(
+        outcome.is_none(),
+        "the interrupt wins over hashing: {outcome:?}"
+    );
 
     assert_ne!(
-        filter
-            .await_leader_exit(Duration::from_secs(10))
-            .await,
+        filter.await_leader_exit(Duration::from_secs(10)).await,
         ProcessObservation::Running,
         "abandoned hashing must kill Git's process group"
     );

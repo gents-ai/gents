@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use tracing::Instrument;
 
-use super::{AgentDaemon, HandleRequestOutcome};
+use super::{AgentDaemon, HandleRequestOutcome, RequestInterruptionSource};
 use crate::admission::{self, AdmissionCallContext, CallKind};
 use crate::compaction;
 use crate::prompt::PromptBuilder;
@@ -159,7 +159,9 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
             Ok::<_, anyhow::Error>((resume_from_history, aggregate_token_budget))
         };
         let Some(admitted) = prepare_unless_interrupted(&mut interrupt_rx, admitted).await else {
-            return Ok(HandleRequestOutcome::Interrupted);
+            return Ok(HandleRequestOutcome::Interrupted(
+                RequestInterruptionSource::Claimed,
+            ));
         };
         let (resume_from_history, aggregate_token_budget) = admitted?;
         let trace_attrs = RequestTraceAttrs::from_request(&request);
@@ -631,7 +633,9 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
             let Some(prepared) = prepare_unless_interrupted(&mut interrupt_rx, preparation).await
             else {
                 flush_received_preparation_partial("interrupted request preparation").await?;
-                return Ok(HandleRequestOutcome::Interrupted);
+                return Ok(HandleRequestOutcome::Interrupted(
+                    RequestInterruptionSource::Preparation,
+                ));
             };
             let (
                 workspace,
@@ -755,7 +759,9 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                 }
                 .instrument(flow_span)
                 .await?;
-                return Ok(HandleRequestOutcome::Interrupted);
+                return Ok(HandleRequestOutcome::Interrupted(
+                    RequestInterruptionSource::Inference,
+                ));
             }
 
             result
