@@ -10,7 +10,11 @@ import {
   unsupportedImports,
 } from "@/contrib/loader";
 import { installUxHost, type UxHost } from "@/contrib/plugin";
-import { resetUxPluginStore, uxPluginRecords } from "@/contrib/plugins-store";
+import {
+  resetUxPluginStore,
+  setUxPluginEnabled,
+  uxPluginRecords,
+} from "@/contrib/plugins-store";
 import { registry } from "@/contrib/registry";
 import { SESSION_HEADER_ACTIONS_AREA } from "@/contrib/types";
 import { resetSdkImportMap } from "@/sdk/runtime";
@@ -223,17 +227,36 @@ describe("runtime loader", () => {
     expect(area[0]?.title).toBe("two");
   });
 
-  it("installs and removes a plugin's css with its lifetime", async () => {
+  it("installs a plugin's css with each activation and removes it with each deactivation", async () => {
+    const styled = () => document.querySelector('style[data-gents-ux="styled"]');
     const source = sdkModule(`export default { id: 'styled', register() {} }`);
     await loadRuntimeUxPlugin(
       { source, css: ".x{color:red}" },
       { origin: "styled", door: "dev" },
     );
-    expect(document.querySelector('style[data-gents-ux="styled"]')?.textContent).toBe(
-      ".x{color:red}",
-    );
+    expect(styled()?.textContent).toBe(".x{color:red}");
+    await setUxPluginEnabled("styled", false);
+    expect(styled()).toBeNull();
+    await setUxPluginEnabled("styled", true);
+    expect(styled()?.textContent).toBe(".x{color:red}");
     retireRuntimeUxPlugin("styled");
-    expect(document.querySelector('style[data-gents-ux="styled"]')).toBeNull();
+    expect(styled()).toBeNull();
+  });
+
+  it("keeps an opt-in plugin's css off the document until it is enabled", async () => {
+    const source = sdkModule(
+      `export default { id: 'quiet', defaultEnabled: false, register() {} }`,
+    );
+    await loadRuntimeUxPlugin(
+      { source, css: "body{display:none}" },
+      { origin: "quiet", door: "dev" },
+    );
+    expect(uxPluginRecords().quiet?.status).toBe("disabled");
+    expect(document.querySelector('style[data-gents-ux="quiet"]')).toBeNull();
+    await setUxPluginEnabled("quiet", true);
+    expect(document.querySelector('style[data-gents-ux="quiet"]')?.textContent).toBe(
+      "body{display:none}",
+    );
   });
 
   it("ships opt-in when the root caps defaultEnabled, without losing the row", async () => {

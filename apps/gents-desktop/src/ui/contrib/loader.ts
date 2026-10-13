@@ -279,7 +279,7 @@ export function unsupportedImports(
   return [...unsupported];
 }
 
-/* a <style> per plugin, replaced on reload and removed on unload */
+/* a <style> per plugin, installed on each activation, removed with it */
 const styles = new Map<string, HTMLStyleElement>();
 
 /* the one dynamic import of a URL the bundler cannot see; isolated so the
@@ -387,11 +387,13 @@ export async function loadRuntimeUxPlugin(
         `duplicate id "${plugin.id}", already loaded from ${existing.file ?? existing.door}`,
       );
     }
-    const disposeCss = installCss(plugin.id, module.css);
+    /* the stylesheet is part of the activation, not the load: a disabled
+       or opt-in plugin's css never touches the document, and every enable
+       installs it again */
     const wrapped: GentsUxPlugin = {
       ...plugin,
       register: (ctx) => {
-        ctx.onDispose(disposeCss);
+        ctx.onDispose(installCss(plugin.id, module.css));
         return plugin.register(ctx);
       },
     };
