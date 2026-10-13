@@ -1,5 +1,6 @@
 use super::*;
 
+mod authoring;
 mod crud;
 mod datastore;
 mod discovery;
@@ -405,6 +406,7 @@ fn log_config_call(
     let verb = argv.get(1).map(String::as_str).unwrap_or("");
     let reads = [
         "get", "list", "discover", "context", "help", "--help", "-h", "scan",
+        "verify",
     ];
     if help
         || previewing
@@ -1574,6 +1576,9 @@ impl ConfigCommandTool {
             .first()
             .map(String::as_str)
             .context("pack command is required; see [\"help\",\"pack\"]")?;
+        if matches!(verb, "scaffold" | "check" | "verify" | "build" | "test") {
+            return self.authoring(verb, &argv[1..]).await;
+        }
         match verb {
             "search" => {
                 let parsed = ParsedArgs::parse(&argv[1..])?;

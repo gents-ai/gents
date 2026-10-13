@@ -23,7 +23,7 @@ use crate::pack::PackManifest;
 use crate::plugin::executor::call_runner;
 use crate::plugin::{BoundDir, PluginBudget, PluginRunner, PluginVerdict};
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PluginCase {
     pub input: Value,

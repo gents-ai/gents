@@ -405,10 +405,10 @@ mod tests {
         scaffold_minimal(&dir, "review_toolkit");
         let manifest = read_manifest(&dir).unwrap();
         let dropped = manifest.metadata.assets[0].clone();
-        std::fs::remove_file(dir.path().join(&dropped)).unwrap();
-        std::fs::write(dir.path().join("notes.md"), "stray").unwrap();
-        std::fs::create_dir_all(dir.path().join("runs/job")).unwrap();
-        std::fs::write(dir.path().join("runs/job/log.txt"), "ignored").unwrap();
+        std::fs::remove_file(dir.join(&dropped)).unwrap();
+        std::fs::write(dir.join("notes.md"), "stray").unwrap();
+        std::fs::create_dir_all(dir.join("runs/job")).unwrap();
+        std::fs::write(dir.join("runs/job/log.txt"), "ignored").unwrap();
 
         let report = check_dir(&dir).await;
         assert!(
@@ -442,7 +442,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let dir = root.path().join("review_toolkit");
         scaffold_minimal(&dir, "review_toolkit");
-        std::fs::write(dir.path().join("experiment.json"), b"{}").unwrap();
+        std::fs::write(dir.join("experiment.json"), b"{}").unwrap();
         // Note: an undeclared experiment.json also trips the asset check,
         // so declare it the way a scenario-carrying pack does.
         let manifest_path = dir.join("manifest.json");
