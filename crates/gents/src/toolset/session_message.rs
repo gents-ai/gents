@@ -9,14 +9,16 @@ use crate::background_tools::{
 };
 use crate::session_message::{
     AgentInterruptArgs, AgentListArgs, AgentMessageArgs, AgentNewArgs, AgentSessionListArgs,
+    AgentSessionReadArgs,
 };
 use crate::tool_surface::{AgentToolConfig, BackgroundToolConfig};
 
 use super::shared::ToolError;
 use super::{
     AGENT_INTERRUPT_TOOL_NAME, AGENT_LIST_TOOL_NAME, AGENT_MESSAGE_TOOL_NAME, AGENT_NEW_TOOL_NAME,
-    AGENT_SESSION_LIST_TOOL_NAME, CANCEL_PROCESS_TOOL_NAME, LIST_PROCESSES_TOOL_NAME,
-    READ_PROCESS_TOOL_NAME, SPAWN_PROCESS_TOOL_NAME, WAIT_PROCESS_TOOL_NAME,
+    AGENT_SESSION_LIST_TOOL_NAME, AGENT_SESSION_READ_TOOL_NAME, CANCEL_PROCESS_TOOL_NAME,
+    LIST_PROCESSES_TOOL_NAME, READ_PROCESS_TOOL_NAME, SPAWN_PROCESS_TOOL_NAME,
+    WAIT_PROCESS_TOOL_NAME,
 };
 
 const SESSION_SERVICE_ID: &str = "session";
@@ -37,6 +39,9 @@ pub(super) struct AgentListTool;
 
 #[derive(Clone, Copy)]
 pub(super) struct AgentSessionListTool;
+
+#[derive(Clone, Copy)]
+pub(super) struct AgentSessionReadTool;
 
 #[derive(Clone)]
 pub(super) struct SpawnProcessTool {
@@ -295,6 +300,37 @@ impl Tool for AgentSessionListTool {
                     },
                     "cursor": {"type": "string"},
                     "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20}
+                }
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        args.validate()
+            .map_err(|error| invalid_arguments_error(Self::NAME, "/", error.to_string()))?;
+        Err(not_yet_executable_error(Self::NAME))
+    }
+}
+
+impl Tool for AgentSessionReadTool {
+    const NAME: &'static str = AGENT_SESSION_READ_TOOL_NAME;
+
+    type Error = ToolError;
+    type Args = AgentSessionReadArgs;
+    type Output = String;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_owned(),
+            description: "Inspect a session you may message. last returns its latest assistant message and request state; recent pages backward through bounded transcript text and tool summaries; status shows work in flight, queued steering and the Goal. Truncation is reported; tool arguments and reasoning are omitted.".to_owned(),
+            parameters: serde_json::json!({
+                "type": "object", "additionalProperties": false,
+                "required": ["session_id"],
+                "properties": {
+                    "session_id": {"type": "string", "description": "Discover available sessions with agent_session_list."},
+                    "view": {"type": "string", "enum": ["last", "recent", "status"], "default": "last"},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 6, "default": 6},
+                    "cursor": {"type": "string", "description": "next_cursor from a recent page for this session."}
                 }
             }),
         }

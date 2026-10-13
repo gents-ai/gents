@@ -396,6 +396,53 @@ impl DefraSessionHook {
                     .await?,
             ));
         }
+        if tool_name == crate::toolset::AGENT_SESSION_READ_TOOL_NAME {
+            let parsed =
+                match serde_json::from_str::<crate::session_message::AgentSessionReadArgs>(args) {
+                    Ok(parsed) => parsed,
+                    Err(error) => {
+                        return Ok(invalid_tool_arguments_payload(
+                            tool_name,
+                            "/",
+                            format!("invalid agent_session_read arguments: {error}"),
+                        ))
+                    }
+                };
+            if let Err(error) = parsed.validate() {
+                return Ok(invalid_tool_arguments_payload(
+                    tool_name,
+                    "/",
+                    error.to_string(),
+                ));
+            }
+            if parsed.session_id.trim() == caller.session_id {
+                return Ok(invalid_tool_arguments_payload(tool_name, "/session_id", "agent_session_read cannot address the calling session; use sessions to inspect this conversation"));
+            }
+            let Some(target) = crate::session_message::resolve_send_target(
+                &self.node,
+                &caller.node_did,
+                &tools,
+                parsed.session_id.trim(),
+            )
+            .await?
+            else {
+                return Ok(tool_not_allowed_payload(tool_name, "/session_id", &parsed.session_id, "session is not messageable; discover available sessions with agent_session_list", tools.target_names()));
+            };
+            if let Err(error) = parsed.validate_target(&crate::session_message::target_scope(
+                &caller.node_did,
+                &target,
+            )) {
+                return Ok(invalid_tool_arguments_payload(
+                    tool_name,
+                    "/cursor",
+                    error.to_string(),
+                ));
+            }
+            return Ok(json_string(
+                crate::session_message::agent_session_read(&self.node, &caller, &tools, &parsed)
+                    .await?,
+            ));
+        }
         let parsed = match serde_json::from_str::<crate::session_message::AgentInterruptArgs>(args)
         {
             Ok(parsed) => parsed,

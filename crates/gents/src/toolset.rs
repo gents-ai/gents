@@ -31,7 +31,8 @@ use cli_tool::CliTool;
 use file_tools::{EditFileTool, GlobTool, GrepTool, ListFilesTool, ReadFileTool, WriteFileTool};
 use session_message::{
     AgentInterruptTool, AgentListTool, AgentMessageTool, AgentNewTool, AgentSessionListTool,
-    CancelProcessTool, ListProcessesTool, ReadProcessTool, SpawnProcessTool, WaitProcessTool,
+    AgentSessionReadTool, CancelProcessTool, ListProcessesTool, ReadProcessTool, SpawnProcessTool,
+    WaitProcessTool,
 };
 
 use crate::tool_surface::{AgentToolConfig, BackgroundToolConfig};
@@ -135,14 +136,16 @@ pub const AGENT_MESSAGE_TOOL_NAME: &str = "agent_message";
 pub const AGENT_INTERRUPT_TOOL_NAME: &str = "agent_interrupt";
 pub const AGENT_LIST_TOOL_NAME: &str = "agent_list";
 pub const AGENT_SESSION_LIST_TOOL_NAME: &str = "agent_session_list";
+pub const AGENT_SESSION_READ_TOOL_NAME: &str = "agent_session_read";
 /// The agents tool group (`AgentTools.enabled`), in the order they are
 /// offered.
-pub const AGENT_TOOL_NAMES: [&str; 5] = [
+pub const AGENT_TOOL_NAMES: [&str; 6] = [
     AGENT_NEW_TOOL_NAME,
     AGENT_MESSAGE_TOOL_NAME,
     AGENT_INTERRUPT_TOOL_NAME,
     AGENT_LIST_TOOL_NAME,
     AGENT_SESSION_LIST_TOOL_NAME,
+    AGENT_SESSION_READ_TOOL_NAME,
 ];
 pub(crate) const SPAWN_PROCESS_TOOL_NAME: &str = "spawn_process";
 pub(crate) const WAIT_PROCESS_TOOL_NAME: &str = "wait_process";
@@ -711,6 +714,7 @@ pub(crate) fn build_agent_tools(config: AgentToolConfig) -> Vec<Box<dyn ToolDyn>
     tools.push(Box::new(AgentInterruptTool));
     tools.push(Box::new(AgentListTool));
     tools.push(Box::new(AgentSessionListTool));
+    tools.push(Box::new(AgentSessionReadTool));
     tools
 }
 
