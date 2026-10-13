@@ -4,6 +4,7 @@ import { emitUxEvent, listenerCount } from "@/contrib/events";
 import {
   createUxContext,
   installUxHost,
+  isGentsUxPlugin,
   UndeclaredContributionError,
   type UxHost,
 } from "@/contrib/plugin";
@@ -174,6 +175,47 @@ describe("ux plugin context", () => {
   it("rejects ctx.plugin for a plugin that ships in no pack", async () => {
     const ctx = createUxContext("loose", { onDispose: (d) => collected.push(d) });
     await expect(ctx.plugin("tool", {})).rejects.toThrow(/needs a pack/);
+  });
+
+  it("admits only a snake_case plugin id, as a pack name", () => {
+    const plugin = (id: unknown) => ({ id, register() {} });
+    for (const ok of ["a", "hello", "focus_timer", "b2", "x".repeat(64)]) {
+      expect(isGentsUxPlugin(plugin(ok)), ok).toBe(true);
+    }
+    for (const bad of [
+      "",
+      "Hello",
+      "a.b",
+      "a:b",
+      "a/b",
+      "a b",
+      "-a",
+      "_a",
+      "1a",
+      "x".repeat(65),
+      "decisions.v1",
+      "../x",
+      1,
+      null,
+    ]) {
+      expect(isGentsUxPlugin(plugin(bad)), String(bad)).toBe(false);
+    }
+  });
+
+  it("refuses a contribution id that could not be a route segment", () => {
+    const ctx = createUxContext("acme", { onDispose: (d) => collected.push(d) });
+    const data = { group: "g", label: "l", render: () => null };
+    for (const bad of ["", "a/b", "a?b", "a#b", "a:b", "a b", "\t"]) {
+      expect(
+        () => ctx.register({ id: bad, area: AGENT_SECTIONS_AREA, data }),
+        JSON.stringify(bad),
+      ).toThrow("one segment");
+    }
+    expect(registry.getArea(AGENT_SECTIONS_AREA)).toHaveLength(0);
+    ctx.register({ id: "page-2.v1", area: AGENT_SECTIONS_AREA, data });
+    expect(registry.getArea(AGENT_SECTIONS_AREA).map((c) => c.id)).toEqual([
+      "acme:page-2.v1",
+    ]);
   });
 
   it("scopes storage under gents.ux.<id>", () => {

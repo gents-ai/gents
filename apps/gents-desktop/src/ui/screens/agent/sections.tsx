@@ -188,6 +188,10 @@ function isSectionData(data: unknown): data is AgentSectionData {
   );
 }
 
+/* the section id becomes a route segment; one that could not round-trip
+   through the route is left out rather than left unreachable */
+const isRouteSegment = (id: string) => !/[\s/?#]/.test(id);
+
 /* a plugin's icon is a node, not a component; the sidebar wants a component */
 const iconOf = (node: ReactNode): ComponentType<{ className?: string }> =>
   node === undefined || node === null ? Puzzle : () => <>{node}</>;
@@ -218,7 +222,9 @@ export function useAgentSections(): readonly AgentSection[] {
     () => [
       ...SECTIONS,
       ...contributed.flatMap((c) =>
-        isSectionData(c.data) ? [contributedSection(c.id, c.data)] : [],
+        isSectionData(c.data) && isRouteSegment(c.id)
+          ? [contributedSection(c.id, c.data)]
+          : [],
       ),
     ],
     [contributed],

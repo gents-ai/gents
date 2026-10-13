@@ -5,6 +5,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import { navItems, registerNavItem, type NavItem } from "@/app/navRegistry";
+import { createUxContext } from "@/contrib/plugin";
+import { NAV_AREA } from "@/contrib/types";
 import type { Route } from "@/lib/router";
 
 const disposers: Array<() => void> = [];
@@ -47,6 +49,14 @@ describe("nav registry", () => {
 
     disposers.splice(0).forEach((dispose) => dispose());
     expect(navItems()).toEqual([]);
+  });
+
+  it("keys a plugin's row on its namespaced contribution id, whatever the payload says", () => {
+    const ctx = createUxContext("acme", { onDispose: (d) => disposers.push(d) });
+    const other = createUxContext("beta", { onDispose: (d) => disposers.push(d) });
+    ctx.register({ id: "nav", area: NAV_AREA, data: make("dup") });
+    other.register({ id: "nav", area: NAV_AREA, data: make("dup") });
+    expect(navItems().map((item) => item.id)).toEqual(["acme:nav", "beta:nav"]);
   });
 
   it("keeps a row's active predicate, badge and placement", () => {

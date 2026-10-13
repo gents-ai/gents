@@ -237,6 +237,11 @@ export function createUxContext(
 ): UxContext {
   const source = `plugin:${pluginId}`;
   const scope = (c: UxContribution): Contribution => {
+    if (typeof c.id !== "string" || !CONTRIBUTION_ID_RE.test(c.id)) {
+      throw new Error(
+        `${pluginId}: contribution id ${JSON.stringify(c.id)} must be one segment without whitespace, "/", "?", "#" or ":"`,
+      );
+    }
     assertDeclared(pluginId, c, options.declared);
     return { ...c, id: `${pluginId}:${c.id}`, source };
   };
@@ -273,13 +278,24 @@ export function createUxContext(
   };
 }
 
+/** a plugin id: a snake_case name, the rule a pack and a dev folder follow
+    (`is_valid_pack_name` in Rust). It prefixes storage keys, contribution
+    ids and routes, so no `.`, `:`, `/` or whitespace. */
+export const UX_PLUGIN_ID_RE = /^[a-z][a-z0-9_]{0,63}$/;
+
+export function isValidUxPluginId(id: unknown): id is string {
+  return typeof id === "string" && UX_PLUGIN_ID_RE.test(id);
+}
+
+/** a contribution's local id: one segment, legal in a route */
+const CONTRIBUTION_ID_RE = /^[^\s/?#:]{1,128}$/;
+
 /** what every loader checks before trusting a module's default export */
 export function isGentsUxPlugin(value: unknown): value is GentsUxPlugin {
   return (
     typeof value === "object" &&
     value !== null &&
-    typeof (value as { id?: unknown }).id === "string" &&
-    (value as { id: string }).id.length > 0 &&
+    isValidUxPluginId((value as { id?: unknown }).id) &&
     typeof (value as { register?: unknown }).register === "function"
   );
 }

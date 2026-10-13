@@ -58,12 +58,16 @@ let snapshot: readonly NavItem[] = [];
 
 /* the registry caches per area; the nav keeps its own derived list keyed on
    that reference, so a plugin's row with a malformed payload is dropped
-   rather than crashing the rail */
+   rather than crashing the rail. A row's id is the registry's namespaced
+   contribution id (`<plugin>:<local>`), unique by construction, whatever
+   the payload says: React keys on it. */
 export function navItems(): readonly NavItem[] {
   const area = registry.getArea(NAV_AREA);
   if (area !== snapshotFor) {
     snapshotFor = area;
-    snapshot = area.map((c) => c.data).filter(isNavItem);
+    snapshot = area.flatMap((c) =>
+      isNavItem(c.data) ? [{ ...c.data, id: c.id }] : [],
+    );
   }
   return snapshot;
 }

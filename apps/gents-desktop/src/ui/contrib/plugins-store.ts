@@ -34,13 +34,27 @@ export interface UxDeclaredContributions {
 
 /* Explicit choices, id -> boolean. Absence means no choice: the plugin's own
    defaultEnabled applies. Absence is not "enabled", which is what lets an
-   opt-in plugin ship off. */
-const DECISIONS_KEY = "gents.ux.decisions.v1";
+   opt-in plugin ship off. The key sits outside `gents.ux.<id>.` so no
+   plugin's storage can reach it. */
+const DECISIONS_KEY = "gents.ux-decisions.v1";
+
+/* only what this store wrote: a plain object of booleans; anything else
+   (another shape, a tampered value) is no choice at all, never a throw
+   during discovery */
+function parseDecisions(raw: string): Record<string, boolean> {
+  const parsed: unknown = JSON.parse(raw);
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
+  const out: Record<string, boolean> = {};
+  for (const [id, value] of Object.entries(parsed as Record<string, unknown>)) {
+    if (typeof value === "boolean") out[id] = value;
+  }
+  return out;
+}
 
 function loadDecisions(): Record<string, boolean> {
   try {
     const raw = window.localStorage.getItem(DECISIONS_KEY);
-    if (raw) return JSON.parse(raw) as Record<string, boolean>;
+    if (raw) return parseDecisions(raw);
   } catch {
     /* no storage, or an unreadable value: no choices */
   }
@@ -68,6 +82,12 @@ function subscribe(fn: () => void) {
   };
 }
 
+/** re-read the persisted choices; test seam */
+export function reloadUxDecisions(): void {
+  decisions = loadDecisions();
+  notify();
+}
+
 export function uxDecisions(): Readonly<Record<string, boolean>> {
   return decisions;
 }
@@ -86,7 +106,9 @@ export function useUxDecisions(): Readonly<Record<string, boolean>> {
 
 /** whether a plugin registers: the explicit choice, else its own default */
 export function uxPluginActive(id: string, defaultEnabled = true): boolean {
-  return id in decisions ? decisions[id]! : defaultEnabled;
+  return Object.prototype.hasOwnProperty.call(decisions, id)
+    ? decisions[id]!
+    : defaultEnabled;
 }
 
 function saveDecisions(next: Record<string, boolean>) {

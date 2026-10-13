@@ -2,8 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen } from "@testing-library/react";
 
 import { activateUxPlugin, isUxPluginLive } from "@/contrib/activate";
-import { installUxHost, type GentsUxPlugin, type UxHost } from "@/contrib/plugin";
 import {
+  createUxContext,
+  installUxHost,
+  type GentsUxPlugin,
+  type UxHost,
+} from "@/contrib/plugin";
+import {
+  reloadUxDecisions,
   resetUxPluginStore,
   setUxPluginEnabled,
   uxDecisions,
@@ -72,7 +78,7 @@ describe("activation and the plugin store", () => {
     expect(isUxPluginLive("a")).toBe(false);
     expect(registry.getArea(SESSION_HEADER_ACTIONS_AREA)).toHaveLength(0);
     expect(uxDecisions().a).toBe(false);
-    expect(window.localStorage.getItem("gents.ux.decisions.v1")).toContain('"a":false');
+    expect(window.localStorage.getItem("gents.ux-decisions.v1")).toContain('"a":false');
 
     activateUxPlugin(chipPlugin("a"), { door: "bundled" });
     expect(uxPluginRecords().a?.status).toBe("disabled");
@@ -87,6 +93,25 @@ describe("activation and the plugin store", () => {
     expect(uxPluginRecords().opt?.status).toBe("disabled");
     expect(uxPluginActive("opt", false)).toBe(false);
     expect(uxPluginActive("opt", true)).toBe(true);
+  });
+
+  it("keeps its decisions out of every plugin's storage and reads only booleans", () => {
+    activateUxPlugin(chipPlugin("decisions"), { door: "bundled" });
+    const ctx = createUxContext("decisions");
+    ctx.storage.set("v1", { a: false });
+    expect(uxPluginActive("a")).toBe(true);
+    expect(window.localStorage.getItem("gents.ux.decisions.v1")).toBe('{"a":false}');
+    expect(window.localStorage.getItem("gents.ux-decisions.v1")).toBeNull();
+
+    for (const tampered of ["[]", "1", "null", '"x"', '{"a":"no","b":false,"c":1}']) {
+      window.localStorage.setItem("gents.ux-decisions.v1", tampered);
+      expect(() => reloadUxDecisions()).not.toThrow();
+      expect(uxPluginActive("a")).toBe(true);
+      expect(uxPluginActive("c")).toBe(true);
+      expect(uxPluginActive("b")).toBe(tampered.includes('"b"') ? false : true);
+      expect(uxPluginActive("hasOwnProperty")).toBe(true);
+      expect(uxPluginActive("constructor")).toBe(true);
+    }
   });
 
   it("rolls back a register() that throws and reports on the plugin's row", () => {
