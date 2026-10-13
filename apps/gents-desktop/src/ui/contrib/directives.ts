@@ -49,9 +49,11 @@ export function parseTranscriptDirective(
   return { name: match[1]!, attrs, source: trimmed };
 }
 
-/* the contribution that claimed a name; first registration wins, so a
-   later plugin cannot hijack a name an earlier one owns. Takes the area
-   snapshot so a React caller can pass what it subscribed to. */
+/* the contribution that claimed a name. A plugin's context refuses a
+   second claim at register time, so among live plugin registrations a name
+   has one owner; the first in the snapshot settles anything registered
+   around the context. Takes the area snapshot so a React caller can pass
+   what it subscribed to. */
 export function resolveDirective(
   name: string,
   area: readonly Contribution[] = registry.getArea(TRANSCRIPT_DIRECTIVE_AREA),

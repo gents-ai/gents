@@ -46,6 +46,13 @@ class ContributionRegistry {
   /** every area that has at least one entry */
   areas = (): string[] => [...this.byArea.keys()];
 
+  /** the first registered entry of `area` the predicate accepts, hidden
+      ones included: what a claim check reads, in registration order */
+  find = (
+    area: string,
+    accept: (c: Contribution) => boolean,
+  ): Contribution | undefined => this.byArea.get(area)?.find(accept);
+
   /** any mutation; engines that react to every change */
   subscribe = (fn: Listener): (() => void) => {
     this.globalListeners.add(fn);

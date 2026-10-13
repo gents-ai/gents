@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { resolveDirective } from "@/contrib/directives";
 import { emitUxEvent, listenerCount } from "@/contrib/events";
 import {
   createUxContext,
@@ -216,6 +217,59 @@ describe("ux plugin context", () => {
     expect(registry.getArea(AGENT_SECTIONS_AREA).map((c) => c.id)).toEqual([
       "acme:page-2.v1",
     ]);
+  });
+
+  it("gives a directive name one owner: order and reload cannot move it", () => {
+    const first = createUxContext("first", { onDispose: (d) => collected.push(d) });
+    const second = createUxContext("second", { onDispose: (d) => collected.push(d) });
+    const claim = (ctx: ReturnType<typeof createUxContext>, order?: number) =>
+      ctx.register({
+        id: "d",
+        area: TRANSCRIPT_DIRECTIVE_AREA,
+        order,
+        data: { name: "dup", render: () => ctx.pluginId },
+      });
+    const resolved = () =>
+      resolveDirective("dup")?.render({ attrs: {}, source: "", streaming: false });
+
+    const release = claim(first);
+    expect(() => claim(second, -1)).toThrow(
+      'directive "dup" is already claimed by plugin:first',
+    );
+    expect(resolved()).toBe("first");
+
+    /* a reload of the owner (dispose, register again) keeps it */
+    release();
+    expect(resolveDirective("dup")).toBeNull();
+    const again = claim(first);
+    expect(() => claim(second, -1)).toThrow("already claimed");
+    expect(resolved()).toBe("first");
+
+    /* once the owner is gone, the next claim takes the name */
+    again();
+    claim(second);
+    expect(resolved()).toBe("second");
+    expect(() => claim(first)).toThrow("already claimed by plugin:second");
+  });
+
+  it("serves the payload it checked, not the plugin's object afterwards", () => {
+    const ctx = createUxContext("acme", {
+      onDispose: (d) => collected.push(d),
+      declared: { areas: [TRANSCRIPT_DIRECTIVE_AREA], directives: ["ok"] },
+    });
+    const data = { name: "ok", render: () => "ok" };
+    ctx.register({ id: "d", area: TRANSCRIPT_DIRECTIVE_AREA, data });
+    expect(() => {
+      data.name = "undeclared";
+    }).not.toThrow();
+    expect(resolveDirective("undeclared")).toBeNull();
+    expect(
+      resolveDirective("ok")?.render({ attrs: {}, source: "", streaming: false }),
+    ).toBe("ok");
+    const served = registry.getArea(TRANSCRIPT_DIRECTIVE_AREA)[0]!.data as {
+      name: string;
+    };
+    expect(Object.isFrozen(served)).toBe(true);
   });
 
   it("scopes storage under gents.ux.<id>", () => {

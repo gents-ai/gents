@@ -220,6 +220,26 @@ function assertDeclared(
   }
 }
 
+/* a directive name has one owner: the first live registration. A second
+   claim is refused here, when it is made, so neither `order` nor a later
+   reload can move the name; it frees when the owner's registration is
+   disposed. */
+function assertUnclaimed(pluginId: string, id: string, c: UxContribution) {
+  const name = (c.data as { name?: unknown } | undefined)?.name;
+  if (typeof name !== "string" || name.length === 0) {
+    throw new Error(`${pluginId}: a transcript directive needs a name`);
+  }
+  const owner = registry.find(
+    TRANSCRIPT_DIRECTIVE_AREA,
+    (e) => (e.data as { name?: unknown } | undefined)?.name === name,
+  );
+  if (owner && owner.id !== id) {
+    throw new Error(
+      `${pluginId}: directive "${name}" is already claimed by ${owner.source ?? owner.id}`,
+    );
+  }
+}
+
 export interface CreateContextOptions {
   /** every registration's disposer lands here; the loader runs them on unload */
   onDispose?: (dispose: () => void) => void;
@@ -243,7 +263,16 @@ export function createUxContext(
       );
     }
     assertDeclared(pluginId, c, options.declared);
-    return { ...c, id: `${pluginId}:${c.id}`, source };
+    const id = `${pluginId}:${c.id}`;
+    if (c.area === TRANSCRIPT_DIRECTIVE_AREA) assertUnclaimed(pluginId, id, c);
+    /* the registry keeps its own frozen snapshot of the payload: what was
+       checked is what is served, whatever the plugin does to its object
+       afterwards */
+    const data =
+      typeof c.data === "object" && c.data !== null && !Array.isArray(c.data)
+        ? Object.freeze({ ...(c.data as Record<string, unknown>) })
+        : c.data;
+    return { ...c, id, source, data };
   };
   const track = (dispose: () => void) => {
     options.onDispose?.(dispose);
