@@ -1,7 +1,6 @@
 import type { DesktopClientUpdatedListenerFactory } from "@source-inc/gents-desktop-client";
 import { listenToDesktopClientUpdates } from "@source-inc/gents-desktop-client";
 
-import { isMacTauriShell } from "../lib/shellPlatform";
 import { clientRunning } from "./clientStore";
 import { readSession } from "./sessionStore";
 import type { DesktopApp } from "./desktopApp";
@@ -125,10 +124,6 @@ export function startClientObservation(
     };
     document.addEventListener("visibilitychange", onVisibilityChange);
     window.addEventListener("focus", refreshForegroundState);
-    /* closing sibling windows returns focus to the surviving view: the host
-       can narrow its observation again once it is the only one */
-    const mac = isMacTauriShell();
-    if (mac) window.addEventListener("focus", publishSelection);
 
     return () => {
       stopped = true;
@@ -139,7 +134,6 @@ export function startClientObservation(
       unsubscribeTracked();
       document.removeEventListener("visibilitychange", onVisibilityChange);
       window.removeEventListener("focus", refreshForegroundState);
-      if (mac) window.removeEventListener("focus", publishSelection);
       unlisten?.();
     };
   }

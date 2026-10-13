@@ -5,7 +5,7 @@ use gents_desktop_core::local_runtime::{
     dangerously_overwrite_desktop_home, init_standard_local_runtime, reset_desktop_runtime_state,
     DesktopInitOptions, DesktopInitSummary,
 };
-use tauri::{AppHandle, Emitter, Manager, Runtime, State};
+use tauri::{AppHandle, Emitter, Manager, Runtime, State, WebviewWindow};
 use tokio::sync::watch;
 
 use crate::config::BootstrapPolicy;
@@ -217,7 +217,7 @@ async fn run_detached_client_start<R: Runtime>(
                 let mut bridge = state.bridge.lock().expect("desktop bridge lock poisoned");
                 let orphan = if bridge.core.is_none() {
                     let updates_task = spawn_client_update_task(app.clone(), Arc::clone(&core));
-                    bridge.core = Some(Arc::clone(&core));
+                    bridge.install_core(Arc::clone(&core));
                     bridge.updates_task = Some(updates_task);
                     None
                 } else {
@@ -554,26 +554,27 @@ fn classify_client_start_error(
 
 #[tauri::command]
 pub fn desktop_set_selected_node<R: Runtime>(
-    app: AppHandle<R>,
+    window: WebviewWindow<R>,
     state: State<'_, DesktopAppState>,
     node_did: Option<String>,
 ) -> Result<(), BridgeError> {
-    let Some(core) = current_core(&state) else {
-        return Err(BridgeError::new(
-            BridgeErrorCode::ClientNotRunning,
-            "desktop client not initialized",
-        ));
-    };
     let did = node_did
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
-    // The backend is shared by all native views; only a single-view host may
-    // narrow its observation/request lookup scope to the selected node.
-    core.set_selected_node_did(if app.webview_windows().len() > 1 {
-        None
-    } else {
-        did.clone()
-    });
+    let core = {
+        let mut bridge = state.bridge.lock().expect("desktop bridge lock poisoned");
+        if !bridge.has_window(window.label()) {
+            return Ok(());
+        }
+        let core = bridge.core.clone().ok_or_else(|| {
+            BridgeError::new(
+                BridgeErrorCode::ClientNotRunning,
+                "desktop client not initialized",
+            )
+        })?;
+        bridge.set_window_selected_node(window.label(), did.clone());
+        core
+    };
 
     if let Some(did_str) = did {
         let core_arc = Arc::clone(&core);
