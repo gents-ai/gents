@@ -1,0 +1,514 @@
+//! Every validation an install runs, for a pack directory, writing nothing;
+//! and the README's generated topology diagram. The shared-library owner
+//! behind `gents pack check` and `gents pack graph`.
+//!
+//! The rules are the installer's own owners, called the way install calls
+//! them: the pack writer and reader for files, paths and the digest, the
+//! configuration loader and apply plan, the graph compiler with a
+//! placeholder owner. Every problem is reported by name, not only the first.
+//!
+//! Two checks stay with the CLI integration and are named in
+//! [`CheckReport::unverified`] rather than run here, because their owners
+//! live outside this crate:
+//!
+//! - Event-source filter validation runs every filter as a query against an
+//!   embedded node through `ConfigAccess` (the CLI's
+//!   `commands::schema::apply_pack_schemas_if_present` applies the pack's
+//!   schemas first).
+//! - `experiment.json` scenario validation is the CLI's
+//!   `commands::pack::scenario::validate_scenario_defaults`.
+
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result};
+use serde::Serialize;
+use serde_json::json;
+
+use crate::pack::{declared_paths, PackKind, PackManifest};
+use crate::pack_archive::{pack_dir, PackArchive};
+
+/// The owner a checked pack is bound to. Never written anywhere.
+pub const PLACEHOLDER_OWNER: &str = "did:key:zPackCheckPlaceholderOwner";
+const TOPOLOGY_START: &str = "<!-- pack-topology:start -->";
+const TOPOLOGY_END: &str = "<!-- pack-topology:end -->";
+
+#[derive(Debug, Serialize)]
+pub struct CheckReport {
+    pub dir: PathBuf,
+    pub pack: Option<String>,
+    pub digest: Option<String>,
+    pub graphs: Vec<String>,
+    pub problems: Vec<String>,
+    /// Checks this layer could not run because their owners live in the
+    /// CLI (event-source filter queries against an embedded node;
+    /// `experiment.json` scenario validation). A caller integrating
+    /// `gents pack check` runs them itself and folds the results into
+    /// `problems`; an empty list here means nothing was skipped, not that
+    /// the pack passed.
+    pub unverified: Vec<&'static str>,
+}
+
+/// Checks the pack directory `dir`.
+pub async fn check_dir(dir: &Path) -> CheckReport {
+    let mut report = CheckReport {
+        dir: dir.to_path_buf(),
+        pack: None,
+        digest: None,
+        graphs: Vec::new(),
+        problems: Vec::new(),
+        unverified: Vec::new(),
+    };
+    let manifest = match read_manifest(dir) {
+        Ok(manifest) => manifest,
+        Err(error) => {
+            report.problems.push(format!("{error:#}"));
+            return report;
+        }
+    };
+    report.pack = Some(manifest.name.clone());
+    let unbuilt = check_files(dir, &manifest, &mut report.problems);
+    if !report.problems.is_empty() {
+        return report;
+    }
+    if !unbuilt.is_empty() {
+        // `gents pack build` compiles these; the digest exists only after it.
+        if let Err(error) = crate::pack::validate_manifest(&manifest.name, &manifest) {
+            report.problems.push(format!("{error:#}"));
+        }
+        if manifest.metadata.kind != PackKind::Plugins {
+            report.problems.push(format!(
+                "build the plugins ({}) with gents pack build before checking its configuration",
+                unbuilt.join(", ")
+            ));
+        }
+        check_readme(dir, &mut report.problems);
+        return report;
+    }
+
+    let archive = match pack_dir(dir).and_then(|(bytes, _)| PackArchive::from_bytes(&bytes)) {
+        Ok(archive) => archive,
+        Err(error) => {
+            report.problems.push(format!("{error:#}"));
+            return report;
+        }
+    };
+    report.digest = Some(archive.digest().to_owned());
+
+    if matches!(
+        manifest.metadata.kind,
+        PackKind::Documents | PackKind::Graph
+    ) {
+        match load_config(&archive) {
+            Ok(config) => {
+                if manifest.metadata.kind == PackKind::Graph {
+                    match crate::graph_package::check_graph_pack(&archive, PLACEHOLDER_OWNER) {
+                        Ok(plans) => {
+                            report.graphs = plans.into_iter().map(|plan| plan.graph_id).collect()
+                        }
+                        Err(error) => report.problems.push(format!("{error:#}")),
+                    }
+                    check_topology(dir, &config, &mut report.problems);
+                }
+                if config
+                    .event_sources
+                    .iter()
+                    .any(|source| source.filter.is_some())
+                {
+                    // The embedded-node filter query and the pack-schema
+                    // apply it needs are the CLI's owners; a caller folds
+                    // their outcome into `problems`.
+                    report.unverified.push("event_source_filters");
+                }
+            }
+            Err(error) => report.problems.push(format!("{error:#}")),
+        }
+    }
+    if dir.join("experiment.json").is_file() {
+        report.unverified.push("experiment_scenario");
+    }
+    check_readme(dir, &mut report.problems);
+    report
+}
+
+pub fn read_manifest(dir: &Path) -> Result<PackManifest> {
+    let path = dir.join("manifest.json");
+    let bytes = std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
+    serde_json::from_slice(&bytes).with_context(|| format!("parsing {}", path.display()))
+}
+
+/// Declared files that are missing, and present files that are not declared.
+/// Plugin sources are built into their artifacts and never travel, and
+/// directories a pack may never carry (`runs/`, `target/`, dotfiles) are
+/// skipped. Returns the plugins whose artifact is missing but has a source
+/// to build it from.
+pub fn check_files(dir: &Path, manifest: &PackManifest, problems: &mut Vec<String>) -> Vec<String> {
+    let declared = declared_paths(manifest);
+    let mut unbuilt = Vec::new();
+    for path in &declared {
+        if dir.join(path).is_file() {
+            continue;
+        }
+        match manifest
+            .metadata
+            .plugins
+            .iter()
+            .find(|plugin| &plugin.artifact == path && plugin.source.is_some())
+        {
+            Some(plugin) => unbuilt.push(plugin.name.clone()),
+            None => problems.push(format!("declares {path}, which is missing")),
+        }
+    }
+    let sources: Vec<String> = manifest
+        .metadata
+        .plugins
+        .iter()
+        .filter_map(|plugin| plugin.source.as_ref())
+        .map(|source| format!("{}/", source.trim_end_matches('/')))
+        .collect();
+    let mut present = Vec::new();
+    if let Err(error) = walk(dir, dir, &mut present) {
+        problems.push(format!("{error:#}"));
+    }
+    for path in present {
+        if declared.binary_search(&path).is_err()
+            && !sources
+                .iter()
+                .any(|source| path.starts_with(source.as_str()))
+        {
+            problems.push(format!("{path} is present but not declared in assets"));
+        }
+    }
+    unbuilt
+}
+
+fn walk(root: &Path, dir: &Path, out: &mut Vec<String>) -> Result<()> {
+    for entry in std::fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
+        let entry = entry?;
+        let path = entry.path();
+        let relative = path
+            .strip_prefix(root)
+            .context("walked outside the pack")?
+            .to_string_lossy()
+            .replace('\\', "/");
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.')
+            || matches!(
+                name.as_str(),
+                "runs" | "target" | "node_modules" | "__pycache__"
+            )
+        {
+            continue;
+        }
+        if entry.file_type()?.is_dir() {
+            walk(root, &path, out)?;
+        } else {
+            out.push(relative);
+        }
+    }
+    Ok(())
+}
+
+/// Loads the pack's canonical configuration exactly as an install would,
+/// for the placeholder owner, through the common loader and the desired
+/// state apply plan.
+pub fn load_config(archive: &PackArchive) -> Result<crate::document_config::PackConfig> {
+    let config = crate::pack::load_pack_config(
+        archive.manifest(),
+        &crate::pack::PackInstallOptions {
+            node_did: PLACEHOLDER_OWNER.into(),
+        },
+        &|path| archive.asset(path).map(Vec::from),
+        &|_| None,
+    )?;
+    crate::config_client::DesiredStateApplyPlan::from_pack_config(&config)?;
+    Ok(config)
+}
+
+pub fn check_readme(dir: &Path, problems: &mut Vec<String>) {
+    match std::fs::read_to_string(dir.join("README.md")) {
+        Ok(text) if text.contains("## ") => {}
+        Ok(_) => problems.push("README.md needs sections on configuration and usage".into()),
+        Err(_) => problems.push("README.md is missing".into()),
+    }
+}
+
+fn check_topology(
+    dir: &Path,
+    config: &crate::document_config::PackConfig,
+    problems: &mut Vec<String>,
+) {
+    let block = topology_block(config);
+    let current = std::fs::read_to_string(dir.join("README.md")).unwrap_or_default();
+    if !current.contains(&block) {
+        problems.push(
+            "README.md topology diagram is stale or missing; run gents pack graph --write-readme"
+                .into(),
+        );
+    }
+}
+
+/// The README's generated diagram: every graph's nodes and port edges.
+pub fn topology_block(config: &crate::document_config::PackConfig) -> String {
+    let mut labels: Vec<&str> = Vec::new();
+    fn id<'a>(labels: &mut Vec<&'a str>, label: &'a str) -> usize {
+        labels
+            .iter()
+            .position(|known| *known == label)
+            .unwrap_or_else(|| {
+                labels.push(label);
+                labels.len() - 1
+            })
+    }
+    let mut edges = Vec::new();
+    for graph in &config.graph_intents {
+        for node in &graph.nodes {
+            id(&mut labels, &node.node_id);
+        }
+        for edge in &graph.edges {
+            let from = id(&mut labels, &edge.from.node_id);
+            let to = id(&mut labels, &edge.to.node_id);
+            let label = format!("{} \u{2192} {}", edge.from.port, edge.to.port);
+            edges.push(format!("    n{from} -->|{}| n{to}", json!(label)));
+        }
+    }
+    let nodes = labels
+        .iter()
+        .enumerate()
+        .map(|(index, label)| format!("    n{index}[{}]", json!(label)))
+        .collect::<Vec<_>>();
+    format!(
+        "{TOPOLOGY_START}\n```mermaid\nflowchart LR\n{}\n{}\n```\n{TOPOLOGY_END}",
+        nodes.join("\n"),
+        edges.join("\n")
+    )
+}
+
+/// Writes the graph pack at `dir`'s topology diagram into its README, in
+/// place of the previous one or as a new section at the end.
+pub fn write_topology(dir: &Path) -> Result<()> {
+    let (bytes, _) = pack_dir(dir).with_context(|| format!("packing {}", dir.display()))?;
+    let block = topology_block(&load_config(&PackArchive::from_bytes(&bytes)?)?);
+    let readme = dir.join("README.md");
+    let text = std::fs::read_to_string(&readme)
+        .with_context(|| format!("reading {}", readme.display()))?;
+    let updated = match (text.find(TOPOLOGY_START), text.find(TOPOLOGY_END)) {
+        (Some(start), Some(end)) if start < end => {
+            format!(
+                "{}{block}{}",
+                &text[..start],
+                &text[end + TOPOLOGY_END.len()..]
+            )
+        }
+        _ => format!(
+            "{}\n## Declared topology\n\nCompiled capability edges.\n\n{block}\n",
+            text.trim_end_matches('\n')
+        ),
+    };
+    std::fs::write(&readme, updated).with_context(|| format!("writing {}", readme.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A minimal documents pack, written by the scaffolder so the check's
+    /// fixtures can never drift from what a scaffold produces.
+    fn scaffold_minimal(dir: &Path, name: &str) {
+        super::super::scaffold::scaffold(
+            dir,
+            name,
+            &super::super::scaffold::ScaffoldInput {
+                kind: None,
+                namespace: "acme".into(),
+                template: Some(super::super::template::Template::Minimal),
+                language: None,
+            },
+        )
+        .unwrap();
+    }
+
+    fn scaffold_graph(dir: &Path, name: &str) {
+        super::super::scaffold::scaffold(
+            dir,
+            name,
+            &super::super::scaffold::ScaffoldInput {
+                kind: None,
+                namespace: "acme".into(),
+                template: Some(super::super::template::Template::Graph),
+                language: None,
+            },
+        )
+        .unwrap();
+    }
+
+    /// A freshly scaffolded documents pack checks clean; the same check of
+    /// its packed-and-rewritten copy reports the same digest (the shape the
+    /// CLI's scaffold tests assert against its own check).
+    #[tokio::test]
+    async fn a_scaffolded_minimal_pack_checks_clean_with_a_digest() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("review_toolkit");
+        scaffold_minimal(&dir, "review_toolkit");
+        let report = check_dir(&dir).await;
+        assert!(
+            report.problems.is_empty(),
+            "{:#?}",
+            report.problems
+        );
+        assert!(report.unverified.is_empty(), "{:#?}", report.unverified);
+        assert!(report.digest.is_some());
+        assert_eq!(report.graphs, Vec::<String>::new());
+    }
+
+    /// A freshly scaffolded graph pack checks clean and names its graph.
+    #[tokio::test]
+    async fn a_scaffolded_graph_pack_checks_clean_and_names_its_graph() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("review_toolkit");
+        scaffold_graph(&dir, "review_toolkit");
+        let report = check_dir(&dir).await;
+        assert!(
+            report.problems.is_empty(),
+            "{:#?}",
+            report.problems
+        );
+        assert_eq!(report.graphs, vec!["review-toolkit".to_owned()]);
+    }
+
+    /// A shipped plan that is not what this build compiles is refused by
+    /// name, the same way install refuses it.
+    #[tokio::test]
+    async fn a_shipped_plan_that_differs_from_compilation_is_refused() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("review_toolkit");
+        scaffold_graph(&dir, "review_toolkit");
+        let plan_path = dir.join("graphs/review_toolkit.plan.json");
+        let mut plan: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&plan_path).unwrap()).unwrap();
+        plan["digest"] = "sha256:0".into();
+        std::fs::write(&plan_path, serde_json::to_vec_pretty(&plan).unwrap()).unwrap();
+        let report = check_dir(&dir).await;
+        assert!(
+            report
+                .problems
+                .iter()
+                .any(|problem| problem.contains("rebuild the pack")),
+            "{:#?}",
+            report.problems
+        );
+    }
+
+    #[tokio::test]
+    async fn missing_and_undeclared_files_are_each_named() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("review_toolkit");
+        scaffold_minimal(&dir, "review_toolkit");
+        let manifest = read_manifest(&dir).unwrap();
+        let dropped = manifest.metadata.assets[0].clone();
+        std::fs::remove_file(dir.path().join(&dropped)).unwrap();
+        std::fs::write(dir.path().join("notes.md"), "stray").unwrap();
+        std::fs::create_dir_all(dir.path().join("runs/job")).unwrap();
+        std::fs::write(dir.path().join("runs/job/log.txt"), "ignored").unwrap();
+
+        let report = check_dir(&dir).await;
+        assert!(
+            report
+                .problems
+                .contains(&format!("declares {dropped}, which is missing")),
+            "{:#?}",
+            report.problems
+        );
+        assert!(
+            report
+                .problems
+                .contains(&"notes.md is present but not declared in assets".to_owned()),
+            "{:#?}",
+            report.problems
+        );
+        assert!(
+            !report
+                .problems
+                .iter()
+                .any(|problem| problem.contains("runs/")),
+            "{:#?}",
+            report.problems
+        );
+    }
+
+    /// An `experiment.json` is not validated here; the report says so
+    /// instead of silently skipping it.
+    #[tokio::test]
+    async fn an_experiment_json_is_reported_unverified() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("review_toolkit");
+        scaffold_minimal(&dir, "review_toolkit");
+        std::fs::write(dir.path().join("experiment.json"), b"{}").unwrap();
+        // Note: an undeclared experiment.json also trips the asset check,
+        // so declare it the way a scenario-carrying pack does.
+        let manifest_path = dir.join("manifest.json");
+        let text = std::fs::read_to_string(&manifest_path).unwrap();
+        let updated = text.replace(
+            "\"assets\": [",
+            "\"assets\": [\n    \"experiment.json\",",
+        );
+        std::fs::write(&manifest_path, updated).unwrap();
+        let report = check_dir(&dir).await;
+        assert!(
+            report.unverified.contains(&"experiment_scenario"),
+            "{:#?}",
+            report.unverified
+        );
+    }
+
+    /// A README without sections is reported; a topology rewrite fixes a
+    /// graph pack's stale diagram.
+    #[tokio::test]
+    async fn a_missing_readme_is_reported_and_topology_rewrite_fixes_a_graph_pack() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("review_toolkit");
+        scaffold_graph(&dir, "review_toolkit");
+        let readme = dir.join("README.md");
+        let text = std::fs::read_to_string(&readme).unwrap();
+        let start = text.find(TOPOLOGY_START).unwrap();
+        std::fs::write(&readme, &text[..start]).unwrap();
+        assert!(check_dir(&dir)
+            .await
+            .problems
+            .iter()
+            .any(|problem| problem.contains("topology diagram is stale")));
+        write_topology(&dir).unwrap();
+        let report = check_dir(&dir).await;
+        assert!(report.problems.is_empty(), "{:#?}", report.problems);
+    }
+
+    /// The topology block names every node of the scaffolded one-stage
+    /// graph and one port edge.
+    #[test]
+    fn the_topology_block_renders_the_scaffolded_graph() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("review_toolkit");
+        scaffold_graph(&dir, "review_toolkit");
+        let (bytes, _) = pack_dir(&dir).unwrap();
+        let config = load_config(&PackArchive::from_bytes(&bytes).unwrap()).unwrap();
+        let block = topology_block(&config);
+        assert!(block.contains(TOPOLOGY_START));
+        assert!(block.contains("flowchart LR"));
+        assert!(block.contains("n0[worker]"));
+        assert!(block.contains("-->|"));
+    }
+
+    #[tokio::test]
+    async fn a_directory_that_is_not_a_pack_reports_the_manifest_error() {
+        let root = tempfile::tempdir().unwrap();
+        let report = check_dir(&root.path().join("empty")).await;
+        assert!(
+            report
+                .problems
+                .iter()
+                .any(|problem| problem.contains("manifest.json")),
+            "{:#?}",
+            report.problems
+        );
+        assert_eq!(report.pack, None);
+    }
+}
