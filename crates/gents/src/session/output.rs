@@ -310,7 +310,7 @@ impl ReadAccess<'_, '_> {
             "{operation} failed: {:?}",
             response.errors
         );
-        Ok(serde_json::json!({"data": response.data}))
+        Ok(crate::graphql::into_data_envelope(response.data))
     }
 }
 

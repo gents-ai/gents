@@ -138,6 +138,15 @@ pub(crate) fn mutation_affected_documents(response: &QueryResponse) -> usize {
         .unwrap_or_default()
 }
 
+/// Native payloads can contain entire transcripts. Preserve their allocations
+/// when adapting the response envelope instead of serializing a second copy.
+pub(crate) fn into_data_envelope(data: Option<Value>) -> Value {
+    Value::Object(serde_json::Map::from_iter([(
+        "data".to_owned(),
+        data.unwrap_or(Value::Null),
+    )]))
+}
+
 pub fn ensure_no_errors(response: &QueryResponse, operation: &str) -> Result<()> {
     if response.has_errors() {
         anyhow::bail!("{operation} failed: {:?}", response.errors);
