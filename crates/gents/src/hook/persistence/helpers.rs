@@ -593,7 +593,12 @@ mod tests {
             max_bytes: 80,
         };
         let raw = "one\r\ntwo\r\nthree\r\nfour";
-        for tool in ["wait_process", "bash", "agent_session_list"] {
+        for tool in [
+            "wait_process",
+            "bash",
+            "agent_session_list",
+            "agent_session_read",
+        ] {
             let (bounded, presentation) = bounded_tool_result_with_presentation(tool, raw, &limits);
             let presentation = presentation.expect("CRLF input should truncate");
             assert_eq!(

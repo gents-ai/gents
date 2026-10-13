@@ -1,0 +1,648 @@
+use std::sync::Arc;
+
+use anyhow::{Context, Result};
+use defra_node::EmbeddedNode;
+use gents_protocol::message::{AssistantContent, Message, UserContent};
+use gents_protocol::row::AgentRequestRow;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+
+use crate::config_client::{ConfigAccess, ConfigApplyTxn};
+use crate::graphql::escape_graphql_string;
+use crate::session::TxnCanonicalReader;
+use crate::session_origin::SessionScope;
+use crate::tool_surface::AgentToolConfig;
+
+const TEXT_CHARS: usize = 8_000;
+const TOOL_PREVIEW_CHARS: usize = 240;
+const STATUS_LIMIT: usize = 20;
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AgentSessionReadArgs {
+    pub session_id: String,
+    #[serde(default)]
+    pub view: ReadView,
+    pub limit: Option<usize>,
+    pub cursor: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ReadView {
+    #[default]
+    Last,
+    Recent,
+    Status,
+}
+
+impl AgentSessionReadArgs {
+    pub(crate) fn validate(&self) -> Result<()> {
+        anyhow::ensure!(
+            !self.session_id.trim().is_empty(),
+            "session_id is required; discover it with agent_session_list"
+        );
+        anyhow::ensure!(
+            self.limit.is_none_or(|limit| (1..=6).contains(&limit)),
+            "limit must be between 1 and 6"
+        );
+        anyhow::ensure!(
+            self.view == ReadView::Recent || self.cursor.is_none(),
+            "cursor is supported only for recent messages"
+        );
+        if let Some(cursor) = &self.cursor {
+            let cursor: Cursor = serde_json::from_str(cursor)
+                .context("invalid recent cursor; restart agent_session_read with view=recent")?;
+            anyhow::ensure!(
+                cursor.session_id == self.session_id.trim(),
+                "cursor belongs to another session; restart agent_session_read with view=recent"
+            );
+        }
+        Ok(())
+    }
+
+    pub(crate) fn validate_target(&self, target: &SessionScope) -> Result<()> {
+        self.validate()?;
+        if let Some(cursor) = &self.cursor {
+            let cursor: Cursor = serde_json::from_str(cursor)?;
+            anyhow::ensure!(cursor.node_did == target.node_did && cursor.requester_did == target.requester_did, "cursor belongs to another session scope; restart agent_session_read with view=recent");
+        }
+        Ok(())
+    }
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct Cursor {
+    node_did: String,
+    requester_did: Option<String>,
+    session_id: String,
+    before_sequence: u32,
+}
+
+fn quoted(value: &str) -> String {
+    format!("\"{}\"", escape_graphql_string(value))
+}
+
+fn rows(response: &Value, collection: &str) -> Result<Vec<Value>> {
+    response["data"][collection]
+        .as_array()
+        .cloned()
+        .with_context(|| format!("session inspection omitted {collection}"))
+}
+
+fn bounded(text: &str, limit: usize) -> (String, bool) {
+    let mut chars = text.chars();
+    let result = chars.by_ref().take(limit).collect();
+    (result, chars.next().is_some())
+}
+
+/// Only ordinary transcript text enters the body. Tool outputs have a
+/// separate short preview; arguments, reasoning and provider captures are
+/// never returned by this interface.
+fn visible_text(message: &Message) -> String {
+    let text_only = match message {
+        Message::User { content } => Message::User {
+            content: content
+                .iter()
+                .filter(|part| matches!(part, UserContent::Text(_)))
+                .cloned()
+                .collect(),
+        },
+        Message::Assistant { id, content } => Message::Assistant {
+            id: id.clone(),
+            content: content
+                .iter()
+                .filter(|part| matches!(part, AssistantContent::Text(_)))
+                .cloned()
+                .collect(),
+        },
+        Message::System { .. } => return String::new(),
+    };
+    gents_protocol::transcript::render_message_body_markdown(&text_only)
+}
+
+async fn request_row(
+    txn: &ConfigApplyTxn<'_>,
+    scope: &str,
+    doc_id: &str,
+) -> Result<Option<AgentRequestRow>> {
+    let response = txn.execute(&format!("{{AgentRequest(filter: {{{scope}, _docID: {{_eq: {}}}}}, limit: 1) {{_docID request_id lifecycle_state failure_reason created_at claimed_at terminalized_at request_hop}}}}", quoted(doc_id))).await?;
+    rows(&response, "AgentRequest")?
+        .into_iter()
+        .next()
+        .map(serde_json::from_value)
+        .transpose()
+        .context("decoding inspected request")
+}
+
+fn request_summary(row: &AgentRequestRow) -> Value {
+    let (reason, truncated) = bounded(
+        row.failure_reason.as_deref().unwrap_or_default(),
+        TOOL_PREVIEW_CHARS,
+    );
+    json!({"request_id": row.request_id, "lifecycle_state": row.lifecycle_state,
+        "terminal_reason": if reason.is_empty() { None } else { Some(reason) },
+        "reason_truncated": truncated, "created_at": row.created_at,
+        "claimed_at": row.claimed_at, "terminalized_at": row.terminalized_at,
+        "causal_hop": row.request_hop})
+}
+
+async fn tools_in_flight(txn: &ConfigApplyTxn<'_>, scope: &str) -> Result<Value> {
+    let response = txn.execute(&format!("{{AgentToolCall(filter: {{{scope}, lifecycle_state: {{_in: [\"pending\", \"running\"]}}}}, order: {{started_at: ASC}}, limit: {}) {{tool_call_key tool_name lifecycle_state started_at}}}}", STATUS_LIMIT + 1)).await?;
+    let rows = rows(&response, "AgentToolCall")?;
+    let now = chrono::Utc::now();
+    let tools = rows.iter().take(STATUS_LIMIT).map(|row| {
+        let elapsed = row["started_at"].as_str().and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok()).map(|at| (now - at.with_timezone(&chrono::Utc)).num_seconds().max(0));
+        json!({"tool_call_id": row["tool_call_key"], "name": row["tool_name"], "status": row["lifecycle_state"], "started_at": row["started_at"], "elapsed_seconds": elapsed})
+    }).collect::<Vec<_>>();
+    Ok(json!({"items": tools, "truncated": rows.len() > STATUS_LIMIT}))
+}
+
+async fn queued_steering(txn: &ConfigApplyTxn<'_>, scope: &str) -> Result<Value> {
+    let response = txn.execute(&format!("{{AgentRequest(filter: {{{scope}, purpose: {{_eq: \"normal\"}}, lifecycle_state: {{_eq: \"pending\"}}}}, order: [{{created_at: ASC}}, {{request_id: ASC}}], limit: {}) {{request_id input created_at}}}}", STATUS_LIMIT + 1)).await?;
+    let pending = rows(&response, "AgentRequest")?;
+    let mut queued = Vec::new();
+    for row in pending.iter().take(STATUS_LIMIT) {
+        let input: gents_protocol::request_input::RequestInput =
+            serde_json::from_value(row["input"].clone())
+                .context("decoding queued session input")?;
+        if let Some(queue) = input
+            .queue
+            .filter(|queue| queue.source == gents_protocol::request_input::QueueSource::Steering)
+        {
+            queued.push(json!({"request_id": row["request_id"], "created_at": row["created_at"], "queued_after_request_id": queue.queued_after_request_id}));
+        }
+    }
+    Ok(json!({"items": queued, "truncated": pending.len() > STATUS_LIMIT}))
+}
+
+async fn messages(
+    txn: &ConfigApplyTxn<'_>,
+    target: &SessionScope,
+    args: &AgentSessionReadArgs,
+) -> Result<Value> {
+    let scope = crate::session::session_scope_filter(
+        &target.node_did,
+        &target.session_id,
+        target.requester_did.as_deref(),
+    );
+    let cursor = args
+        .cursor
+        .as_deref()
+        .map(serde_json::from_str::<Cursor>)
+        .transpose()
+        .context("invalid cursor; next call: agent_session_read with session_id and view=recent")?;
+    if let Some(cursor) = &cursor {
+        anyhow::ensure!(
+            cursor.node_did == target.node_did
+                && cursor.requester_did == target.requester_did
+                && cursor.session_id == target.session_id,
+            "cursor belongs to another session; restart agent_session_read with view=recent"
+        );
+    }
+    let bounds = cursor
+        .map(|cursor| format!(", sequence: {{_lt: {}}}", cursor.before_sequence))
+        .unwrap_or_default();
+    let role = if args.view == ReadView::Last {
+        ", role: {_eq: \"assistant\"}"
+    } else {
+        ""
+    };
+    let limit = if args.view == ReadView::Last {
+        1
+    } else {
+        args.limit.unwrap_or(6)
+    };
+    let response = txn.execute(&format!("{{AgentMessage(filter: {{{scope}{bounds}{role}}}, order: {{sequence: DESC}}, limit: {}) {{{}}}}}", limit + 1, crate::session::canonical_rows::AGENT_MESSAGE_FIELDS)).await?;
+    let headers = rows(&response, "AgentMessage")?
+        .iter()
+        .map(crate::session::canonical_rows::decode_transcript_message_row)
+        .collect::<Result<Vec<_>>>()?;
+    let mut reader =
+        TxnCanonicalReader::new(txn, &target.node_did, target.requester_did.as_deref());
+    reader.observe_headers(&headers);
+    let mut text_budget = TEXT_CHARS;
+    let mut result = Vec::new();
+    for row in headers.iter().take(limit) {
+        let (header, message) = reader.load_message(&row.doc_id).await?;
+        let presentation = gents_protocol::transcript::present_message(&message);
+        let (text, truncated) = bounded(&visible_text(&message), text_budget);
+        text_budget -= text.chars().count();
+        let tools = tool_summaries(txn, &scope, &header, &message).await?;
+        result.push(json!({"message_doc_id": row.doc_id, "sequence": header.sequence, "role": presentation.role.label(), "created_at": header.created_at, "text": text, "text_truncated": truncated, "tools": tools}));
+    }
+    let next = if args.view == ReadView::Recent && headers.len() > limit {
+        headers
+            .get(limit - 1)
+            .map(|row| {
+                serde_json::to_string(&Cursor {
+                    node_did: target.node_did.clone(),
+                    requester_did: target.requester_did.clone(),
+                    session_id: target.session_id.clone(),
+                    before_sequence: row.message.sequence,
+                })
+            })
+            .transpose()?
+    } else {
+        None
+    };
+    result.reverse();
+    Ok(json!({"items": result, "next_cursor": next}))
+}
+
+async fn tool_summaries(
+    txn: &ConfigApplyTxn<'_>,
+    scope: &str,
+    header: &gents_protocol::output::TranscriptMessage,
+    message: &Message,
+) -> Result<Value> {
+    let mut summaries = Vec::new();
+    for (index, block) in header.blocks.iter().enumerate() {
+        let doc_id = match block {
+            gents_protocol::output::MessageBlock::ToolCall {
+                tool_call_doc_id, ..
+            }
+            | gents_protocol::output::MessageBlock::ToolResult {
+                tool_call_doc_id, ..
+            } => tool_call_doc_id,
+            _ => continue,
+        };
+        if summaries.len() == STATUS_LIMIT {
+            break;
+        }
+        let response = txn.execute(&format!("{{AgentToolCall(filter: {{{scope}, _docID: {{_eq: {}}}}}, limit: 1) {{tool_call_key tool_call_id tool_name lifecycle_state}}}}", quoted(doc_id))).await?;
+        let rows = rows(&response, "AgentToolCall")?;
+        let row = rows
+            .first()
+            .context("canonical tool summary references an unavailable call")?;
+        let preview = match message {
+            Message::User { content } => content
+                .get(index)
+                .filter(|part| matches!(part, UserContent::ToolResult(_)))
+                .map(|part| {
+                    gents_protocol::transcript::render_message_body_markdown(&Message::User {
+                        content: vec![part.clone()],
+                    })
+                }),
+            _ => None,
+        };
+        let (preview, truncated) =
+            bounded(preview.as_deref().unwrap_or_default(), TOOL_PREVIEW_CHARS);
+        summaries.push(json!({"tool_call_id": row["tool_call_key"], "name": row["tool_name"], "status": row["lifecycle_state"], "result_preview": preview, "preview_truncated": truncated}));
+    }
+    let count = header
+        .blocks
+        .iter()
+        .filter(|block| {
+            matches!(
+                block,
+                gents_protocol::output::MessageBlock::ToolCall { .. }
+                    | gents_protocol::output::MessageBlock::ToolResult { .. }
+            )
+        })
+        .count();
+    Ok(json!({"items": summaries, "truncated": count > STATUS_LIMIT}))
+}
+
+pub(crate) async fn agent_session_read(
+    node: &Arc<EmbeddedNode>,
+    caller: &crate::AgentRequest,
+    tools: &AgentToolConfig,
+    args: &AgentSessionReadArgs,
+) -> Result<Value> {
+    args.validate()?;
+    anyhow::ensure!(args.session_id.trim() != caller.session_id, "agent_session_read cannot address the calling session; use sessions to inspect this conversation");
+    let target = super::resolve_send_target(node, &caller.node_did, tools, args.session_id.trim())
+        .await?
+        .context(
+            "session is not messageable; discover available sessions with agent_session_list",
+        )?;
+    let target = super::target_scope(&caller.node_did, &target);
+    args.validate_target(&target)?;
+    let active = crate::interrupt::active_session_request(
+        node,
+        &target.session_id,
+        &target.node_did,
+        target.requester_did.as_deref(),
+    )
+    .await?;
+    let identity = caller
+        .node_did
+        .parse()
+        .context("session inspection requires a valid caller DID")?;
+    ConfigAccess::transact_local_readonly(node, Some(identity), "agent_session.read", |txn| {
+        let target = target.clone();
+        let active = active.clone();
+        let args = args.clone();
+        Box::pin(async move {
+            let scope = crate::session::session_scope_filter(&target.node_did, &target.session_id, target.requester_did.as_deref());
+            let response = txn.execute(&format!("{{AgentSession(filter: {{{scope}}}, limit: 2) {{{}}}}}", crate::session::AGENT_SESSION_FIELDS)).await?;
+            let sessions = rows(&response, "AgentSession")?;
+            anyhow::ensure!(sessions.len() == 1, "inspected session is unavailable or ambiguous");
+            let session = crate::session::decode_session_row(&sessions[0])?.session;
+            anyhow::ensure!(super::session_target_allowed(&session, &caller.node_did, tools), "inspected session is no longer messageable");
+            let unobserved = if active.is_none() {
+                match session.observation.as_ref().and_then(|view| view.latest_request.as_ref()) {
+                    Some(observed) if request_row(txn, &scope, &observed.request_doc_id).await?.is_none() => Some(observed),
+                    _ => None,
+                }
+            } else { None };
+            let latest = crate::session::load_latest_request_in_txn(txn, &target.node_did, &target.session_id, Some(target.requester_did.as_deref())).await?;
+            let doc_id = active.as_ref().and_then(|row| row.doc_id.as_deref()).or_else(|| latest.as_ref().map(|head| head.observed.request_doc_id.as_str()));
+            let request = match unobserved {
+                Some(observed) => Some(json!({"request_id": observed.request_id, "lifecycle_state": observed.lifecycle_state, "available": false})),
+                None => match doc_id { Some(id) => request_row(txn, &scope, id).await?.map(|row| request_summary(&row)), None => None },
+            };
+            let mut result = json!({"ok": true, "session_id": target.session_id, "view": args.view, "request": request});
+            if args.view == ReadView::Status {
+                result["tools_in_flight"] = tools_in_flight(txn, &scope).await?;
+                result["queued_steering"] = queued_steering(txn, &scope).await?;
+                result["goal"] = match crate::goal::load_canonical_goal_in_txn(txn, &target.node_did, &target.session_id).await? {
+                    Some(goal) => { let (objective, truncated) = bounded(&goal.objective, TOOL_PREVIEW_CHARS); json!({"goal_id": goal.goal_id, "status": goal.status, "objective": objective, "objective_truncated": truncated, "tokens_used": goal.tokens_used, "token_budget": goal.token_budget, "active_time_seconds": goal.active_time_seconds}) },
+                    None => Value::Null,
+                };
+            } else {
+                result["messages"] = messages(txn, &target, &args).await?;
+            }
+            Ok(result)
+        })
+    }).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bounded_inspection_excludes_reasoning_and_tool_arguments() {
+        let message = Message::Assistant {
+            id: None,
+            content: vec![
+                AssistantContent::Text(gents_protocol::message::Text {
+                    text: "界".repeat(TEXT_CHARS + 1),
+                }),
+                AssistantContent::Reasoning(gents_protocol::message::Reasoning::new(
+                    "private reasoning",
+                )),
+            ],
+        };
+        let (text, truncated) = bounded(&visible_text(&message), TEXT_CHARS);
+        assert!(truncated);
+        assert_eq!(text, "界".repeat(TEXT_CHARS));
+        assert!(!text.contains("private reasoning"));
+    }
+
+    #[tokio::test]
+    async fn trigger_worker_inspection_reads_canonical_output_status_and_goal() {
+        use crate::identity::NodeIdentity;
+        use crate::tool_call_lifecycle::admission_fixture::{
+            claimed_signed_request_with_trigger_correlation, publish_accepted_on_claimed_request,
+        };
+        use crate::tool_call_lifecycle::AwaitMode;
+        let (message, caller, _) =
+            super::super::agent_tools_tests::started("agent-session-inspection").await;
+        let node = message.admission.node.clone();
+        let identity =
+            crate::KeyIdentity::load_or_create(message.admission.path.join("test-agent.key"), None)
+                .unwrap();
+        let mut worker = claimed_signed_request_with_trigger_correlation(
+            &node,
+            "read-worker-request",
+            "read-worker",
+            &identity,
+            None,
+            Some("shard-assignment"),
+            Some("R3a"),
+        )
+        .await;
+        let mut tool = publish_accepted_on_claimed_request(
+            node.clone(),
+            &mut worker,
+            identity.did(),
+            0,
+            "bash",
+            "worker-check",
+            json!({"command": "private tool arguments"}),
+            AwaitMode::Foreground,
+            true,
+        )
+        .await
+        .unwrap();
+        crate::goal::create_goal_for_session(
+            &node,
+            identity.did(),
+            "read-worker",
+            "verify shard R3a",
+            Some(1000),
+        )
+        .await
+        .unwrap();
+        let tools = AgentToolConfig {
+            enabled: true,
+            targets: Vec::new(),
+        };
+        let mut queued = gents_protocol::request_admission::AgentRequestCreate::base(
+            gents_protocol::request_admission::RequestPurpose::Normal,
+            "read-worker-steering",
+            identity.did(),
+            identity.did(),
+            "general",
+            "read-worker",
+            "continue after verification",
+            "interactive",
+            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
+                identity.did(),
+            ),
+        );
+        queued.input.queue = Some(gents_protocol::request_input::RequestQueue {
+            delivery: gents_protocol::request_input::QueueDelivery::Steer,
+            position: None,
+            source: gents_protocol::request_input::QueueSource::Steering,
+            policy: gents_protocol::request_input::QueuePolicy::Append,
+            key: None,
+            queued_after_request_id: Some(worker.request().request_id.clone()),
+            interrupted_request_id: None,
+            background_completion_wake_version: None,
+        });
+        crate::sign_agent_request_create(&identity, &mut queued)
+            .await
+            .unwrap();
+        ConfigAccess::Local(node.clone())
+            .write(
+                "test.inspection.steering",
+                &queued.graphql_mutation().unwrap(),
+            )
+            .await
+            .unwrap();
+        let mut args = AgentSessionReadArgs {
+            session_id: "read-worker".to_owned(),
+            view: ReadView::Status,
+            ..Default::default()
+        };
+        let status = agent_session_read(&node, &caller, &tools, &args)
+            .await
+            .unwrap();
+        assert_eq!(status["request"]["request_id"], worker.request().request_id);
+        assert_eq!(status["request"]["lifecycle_state"], "processing");
+        assert_eq!(status["request"]["causal_hop"], 0);
+        assert_eq!(status["tools_in_flight"]["items"][0]["name"], "bash");
+        assert_eq!(status["tools_in_flight"]["items"][0]["status"], "running");
+        assert!(
+            status["tools_in_flight"]["items"][0]["elapsed_seconds"]
+                .as_i64()
+                .unwrap()
+                >= 0
+        );
+        assert_eq!(status["goal"]["objective"], "verify shard R3a");
+        assert_eq!(
+            status["queued_steering"]["items"][0]["request_id"],
+            "read-worker-steering"
+        );
+        assert_eq!(
+            status["queued_steering"]["items"][0]["queued_after_request_id"],
+            worker.request().request_id
+        );
+        assert!(!status.to_string().contains("private tool arguments"));
+        tool.complete(&"界".repeat(1000)).await.unwrap();
+        let writer = crate::streaming::DefraStreamWriter::new(
+            node.clone(),
+            identity.did(),
+            std::time::Duration::ZERO,
+        );
+        writer
+            .start_provider_attempt(
+                &worker.request().doc_id,
+                1,
+                0,
+                "inference.2".parse().unwrap(),
+            )
+            .await;
+        let report = Message::Assistant {
+            id: None,
+            content: vec![
+                AssistantContent::Reasoning(gents_protocol::message::Reasoning {
+                    id: Some("private provider id".to_owned()),
+                    content: vec![gents_protocol::message::ReasoningContent::Encrypted(
+                        "private encrypted reasoning".to_owned(),
+                    )],
+                }),
+                AssistantContent::Text(gents_protocol::message::Text {
+                    text: "shard R3a verified".to_owned(),
+                }),
+            ],
+        };
+        let published = writer
+            .publish_native_turn(&worker, 1, 0, &report)
+            .await
+            .unwrap();
+        worker
+            .terminalize_owned(
+                crate::lifecycle::RequestTerminalOutcome::Completed,
+                gents_protocol::output::TerminalOutput::Message {
+                    message_doc_id: published.message_doc_id,
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        args.view = ReadView::Last;
+        let last = agent_session_read(&node, &caller, &tools, &args)
+            .await
+            .unwrap();
+        assert_eq!(last["messages"]["items"][0]["text"], "shard R3a verified");
+        assert_eq!(last["request"]["request_id"], "read-worker-steering");
+        assert_eq!(last["request"]["lifecycle_state"], "pending");
+        assert!(last["request"]["created_at"].is_string());
+        assert!(!last.to_string().contains("private encrypted reasoning"));
+        assert!(!last.to_string().contains("private provider id"));
+        args.view = ReadView::Recent;
+        args.limit = Some(1);
+        let mut messages = Vec::new();
+        loop {
+            let page = agent_session_read(&node, &caller, &tools, &args)
+                .await
+                .unwrap();
+            assert!(!page.to_string().contains("private tool arguments"));
+            assert!(!page.to_string().contains("private encrypted reasoning"));
+            messages.extend(page["messages"]["items"].as_array().unwrap().clone());
+            args.cursor = page["messages"]["next_cursor"]
+                .as_str()
+                .map(ToOwned::to_owned);
+            if args.cursor.is_none() {
+                break;
+            }
+        }
+        assert!(messages.iter().any(|row| row["tools"]["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|tool| tool["name"] == "bash" && tool["status"] == "completed")));
+        assert!(messages
+            .iter()
+            .any(|row| row["tools"]["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(
+                    |tool| tool["result_preview"] == "界".repeat(TOOL_PREVIEW_CHARS)
+                        && tool["preview_truncated"] == true
+                )));
+        let result_message = messages
+            .iter()
+            .find(|row| row["role"] == "TOOL")
+            .expect("canonical tool result remains inspectable");
+        assert_eq!(
+            result_message["text"], "",
+            "full tool output must not appear in the message body"
+        );
+        let scope = crate::session::session_scope_filter(
+            identity.did(),
+            "read-worker",
+            Some(identity.did()),
+        );
+        let observation = gents_protocol::session::SessionObservation {
+            last_activity_at: chrono::Utc::now().to_rfc3339(),
+            preview: None,
+            latest_request: Some(gents_protocol::session::SessionRequestObservation {
+                request_doc_id: "unobserved-request-document".to_owned(),
+                request_id: "unobserved-request".to_owned(),
+                lifecycle_state:
+                    gents_protocol::request_lifecycle::RequestLifecycleState::Processing,
+            }),
+        };
+        ConfigAccess::transact_local(&node, None, "test.inspection.index_only", |txn| {
+            let scope = scope.clone();
+            let observation = observation.clone();
+            Box::pin(async move { txn.execute_with_variables(&format!("mutation($input: AgentSessionMutationInputArg!) {{update_AgentSession(filter: {{{scope}}}, input: $input) {{_docID}}}}"), &json!({"input": {"observation": observation}})).await })
+        }).await.unwrap();
+        args.view = ReadView::Status;
+        let unavailable = agent_session_read(&node, &caller, &tools, &args)
+            .await
+            .unwrap();
+        assert_eq!(unavailable["request"]["request_id"], "unobserved-request");
+        assert_eq!(unavailable["request"]["available"], false);
+        args.session_id = caller.session_id.clone();
+        assert!(agent_session_read(&node, &caller, &tools, &args)
+            .await
+            .is_err());
+        let foreign_identity = crate::KeyIdentity::load_or_create(
+            message.admission.path.join("other-principal.key"),
+            None,
+        )
+        .unwrap();
+        let foreign = crate::AgentRequest {
+            node_did: foreign_identity.did().to_owned(),
+            ..caller.clone()
+        };
+        args.session_id = "read-worker".to_owned();
+        let error = agent_session_read(&node, &foreign, &tools, &args)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("not messageable"), "{error:#}");
+        drop(worker);
+        node.shutdown().await;
+        std::fs::remove_dir_all(&message.admission.path).unwrap();
+    }
+}

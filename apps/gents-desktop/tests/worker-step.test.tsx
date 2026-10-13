@@ -56,6 +56,7 @@ it("keeps session discovery and inspection in ordinary tool steps", () => {
   for (const [toolName, action] of [
     ["agent_list", "list"],
     ["agent_session_list", "sessions"],
+    ["agent_session_read", "read"],
   ]) {
     const tool = call("success");
     tool.toolName = toolName;

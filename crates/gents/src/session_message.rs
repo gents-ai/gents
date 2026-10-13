@@ -19,6 +19,8 @@ use crate::tool_surface::AgentToolConfig;
 
 mod discovery;
 pub(crate) use discovery::{agent_session_list, AgentSessionListArgs};
+mod inspection;
+pub(crate) use inspection::{agent_session_read, AgentSessionReadArgs};
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]

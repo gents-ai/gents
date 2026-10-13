@@ -186,6 +186,7 @@ fn session_message_tools_follow_enabled_and_agent_new_needs_a_target() {
             "agent_interrupt",
             "agent_list",
             "agent_session_list",
+            "agent_session_read"
         ]
     );
 

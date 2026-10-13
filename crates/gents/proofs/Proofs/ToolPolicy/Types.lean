@@ -67,7 +67,7 @@ structure Surface where
   contextBudget : Bool
   /-- The agents tool group (`AgentTools.enabled`): `agent_new` over the
   `agentTargets` allowlist, `agent_message`, `agent_interrupt` and
-  `agent_list`, and the read-only `agent_session_list`.
+  `agent_list`, and the read-only `agent_session_list` and `agent_session_read`.
   Session reads and sends retain the requester and target contract in `DurableLineage`. -/
   sessionMessages : Bool
   skills : Bool
