@@ -1,5 +1,33 @@
 use super::*;
 
+#[tokio::test]
+async fn startup_seeding_covers_every_document_beyond_the_former_cap() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(&node).await.unwrap();
+    let ids =
+        crate::trigger_engine::event_delivery::source_scan::tests::create_source_documents(&node)
+            .await;
+    let mut trigger =
+        resolved_event_trigger("complete-seed", "RescanSource", resolved_task("observe"));
+    trigger.correlation_field = Some("correlation".to_owned());
+    trigger.filter = Some("{correlation: {_like: \"group-%\"}}".to_owned());
+    let snapshot =
+        snapshot_with_event_triggers(1, HashMap::from([("complete-seed".to_owned(), trigger)]));
+    let (_tx, rx) = watch::channel(snapshot.clone());
+    let mut source = EventSource::new(rx, node.clone(), CancellationToken::new());
+    source.reconcile_subscriptions(&snapshot).await;
+    let seen = ids
+        .iter()
+        .filter(|id| source.has_seen("RescanSource", id))
+        .count();
+    assert_eq!(
+        seen,
+        ids.len(),
+        "startup seeding must cover the full source collection"
+    );
+    node.shutdown().await;
+}
+
 use events::{
     Bus, ChannelBus, DocumentChangeSubscription, EventName, Message, Subscription, Update,
 };
