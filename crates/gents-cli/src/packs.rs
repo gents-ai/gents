@@ -260,8 +260,8 @@ pub fn registry_list(home: &std::path::Path) -> Result<Value> {
     crate::commands::registry::list(home)
 }
 
-pub async fn registry_refresh(home: PathBuf, master: Option<String>) -> Result<Value> {
-    crate::commands::registry::refresh(&home, master.as_deref()).await
+pub async fn registry_refresh(home: PathBuf) -> Result<Value> {
+    crate::commands::registry::refresh(&home, None).await
 }
 
 pub fn registry_add(

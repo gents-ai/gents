@@ -47,10 +47,47 @@ pub fn resolve_registry_url(explicit: Option<&str>) -> String {
         std::env::var(REGISTRY_ENV_VAR).ok(),
     ] {
         if let Some(url) = candidate.filter(|value| !value.trim().is_empty()) {
-            return url.trim_end_matches('/').to_owned();
+            let url = url.trim().trim_end_matches('/');
+            // This path cannot fail; credentials in a registry URL would be
+            // recorded in every install and echoed in every report, so
+            // they are dropped here and refused where an error can be.
+            return match without_userinfo(url) {
+                Some(stripped) => {
+                    tracing::warn!(
+                        "registry URL carried credentials; dropped (use `gents pack login`)"
+                    );
+                    stripped
+                }
+                None => url.to_owned(),
+            };
         }
     }
     DEFAULT_REGISTRY_URL.to_owned()
+}
+
+/// `url` with its userinfo removed, or `None` when it carried none.
+fn without_userinfo(url: &str) -> Option<String> {
+    let (scheme, rest) = url.split_once("://")?;
+    let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
+    let (_, host) = authority.rsplit_once('@')?;
+    Some(if path.is_empty() {
+        format!("{scheme}://{host}")
+    } else {
+        format!("{scheme}://{host}/{path}")
+    })
+}
+
+/// A registry URL the index and the install records may carry: http(s),
+/// a host, and no credentials in it.
+pub fn is_registry_url(url: &str) -> bool {
+    let Some(rest) = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+    else {
+        return false;
+    };
+    let authority = rest.split('/').next().unwrap_or("");
+    !authority.is_empty() && !authority.contains('@') && !authority.contains(char::is_whitespace)
 }
 
 /// [`resolve_registry_url`] that also accepts a registry **id** from the
@@ -68,6 +105,11 @@ pub fn resolve_registry_url_in(home: &Path, explicit: Option<&str>) -> Result<St
     };
     let candidate = candidate.trim();
     if candidate.contains("://") {
+        anyhow::ensure!(
+            is_registry_url(candidate),
+            "{candidate:?} is not a registry URL: http(s), a host, and no credentials in it \
+             (use `gents pack login` for those)"
+        );
         return Ok(candidate.trim_end_matches('/').to_owned());
     }
     let known = index::read(home)?;
@@ -119,12 +161,12 @@ pub mod index {
         "official".to_owned()
     }
 
+    /* The master is never persisted: it is whatever GENTS_REGISTRY or the
+    default names at read time, so a change of master is a change of the
+    first entry, not a second "master" beside a stale one. */
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
     #[serde(rename_all = "camelCase")]
     pub struct RegistryIndex {
-        /// The master this index was fetched from.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub master: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub refreshed_at: Option<String>,
         #[serde(default)]
@@ -152,8 +194,15 @@ pub mod index {
         }
     }
 
-    /// The cached index, or the master alone when nothing is cached.
+    /// The cached index with the configured master first, or the master
+    /// alone when nothing is cached.
     pub fn read(home: &Path) -> Result<RegistryIndex> {
+        read_with_master(home, &super::resolve_registry_url(None))
+    }
+
+    /// [`read`] under a given master. A `master` entry an older index
+    /// persisted is dropped: the master is derived, never stored.
+    pub fn read_with_master(home: &Path, master_url: &str) -> Result<RegistryIndex> {
         let file = path(home);
         let mut index = match std::fs::read(&file) {
             Ok(bytes) => serde_json::from_slice::<RegistryIndex>(&bytes)
@@ -161,21 +210,26 @@ pub mod index {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => RegistryIndex::default(),
             Err(error) => return Err(error).with_context(|| format!("reading {}", file.display())),
         };
-        let master = index
-            .master
-            .clone()
-            .unwrap_or_else(|| super::resolve_registry_url(None));
-        if !index.registries.iter().any(|r| r.id == MASTER_ID) {
-            index.registries.insert(0, master_entry(&master));
-        }
+        index.registries.retain(|r| r.id != MASTER_ID);
+        index.registries.insert(0, master_entry(master_url));
         Ok(index)
     }
 
+    /// Persists every entry but the master's, which `read` derives.
     pub fn write(home: &Path, index: &RegistryIndex) -> Result<()> {
         let file = path(home);
         let dir = file.parent().context("index path has no parent")?;
         std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-        let bytes = serde_json::to_vec_pretty(index).context("encoding the registry index")?;
+        let stored = RegistryIndex {
+            refreshed_at: index.refreshed_at.clone(),
+            registries: index
+                .registries
+                .iter()
+                .filter(|r| r.id != MASTER_ID)
+                .cloned()
+                .collect(),
+        };
+        let bytes = serde_json::to_vec_pretty(&stored).context("encoding the registry index")?;
         let mut staged = tempfile::NamedTempFile::new_in(dir)
             .with_context(|| format!("staging the registry index in {}", dir.display()))?;
         std::io::Write::write_all(&mut staged, &bytes).context("writing the staged index")?;
@@ -186,8 +240,11 @@ pub mod index {
         Ok(())
     }
 
-    /// Replaces the listed (non-user) entries with what `master` serves,
-    /// keeping every `user` entry the operator added by hand.
+    /// Replaces the listed (non-user) entries with what the master serves,
+    /// keeping every `user` entry the operator added by hand. A fetched
+    /// entry is held to what the index may carry: a snake_case id seen
+    /// once, a registry URL, and a listed tier (`official` or `partner`;
+    /// a master cannot hand out `user`).
     pub fn merge_refresh(
         current: &RegistryIndex,
         master_url: &str,
@@ -195,18 +252,27 @@ pub mod index {
         now: &str,
     ) -> RegistryIndex {
         let mut registries = vec![master_entry(master_url)];
-        registries.extend(
-            fetched
-                .into_iter()
-                .filter(|r| r.id != MASTER_ID && crate::pack::is_valid_pack_name(&r.id)),
-        );
+        for mut entry in fetched {
+            if entry.id == MASTER_ID
+                || !crate::pack::is_valid_pack_name(&entry.id)
+                || !super::is_registry_url(&entry.url)
+                || registries.iter().any(|r| r.id == entry.id)
+            {
+                tracing::warn!(id = %entry.id, url = %entry.url, "registry entry from the master skipped");
+                continue;
+            }
+            entry.url = entry.url.trim_end_matches('/').to_owned();
+            if entry.tier != "partner" {
+                entry.tier = "official".to_owned();
+            }
+            registries.push(entry);
+        }
         for user in current.registries.iter().filter(|r| r.tier == "user") {
             if !registries.iter().any(|r| r.id == user.id) {
                 registries.push(user.clone());
             }
         }
         RegistryIndex {
-            master: Some(master_url.trim_end_matches('/').to_owned()),
             refreshed_at: Some(now.to_owned()),
             registries,
         }
@@ -229,9 +295,19 @@ pub mod index {
             "{MASTER_ID:?} is the master registry and cannot be replaced"
         );
         anyhow::ensure!(
-            url.starts_with("https://") || url.starts_with("http://"),
-            "registry url must be http(s): {url:?}"
+            super::is_registry_url(url),
+            "registry url must be http(s) with a host and no credentials in it: {url:?}"
         );
+        if let Some(listed) = index
+            .registries
+            .iter()
+            .find(|r| r.id == id && r.tier != "user")
+        {
+            anyhow::bail!(
+                "{id:?} is listed by the master registry at {}; use it as it is, or add yours under another id",
+                listed.url
+            );
+        }
         index.registries.retain(|r| r.id != id);
         index.registries.push(RegistryEntry {
             id: id.to_owned(),
@@ -286,7 +362,6 @@ pub mod index {
         #[test]
         fn refresh_keeps_user_entries_and_drops_stale_listed_ones() {
             let current = RegistryIndex {
-                master: None,
                 refreshed_at: None,
                 registries: vec![entry("old", "official"), entry("mine", "user")],
             };
@@ -298,7 +373,96 @@ pub mod index {
             );
             let ids: Vec<_> = next.registries.iter().map(|r| r.id.as_str()).collect();
             assert_eq!(ids, vec![MASTER_ID, "legal", "mine"]);
-            assert_eq!(next.master.as_deref(), Some("https://master.example"));
+            assert_eq!(next.registries[0].url, "https://master.example");
+        }
+
+        #[test]
+        fn refresh_holds_fetched_entries_to_what_the_index_may_carry() {
+            let mut bad_scheme = entry("ftp", "official");
+            bad_scheme.url = "ftp://ftp.example".into();
+            let mut creds = entry("creds", "official");
+            creds.url = "https://user:pw@creds.example".into();
+            let mut sticky = entry("sticky", "user");
+            sticky.url = "https://sticky.example/".into();
+            let mut dup = entry("legal", "official");
+            dup.url = "https://second.example".into();
+            let fetched = vec![
+                entry("legal", "official"),
+                dup,
+                bad_scheme,
+                creds,
+                sticky,
+                entry("partner", "partner"),
+                entry("Bad-Id", "official"),
+                entry(MASTER_ID, "official"),
+            ];
+            let next = merge_refresh(&RegistryIndex::default(), "https://m.example", fetched, "t");
+            let seen: Vec<(&str, &str, &str)> = next
+                .registries
+                .iter()
+                .map(|r| (r.id.as_str(), r.url.as_str(), r.tier.as_str()))
+                .collect();
+            assert_eq!(
+                seen,
+                vec![
+                    (MASTER_ID, "https://m.example", "official"),
+                    ("legal", "https://legal.example", "official"),
+                    ("sticky", "https://sticky.example", "official"),
+                    ("partner", "https://partner.example", "partner"),
+                ]
+            );
+        }
+
+        #[test]
+        fn the_master_is_derived_on_read_and_never_written() {
+            let home = tempfile::tempdir().unwrap();
+            let fetched = merge_refresh(
+                &RegistryIndex::default(),
+                "https://one.example",
+                vec![entry("legal", "official")],
+                "t",
+            );
+            write(home.path(), &fetched).unwrap();
+            let stored: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(path(home.path())).unwrap()).unwrap();
+            assert!(stored.get("master").is_none(), "{stored}");
+            assert_eq!(
+                stored["registries"].as_array().unwrap().len(),
+                1,
+                "{stored}"
+            );
+
+            /* a changed master is a changed first entry, not a second one */
+            let index = read_with_master(home.path(), "https://two.example/").unwrap();
+            let seen: Vec<(&str, &str)> = index
+                .registries
+                .iter()
+                .map(|r| (r.id.as_str(), r.url.as_str()))
+                .collect();
+            assert_eq!(
+                seen,
+                vec![
+                    (MASTER_ID, "https://two.example"),
+                    ("legal", "https://legal.example")
+                ]
+            );
+
+            /* an index an older gents wrote with a master entry in it */
+            std::fs::write(
+                path(home.path()),
+                serde_json::json!({
+                    "master": "https://stale.example",
+                    "registries": [
+                        { "id": "master", "label": "Gents registry", "url": "https://stale.example" },
+                        { "id": "legal", "label": "Legal", "url": "https://legal.example" }
+                    ]
+                })
+                .to_string(),
+            )
+            .unwrap();
+            let index = read_with_master(home.path(), "https://two.example").unwrap();
+            let seen: Vec<&str> = index.registries.iter().map(|r| r.url.as_str()).collect();
+            assert_eq!(seen, vec!["https://two.example", "https://legal.example"]);
         }
 
         #[test]
@@ -318,6 +482,21 @@ pub mod index {
             assert!(add_user(&mut index, "Not-Snake", "https://x", None).is_err());
             assert!(add_user(&mut index, MASTER_ID, "https://x", None).is_err());
             assert!(add_user(&mut index, "ftp", "ftp://x", None).is_err());
+            assert!(add_user(&mut index, "creds", "https://u:p@x.example", None).is_err());
+            let shadow = add_user(&mut index, "legal", "https://mine.example", None).unwrap_err();
+            assert!(
+                format!("{shadow:#}").contains("listed by the master"),
+                "{shadow:#}"
+            );
+            assert_eq!(
+                index
+                    .registries
+                    .iter()
+                    .find(|r| r.id == "legal")
+                    .unwrap()
+                    .url,
+                "https://legal.example"
+            );
             assert!(remove_user(&mut index, "legal").is_err());
             remove_user(&mut index, "mine").unwrap();
             assert!(remove_user(&mut index, "mine").is_err());
@@ -360,6 +539,29 @@ pub mod index {
                 super::super::resolve_registry_url_in(home.path(), Some("nope")).unwrap_err();
             assert!(format!("{error:#}").contains("known ids"), "{error:#}");
             assert!(format!("{error:#}").contains("legal"), "{error:#}");
+        }
+
+        #[test]
+        fn credentials_in_a_registry_url_are_refused_where_possible_and_dropped_otherwise() {
+            let home = tempfile::tempdir().unwrap();
+            let error = super::super::resolve_registry_url_in(
+                home.path(),
+                Some("https://user:pw@host.example/"),
+            )
+            .unwrap_err();
+            assert!(format!("{error:#}").contains("no credentials"), "{error:#}");
+            assert_eq!(
+                super::super::resolve_registry_url(Some("https://user:pw@host.example/v1/")),
+                "https://host.example/v1"
+            );
+            assert_eq!(
+                super::super::resolve_registry_url(Some("https://host.example")),
+                "https://host.example"
+            );
+            assert!(super::super::is_registry_url("http://127.0.0.1:9"));
+            assert!(!super::super::is_registry_url("https://"));
+            assert!(!super::super::is_registry_url("file:///tmp/x"));
+            assert!(!super::super::is_registry_url("https://a b.example"));
         }
     }
 }

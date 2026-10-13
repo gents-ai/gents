@@ -28,13 +28,14 @@ pub fn desktop_registry_list(state: State<'_, DesktopAppState>) -> Result<Value,
     packs::registry_list(&home(&state)?).map_err(failed)
 }
 
+/* refreshed from the configured master only: the webview names no
+registry here, so nothing it holds can decide what the index trusts */
 #[tauri::command]
 pub async fn desktop_registry_refresh(
-    master: Option<String>,
     state: State<'_, DesktopAppState>,
 ) -> Result<Value, BridgeError> {
     let home = home(&state)?;
-    packs::registry_refresh(home, master).await.map_err(failed)
+    packs::registry_refresh(home).await.map_err(failed)
 }
 
 #[derive(Debug, Deserialize)]
