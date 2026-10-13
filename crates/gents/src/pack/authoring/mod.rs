@@ -25,10 +25,9 @@
 //!   `commands::afterburner_build::{load_and_validate, compile}` is the
 //!   implementation to supply.
 //!
-//! Registration: this module is not yet wired into `crate::pack`. Wiring it
-//! is one line (`pub mod authoring;` in `crates/gents/src/pack.rs`) plus the
-//! CLI delegation, tracked with the integration step; until then the files
-//! here are unwired and nothing in the workspace reads them.
+//! Registration: this module is wired into `crate::pack`
+//! (`pub mod authoring;` in `crates/gents/src/pack.rs`); the CLI delegation
+//! over these owners is the remaining integration step.
 pub mod build;
 pub mod check;
 pub mod inspect;

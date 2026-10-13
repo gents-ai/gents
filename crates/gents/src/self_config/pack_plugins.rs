@@ -1,5 +1,45 @@
 use super::*;
 
+/// Per-plugin post-install discovery entry. Every installed plugin gets one,
+/// so a multi-plugin pack response never omits the others.
+fn plugin_discovery_calls(plugins: &[(String, String)]) -> Vec<serde_json::Value> {
+    plugins
+        .iter()
+        .map(|(namespace, name)| {
+            // The config tool accepts argv/options/target_id/set/clear only;
+            // plugin metadata already rides in the `plugins` response.
+            json!({"argv": ["plugin", "get", format!("{namespace}/{name}")]})
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn discovery_calls_cover_every_plugin() {
+        let calls = plugin_discovery_calls(&[
+            ("ns".to_owned(), "alpha".to_owned()),
+            ("ns".to_owned(), "beta".to_owned()),
+        ]);
+        assert_eq!(calls.len(), 2);
+        assert_eq!(
+            calls[0],
+            json!({"argv": ["plugin", "get", "ns/alpha"]})
+        );
+        assert_eq!(
+            calls[1],
+            json!({"argv": ["plugin", "get", "ns/beta"]})
+        );
+    }
+
+    #[test]
+    fn discovery_calls_empty_for_no_plugins() {
+        assert!(plugin_discovery_calls(&[]).is_empty());
+    }
+}
+
 impl PackInstaller {
     pub(super) async fn plugins_pack(
         &self,
@@ -118,11 +158,19 @@ impl PackInstaller {
             },
         )
         .await?;
+        let discovery = plugin_discovery_calls(
+            &plugins
+                .iter()
+                .map(|plugin| (plugin.namespace.clone(), plugin.name.clone()))
+                .collect::<Vec<_>>(),
+        );
+        let single = discovery.first().cloned().unwrap_or(json!(null));
         ordered! {
             "committed": true,
             "installed": record,
-            "next_call": json!({"argv":["plugin","get",format!("{}/{}", manifest.metadata.namespace, plugins.first().context("plugins pack contains no plugins")?.name)]}),
-            "guidance": "Installation does not select tools. Read the target Tools document, preserve its other entries, and explicitly select the returned pinned plugin in Tools.integrations.plugins. Read config tools get and config get after selection; start a fresh request to call the plugin.",
+            "next_call": single,
+            "next_calls": discovery,
+            "guidance": "Installation installs every plugin in `plugins` but selects no tool: installed is not selected. Read the current Tools document first and preserve its full `integrations` object, including every existing entry and plugin; do not generate a replacement patch or overwrite the whole object. Then explicitly select each installed plugin by name in `Tools.integrations.plugins`, one entry per plugin. Read config tools get and config get after selection; start a fresh request to call each selected plugin.",
             "plugins": plugins,
             "artifact_digest": distribution.digest(),
         }.pretty()

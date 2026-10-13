@@ -56,7 +56,8 @@ pub fn preview_config(
         .iter()
         .any(|path| path == "experiment.json")
         .then(|| -> Result<serde_json::Value> {
-            let raw = std::str::from_utf8(asset("experiment.json")?)
+            let bytes = asset("experiment.json")?;
+            let raw = std::str::from_utf8(&bytes)
                 .context("experiment.json is not UTF-8")?;
             let expanded = crate::pack::interpolate::interpolate_with(raw, &|_| None)
                 .map_err(|missing| {
@@ -75,6 +76,7 @@ pub fn preview_config(
 mod tests {
     use super::*;
     use super::super::build::PluginCompiler;
+    use std::path::Path;
 
     /// A compiler seam that records it was asked and refuses: no real
     /// toolchain in this test.

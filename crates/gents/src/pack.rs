@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 mod home_install;
 mod inference;
 mod installation;
+pub mod authoring;
 pub mod interpolate;
 mod loader;
 pub mod local;
