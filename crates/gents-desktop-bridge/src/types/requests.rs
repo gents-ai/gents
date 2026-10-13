@@ -21,14 +21,7 @@ pub struct ManagedServerStartRequest {
     pub tool_root: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, TS)]
-#[serde(rename_all = "kebab-case")]
-#[ts(rename_all = "kebab-case")]
-pub enum ManagedServerToolCeiling {
-    MetaOnly,
-    Readonly,
-    Readwrite,
-}
+pub use gents_desktop_core::preference::ManagedServerToolCeiling;
 
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]

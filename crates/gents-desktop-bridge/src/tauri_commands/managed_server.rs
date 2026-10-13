@@ -1,5 +1,5 @@
 use gents_desktop_core::home_reset::*;
-use serde::{Deserialize, Serialize};
+use gents_desktop_core::preference::{ReviewedHome, StoredManagedServer, MANAGED_SERVER_CONFIG};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -25,34 +25,11 @@ use crate::types::{
     ManagedServerStartRequest, ManagedServerState, ManagedServerStatus, ManagedServerToolCeiling,
 };
 
-const MANAGED_SERVER_CONFIG: &str = "managed-server.json";
-
 #[derive(Debug, Clone)]
 struct ManagedPairingTarget {
     node_name: String,
     node_did: String,
     graphql: String,
-}
-
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct StoredManagedServer {
-    node_name: String,
-    #[serde(default)]
-    tool_ceiling: Option<ManagedServerToolCeiling>,
-    #[serde(default)]
-    tool_root: Option<String>,
-    /// The canonical home and init identity the ceiling and root were
-    /// reviewed for. A remembered grant applies only to that home.
-    #[serde(default)]
-    reviewed_for: Option<ReviewedHome>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ReviewedHome {
-    node_home: String,
-    node_did: String,
 }
 
 /// What an initialized home says about itself in `init.json`.
@@ -724,7 +701,7 @@ async fn start_managed_server<'a, R: Runtime>(
             gents_server::server_host::ProvisionOptions {
                 home: node_home.clone(),
                 node_name: node_name.to_string(),
-                tool_ceiling: authority.tool_ceiling.into(),
+                tool_ceiling: runtime_tool_ceiling(authority.tool_ceiling),
                 tool_root: authority.tool_root.clone(),
                 store_key_custody: state.policy.store_key_custody,
             },
@@ -1350,13 +1327,14 @@ fn ensure_managed_endpoint_stopped(
     }
 }
 
-impl From<ManagedServerToolCeiling> for gents_server::server_host::ManagedToolCeiling {
-    fn from(value: ManagedServerToolCeiling) -> Self {
-        match value {
-            ManagedServerToolCeiling::MetaOnly => Self::MetaOnly,
-            ManagedServerToolCeiling::Readonly => Self::Readonly,
-            ManagedServerToolCeiling::Readwrite => Self::Readwrite,
-        }
+fn runtime_tool_ceiling(
+    value: ManagedServerToolCeiling,
+) -> gents_server::server_host::ManagedToolCeiling {
+    use gents_server::server_host::ManagedToolCeiling;
+    match value {
+        ManagedServerToolCeiling::MetaOnly => ManagedToolCeiling::MetaOnly,
+        ManagedServerToolCeiling::Readonly => ManagedToolCeiling::Readonly,
+        ManagedServerToolCeiling::Readwrite => ManagedToolCeiling::Readwrite,
     }
 }
 
@@ -2853,7 +2831,7 @@ pub async fn desktop_managed_server_restart<R: Runtime>(
     let provision = gents_server::server_host::ProvisionOptions {
         home: node_home.clone(),
         node_name: request.node_name.clone(),
-        tool_ceiling: tool_ceiling.into(),
+        tool_ceiling: runtime_tool_ceiling(tool_ceiling),
         tool_root: authority.tool_root.clone(),
         store_key_custody: state.policy.store_key_custody,
     };
@@ -3565,7 +3543,7 @@ mod tests {
             gents_server::server_host::ProvisionOptions {
                 home: node_home.clone(),
                 node_name: "Scout".to_string(),
-                tool_ceiling: ManagedServerToolCeiling::Readwrite.into(),
+                tool_ceiling: runtime_tool_ceiling(ManagedServerToolCeiling::Readwrite),
                 tool_root: None,
                 store_key_custody: gents::store_key::StoreKeyCustodyChoice::File,
             },

@@ -2,7 +2,8 @@ use crate::error::{BridgeError, BridgeErrorCode};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use ts_rs::TS;
-const MANAGED_SERVER_CONFIG: &str = "managed-server.json";
+
+use crate::preference::{StoredManagedServer, MANAGED_SERVER_CONFIG};
 const ARCHIVE_CONSEQUENCE: &str = "The selected local state is moved into a timestamped backup. Nothing is imported into the new home.";
 const DELETE_CONSEQUENCE: &str =
     "The selected local state is permanently deleted. Nothing is imported into the new home.";
@@ -170,6 +171,8 @@ pub struct HomeResetPlan {
     full_reset: bool,
     host_entries: Vec<(String, PathBuf)>,
     browser_entries: Vec<PathBuf>,
+    /// The decoded records that prove each root is Gents'; retired last.
+    ownership_records: Vec<PathBuf>,
 }
 
 /// Keychain custody outlives filesystem retirement. Its record stays until
@@ -212,36 +215,50 @@ fn add_store_key(keys: &mut Vec<RetiredStoreKey>, key: RetiredStoreKey) {
     }
 }
 
-/// A regular file the desktop client wrote that decodes as its record: the
-/// identity record, the store's custody record or pending upgrade journal,
-/// or a preference naming the reviewed node's DID. A path that merely
-/// exists proves nothing.
-fn desktop_record_decodes(paths: &crate::client::DesktopPaths, preference: &Path) -> bool {
+/// The regular files the desktop client wrote that decode, through their
+/// owners, as its records: the identity record, the store's custody record
+/// or pending upgrade journal, and a preference reviewed for a node. A path
+/// that merely exists proves nothing.
+fn decoded_desktop_records(paths: &crate::client::DesktopPaths, preference: &Path) -> Vec<PathBuf> {
     let read = |path: &Path| {
         std::fs::symlink_metadata(path)
             .is_ok_and(|metadata| metadata.is_file())
             .then(|| std::fs::read(path).ok())
             .flatten()
     };
-    crate::client::PrincipalIdentity::recorded_did(paths.principal_metadata_path()).is_some()
-        || read(paths.store_encryption_path()).is_some_and(|bytes| {
-            serde_json::from_slice::<gents::store_key::StoreEncryption>(&bytes).is_ok()
-        })
-        || std::fs::symlink_metadata(gents::store_key::upgrade::journal_path(
-            paths.node_data_dir(),
-        ))
-        .is_ok_and(|metadata| metadata.is_file())
-            && gents::store_key::upgrade::pending_record(paths.node_data_dir())
-                .is_ok_and(|record| record.is_some())
-        || read(preference)
-            .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
-            .and_then(|value| {
-                value
-                    .pointer("/reviewedFor/nodeDid")
-                    .and_then(serde_json::Value::as_str)
-                    .map(|did| did.starts_with("did:"))
-            })
-            == Some(true)
+    let journal = gents::store_key::upgrade::journal_path(paths.node_data_dir());
+    [
+        (
+            paths.principal_metadata_path().to_path_buf(),
+            crate::client::PrincipalIdentity::recorded_did(paths.principal_metadata_path())
+                .is_some(),
+        ),
+        (
+            paths.store_encryption_path().to_path_buf(),
+            read(paths.store_encryption_path()).is_some_and(|bytes| {
+                serde_json::from_slice::<gents::store_key::StoreEncryption>(&bytes).is_ok()
+            }),
+        ),
+        (
+            journal.clone(),
+            read(&journal).is_some()
+                && gents::store_key::upgrade::pending_record(paths.node_data_dir())
+                    .is_ok_and(|record| record.is_some()),
+        ),
+        (
+            preference.to_path_buf(),
+            read(preference)
+                .and_then(|bytes| serde_json::from_slice::<StoredManagedServer>(&bytes).ok())
+                .and_then(|stored| stored.reviewed_for)
+                .is_some_and(|reviewed| {
+                    reviewed.node_did.starts_with("did:key:")
+                        && !reviewed.node_home.trim().is_empty()
+                }),
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(path, decoded)| decoded.then_some(path))
+    .collect()
 }
 
 fn upgrade_retirement(
@@ -558,16 +575,22 @@ fn plan_reset(
         }
         None => false,
     };
+    let home_record = runtime
+        .as_ref()
+        .filter(|_| initialized)
+        .map(|(home, _)| gents::home::init_config_path(home));
     let mut client_entries = Vec::new();
     // Like a runtime home, a desktop home proves itself only through a record
     // the desktop wrote; its entry names alone also occur in user projects.
     let mut desktop_owned = client.is_some();
+    let mut ownership_records = Vec::new();
     if retires_client_state {
         // Entries are derived from the canonical root, never from the raw
         // configured path.
         let canonical = crate::client::DesktopPaths::from_root(&desktop_root);
         let preference = desktop_root.join(MANAGED_SERVER_CONFIG);
-        desktop_owned |= desktop_record_decodes(&canonical, &preference);
+        ownership_records.extend(decoded_desktop_records(&canonical, &preference));
+        desktop_owned |= !ownership_records.is_empty();
         for entry in canonical
             .client_state_entries()
             .into_iter()
@@ -716,6 +739,7 @@ fn plan_reset(
         full_reset,
         host_entries: Vec::new(),
         browser_entries: Vec::new(),
+        ownership_records: home_record.into_iter().chain(ownership_records).collect(),
     })
 }
 
@@ -726,16 +750,10 @@ impl HomeResetPlan {
         self.full_reset || self.client.is_some() || self.runtime.is_some() || self.orphaned_client
     }
 
-    /// The records that prove a root belongs to Gents: the home's init
-    /// marker and the desktop client's own records.
+    /// Only records that decoded as evidence wait for the final pass; every
+    /// other entry, including undecoded records, goes first.
     fn is_ownership_record(&self, path: &Path) -> bool {
-        let desktop = crate::client::DesktopPaths::from_root(&self.desktop_root);
-        self.runtime
-            .as_ref()
-            .is_some_and(|(home, _)| path == gents::home::init_config_path(home))
-            || path == self.desktop_root.join(MANAGED_SERVER_CONFIG)
-            || path == gents::store_key::upgrade::journal_path(desktop.node_data_dir())
-            || desktop.client_records().contains(&path)
+        self.ownership_records.iter().any(|record| record == path)
     }
 
     fn refused_stores(&self) -> impl Iterator<Item = &gents::storage_backend::IncompatibleStore> {
@@ -1171,17 +1189,21 @@ pub fn lock_desktop_process(
     paths: &crate::client::DesktopPaths,
     wait: bool,
 ) -> anyhow::Result<DesktopProcessLock> {
-    lock_file(paths, ".desktop-process.lock", wait).map(DesktopProcessLock)
+    lock_file(paths, ".desktop-process.lock", wait).map(|lock| DesktopProcessLock { _lock: lock })
 }
 
 /// [`lock_desktop_process`]'s lock. Tauri keeps one managed value per type,
 /// so each lock a desktop holds has its own type.
 #[derive(Debug)]
-pub struct DesktopProcessLock(gents::file_lock::FileLock);
+pub struct DesktopProcessLock {
+    _lock: gents::file_lock::FileLock,
+}
 
 /// [`lock_browser_store`]'s lock; see [`DesktopProcessLock`].
 #[derive(Debug)]
-pub struct BrowserStoreLock(gents::file_lock::FileLock);
+pub struct BrowserStoreLock {
+    _lock: gents::file_lock::FileLock,
+}
 
 /// A reset reserves the next process-lock acquisition before asking the app to
 /// exit. Startup takes this lock first, so it cannot overtake the waiting reset.
@@ -1238,7 +1260,7 @@ fn lock_browser_store_in(
         Some(identifier) => format!("browser-store-{identifier}.lock"),
         None => "browser-store.lock".into(),
     };
-    lock_in(directory, &name, false).map(BrowserStoreLock)
+    lock_in(directory, &name, false).map(|lock| BrowserStoreLock { _lock: lock })
 }
 
 fn lock_file(
@@ -1560,7 +1582,7 @@ mod tests {
         assert_eq!(reviewed_reset_home(&paths).unwrap(), None);
         write(
             &temp.path().join(MANAGED_SERVER_CONFIG),
-            r#"{"reviewedFor":{"nodeHome":"/a/custom/home","nodeDid":"did:key:example"}}"#,
+            r#"{"nodeName":"local","reviewedFor":{"nodeHome":"/a/custom/home","nodeDid":"did:key:example"}}"#,
         );
         assert_eq!(
             reviewed_reset_home(&paths).unwrap(),
@@ -1620,7 +1642,15 @@ mod tests {
             "store.key",
         ];
         for name in names {
-            for contents in [None, Some("hello"), Some("{}"), Some(r#"{"did":"x"}"#)] {
+            for contents in [
+                None,
+                Some("hello"),
+                Some("{}"),
+                Some(r#"{"did":"x"}"#),
+                Some(r#"{"reviewedFor":{"nodeDid":"did:"}}"#),
+                Some(r#"{"reviewedFor":{"nodeDid":"did:key:z","nodeHome":"/h"}}"#),
+                Some(r#"{"version":1}"#),
+            ] {
                 let temp = tempfile::tempdir().unwrap();
                 let user = temp.path().canonicalize().unwrap();
                 let (home, _, service) = fixture(&user);
@@ -1671,6 +1701,102 @@ mod tests {
         assert!(!logs.exists());
         assert!(!desktop.principal_metadata_path().exists());
         assert!(!home.join("init.json").exists());
+    }
+
+    fn evidenced_fixture(user: &Path) -> (PathBuf, DesktopPaths, PathBuf) {
+        let (home, desktop, service) = fixture(user);
+        write(
+            desktop.store_encryption_path(),
+            r#"{"version":1,"custody":"file"}"#,
+        );
+        write(desktop.store_key_path(), "client store key");
+        write(desktop.peer_directory_path(), "{}");
+        (home, desktop, service)
+    }
+
+    #[test]
+    fn a_retry_finishes_after_an_interrupted_evidence_pass() {
+        let first = tempfile::tempdir().unwrap();
+        let first = first.path().canonicalize().unwrap();
+        let (home, desktop, service) = evidenced_fixture(&first);
+        let plan = plan_full_reset(Some(&home), &desktop, &first, &service).unwrap();
+        let records = plan.ownership_records.clone();
+        assert_eq!(
+            records,
+            [
+                home.join("init.json"),
+                desktop.principal_metadata_path().to_path_buf(),
+                desktop.store_encryption_path().to_path_buf(),
+            ]
+        );
+        let order = plan
+            .retire(HomeResetDisposition::Delete, None)
+            .unwrap()
+            .retired_paths;
+        let boundary = order
+            .iter()
+            .position(|path| records.contains(&PathBuf::from(path)))
+            .unwrap();
+        assert!(order[boundary..]
+            .iter()
+            .all(|path| records.contains(&PathBuf::from(path))));
+        for dependent in [
+            desktop.store_key_path(),
+            desktop.peer_directory_path(),
+            &desktop.root().join(MANAGED_SERVER_CONFIG),
+            &desktop.root().join("logs"),
+        ] {
+            assert!(order[..boundary].contains(&dependent.display().to_string()));
+        }
+
+        // Interrupt a second, identical reset right after its first record.
+        let second = tempfile::tempdir().unwrap();
+        let second = second.path().canonicalize().unwrap();
+        let (home, desktop, service) = evidenced_fixture(&second);
+        for path in &order[..=boundary] {
+            let path = second.join(Path::new(path).strip_prefix(&first).unwrap());
+            if path.is_dir() {
+                std::fs::remove_dir_all(&path).unwrap();
+            } else {
+                std::fs::remove_file(&path).unwrap();
+            }
+        }
+        let retry = plan_full_reset(Some(&home), &desktop, &second, &service).unwrap();
+        retry.retire(HomeResetDisposition::Delete, None).unwrap();
+        for path in &order {
+            let path = second.join(Path::new(path).strip_prefix(&first).unwrap());
+            assert!(!path.exists(), "{} survived the retry", path.display());
+        }
+    }
+
+    #[test]
+    fn a_pending_upgrade_journal_alone_proves_desktop_ownership() {
+        use gents::store_key::{upgrade, StoreEncryption, StoreKeyCustodyChoice};
+        let temp = tempfile::tempdir().unwrap();
+        let user = temp.path().canonicalize().unwrap();
+        let (home, _, service) = fixture(&user);
+        let desktop = DesktopPaths::from_root(user.join("upgrading"));
+        write(&desktop.node_data_dir().join("MANIFEST"), "REGOMAN client");
+        write(desktop.principal_metadata_path(), "{}");
+        write(&desktop.root().join("logs/client.log"), "diagnostics");
+        let data = desktop.node_data_dir();
+        let record = StoreEncryption::prepare(
+            StoreKeyCustodyChoice::File,
+            desktop.store_key_path(),
+            &upgrade::staging_path(data),
+        )
+        .unwrap();
+        upgrade::begin(data, &record).unwrap();
+        let journal = upgrade::journal_path(data);
+        let plan = plan_full_reset(Some(&home), &desktop, &user, &service).unwrap();
+        assert!(plan.ownership_records.contains(&journal));
+        assert!(!plan
+            .ownership_records
+            .contains(&desktop.principal_metadata_path().to_path_buf()));
+        plan.retire(HomeResetDisposition::Delete, None).unwrap();
+        assert!(!data.exists());
+        assert!(!journal.exists());
+        assert!(!desktop.root().join("logs").exists());
     }
 
     #[test]
@@ -1790,12 +1916,12 @@ pub fn reviewed_reset_home(paths: &crate::client::DesktopPaths) -> anyhow::Resul
                 "Reading desktop preference; specify --home to choose the reset target explicitly",
             ),
         };
-    let value: serde_json::Value = serde_json::from_slice(&bytes).context(
+    let stored: StoredManagedServer = serde_json::from_slice(&bytes).context(
         "Reading desktop preference; specify --home to choose the reset target explicitly",
     )?;
-    Ok(value
-        .pointer("/reviewedFor/nodeHome")
-        .and_then(serde_json::Value::as_str)
-        .filter(|value| !value.trim().is_empty())
+    Ok(stored
+        .reviewed_for
+        .map(|reviewed| reviewed.node_home)
+        .filter(|home| !home.trim().is_empty())
         .map(PathBuf::from))
 }
