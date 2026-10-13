@@ -51,8 +51,9 @@ use crate::lean_vocab_test::{
     lean_prompt_assembly_claude_body_cases, lean_prompt_assembly_claude_map_cases,
     lean_prompt_assembly_claude_replay_cases, lean_prompt_assembly_claude_stream_cases,
     lean_prompt_assembly_claude_thinking_stream_cases, lean_prompt_assembly_sanitize_cases,
-    LeanClaudeReasoningPart, LeanClaudeReplayBlock, LeanClaudeStreamBlock, LeanClaudeStreamEvent,
-    LeanPromptAssemblyItem, LeanPromptAssemblyRow,
+    native_claude_reasoning_parts, native_claude_replay_content, LeanClaudeReasoningPart,
+    LeanClaudeReplayBlock, LeanClaudeStreamBlock, LeanClaudeStreamEvent, LeanPromptAssemblyItem,
+    LeanPromptAssemblyRow,
 };
 
 /// Stable identities for the abstract ids the model uses. The model abstracts
@@ -1004,28 +1005,6 @@ fn physical_replay_tag(row: usize) -> gents_loop::claude_messages_body::ReplayTa
     }
 }
 
-fn native_claude_reasoning_parts(
-    parts: &[crate::lean_vocab_test::LeanClaudeReplayInputPart],
-) -> Vec<gents::llm::message::ReasoningContent> {
-    use gents::llm::message::ReasoningContent;
-    parts
-        .iter()
-        .map(|part| {
-            let payload = String::from_utf8(part.payload.clone()).expect("reconstructed UTF-8");
-            match part.kind.as_str() {
-                "text" => ReasoningContent::Text {
-                    text: payload,
-                    signature: part.signature.clone(),
-                },
-                "redacted" => ReasoningContent::Redacted { data: payload },
-                "encrypted" => ReasoningContent::Encrypted(payload),
-                "summary" => ReasoningContent::Summary(payload),
-                other => panic!("unknown modeled reasoning part {other}"),
-            }
-        })
-        .collect()
-}
-
 fn native_replay_tag(
     tag: &crate::lean_vocab_test::LeanCanonicalCoordinate,
 ) -> gents_loop::claude_messages_body::ReplayTag {
@@ -1600,48 +1579,6 @@ fn generated_claude_checkpoint_cases_bind_selected_assistant_projection() {
             }
         }
     }
-}
-
-fn native_claude_replay_content(
-    blocks: &[crate::lean_vocab_test::LeanClaudeReplayInputBlock],
-) -> Vec<AssistantContent> {
-    let mut content = Vec::new();
-    for block in blocks {
-        match block.kind.as_str() {
-            "text" => content.push(AssistantContent::Text(Text {
-                text: String::from_utf8(block.payload.clone().expect("text payload"))
-                    .expect("reconstructed UTF-8"),
-            })),
-            "reasoning" => {
-                let parts =
-                    native_claude_reasoning_parts(block.parts.as_ref().expect("reasoning parts"));
-                content.push(AssistantContent::Reasoning(Reasoning {
-                    id: block.id.clone(),
-                    content: parts,
-                }));
-            }
-            "toolCall" => {
-                let arguments = String::from_utf8(block.arguments.clone().expect("arguments"))
-                    .expect("reconstructed UTF-8");
-                content.push(AssistantContent::ToolCall(ToolCall {
-                    id: block.id.clone().expect("provider tool id"),
-                    call_id: block.call_id.clone(),
-                    function: ToolFunction {
-                        name: block.name.clone().expect("tool name"),
-                        arguments: serde_json::from_str(&arguments)
-                            .expect("modeled JSON arguments"),
-                    },
-                    signature: block.signature.clone(),
-                    additional_params: block.additional_params.as_ref().map(|value| {
-                        serde_json::from_str(value).expect("modeled additional params JSON")
-                    }),
-                }));
-            }
-            "unsupportedMedia" => content.push(AssistantContent::Image(Image::default())),
-            other => panic!("unsupported modeled replay input block {other}"),
-        }
-    }
-    content
 }
 
 #[test]

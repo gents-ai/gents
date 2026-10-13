@@ -1015,6 +1015,10 @@ def promptAssemblyClaudeReplayCases : List PromptAssemblyClaudeReplayCase :=
       [.reasoning none [.text (utf8Bytes "考慮") (some "署名"),
                         .redacted (utf8Bytes "opaque")],
        .toolCall 1 "call-1" none "echo" (utf8Bytes "{}") none none]
+  , claudeReplayCase "streamed-signed-redacted-tool"
+      [.reasoning none [.text (utf8Bytes "考慮") (some "署名")],
+       .reasoning none [.redacted (utf8Bytes "opaque")],
+       .toolCall 1 "call-1" none "echo" (utf8Bytes "{}") none none]
   , claudeReplayCase "empty-text-with-signature"
       [.reasoning none [.text [] (some "signature")]]
   , claudeReplayCase "empty-ordinary-text-omitted"
