@@ -1001,6 +1001,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_agent_request_admission_cases_match_shared_projector",
         },
         ConformanceConsumer::RustTest {
+            id: "session_message::agent_tools_tests::session_target_authority_matches_lean_owner",
+            package: "gents",
+            source_path: "crates/gents/src/session_message.rs",
+            module_path: "session_message::agent_tools_tests",
+            function: "session_target_authority_matches_lean_owner",
+        },
+        ConformanceConsumer::RustTest {
             id: "conformance::enrollment::generated_causal_hop_cases_match_native_materializer",
             package: "gents",
             source_path: "crates/gents/tests/conformance/enrollment.rs",

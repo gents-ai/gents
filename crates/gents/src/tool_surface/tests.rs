@@ -2390,6 +2390,7 @@ fn explain_complex_document_combination_filters_agents_and_groups_surface() {
         "agent_message",
         "agent_interrupt",
         "agent_list",
+        "agent_session_list",
         "query",
     ] {
         assert!(

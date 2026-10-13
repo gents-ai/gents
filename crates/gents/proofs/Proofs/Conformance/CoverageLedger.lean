@@ -802,6 +802,11 @@ def caseCoverage : List CoverageEntry :=
       "CausalHopContract"
       "conformance::enrollment::generated_causal_hop_cases_match_native_materializer")
       "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "causal_hop_contract"
+      "SessionTargetAuthorityCases"
+      "session_message::agent_tools_tests::session_target_authority_matches_lean_owner")
+      "request-lifecycle" [Surface.agentFacing]
   , tagged (followUpCoverage
       "title_request_admission_cases"
       "TitleRequestAdmissionCases"

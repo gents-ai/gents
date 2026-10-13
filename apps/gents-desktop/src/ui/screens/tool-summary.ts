@@ -129,7 +129,12 @@ export function toolSummary(t: RenderedToolCallView): {
     case "agent":
       return {
         kind: `agent · ${p.action}`,
-        primary: p.action === "list" ? "agents" : (p.name ?? p.sessionId ?? "agent"),
+        primary:
+          p.action === "list"
+            ? "agents"
+            : p.action === "sessions"
+              ? "sessions"
+              : (p.name ?? p.sessionId ?? "agent"),
         secondary: compact(p.description),
       };
     case "process":

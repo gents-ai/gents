@@ -6,6 +6,10 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- `agent_list` now returns startup targets only. `agent_session_list` discovers
+  messageable sessions, including trigger-started work, with filters and paging
+  while preserving message and interrupt authority (#2038).
+
 - A request's first turn no longer resolves canonical replay evidence twice.
   The admission estimate's resolution is served to the immediately following
   dispatch and taken once, and every later assembly re-reads the store exactly

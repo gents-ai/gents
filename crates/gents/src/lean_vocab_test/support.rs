@@ -1135,6 +1135,17 @@ pub(crate) struct LeanCausalHopContract {
     pub(crate) call_cases: Vec<LeanCausalHopCallCase>,
     pub(crate) interrupt_cases: Vec<LeanAgentInterruptCase>,
     pub(crate) write_cases: Vec<LeanSessionMessageWriteCase>,
+    pub(crate) session_target_cases: Vec<LeanSessionTargetCase>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanSessionTargetCase {
+    pub(crate) same_requester: bool,
+    pub(crate) same_node: bool,
+    pub(crate) caused: bool,
+    pub(crate) allowed_target: bool,
+    pub(crate) expected_allowed: bool,
 }
 
 /// One delivered session message (`DurableLineage.sessionMessageWrite`).
