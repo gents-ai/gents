@@ -1,0 +1,20 @@
+{
+  "node": {},
+  "eval_definitions": [
+    {
+      "definition_id": "engineer-native-packs",
+      "comparability_version": 1,
+      "title": "Native plugin pack lifecycle",
+      "subject": {
+        "kind": "agent",
+        "inference_slots": [
+          "engineer"
+        ]
+      },
+      "cases": [
+        "./cases/local_sealed_install.json",
+        "./cases/authority_refusal.json"
+      ]
+    }
+  ]
+}

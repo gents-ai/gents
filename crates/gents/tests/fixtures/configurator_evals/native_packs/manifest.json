@@ -1,0 +1,19 @@
+{
+  "manifest_version": 1,
+  "name": "engineer_native_pack_experience",
+  "version": "0.1.0",
+  "description": "Offline local artifact inspection, pinned sealed install, explicit plugin selection and fresh-request execution.",
+  "authors": [
+    "gents-ai contributors"
+  ],
+  "kind": "documents",
+  "assets": [
+    "README.md",
+    "pack_config.json",
+    "cases/local_sealed_install.json",
+    "artifacts/native_echo.pack",
+    "cases/authority_refusal.json",
+    "artifacts/native_authority.pack"
+  ],
+  "config": "pack_config.json"
+}

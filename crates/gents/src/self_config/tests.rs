@@ -7424,3 +7424,235 @@ async fn model_reselection_and_existing_sibling_grants_use_invoker_bounds() {
         .unwrap();
     no_grant.apply(tools_request(&no_grant, vec![("self_config".into(), Some(json!({"enable_self_config":true,"enable_pack_install":true,"self_config_preview":true})))])).await.unwrap();
 }
+
+#[tokio::test]
+async fn native_pack_local_install_inspection_selection_and_digest_fence() {
+    let (workspace, artifact, archive) =
+        crate::pack::plugin_lifecycle::tests::fixture("1.0.0", false);
+    let home = tempfile::tempdir().unwrap();
+    let plugins = Arc::new(crate::plugin::executor::PluginExecutor::new(Some(
+        home.path().to_owned(),
+    )));
+    let node = build_agent_node().await;
+    let identity = node_identity("native-pack");
+    let did = identity.did().to_string();
+    crate::test_support::install_test_agent(&node, &did, "setup").await;
+    let mut cfg = config(&["tools", "agent"]);
+    cfg.agent_id = "setup".into();
+    cfg.enable_pack_install = true;
+    cfg.process_ceiling.file_mode = crate::tool_surface::FileToolMode::ReadOnly;
+    cfg.process_ceiling.root = Some(workspace.path().to_owned());
+    let tools = build_self_config_tools(
+        node.clone(),
+        did.clone(),
+        Some(identity),
+        &cfg,
+        plugins.clone(),
+    );
+    let tool = tools
+        .iter()
+        .find(|tool| tool.name() == CONFIG_TOOL_NAME)
+        .unwrap();
+    tool.call(json!({"argv":["tools","update"],"set":{"host":{"root":workspace.path(),"files":{"mode":"ReadOnly"},"bash":{"mode":"Off"}}}}).to_string()).await.unwrap();
+    let path = artifact.to_str().unwrap();
+    let preview: Value = serde_json::from_str(
+        &config_call(&tools, &["pack", "preview", "install", path])
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(preview["ready"], true);
+    assert_eq!(preview["artifact_digest"], archive.digest());
+    assert_eq!(
+        preview["apply_with"]["argv"],
+        json!(["pack", "install", archive.digest()])
+    );
+    assert!(crate::plugin::store::list_records(home.path())
+        .unwrap()
+        .is_empty());
+    let wrong = format!("sha256:{}", "0".repeat(64));
+    let error = config_call(&tools, &["pack", "install", path, "--digest", &wrong])
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("digest changed"), "{error}");
+    assert!(crate::plugin::store::list_records(home.path())
+        .unwrap()
+        .is_empty());
+    let installed: Value = serde_json::from_str(
+        &config_call(
+            &tools,
+            &["pack", "install", path, "--digest", archive.digest()],
+        )
+        .await
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(installed["committed"], true);
+    let inspect: Value = serde_json::from_str(
+        &config_call(&tools, &["plugin", "get", "fixture/native_echo"])
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(inspect["selection"]["plugin"], "fixture/native_echo");
+    let tool = tools
+        .iter()
+        .find(|tool| tool.name() == CONFIG_TOOL_NAME)
+        .unwrap();
+    let before: Value =
+        serde_json::from_str(&config_call(&tools, &["tools", "get"]).await.unwrap()).unwrap();
+    assert!(
+        !before.to_string().contains("native_echo"),
+        "install must not select a tool"
+    );
+    tool.call(json!({"argv":["tools","update"],"set":{"integrations":{"plugins":[inspect["selection"].clone()]}}}).to_string()).await.unwrap();
+    let readback = config_call(&tools, &["tools", "get"]).await.unwrap();
+    assert!(readback.contains("fixture/native_echo"));
+    let record = crate::plugin::store::read_record(home.path(), "fixture", "native_echo").unwrap();
+    assert!(record.granted.is_none());
+    let selection: crate::document_config::PluginToolRef =
+        serde_json::from_value(inspect["selection"].clone()).unwrap();
+    let fresh_tool = crate::plugin::tool::PluginTool::resolve(
+        plugins,
+        &selection,
+        Some(workspace.path().to_owned()),
+    )
+    .unwrap();
+    let output: Value = serde_json::from_str(&fresh_tool.call("{}".into()).await.unwrap()).unwrap();
+    assert_eq!(output, json!({"native_pack_echo":"ok"}));
+    let (_next_dir, next_path, next) =
+        crate::pack::plugin_lifecycle::tests::fixture("2.0.0", false);
+    std::fs::copy(next_path, &artifact).unwrap();
+    let error = config_call(
+        &tools,
+        &["pack", "update", path, "--digest", archive.digest()],
+    )
+    .await
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("digest changed"));
+    config_call(&tools, &["pack", "update", path, "--digest", next.digest()])
+        .await
+        .unwrap();
+    let status: Value = serde_json::from_str(
+        &config_call(&tools, &["pack", "get", "fixture/native_echo_pack"])
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(status["installed"]["version"], "2.0.0");
+    let removal = config_call(&tools, &["pack", "remove", "fixture/native_echo_pack"])
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(removal.contains("native removal"));
+    assert_eq!(
+        crate::plugin::store::read_record(home.path(), "fixture", "native_echo")
+            .unwrap()
+            .version,
+        "2.0.0"
+    );
+}
+
+#[tokio::test]
+async fn native_pack_local_paths_and_approval_fail_closed() {
+    let (workspace, artifact, _) = crate::pack::plugin_lifecycle::tests::fixture("1.0.0", true);
+    let home = tempfile::tempdir().unwrap();
+    let plugins = Arc::new(crate::plugin::executor::PluginExecutor::new(Some(
+        home.path().to_owned(),
+    )));
+    let node = build_agent_node().await;
+    let identity = node_identity("native-pack-refusals");
+    let did = identity.did().to_string();
+    crate::test_support::install_test_agent(&node, &did, "setup").await;
+    let mut cfg = config(&["tools"]);
+    cfg.agent_id = "setup".into();
+    cfg.enable_pack_install = true;
+    cfg.process_ceiling.root = Some(workspace.path().to_owned());
+    let tools = build_self_config_tools(
+        node.clone(),
+        did.clone(),
+        Some(identity.clone()),
+        &cfg,
+        plugins.clone(),
+    );
+    let path = artifact.to_str().unwrap();
+    assert!(config_call(&tools, &["pack", "get", path])
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("effective file read permission"));
+    cfg.process_ceiling.file_mode = crate::tool_surface::FileToolMode::ReadOnly;
+    let tools = build_self_config_tools(node, did, Some(identity), &cfg, plugins);
+    assert!(config_call(&tools, &["pack", "get", path])
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("effective file read permission"));
+    let tool = tools
+        .iter()
+        .find(|tool| tool.name() == CONFIG_TOOL_NAME)
+        .unwrap();
+    tool.call(json!({"argv":["tools","update"],"set":{"host":{"root":workspace.path(),"files":{"mode":"ReadOnly"},"bash":{"mode":"Off"}}}}).to_string()).await.unwrap();
+    let preview: Value = serde_json::from_str(
+        &config_call(&tools, &["pack", "preview", "install", path])
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(preview["ready"], false);
+    assert_eq!(preview["apply_with"], Value::Null);
+    let digest = preview["artifact_digest"].as_str().unwrap();
+    let tool = tools
+        .iter()
+        .find(|tool| tool.name() == CONFIG_TOOL_NAME)
+        .unwrap();
+    assert!(tool
+        .call(
+            json!({"argv":["pack","install",path],"options":{"digest":digest,"approved":true}})
+                .to_string()
+        )
+        .await
+        .is_err());
+    assert!(
+        config_call(&tools, &["pack", "install", path, "--digest", digest])
+            .await
+            .is_err()
+    );
+    assert!(crate::plugin::store::list_records(home.path())
+        .unwrap()
+        .is_empty());
+    let outside = tempfile::tempdir().unwrap();
+    let outside_path = outside.path().join("outside.pack");
+    std::fs::copy(&artifact, &outside_path).unwrap();
+    let error = config_call(&tools, &["pack", "get", outside_path.to_str().unwrap()])
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("outside the allowed tool root"));
+    #[cfg(unix)]
+    {
+        let link = workspace.path().join("escape.pack");
+        std::os::unix::fs::symlink(&outside_path, &link).unwrap();
+        assert!(
+            config_call(&tools, &["pack", "get", link.to_str().unwrap()])
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("outside the allowed tool root")
+        );
+    }
+    let corrupt = workspace.path().join("corrupt.pack");
+    std::fs::write(&corrupt, b"not a pack").unwrap();
+    assert!(
+        config_call(&tools, &["pack", "get", corrupt.to_str().unwrap()])
+            .await
+            .is_err()
+    );
+    assert!(
+        config_call(&tools, &["pack", "get", workspace.path().to_str().unwrap()])
+            .await
+            .is_err()
+    );
+}

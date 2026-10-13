@@ -23,6 +23,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use identity::Did;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -550,65 +551,97 @@ pub async fn record_plugin_store_change(
     coordinate: &str,
     installed: Option<&PackIdentity>,
 ) -> Result<()> {
+    record_plugin_store_change_as(access, owner, None, home, coordinate, installed).await
+}
+
+/// The same, retaining `identity` for the transaction's ACP decision when the
+/// access is embedded and the caller knows the invoking DID. `None` keeps the
+/// default actor (the operator/CLI path). A model-facing caller must pass the
+/// invoking DID: the record's owner string is not authentication.
+pub async fn record_plugin_store_change_as(
+    access: &ConfigAccess,
+    owner: &str,
+    identity: Option<Did>,
+    home: &Path,
+    coordinate: &str,
+    installed: Option<&PackIdentity>,
+) -> Result<()> {
     let retained = installed.is_none()
         && crate::plugin::store::list_records(home)?
             .iter()
             .any(|plugin| plugin.owner_pack_coordinate.as_deref() == Some(coordinate));
-    access
-        .transact("pack.record_plugin_store", |txn| {
-            Box::pin(async move {
-                let prior = read_record(txn, owner, coordinate).await?;
-                let documents: Vec<RecordedDocument> = prior.documents.values().cloned().collect();
-                let own = prior.doc_id.is_none() || prior.plugin_store;
-                match installed {
-                    Some(pack) if own => {
-                        return write_record_in_txn(
-                            txn, owner, pack, &prior, documents, false, true,
-                        )
-                        .await
-                    }
-                    None if prior.doc_id.is_none() => return Ok(()),
-                    None if own && !retained => {
-                        return remove_record_in_txn(
-                            txn,
-                            owner,
-                            coordinate,
-                            &prior,
-                            DriftPolicy::Refuse,
-                        )
-                        .await
-                        .map(|_| ());
-                    }
-                    _ => {}
-                }
-                // A removal of the coordinate's plugins releases by these
-                // names, so an install's names join them.
-                let mut plugins = prior.plugins.clone();
-                for plugin in installed.map_or(&[][..], |pack| &pack.plugins[..]) {
-                    plugins.retain(|kept| kept.name != plugin.name);
-                    plugins.push(plugin.clone());
-                }
-                let unchanged = PackIdentity {
-                    coordinate: coordinate.to_owned(),
-                    version: prior.version.clone().unwrap_or_default(),
-                    digest: prior.digest.clone().unwrap_or_default(),
-                    plugins,
-                    dependencies: Vec::new(),
-                };
-                let plugin_store = prior.plugin_store;
-                write_record_in_txn(
-                    txn,
-                    owner,
-                    &unchanged,
-                    &prior,
-                    documents,
-                    false,
-                    plugin_store,
+    match (access, identity) {
+        (ConfigAccess::Local(node), Some(identity)) => {
+            ConfigAccess::transact_local_idempotent(
+                node,
+                Some(identity),
+                crate::config_client::IdempotentTransactionRetry::Standard,
+                "pack.record_plugin_store",
+                |txn| Box::pin(async move { write_plugin_record(txn, owner, home, coordinate, installed, retained).await }),
+            )
+            .await
+        }
+        (ConfigAccess::Local(node), None) => {
+            ConfigAccess::transact_local_idempotent(
+                node,
+                None,
+                crate::config_client::IdempotentTransactionRetry::Standard,
+                "pack.record_plugin_store",
+                |txn| Box::pin(async move { write_plugin_record(txn, owner, home, coordinate, installed, retained).await }),
+            )
+            .await
+        }
+        (access @ ConfigAccess::Graphql(_), _) => {
+            access
+                .transact_idempotent(
+                    crate::config_client::IdempotentTransactionRetry::Standard,
+                    "pack.record_plugin_store",
+                    |txn| Box::pin(async move { write_plugin_record(txn, owner, home, coordinate, installed, retained).await }),
                 )
                 .await
-            })
-        })
-        .await
+        }
+    }
+}
+
+async fn write_plugin_record(
+    txn: &ConfigApplyTxn<'_>,
+    owner: &str,
+    _home: &Path,
+    coordinate: &str,
+    installed: Option<&PackIdentity>,
+    retained: bool,
+) -> Result<()> {
+    let prior = read_record(txn, owner, coordinate).await?;
+    let documents: Vec<RecordedDocument> = prior.documents.values().cloned().collect();
+    let own = prior.doc_id.is_none() || prior.plugin_store;
+    match installed {
+        Some(pack) if own => {
+            return write_record_in_txn(txn, owner, pack, &prior, documents, false, true).await
+        }
+        None if prior.doc_id.is_none() => return Ok(()),
+        None if own && !retained => {
+            return remove_record_in_txn(txn, owner, coordinate, &prior, DriftPolicy::Refuse)
+                .await
+                .map(|_| ());
+        }
+        _ => {}
+    }
+    // A removal of the coordinate's plugins releases by these names, so an
+    // install's names join them.
+    let mut plugins = prior.plugins.clone();
+    for plugin in installed.map_or(&[][..], |pack| &pack.plugins[..]) {
+        plugins.retain(|kept| kept.name != plugin.name);
+        plugins.push(plugin.clone());
+    }
+    let unchanged = PackIdentity {
+        coordinate: coordinate.to_owned(),
+        version: prior.version.clone().unwrap_or_default(),
+        digest: prior.digest.clone().unwrap_or_default(),
+        plugins,
+        dependencies: Vec::new(),
+    };
+    let plugin_store = prior.plugin_store;
+    write_record_in_txn(txn, owner, &unchanged, &prior, documents, false, plugin_store).await
 }
 
 /// Whether an installation record row is a plugin-store record

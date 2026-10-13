@@ -350,59 +350,18 @@ pub(crate) async fn resolve_pack_source(
 }
 
 fn materialize(pack: &PackSource, root: &std::path::Path) -> Result<()> {
-    use std::io::Write;
-    for path in std::iter::once("manifest.json")
-        .chain(pack.manifest().metadata.assets.iter().map(String::as_str))
-    {
-        let destination = root.join(path);
-        std::fs::create_dir_all(destination.parent().context("asset parent")?)?;
-        let bytes = pack.asset(path)?;
-        // Stage beside the destination and publish without replacing it. Readers
-        // never see a partial body, and an interrupted staging write cannot
-        // poison the digest-addressed destination or overwrite operator edits.
-        let mut staged = tempfile::NamedTempFile::new_in(destination.parent().unwrap())?;
-        staged.write_all(bytes)?;
-        set_distribution_permissions(staged.as_file())?;
-        staged.as_file().sync_all()?;
-        match staged.persist_noclobber(&destination) {
-            Ok(_) => {
-                #[cfg(unix)]
-                std::fs::File::open(destination.parent().unwrap())?.sync_all()?;
-            }
-            Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {
-                anyhow::ensure!(
-                    std::fs::read(&destination)? == bytes,
-                    "installed asset was modified: {}",
-                    destination.display()
-                );
-                set_distribution_permissions(&std::fs::File::open(&destination)?)?;
-            }
-            Err(error) => return Err(error.error.into()),
-        }
-    }
-    Ok(())
+    gents::pack::materialize::materialize(&pack.archive, root)
 }
 
 fn set_distribution_permissions(file: &std::fs::File) -> Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        file.set_permissions(std::fs::Permissions::from_mode(0o644))?;
-    }
-    Ok(())
+    gents::pack::materialize::set_distribution_permissions(file)
 }
 
 fn materialize_cached_pack(
     home: &std::path::Path,
     pack: &PackSource,
 ) -> Result<(std::path::PathBuf, gents::file_lock::FileLock)> {
-    let root = asset_cache_root(home, pack)?;
-    let lock = gents::file_lock::FileLock::shared(cache::cache_lock(
-        root.parent().context("pack cache parent")?,
-    )?)?;
-    materialize(pack, &root)?;
-    cache::write_cache_marker(&root)?;
-    Ok((root, lock))
+    gents::pack::materialize::cached(home, &pack.archive)
 }
 
 /// A subject pack for `gents eval run` and `gents optimization run`: a
@@ -922,86 +881,18 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
                 .scope
                 .home
                 .context("asset and plugins packs require --home")?;
-            let (root, _cache_lease) = materialize_cached_pack(&home, &pack)?;
-            // A pack's plugins travel inside it (pack_archive's own doc),
-            // so installing the pack installs each one into the same
-            // content-addressed plugin store `gents plugin install` uses:
-            // a plugin that arrived bundled in a pack is just as runnable
-            // by name (`gents plugin run <name>`) as one installed on its
-            // own. A failure past this point (the record write) must not
-            // leave the plugins installed above orphaned.
-            let prior_record = gents::pack::read_home_install(
+            let (record, installed_plugins) = gents::pack::plugin_lifecycle::install(
                 &home,
-                &format!(
-                    "{}/{}",
-                    pack.manifest().metadata.namespace,
-                    pack.manifest().name
-                ),
-            )?;
-            let rollback = snapshot_pack_plugin_records(&home, pack.manifest());
-            let installed_plugins = install_pack_plugins(
-                &home,
-                pack.manifest(),
-                pack.digest(),
-                |path| pack.asset(path),
+                &pack.archive,
                 args.grant_authority,
+                slot_owner.as_deref(),
+                &requested,
+                |identity| async {
+                    record_plugin_store_change(&home, &identity.coordinate, Some(&identity)).await
+                },
             )
-            .inspect_err(|_| rollback_pack_plugin_records(&home, &rollback))?;
-            let record = gents::pack::HomePackInstall {
-                coordinate: format!(
-                    "{}/{}",
-                    pack.manifest().metadata.namespace,
-                    pack.manifest().name
-                ),
-                version: pack.manifest().version.clone(),
-                digest: pack.digest().to_owned(),
-                kind: pack.manifest().metadata.kind.clone(),
-                assets: root
-                    .strip_prefix(&home)
-                    .unwrap_or(root.as_path())
-                    .to_string_lossy()
-                    .into_owned(),
-                plugins: installed_plugins
-                    .iter()
-                    .map(|plugin| gents::pack::InstalledPackPlugin {
-                        name: plugin.name.clone(),
-                        digest: plugin.digest.clone(),
-                    })
-                    .collect(),
-                installed_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-            };
-            // The node record goes last, in one transaction: a failure
-            // before it leaves the node untouched, and undoing the store and
-            // home record restores everything else.
-            let recorded = async {
-                bind_plugin_slots(&home, pack.manifest(), slot_owner.as_deref(), &requested)?;
-                gents::pack::write_home_install(&home, &record)?;
-                if !record.plugins.is_empty() {
-                    let identity = gents::pack::PackIdentity::new(
-                        pack.manifest(),
-                        pack.digest(),
-                        record.plugins.clone(),
-                    );
-                    record_plugin_store_change(&home, &record.coordinate, Some(&identity)).await?;
-                }
-                anyhow::Ok(())
-            }
-            .await;
-            if let Err(error) = recorded {
-                rollback_pack_plugin_records(&home, &rollback);
-                let restored = match &prior_record {
-                    Some(prior) => gents::pack::write_home_install(&home, prior),
-                    None => gents::pack::forget_home_install(&home, &record.coordinate),
-                };
-                if let Err(restore) = restored {
-                    tracing::error!(
-                        coordinate = %record.coordinate,
-                        error = %restore,
-                        "failed to restore the pack install record after a failed pack install",
-                    );
-                }
-                return Err(error);
-            }
+            .await?;
+            let root = home.join(&record.assets);
             crate::print_json(&json!({
                 "pack": pack.manifest().name,
                 "digest": pack.digest(),

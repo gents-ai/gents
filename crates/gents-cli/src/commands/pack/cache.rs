@@ -77,17 +77,7 @@ pub(super) fn asset_cache_root_for(
     name: &str,
     digest: &str,
 ) -> Result<std::path::PathBuf> {
-    anyhow::ensure!(
-        gents::pack::is_valid_pack_name(namespace) && gents::pack::is_valid_pack_name(name),
-        "invalid pack coordinate {namespace}/{name}"
-    );
-    let hash = gents::pack_archive::digest_hex(digest)?;
-    Ok(home
-        .join(gents::home::PACKS_DIR_NAME)
-        .join(".materialized")
-        .join(namespace)
-        .join(name)
-        .join(hash))
+    gents::pack::materialize::cache_root(home, namespace, name, digest)
 }
 
 /// A receipt whose path omits the namespace needs its verified pack contents
