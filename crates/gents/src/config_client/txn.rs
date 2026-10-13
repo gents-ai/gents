@@ -10,10 +10,9 @@ use std::sync::{Arc, Mutex as StdMutex, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use defra_node::{EmbeddedNode, ExecuteRetryPolicy, QueryRequest};
+use defra_node::{EmbeddedNode, EmbeddedTransaction, ExecuteRetryPolicy, QueryRequest};
 use futures::future::BoxFuture;
 use identity::Did;
-use query::TransactionHandle;
 use serde_json::{json, Value};
 
 use super::graphql;
@@ -32,8 +31,11 @@ enum TxnBackend<'a> {
     },
     Embedded {
         node: &'a EmbeddedNode,
-        handle: TransactionHandle,
+        transaction: Option<EmbeddedTransaction<'a>>,
         identity: Option<Did>,
+        /// Native abandonment must finish before the next mutation can acquire
+        /// this gate. Struct fields drop in declaration order.
+        write_guard: Option<MutationWriteGuard>,
     },
 }
 
@@ -285,17 +287,6 @@ fn embedded_phase_timeout(phase: &str, timeout: Duration) -> anyhow::Error {
     ))
 }
 
-async fn cleanup_while_holding_write_gate<G, F, T>(
-    write_guard: Option<G>,
-    cleanup: F,
-) -> std::result::Result<T, tokio::time::error::Elapsed>
-where
-    F: Future<Output = T>,
-{
-    let _write_guard = write_guard;
-    tokio::time::timeout(EMBEDDED_TRANSACTION_ROLLBACK_TIMEOUT, cleanup).await
-}
-
 fn mutation_write_gate(node: &EmbeddedNode) -> Arc<MutationWriteGate> {
     static GATES: OnceLock<StdMutex<HashMap<usize, Weak<MutationWriteGate>>>> = OnceLock::new();
 
@@ -314,36 +305,16 @@ fn mutation_write_gate(node: &EmbeddedNode) -> Arc<MutationWriteGate> {
     gate
 }
 
-enum RollbackOnDrop {
-    Http {
-        endpoint: GraphqlEndpoint,
-        id: String,
-        client: reqwest::Client,
-        armed: bool,
-    },
-    Embedded {
-        runner: Arc<dyn query::QueryExecutor>,
-        /// DefraDB binds a transaction to the effective identity that began it,
-        /// so the detached rollback runs under the same node identity.
-        node_identity: Option<String>,
-        handle: Option<TransactionHandle>,
-        write_guard: Option<MutationWriteGuard>,
-        armed: bool,
-    },
+struct RollbackOnDrop {
+    endpoint: GraphqlEndpoint,
+    id: String,
+    client: reqwest::Client,
+    armed: bool,
 }
 
 impl RollbackOnDrop {
     fn disarm(&mut self) {
-        match self {
-            Self::Http { armed, .. } | Self::Embedded { armed, .. } => *armed = false,
-        }
-    }
-
-    fn set_embedded_handle(&mut self, transaction_handle: TransactionHandle) {
-        let Self::Embedded { handle, .. } = self else {
-            unreachable!("only embedded rollback owners receive native handles")
-        };
-        *handle = Some(transaction_handle);
+        self.armed = false;
     }
 }
 
@@ -352,110 +323,18 @@ impl Drop for RollbackOnDrop {
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {
             return;
         };
-        match self {
-            Self::Http {
-                endpoint,
-                id,
-                client,
-                armed,
-            } => {
-                if !*armed {
-                    return;
-                }
-                let endpoint = endpoint.clone();
-                let id = id.clone();
-                let client = client.clone();
-                runtime.spawn(async move {
-                    if let Err(error) = graphql::txn_discard(&endpoint, &id, &client).await {
-                        tracing::debug!(%error, "discarding cancelled HTTP transaction");
-                    }
-                });
-            }
-            Self::Embedded {
-                runner,
-                node_identity,
-                handle,
-                write_guard,
-                armed,
-            } => {
-                if !*armed {
-                    return;
-                }
-                let Some(handle) = handle.take() else {
-                    return;
-                };
-                let runner = runner.clone();
-                let node_identity = node_identity.clone();
-                let write_guard = write_guard.take();
-                runtime.spawn(async move {
-                    match cleanup_while_holding_write_gate(
-                        write_guard,
-                        defra_core::current_identity::with_scoped_identity(
-                            node_identity,
-                            runner.rollback_txn(&handle),
-                        ),
-                    )
-                    .await {
-                        Ok(Ok(())) => {}
-                        Ok(Err(error)) => {
-                            tracing::debug!(%error, "discarding cancelled embedded transaction");
-                        }
-                        Err(_) => {
-                            tracing::warn!(
-                                timeout_ms = EMBEDDED_TRANSACTION_ROLLBACK_TIMEOUT.as_millis(),
-                                "cancelled embedded transaction rollback timed out; releasing mutation gate"
-                            );
-                        }
-                    }
-                });
-            }
+        if !self.armed {
+            return;
         }
+        let endpoint = self.endpoint.clone();
+        let id = self.id.clone();
+        let client = self.client.clone();
+        runtime.spawn(async move {
+            if let Err(error) = graphql::txn_discard(&endpoint, &id, &client).await {
+                tracing::debug!(%error, "discarding cancelled HTTP transaction");
+            }
+        });
     }
-}
-
-async fn begin_embedded_owned<F, Fut>(
-    runner: Arc<dyn query::QueryExecutor>,
-    node_identity: Option<String>,
-    read_only: bool,
-    operation: WriteOperation,
-    write_guard: Option<MutationWriteGuard>,
-    cancellation_rollback_scheduled: Arc<AtomicBool>,
-    after_begin: F,
-) -> Result<(RollbackOnDrop, TransactionHandle)>
-where
-    F: FnOnce(TransactionHandle) -> Fut,
-    Fut: Future<Output = ()>,
-{
-    // Construct the cleanup owner before begin. The caller deliberately runs
-    // this future in a detached task: if its JoinHandle is cancelled after
-    // DefraDB registers the transaction, dropping the task output still owns
-    // and rolls back the handle before releasing the write gate.
-    let mut rollback = RollbackOnDrop::Embedded {
-        runner: Arc::clone(&runner),
-        node_identity: node_identity.clone(),
-        handle: None,
-        write_guard,
-        armed: true,
-    };
-    let started = Instant::now();
-    let result = tokio::time::timeout(
-        EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
-        defra_core::current_identity::with_scoped_identity(
-            node_identity,
-            runner.begin_txn(read_only),
-        ),
-    )
-    .await;
-    record_slow_native_phase(Some(operation.as_str()), "begin", started.elapsed());
-    let handle = result
-        .map_err(|_| embedded_phase_timeout("begin", EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT))?
-        .map_err(|error| {
-            retry::transaction_storage_failure(anyhow::anyhow!("begin_txn: {error}"))
-        })?;
-    rollback.set_embedded_handle(handle.clone());
-    cancellation_rollback_scheduled.store(true, Ordering::Release);
-    after_begin(handle.clone()).await;
-    Ok((rollback, handle))
 }
 
 async fn begin_http_owned(
@@ -468,7 +347,7 @@ async fn begin_http_owned(
     let (client, id) = graphql::txn_begin(&endpoint)
         .await
         .map_err(retry::transaction_storage_failure)?;
-    let rollback = RollbackOnDrop::Http {
+    let rollback = RollbackOnDrop {
         endpoint: endpoint.clone(),
         id: id.clone(),
         client: client.clone(),
@@ -582,6 +461,34 @@ enum EmbeddedTransactionPurpose {
     Mutation,
     ExecutionRenewal,
     ReadOnly,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EmbeddedFinalizationBoundary {
+    BeforeCommit,
+    AfterCommit,
+    BeforeRollback,
+}
+
+#[cfg(test)]
+tokio::task_local! {
+    static EMBEDDED_FINALIZATION_PAUSE: (
+        EmbeddedFinalizationBoundary,
+        Arc<tokio::sync::Notify>,
+    );
+}
+
+#[cfg(test)]
+async fn pause_embedded_finalization_for_test(boundary: EmbeddedFinalizationBoundary) {
+    let reached = EMBEDDED_FINALIZATION_PAUSE
+        .try_with(|(selected, reached)| (*selected == boundary).then(|| Arc::clone(reached)))
+        .ok()
+        .flatten();
+    if let Some(reached) = reached {
+        reached.notify_one();
+        std::future::pending::<()>().await;
+    }
 }
 
 impl<'a> ConfigApplyTxn<'a> {
@@ -807,7 +714,6 @@ impl<'a> ConfigApplyTxn<'a> {
         node: &'a EmbeddedNode,
         identity: Option<Did>,
         operation: WriteOperation,
-        cancellation_rollback_scheduled: Arc<AtomicBool>,
         purpose: EmbeddedTransactionPurpose,
     ) -> Result<Self> {
         let read_only = matches!(purpose, EmbeddedTransactionPurpose::ReadOnly);
@@ -819,25 +725,28 @@ impl<'a> ConfigApplyTxn<'a> {
                 None
             }
         };
-        let runner = node.runner().clone();
-        let (rollback_on_drop, handle) = tokio::spawn(begin_embedded_owned(
-            runner,
-            node.node_identity_did().map(str::to_owned),
-            read_only,
-            operation,
-            write_guard,
-            cancellation_rollback_scheduled,
-            |_| std::future::ready(()),
-        ))
-        .await
-        .context("begin embedded transaction task")??;
+        let started = Instant::now();
+        let result = tokio::time::timeout(
+            EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
+            node.begin_transaction_guard(read_only),
+        )
+        .await;
+        record_slow_native_phase(Some(operation.as_str()), "begin", started.elapsed());
+        let transaction = result
+            .map_err(|_| {
+                embedded_phase_timeout("begin", EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT)
+            })?
+            .map_err(|error| {
+                retry::transaction_storage_failure(anyhow::anyhow!("begin_txn: {error}"))
+            })?;
         Ok(Self {
             backend: TxnBackend::Embedded {
                 node,
-                handle: handle.clone(),
+                transaction: Some(transaction),
                 identity,
+                write_guard,
             },
-            rollback_on_drop: Some(rollback_on_drop),
+            rollback_on_drop: None,
             affected_documents: AtomicU64::new(0),
             operation: Some(operation.as_str()),
         })
@@ -849,7 +758,6 @@ impl<'a> ConfigApplyTxn<'a> {
             node,
             None,
             WriteOperation::new("test.execution_renewal")?,
-            Arc::new(AtomicBool::new(false)),
             EmbeddedTransactionPurpose::ExecutionRenewal,
         )
         .await
@@ -861,7 +769,6 @@ impl<'a> ConfigApplyTxn<'a> {
             node,
             identity,
             WriteOperation::new("test.begin_local")?,
-            Arc::new(AtomicBool::new(false)),
             EmbeddedTransactionPurpose::Mutation,
         )
         .await
@@ -928,19 +835,21 @@ impl<'a> ConfigApplyTxn<'a> {
                 .await
                 .map_err(retry::transaction_storage_failure)?,
             TxnBackend::Embedded {
-                node,
-                handle,
+                transaction,
                 identity,
+                ..
             } => {
                 let started = Instant::now();
                 let result = tokio::time::timeout(
                     EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
-                    node.execute_request_in_txn(
-                        QueryRequest::new(document)
-                            .with_variables(variables.clone())
-                            .with_identity(identity.clone()),
-                        handle,
-                    ),
+                    transaction
+                        .as_ref()
+                        .expect("active transaction")
+                        .execute_request(
+                            QueryRequest::new(document)
+                                .with_variables(variables.clone())
+                                .with_identity(identity.clone()),
+                        ),
                 )
                 .await;
                 record_slow_native_phase(self.operation, "execute", started.elapsed());
@@ -1008,9 +917,9 @@ impl<'a> ConfigApplyTxn<'a> {
         document: &str,
     ) -> Result<defra_node::QueryResponse> {
         let TxnBackend::Embedded {
-            node,
-            handle,
+            transaction,
             identity,
+            ..
         } = &self.backend
         else {
             anyhow::bail!("native transaction responses require embedded access");
@@ -1018,10 +927,10 @@ impl<'a> ConfigApplyTxn<'a> {
         let started = Instant::now();
         let result = tokio::time::timeout(
             EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
-            node.execute_request_in_txn(
-                QueryRequest::new(document).with_identity(identity.clone()),
-                handle,
-            ),
+            transaction
+                .as_ref()
+                .expect("active transaction")
+                .execute_request(QueryRequest::new(document).with_identity(identity.clone())),
         )
         .await;
         record_slow_native_phase(self.operation, "execute", started.elapsed());
@@ -1048,7 +957,7 @@ impl<'a> ConfigApplyTxn<'a> {
     }
 
     async fn commit_inner(&mut self) -> std::result::Result<(), CommitFailure> {
-        match &self.backend {
+        match &mut self.backend {
             TxnBackend::Http {
                 endpoint,
                 id,
@@ -1065,13 +974,27 @@ impl<'a> ConfigApplyTxn<'a> {
                         cleanup: CommitCleanup::NotNeeded,
                     },
                 }),
-            TxnBackend::Embedded { node, handle, .. } => {
+            TxnBackend::Embedded { transaction, .. } => {
                 let started = Instant::now();
-                let result = tokio::time::timeout(
-                    EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
-                    node.commit_transaction(handle),
-                )
-                .await;
+                let transaction = transaction.take().expect("active transaction");
+                let result =
+                    tokio::time::timeout(EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT, async {
+                        #[cfg(test)]
+                        pause_embedded_finalization_for_test(
+                            EmbeddedFinalizationBoundary::BeforeCommit,
+                        )
+                        .await;
+                        let result = transaction.commit().await;
+                        #[cfg(test)]
+                        if result.is_ok() {
+                            pause_embedded_finalization_for_test(
+                                EmbeddedFinalizationBoundary::AfterCommit,
+                            )
+                            .await;
+                        }
+                        result
+                    })
+                    .await;
                 record_slow_native_phase(self.operation, "commit", started.elapsed());
                 match result {
                     Err(_) => Err(CommitFailure {
@@ -1079,7 +1002,7 @@ impl<'a> ConfigApplyTxn<'a> {
                             "commit",
                             EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
                         ),
-                        cleanup: CommitCleanup::Required,
+                        cleanup: CommitCleanup::NotNeeded,
                     }),
                     Ok(Ok(())) => {
                         // External storage premise, test-only (#1630): the
@@ -1123,17 +1046,22 @@ impl<'a> ConfigApplyTxn<'a> {
     }
 
     async fn rollback_inner(&mut self) -> Result<()> {
-        let result = match &self.backend {
+        let result = match &mut self.backend {
             TxnBackend::Http {
                 endpoint,
                 id,
                 client,
             } => graphql::txn_discard(endpoint, id, client).await,
-            TxnBackend::Embedded { node, handle, .. } => {
-                match tokio::time::timeout(
-                    EMBEDDED_TRANSACTION_ROLLBACK_TIMEOUT,
-                    node.rollback_transaction(handle),
-                )
+            TxnBackend::Embedded { transaction, .. } => {
+                let transaction = transaction.take().expect("active transaction");
+                match tokio::time::timeout(EMBEDDED_TRANSACTION_ROLLBACK_TIMEOUT, async {
+                    #[cfg(test)]
+                    pause_embedded_finalization_for_test(
+                        EmbeddedFinalizationBoundary::BeforeRollback,
+                    )
+                    .await;
+                    transaction.rollback().await
+                })
                 .await
                 {
                     Ok(result) => result.map_err(|error| anyhow::anyhow!("rollback_txn: {error}")),
@@ -1142,18 +1070,13 @@ impl<'a> ConfigApplyTxn<'a> {
                             "rollback",
                             EMBEDDED_TRANSACTION_ROLLBACK_TIMEOUT,
                         );
-                        tracing::warn!(
-                            "embedded rollback timed out; releasing mutation gate with transaction outcome ambiguous"
-                        );
-                        // Do not let Drop schedule a second bounded rollback
-                        // while retaining the same process-wide write gate.
                         self.disarm_rollback();
                         return Err(error);
                     }
                 }
             }
         };
-        if result.is_ok() {
+        if result.is_ok() || matches!(&self.backend, TxnBackend::Embedded { .. }) {
             self.disarm_rollback();
         }
         result
@@ -1164,6 +1087,9 @@ impl<'a> ConfigApplyTxn<'a> {
             rollback.disarm();
         }
         self.rollback_on_drop = None;
+        if let TxnBackend::Embedded { write_guard, .. } = &mut self.backend {
+            *write_guard = None;
+        }
     }
 
     #[cfg(test)]
@@ -1418,7 +1344,10 @@ where
                     return Err(error);
                 }
             };
-            telemetry.cancelled_rollback = RollbackStatus::Scheduled;
+            telemetry.cancelled_rollback = match backend {
+                WriteBackend::Embedded => RollbackStatus::NotNeeded,
+                WriteBackend::Http => RollbackStatus::Scheduled,
+            };
             let callback_result = match backend {
                 WriteBackend::Embedded => ACTIVE_EMBEDDED_TRANSACTION
                     .scope(
@@ -1470,6 +1399,8 @@ where
                     let retry_generic = mode.retries_callback_error(&error);
                     let rollback = if txn.rollback_inner().await.is_ok() {
                         RollbackStatus::Succeeded
+                    } else if matches!(backend, WriteBackend::Embedded) {
+                        RollbackStatus::NotNeeded
                     } else {
                         RollbackStatus::Scheduled
                     };
@@ -1575,7 +1506,6 @@ impl ConfigAccess {
                     node,
                     None,
                     operation,
-                    cancellation_rollback_scheduled,
                     EmbeddedTransactionPurpose::Mutation,
                 )
                 .await
@@ -1890,14 +1820,13 @@ impl ConfigAccess {
             operation,
             WriteBackend::Embedded,
             TransactionMode::ConflictRetry,
-            move |operation, rollback| {
+            move |operation, _| {
                 let identity = identity.clone();
                 Box::pin(async move {
                     ConfigApplyTxn::begin_local_owned(
                         node,
                         identity,
                         operation,
-                        rollback,
                         EmbeddedTransactionPurpose::Mutation,
                     )
                     .await
@@ -1925,14 +1854,13 @@ impl ConfigAccess {
             operation,
             WriteBackend::Embedded,
             TransactionMode::ConflictRetry,
-            move |operation, rollback| {
+            move |operation, _| {
                 let identity = identity.clone();
                 Box::pin(async move {
                     ConfigApplyTxn::begin_local_owned(
                         node,
                         identity,
                         operation,
-                        rollback,
                         EmbeddedTransactionPurpose::ReadOnly,
                     )
                     .await
@@ -1959,12 +1887,11 @@ impl ConfigAccess {
             "lifecycle.renew_execution_lease",
             WriteBackend::Embedded,
             TransactionMode::Idempotent(IdempotentTransactionRetry::Standard),
-            move |operation, rollback| {
+            move |operation, _| {
                 Box::pin(ConfigApplyTxn::begin_local_owned(
                     node,
                     None,
                     operation,
-                    rollback,
                     EmbeddedTransactionPurpose::ExecutionRenewal,
                 ))
             },
@@ -1998,14 +1925,13 @@ impl ConfigAccess {
             operation,
             WriteBackend::Embedded,
             TransactionMode::Idempotent(retry_policy),
-            move |operation, rollback| {
+            move |operation, _| {
                 let identity = identity.clone();
                 Box::pin(async move {
                     ConfigApplyTxn::begin_local_owned(
                         node,
                         identity,
                         operation,
-                        rollback,
                         EmbeddedTransactionPurpose::Mutation,
                     )
                     .await
@@ -2031,14 +1957,13 @@ impl ConfigAccess {
             operation,
             WriteBackend::Embedded,
             TransactionMode::ObserveConflict,
-            move |operation, rollback| {
+            move |operation, _| {
                 let identity = identity.clone();
                 Box::pin(async move {
                     ConfigApplyTxn::begin_local_owned(
                         node,
                         identity,
                         operation,
-                        rollback,
                         EmbeddedTransactionPurpose::Mutation,
                     )
                     .await

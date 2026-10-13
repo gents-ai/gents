@@ -23,7 +23,12 @@ use crate::config_client::write_telemetry::WRITE_ATTEMPT_EVENT_TARGET;
 fn transaction_id(txn: &ConfigApplyTxn<'_>) -> String {
     match &txn.backend {
         TxnBackend::Http { id, .. } => id.clone(),
-        TxnBackend::Embedded { handle, .. } => handle.as_str().to_owned(),
+        TxnBackend::Embedded { transaction, .. } => transaction
+            .as_ref()
+            .expect("active transaction")
+            .handle()
+            .as_str()
+            .to_owned(),
     }
 }
 
@@ -366,106 +371,258 @@ async fn armed_mutation_pause_does_not_consume_an_out_of_scope_write() {
 }
 
 #[tokio::test]
-async fn cancellation_after_embedded_begin_reports_and_completes_rollback() {
+async fn cancellation_after_embedded_begin_abandons_before_releasing_the_gate() {
     let node = EmbeddedNode::builder().build().await.unwrap();
-    let node_ref = &node;
-    let runner = node.runner().clone();
-    let gate = Arc::new(super::MutationWriteGate::new());
-    let gate_for_assert = Arc::clone(&gate);
     let registered = Arc::new(Mutex::new(None));
     let registered_for_begin = Arc::clone(&registered);
-    let registered_notify = Arc::new(Notify::new());
-    let registered_notify_for_begin = Arc::clone(&registered_notify);
-    let release = Arc::new(Notify::new());
-    let release_for_begin = Arc::clone(&release);
+    let reached = Arc::new(Notify::new());
+    let reached_for_begin = Arc::clone(&reached);
     let telemetry = EventCapture::default();
     let events = Arc::clone(&telemetry.events);
     let subscriber = tracing::Dispatch::new(Registry::default().with(telemetry));
     let _subscriber_guard = tracing::dispatcher::set_default(&subscriber);
+    let node_ref = &node;
 
     let mut transaction = Box::pin(super::transact_owned(
         "test.cancel_after_embedded_begin",
         crate::config_client::write_telemetry::WriteBackend::Embedded,
         super::TransactionMode::ConflictRetry,
-        move |operation, rollback_scheduled| {
-            let runner = Arc::clone(&runner);
-            let gate = Arc::clone(&gate);
+        move |operation, _| {
             let registered = Arc::clone(&registered_for_begin);
-            let registered_notify = Arc::clone(&registered_notify_for_begin);
-            let release = Arc::clone(&release_for_begin);
+            let reached = Arc::clone(&reached_for_begin);
             Box::pin(async move {
-                let write_guard = gate.acquire(operation).await?;
-                let (rollback_on_drop, handle) = tokio::spawn(super::begin_embedded_owned(
-                    runner,
+                let txn = ConfigApplyTxn::begin_local_owned(
+                    node_ref,
                     None,
-                    false,
                     operation,
-                    Some(write_guard),
-                    rollback_scheduled,
-                    move |handle| async move {
-                        *lock(&registered) = Some(handle);
-                        registered_notify.notify_one();
-                        release.notified().await;
-                    },
-                ))
-                .await
-                .expect("detached begin task")?;
-                Ok(ConfigApplyTxn {
-                    backend: TxnBackend::Embedded {
-                        node: node_ref,
-                        handle,
-                        identity: None,
-                    },
-                    rollback_on_drop: Some(rollback_on_drop),
-                    affected_documents: std::sync::atomic::AtomicU64::new(0),
-                    operation: Some(operation.as_str()),
-                })
+                    super::EmbeddedTransactionPurpose::Mutation,
+                )
+                .await?;
+                *lock(&registered) = Some(transaction_handle(&txn));
+                reached.notify_one();
+                std::future::pending::<()>().await;
+                Ok(txn)
             })
         },
         |_| Box::pin(async { Ok::<_, anyhow::Error>(()) }),
     ));
 
-    tokio::select! {
-        () = registered_notify.notified() => {}
-        result = &mut transaction => panic!("transaction finished before cancellation: {result:?}"),
-    }
+    tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::select! {
+            () = reached.notified() => {}
+            result = &mut transaction => panic!("transaction finished before cancellation: {result:?}"),
+        }
+    })
+    .await
+    .expect("transaction registered");
     let handle = lock(&registered)
         .clone()
         .expect("registered transaction handle was observed");
+    let gate = super::mutation_write_gate(&node);
     drop(transaction);
-    release.notify_one();
+    assert_native_transaction_abandoned(&node, &handle).await;
+    assert!(gate.lock.try_lock().is_ok());
 
-    let next_guard = tokio::time::timeout(
-        Duration::from_secs(2),
-        gate_for_assert.acquire(
-            crate::config_client::write_telemetry::WriteOperation::new(
-                "test.write_after_cancelled_begin",
-            )
-            .expect("valid test write operation"),
-        ),
+    {
+        let events = lock(&events);
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].get("outcome").map(String::as_str),
+            Some("cancelled")
+        );
+        assert_eq!(
+            events[0].get("rollback").map(String::as_str),
+            Some("not_needed")
+        );
+    }
+    node.shutdown().await;
+}
+
+fn transaction_handle(txn: &ConfigApplyTxn<'_>) -> query::TransactionHandle {
+    let TxnBackend::Embedded { transaction, .. } = &txn.backend else {
+        panic!("embedded transaction required")
+    };
+    transaction
+        .as_ref()
+        .expect("active transaction")
+        .handle()
+        .clone()
+}
+
+async fn assert_native_transaction_abandoned(
+    node: &EmbeddedNode,
+    handle: &query::TransactionHandle,
+) {
+    let error = node
+        .rollback_transaction(handle)
+        .await
+        .expect_err("native owner already removed the registered transaction");
+    assert!(
+        matches!(error, query::TransactionError::NotFound(_)),
+        "{error:?}"
+    );
+}
+
+#[tokio::test]
+async fn aborting_embedded_callback_discards_writes_and_releases_the_gate() {
+    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    ConfigAccess::Local(Arc::clone(&node))
+        .add_schema("type AbortedTransactionProbe { value: String }")
+        .await
+        .unwrap();
+    let registered = Arc::new(Mutex::new(None));
+    let registered_for_callback = Arc::clone(&registered);
+    let reached = Arc::new(Notify::new());
+    let reached_for_callback = Arc::clone(&reached);
+    let task_node = Arc::clone(&node);
+    let task = tokio::spawn(async move {
+        ConfigAccess::transact_local(&task_node, None, "test.abort_embedded_callback", |txn| {
+            let registered = Arc::clone(&registered_for_callback);
+            let reached = Arc::clone(&reached_for_callback);
+            Box::pin(async move {
+                txn.execute(r#"mutation { create_AbortedTransactionProbe(input: {value: "uncommitted"}) {_docID} }"#).await?;
+                *lock(&registered) = Some(transaction_handle(txn));
+                reached.notify_one();
+                std::future::pending::<Result<()>>().await
+            })
+        })
+        .await
+    });
+    tokio::time::timeout(Duration::from_secs(5), reached.notified())
+        .await
+        .expect("callback staged its write");
+    let handle = lock(&registered).clone().unwrap();
+    let gate = super::mutation_write_gate(&node);
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+    assert!(gate.lock.try_lock().is_ok());
+    assert_native_transaction_abandoned(&node, &handle).await;
+    let response = ConfigAccess::Local(Arc::clone(&node))
+        .execute("{ AbortedTransactionProbe { value } }")
+        .await
+        .unwrap();
+    assert_eq!(response["data"]["AbortedTransactionProbe"], json!([]));
+    ConfigAccess::write_local(
+        &node,
+        "test.write_after_aborted_callback",
+        r#"mutation { create_AbortedTransactionProbe(input: {value: "committed"}) {_docID} }"#,
     )
     .await
-    .expect("rollback finishes before releasing the write gate")
-    .expect("write gate acquisition succeeds");
-    drop(next_guard);
-    let error = node
-        .runner()
-        .rollback_txn(&handle)
-        .await
-        .expect_err("cancelled begin already removed the registered transaction");
-    assert!(matches!(error, query::TransactionError::NotFound(_)));
-
-    let events = lock(&events);
-    assert_eq!(events.len(), 1);
-    assert_eq!(
-        events[0].get("outcome").map(String::as_str),
-        Some("cancelled")
-    );
-    assert_eq!(
-        events[0].get("rollback").map(String::as_str),
-        Some("scheduled")
-    );
+    .unwrap();
     node.shutdown().await;
+}
+
+#[test]
+fn dropping_embedded_transaction_after_runtime_shutdown_abandons_synchronously() {
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let node = runtime.block_on(async {
+        let node = EmbeddedNode::builder().build().await.unwrap();
+        node.add_schema("type RuntimeShutdownProbe { value: String }")
+            .await
+            .unwrap();
+        node
+    });
+    let txn = runtime.block_on(async {
+        let txn = ConfigApplyTxn::begin_local(&node, None).await.unwrap();
+        txn.execute(
+            r#"mutation { create_RuntimeShutdownProbe(input: {value: "uncommitted"}) {_docID} }"#,
+        )
+        .await
+        .unwrap();
+        txn
+    });
+    let handle = transaction_handle(&txn);
+    let gate = super::mutation_write_gate(&node);
+    runtime.shutdown_background();
+    assert!(tokio::runtime::Handle::try_current().is_err());
+    drop(txn);
+    assert!(gate.lock.try_lock().is_ok());
+
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        assert_native_transaction_abandoned(&node, &handle).await;
+        let response = crate::graphql::graphql_with_transaction_retry(
+            &node,
+            "{ RuntimeShutdownProbe { value } }",
+            "test.read_after_runtime_shutdown",
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.data.unwrap()["RuntimeShutdownProbe"], json!([]));
+        ConfigAccess::write_local(
+            &node,
+            "test.write_after_runtime_shutdown",
+            r#"mutation { create_RuntimeShutdownProbe(input: {value: "committed"}) {_docID} }"#,
+        )
+        .await
+        .unwrap();
+        node.shutdown().await;
+    });
+}
+
+#[tokio::test]
+async fn cancellation_at_embedded_finalization_boundaries_preserves_commit_outcome() {
+    use super::EmbeddedFinalizationBoundary::{AfterCommit, BeforeCommit, BeforeRollback};
+
+    for boundary in [BeforeCommit, BeforeRollback, AfterCommit] {
+        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        ConfigAccess::Local(Arc::clone(&node))
+            .add_schema("type FinalizationCancellationProbe { value: String }")
+            .await
+            .unwrap();
+        let txn = ConfigApplyTxn::begin_local(&node, None).await.unwrap();
+        txn.execute(r#"mutation { create_FinalizationCancellationProbe(input: {value: "original"}) {_docID} }"#)
+            .await
+            .unwrap();
+        let handle = transaction_handle(&txn);
+        let gate = super::mutation_write_gate(&node);
+        let reached = Arc::new(Notify::new());
+        let mut finalization = Box::pin(super::EMBEDDED_FINALIZATION_PAUSE.scope(
+            (boundary, Arc::clone(&reached)),
+            async move {
+                if boundary == BeforeRollback {
+                    txn.discard().await
+                } else {
+                    txn.commit().await
+                }
+            },
+        ));
+        tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::select! {
+                () = reached.notified() => {}
+                result = &mut finalization => panic!("finalizer skipped its boundary: {result:?}"),
+            }
+        })
+        .await
+        .expect("finalizer reached the selected boundary");
+        assert!(
+            gate.lock.try_lock().is_err(),
+            "finalization must retain its write gate"
+        );
+        drop(finalization);
+        assert!(
+            gate.lock.try_lock().is_ok(),
+            "cancellation must release the write gate"
+        );
+        assert_native_transaction_abandoned(&node, &handle).await;
+        let response = ConfigAccess::Local(Arc::clone(&node))
+            .execute("{ FinalizationCancellationProbe { value } }")
+            .await
+            .unwrap();
+        let expected = if boundary == AfterCommit {
+            json!([{"value": "original"}])
+        } else {
+            json!([])
+        };
+        assert_eq!(response["data"]["FinalizationCancellationProbe"], expected);
+        ConfigAccess::write_local(
+            &node,
+            "test.write_after_cancelled_finalizer",
+            r#"mutation { create_FinalizationCancellationProbe(input: {value: "next"}) {_docID} }"#,
+        )
+        .await
+        .unwrap();
+        node.shutdown().await;
+    }
 }
 
 #[tokio::test(start_paused = true)]
@@ -484,9 +641,7 @@ async fn cancellation_before_begin_reports_no_scheduled_rollback() {
         |_| Box::pin(async { Ok::<_, anyhow::Error>(()) }),
     ));
 
-    tokio::time::timeout(Duration::from_millis(10), &mut transaction)
-        .await
-        .expect_err("transaction remains blocked before begin");
+    assert!(futures::poll!(&mut transaction).is_pending());
     drop(transaction);
     drop(held);
 
@@ -677,25 +832,6 @@ async fn write_gate_timeout_names_waiter_and_current_owner() {
         "gate wait timeouts use the standard storage-failure retry classification"
     );
     drop(owner);
-}
-
-#[tokio::test(start_paused = true)]
-async fn stalled_cancellation_cleanup_releases_the_embedded_write_gate() {
-    let gate = Arc::new(tokio::sync::Mutex::new(()));
-    let guard = Arc::clone(&gate).lock_owned().await;
-    let cleanup = tokio::spawn(super::cleanup_while_holding_write_gate(
-        Some(guard),
-        std::future::pending::<()>(),
-    ));
-
-    tokio::time::advance(super::EMBEDDED_TRANSACTION_ROLLBACK_TIMEOUT).await;
-    cleanup
-        .await
-        .expect("cleanup task joins")
-        .expect_err("stalled cleanup times out");
-    let _guard = tokio::time::timeout(Duration::from_millis(1), gate.lock())
-        .await
-        .expect("the embedded write gate is released after cleanup times out");
 }
 
 #[test]
