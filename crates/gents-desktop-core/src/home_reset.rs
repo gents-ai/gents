@@ -212,6 +212,31 @@ fn add_store_key(keys: &mut Vec<RetiredStoreKey>, key: RetiredStoreKey) {
     }
 }
 
+/// A regular file the desktop client wrote that decodes as its record: the
+/// identity record, the store's custody record, or a preference naming the
+/// reviewed node's DID. A path that merely exists proves nothing.
+fn desktop_record_decodes(paths: &crate::client::DesktopPaths, preference: &Path) -> bool {
+    let read = |path: &Path| {
+        std::fs::symlink_metadata(path)
+            .is_ok_and(|metadata| metadata.is_file())
+            .then(|| std::fs::read(path).ok())
+            .flatten()
+    };
+    crate::client::PrincipalIdentity::recorded_did(paths.principal_metadata_path()).is_some()
+        || read(paths.store_encryption_path()).is_some_and(|bytes| {
+            serde_json::from_slice::<gents::store_key::StoreEncryption>(&bytes).is_ok()
+        })
+        || read(preference)
+            .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+            .and_then(|value| {
+                value
+                    .pointer("/reviewedFor/nodeDid")
+                    .and_then(serde_json::Value::as_str)
+                    .map(|did| did.starts_with("did:"))
+            })
+            == Some(true)
+}
+
 fn upgrade_retirement(
     data: &Path,
     key_file: PathBuf,
@@ -527,28 +552,21 @@ fn plan_reset(
         None => false,
     };
     let mut client_entries = Vec::new();
-    // Like a runtime home, a desktop home proves itself only through records
-    // the desktop writes; its store and log directory names also occur in
-    // user projects.
+    // Like a runtime home, a desktop home proves itself only through a record
+    // the desktop wrote; its entry names alone also occur in user projects.
     let mut desktop_owned = client.is_some();
     if retires_client_state {
         // Entries are derived from the canonical root, never from the raw
         // configured path.
         let canonical = crate::client::DesktopPaths::from_root(&desktop_root);
         let preference = desktop_root.join(MANAGED_SERVER_CONFIG);
-        for record in canonical
-            .client_records()
-            .into_iter()
-            .chain(std::iter::once(preference.as_path()))
-        {
-            desktop_owned |= present(record)?;
-        }
+        desktop_owned |= desktop_record_decodes(&canonical, &preference);
         for entry in canonical
             .client_state_entries()
             .into_iter()
             .chain(std::iter::once(preference))
         {
-            if (desktop_owned || entry != canonical.node_data_dir()) && present(&entry)? {
+            if desktop_owned && present(&entry)? {
                 client_entries.push(entry);
             }
         }
@@ -565,7 +583,7 @@ fn plan_reset(
     let mut delete_home_entries = Vec::new();
     let mut delete_prunes_keys = None;
     let mut store_keys = Vec::new();
-    if retires_client_state {
+    if retires_client_state && desktop_owned {
         let canonical = crate::client::DesktopPaths::from_root(&desktop_root);
         if let Some(key) = recorded_store_key(
             canonical.store_encryption_path().to_path_buf(),
@@ -1253,7 +1271,10 @@ mod tests {
         write(&home.join("keys/other.key"), "another home's identity");
         write(&home.join("other-node/init.json"), "other home");
         let desktop = DesktopPaths::from_root(user.join("desktop"));
-        write(desktop.principal_metadata_path(), "client identity");
+        write(
+            desktop.principal_metadata_path(),
+            r#"{"did":"did:key:z6MkTest","public_key_bytes":[1,2,3]}"#,
+        );
         write(&desktop.root().join(MANAGED_SERVER_CONFIG), "preferences");
         write(&desktop.root().join("logs/client.log"), "diagnostics");
         let service = user.join("Library/LaunchAgents/ai.gents.runtime.plist");
@@ -1389,7 +1410,10 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let user = temp.path().canonicalize().unwrap();
         let desktop = DesktopPaths::from_root(user.join("desktop"));
-        write(desktop.principal_metadata_path(), "client identity");
+        write(
+            desktop.principal_metadata_path(),
+            r#"{"did":"did:key:z6MkTest","public_key_bytes":[1,2,3]}"#,
+        );
         let home = desktop.node_data_dir().join("managed");
         write(&home.join("other-node/init.json"), "retained node");
         assert!(
@@ -1547,6 +1571,44 @@ mod tests {
         assert!(project.node_data_dir().join("index.js").is_file());
         assert!(project.root().join("logs/build.log").is_file());
         assert!(!home.join("init.json").exists());
+    }
+
+    #[test]
+    fn desktop_record_names_without_desktop_contents_prove_nothing() {
+        let names = [
+            "principal.json",
+            "store-encryption.json",
+            MANAGED_SERVER_CONFIG,
+            "peers.json",
+            "store.key",
+        ];
+        for name in names {
+            for contents in [None, Some("hello"), Some("{}"), Some(r#"{"did":"x"}"#)] {
+                let temp = tempfile::tempdir().unwrap();
+                let user = temp.path().canonicalize().unwrap();
+                let (home, _, service) = fixture(&user);
+                let project = DesktopPaths::from_root(user.join("project"));
+                write(&project.node_data_dir().join("index.js"), "user file");
+                write(&project.root().join("logs/build.log"), "user file");
+                let record = project.root().join(name);
+                match contents {
+                    Some(contents) => write(&record, contents),
+                    None => write(&record.join("inside"), "user file"),
+                }
+                let plan = plan_full_reset(Some(&home), &project, &user, &service).unwrap();
+                let preview = plan.preview();
+                for path in preview.planned_paths.iter().chain(&preview.delete_paths) {
+                    assert!(
+                        !Path::new(path).starts_with(project.root()),
+                        "{name} {contents:?}: {path}"
+                    );
+                }
+                plan.retire(HomeResetDisposition::Delete, None).unwrap();
+                assert!(project.node_data_dir().join("index.js").is_file());
+                assert!(project.root().join("logs/build.log").is_file());
+                assert!(record.exists());
+            }
+        }
     }
 
     #[test]
