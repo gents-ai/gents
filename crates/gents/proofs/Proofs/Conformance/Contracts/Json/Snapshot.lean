@@ -1,5 +1,6 @@
 import Proofs.Conformance.CountCarrier
 import Proofs.Conformance.ConfigurationScope
+import Proofs.Conformance.EnrollmentPendingRequests
 import Proofs.Conformance.GraphWorkspaceLineage
 import Proofs.Conformance.OperatorBaseFreeze
 import Proofs.Conformance.LogicalOutputObligation
@@ -209,6 +210,8 @@ def snapshotJson : String :=
       ++ enrollmentCasesJson ++ ","
     ++ "\"enrollment_durable_projection_cases\":"
       ++ enrollmentDurableProjectionCasesJson ++ ","
+    ++ "\"enrollment_pending_request_cases\":"
+      ++ Conformance.EnrollmentPendingRequests.casesJson ++ ","
     ++ "\"enrollment_encoding_cases\":"
       ++ enrollmentEncodingCasesJson ++ ","
     ++ "\"enrollment_digest_cases\":"
