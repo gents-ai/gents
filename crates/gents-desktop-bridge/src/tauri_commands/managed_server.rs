@@ -3683,7 +3683,10 @@ mod tests {
             "REGOMAN old client",
         );
         write(desktop.peer_directory_path(), "{}");
-        write(desktop.principal_metadata_path(), "{}");
+        write(
+            desktop.principal_metadata_path(),
+            r#"{"did":"did:key:z6MkClient","public_key_bytes":[1,2,3]}"#,
+        );
         write(desktop.identity_key_path(), "principal");
         write(desktop.iroh_secret_key_path(), "iroh");
         write(&desktop.root().join(MANAGED_SERVER_CONFIG), "{}");

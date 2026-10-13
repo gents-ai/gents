@@ -213,8 +213,9 @@ fn add_store_key(keys: &mut Vec<RetiredStoreKey>, key: RetiredStoreKey) {
 }
 
 /// A regular file the desktop client wrote that decodes as its record: the
-/// identity record, the store's custody record, or a preference naming the
-/// reviewed node's DID. A path that merely exists proves nothing.
+/// identity record, the store's custody record or pending upgrade journal,
+/// or a preference naming the reviewed node's DID. A path that merely
+/// exists proves nothing.
 fn desktop_record_decodes(paths: &crate::client::DesktopPaths, preference: &Path) -> bool {
     let read = |path: &Path| {
         std::fs::symlink_metadata(path)
@@ -226,6 +227,12 @@ fn desktop_record_decodes(paths: &crate::client::DesktopPaths, preference: &Path
         || read(paths.store_encryption_path()).is_some_and(|bytes| {
             serde_json::from_slice::<gents::store_key::StoreEncryption>(&bytes).is_ok()
         })
+        || std::fs::symlink_metadata(gents::store_key::upgrade::journal_path(
+            paths.node_data_dir(),
+        ))
+        .is_ok_and(|metadata| metadata.is_file())
+            && gents::store_key::upgrade::pending_record(paths.node_data_dir())
+                .is_ok_and(|record| record.is_some())
         || read(preference)
             .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
             .and_then(|value| {
@@ -727,6 +734,7 @@ impl HomeResetPlan {
             .as_ref()
             .is_some_and(|(home, _)| path == gents::home::init_config_path(home))
             || path == self.desktop_root.join(MANAGED_SERVER_CONFIG)
+            || path == gents::store_key::upgrade::journal_path(desktop.node_data_dir())
             || desktop.client_records().contains(&path)
     }
 
