@@ -8,6 +8,7 @@ use rig::completion::{CompletionError, CompletionModel, CompletionRequest, Compl
 use rig::streaming::{RawStreamingChoice, StreamingCompletionResponse};
 use serde_json::json;
 
+use super::inference::tests::InterruptionCapture;
 use super::AgentDaemon;
 use crate::agent::runtime::StartupBarrier;
 use crate::config::ResolvedAgent;
@@ -17,6 +18,7 @@ use crate::llm::tool::ToolDyn;
 use crate::prompt::LayeredPromptBuilder;
 use crate::watcher::AgentRequest;
 use crate::Collection;
+use tracing::instrument::WithSubscriber;
 
 const TASK_ID: &str = "hook-task";
 const TRIGGER_ID: &str = "hook-trigger";
@@ -510,9 +512,12 @@ async fn interrupting_a_held_after_success_hook_cancels_it_and_interrupts_the_re
         ]))
         .await;
     let request = harness.create_request(Lineage::ManualFire, false).await;
+    let capture = InterruptionCapture::default();
     let row = harness
         .run_interrupting_at(request, &harness.mark("verify-started"))
+        .with_subscriber(capture.subscriber())
         .await;
+    capture.assert_source("task_hook");
     assert_eq!(harness.calls(), 1, "{row}");
     assert_eq!(row["lifecycle_state"], "interrupted", "{row}");
     assert!(!harness.mark("verify-finished").exists());
@@ -539,9 +544,12 @@ async fn interrupting_a_before_hook_skips_the_agent_and_still_cleans_up() {
         ]))
         .await;
     let request = harness.create_request(Lineage::Trigger, false).await;
+    let capture = InterruptionCapture::default();
     let row = harness
         .run_interrupting_at(request, &harness.mark("prepare-started"))
+        .with_subscriber(capture.subscriber())
         .await;
+    capture.assert_source("task_hook");
     assert_eq!(harness.calls(), 0, "{row}");
     assert_eq!(row["lifecycle_state"], "interrupted", "{row}");
     assert!(!harness.mark("prepare-finished").exists());
