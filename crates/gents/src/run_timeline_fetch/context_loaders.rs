@@ -10,6 +10,64 @@ pub(super) async fn load_timeline_session(
     let fields = crate::session::AGENT_SESSION_FIELDS;
     let query = format!("{{ AgentSession(filter: {{ {scope} }}, limit: 2) {{ {fields} }} }}");
     let rows = load_rows::<serde_json::Value>(access, "AgentSession", &query).await?;
+    decode_timeline_session_rows(rows, node_did, session_id, requester_did)
+}
+
+pub(super) async fn load_timeline_sessions(
+    access: &ConfigAccess,
+    scopes: &[(String, String, Option<String>)],
+) -> Result<Vec<TimelineSessionRow>> {
+    const BATCH_SIZE: usize = 64;
+    let fields = crate::session::AGENT_SESSION_FIELDS;
+    let mut sessions = Vec::new();
+    for batch in scopes.chunks(BATCH_SIZE) {
+        let selections = batch
+            .iter()
+            .enumerate()
+            .map(|(index, (node_did, session_id, requester_did))| {
+                let scope = crate::session::session_scope_filter(
+                    node_did,
+                    session_id,
+                    requester_did.as_deref(),
+                );
+                format!("s{index}: AgentSession(filter: {{ {scope} }}, limit: 2) {{ {fields} }}")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let response = access.execute(&format!("{{ {selections} }}")).await?;
+        anyhow::ensure!(
+            response.get("errors").is_none_or(
+                |errors| errors.is_null() || errors.as_array().is_some_and(Vec::is_empty)
+            ),
+            "timeline AgentSession query failed: {}",
+            response["errors"]
+        );
+        let data = response
+            .get("data")
+            .context("timeline AgentSession query omitted data")?;
+        for (index, (node_did, session_id, requester_did)) in batch.iter().enumerate() {
+            let alias = format!("s{index}");
+            let rows = data
+                .get(alias.as_str())
+                .and_then(serde_json::Value::as_array)
+                .with_context(|| format!("timeline query omitted AgentSession scope s{index}"))?
+                .clone();
+            if let Some(session) =
+                decode_timeline_session_rows(rows, node_did, session_id, requester_did.as_deref())?
+            {
+                sessions.push(session);
+            }
+        }
+    }
+    Ok(sessions)
+}
+
+fn decode_timeline_session_rows(
+    rows: Vec<serde_json::Value>,
+    node_did: &str,
+    session_id: &str,
+    requester_did: Option<&str>,
+) -> Result<Option<TimelineSessionRow>> {
     anyhow::ensure!(
         rows.len() <= 1,
         "ambiguous owner/requester-scoped timeline session"
@@ -94,6 +152,22 @@ mod tests {
                 .unwrap();
         assert_eq!(owner_b.session.agent_id, "behavior-b");
         assert_ne!(owner_a.doc_id, owner_b.doc_id);
+        let batched = load_timeline_sessions(
+            &access,
+            &[
+                ("owner-a".to_owned(), "shared-label".to_owned(), None),
+                (
+                    "owner-b".to_owned(),
+                    "shared-label".to_owned(),
+                    Some("requester-b".to_owned()),
+                ),
+            ],
+        )
+        .await
+        .unwrap();
+        assert_eq!(batched.len(), 2);
+        assert_eq!(batched[0].session.agent_id, "behavior-a");
+        assert_eq!(batched[1].session.agent_id, "behavior-b");
         assert!(
             load_timeline_session(&access, "absent", "shared-label", None)
                 .await

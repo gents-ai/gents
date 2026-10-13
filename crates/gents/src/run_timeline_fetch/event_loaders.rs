@@ -1,6 +1,11 @@
 use super::query_helpers::required_rows;
 use super::*;
+#[cfg(test)]
 use crate::session::load_canonical_message;
+use crate::session::{
+    canonical_rows::{decode_transcript_message_row, AGENT_MESSAGE_FIELDS},
+    TxnCanonicalReader,
+};
 
 /// One timeline message row assembled from an authorized canonical header
 /// resolution. The physical `AgentMessage` header doc ID is the row's identity;
@@ -13,10 +18,115 @@ pub(super) async fn resolve_timeline_messages_for_session(
     session_id: &str,
     requester_did: Option<&str>,
 ) -> Result<Vec<TimelineMessageRow>> {
-    let header_doc_ids =
-        load_timeline_message_header_ids_for_session(access, node_did, session_id, requester_did)
-            .await?;
-    resolve_timeline_messages(access, node_did, session_id, requester_did, header_doc_ids).await
+    let node_did = node_did.to_owned();
+    let session_id = session_id.to_owned();
+    let requester_did = requester_did.map(str::to_owned);
+    access
+        .transact_readonly("timeline.canonical_session_messages", move |txn| {
+            let node_did = node_did.clone();
+            let session_id = session_id.clone();
+            let requester_did = requester_did.clone();
+            Box::pin(async move {
+                let scope = crate::session::session_scope_filter(
+                    &node_did,
+                    &session_id,
+                    requester_did.as_deref(),
+                );
+                let query = format!(
+                    r#"{{ AgentMessage(filter: {{ {scope} }}, order: {{ sequence: ASC }}) {{ {AGENT_MESSAGE_FIELDS} }} }}"#
+                );
+                let response = txn.execute(&query).await?;
+                anyhow::ensure!(
+                    response.get("errors").is_none_or(|errors| {
+                        errors.is_null() || errors.as_array().is_some_and(Vec::is_empty)
+                    }),
+                    "timeline AgentMessage query failed: {}",
+                    response["errors"]
+                );
+                let raw_headers = response
+                    .get("data")
+                    .and_then(|data| data.get("AgentMessage"))
+                    .and_then(serde_json::Value::as_array)
+                    .context("timeline query omitted required AgentMessage row array")?;
+                anyhow::ensure!(
+                    raw_headers.iter().all(serde_json::Value::is_object),
+                    "timeline AgentMessage query returned a non-document row"
+                );
+                let mut headers = raw_headers
+                    .iter()
+                    .map(decode_transcript_message_row)
+                    .collect::<Result<Vec<_>>>()?;
+                for header in &headers {
+                    anyhow::ensure!(
+                        header.message.session_id == session_id
+                            && header.message.node_did == node_did
+                            && header.message.requester_did.as_deref() == requester_did.as_deref(),
+                        "canonical AgentMessage {} crossed the requested session scope",
+                        header.doc_id
+                    );
+                }
+                headers.sort_by_key(|header| header.message.sequence);
+                let header_order = headers
+                    .iter()
+                    .map(|header| header.doc_id.clone())
+                    .collect::<Vec<_>>();
+                let mut reader = TxnCanonicalReader::new(
+                    txn,
+                    &node_did,
+                    requester_did.as_deref(),
+                );
+                reader.observe_headers(&headers);
+                let mut groups = BTreeMap::<String, Vec<_>>::new();
+                let mut unbound_headers = Vec::new();
+                for header in headers {
+                    if let Some(request_doc_id) = &header.message.request_doc_id {
+                        groups
+                            .entry(request_doc_id.clone())
+                            .or_default()
+                            .push(header);
+                    } else {
+                        unbound_headers.push(header);
+                    }
+                }
+                let mut resolved = BTreeMap::new();
+                let grouped_headers = groups
+                    .into_values()
+                    .chain(unbound_headers.into_iter().map(|header| vec![header]));
+                for group in grouped_headers {
+                    for header in group {
+                        let physical_id = header.doc_id.clone();
+                        let (canonical_header, message) = reader
+                            .load_message(&physical_id)
+                            .await
+                            .with_context(|| {
+                                format!("resolving canonical AgentMessage {physical_id} for timeline")
+                            })?;
+                        anyhow::ensure!(
+                            canonical_header == header.message,
+                            "canonical AgentMessage {physical_id} changed during timeline reconstruction"
+                        );
+                        resolved.insert(
+                            physical_id.clone(),
+                            TimelineMessageRow::from_canonical(
+                                physical_id,
+                                canonical_header,
+                                message,
+                            ),
+                        );
+                    }
+                    reader.clear_output_cache();
+                }
+                let mut rows = Vec::with_capacity(resolved.len());
+                for header_doc_id in header_order {
+                    let row = resolved.remove(&header_doc_id).with_context(|| {
+                        format!("canonical AgentMessage {header_doc_id} was not resolved")
+                    })?;
+                    rows.push(row);
+                }
+                Ok(rows)
+            })
+        })
+        .await
 }
 
 /// The canonical messages at one accepted sequence of an exact session scope.
@@ -40,6 +150,7 @@ pub(super) async fn resolve_timeline_messages_at_sequence(
     resolve_timeline_messages(access, node_did, session_id, requester_did, header_doc_ids).await
 }
 
+#[cfg(test)]
 async fn resolve_timeline_messages(
     access: &ConfigAccess,
     node_did: &str,
@@ -70,20 +181,7 @@ async fn resolve_timeline_messages(
     Ok(rows)
 }
 
-/// The physical `AgentMessage` header doc IDs for one exact session scope,
-/// in canonical sequence order. Headers are the only selected surface; each
-/// doc ID is then resolved exactly through the authorized canonical reader
-/// (`session::load_canonical_message`) — there is no serialized-content
-/// fallback, and unresolved or integrity-failing headers propagate as errors.
-pub(super) async fn load_timeline_message_header_ids_for_session(
-    access: &ConfigAccess,
-    node_did: &str,
-    session_id: &str,
-    requester_did: Option<&str>,
-) -> Result<Vec<String>> {
-    load_message_header_ids(access, node_did, session_id, requester_did, "").await
-}
-
+#[cfg(test)]
 async fn load_message_header_ids(
     access: &ConfigAccess,
     node_did: &str,
@@ -451,15 +549,25 @@ pub(super) fn resolve_tool_payloads(
     Ok(row)
 }
 
-pub(super) async fn load_timeline_inference_calls_for_request(
+pub(super) async fn load_timeline_inference_calls_for_requests(
     access: &ConfigAccess,
-    request_doc_id: &str,
+    request_doc_ids: &[String],
 ) -> Result<Vec<TimelineInferenceCallRow>> {
-    let query = format!(
-        r#"{{
+    const BATCH_SIZE: usize = 128;
+    let mut rows = Vec::new();
+    for batch in request_doc_ids.chunks(BATCH_SIZE) {
+        if batch.is_empty() {
+            continue;
+        }
+        let request_ids = batch
+            .iter()
+            .map(|id| format!("\"{}\"", escape_graphql_string(id)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let query = format!(
+            r#"{{
             InferenceCall(
-                filter: {{ request_doc_id: {{ _eq: "{}" }} }},
-                order: {{ call_seq: ASC }}
+                filter: {{ request_doc_id: {{ _in: [{request_ids}] }} }}
             ) {{
                 _docID
                 call_id
@@ -487,9 +595,43 @@ pub(super) async fn load_timeline_inference_calls_for_request(
                 context_accounting_json
             }}
         }}"#,
-        escape_graphql_string(request_doc_id)
-    );
-    load_rows(access, "InferenceCall", &query).await
+        );
+        let batch_rows =
+            load_rows::<TimelineInferenceCallRow>(access, "InferenceCall", &query).await?;
+        let requested = batch.iter().cloned().collect::<BTreeSet<_>>();
+        for row in &batch_rows {
+            anyhow::ensure!(
+                row.request_doc_id
+                    .as_ref()
+                    .is_some_and(|request_doc_id| requested.contains(request_doc_id)),
+                "timeline InferenceCall returned a row outside its request batch"
+            );
+        }
+        rows.extend(batch_rows);
+    }
+    let requested = request_doc_ids.iter().cloned().collect::<BTreeSet<_>>();
+    let mut by_request = BTreeMap::<String, Vec<TimelineInferenceCallRow>>::new();
+    for row in rows {
+        let request_doc_id = row
+            .request_doc_id
+            .as_deref()
+            .context("timeline InferenceCall omitted request_doc_id")?;
+        anyhow::ensure!(
+            requested.contains(request_doc_id),
+            "timeline InferenceCall returned an unrequested request document"
+        );
+        by_request
+            .entry(request_doc_id.to_owned())
+            .or_default()
+            .push(row);
+    }
+    let mut ordered = Vec::new();
+    for request_doc_id in request_doc_ids {
+        let mut request_rows = by_request.remove(request_doc_id).unwrap_or_default();
+        request_rows.sort_by_key(|row| row.call_seq);
+        ordered.extend(request_rows);
+    }
+    Ok(ordered)
 }
 
 /// The rendered-request capture rows for one session, metadata columns only.
@@ -597,15 +739,25 @@ pub(super) async fn load_timeline_compactions_for_session(
     load_rows(access, "CompactionEntry", &query).await
 }
 
-pub(super) async fn load_timeline_provider_context_reductions_for_request(
+pub(super) async fn load_timeline_provider_context_reductions_for_requests(
     access: &ConfigAccess,
-    request_doc_id: &str,
+    request_doc_ids: &[String],
 ) -> Result<Vec<TimelineProviderContextReductionRow>> {
-    let query = format!(
-        r#"{{
+    const BATCH_SIZE: usize = 128;
+    let mut rows = Vec::new();
+    for batch in request_doc_ids.chunks(BATCH_SIZE) {
+        if batch.is_empty() {
+            continue;
+        }
+        let request_ids = batch
+            .iter()
+            .map(|id| format!("\"{}\"", escape_graphql_string(id)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let query = format!(
+            r#"{{
             ProviderContextReduction(
-                filter: {{ request_doc_id: {{ _eq: "{}" }} }},
-                order: {{ reduction_index: ASC }}
+                filter: {{ request_doc_id: {{ _in: [{request_ids}] }} }}
             ) {{
                 _docID
                 reduction_key
@@ -623,9 +775,41 @@ pub(super) async fn load_timeline_provider_context_reductions_for_request(
                 created_at
             }}
         }}"#,
-        escape_graphql_string(request_doc_id)
-    );
-    load_rows(access, "ProviderContextReduction", &query).await
+        );
+        let batch_rows = load_rows::<TimelineProviderContextReductionRow>(
+            access,
+            "ProviderContextReduction",
+            &query,
+        )
+        .await?;
+        let requested = batch.iter().cloned().collect::<BTreeSet<_>>();
+        anyhow::ensure!(
+            batch_rows
+                .iter()
+                .all(|row| requested.contains(&row.request_doc_id)),
+            "timeline ProviderContextReduction returned a row outside its request batch"
+        );
+        rows.extend(batch_rows);
+    }
+    let requested = request_doc_ids.iter().cloned().collect::<BTreeSet<_>>();
+    let mut by_request = BTreeMap::<String, Vec<TimelineProviderContextReductionRow>>::new();
+    for row in rows {
+        anyhow::ensure!(
+            requested.contains(&row.request_doc_id),
+            "timeline ProviderContextReduction returned an unrequested request document"
+        );
+        by_request
+            .entry(row.request_doc_id.clone())
+            .or_default()
+            .push(row);
+    }
+    let mut ordered = Vec::new();
+    for request_doc_id in request_doc_ids {
+        let mut request_rows = by_request.remove(request_doc_id).unwrap_or_default();
+        request_rows.sort_by_key(|row| row.reduction_index);
+        ordered.extend(request_rows);
+    }
+    Ok(ordered)
 }
 
 pub(super) async fn load_timeline_rendered_request_refs(
