@@ -379,6 +379,11 @@ impl RegistryClient {
         }
     }
 
+    /// The registry this client talks to, as it was given.
+    pub fn base_url(&self) -> &str {
+        &self.base_url
+    }
+
     fn unreachable(&self, source: reqwest::Error) -> RegistryError {
         RegistryError::Unreachable {
             url: self.base_url.clone(),
@@ -878,6 +883,11 @@ pub async fn fetch_pack(
         &coordinate.name,
         &coordinate.version,
     )?;
+    // Recorded on a cache hit too: the store may hold the archive from a
+    // file import, which left no origin.
+    if let Some(store) = &store {
+        store.record_origin(archive.digest(), &client.base_url)?;
+    }
     Ok(RegistryPack {
         digest: archive.digest().to_owned(),
         archive,

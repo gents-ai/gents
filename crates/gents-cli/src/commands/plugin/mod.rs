@@ -45,7 +45,10 @@ async fn publish(args: PluginPublishArgs) -> Result<()> {
     let dir = tempfile::tempdir().context("staging the plugin's pack")?;
     let (pack, header) = plugin_pack(dir.path(), &afb, &bytes)?;
 
-    let registry = crate::commands::pack::registry::resolve_registry_url(args.registry.as_deref());
+    let registry = crate::commands::pack::registry::registry_url(
+        args.registry.as_deref(),
+        args.home.as_deref(),
+    )?;
     let home = crate::home_state::resolve_home_dir(args.home.as_deref());
     let token_flag =
         crate::commands::pack::registry::resolve_token_flag(args.token, args.token_stdin)?;

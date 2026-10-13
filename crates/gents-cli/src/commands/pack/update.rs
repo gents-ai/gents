@@ -10,7 +10,7 @@
 use anyhow::Result;
 use serde_json::{json, Value};
 
-use super::registry::{resolve_registry_url, RegistryClient};
+use super::registry::RegistryClient;
 use crate::cli::{PackInstallArgs, PackOutdatedArgs, PackUpdateArgs};
 use crate::output_format::OutputFormat;
 
@@ -36,14 +36,18 @@ async fn outdated_packs(
     .await?;
     let default_registry = gents::pack_registry::resolve_registry_url_in(&home, registry)?;
     let client = RegistryClient::new(default_registry.clone());
-    /* a file-recorded install remembers the registry it came from, so a
-    pack from a vertical registry is checked against that one, not the
-    master; DB-recorded packs have no record and use the default */
-    let recorded: std::collections::BTreeMap<String, String> =
+    // An explicit --registry names where every pack is checked. Without one,
+    // a file-recorded install is checked where it was installed from (a
+    // vertical registry's pack is not on the master); a DB-recorded pack has
+    // no record and uses the env/default.
+    let recorded: std::collections::BTreeMap<String, String> = if registry.is_some() {
+        Default::default()
+    } else {
         gents::pack::list_home_installs(&home)?
             .into_iter()
             .filter_map(|record| Some((record.coordinate, record.registry?)))
-            .collect();
+            .collect()
+    };
     let mut report = Vec::new();
     for pack in installed {
         let (namespace, name) = super::split_namespace(&pack.coordinate);
@@ -169,12 +173,8 @@ pub(crate) async fn update(args: PackUpdateArgs) -> Result<()> {
             scope: args.scope.clone(),
             output: OutputFormat::Json,
             force_rebind_concrete_did: false,
-            // The registry the outdated check used: the install record's
-            // own for a pack from a vertical registry, else the default.
-            registry: pack["registry"]
-                .as_str()
-                .map(str::to_owned)
-                .or_else(|| args.registry.clone()),
+            // the registry the outdated check found the newer version on
+            registry: pack["registry"].as_str().map(str::to_owned),
             drift: args.drift,
             grant_authority: false,
             // An update never turns a dependency-only install into an
@@ -365,6 +365,104 @@ mod tests {
             report,
             json!({ "updated": ["gents/demo_pack"], "failed": [], "current": [] })
         );
+    }
+
+    /// The desktop's flow: a preview fetches the pack (into the store, no
+    /// record), the install that follows resolves it from the store. The
+    /// record must still name the registry the preview fetched from, and
+    /// `outdated` must return there — unless `--registry` names where every
+    /// pack is checked, which overrides the record.
+    #[tokio::test]
+    async fn a_store_hit_keeps_the_registry_the_preview_fetched_from_and_a_flag_overrides_it() {
+        let fixture = super::super::test_support::fixture_dir("assets_fixture");
+        let (bytes, _) = gents::pack_archive::pack_dir(&fixture).unwrap();
+        let digest = {
+            use sha2::Digest;
+            format!("{:x}", sha2::Sha256::digest(&bytes))
+        };
+        let (vertical, state) = crate::commands::pack::registry::tests::serve_fake_pack(
+            "assets_fixture",
+            "1.0.0",
+            bytes,
+            digest,
+        )
+        .await;
+        let home = tempfile::tempdir().unwrap();
+        let scope = crate::cli::GraphScopeArgs {
+            home: Some(home.path().to_path_buf()),
+            graphql: None,
+            agent_did: None,
+        };
+        let install = |preview: bool, registry: Option<String>| PackInstallArgs {
+            package: "fixture/assets_fixture".to_owned(),
+            bindings: None,
+            inference_slots: Vec::new(),
+            preview,
+            scope: scope.clone(),
+            output: OutputFormat::Json,
+            force_rebind_concrete_did: false,
+            registry,
+            drift: crate::cli::PackDriftArgs::default(),
+            grant_authority: false,
+            explicit: true,
+        };
+
+        crate::request_helpers::capture_report(super::super::install(install(
+            true,
+            Some(vertical.clone()),
+        )))
+        .await
+        .expect("the preview fetches from the vertical registry");
+        assert_eq!(state.downloads.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert!(
+            gents::pack::read_home_install(home.path(), "fixture/assets_fixture")
+                .unwrap()
+                .is_none(),
+            "a preview writes no record"
+        );
+
+        crate::request_helpers::capture_report(super::super::install(install(false, None)))
+            .await
+            .expect("the install resolves from the store");
+        assert_eq!(
+            state.downloads.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "no second download: the store had it"
+        );
+        let record = gents::pack::read_home_install(home.path(), "fixture/assets_fixture")
+            .unwrap()
+            .expect("installed");
+        assert_eq!(record.registry.as_deref(), Some(vertical.as_str()));
+
+        // reinstalling keeps the recorded registry rather than clobbering it
+        crate::request_helpers::capture_report(super::super::install(install(false, None)))
+            .await
+            .expect("a reinstall resolves from the installed record");
+        let record = gents::pack::read_home_install(home.path(), "fixture/assets_fixture")
+            .unwrap()
+            .expect("still installed");
+        assert_eq!(record.registry.as_deref(), Some(vertical.as_str()));
+
+        let packs = outdated_packs(&scope, None).await.unwrap();
+        assert_eq!(packs.len(), 1, "{packs:?}");
+        assert_eq!(packs[0]["registry"], vertical.as_str());
+        assert_eq!(packs[0]["outdated"], false);
+        assert!(packs[0]["error"].is_null(), "{:?}", packs[0]["error"]);
+
+        let (elsewhere, _state) = crate::commands::pack::registry::tests::serve_fake_pack(
+            "assets_fixture",
+            "2.0.0",
+            Vec::new(),
+            format!("sha256:{}", "a".repeat(64)),
+        )
+        .await;
+        let packs = outdated_packs(&scope, Some(&elsewhere)).await.unwrap();
+        assert_eq!(
+            packs[0]["registry"],
+            elsewhere.as_str(),
+            "the flag names where every pack is checked"
+        );
+        assert_eq!(packs[0]["outdated"], true);
     }
 
     /// An assets pack installs a file record, never a `PackInstallation`; a

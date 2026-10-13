@@ -10,15 +10,25 @@
 use anyhow::{Context, Result};
 #[cfg(test)]
 use gents::pack_archive::PackArchive;
-pub(crate) use gents::pack_registry::{
-    fetch_pack, resolve_pack_coordinate, resolve_registry_url, RegistryClient,
-};
+pub(crate) use gents::pack_registry::{fetch_pack, resolve_pack_coordinate, RegistryClient};
 #[cfg(test)]
 use gents::pack_registry::{verify_pack_coordinate, DEFAULT_REGISTRY_URL, REGISTRY_ENV_VAR};
 #[cfg(test)]
 use serde_json::Value;
 
 use crate::cli::args::{PackFetchArgs, PackPublishArgs, PackSearchArgs};
+
+/// The registry a command talks to: `--registry` as a URL or as an id from
+/// the cached index (`gents registry list`), else `GENTS_REGISTRY`, else the
+/// public registry. The index lives in a home, so a command without a
+/// `--home` of its own resolves ids against the default home.
+pub(crate) fn registry_url(
+    explicit: Option<&str>,
+    home: Option<&std::path::Path>,
+) -> Result<String> {
+    let home = crate::home_state::resolve_home_dir(home);
+    gents::pack_registry::resolve_registry_url_in(&home, explicit)
+}
 
 const REGISTRY_TOKEN_ENV_VAR: &str = "GENTS_REGISTRY_TOKEN";
 
@@ -77,7 +87,7 @@ pub(crate) async fn fetch(args: PackFetchArgs) -> Result<()> {
         return fetch_into_store(args).await;
     }
     let (namespace, name) = crate::commands::pack::split_namespace(&args.package);
-    let base_url = resolve_registry_url(args.registry.as_deref());
+    let base_url = registry_url(args.registry.as_deref(), args.home.as_deref())?;
     let client = RegistryClient::new(base_url.clone());
 
     let coordinate =
@@ -160,7 +170,7 @@ async fn fetch_into_store(args: PackFetchArgs) -> Result<()> {
     };
     let options = gents::pack_resolve::ResolveOptions {
         home: Some(&home),
-        registry_url: resolve_registry_url(args.registry.as_deref()),
+        registry_url: registry_url(args.registry.as_deref(), Some(&home))?,
         installed: &[],
     };
     let resolved = gents::pack_resolve::resolve_named(&spec, &options).await?;
@@ -191,7 +201,7 @@ fn verify_digest_hex(computed: &str, advertised: &str, version: &str) -> Result<
 }
 
 pub(crate) async fn search(args: PackSearchArgs) -> Result<()> {
-    let client = RegistryClient::new(resolve_registry_url(args.registry.as_deref()));
+    let client = RegistryClient::new(registry_url(args.registry.as_deref(), None)?);
     let results = client
         .search(args.query.as_deref().unwrap_or(""), args.page.max(1))
         .await?;
@@ -199,7 +209,7 @@ pub(crate) async fn search(args: PackSearchArgs) -> Result<()> {
 }
 
 pub(crate) async fn publish(args: PackPublishArgs) -> Result<()> {
-    let registry = resolve_registry_url(args.registry.as_deref());
+    let registry = registry_url(args.registry.as_deref(), args.home.as_deref())?;
     let home = crate::home_state::resolve_home_dir(args.home.as_deref());
     let token_flag = resolve_token_flag(args.token, args.token_stdin)?;
     let token = super::account::resolve_publish_token(token_flag.as_deref(), &registry, &home)?;
@@ -287,16 +297,26 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn registry_url_precedence_is_flag_then_env_then_default() {
+    fn registry_url_precedence_is_flag_then_env_then_default_and_an_id_is_looked_up() {
         let guard = EnvVarGuard::clear(&[REGISTRY_ENV_VAR]);
-        assert_eq!(resolve_registry_url(None), DEFAULT_REGISTRY_URL);
+        let home = tempfile::tempdir().unwrap();
+        let at = |explicit: Option<&str>| registry_url(explicit, Some(home.path())).unwrap();
+        assert_eq!(at(None), DEFAULT_REGISTRY_URL);
 
         guard.set(REGISTRY_ENV_VAR, "https://env.example/");
-        assert_eq!(resolve_registry_url(None), "https://env.example");
-        assert_eq!(
-            resolve_registry_url(Some("https://flag.example")),
-            "https://flag.example"
-        );
+        assert_eq!(at(None), "https://env.example");
+        assert_eq!(at(Some("https://flag.example")), "https://flag.example");
+
+        crate::commands::registry::add(
+            home.path(),
+            "legal",
+            "https://legal.example/",
+            Some("Legal"),
+        )
+        .unwrap();
+        assert_eq!(at(Some("legal")), "https://legal.example");
+        let unknown = registry_url(Some("medical"), Some(home.path())).unwrap_err();
+        assert!(format!("{unknown:#}").contains("legal"), "{unknown:#}");
     }
 
     #[test]
