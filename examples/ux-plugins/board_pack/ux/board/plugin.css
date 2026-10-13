@@ -9,3 +9,9 @@
 .gents-board-card-title code { font-size: .7rem; opacity: .6 }
 .gents-board-card-actions { display: flex; flex-wrap: wrap; gap: .125rem }
 .gents-board-chip { font-variant-numeric: tabular-nums }
+
+/* the task a ::board{id} card deep-linked to */
+.gents-board-card-highlight {
+  outline: 2px solid var(--ring, currentColor);
+  outline-offset: 1px;
+}

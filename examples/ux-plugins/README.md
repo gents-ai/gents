@@ -6,12 +6,13 @@ hermes-agent's bundled desktop plugins (`apps/desktop/src/plugins/`):
 | Example | Hermes original | Door | Form | What it shows |
 |---|---|---|---|---|
 | `hello_runtime/` | `hello-runtime/plugin.runtime.js` | dev (`<home>/ux-plugins/`) | plain ESM | the whole runtime pipeline in 30 lines: SDK import, `jsx()` calls, one header chip |
-| `focus_timer/` | `radio/plugin.js` | dev | plain ESM + css | the radio plugin's patterns: `ctx.storage` state, a header chip with a popover, `ctx.setInterval`, a stylesheet beside the module |
-| `board_pack/` | `kanban/plugin.tsx` + `plugins/kanban/dashboard/plugin_api.py` | pack | ESM + `.afb` | the kanban plugin's shape: a nav row, an agent-section page, a `::board` directive, and `ctx.plugin()` into the pack's own `.afb` (the Gents stand-in for `ctx.rest`) |
+| `focus_timer/` | `radio/plugin.js` | dev | plain ESM + css | the radio plugin's patterns: `ctx.storage` state (validated on read), a header chip with a popover, `ctx.setInterval`, a stylesheet beside the module; ships off like the original |
+| `board_pack/` | `kanban/plugin.tsx` + `plugins/kanban/dashboard/plugin_api.py` | pack | ESM + `.afb` | the kanban plugin's shape: a nav row, an agent-section page, a `::board` directive, and `ctx.plugin()` into the pack's own `.afb` (the Gents stand-in for `ctx.rest`); ships off like the original |
 
 A bundled fourth, `hello`, lives in the app at
-`apps/gents-desktop/src/ui/ux-plugins/hello/plugin.tsx` and proves every
-first-wave area on each boot.
+`apps/gents-desktop/src/ui/ux-plugins/hello/plugin.tsx`: it ships off
+(`defaultEnabled: false`) and, once enabled in Agent ▸ UX Plugins, shows
+every first-wave area at once.
 
 ## Running them
 

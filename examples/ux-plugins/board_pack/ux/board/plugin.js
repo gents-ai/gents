@@ -19,12 +19,32 @@ import { jsx, jsxs } from 'react/jsx-runtime'
 
 const LANES = ['triage', 'ready', 'running', 'done']
 
+/* the refresh signal: `client-updated` (the agent may have moved a card
+   through the board_store tool) bumps it, and every mounted page re-reads */
+const refresh = { version: 0, listeners: new Set() }
+const bumpRefresh = () => {
+  refresh.version += 1
+  refresh.listeners.forEach((fn) => fn(refresh.version))
+}
+function useRefreshVersion() {
+  const [version, setVersion] = useState(refresh.version)
+  useEffect(() => {
+    refresh.listeners.add(setVersion)
+    return () => refresh.listeners.delete(setVersion)
+  }, [])
+  return version
+}
+
 /* the board's folder: the operator allows one with `gents plugin dirs
    add`; the page remembers the last choice in the plugin's own storage */
 function useBoard(ctx) {
-  const [root, setRoot] = useState(() => ctx.storage.get('root', ''))
+  const [root, setRoot] = useState(() => {
+    const stored = ctx.storage.get('root', '')
+    return typeof stored === 'string' ? stored : ''
+  })
   const [tasks, setTasks] = useState([])
   const [error, setError] = useState(null)
+  const version = useRefreshVersion()
   const call = useCallback(
     async (input) => {
       if (!root) return null
@@ -45,7 +65,7 @@ function useBoard(ctx) {
   }, [call])
   useEffect(() => {
     void reload()
-  }, [reload])
+  }, [reload, version])
   const chooseRoot = async () => {
     const picked = await ctx.os.pickDirectory({ title: 'Board folder' })
     if (!picked) return
@@ -55,14 +75,14 @@ function useBoard(ctx) {
   return { root, tasks, error, reload, call, chooseRoot }
 }
 
-function Lane({ lane, tasks, onMove, onRemove }) {
+function Lane({ lane, tasks, highlight, onMove, onRemove }) {
   return jsxs('div', {
     className: 'gents-board-lane',
     children: [
       jsxs('h4', { className: 'gents-board-lane-title', children: [lane, ' ', jsx('span', { children: tasks.length })] }),
       ...tasks.map((t) =>
         jsxs('div', {
-          className: 'gents-board-card',
+          className: t.id === highlight ? 'gents-board-card gents-board-card-highlight' : 'gents-board-card',
           'data-task': t.id,
           children: [
             jsxs('span', { className: 'gents-board-card-title', children: [jsx('code', { children: `#${t.id}` }), ' ', t.title] }),
@@ -82,8 +102,11 @@ function Lane({ lane, tasks, onMove, onRemove }) {
   })
 }
 
-function BoardPage({ ctx }) {
+/* `item` is the route's item: the task id a ::board{id} card deep-links
+   to, drawn highlighted when the board has it */
+function BoardPage({ ctx, item }) {
   const board = useBoard(ctx)
+  const highlight = typeof item === 'string' && /^\d{1,9}$/.test(item) ? item : null
   const [title, setTitle] = useState('')
   const add = async () => {
     if (!title.trim()) return
@@ -145,7 +168,7 @@ function BoardPage({ ctx }) {
       jsx('div', {
         className: 'gents-board',
         children: LANES.map((lane) =>
-          jsx(Lane, { lane, tasks: board.tasks.filter((t) => t.lane === lane), onMove: move, onRemove: remove }, lane),
+          jsx(Lane, { lane, tasks: board.tasks.filter((t) => t.lane === lane), highlight, onMove: move, onRemove: remove }, lane),
         ),
       }),
     ],
@@ -171,6 +194,9 @@ export default {
   id: 'board',
   name: 'Board',
   description: 'Task board: a Board page, nav row, and a ::board card; backed by the pack\'s board_store plugin.',
+  /* ships off, as the kanban plugin does: it inventories, and registers
+     once the operator turns it on */
+  defaultEnabled: false,
   register(ctx) {
     ctx.registerMany([
       {
@@ -190,7 +216,7 @@ export default {
       {
         id: 'page',
         area: AGENT_SECTIONS_AREA,
-        data: { group: 'Packs', label: 'Board', render: () => jsx(BoardPage, { ctx }) },
+        data: { group: 'Packs', label: 'Board', render: ({ item }) => jsx(BoardPage, { ctx, item }) },
       },
       {
         id: 'directive',
@@ -198,11 +224,9 @@ export default {
         data: { name: 'board', render: ({ attrs }) => jsx(BoardCard, { ctx, attrs }) },
       },
     ])
-    ctx.onEvent('client-updated', () => {
-      /* the agent may have moved a card; a mounted page re-reads on its
-         own effect, so nothing to do here but it is where a refresh
-         signal would go */
-    })
+    /* the agent may have moved a card through the board_store tool: every
+       mounted page re-reads */
+    ctx.onEvent('client-updated', bumpRefresh)
     ctx.onDispose(() => toast('Board plugin unloaded'))
   },
 }

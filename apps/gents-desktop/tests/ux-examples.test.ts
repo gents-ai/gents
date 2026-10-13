@@ -12,7 +12,11 @@ import {
   unsupportedImports,
 } from "@/contrib/loader";
 import { installUxHost, type UxHost } from "@/contrib/plugin";
-import { resetUxPluginStore, uxPluginRecords } from "@/contrib/plugins-store";
+import {
+  resetUxPluginStore,
+  setUxPluginEnabled,
+  uxPluginRecords,
+} from "@/contrib/plugins-store";
 import { registry } from "@/contrib/registry";
 import {
   AGENT_SECTIONS_AREA,
@@ -98,7 +102,7 @@ describe("example plugins", () => {
     ]);
   });
 
-  it("focus_timer loads with its stylesheet and persists through its storage namespace", async () => {
+  it("focus_timer ships off, then loads with its stylesheet once enabled", async () => {
     await loadRuntimeUxPlugin(
       {
         source: read(EXAMPLES.focus_timer),
@@ -106,12 +110,52 @@ describe("example plugins", () => {
       },
       { origin: "focus_timer", door: "dev" },
     );
+    expect(uxPluginRecords().focus_timer?.status).toBe("disabled");
+    expect(document.querySelector('style[data-gents-ux="focus_timer"]')).toBeNull();
+    await setUxPluginEnabled("focus_timer", true);
     expect(uxPluginRecords().focus_timer?.status).toBe("loaded");
     expect(document.querySelector('style[data-gents-ux="focus_timer"]')).not.toBeNull();
     expect(registry.getArea(SESSION_HEADER_ACTIONS_AREA)).toHaveLength(1);
   });
 
-  it("board loads under its declared gate and claims the ::board directive", async () => {
+  it("focus_timer settles a block that ran out while the app was closed, without sending", async () => {
+    const sent: string[] = [];
+    installUxHost({
+      ...host,
+      shell: {
+        ...host.shell,
+        send: async (content) => {
+          sent.push(content);
+        },
+      },
+    });
+    window.localStorage.setItem(
+      "gents.ux.focus_timer.state",
+      JSON.stringify({ presetId: "deep", endsAt: Date.now() - 60_000, done: 2 }),
+    );
+    await loadRuntimeUxPlugin(
+      { source: read(EXAMPLES.focus_timer) },
+      { origin: "focus_timer", door: "dev" },
+    );
+    await setUxPluginEnabled("focus_timer", true);
+    expect(sent).toEqual([]);
+    expect(
+      JSON.parse(window.localStorage.getItem("gents.ux.focus_timer.state")!),
+    ).toEqual({
+      presetId: "deep",
+      endsAt: null,
+      done: 3,
+      ended: true,
+    });
+
+    /* a value that is not this plugin's shape reads as the default */
+    window.localStorage.setItem("gents.ux.focus_timer.state", JSON.stringify([1, 2]));
+    await setUxPluginEnabled("focus_timer", false);
+    await setUxPluginEnabled("focus_timer", true);
+    expect(uxPluginRecords().focus_timer?.status).toBe("loaded");
+  });
+
+  it("board ships off, then loads under its declared gate and claims the ::board directive", async () => {
     const id = await loadRuntimeUxPlugin(
       { source: read(EXAMPLES.board) },
       {
@@ -125,6 +169,8 @@ describe("example plugins", () => {
       },
     );
     expect(id).toBe("board");
+    expect(uxPluginRecords().board?.status).toBe("disabled");
+    await setUxPluginEnabled("board", true);
     expect(uxPluginRecords().board?.status).toBe("loaded");
     expect(registry.getArea(NAV_AREA).some((c) => c.id === "board:nav")).toBe(true);
     expect(registry.getArea(AGENT_SECTIONS_AREA).map((c) => c.id)).toEqual([
@@ -147,6 +193,7 @@ describe("example plugins", () => {
         declared: { areas: [NAV_AREA], directives: [] },
       },
     );
+    await setUxPluginEnabled("board", true);
     expect(uxPluginRecords().board?.status).toBe("error");
     expect(uxPluginRecords().board?.error).toMatch(/does not declare/);
     expect(registry.getArea(NAV_AREA).some((c) => c.id === "board:nav")).toBe(false);
