@@ -415,6 +415,7 @@ structure ProcessStopCase where
   deriving Repr
 
 structure LifecycleTransitionCase where
+  stoppedBeforeRunning : Bool := false
   name : String
   domain : String
   fromState : String

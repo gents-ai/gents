@@ -9,6 +9,7 @@ def lifecycleTransitionCaseJson (witness : LifecycleTransitionCase) : String :=
   "{"
     ++ "\"name\":" ++ jsonString witness.name ++ ","
     ++ "\"domain\":" ++ jsonString witness.domain ++ ","
+    ++ "\"stopped_before_running\":" ++ boolString witness.stoppedBeforeRunning ++ ","
     ++ "\"from\":" ++ jsonString witness.fromState ++ ","
     ++ "\"to\":" ++ jsonString witness.toState ++ ","
     ++ "\"classification\":" ++ jsonString witness.classification ++ ","

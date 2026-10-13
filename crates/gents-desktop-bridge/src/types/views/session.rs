@@ -317,6 +317,9 @@ pub struct FoldedInputView {
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct RequestOutcomeView {
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub stopped_before_running: Option<bool>,
     pub failure_reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[ts(optional = nullable)]

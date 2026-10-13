@@ -38,7 +38,7 @@ export function requestProgressPresentation(
     case "dead":
       return { label: "Expired", animated: false };
     case "interrupted":
-      return { label: "Interrupted", animated: false };
+      return { label: "Stopped", animated: false };
     default:
       return null;
   }

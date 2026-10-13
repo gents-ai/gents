@@ -174,8 +174,85 @@ pub(crate) fn observed_tree_hash(dest: &Path) -> Result<String> {
 
 /// Hash-only observation for read bindings. Authorization captures below also
 /// bind the immutable base and validate the actual Git tree delta.
-pub(crate) fn working_tree_hash(dest: &Path) -> Result<String> {
-    capture_working_tree(dest)
+///
+/// Dropping the future kills Git's process group through the managed host
+/// process owner, so request cancellation does not wait for a large tree; the
+/// temporary index leaves the workspace's own index untouched.
+pub(crate) async fn working_tree_hash(dest: &Path) -> Result<String> {
+    let tmp = tempfile::Builder::new()
+        .prefix("gents-ws-index")
+        .tempdir()
+        .context("creating temporary git index for seal")?;
+    let index = tmp.path().join("index");
+    managed_git_with_index(dest, &index, &["read-tree", "HEAD"]).await?;
+    managed_git_with_index(dest, &index, &["add", "-A", "--"]).await?;
+    managed_git_with_index(dest, &index, &["write-tree"]).await
+}
+
+const MANAGED_GIT_OUTPUT_BYTE_CAP: usize = 64 * 1024;
+
+async fn managed_git_with_index(cwd: &Path, index: &Path, args: &[&str]) -> Result<String> {
+    use crate::managed_exec::{run_managed_exec, ManagedExecOutcome, ManagedExecRequest};
+
+    let index = index
+        .to_str()
+        .context("temporary git index path is not UTF-8")?;
+    let mut environment = std::env::vars_os()
+        .filter_map(|(key, value)| Some((key.into_string().ok()?, value.into_string().ok()?)))
+        .filter(|(key, _)| !GIT_ENV_REMOVED.contains(&key.as_str()))
+        .collect::<std::collections::HashMap<_, _>>();
+    environment.extend(
+        GIT_ENV_SET
+            .iter()
+            .map(|(key, value)| ((*key).to_owned(), (*value).to_owned())),
+    );
+    environment.insert("GIT_INDEX_FILE".to_owned(), index.to_owned());
+    let outcome = run_managed_exec(ManagedExecRequest {
+        argv: std::iter::once("git")
+            .chain(args.iter().copied())
+            .map(str::to_owned)
+            .collect(),
+        cwd: cwd.to_path_buf(),
+        deadline_at: None,
+        cancellation_token: tokio_util::sync::CancellationToken::new(),
+        max_output_bytes: MANAGED_GIT_OUTPUT_BYTE_CAP,
+        stdin: Vec::new(),
+        environment: Some(environment),
+        tool_name: None,
+        live_output: None,
+    })
+    .await;
+    match outcome {
+        ManagedExecOutcome::Exited {
+            code: Some(0),
+            stdout,
+            stdout_truncated: false,
+            ..
+        } => Ok(String::from_utf8_lossy(&stdout).trim().to_string()),
+        ManagedExecOutcome::Exited {
+            code: Some(0),
+            stdout_truncated: true,
+            ..
+        } => bail!(
+            "git {} output exceeded {MANAGED_GIT_OUTPUT_BYTE_CAP} bytes",
+            args.join(" ")
+        ),
+        ManagedExecOutcome::Exited { stderr, .. } => bail!(
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&stderr).trim()
+        ),
+        ManagedExecOutcome::SpawnFailed { error } => bail!(
+            "running git {} in {}: {error}",
+            args.join(" "),
+            cwd.display()
+        ),
+        ManagedExecOutcome::TimedOut { .. } | ManagedExecOutcome::Cancelled { .. } => bail!(
+            "git {} in {} stopped before completing",
+            args.join(" "),
+            cwd.display()
+        ),
+    }
 }
 
 fn capture_working_tree(dest: &Path) -> Result<String> {
@@ -1131,16 +1208,25 @@ fn git_output_bytes_inner(mut cmd: Command, cwd: &Path, args: &[&str]) -> Result
     Ok(output.stdout)
 }
 
+const GIT_ENV_REMOVED: [&str; 4] = [
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_COMMON_DIR",
+    "GIT_INDEX_FILE",
+];
+const GIT_ENV_SET: [(&str, &str); 3] = [
+    ("GIT_TERMINAL_PROMPT", "0"),
+    ("GIT_LITERAL_PATHSPECS", "1"),
+    ("GIT_NO_REPLACE_OBJECTS", "1"),
+];
+
 fn git_command(cwd: &Path, args: &[&str]) -> Command {
     let mut cmd = Command::new("git");
     cmd.args(args).current_dir(cwd);
-    cmd.env_remove("GIT_DIR");
-    cmd.env_remove("GIT_WORK_TREE");
-    cmd.env_remove("GIT_COMMON_DIR");
-    cmd.env_remove("GIT_INDEX_FILE");
-    cmd.env("GIT_TERMINAL_PROMPT", "0");
-    cmd.env("GIT_LITERAL_PATHSPECS", "1");
-    cmd.env("GIT_NO_REPLACE_OBJECTS", "1");
+    for key in GIT_ENV_REMOVED {
+        cmd.env_remove(key);
+    }
+    cmd.envs(GIT_ENV_SET);
     cmd
 }
 

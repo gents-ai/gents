@@ -10,7 +10,7 @@ use axum::{http::Uri, routing::get, Router};
 use gents::defra_node::EmbeddedNode;
 use gents::{
     DocumentRuntimeOptions, Gents, KeyIdentity, McpPool, NodeIdentity, ProcessLifecycleObserver,
-    ProcessLifecycleState, ToolCeiling,
+    ProcessLifecycleState,
 };
 use serde_json::{json, Value};
 use tokio::sync::watch;
@@ -23,9 +23,9 @@ use crate::http::router::{RuntimeActivationObservation, ServeLifecycleHandle};
 use crate::http::runtime_contract_router;
 use crate::shared::{P2pAdmissionState, *};
 use crate::{
-    default_data_dir, default_key_path, display_host, format_tool_ceiling, parse_cli_tool_arg,
-    print_json, read_init_config, resolve_home_dir, server_start_failure_hint, write_runtime_state,
-    DEFAULT_NODE_NAME,
+    default_data_dir, default_key_path, display_host, format_tool_ceiling, host_tool_ceiling,
+    parse_cli_tool_arg, print_json, read_init_config, resolve_home_dir, server_start_failure_hint,
+    write_runtime_state, DEFAULT_NODE_NAME,
 };
 use gents::codex_shim_binding::{ShimBinding, ShimUnboundReason};
 use gents_protocol::row::{
@@ -632,29 +632,12 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
             .as_ref()
             .and_then(|config| config.tool_root.as_ref().map(PathBuf::from))
     });
-    let effective_tool_root = match effective_tool_ceiling {
-        ToolCeilingArg::MetaOnly => configured_tool_root,
-        ToolCeilingArg::Readonly => Some(match configured_tool_root {
-            Some(root) => root,
-            None => resolve_default_tool_root(None)?,
-        }),
-        ToolCeilingArg::Readwrite => Some(configured_tool_root.ok_or_else(|| {
-            anyhow::anyhow!("--tool-root is required when --tool-ceiling readwrite")
-        })?),
+    let effective_tool_root = match (effective_tool_ceiling, configured_tool_root) {
+        (ToolCeilingArg::Readonly, None) => Some(resolve_default_tool_root(None)?),
+        (_, root) => root,
     };
-    let mut tool_ceiling = match effective_tool_ceiling {
-        ToolCeilingArg::MetaOnly => ToolCeiling::meta_only(),
-        ToolCeilingArg::Readonly => ToolCeiling::readonly_at(
-            effective_tool_root
-                .as_ref()
-                .expect("readonly root resolved"),
-        ),
-        ToolCeilingArg::Readwrite => ToolCeiling::readwrite(
-            effective_tool_root
-                .as_ref()
-                .expect("readwrite root resolved"),
-        ),
-    };
+    let mut tool_ceiling =
+        host_tool_ceiling(effective_tool_ceiling, effective_tool_root.as_deref())?;
     tool_ceiling = tool_ceiling.with_command_timeout_secs(args.command_timeout_secs);
     if let Some(max_secs) = args.command_timeout_max_secs {
         tool_ceiling = tool_ceiling.with_command_timeout_max_secs(max_secs);
@@ -719,8 +702,16 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
         identity.did().to_string(),
         format_tool_ceiling(effective_tool_ceiling).to_string(),
         effective_tool_root
-            .as_ref()
-            .map(|path| path.to_string_lossy().into_owned()),
+            .as_deref()
+            .map(|root| {
+                gents::tool_surface::resolve_configured_tool_root(root)
+                    .map(|resolved| resolved.to_string_lossy().into_owned())
+                    .map_err(|error| {
+                        format!("tool root {} does not resolve: {error:#}", root.display())
+                    })
+            })
+            .transpose(),
+        args.cli_tools.clone(),
         Some(home_dir.to_string_lossy().into_owned()),
         mcp_options,
         Some(backend_health.clone()),

@@ -193,7 +193,13 @@ const STOP_SOURCES: Record<string, string> = {
   deadline: "its deadline",
 };
 
-function StoppedNotice({ cause }: { cause: DerivedCancelCauseView | null }) {
+function StoppedNotice({
+  cause,
+  stoppedBeforeRunning,
+}: {
+  cause: DerivedCancelCauseView | null;
+  stoppedBeforeRunning: boolean;
+}) {
   const headline =
     cause?.cause === "userCancelled"
       ? "You stopped this response."
@@ -207,7 +213,8 @@ function StoppedNotice({ cause }: { cause: DerivedCancelCauseView | null }) {
       data-testid="stopped-notice"
     >
       <p className="flex items-center gap-2">
-        {headline}
+        <span>{stoppedBeforeRunning ? "Stopped before running" : "Stopped"}</span>
+        <span>{headline}</span>
         {cause && (
           <CollapsibleTrigger className="cursor-pointer underline decoration-border underline-offset-4 hover:text-foreground">
             Details
@@ -571,7 +578,12 @@ export const TranscriptPanel = memo(function TranscriptPanel({
         </AppliedInputsContext.Provider>
       </WorkerActionsContext.Provider>
       {wasInterrupted && !inFlight && (
-        <StoppedNotice cause={session?.latestRequestOutcome?.cancelCause ?? null} />
+        <StoppedNotice
+          cause={session?.latestRequestOutcome?.cancelCause ?? null}
+          stoppedBeforeRunning={
+            session?.latestRequestOutcome?.stoppedBeforeRunning === true
+          }
+        />
       )}
       {showError && (
         <div className="rounded-2xl border border-destructive/30 bg-destructive/5 px-4 py-3">

@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use gents::{cli_tool, BackendProviderKind, OpenAiWireApi};
@@ -133,6 +133,24 @@ pub(crate) fn parse_cli_tool_arg(value: &str) -> Result<gents::CliToolConfig> {
         PathBuf::from(path),
         format!("Run the approved {name} CLI."),
     ))
+}
+
+/// The host ceiling a `gents server` enforces for this mode and root. Serve
+/// resolves the readonly default root before calling; a readonly ceiling
+/// without one leaves file tools unrooted.
+pub(crate) fn host_tool_ceiling(
+    mode: ToolCeilingArg,
+    root: Option<&Path>,
+) -> Result<gents::ToolCeiling> {
+    Ok(match (mode, root) {
+        (ToolCeilingArg::MetaOnly, _) => gents::ToolCeiling::meta_only(),
+        (ToolCeilingArg::Readonly, Some(root)) => gents::ToolCeiling::readonly_at(root),
+        (ToolCeilingArg::Readonly, None) => gents::ToolCeiling::readonly(),
+        (ToolCeilingArg::Readwrite, Some(root)) => gents::ToolCeiling::readwrite(root),
+        (ToolCeilingArg::Readwrite, None) => {
+            anyhow::bail!("--tool-root is required when --tool-ceiling readwrite")
+        }
+    })
 }
 
 pub(crate) fn format_tool_ceiling(value: ToolCeilingArg) -> &'static str {

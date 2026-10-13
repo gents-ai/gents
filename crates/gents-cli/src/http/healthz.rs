@@ -198,6 +198,8 @@ mod tests {
             node_did: "did:test:test".to_string(),
             tool_ceiling: "readwrite".to_string(),
             tool_root: Some("/tmp/work".to_string()),
+            tool_root_error: None,
+            cli_tools: Vec::new(),
             home: None,
             started_at: "2026-05-13T12:00:00Z".to_string(),
             started_instant: Instant::now(),
