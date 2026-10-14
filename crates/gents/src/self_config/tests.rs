@@ -348,7 +348,7 @@ async fn pack_install_uses_current_node_and_inference_chain() {
         crate::test_support::install_test_agent(&node, &node_did, role).await;
     }
 
-    let (_home, plugins) = crate::test_support::home_with_fixture_pack("plugin_documents_fixture");
+    let (home, plugins) = crate::test_support::home_with_fixture_pack("plugin_documents_fixture");
     let mut tool_config = config(&[]);
     tool_config.agent_id = "setup".to_string();
     tool_config.enable_pack_install = true;
@@ -428,6 +428,13 @@ async fn pack_install_uses_current_node_and_inference_chain() {
         "fixture/plugin_documents_fixture"
     );
     assert_eq!(output["artifact_digest"], preview["artifact_digest"]);
+    let record = crate::plugin::store::read_record(home.path(), "fixture", "echo_fixture")
+        .expect("the pack's plugin is in the home's plugin store");
+    assert_eq!(
+        record.owner_pack_coordinate.as_deref(),
+        Some("fixture/plugin_documents_fixture")
+    );
+    assert!(record.granted.is_none(), "a sealed plugin holds no grant");
     assert_eq!(
         output["inference"]["bindings"],
         json!({
