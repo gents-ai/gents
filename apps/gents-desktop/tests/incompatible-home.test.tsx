@@ -92,6 +92,7 @@ function snapshot(configured: boolean): DesktopClientSnapshot {
   return {
     bootstrap: {
       ...bootstrap,
+      initConfigStatus: configured ? "configured" : "absent",
       clientStateExists: configured,
       savedPeers: configured
         ? [

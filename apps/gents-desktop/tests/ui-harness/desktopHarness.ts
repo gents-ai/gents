@@ -697,6 +697,7 @@ export function createDesktopUiHarness(
         defaultNodeHome: "/tmp/gents-bombadil/agent",
         initNodeName: freshHome ? null : deployment.label,
         initNodeDid: freshHome ? null : NODE_DID,
+        initConfigStatus: freshHome ? "absent" : "configured",
         initToolCeiling: freshHome ? null : "ReadWrite",
         initToolRoot: freshHome ? null : "/tmp/gents-bombadil/workspace",
         desktopHome: "/tmp/gents-bombadil/desktop",
@@ -734,6 +735,7 @@ export function createDesktopUiHarness(
         peerIssueCount: 0,
         rowCount,
         approxSerializedBytes: rowCount * 512,
+        operatorConfigAuthoritativeNodeDids: freshHome ? [] : [NODE_DID],
         deployments,
       },
     };
