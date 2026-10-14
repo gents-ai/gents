@@ -1742,8 +1742,14 @@ impl ClientCore {
         if !hydration_start_evidence_is_ready(false, &progress, &evidence) {
             return Ok((progress, detail));
         }
-        self.admit_initial_session_hydration(&session_id, &node_did, &progress, &evidence)
-            .await?;
+        self.admit_session_hydration_request(
+            gents::agent::p2p_reconcile::session_hydration::HydrationAdmissionAction::PassiveStart,
+            &session_id,
+            &node_did,
+            &progress,
+            Some(&evidence),
+        )
+        .await?;
         self.load_hydration_status(&session_id, &node_did).await
     }
 
@@ -1825,7 +1831,13 @@ impl ClientCore {
             bail!("session hydration retry requires a failed attempt for the selected session");
         }
         if !self
-            .retry_rejected_session_hydration(&session_id, &node_did, &progress)
+            .admit_session_hydration_request(
+                gents::agent::p2p_reconcile::session_hydration::HydrationAdmissionAction::ExplicitRetry,
+                &session_id,
+                &node_did,
+                &progress,
+                None,
+            )
             .await?
         {
             bail!("session hydration retry requires a failed attempt for the selected session");
@@ -1833,17 +1845,34 @@ impl ClientCore {
         Ok(())
     }
 
-    /// Carry the existing local admission observation into the transaction;
-    /// only the durable request row is fenced under the mutation write gate.
-    async fn admit_initial_session_hydration(
+    /// Carry the local admission observation into the transaction; only the
+    /// arrival fence and durable request row are checked under the write gate.
+    async fn admit_session_hydration_request(
         &self,
+        action: gents::agent::p2p_reconcile::session_hydration::HydrationAdmissionAction,
         session_id: &str,
         node_did: &str,
         observed_progress: &gents::agent::p2p_reconcile::session_hydration::ClientHydrationProgress,
-        evidence: &LocalHydrationStartEvidence,
+        evidence: Option<&LocalHydrationStartEvidence>,
     ) -> Result<bool> {
+        use gents::agent::p2p_reconcile::session_hydration::HydrationAdmissionAction as Action;
+
         let session_id = normalize_required("session_id", session_id)?;
         let node_did = normalize_required("node_did", node_did)?;
+        let evidence = match action {
+            Action::PassiveStart => Some(
+                evidence
+                    .context("passive hydration admission requires local start evidence")?
+                    .clone(),
+            ),
+            Action::ExplicitRetry => {
+                anyhow::ensure!(
+                    evidence.is_none(),
+                    "explicit hydration retry does not accept passive start evidence"
+                );
+                None
+            }
+        };
         let peer_record = self
             .peer_record_for_chat_write(&node_did, Utc::now())
             .await?;
@@ -1859,9 +1888,9 @@ impl ClientCore {
         );
         let request_query = hydration_request_admission_query(&request_key_gql);
         let observed_progress = observed_progress.clone();
-        let evidence = evidence.clone();
-        let mutation = format!(
-            r#"mutation {{
+        let mutation = match action {
+            Action::PassiveStart => format!(
+                r#"mutation {{
                 create_SessionHydrationRequest(input: {{
                         request_key: "{request_key_gql}",
                         requester_did: "{requester_did}",
@@ -1872,88 +1901,10 @@ impl ClientCore {
                         status_detail: "",
                         served_doc_count: 0
                 }}) {{ _docID }}
-            }}"#
-        );
-        gents::config_client::ConfigAccess::transact_local_write(
-            &self.node,
-            None,
-            "desktop.session_hydration.admit_initial",
-            move |txn| {
-                let request_query = request_query.clone();
-                let mutation = mutation.clone();
-                let session_id = session_id.clone();
-                let node_did = node_did.clone();
-                let request_key = request_key.clone();
-                let expected_requester_did = expected_requester_did.clone();
-                let observed_progress = observed_progress.clone();
-                let evidence = evidence.clone();
-                Box::pin(async move {
-                    gents::graphql::fence_arrivals(txn, "SessionHydrationRequest").await?;
-                    let request_response = txn.execute(&request_query).await?;
-                    let requests = transaction_rows::<HydrationAdmissionRequestRow>(
-                        &request_response,
-                        "SessionHydrationRequest",
-                    )?;
-                    anyhow::ensure!(
-                        requests.len() <= 1,
-                        "session hydration request key resolved to multiple rows"
-                    );
-                    if let Some(request) = requests.first() {
-                        request.ensure_target(
-                            &request_key,
-                            &expected_requester_did,
-                            &node_did,
-                            &session_id,
-                        )?;
-                        return Ok(false);
-                    }
-
-                    if !gents::agent::p2p_reconcile::session_hydration::can_admit_hydration_request(
-                        gents::agent::p2p_reconcile::session_hydration::HydrationAdmissionAction::PassiveStart,
-                        &gents::agent::p2p_reconcile::session_hydration::ClientHydrationRequestState::Missing,
-                        &observed_progress,
-                        &session_id,
-                        &node_did,
-                        false,
-                        evidence.owned_session_present,
-                        observed_progress.merged_count > 0,
-                        evidence.nonterminal_request_present,
-                    ) {
-                        return Ok(false);
-                    }
-                    txn.execute(&mutation).await?;
-                    Ok(true)
-                })
-            },
-        )
-        .await
-    }
-
-    async fn retry_rejected_session_hydration(
-        &self,
-        session_id: &str,
-        node_did: &str,
-        observed_progress: &gents::agent::p2p_reconcile::session_hydration::ClientHydrationProgress,
-    ) -> Result<bool> {
-        let session_id = normalize_required("session_id", session_id)?;
-        let node_did = normalize_required("node_did", node_did)?;
-        let peer_record = self
-            .peer_record_for_chat_write(&node_did, Utc::now())
-            .await?;
-        ensure_peer_chat_ready_at(&node_did, peer_record.as_ref(), Utc::now())?;
-        let request_key = format!("{}:{session_id}", self.local_peer_id());
-        let expected_requester_did = self.node_identity.did().to_owned();
-        let requester_did = gents::graphql::escape_graphql_string(&expected_requester_did);
-        let node_did_gql = gents::graphql::escape_graphql_string(&node_did);
-        let session_id_gql = gents::graphql::escape_graphql_string(&session_id);
-        let request_key_gql = gents::graphql::escape_graphql_string(&request_key);
-        let now = gents::graphql::escape_graphql_string(
-            &chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        );
-        let request_query = hydration_request_admission_query(&request_key_gql);
-        let observed_progress = observed_progress.clone();
-        let mutation = format!(
-            r#"mutation {{
+            }}"#,
+            ),
+            Action::ExplicitRetry => format!(
+                r#"mutation {{
                 update_SessionHydrationRequest(
                     filter: {{
                         request_key: {{ _eq: "{request_key_gql}" }},
@@ -1973,21 +1924,31 @@ impl ClientCore {
                         processed_at: null
                     }}
                 ) {{ _docID }}
-            }}"#
-        );
+            }}"#,
+            ),
+        };
+        let operation = match action {
+            Action::PassiveStart => "desktop.session_hydration.admit_initial",
+            Action::ExplicitRetry => "desktop.session_hydration.retry_rejected",
+        };
         gents::config_client::ConfigAccess::transact_local_write(
             &self.node,
             None,
-            "desktop.session_hydration.retry_rejected",
+            operation,
             move |txn| {
                 let request_query = request_query.clone();
                 let mutation = mutation.clone();
+                let action = action;
+                let session_id = session_id.clone();
+                let node_did = node_did.clone();
                 let request_key = request_key.clone();
                 let expected_requester_did = expected_requester_did.clone();
-                let node_did = node_did.clone();
-                let session_id = session_id.clone();
                 let observed_progress = observed_progress.clone();
+                let evidence = evidence.clone();
                 Box::pin(async move {
+                    if action == Action::PassiveStart {
+                        gents::graphql::fence_arrivals(txn, "SessionHydrationRequest").await?;
+                    }
                     let request_response = txn.execute(&request_query).await?;
                     let requests = transaction_rows::<HydrationAdmissionRequestRow>(
                         &request_response,
@@ -1997,47 +1958,59 @@ impl ClientCore {
                         requests.len() <= 1,
                         "session hydration request key resolved to multiple rows"
                     );
-                    let Some(request) = requests.first() else {
-                        return Ok(false);
+                    let request = requests.first();
+                    if let Some(request) = request {
+                        request.ensure_target(&request_key, &expected_requester_did, &node_did, &session_id)?;
+                    }
+                    let request_state = match request {
+                        None => {
+                            gents::agent::p2p_reconcile::session_hydration::ClientHydrationRequestState::Missing
+                        }
+                        Some(request) => match request.status.as_deref() {
+                            Some("pending") => {
+                                gents::agent::p2p_reconcile::session_hydration::ClientHydrationRequestState::Pending
+                            }
+                            Some("served") => {
+                                gents::agent::p2p_reconcile::session_hydration::ClientHydrationRequestState::Served(BTreeSet::new())
+                            }
+                            Some("rejected") => {
+                                gents::agent::p2p_reconcile::session_hydration::ClientHydrationRequestState::Rejected(None)
+                            }
+                            Some(_) | None if action == Action::PassiveStart => {
+                                gents::agent::p2p_reconcile::session_hydration::ClientHydrationRequestState::Pending
+                            }
+                            Some(status) => anyhow::bail!("unknown session hydration request status {status:?}"),
+                            None => anyhow::bail!("session hydration request is missing status"),
+                        },
                     };
-                    request.ensure_target(
-                        &request_key,
-                        &expected_requester_did,
-                        &node_did,
-                        &session_id,
-                    )?;
-                    let request_state = match request.status.as_deref() {
-                        Some("pending") => {
-                            gents::agent::p2p_reconcile::session_hydration::ClientHydrationRequestState::Pending
-                        }
-                        Some("served") => {
-                            gents::agent::p2p_reconcile::session_hydration::ClientHydrationRequestState::Served(BTreeSet::new())
-                        }
-                        Some("rejected") => {
-                            gents::agent::p2p_reconcile::session_hydration::ClientHydrationRequestState::Rejected(None)
-                        }
-                        Some(status) => anyhow::bail!("unknown session hydration request status {status:?}"),
-                        None => anyhow::bail!("session hydration request is missing status"),
-                    };
+                    let evidence = evidence.as_ref();
                     if !gents::agent::p2p_reconcile::session_hydration::can_admit_hydration_request(
-                        gents::agent::p2p_reconcile::session_hydration::HydrationAdmissionAction::ExplicitRetry,
+                        action,
                         &request_state,
                         &observed_progress,
                         &session_id,
                         &node_did,
                         false,
-                        false,
-                        false,
-                        false,
+                        evidence.is_some_and(|evidence| evidence.owned_session_present),
+                        observed_progress.merged_count > 0,
+                        evidence.is_some_and(|evidence| evidence.nonterminal_request_present),
                     ) {
                         return Ok(false);
                     }
                     let response = txn.execute(&mutation).await?;
-                    let rows = gents::graphql::mutation_documents(
-                        &response,
-                        "update_SessionHydrationRequest",
-                    )?;
-                    Ok(rows.is_some_and(|rows| !rows.is_empty()))
+                    let field = match action {
+                        Action::PassiveStart => "create_SessionHydrationRequest",
+                        Action::ExplicitRetry => "update_SessionHydrationRequest",
+                    };
+                    let rows = gents::graphql::mutation_documents(&response, field)?;
+                    let changed = rows.is_some_and(|rows| !rows.is_empty());
+                    if action == Action::PassiveStart {
+                        anyhow::ensure!(
+                            changed,
+                            "initial session hydration request create returned no document"
+                        );
+                    }
+                    Ok(changed)
                 })
             },
         )
