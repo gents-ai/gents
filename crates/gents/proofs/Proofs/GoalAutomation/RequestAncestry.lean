@@ -49,12 +49,11 @@ private def root : Attempt := ⟨10, true, some .failed⟩
 private def child : Attempt := ⟨20, false, some .completed⟩
 private def edge : Edge := ⟨10, 20, true⟩
 
-/-- A pinned entry that also has an authenticated parent is visible to the
-ancestry: the production owner's incoming-parent exclusion keys on it. -/
+/-- An authenticated edge into a pinned entry stays visible through `parents`;
+a consumer that requires a parentless root can check it there. -/
 theorem pinned_root_with_parent_has_parent : parents [⟨20,10,true⟩] 10 ≠ [] := by decide
 
-/-- Two authenticated roots over one child are ambiguous, so the projection
-fails closed. -/
+/-- Two authenticated pinned roots over one child make `ambiguous` true. -/
 theorem two_authenticated_roots_ambiguous :
     ambiguous [root, {root with doc := 30}, child] [edge, ⟨30,20,true⟩] = true := by decide
 
