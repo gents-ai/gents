@@ -4,8 +4,8 @@
  * One session scope's provenance: what other sessions' calls caused in it,
  * and what its own calls caused elsewhere.
  */
-export type DesktopSessionProvenanceRequest = { sessionId: string, nodeDid: string | null,
+export type DesktopSessionProvenanceRequest = { sessionId: string, nodeDid?: string | null,
 /**
  * Part of the exact session scope; null is the null-requester scope.
  */
-requesterDid: string | null, };
+requesterDid?: string | null, };

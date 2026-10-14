@@ -1146,6 +1146,21 @@ export function createDesktopUiHarness(
         mcpServicesOnline: true,
         surface: {
           tool_names: ["read_file", "list_files", "gents_exec"],
+          policy: {
+            requested: {
+              file_tools: ["read_file", "list_files", "write_file"],
+              meta: ["gents_exec"],
+            },
+            ceiling: { file_tools: ["read_file", "list_files"], meta: ["gents_exec"] },
+            runtime: {
+              file_tools: ["read_file", "list_files", "write_file"],
+              meta: ["gents_exec"],
+            },
+            effective: {
+              file_tools: ["read_file", "list_files"],
+              meta: ["gents_exec"],
+            },
+          },
           included: { read_file: ["ceiling allows readonly file tools"] },
           excluded: { write_file: ["ceiling is readonly"] },
           unavailable: {},
