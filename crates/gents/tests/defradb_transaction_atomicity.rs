@@ -287,11 +287,13 @@ async fn independent_reader_never_observes_half_of_a_two_document_commit() -> Re
     Ok(())
 }
 
-fn write_unique(key: &str) -> String {
+/// `label` is outside the indexed field so documents sharing a key still get
+/// distinct content-addressed docIDs; only the unique index can reject them.
+fn write_unique(key: &str, label: &str) -> String {
     format!(
         r#"mutation {{ create_TxnAtomicityUnique(input: {{ key: "{}", label: "{}" }}) {{ _docID }} }}"#,
         escape_graphql_string(key),
-        escape_graphql_string(key)
+        escape_graphql_string(label)
     )
 }
 
@@ -311,7 +313,7 @@ async fn read_then_insert_unique(txn: &ConfigApplyTxn<'_>, key: &str) -> Result<
     if found > 0 {
         return Ok(false);
     }
-    ensure_no_errors(txn.execute(&write_unique(key)).await?)?;
+    ensure_no_errors(txn.execute(&write_unique(key, "inserted")).await?)?;
     Ok(true)
 }
 
@@ -332,17 +334,21 @@ async fn unique_index_violation_aborts_the_transaction() -> Result<()> {
         |txn: &ConfigApplyTxn<'_>| {
             Box::pin(async move {
                 ensure_no_errors(txn.execute(&write_left("unique-abort", 1)).await?)?;
-                ensure_no_errors(txn.execute(&write_unique("same")).await?)?;
-                ensure_no_errors(txn.execute(&write_unique("same")).await?)?;
+                ensure_no_errors(txn.execute(&write_unique("same", "first")).await?)?;
+                ensure_no_errors(txn.execute(&write_unique("same", "second")).await?)?;
                 Ok(())
             })
         },
     )
     .await;
 
+    let error = format!(
+        "{:#}",
+        outcome.expect_err("a duplicate unique-key insert must fail")
+    );
     assert!(
-        outcome.is_err(),
-        "a duplicate unique-key insert must fail the transaction: {outcome:?}"
+        error.contains("violates unique index"),
+        "the unique index must reject the duplicate key: {error}"
     );
     assert_eq!(collection_count(&node, "TxnAtomicityLeft").await?, 0);
     assert_eq!(collection_count(&node, "TxnAtomicityUnique").await?, 0);
@@ -350,7 +356,9 @@ async fn unique_index_violation_aborts_the_transaction() -> Result<()> {
 }
 
 /// Two concurrent read-then-insert transactions on one unique key leave one
-/// row; the unique index is the backstop when both reads miss. Same pinned
+/// row. `transact_local` serializes writers through the per-node mutation
+/// gate, so the second read always sees the first commit: the read is the
+/// guard on this path and the unique index is not reached. Same pinned
 /// DefraDB rev as `unique_index_violation_aborts_the_transaction`.
 #[tokio::test]
 async fn concurrent_read_then_insert_leaves_one_row() -> Result<()> {
@@ -372,9 +380,11 @@ async fn concurrent_read_then_insert_leaves_one_row() -> Result<()> {
     .await
     .context("concurrent read-then-insert timed out")?;
 
-    assert!(
-        first.is_ok() || second.is_ok(),
-        "at least one transaction must commit: {first:?} / {second:?}"
+    let inserted = [first?, second?];
+    assert_eq!(
+        inserted.iter().filter(|inserted| **inserted).count(),
+        1,
+        "exactly one transaction inserts: {inserted:?}"
     );
     assert_eq!(collection_count(&node, "TxnAtomicityUnique").await?, 1);
     Ok(())
@@ -391,7 +401,7 @@ async fn read_then_insert_of_existing_key_commits_the_other_write() -> Result<()
         "txn_atomicity_seed_existing_key",
         |txn: &ConfigApplyTxn<'_>| {
             Box::pin(async move {
-                ensure_no_errors(txn.execute(&write_unique("existing")).await?)?;
+                ensure_no_errors(txn.execute(&write_unique("existing", "seed")).await?)?;
                 Ok(())
             })
         },
