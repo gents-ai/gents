@@ -118,8 +118,15 @@ export function WindowBar({
       data-testid="window-bar"
     >
       {wide && (
-        <div className="flex items-center justify-center" data-tauri-drag-region={drag}>
-          <MarkLink />
+        <div className="flex items-center" data-tauri-drag-region={drag}>
+          {/* the rail's own width in every mode: the expanded nav widens
+              this column, and the mark stays over the rail's place */}
+          <div
+            className="flex w-14 shrink-0 justify-center"
+            data-tauri-drag-region={drag}
+          >
+            <MarkLink />
+          </div>
         </div>
       )}
       <div
