@@ -55,6 +55,7 @@ async fn merge_accepted_edit_projection(
         if doc_ids.is_empty() {
             return anyhow::Result::<()>::Ok(());
         }
+        let (captured, captured_revision) = store.snapshot_with_revision();
         let rows = crate::client::load_request_documents_on(access, &doc_ids).await?;
         for row in &rows {
             anyhow::ensure!(
@@ -68,7 +69,13 @@ async fn merge_accepted_edit_projection(
             requests: rows,
             ..ClientStoreRows::default()
         });
-        store.merge_chat_patch(patch);
+        if store
+            .merge_chat_patch_at_snapshot(&captured, captured_revision.request_event_version, patch)
+            .is_none()
+        {
+            store.request_resync(Some(node_did));
+            anyhow::bail!("accepted edit projection read became stale before publication");
+        }
         anyhow::Result::<()>::Ok(())
     }
     .await;
@@ -603,6 +610,7 @@ impl ClientCore {
             return Ok(None);
         }
 
+        let (captured, captured_revision) = self.store.snapshot_with_revision();
         let (patch, source) = match self.operator_graphql(node_did) {
             Some(graphql) => {
                 let access = ConfigAccess::Graphql(graphql);
@@ -644,7 +652,14 @@ impl ClientCore {
         let terminal = patch
             .request_row(request_id)
             .is_some_and(|row| row.is_terminal());
-        let version = self.store.merge_chat_patch(patch);
+        let Some(version) = self.store.merge_chat_patch_at_snapshot(
+            &captured,
+            captured_revision.request_event_version,
+            patch,
+        ) else {
+            self.store.request_resync(Some(node_did));
+            return Ok(None);
+        };
         // A completed agent turn may have used self-configuration tools. Most
         // of that control plane is intentionally absent from the client P2P
         // route (the Node document and inference credentials in particular),

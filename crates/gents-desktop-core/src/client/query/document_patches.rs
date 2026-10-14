@@ -9,6 +9,10 @@ pub struct DocumentPatch {
     /// Existing auxiliary requests may be intentionally absent from the public
     /// store; that is not evidence of a deleted document.
     pub observed_documents: usize,
+    /// Exact missing physical IDs when this patch queried AgentRequest.
+    /// Other collections retain the conservative row-count fallback because
+    /// their decoders do not expose physical IDs uniformly.
+    pub missing_doc_ids: Option<Vec<String>>,
 }
 
 /// Preserve document existence separately from public projection so auxiliary
@@ -22,6 +26,7 @@ pub async fn fetch_doc_patch(
         return Ok(DocumentPatch {
             store: ClientStore::default(),
             observed_documents: 0,
+            missing_doc_ids: (collection_name == AGENT_REQUEST_NAME).then(Vec::new),
         });
     }
 
@@ -297,6 +302,18 @@ pub async fn fetch_doc_patch(
         .map(|row| Some(row.node_did.clone()))
         .collect();
     let request_count = rows.requests.len();
+    let missing_doc_ids = (collection_name == AGENT_REQUEST_NAME).then(|| {
+        let found_doc_ids: std::collections::HashSet<&str> = rows
+            .requests
+            .iter()
+            .filter_map(|row| row.doc_id.as_deref())
+            .collect();
+        doc_ids
+            .iter()
+            .filter(|doc_id| !found_doc_ids.contains(**doc_id))
+            .map(|doc_id| (*doc_id).to_owned())
+            .collect()
+    });
     let store = ClientStore::from_rows(rows);
     let observed_documents = if collection_name == AGENT_REQUEST_NAME {
         request_count
@@ -306,6 +323,7 @@ pub async fn fetch_doc_patch(
     Ok(DocumentPatch {
         store,
         observed_documents,
+        missing_doc_ids,
     })
 }
 

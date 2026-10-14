@@ -7,6 +7,7 @@ use defra_node::EmbeddedNode;
 use events::DocumentChangeSubscription;
 use gents_protocol::schemas::AGENT_TOOL_CALL_NAME;
 use tokio::sync::watch;
+use tokio::time::Instant;
 
 use super::collection_resolver::CollectionResolver;
 use super::core::sync_state::ClientSyncStateOwner;
@@ -14,6 +15,7 @@ use super::query::{
     fetch_doc_patch, is_transcript_content_collection, load_full_snapshot_with_peer_records,
     load_node_scoped_snapshot_with_peer_records, supports_doc_patch_collection,
 };
+use gents_protocol::schemas::AGENT_REQUEST_NAME;
 
 mod projection_store;
 pub use projection_store::{
@@ -26,9 +28,14 @@ const RESYNC_RETRY_DELAY: Duration = Duration::from_millis(250);
 const FETCH_RETRY_LIMIT: u32 = 3;
 const SESSION_HYDRATION_REQUEST: &str = "SessionHydrationRequest";
 
+fn resync_retry_ready(retry_not_before: Option<Instant>, now: Instant) -> bool {
+    retry_not_before.map_or(true, |deadline| now >= deadline)
+}
+
 enum ObserverWake {
     Changes(events::DocumentChangeBatch),
     Retry,
+    Resync,
 }
 
 pub struct ObserverHandle {
@@ -60,12 +67,14 @@ pub fn spawn_observer_with_selection(
     let metrics = Arc::new(ObserverMetrics::default());
     let metrics_for_task = Arc::clone(&metrics);
     let resolver = Arc::new(CollectionResolver::new());
+    let mut resync_requests = store.subscribe_resync_requests();
 
     let task = tokio::spawn(async move {
         let mut subscription = subscription;
         let mut dirty: HashMap<&'static str, HashSet<String>> = HashMap::new();
         let mut redundant_fetches_pending: HashMap<(String, String), u32> = HashMap::new();
         let mut resync_pending = false;
+        let mut resync_retry_not_before = None;
 
         loop {
             let wake = tokio::select! {
@@ -84,10 +93,22 @@ pub fn spawn_observer_with_selection(
                         break;
                     }
                 },
-                _ = tokio::time::sleep(if resync_pending { RESYNC_RETRY_DELAY } else { FETCH_RETRY_DELAY }), if resync_pending || !dirty.is_empty() => {
+                changed = resync_requests.changed() => match changed {
+                    Ok(()) => ObserverWake::Resync,
+                    Err(_) => break,
+                },
+                _ = async {
+                    match resync_retry_not_before {
+                        Some(deadline) => tokio::time::sleep_until(deadline).await,
+                        None => tokio::time::sleep(FETCH_RETRY_DELAY).await,
+                    }
+                }, if resync_pending || !dirty.is_empty() => {
                     ObserverWake::Retry
                 }
             };
+            if matches!(&wake, ObserverWake::Resync) {
+                resync_pending = true;
+            }
             if let ObserverWake::Changes(msg) = wake {
                 metrics_for_task
                     .events_received
@@ -111,6 +132,7 @@ pub fn spawn_observer_with_selection(
                         &update.doc_id,
                         !update.has_local_write,
                         metrics_for_task.as_ref(),
+                        store.as_ref(),
                     )
                     .await;
                 }
@@ -123,50 +145,89 @@ pub fn spawn_observer_with_selection(
                     metrics_for_task
                         .drop_recoveries
                         .fetch_add(1, Ordering::Relaxed);
+                    // Overflow may have omitted an AgentRequest event from
+                    // this batch, so fence in-flight request reads conservatively.
+                    store.observe_request_event();
+                    store.enqueue_resync_request(None);
                     resync_pending = true;
                 }
             }
-            if resync_pending {
-                dirty.clear();
-                redundant_fetches_pending.clear();
-
-                let captured = store.projection_revision();
-                let scope = selected_node_did_rx.borrow().clone();
+            if resync_pending && resync_retry_ready(resync_retry_not_before, Instant::now()) {
+                resync_retry_not_before = None;
                 let peers = configured_peers.records();
-                let result = match scope {
-                    Some(ref did) => {
-                        load_node_scoped_snapshot_with_peer_records(
-                            node.as_ref(),
-                            did,
-                            &peers,
-                            &requester_did,
-                        )
-                        .await
-                    }
-                    None => {
-                        load_full_snapshot_with_peer_records(node.as_ref(), &peers, &requester_did)
-                            .await
-                    }
+                let (reload_full, requested_scopes) = store.take_resync_requests();
+                let scopes = if reload_full {
+                    vec![None]
+                } else if !requested_scopes.is_empty() {
+                    requested_scopes.into_iter().map(Some).collect()
+                } else {
+                    Vec::new()
                 };
-                match result {
-                    Ok(snapshot) => {
-                        resync_pending =
-                            !store.replace_reloaded_snapshot(captured, scope.as_deref(), snapshot);
-                        if resync_pending {
-                            continue;
+                if reload_full {
+                    dirty.clear();
+                    redundant_fetches_pending.clear();
+                }
+                resync_pending = false;
+                for (scope_index, scope) in scopes.iter().enumerate() {
+                    let (captured, captured_revision) = store.snapshot_with_revision();
+                    let result = match scope.as_deref() {
+                        Some(did) => {
+                            load_node_scoped_snapshot_with_peer_records(
+                                node.as_ref(),
+                                did,
+                                &peers,
+                                &requester_did,
+                            )
+                            .await
                         }
-                        metrics_for_task
-                            .scope_reloads
-                            .fetch_add(1, Ordering::Relaxed);
-                        tracing::debug!(
-                            node_did = ?scope,
-                            "drop-recovery snapshot merged"
-                        );
-                    }
-                    Err(err) => {
-                        tracing::error!(error = %err, "drop-recovery snapshot failed");
+                        None => {
+                            load_full_snapshot_with_peer_records(
+                                node.as_ref(),
+                                &peers,
+                                &requester_did,
+                            )
+                            .await
+                        }
+                    };
+                    match result {
+                        Ok(snapshot) => {
+                            if !store.replace_reloaded_snapshot_at_snapshot(
+                                &captured,
+                                captured_revision.request_event_version,
+                                scope.as_deref(),
+                                snapshot,
+                            ) {
+                                for pending_scope in &scopes[scope_index..] {
+                                    store.enqueue_resync_request(pending_scope.as_deref());
+                                }
+                                resync_pending = true;
+                                resync_retry_not_before = Some(Instant::now() + RESYNC_RETRY_DELAY);
+                                break;
+                            }
+                            metrics_for_task
+                                .scope_reloads
+                                .fetch_add(1, Ordering::Relaxed);
+                            tracing::debug!(
+                                node_did = ?scope,
+                                "drop-recovery snapshot merged"
+                            );
+                        }
+                        Err(err) => {
+                            for pending_scope in &scopes[scope_index..] {
+                                store.enqueue_resync_request(pending_scope.as_deref());
+                            }
+                            resync_pending = true;
+                            resync_retry_not_before = Some(Instant::now() + RESYNC_RETRY_DELAY);
+                            tracing::error!(error = %err, "drop-recovery snapshot failed");
+                            break;
+                        }
                     }
                 }
+                continue;
+            }
+            // While waiting for a failed authoritative reload's deadline,
+            // ingest and fence new events but do not start patch or reload I/O.
+            if resync_pending {
                 continue;
             }
 
@@ -216,62 +277,66 @@ pub fn spawn_observer_with_selection(
                     continue;
                 }
                 let id_refs: Vec<&str> = doc_ids.iter().map(|s| s.as_str()).collect();
+                let (captured_snapshot, captured_revision) = store.snapshot_with_revision();
                 match fetch_doc_patch(node.as_ref(), collection_name, &id_refs).await {
                     Ok(patch) => {
                         let row_count = patch.observed_documents;
                         // A scoped deletion reload cannot recover surviving rows
                         // for other nodes in this same update batch.
                         if patch.store.row_count() > 0 {
-                            store.merge_observer_patch_with_outcome(patch.store);
+                            if store
+                                .merge_observer_patch_at_snapshot(
+                                    &captured_snapshot,
+                                    captured_revision.request_event_version,
+                                    patch.store,
+                                )
+                                .is_none()
+                            {
+                                store.enqueue_resync_request(None);
+                                resync_pending = true;
+                                continue;
+                            }
                         }
-                        if row_count < id_refs.len() {
-                            // Missing documents require replacement, including
-                            // batches that also contain surviving rows.
-                            let captured = store.projection_revision();
-                            let scope = selected_node_did_rx.borrow().clone();
-                            let peers = configured_peers.records();
-                            let reload = match scope.as_deref() {
-                                Some(did) => {
-                                    load_node_scoped_snapshot_with_peer_records(
-                                        node.as_ref(),
-                                        did,
-                                        &peers,
-                                        &requester_did,
-                                    )
-                                    .await
-                                }
-                                None => {
-                                    load_full_snapshot_with_peer_records(
-                                        node.as_ref(),
-                                        &peers,
-                                        &requester_did,
-                                    )
-                                    .await
-                                }
-                            };
-                            match reload {
-                                Ok(snapshot) => {
-                                    if store.replace_reloaded_snapshot(
-                                        captured,
-                                        scope.as_deref(),
-                                        snapshot,
-                                    ) {
-                                        metrics_for_task
-                                            .scope_reloads
-                                            .fetch_add(1, Ordering::Relaxed);
-                                    } else {
-                                        resync_pending = true;
+                        let reload_scopes = match patch.missing_doc_ids.as_deref() {
+                            Some(missing_doc_ids) if !missing_doc_ids.is_empty() => {
+                                let snapshot = store.snapshot();
+                                let missing: HashSet<&str> =
+                                    missing_doc_ids.iter().map(String::as_str).collect();
+                                let mut scopes = HashSet::new();
+                                let mut require_full = false;
+                                for request in &snapshot.requests {
+                                    if request
+                                        .doc_id
+                                        .as_deref()
+                                        .is_some_and(|doc_id| missing.contains(doc_id))
+                                    {
+                                        if let Some(node_did) = request.node_did.as_ref() {
+                                            scopes.insert(node_did.clone());
+                                        } else {
+                                            require_full = true;
+                                        }
                                     }
                                 }
-                                Err(error) => {
-                                    resync_pending = true;
-                                    tracing::warn!(
-                                        collection = collection_name,
-                                        error = %error,
-                                        "authoritative delete reload failed"
-                                    );
+                                if require_full {
+                                    vec![None]
+                                } else {
+                                    let mut scopes: Vec<_> = scopes.into_iter().map(Some).collect();
+                                    scopes.sort();
+                                    scopes
                                 }
                             }
+                            Some(_) => Vec::new(),
+                            None if row_count < id_refs.len() => {
+                                vec![selected_node_did_rx.borrow().clone()]
+                            }
+                            None => Vec::new(),
+                        };
+                        for scope in reload_scopes {
+                            // One observer owner handles authoritative reads and
+                            // applies the same bounded retry deadline to every
+                            // source of a replacement request.
+                            store.request_resync(scope.as_deref());
+                            resync_pending = true;
                         }
                         metrics_for_task
                             .docs_fetched
@@ -302,6 +367,7 @@ pub fn spawn_observer_with_selection(
                                     "fetch_doc_patch retry limit reached; scheduling scoped resync"
                                 );
                                 redundant_fetches_pending.remove(&key);
+                                store.enqueue_resync_request(None);
                                 resync_pending = true;
                             } else {
                                 dirty.entry(collection_name).or_default().insert(id.clone());
@@ -328,11 +394,17 @@ async fn accumulate_dirty(
     doc_id: &str,
     is_relay: bool,
     metrics: &ObserverMetrics,
+    store: &ObservedStore,
 ) {
     match resolver.resolve(node, collection_id).await {
         Ok(Some(name))
             if supports_doc_patch_collection(name) || name == SESSION_HYDRATION_REQUEST =>
         {
+            // Fence prior request reads as soon as collection identity is known,
+            // before this event can be delayed behind the observer's retry timer.
+            if name == AGENT_REQUEST_NAME {
+                store.observe_request_event();
+            }
             if !is_relay && supports_doc_patch_collection(name) {
                 metrics
                     .local_write_redundant_fetches
