@@ -3,7 +3,7 @@
    turn) and the line under it. It holds the draft, so a keystroke renders
    this and not the transcript above it. */
 import { useMemo, useRef, type KeyboardEvent, type RefCallback } from "react";
-import { ArrowDown, Pencil, X } from "lucide-react";
+import { ArrowDown, Check, Pencil, X } from "lucide-react";
 import type { DesktopSessionSnapshot } from "@source-inc/gents-desktop-client";
 import { Button } from "@gents/ui/components/button";
 import { Composer } from "@gents/ui/conversation";
@@ -178,6 +178,13 @@ export function OpenSessionComposer({
             onKeyDown={onKeyDown}
             textareaRef={textarea}
             leading={<ChatFolderPicker folder={chatFolder} onChange={setChatFolder} />}
+            /* while it holds an edit, the chip's X is the way out and the
+               button saves; an edit the agent already took sends as new */
+            clearable={!editing}
+            submitLabel={
+              editing ? (editing.reached ? "Send as a new message" : "Save") : "Send"
+            }
+            submitIcon={editing && !editing.reached ? <Check /> : undefined}
             sending={editing ? edit.saving : sending || (inFlight && !queueing)}
             onStop={!editing && inFlight && !stopping ? stop : undefined}
             placeholder={

@@ -103,6 +103,9 @@ describe("editing a waiting message in the composer", () => {
     await user.click(within(rowFor("a")).getByRole("button", { name: "Edit" }));
     expect(screen.getByTestId("editing-message")).toBeInTheDocument();
     expect(composerBox()).toHaveValue("message a");
+    /* the button saves the edit; the chip's X, not the field's, is the way out */
+    expect(screen.getByRole("button", { name: "Save" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
     await user.clear(composerBox());
     await user.type(composerBox(), "corrected instruction{Enter}");
     await waitFor(() =>
@@ -178,7 +181,7 @@ describe("editing a waiting message in the composer", () => {
     await user.keyboard("{Enter}");
     expect(sendChatMessage).not.toHaveBeenCalled();
     expect(composerBox()).toHaveValue("message a and more");
-    await user.click(screen.getByRole("button", { name: /^Send/ }));
+    await user.click(screen.getByRole("button", { name: "Send as a new message" }));
     await waitFor(() =>
       expect(sendChatMessage).toHaveBeenCalledWith(
         expect.objectContaining({ content: "message a and more" }),
