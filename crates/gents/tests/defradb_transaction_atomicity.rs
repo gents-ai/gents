@@ -1,10 +1,11 @@
 //! Bounded native external-premise experiment: real multi-document
 //! transaction atomicity against the pinned embedded DefraDB node, through
 //! `ConfigAccess::transact_local_write`. Commit/rollback evidence only,
-//! including that a duplicate unique-indexed key fails the transaction and
-//! persists none of its writes when the caller propagates the error: no
-//! claim about host crash durability or remote P2P merge. A blocked
-//! outside read is permitted; a partial pair is not.
+//! including that a duplicate unique-indexed key errors with "violates unique
+//! index" and, when the caller propagates that error, none of the
+//! transaction's writes persists: no claim about host crash durability or
+//! remote P2P merge. A blocked outside read is permitted; a partial pair is
+//! not.
 
 use anyhow::{bail, Context, Result};
 use gents::config_client::{ConfigAccess, ConfigApplyTxn};
@@ -322,11 +323,13 @@ async fn read_then_insert_unique(txn: &ConfigApplyTxn<'_>, key: &str) -> Result<
 /// Premise for read-then-insert with a unique index as the backstop, on the
 /// DefraDB rev pinned in the workspace `Cargo.toml`
 /// (`980190cb3d0e8298e038a07c34dff94fd710893a`): a duplicate insert of a
-/// unique-indexed key inside `transact_local` errors, and when the caller
-/// propagates that error neither the duplicate nor an earlier write in the
-/// same transaction persists.
+/// unique-indexed key errors with "violates unique index", and the error,
+/// propagated out of `transact_local`, rolls back the whole transaction, so
+/// neither the duplicate nor an earlier write in it persists. DefraDB rejects
+/// the insert; the rollback comes from propagating the error, not from
+/// DefraDB aborting the transaction itself.
 #[tokio::test]
-async fn unique_index_violation_aborts_the_transaction() -> Result<()> {
+async fn duplicate_unique_key_errors_and_propagated_error_rolls_back() -> Result<()> {
     let node = disposable_node().await?;
 
     let outcome: Result<()> = ConfigAccess::transact_local(
@@ -361,7 +364,7 @@ async fn unique_index_violation_aborts_the_transaction() -> Result<()> {
 /// row. `transact_local` serializes writers through the per-node mutation
 /// gate, so the second read always sees the first commit: the read is the
 /// guard on this path and the unique index is not reached. Same pinned
-/// DefraDB rev as `unique_index_violation_aborts_the_transaction`.
+/// DefraDB rev as `duplicate_unique_key_errors_and_propagated_error_rolls_back`.
 #[tokio::test]
 async fn concurrent_read_then_insert_leaves_one_row() -> Result<()> {
     let node = disposable_node().await?;
