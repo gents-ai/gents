@@ -86,7 +86,7 @@ async fn assert_rpc_reachable(rpc_url: &str, chain_id: i64) {
 }
 
 pub(crate) async fn bind_eth_target(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     identity: &dyn NodeIdentity,
     target: &InferenceTarget,
     system_prompt: &str,
@@ -108,7 +108,7 @@ pub(crate) async fn bind_eth_target(
     (node_did, agent_id)
 }
 
-async fn create_eth_tool(node: &EmbeddedNode, node_did: &str) {
+async fn create_eth_tool(node: &Arc<EmbeddedNode>, node_did: &str) {
     let tool_id = escape_graphql_string(TOOL_ID);
     let node_did = escape_graphql_string(node_did);
     let rpc_url = escape_graphql_string(&live_rpc());
@@ -187,17 +187,17 @@ async fn eth_tool_live_model_queries_base_sepolia() {
     let db = test_db("eth-tool-live").await;
     let identity: Arc<dyn NodeIdentity> = Arc::new(test_identity("eth-tool-live"));
     let (node_did, agent_id) = bind_eth_target(
-        db.node.as_ref(),
+        &db.node,
         identity.as_ref(),
         &target,
         "You are an Ethereum operator. You have the native tool base-sepolia_query. \
          When asked for chain data, call that tool. Do not guess block numbers.",
     )
     .await;
-    create_eth_tool(db.node.as_ref(), &node_did).await;
+    create_eth_tool(&db.node, &node_did).await;
 
     configure_agent_tools(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         &agent_id,
         None,
@@ -226,12 +226,12 @@ async fn eth_tool_live_model_queries_base_sepolia() {
     .expect("boot agent");
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
-    wait_for_runtime_ready(db.node.as_ref(), &node_did).await;
+    wait_for_runtime_ready(&db.node, &node_did).await;
     let _booted = BootedAgent::new(shutdown_tx, handle, node_did.clone());
 
     let request_id = "eth-live-block-1";
     create_runtime_request(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         &agent_id,
         request_id,
@@ -240,8 +240,7 @@ async fn eth_tool_live_model_queries_base_sepolia() {
     )
     .await;
 
-    let terminal =
-        wait_for_request_terminal(db.node.as_ref(), request_id, Duration::from_secs(180)).await;
+    let terminal = wait_for_request_terminal(&db.node, request_id, Duration::from_secs(180)).await;
     assert_eq!(
         terminal, "completed",
         "live eth query request must complete; last={terminal}"
@@ -259,8 +258,7 @@ async fn eth_tool_live_model_queries_base_sepolia() {
         "live RPC result must be a hex quantity, result={result}"
     );
 
-    let answer =
-        wait_for_assistant_answer(db.node.as_ref(), request_id, Duration::from_secs(30)).await;
+    let answer = wait_for_assistant_answer(&db.node, request_id, Duration::from_secs(30)).await;
     assert!(
         !answer.trim().is_empty(),
         "model must persist a non-empty answer after the live query"

@@ -145,7 +145,7 @@ fn string<'a>(row: &'a Value, field: &str) -> Result<&'a str> {
 
 async fn configure(
     access: &ConfigAccess,
-    node: &gents::defra_node::EmbeddedNode,
+    node: &std::sync::Arc<gents::defra_node::EmbeddedNode>,
     owner: &str,
     endpoints: &[String; 2],
 ) -> Result<()> {

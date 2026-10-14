@@ -96,7 +96,7 @@ async fn live_interrupt_mid_stream_on_openai_compatible() -> Result<()> {
     let request_id = "req-live-openai-interrupt";
     let session_id = "session-live-openai-interrupt";
     let request_doc_id = create_runtime_request(
-        db.node.as_ref(),
+        &db.node,
         agent.node_did.as_str(),
         LIVE_AGENT_ID,
         request_id,
@@ -110,8 +110,7 @@ async fn live_interrupt_mid_stream_on_openai_compatible() -> Result<()> {
     // owner until a TEXT (not reasoning) prefix is visible. Any conflicted or
     // invalid canonical state fails immediately inside the observation.
     let (observed_row, before_interrupt, provider_scopes) =
-        wait_for_visible_text_prefix(db.node.as_ref(), &request_doc_id, MIN_VISIBLE_PREFIX_CHARS)
-            .await?;
+        wait_for_visible_text_prefix(&db.node, &request_doc_id, MIN_VISIBLE_PREFIX_CHARS).await?;
     let node_did = observed_row
         .node_did
         .clone()
@@ -141,7 +140,7 @@ async fn live_interrupt_mid_stream_on_openai_compatible() -> Result<()> {
     // Physical request cancellation through the public interrupt owner, bound
     // to the exact physical request and principal scope observed above.
     interrupt_request_by_doc_id(
-        db.node.as_ref(),
+        &db.node,
         &request_doc_id,
         &node_did,
         observed_row.requester_did.as_deref(),
@@ -149,14 +148,14 @@ async fn live_interrupt_mid_stream_on_openai_compatible() -> Result<()> {
     .await
     .expect("interrupt_request_by_doc_id should latch interrupt_requested_at");
 
-    wait_for_request_lifecycle_state(db.node.as_ref(), &request_doc_id, "interrupted").await;
-    let call = wait_for_inference_call_state(db.node.as_ref(), request_id, "cancelled").await;
+    wait_for_request_lifecycle_state(&db.node, &request_doc_id, "interrupted").await;
+    let call = wait_for_inference_call_state(&db.node, request_id, "cancelled").await;
     assert_eq!(call.failure_reason.as_deref(), Some("Cancelled"));
 
     // The interrupted terminal row must keep the exact execution owner observed
     // before the interrupt. It may publish a partial header or retain the
     // partial source with the canonical `NoMessage` selection.
-    let row = wait_for_interrupted_terminal_row(db.node.as_ref(), &request_doc_id).await?;
+    let row = wait_for_interrupted_terminal_row(&db.node, &request_doc_id).await?;
     assert_eq!(
         row.execution_generation.as_deref(),
         Some(execution_generation.as_str()),
@@ -167,7 +166,7 @@ async fn live_interrupt_mid_stream_on_openai_compatible() -> Result<()> {
         .clone()
         .expect("interrupted terminal row carries terminal_output");
     assert_terminal_partial(
-        db.node.as_ref(),
+        &db.node,
         &row,
         &request_doc_id,
         &terminal_output,
@@ -178,7 +177,7 @@ async fn live_interrupt_mid_stream_on_openai_compatible() -> Result<()> {
     // Stability: after the interrupted lifecycle is persisted, the terminal
     // selection and its exact reconstruction never move.
     tokio::time::sleep(Duration::from_millis(750)).await;
-    let settled_row = fetch_request_row(db.node.as_ref(), &request_doc_id).await?;
+    let settled_row = fetch_request_row(&db.node, &request_doc_id).await?;
     assert_eq!(
         settled_row.lifecycle_state, row.lifecycle_state,
         "interrupted lifecycle must stay settled"
@@ -192,7 +191,7 @@ async fn live_interrupt_mid_stream_on_openai_compatible() -> Result<()> {
         "execution owner must stay settled after the interrupted lifecycle persists"
     );
     assert_terminal_partial(
-        db.node.as_ref(),
+        &db.node,
         &settled_row,
         &request_doc_id,
         &terminal_output,
@@ -525,7 +524,7 @@ async fn boot_interrupt_agent(db: &TestDb, target: &InferenceTarget) -> Result<B
     // Install the actual node-DID-scoped live fixture documents the runtime
     // reconciler resolves: backend, profile, sampling, context, behavior, and
     // the principal selecting the behavior as default.
-    upsert_live_backend(db.node.as_ref(), &node_did, target).await;
+    upsert_live_backend(&db.node, &node_did, target).await;
 
     let agent = Gents::from_default_agent_documents(
         db.node.clone(),
@@ -540,7 +539,7 @@ async fn boot_interrupt_agent(db: &TestDb, target: &InferenceTarget) -> Result<B
     let node_did = agent.node_did().to_string();
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
-    wait_for_runtime_ready(db.node.as_ref(), &node_did).await;
+    wait_for_runtime_ready(&db.node, &node_did).await;
 
     Ok(BootedAgent::new(shutdown_tx, handle, node_did))
 }
@@ -551,7 +550,7 @@ async fn boot_interrupt_agent(db: &TestDb, target: &InferenceTarget) -> Result<B
 /// default behavior resolves through, with the principal's
 /// `default_agent_id` bound to `LIVE_AGENT_ID`. The profile selects the
 /// target's model with high reasoning effort.
-async fn upsert_live_backend(node: &EmbeddedNode, node_did: &str, target: &InferenceTarget) {
+async fn upsert_live_backend(node: &Arc<EmbeddedNode>, node_did: &str, target: &InferenceTarget) {
     let mut principal = ensure_node(node, node_did)
         .await
         .expect("ensure live interrupt fixture principal");
@@ -630,7 +629,7 @@ async fn upsert_live_backend(node: &EmbeddedNode, node_did: &str, target: &Infer
 }
 
 async fn apply_fixture_documents(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     documents: Vec<(Collection, serde_json::Value)>,
 ) {
     use gents::config_client::{
