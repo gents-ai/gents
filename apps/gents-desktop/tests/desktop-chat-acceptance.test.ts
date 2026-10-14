@@ -9,6 +9,7 @@ import { createChatActions } from "../src/hooks/chatActions";
 import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
 import { selection } from "../src/hooks/selectionStore";
 import { admittingProjection, historyOf, shellStores } from "./shell-fixture";
+import { deferred } from "./deferred";
 
 function fixture(
   send: () => Promise<unknown>,
@@ -46,16 +47,6 @@ function fixture(
     pendingTurn: () => stores.chat.getState().optimisticPendingTurn,
     ...effects,
   };
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
 }
 
 describe("canonical chat submission acceptance", () => {

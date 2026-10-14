@@ -25,6 +25,7 @@ import {
 import { RenameDialog } from "../AgentsScreen";
 import { useApp } from "@/app/AppContext";
 import { SUBSCRIPTION } from "./inferenceKinds";
+import { errorText } from "../../../lib/errorText";
 
 /* the stored account a subscription backend runs on: the one with the
    backend's reference; no reference is the provider's original account */
@@ -253,9 +254,7 @@ export function AccountRows({
       toast("Disconnected");
       setConfirmingDisconnect(false);
     } catch (error) {
-      toast(
-        `Disconnect failed: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      toast(`Disconnect failed: ${errorText(error)}`);
     } finally {
       setBusy(false);
     }

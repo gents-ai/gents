@@ -8,16 +8,7 @@ import type {
 } from "@source-inc/gents-desktop-client";
 import { createConfigActions } from "../src/hooks/configActions";
 import { lifecycleFor } from "./shell-fixture";
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason: unknown) => void;
-  const promise = new Promise<T>((next, fail) => {
-    resolve = next;
-    reject = fail;
-  });
-  return { promise, reject, resolve };
-}
+import { deferred } from "./deferred";
 
 function snapshot(label: string): DesktopClientSnapshot {
   return {

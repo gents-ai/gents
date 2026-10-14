@@ -10,6 +10,7 @@ import type { ShellProjection } from "../src/hooks/shellProjection";
 import { QueuedInputs } from "../src/ui/screens/TranscriptInputs";
 import { deployment } from "./config-panel-wiring/fixtures";
 import { shellStores } from "./shell-fixture";
+import { deferred } from "./deferred";
 
 const entry = (id: string, group: string | null = "same"): PendingQueueEntryView => ({
   requestDocId: `doc-${id}`,
@@ -27,16 +28,6 @@ const turn = (row: PendingQueueEntryView): PendingTurnView => ({
   origin: null,
   createdAt: null,
 });
-
-function deferred() {
-  let resolve!: () => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<void>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-}
 
 function rowFor(id: string) {
   const row = screen

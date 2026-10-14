@@ -15,14 +15,12 @@ import type {
 import { useApp } from "@/app/AppContext";
 import { ChoiceRow } from "./editors";
 import { Group, Row } from "./rows";
-
-const message = (error: unknown) =>
-  error instanceof Error ? error.message : String(error);
+import { errorText } from "../../../lib/errorText";
 
 /* An install or update that would replace documents someone edited stops
    and names them; the person chooses to keep or overwrite. */
 function editedChoice(error: unknown): boolean {
-  return message(error).includes("--overwrite");
+  return errorText(error).includes("--overwrite");
 }
 
 export function PacksPanel() {
@@ -44,7 +42,7 @@ export function PacksPanel() {
       setInstalled(report.packs);
     } catch (error) {
       setInstalled([]);
-      toast.error(message(error));
+      toast.error(errorText(error));
     }
     try {
       const report = await actions.listPackPluginSlots();
@@ -52,7 +50,7 @@ export function PacksPanel() {
       setProfiles(report.profiles.filter((profile) => profile.usable));
     } catch (error) {
       setSlots([]);
-      toast.error(message(error));
+      toast.error(errorText(error));
     }
     try {
       const me = await actions.readPackAccount();
@@ -74,7 +72,7 @@ export function PacksPanel() {
       setHasMore(report.has_more);
       setPage(next);
     } catch (error) {
-      toast.error(message(error));
+      toast.error(errorText(error));
     } finally {
       setBusy(null);
     }
@@ -91,7 +89,7 @@ export function PacksPanel() {
       toast.success(`Installed ${pack}`);
       await refresh();
     } catch (error) {
-      const text = message(error);
+      const text = errorText(error);
       if (
         text.includes("--grant-authority") &&
         window.confirm(`${text}\n\nAllow it?`)
@@ -119,11 +117,11 @@ export function PacksPanel() {
     } catch (error) {
       if (editedChoice(error)) {
         const overwrite = window.confirm(
-          `${message(error)}\n\nOK replaces them, Cancel keeps your edits.`,
+          `${errorText(error)}\n\nOK replaces them, Cancel keeps your edits.`,
         );
         return update(pack, overwrite ? "overwrite" : "keep");
       }
-      toast.error(message(error));
+      toast.error(errorText(error));
     } finally {
       setBusy(null);
     }
@@ -137,7 +135,7 @@ export function PacksPanel() {
       toast.success(`Removed ${pack}`);
       await refresh();
     } catch (error) {
-      toast.error(message(error));
+      toast.error(errorText(error));
     } finally {
       setBusy(null);
     }
@@ -149,7 +147,7 @@ export function PacksPanel() {
       await actions.bindPackPlugin(plugin, profile || null);
       await refresh();
     } catch (error) {
-      toast.error(message(error));
+      toast.error(errorText(error));
     } finally {
       setBusy(null);
     }
@@ -162,14 +160,16 @@ export function PacksPanel() {
       setToken("");
       await refresh();
     } catch (error) {
-      toast.error(message(error));
+      toast.error(errorText(error));
     } finally {
       setBusy(null);
     }
   }
 
   async function signOut() {
-    await actions.signOutOfPackRegistry().catch((error) => toast.error(message(error)));
+    await actions
+      .signOutOfPackRegistry()
+      .catch((error) => toast.error(errorText(error)));
     await refresh();
   }
 

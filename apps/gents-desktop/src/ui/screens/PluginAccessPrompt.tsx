@@ -17,6 +17,7 @@ import type {
   PluginApprovalRequest,
 } from "@source-inc/gents-desktop-client";
 import { useApp } from "@/app/AppContext";
+import { errorText } from "../../lib/errorText";
 
 const POLL_MS = 1000;
 
@@ -41,7 +42,7 @@ export function PluginAccessPrompt() {
       setQuestion(requests[0] ?? null);
     } catch (error) {
       if (!current()) return;
-      const text = error instanceof Error ? error.message : String(error);
+      const text = errorText(error);
       if (failed.current !== text) toast.error(text);
       failed.current = text;
     } finally {
@@ -63,7 +64,7 @@ export function PluginAccessPrompt() {
       await actions.decidePluginApproval(question.id, decision);
       setQuestion(null);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : String(error));
+      toast.error(errorText(error));
     } finally {
       answering.current = false;
     }

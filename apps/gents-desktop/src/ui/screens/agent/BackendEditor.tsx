@@ -35,6 +35,7 @@ import { toastFailure } from "@/lib/failure";
 import { healthy, isSubscriptionKind, KINDS, SUBSCRIPTION } from "./inferenceKinds";
 import { UsageRows } from "./ProviderUsage";
 import { accountWarnings, AccountRows, backendAccount } from "./ProviderAccounts";
+import { errorText } from "../../../lib/errorText";
 
 export function backendSave(
   nodeDid: string,
@@ -285,9 +286,7 @@ export function BackendEditor({
                 } catch (error) {
                   if (!current()) return;
                   setProbe("probe failed");
-                  toast(
-                    `Probe failed: ${error instanceof Error ? error.message : String(error)}`,
-                  );
+                  toast(`Probe failed: ${errorText(error)}`);
                 }
               }}
             >

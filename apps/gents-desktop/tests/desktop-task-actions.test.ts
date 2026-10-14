@@ -4,16 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createTaskActions } from "../src/hooks/taskActions";
 import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
 import { createSelectionStore, selection } from "../src/hooks/selectionStore";
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-}
+import { deferred } from "./deferred";
 
 function fixture(runTask: () => Promise<unknown>, runSchedule = runTask) {
   const store = createSelectionStore();

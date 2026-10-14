@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { ToolServiceToolView } from "@source-inc/gents-desktop-client";
 import { Button } from "@gents/ui/components/button";
 import { DocumentSelection } from "./DocumentSelection";
+import { errorText } from "../../../lib/errorText";
 
 export function RemoteToolDiscovery({
   discover,
@@ -25,7 +26,7 @@ export function RemoteToolDiscovery({
           try {
             setTools(await discover());
           } catch (error) {
-            setError(error instanceof Error ? error.message : String(error));
+            setError(errorText(error));
           } finally {
             setBusy(false);
           }

@@ -13,16 +13,7 @@ import App from "../src/App";
 import { StartupScreen } from "../src/components/StartupScreen";
 import { renderIn, testApp } from "./app-fixture";
 import { bootstrap, deployment } from "./config-panel-wiring/fixtures";
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, reject, resolve };
-}
+import { deferred } from "./deferred";
 
 const savedPeer = {
   peerId: deployment.peerId,
