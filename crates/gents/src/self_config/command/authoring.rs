@@ -7,8 +7,8 @@
 //! comes from the invoking agent's effective file tools, through the same
 //! admission `skill import` and `discovery scan` use: the caller path is
 //! resolved inside the effective tool root and never expands it. Scaffold
-//! and check may write under that root, so they require readwrite file
-//! tools; verify is observational and needs only read. `pack build` and
+//! may write under that root, so it requires readwrite file tools; check
+//! and verify are observational and need only read. `pack build` and
 //! `pack test` are refused with the owner that holds them, never run here:
 //! plugin compilation shells out to language toolchains through the
 //! [`crate::pack::authoring::build::PluginCompiler`] seam, whose
@@ -129,9 +129,9 @@ fn parse_authoring_args(verb: &str, argv: &[String]) -> Result<AuthoringCall> {
     }
 }
 
-/// Effective file tools admit authoring: `write` calls need readwrite
-/// (scaffold writes the template; check may rewrite a graph pack's README
-/// topology), read calls need read. Off refuses both.
+/// Effective file tools admit authoring: write calls need readwrite
+/// (scaffold writes the template files), read calls need read. Off refuses
+/// both.
 fn ensure_mode(
     mode: crate::tool_surface::FileToolMode,
     write: bool,
@@ -143,7 +143,7 @@ fn ensure_mode(
             "pack {operation} requires effective file permission on the invoking agent; the effective file tools are Off. Grant file tools, or run pack authoring from the operator CLI"
         ),
         (true, FileToolMode::ReadOnly) => bail!(
-            "pack {operation} may write inside the tool root (scaffold writes the template files; check may rewrite a graph pack's README topology), so it requires readwrite file tools, not the current read-only mode"
+            "pack {operation} may write inside the tool root (scaffold writes the template files), so it requires readwrite file tools, not the current read-only mode"
         ),
         _ => Ok(()),
     }
@@ -217,18 +217,17 @@ impl ConfigCommandTool {
             "template": report.template,
             "dir": relative,
             "files": report.files,
-            "next": json!({"argv":["pack","check",relative]}),
+            "next_call": json!({"argv":["pack","check",relative]}),
             "note": "Scaffolded inside the effective tool root. The pack is not installed and nothing runs; check it, then build plugin artifacts with `gents pack build` from the operator CLI before installing.",
         }
-        .pretty())
+        .pretty()?)
     }
 
     async fn check(&self, dir: Option<&str>) -> Result<String> {
-        // Admission stays write-level even though the shared check writes
-        // nothing itself: the topology rewrite (`pack graph --write-readme`
-        // semantics) is one integration step away, and read-only callers
-        // must not assume this verb never writes.
-        let context = self.authoring_paths("check", true).await?;
+        // Observational: the shared check reads and validates only (any
+        // topology rewrite is a separate integration step), so read-only
+        // file tools suffice.
+        let context = self.authoring_paths("check", false).await?;
         let dir = context.resolve_existing_dir(dir)?;
         let report = check_dir(&dir).await;
         let (validated, note) = check_outcome_fields(&report);
@@ -242,7 +241,7 @@ impl ConfigCommandTool {
             "validated": validated,
             "note": note,
         }
-        .pretty())
+        .pretty()?)
     }
 
     async fn verify(&self, pack: &str) -> Result<String> {
@@ -255,12 +254,14 @@ impl ConfigCommandTool {
             context.display_path(&path)
         );
         let header = verify_pack_file(&path)?;
+        let resolved = context.display_path(&path);
         Ok(ordered! {
             "verified": true,
             "header": serde_json::to_value(&header)?,
-            "note": "Verified the archive in place; nothing was stored or installed. Install with [\"pack\",\"install\"].",
+            "next_call": json!({"argv":["pack","preview","install",resolved]}),
+            "note": "Verified the archive in place; nothing was stored or installed.",
         }
-        .pretty())
+        .pretty()?)
     }
 }
 
@@ -381,7 +382,11 @@ mod tests {
         let context =
             crate::toolset::ToolContext::new(root.path().to_path_buf(), false).unwrap();
         let inside = admit_scaffold_dir(&context, "review_toolkit").unwrap();
-        assert!(inside.starts_with(root.path()));
+        // ToolContext::new canonicalizes the root, so containment is judged
+        // against the canonical root, not the caller alias (e.g. /var is a
+        // symlink to /private/var on macOS).
+        let canonical_root = std::fs::canonicalize(root.path()).unwrap();
+        assert!(inside.starts_with(&canonical_root));
         for escape in ["../escape", "/etc/gents_escape"] {
             let error = admit_scaffold_dir(&context, escape).unwrap_err();
             let message = format!("{error:#}");
@@ -407,10 +412,13 @@ mod tests {
                 "{message} should name {expected}"
             );
         }
-        let error = ensure_mode(FileToolMode::Off, false, "verify").unwrap_err();
-        let message = format!("{error:#}");
-        assert!(message.contains("file permission"), "{message}");
-        assert!(ensure_mode(FileToolMode::ReadOnly, false, "verify").is_ok());
+        // check and verify are observational: read-only file tools suffice.
+        for operation in ["check", "verify"] {
+            let error = ensure_mode(FileToolMode::Off, false, operation).unwrap_err();
+            let message = format!("{error:#}");
+            assert!(message.contains("file permission"), "{message}");
+            assert!(ensure_mode(FileToolMode::ReadOnly, false, operation).is_ok());
+        }
     }
 
     #[test]
