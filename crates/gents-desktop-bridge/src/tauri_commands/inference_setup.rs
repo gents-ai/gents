@@ -1345,6 +1345,8 @@ pub(crate) async fn desktop_grok_login<R: Runtime>(
 
 #[cfg(test)]
 mod provider_account_tests {
+    use std::sync::Arc;
+
     use super::*;
 
     #[test]

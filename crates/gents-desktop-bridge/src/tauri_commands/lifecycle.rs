@@ -839,7 +839,7 @@ mod tests {
     #[tokio::test]
     async fn cancelled_exclusion_waiter_keeps_lifecycle_guard_until_shutdown_owner_returns() {
         let fixture: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../../gents/tests/fixtures/native_claim_lifetime.json"
+            "../../../gents/tests/fixtures/native_claim_lifetime.json"
         ))
         .expect("generated native claim lifetime fixture");
         let case = fixture

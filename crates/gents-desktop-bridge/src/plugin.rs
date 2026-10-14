@@ -53,9 +53,10 @@ pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
                     app.state::<DesktopAppState>().window_event(label, event);
                 }
                 // Tauri ignores prevent_exit for its restart code, so that path cannot await shutdown.
-                tauri::RunEvent::ExitRequested { code, api }
-                    if code != Some(tauri::RESTART_EXIT_CODE) =>
+                tauri::RunEvent::ExitRequested { code, api, .. }
+                    if *code != Some(tauri::RESTART_EXIT_CODE) =>
                 {
+                    let exit_code = *code;
                     match exit_owner.request() {
                         ExitRequest::StartShutdown => {
                             api.prevent_exit();
@@ -75,7 +76,7 @@ pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
                                     );
                                 }
                                 exit_owner.complete();
-                                app.exit(code.unwrap_or(0));
+                                app.exit(exit_code.unwrap_or(0));
                             });
                         }
                         ExitRequest::WaitForShutdown => api.prevent_exit(),
@@ -224,20 +225,6 @@ impl ExitRequestOwner {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{ExitRequest, ExitRequestOwner};
-
-    #[test]
-    fn exit_is_deferred_once_until_the_existing_shutdown_owner_finishes() {
-        let owner = ExitRequestOwner::default();
-        assert_eq!(owner.request(), ExitRequest::StartShutdown);
-        assert_eq!(owner.request(), ExitRequest::WaitForShutdown);
-        owner.complete();
-        assert_eq!(owner.request(), ExitRequest::Allow);
-    }
-}
-
 fn register_window<R: Runtime>(webview: tauri::Webview<R>) {
     let window = webview.window();
     window
@@ -268,6 +255,15 @@ mod tests {
     use gents_desktop_core::home_reset::{
         lock_browser_store, lock_desktop_process, BrowserStoreLock, DesktopProcessLock,
     };
+
+    #[test]
+    fn exit_is_deferred_once_until_the_existing_shutdown_owner_finishes() {
+        let owner = ExitRequestOwner::default();
+        assert_eq!(owner.request(), ExitRequest::StartShutdown);
+        assert_eq!(owner.request(), ExitRequest::WaitForShutdown);
+        owner.complete();
+        assert_eq!(owner.request(), ExitRequest::Allow);
+    }
 
     #[test]
     fn browser_store_and_process_locks_are_both_held_after_setup() {

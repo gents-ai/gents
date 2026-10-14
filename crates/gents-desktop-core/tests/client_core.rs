@@ -550,7 +550,6 @@ async fn passive_hydration_observation_preserves_rejection_until_explicit_retry(
 
     let peer_id_before_restart = core.local_peer_id().to_string();
     Arc::new(core).shutdown().await?;
-    drop(core);
     let core =
         ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_simulated_route())
             .await?;

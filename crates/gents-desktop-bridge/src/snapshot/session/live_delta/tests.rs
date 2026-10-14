@@ -5,6 +5,7 @@ use gents_protocol::output::{
     OutputSegment, OutputSource, OutputWriter, SegmentRun, StreamDeclaration, StreamPayload,
 };
 use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
+use std::sync::Arc;
 
 fn rows() -> ClientStoreRows {
     ClientStoreRows {
