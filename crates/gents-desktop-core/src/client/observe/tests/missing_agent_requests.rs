@@ -1,6 +1,6 @@
 use super::*;
-use crate::client::store::{AgentRequestRow, ClientStoreRows};
-use events::Bus;
+use crate::client::store::ClientStoreRows;
+use gents_protocol::row::AgentRequestRow;
 use gents_protocol::schemas::AGENT_REQUEST_NAME;
 
 async fn publish_request_invalidation(node: &EmbeddedNode, doc_id: &str) {
@@ -10,7 +10,9 @@ async fn publish_request_invalidation(node: &EmbeddedNode, doc_id: &str) {
         .expect("AgentRequest schema installed")
         .collection_id;
     let block = b"observer missing-request invalidation";
-    let cid = defra_core::block::generate_cid_from_bytes(block).expect("test invalidation CID");
+    let cid = "QmYwAPJzv5CZsnAzt8auVZRnGi2C6ihTNdEWbj5Qigx7Ha"
+        .parse()
+        .expect("test invalidation CID");
     node.event_bus()
         .publish(events::Message::update(events::Update::new(
             doc_id.to_owned(),
@@ -71,7 +73,7 @@ async fn an_uncached_missing_request_does_not_reload_the_projection() {
     let mut store_version = store.subscribe();
     let public_version_before = *store_version.borrow_and_update();
 
-    publish_request_invalidation(node.as_ref(), "not-yet-replicated-request").await;
+    publish_request_invalidation(node.as_ref(), "bae-37b10157-24d3-559b-8646-b82dedbdfb35").await;
     tokio::time::timeout(Duration::from_secs(5), async {
         while store.projection_revision().request_event_version
             == revision_before.request_event_version
@@ -134,17 +136,23 @@ async fn scoped_resync_request_reloads_that_node_through_the_observer_owner() {
 async fn a_missing_cached_request_still_reloads_and_removes_the_request() {
     let (_tempdir, node, store, handle) =
         build_observer_fixture_for_selection(Some("did:test:selected".to_owned())).await;
-    let missing_doc_id = "cached-request-now-deleted";
+    let missing_doc_id = "bae-7ae82f02-e54f-5f76-bbd5-f03cf03d0951";
     let mut cached = AgentRequestRow::default();
     cached.doc_id = Some(missing_doc_id.to_owned());
     cached.request_id = "cached-request".to_owned();
     cached.node_did = Some("did:test:cached-request".to_owned());
+    cached.purpose = Some(gents_protocol::request_admission::RequestPurpose::Normal);
     store.merge_observer_patch(crate::client::store::ClientStore::from_rows(
         ClientStoreRows {
             requests: vec![cached],
             ..ClientStoreRows::default()
         },
     ));
+    assert!(store
+        .snapshot()
+        .requests
+        .iter()
+        .any(|row| row.doc_id.as_deref() == Some(missing_doc_id)));
 
     publish_request_invalidation(node.as_ref(), missing_doc_id).await;
     seed_node(node.as_ref(), "did:test:observer-after-delete").await;
