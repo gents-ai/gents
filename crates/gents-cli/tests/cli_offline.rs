@@ -12,6 +12,8 @@ mod cli_config_validate;
 mod cli_eval;
 #[path = "suites/cli_help.rs"]
 mod cli_help;
+#[path = "suites/cli_pack.rs"]
+mod cli_pack;
 #[path = "suites/cli_provision.rs"]
 mod cli_provision;
 #[path = "suites/cli_schema.rs"]
