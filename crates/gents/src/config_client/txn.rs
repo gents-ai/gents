@@ -179,6 +179,9 @@ struct SuccessfulMutationFault {
     write_gate_observation: Option<Arc<WriteGateObservation>>,
     read_storage_failure: Option<&'static str>,
     read_pause: Option<(&'static str, Arc<tokio::sync::Notify>)>,
+    fail_rollback: bool,
+    retry_backoff_reached: Option<Arc<tokio::sync::Notify>>,
+    cleanup_scheduled: Option<Arc<AtomicBool>>,
 }
 
 #[cfg(test)]
@@ -218,6 +221,31 @@ async fn after_successful_mutation_for_test() -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+fn fail_rollback_for_test() -> bool {
+    SUCCESSFUL_MUTATION_FAULT
+        .try_with(|fault| fault.fail_rollback)
+        .unwrap_or(false)
+}
+
+#[cfg(test)]
+fn retry_backoff_reached_for_test() {
+    let _ = SUCCESSFUL_MUTATION_FAULT.try_with(|fault| {
+        if let Some(reached) = fault.retry_backoff_reached.as_ref() {
+            reached.notify_one();
+        }
+    });
+}
+
+#[cfg(test)]
+fn mark_cleanup_scheduled_for_test() {
+    let _ = SUCCESSFUL_MUTATION_FAULT.try_with(|fault| {
+        if let Some(scheduled) = fault.cleanup_scheduled.as_ref() {
+            scheduled.store(true, Ordering::Release);
+        }
+    });
 }
 
 // External storage premise, test-only: an embedded commit may be durable while
@@ -408,6 +436,8 @@ impl Drop for RollbackOnDrop {
                         }
                     }
                 });
+                #[cfg(test)]
+                mark_cleanup_scheduled_for_test();
             }
         }
     }
@@ -601,6 +631,9 @@ impl<'a> ConfigApplyTxn<'a> {
             write_gate_observation: None,
             read_storage_failure: None,
             read_pause: None,
+            fail_rollback: false,
+            retry_backoff_reached: None,
+            cleanup_scheduled: None,
         });
         let output = SUCCESSFUL_MUTATION_FAULT
             .scope(Arc::clone(&fault), future)
@@ -687,6 +720,9 @@ impl<'a> ConfigApplyTxn<'a> {
             write_gate_observation: None,
             read_storage_failure: None,
             read_pause: None,
+            fail_rollback: false,
+            retry_backoff_reached: None,
+            cleanup_scheduled: None,
         });
         let output = SUCCESSFUL_MUTATION_FAULT
             .scope(Arc::clone(&fault), future)
@@ -719,6 +755,9 @@ impl<'a> ConfigApplyTxn<'a> {
             write_gate_observation: None,
             read_storage_failure: None,
             read_pause: None,
+            fail_rollback: false,
+            retry_backoff_reached: None,
+            cleanup_scheduled: None,
         });
         let output = SUCCESSFUL_MUTATION_FAULT
             .scope(Arc::clone(&fault), future)
@@ -756,6 +795,9 @@ impl<'a> ConfigApplyTxn<'a> {
             })),
             read_storage_failure: None,
             read_pause: None,
+            fail_rollback: false,
+            retry_backoff_reached: None,
+            cleanup_scheduled: None,
         });
         SUCCESSFUL_MUTATION_FAULT.scope(fault, future).await
     }
@@ -777,6 +819,9 @@ impl<'a> ConfigApplyTxn<'a> {
             write_gate_observation: None,
             read_storage_failure: Some(marker),
             read_pause: None,
+            fail_rollback: false,
+            retry_backoff_reached: None,
+            cleanup_scheduled: None,
         });
         SUCCESSFUL_MUTATION_FAULT.scope(fault, future).await
     }
@@ -799,6 +844,32 @@ impl<'a> ConfigApplyTxn<'a> {
             write_gate_observation: None,
             read_storage_failure: None,
             read_pause: Some((marker, reached)),
+            fail_rollback: false,
+            retry_backoff_reached: None,
+            cleanup_scheduled: None,
+        });
+        SUCCESSFUL_MUTATION_FAULT.scope(fault, future).await
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn with_rollback_failure_retry_boundary<F: Future>(
+        reached: Arc<tokio::sync::Notify>,
+        cleanup_scheduled: Arc<AtomicBool>,
+        future: F,
+    ) -> F::Output {
+        let fault = Arc::new(SuccessfulMutationFault {
+            fail_after: None,
+            count: AtomicUsize::new(0),
+            lose_receipt: false,
+            receipt_operation: None,
+            receipt_fired: AtomicBool::new(false),
+            pause: None,
+            write_gate_observation: None,
+            read_storage_failure: None,
+            read_pause: None,
+            fail_rollback: true,
+            retry_backoff_reached: Some(reached),
+            cleanup_scheduled: Some(cleanup_scheduled),
         });
         SUCCESSFUL_MUTATION_FAULT.scope(fault, future).await
     }
@@ -1124,6 +1195,10 @@ impl<'a> ConfigApplyTxn<'a> {
     }
 
     async fn rollback_inner(&mut self) -> Result<()> {
+        #[cfg(test)]
+        if fail_rollback_for_test() {
+            return Err(anyhow::anyhow!("injected rollback failure"));
+        }
         let result = match &self.backend {
             TxnBackend::Http {
                 endpoint,
@@ -1511,6 +1586,9 @@ where
                         affected_documents: Some(0),
                         rollback,
                     });
+                    drop(txn);
+                    #[cfg(test)]
+                    retry_backoff_reached_for_test();
                     tokio::time::sleep(backoff).await;
                 }
                 FailureDisposition::Fail => {
@@ -2058,6 +2136,10 @@ mod owner_tests;
 #[cfg(test)]
 #[path = "receipt_owner_tests.rs"]
 mod receipt_owner_tests;
+
+#[cfg(test)]
+#[path = "txn_stream_waiter_conformance.rs"]
+mod stream_waiter_conformance;
 
 #[cfg(test)]
 mod variable_tests {

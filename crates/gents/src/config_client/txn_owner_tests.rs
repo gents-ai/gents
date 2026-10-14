@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, HashSet};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -750,6 +750,74 @@ async fn stream_owned_gate_waiter_is_copolled_with_flush() {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .is_none());
+}
+
+#[tokio::test]
+async fn failed_rollback_cleanup_starts_before_transaction_retry_backoff() {
+    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node_for_begin = &node;
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let attempts_for_transaction = Arc::clone(&attempts);
+    let cleanup_scheduled = Arc::new(AtomicBool::new(false));
+    let retry_boundary = Arc::new(Notify::new());
+    let cancellation_scheduled = Arc::new(Mutex::new(None::<Arc<AtomicBool>>));
+    let cancellation_scheduled_for_begin = Arc::clone(&cancellation_scheduled);
+
+    let mut transaction = Box::pin(super::ConfigApplyTxn::with_rollback_failure_retry_boundary(
+        Arc::clone(&retry_boundary),
+        Arc::clone(&cleanup_scheduled),
+        super::transact_owned(
+            "test.rollback_before_retry_backoff",
+            crate::config_client::write_telemetry::WriteBackend::Embedded,
+            super::TransactionMode::Idempotent(IdempotentTransactionRetry::Standard),
+            move |operation, cancellation_rollback_scheduled| {
+                let node = node_for_begin;
+                let attempts = Arc::clone(&attempts_for_transaction);
+                let retained = Arc::clone(&cancellation_scheduled_for_begin);
+                Box::pin(async move {
+                    attempts.fetch_add(1, Ordering::SeqCst);
+                    *lock(&retained) = Some(Arc::clone(&cancellation_rollback_scheduled));
+                    ConfigApplyTxn::begin_local_owned(
+                        node.as_ref(),
+                        None,
+                        operation,
+                        cancellation_rollback_scheduled,
+                        super::EmbeddedTransactionPurpose::Mutation,
+                    )
+                    .await
+                })
+            },
+            |_| {
+                Box::pin(async {
+                    Err::<(), anyhow::Error>(super::retry::transaction_storage_failure(
+                        anyhow::anyhow!("retry after a failed transaction callback"),
+                    ))
+                })
+            },
+        ),
+    ));
+
+    tokio::time::timeout(Duration::from_secs(30), async {
+        tokio::select! {
+            () = retry_boundary.notified() => {}
+            result = &mut transaction => panic!("transaction completed before retry backoff: {result:?}"),
+        }
+    })
+    .await
+    .expect("transaction did not reach its retry boundary");
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    assert!(
+        lock(&cancellation_scheduled)
+            .as_ref()
+            .is_some_and(|scheduled| scheduled.load(Ordering::Acquire)),
+        "the transaction begin must publish its cleanup owner before retry"
+    );
+    assert!(
+        cleanup_scheduled.load(Ordering::Acquire),
+        "dropping the failed attempt must schedule detached rollback before retry backoff"
+    );
+    drop(transaction);
+    node.shutdown().await;
 }
 
 #[tokio::test(start_paused = true)]

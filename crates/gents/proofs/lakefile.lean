@@ -14,7 +14,8 @@ def proofRoots : Array Lean.Name := #[
   `Proofs,
   `Proofs.Conformance.ClientObservationOrdering,
   `Proofs.Conformance.ClientPresentationAgreement,
-  `Proofs.Conformance.StorageWriteGate]
+  `Proofs.Conformance.StorageWriteGate,
+  `Proofs.Conformance.StorageWriteGateStreamWaiter]
 
 -- Always check the source inventory, even when compiled artifacts are cached.
 @[default_target]

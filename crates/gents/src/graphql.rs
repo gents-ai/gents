@@ -192,17 +192,11 @@ where
     Ok(rows(response, field)?.into_iter().next())
 }
 
-/// Return the single document selected by a create/update mutation.
-///
-/// DefraDB has returned both an object and a one-element array for mutation
-/// fields across API generations. Normalizing that shape here keeps callers
-/// from growing subtly different response parsers. More than one row is an
-/// error because none of the provenance-bearing mutations are bulk writes.
-pub fn single_mutation_document<'a>(
-    response: &'a QueryResponse,
+fn mutation_documents_in_data<'a>(
+    data: Option<&'a Value>,
     field: &str,
-) -> Result<Option<&'a Value>> {
-    let Some(data) = response.data.as_ref().and_then(Value::as_object) else {
+) -> Result<Option<&'a [Value]>> {
+    let Some(data) = data.and_then(Value::as_object) else {
         return Ok(None);
     };
     let normalized_field = field
@@ -226,16 +220,51 @@ pub fn single_mutation_document<'a>(
         (None, None) => return Ok(None),
     };
     match value {
-        Value::Object(_) => Ok(Some(value)),
-        Value::Array(rows) => match rows.as_slice() {
-            [] => Ok(None),
-            [row] => Ok(Some(row)),
-            _ => anyhow::bail!(
-                "{field} returned {} documents; expected at most one",
-                rows.len()
-            ),
-        },
+        Value::Object(_) => Ok(Some(std::slice::from_ref(value))),
+        Value::Array(rows) => Ok(Some(rows.as_slice())),
         _ => anyhow::bail!("{field} returned an unexpected mutation response shape"),
+    }
+}
+
+/// Return borrowed documents from a create/update mutation envelope.
+///
+/// DefraDB has returned both object and array mutation shapes, and may expose
+/// a `create_` request under its normalized `add_` response field. Centralize
+/// that compatibility handling so callers only interpret returned documents.
+pub fn mutation_documents<'a>(response: &'a Value, field: &str) -> Result<Option<&'a [Value]>> {
+    anyhow::ensure!(
+        response.get("errors").is_none_or(|errors| {
+            errors.is_null() || errors.as_array().is_some_and(Vec::is_empty)
+        }),
+        "{field} returned GraphQL errors"
+    );
+    let data = response
+        .get("data")
+        .with_context(|| format!("{field} omitted response data"))?;
+    mutation_documents_in_data(Some(data), field)
+}
+
+/// Return the single document selected by a create/update mutation.
+/// More than one row is an error because provenance-bearing mutations are
+/// single-document writes.
+pub fn single_mutation_document<'a>(
+    response: &'a QueryResponse,
+    field: &str,
+) -> Result<Option<&'a Value>> {
+    single_mutation_document_in_data(response.data.as_ref(), field)
+}
+
+fn single_mutation_document_in_data<'a>(
+    data: Option<&'a Value>,
+    field: &str,
+) -> Result<Option<&'a Value>> {
+    let Some(documents) = mutation_documents_in_data(data, field)? else {
+        return Ok(None);
+    };
+    match documents.len() {
+        0 => Ok(None),
+        1 => Ok(documents.first()),
+        count => anyhow::bail!("{field} returned {count} documents; expected at most one"),
     }
 }
 
@@ -243,18 +272,17 @@ pub fn single_mutation_document<'a>(
 /// Use the same mutation normalization as other storage adapters: the pinned
 /// DefraDB accepts `create_` but returns `add_` unless explicitly aliased.
 pub fn created_doc_id(response: &Value, collection: &str) -> Result<String> {
-    anyhow::ensure!(
-        response
-            .get("errors")
-            .is_none_or(|errors| errors.is_null() || errors.as_array().is_some_and(Vec::is_empty)),
-        "create {collection} returned GraphQL errors"
-    );
-    let data = response
-        .get("data")
-        .context("create omitted response data")?;
-    let response = QueryResponse::success(data.clone());
     let field = format!("create_{collection}");
-    single_mutation_document(&response, &field)?
+    let documents = mutation_documents(response, &field)?;
+    if let Some(documents) = documents.as_ref() {
+        anyhow::ensure!(
+            documents.len() <= 1,
+            "{field} returned {} documents; expected at most one",
+            documents.len()
+        );
+    }
+    documents
+        .and_then(|rows| rows.first())
         .and_then(|row| row.get("_docID"))
         .and_then(Value::as_str)
         .filter(|id| !id.trim().is_empty())
