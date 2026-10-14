@@ -92,9 +92,6 @@ export function IncompatibleHomeScreen({ home, error }: IncompatibleHomeScreenPr
         ) : (
           <div className="grid gap-4">
             <div className="grid gap-2">
-              <p className="font-mono text-[10px] tracking-wide text-muted-foreground uppercase">
-                {home.fullReset ? "Reset" : "Upgrade"}
-              </p>
               <h2
                 id="incompatible-home-title"
                 className="font-heading text-2xl font-medium text-heading"
@@ -160,10 +157,14 @@ export function IncompatibleHomeScreen({ home, error }: IncompatibleHomeScreenPr
                 ))}
               </p>
             ) : null}
-            <div className="grid gap-1 text-sm">
-              <p>Starting fresh moves or deletes exactly these:</p>
-              {pathList(report.plannedPaths, "incompatible-home-planned")}
-            </div>
+            {/* one list for the choice in hand: confirming a delete shows
+                what it deletes, not this beside it */}
+            {confirmingDelete ? null : (
+              <div className="grid gap-1 text-sm">
+                <p>Starting fresh moves or deletes exactly these:</p>
+                {pathList(report.plannedPaths, "incompatible-home-planned")}
+              </div>
+            )}
             {report.browserPaths.length > 0 ? (
               <div className="grid gap-1 text-sm" data-testid="reset-browser-clear">
                 <p>

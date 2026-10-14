@@ -224,6 +224,7 @@ describe("a home this version cannot open", () => {
     expect(screen.getByTestId("incompatible-home-delete-paths")).toHaveTextContent(
       `${HOME}/keys/local.key`,
     );
+    expect(screen.queryByTestId("incompatible-home-planned")).not.toBeInTheDocument();
     expect(
       screen.getByTestId("incompatible-home-delete-installed-note"),
     ).toHaveTextContent("packs and plugins");
