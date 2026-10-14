@@ -209,6 +209,7 @@ pub async fn build_session_snapshot_for_node(
         None,
         None,
         None,
+        None,
         true,
         true,
     )
@@ -224,6 +225,10 @@ pub async fn build_session_snapshot_for_node_with_transcript(
     canonical_dependencies: Option<&CanonicalTranscriptDependencies>,
     context_store: Option<&ClientStore>,
     prompt_ownership: Option<&gents_desktop_core::client::RequestPromptOwnership>,
+    hydration_observation: Option<(
+        gents::agent::p2p_reconcile::session_hydration::ClientHydrationProgress,
+        Option<String>,
+    )>,
     context_totals_exact: bool,
     include_live_tail: bool,
 ) -> Option<DesktopSessionSnapshot> {
@@ -234,17 +239,24 @@ pub async fn build_session_snapshot_for_node_with_transcript(
     });
     let hydration = match node_did {
         Some(_) if unreadable.is_some() => unreadable,
-        Some(node_did) => match core.session_hydration_status(session_id, node_did).await {
-            Ok((progress, detail)) => Some(super::to_hydration_view(&progress, detail)),
-            Err(error) => {
-                tracing::warn!(
-                    error = %error,
-                    session_id,
-                    node_did,
-                    "loading session-keyed hydration progress failed"
-                );
-                None
-            }
+        Some(node_did) => match super::scoped_hydration_observation_view(
+            hydration_observation,
+            session_id,
+            node_did,
+        ) {
+            Some(view) => Some(view),
+            None => match core.session_hydration_status(session_id, node_did).await {
+                Ok((progress, detail)) => Some(super::to_hydration_view(&progress, detail)),
+                Err(error) => {
+                    tracing::warn!(
+                        error = %error,
+                        session_id,
+                        node_did,
+                        "loading session-keyed hydration progress failed"
+                    );
+                    None
+                }
+            },
         },
         None => None,
     };

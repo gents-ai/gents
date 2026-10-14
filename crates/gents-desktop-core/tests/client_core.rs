@@ -237,8 +237,14 @@ async fn initial_session_hydration_starts_when_local_transcript_rows_already_exi
         response.errors
     );
 
-    core.ensure_session_hydration_started(session_id, node_did)
+    let (started_progress, _) = core
+        .ensure_session_hydration_started(session_id, node_did)
         .await?;
+    assert_eq!(
+        started_progress.phase.as_str(),
+        "serving",
+        "the returned observation reflects the durable request created by this call"
+    );
 
     let progress = core
         .session_hydration_progress(session_id, node_did)
