@@ -300,9 +300,6 @@ pub(crate) async fn load_latest_requests_in_txn(
 ) -> Result<BTreeMap<String, SessionRequestFact>> {
     let mut latest_by_session = BTreeMap::new();
     for batch in session_ids.chunks(REQUEST_FACT_SESSION_BATCH_SIZE) {
-        if batch.is_empty() {
-            continue;
-        }
         let query = request_fact_query(&scoped_request_sessions_filter(
             node_did,
             batch,
