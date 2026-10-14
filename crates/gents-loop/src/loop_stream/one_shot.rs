@@ -137,18 +137,24 @@ fn ensure_auxiliary_identity(
     Ok(())
 }
 
-async fn flush_auxiliary_at_deadline(
+async fn flush_auxiliary_at_deadline<F, T>(
     sink: &AuxiliaryOutputSink,
     identity: (CaptureScope, usize, u32),
-) -> anyhow::Result<()> {
-    match (sink.flush_pending)(identity.0, identity.1, identity.2).await {
+    progress: F,
+) -> (anyhow::Result<()>, Option<Option<T>>)
+where
+    F: std::future::Future<Output = Option<T>>,
+{
+    let (flushed, item) = crate::stream_processor::flush_while_polling(
+        (sink.flush_pending)(identity.0, identity.1, identity.2),
+        progress,
+    )
+    .await;
+    let flushed = match flushed {
         Ok(()) => Ok(()),
-        Err(error) => Err(close_received_auxiliary_after_error(persistence_failure(
-            "deadline flush",
-            error,
-        ))
-        .await),
-    }
+        Err(error) => Err(persistence_failure("deadline flush", error)),
+    };
+    (flushed, item)
 }
 
 /// Runs a text completion through the owned stream. A request-scoped auxiliary
@@ -181,7 +187,7 @@ where
     M::StreamingResponse: 'static,
 {
     let provider_profile = config.provider_input_counter.profile();
-    let stream = run_loop_stream::<M, crate::session_hook::NoopSessionHook>(
+    let mut stream = Box::pin(run_loop_stream::<M, crate::session_hook::NoopSessionHook>(
         model,
         None,
         TaggedMessage::unassociated(prompt),
@@ -191,8 +197,7 @@ where
             .collect(),
         tools,
         config,
-    );
-    futures::pin_mut!(stream);
+    ));
     let mut accumulator = AssistantTurnAccumulator::default();
     let auxiliary_sink = crate::rendered_request::scope::auxiliary_output_sink();
     let mut auxiliary_enabled = false;
@@ -202,16 +207,18 @@ where
     let mut last_attempt_error: Option<InferenceError> = None;
 
     loop {
+        let mut flush_failure = None;
         let deadline = match (active_auxiliary, auxiliary_sink.as_ref()) {
             (Some((scope, turn, attempt)), Some(sink)) => {
                 match (sink.next_flush_deadline)(scope, turn, attempt).await {
                     Ok(deadline) => deadline,
                     Err(error) => {
+                        drop(stream);
                         return Err(close_received_auxiliary_after_error(persistence_failure(
                             "next flush deadline",
                             error,
                         ))
-                        .await)
+                        .await);
                     }
                 }
             }
@@ -227,8 +234,22 @@ where
                 tokio::select! {
                     biased;
                     _ = tokio::time::sleep_until(deadline) => {
-                        flush_auxiliary_at_deadline(sink, (scope, turn, attempt)).await?;
-                        continue;
+                        let (flushed, item) = flush_auxiliary_at_deadline(
+                            sink, (scope, turn, attempt),
+                            stream.next(),
+                        ).await;
+                        if let Err(error) = flushed {
+                            if matches!(&item, Some(Some(_))) {
+                                flush_failure = Some(error);
+                            } else {
+                                drop(stream);
+                                return Err(close_received_auxiliary_after_error(error).await);
+                            }
+                        }
+                        match item {
+                            Some(item) => item,
+                            None => continue,
+                        }
                     }
                     item = stream.next() => item,
                 }
@@ -241,7 +262,14 @@ where
         let item = match item {
             Ok(item) => item,
             Err(error) => {
+                drop(stream);
                 let error = stream_failure(error, last_attempt_error.take());
+                let error = match flush_failure {
+                    Some(flush_error) => error.context(format!(
+                        "receiving the auxiliary item after a flush failed: {flush_error:#}"
+                    )),
+                    None => error,
+                };
                 return Err(if active_auxiliary.is_some() {
                     close_received_auxiliary_after_error(error).await
                 } else {
@@ -249,188 +277,212 @@ where
                 });
             }
         };
-        match item {
-            LoopStreamItem::ProviderAudit(observation) => {
-                if !auxiliary_enabled {
-                    anyhow::bail!(
-                        "received provider audit reached a nonpersistent auxiliary; \
+        let processed = async {
+            match item {
+                LoopStreamItem::ProviderAudit(observation) => {
+                    if !auxiliary_enabled {
+                        anyhow::bail!(
+                            "received provider audit reached a nonpersistent auxiliary; \
                          a canonical output authority is required"
+                        );
+                    }
+                    let identity = (
+                        observation.capture_scope,
+                        observation.turn,
+                        observation.attempt,
                     );
+                    ensure_auxiliary_identity(active_auxiliary, identity)?;
+                    emit_auxiliary(identity, AuxiliaryOutputEvent::Audit(observation.event))
+                        .await?;
                 }
-                let identity = (
-                    observation.capture_scope,
-                    observation.turn,
-                    observation.attempt,
-                );
-                ensure_auxiliary_identity(active_auxiliary, identity)?;
-                emit_auxiliary(identity, AuxiliaryOutputEvent::Audit(observation.event)).await?;
-            }
-            LoopStreamItem::SteeringBoundary { .. }
-            | LoopStreamItem::AuthoredInputReady { .. }
-            | LoopStreamItem::FinishOrIntake { .. } => {
-                // This event carries persistence authority and may only be
-                // consumed by the owned StreamProcessor. The auxiliary has no
-                // hook, so observing it here means authority leaked past the
-                // ownership boundary: fail loudly instead of discarding it.
-                anyhow::bail!(
-                    "AuthoredInputReady reached the nonpersistent one-shot auxiliary; \
+                LoopStreamItem::SteeringBoundary { .. }
+                | LoopStreamItem::AuthoredInputReady { .. }
+                | LoopStreamItem::FinishOrIntake { .. } => {
+                    // This event carries persistence authority and may only be
+                    // consumed by the owned StreamProcessor. The auxiliary has no
+                    // hook, so observing it here means authority leaked past the
+                    // ownership boundary: fail loudly instead of discarding it.
+                    anyhow::bail!(
+                        "AuthoredInputReady reached the nonpersistent one-shot auxiliary; \
                      authored-input persistence belongs to the owned StreamProcessor consumer"
-                );
-            }
-            LoopStreamItem::ProviderAttemptStarted {
-                turn,
-                attempt,
-                capture_scope,
-            } => {
-                last_attempt_error = None;
-                auxiliary_enabled = OutputSource::ProviderTurn {
-                    scope: capture_scope,
-                    turn_index: u32::try_from(turn)?,
+                    );
+                }
+                LoopStreamItem::ProviderAttemptStarted {
+                    turn,
                     attempt,
+                    capture_scope,
+                } => {
+                    last_attempt_error = None;
+                    auxiliary_enabled = OutputSource::ProviderTurn {
+                        scope: capture_scope,
+                        turn_index: u32::try_from(turn)?,
+                        attempt,
+                    }
+                    .is_auxiliary_audit();
+                    if auxiliary_enabled {
+                        anyhow::ensure!(
+                            auxiliary_sink.is_some(),
+                            "auxiliary output has no canonical sink"
+                        );
+                        let identity = (capture_scope, turn, attempt);
+                        anyhow::ensure!(
+                            active_auxiliary.is_none(),
+                            "auxiliary attempt overlaps another source"
+                        );
+                        emit_auxiliary(identity, AuxiliaryOutputEvent::AttemptStarted).await?;
+                        active_auxiliary = Some(identity);
+                        last_auxiliary = Some(identity);
+                    }
                 }
-                .is_auxiliary_audit();
-                if auxiliary_enabled {
-                    anyhow::ensure!(
-                        auxiliary_sink.is_some(),
-                        "auxiliary output has no canonical sink"
-                    );
-                    let identity = (capture_scope, turn, attempt);
-                    anyhow::ensure!(
-                        active_auxiliary.is_none(),
-                        "auxiliary attempt overlaps another source"
-                    );
-                    emit_auxiliary(identity, AuxiliaryOutputEvent::AttemptStarted).await?;
-                    active_auxiliary = Some(identity);
-                    last_auxiliary = Some(identity);
-                }
-            }
-            LoopStreamItem::ProviderTurnReady {
-                turn,
-                attempt,
-                message,
-            } => {
-                if auxiliary_enabled {
-                    let identity = active_auxiliary
-                        .ok_or_else(|| anyhow::anyhow!("auxiliary turn has no active source"))?;
-                    anyhow::ensure!(
-                        (identity.1, identity.2) == (turn, attempt),
-                        "auxiliary ready changed source"
-                    );
-                    emit_auxiliary(identity, AuxiliaryOutputEvent::TurnReady { message }).await?;
-                    active_auxiliary = None;
-                }
-            }
-            LoopStreamItem::TurnRetracted { turn, attempt, .. } => {
-                if auxiliary_enabled {
-                    let identity = active_auxiliary
-                        .ok_or_else(|| anyhow::anyhow!("auxiliary retract has no active source"))?;
-                    anyhow::ensure!(
-                        (identity.1, identity.2) == (turn, attempt),
-                        "auxiliary retract changed source"
-                    );
-                    emit_auxiliary(identity, AuxiliaryOutputEvent::Retract).await?;
-                    active_auxiliary = None;
-                } else {
-                    accumulator = AssistantTurnAccumulator::default();
-                }
-                final_text = None;
-            }
-            LoopStreamItem::OutputObligationPending { reminder } => {
-                if auxiliary_enabled {
-                    let identity = last_auxiliary
-                        .ok_or_else(|| anyhow::anyhow!("auxiliary reminder has no source"))?;
-                    emit_auxiliary(
-                        identity,
-                        AuxiliaryOutputEvent::OutputObligationPending { reminder },
-                    )
-                    .await?;
-                } else {
-                    accumulator = AssistantTurnAccumulator::default();
-                }
-            }
-            LoopStreamItem::AttemptFailed {
-                turn,
-                attempt,
-                error,
-                will_retry,
-                ..
-            } => {
-                if auxiliary_enabled {
-                    if let Some(identity) = active_auxiliary {
+                LoopStreamItem::ProviderTurnReady {
+                    turn,
+                    attempt,
+                    message,
+                } => {
+                    if auxiliary_enabled {
+                        let identity = active_auxiliary.ok_or_else(|| {
+                            anyhow::anyhow!("auxiliary turn has no active source")
+                        })?;
                         anyhow::ensure!(
                             (identity.1, identity.2) == (turn, attempt),
-                            "auxiliary failure changed source"
+                            "auxiliary ready changed source"
                         );
-                        emit_auxiliary(
-                            identity,
-                            AuxiliaryOutputEvent::AttemptFailed { will_retry },
-                        )
-                        .await?;
+                        emit_auxiliary(identity, AuxiliaryOutputEvent::TurnReady { message })
+                            .await?;
                         active_auxiliary = None;
                     }
                 }
-                final_text = None;
-                last_attempt_error = Some(error);
-            }
-            LoopStreamItem::Text(text) => {
-                if auxiliary_enabled {
-                    let identity = active_auxiliary
-                        .ok_or_else(|| anyhow::anyhow!("auxiliary text has no active source"))?;
-                    emit_auxiliary(identity, AuxiliaryOutputEvent::TextDelta(text)).await?;
-                } else {
-                    accumulator.push_text(&text);
+                LoopStreamItem::TurnRetracted { turn, attempt, .. } => {
+                    if auxiliary_enabled {
+                        let identity = active_auxiliary.ok_or_else(|| {
+                            anyhow::anyhow!("auxiliary retract has no active source")
+                        })?;
+                        anyhow::ensure!(
+                            (identity.1, identity.2) == (turn, attempt),
+                            "auxiliary retract changed source"
+                        );
+                        emit_auxiliary(identity, AuxiliaryOutputEvent::Retract).await?;
+                        active_auxiliary = None;
+                    } else {
+                        accumulator = AssistantTurnAccumulator::default();
+                    }
+                    final_text = None;
+                }
+                LoopStreamItem::OutputObligationPending { reminder } => {
+                    if auxiliary_enabled {
+                        let identity = last_auxiliary
+                            .ok_or_else(|| anyhow::anyhow!("auxiliary reminder has no source"))?;
+                        emit_auxiliary(
+                            identity,
+                            AuxiliaryOutputEvent::OutputObligationPending { reminder },
+                        )
+                        .await?;
+                    } else {
+                        accumulator = AssistantTurnAccumulator::default();
+                    }
+                }
+                LoopStreamItem::AttemptFailed {
+                    turn,
+                    attempt,
+                    error,
+                    will_retry,
+                    ..
+                } => {
+                    if auxiliary_enabled {
+                        if let Some(identity) = active_auxiliary {
+                            anyhow::ensure!(
+                                (identity.1, identity.2) == (turn, attempt),
+                                "auxiliary failure changed source"
+                            );
+                            emit_auxiliary(
+                                identity,
+                                AuxiliaryOutputEvent::AttemptFailed { will_retry },
+                            )
+                            .await?;
+                            active_auxiliary = None;
+                        }
+                    }
+                    final_text = None;
+                    last_attempt_error = Some(error);
+                }
+                LoopStreamItem::Text(text) => {
+                    if auxiliary_enabled {
+                        let identity = active_auxiliary.ok_or_else(|| {
+                            anyhow::anyhow!("auxiliary text has no active source")
+                        })?;
+                        emit_auxiliary(identity, AuxiliaryOutputEvent::TextDelta(text)).await?;
+                    } else {
+                        accumulator.push_text(&text);
+                    }
+                }
+                LoopStreamItem::Reasoning(reasoning) => {
+                    if auxiliary_enabled {
+                        let identity = active_auxiliary.ok_or_else(|| {
+                            anyhow::anyhow!("auxiliary reasoning has no active source")
+                        })?;
+                        emit_auxiliary(identity, AuxiliaryOutputEvent::Reasoning(reasoning))
+                            .await?;
+                    } else {
+                        accumulator.push_provider_reasoning(provider_profile, reasoning)?;
+                    }
+                }
+                LoopStreamItem::ReasoningDelta { id, reasoning } => {
+                    if auxiliary_enabled {
+                        let identity = active_auxiliary.ok_or_else(|| {
+                            anyhow::anyhow!("auxiliary reasoning delta has no active source")
+                        })?;
+                        emit_auxiliary(
+                            identity,
+                            AuxiliaryOutputEvent::ReasoningDelta {
+                                id,
+                                fragment: reasoning,
+                            },
+                        )
+                        .await?;
+                    } else {
+                        accumulator.push_provider_reasoning_delta(provider_profile, id, &reasoning);
+                    }
+                }
+                LoopStreamItem::ToolCall { tool_call, .. } => {
+                    if auxiliary_enabled {
+                        let identity = active_auxiliary.ok_or_else(|| {
+                            anyhow::anyhow!("auxiliary tool call has no active source")
+                        })?;
+                        emit_auxiliary(identity, AuxiliaryOutputEvent::ToolCall(tool_call)).await?;
+                    } else {
+                        accumulator.push_tool_call(tool_call);
+                    }
+                }
+                LoopStreamItem::ToolResult { .. } => {}
+                LoopStreamItem::Final { text } => {
+                    if auxiliary_enabled {
+                        let identity = active_auxiliary.or(last_auxiliary).ok_or_else(|| {
+                            anyhow::anyhow!("auxiliary final response has no source")
+                        })?;
+                        emit_auxiliary(identity, AuxiliaryOutputEvent::FinalText(text.clone()))
+                            .await?;
+                    } else {
+                        accumulator.reconcile_text(&text);
+                    }
+                    final_text = Some(text);
                 }
             }
-            LoopStreamItem::Reasoning(reasoning) => {
-                if auxiliary_enabled {
-                    let identity = active_auxiliary.ok_or_else(|| {
-                        anyhow::anyhow!("auxiliary reasoning has no active source")
-                    })?;
-                    emit_auxiliary(identity, AuxiliaryOutputEvent::Reasoning(reasoning)).await?;
-                } else {
-                    accumulator.push_provider_reasoning(provider_profile, reasoning)?;
-                }
-            }
-            LoopStreamItem::ReasoningDelta { id, reasoning } => {
-                if auxiliary_enabled {
-                    let identity = active_auxiliary.ok_or_else(|| {
-                        anyhow::anyhow!("auxiliary reasoning delta has no active source")
-                    })?;
-                    emit_auxiliary(
-                        identity,
-                        AuxiliaryOutputEvent::ReasoningDelta {
-                            id,
-                            fragment: reasoning,
-                        },
-                    )
-                    .await?;
-                } else {
-                    accumulator.push_provider_reasoning_delta(provider_profile, id, &reasoning);
-                }
-            }
-            LoopStreamItem::ToolCall { tool_call, .. } => {
-                if auxiliary_enabled {
-                    let identity = active_auxiliary.ok_or_else(|| {
-                        anyhow::anyhow!("auxiliary tool call has no active source")
-                    })?;
-                    emit_auxiliary(identity, AuxiliaryOutputEvent::ToolCall(tool_call)).await?;
-                } else {
-                    accumulator.push_tool_call(tool_call);
-                }
-            }
-            LoopStreamItem::ToolResult { .. } => {}
-            LoopStreamItem::Final { text } => {
-                if auxiliary_enabled {
-                    let identity = active_auxiliary
-                        .or(last_auxiliary)
-                        .ok_or_else(|| anyhow::anyhow!("auxiliary final response has no source"))?;
-                    emit_auxiliary(identity, AuxiliaryOutputEvent::FinalText(text.clone())).await?;
-                } else {
-                    accumulator.reconcile_text(&text);
-                }
-                final_text = Some(text);
-            }
+            Ok::<_, anyhow::Error>(())
         }
+        .await;
+        if let Some(error) = flush_failure {
+            drop(stream);
+            return Err(match processed {
+                Ok(()) if active_auxiliary.is_some() => {
+                    close_received_auxiliary_after_error(error).await
+                }
+                Ok(()) => error,
+                Err(receipt_error) => receipt_error.context(format!(
+                    "retaining the received auxiliary item after a flush failed: {error:#}"
+                )),
+            });
+        }
+        processed?;
     }
     if active_auxiliary.is_some() {
         close_received_auxiliary().await?;
@@ -542,13 +594,15 @@ mod tests {
                 .unwrap();
             drop(reservation);
 
-            let error = tokio::time::timeout(
+            let (result, item) = tokio::time::timeout(
                 std::time::Duration::from_secs(2),
-                flush_auxiliary_at_deadline(&sink, identity),
+                flush_auxiliary_at_deadline(&sink, identity, std::future::pending::<Option<()>>()),
             )
             .await
-            .expect("bounded flush failure cleanup")
-            .expect_err("mock flush fails");
+            .expect("bounded flush failure cleanup");
+            assert!(item.is_none());
+            let error =
+                close_received_auxiliary_after_error(result.expect_err("mock flush fails")).await;
             assert!(error.to_string().contains("mock flush failure"));
             assert!(error
                 .downcast_ref::<AuxiliaryPersistenceFailure>()

@@ -679,6 +679,79 @@ async fn write_gate_timeout_names_waiter_and_current_owner() {
     drop(owner);
 }
 
+#[tokio::test]
+async fn stream_owned_gate_waiter_is_copolled_with_flush() {
+    use std::future::Future;
+    use std::task::{Context, Poll};
+
+    use futures::StreamExt;
+
+    let gate = Arc::new(super::MutationWriteGate::new());
+    let owner = gate
+        .acquire(
+            crate::config_client::write_telemetry::WriteOperation::new(
+                "test.stream_gate_initial_owner",
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let stream_gate = Arc::clone(&gate);
+    let mut stream = Box::pin(async_stream::stream! {
+        let guard = stream_gate
+            .acquire(
+                crate::config_client::write_telemetry::WriteOperation::new(
+                    "test.stream_gate_capture",
+                )
+                .unwrap(),
+            )
+            .await
+            .expect("stream capture acquires the gate");
+        drop(guard);
+        yield ();
+    });
+    let mut next = Box::pin(stream.next());
+    let waker = futures::task::noop_waker();
+    let mut context = Context::from_waker(&waker);
+    assert!(Future::poll(next.as_mut(), &mut context).is_pending());
+    drop(next);
+    drop(owner);
+
+    assert!(gate
+        .owner
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .is_none());
+    assert!(gate.lock.try_lock().is_err());
+
+    let flush_gate = Arc::clone(&gate);
+    let flush = flush_gate.acquire(
+        crate::config_client::write_telemetry::WriteOperation::new("test.stream_gate_flush")
+            .unwrap(),
+    );
+    let (flush_result, item) = tokio::time::timeout(
+        Duration::from_secs(1),
+        gents_loop::stream_processor::flush_while_polling(flush, stream.next()),
+    )
+    .await
+    .expect("co-polling must release the retained stream waiter");
+
+    assert_eq!(item, Some(Some(())));
+    let flush_guard = flush_result.expect("flush acquires the gate");
+    assert!(gate
+        .owner
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .is_some());
+    drop(flush_guard);
+    assert!(gate
+        .owner
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .is_none());
+}
+
 #[tokio::test(start_paused = true)]
 async fn stalled_cancellation_cleanup_releases_the_embedded_write_gate() {
     let gate = Arc::new(tokio::sync::Mutex::new(()));

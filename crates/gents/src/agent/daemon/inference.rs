@@ -576,6 +576,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                         let mut stream_error = None;
 
                         loop {
+                            let mut flush_failure = None;
                             let flush_deadline = processor.next_flush_deadline().await;
                             let item = match tokio::select! {
                                 biased;
@@ -615,10 +616,10 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                                 _ = interrupt_rx.changed() => {
                                     request_token.cancel();
                                     inference_token.cancel();
+                                    drop(stream);
                                     let output_result = processor
                                         .persist_received_partial_turn("persist interrupted assistant turn")
                                         .await;
-                                    drop(stream);
                                     if let Err(error) =
                                         persistence_hook.cancel_in_flight_tool_calls().await
                                     {
@@ -666,8 +667,30 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                                         None => std::future::pending::<()>().await,
                                     }
                                 } => {
-                                    processor.flush_pending().await?;
-                                    continue;
+                                    let progress = async {
+                                        crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
+                                            request_deadline,
+                                            request_token.clone(),
+                                            None,
+                                            None,
+                                            Some(session_id.clone()),
+                                            trigger_correlation.clone(),
+                                            trigger_context.source_fields.clone(),
+                                            false,
+                                            stream.next(),
+                                        ).await
+                                    };
+                                    let (flushed, item) = crate::agent::stream_processor::flush_while_polling(
+                                        processor.flush_pending(), progress,
+                                    ).await;
+                                    match item {
+                                        Some(Some(item)) => {
+                                            flush_failure = flushed.err();
+                                            Some(item)
+                                        }
+                                        Some(None) => { flushed?; None }
+                                        None => { flushed?; continue }
+                                    }
                                 }
                                 result = await_with_request_deadline(
                                     request_deadline,
@@ -691,12 +714,12 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                                                 &terminal_failure_reason,
                                                 error.to_string(),
                                             );
+                                            drop(stream);
                                             let output_result = processor
                                                 .persist_received_partial_turn(
                                                     "persist deadline-expired assistant turn",
                                                 )
                                                 .await;
-                                            drop(stream);
                                             if let Err(sweep_error) =
                                                 persistence_hook.timeout_expired_tool_calls().await
                                             {
@@ -724,9 +747,29 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                                 Ok(processed) => processed,
                                 Err(error) => {
                                     drop(stream);
-                                    return Err(error);
+                                    return Err(match flush_failure {
+                                        Some(flush_error) => error.context(format!(
+                                            "retaining the received stream item after a flush failed: {flush_error:#}"
+                                        )),
+                                        None => error,
+                                    });
                                 }
                             };
+                            if let Some(error) = flush_failure {
+                                drop(stream);
+                                if processor.natural_finished {
+                                    return Err(error);
+                                }
+                                let retained = processor
+                                    .persist_received_partial_turn("persist received assistant turn after flush failure")
+                                    .await;
+                                return Err(match retained {
+                                    Ok(_) => error,
+                                    Err(retention_error) => retention_error.context(format!(
+                                        "retaining received output after a flush failed: {error:#}"
+                                    )),
+                                });
+                            }
                             if let Err(error) = if processor.natural_finished { Ok(()) } else { ensure_request_deadline_open(
                                 request_deadline,
                                 "processing inference stream item",
