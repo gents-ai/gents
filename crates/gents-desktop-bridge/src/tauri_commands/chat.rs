@@ -442,7 +442,7 @@ pub async fn desktop_request_timeline(
     node_did: String,
     request_id: String,
     state: State<'_, DesktopAppState>,
-) -> Result<serde_json::Value, BridgeError> {
+) -> Result<crate::types::RequestTimelineView, BridgeError> {
     let Some(core) = current_core(&state) else {
         return Err(BridgeError::untyped("desktop client is not running"));
     };
@@ -451,7 +451,9 @@ pub async fn desktop_request_timeline(
         .request_timeline(&node_did, &request_id)
         .await
         .map_err(|error| BridgeError::untyped(error.to_string()))?;
-    serde_json::to_value(&timeline).map_err(|error| BridgeError::untyped(error.to_string()))
+    let value =
+        serde_json::to_value(&timeline).map_err(|error| BridgeError::untyped(error.to_string()))?;
+    serde_json::from_value(value).map_err(|error| BridgeError::untyped(error.to_string()))
 }
 
 #[tauri::command]

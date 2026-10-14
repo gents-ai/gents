@@ -30,16 +30,7 @@ export type { TaskRecentRunsView } from "../generated/TaskRecentRunsView.js";
 export type { TaskRunSummaryView } from "../generated/TaskRunSummaryView.js";
 export type { TaskView } from "../generated/TaskView.js";
 
-export type ToolSurfaceExplanationView = {
-  agentId: string;
-  enabled: boolean;
-  contextId?: string | null;
-  toolsId?: string | null;
-  toolsSource: string;
-  ceilingSource: string;
-  mcpServicesOnline: boolean;
-  surface: Record<string, unknown>;
-};
+export type { ToolSurfaceExplanationView } from "../generated/ToolSurfaceExplanationView.js";
 
 export type { SessionProvenance } from "../generated/SessionProvenance.js";
 export type { SessionFork } from "../generated/SessionFork.js";

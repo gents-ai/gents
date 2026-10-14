@@ -20,7 +20,7 @@ blake3 = "1"
 chrono.workspace = true
 dirs.workspace = true
 gents = { path = "../gents", features = ["typescript"] }
-gents-server = { package = "gents-cli", path = "../gents-cli", default-features = false }
+gents-server = { package = "gents-cli", path = "../gents-cli", default-features = false, features = ["typescript"] }
 gents-chatgpt-login.workspace = true
 gents-claude-login.workspace = true
 gents-desktop-core.workspace = true
@@ -40,6 +40,7 @@ tracing-subscriber.workspace = true
 # (RenderedTimelineItem) without hand-written mirror types.
 ts-rs = { version = "10.1", default-features = false, features = [
     "serde-compat",
+    "serde-json-impl",
     "chrono-impl",
     "no-serde-warnings",
 ] }
@@ -52,6 +53,8 @@ libc = "0.2"
 tauri-plugin = { version = "2", features = ["build"] }
 
 [dev-dependencies]
+syn = { version = "2", features = ["full"] }
+heck = "0.5"
 async-trait = "0.1"
 wiremock = "0.6"
 gents-desktop-core = { workspace = true, features = ["test-fixtures"] }

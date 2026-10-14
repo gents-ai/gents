@@ -5,11 +5,11 @@ export type ManagedServerResetRequest = {
 /**
  * Include healthy stores, the managed service and browser state.
  */
-fullReset?: boolean,
+fullReset?: boolean | null,
 /**
  * Omit to preview what would be retired and the required confirmation.
  */
-confirmation: string | null,
+confirmation?: string | null,
 /**
  * Archive (the default) or delete. Each has its own confirmation text.
  */
