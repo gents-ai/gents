@@ -953,7 +953,14 @@ pub async fn sweep_open_mailbox_items_with_close_collections(
         "load open mailbox items",
     )
     .await?;
-    let raw_items = rows::<Value>(&response, MAILBOX_COLLECTION)?;
+    let raw_items = response
+        .data
+        .and_then(|mut data| data.as_object_mut()?.remove(MAILBOX_COLLECTION));
+    let raw_items: Vec<Value> = match raw_items {
+        Some(Value::Array(rows)) => rows,
+        Some(rows) => serde_json::from_value(rows).context("decode MailboxItem rows")?,
+        None => Vec::new(),
+    };
     let mut report = MailboxSweepReport {
         scanned: raw_items.len(),
         ..Default::default()
