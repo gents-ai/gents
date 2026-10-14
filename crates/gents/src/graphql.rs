@@ -289,6 +289,19 @@ pub(crate) fn decode_composite_commits(rows: &[Value]) -> Result<Vec<CompositeCo
     Ok(commits)
 }
 
+fn response_composite_commits(
+    response: &QueryResponse,
+    field: &str,
+) -> Result<Vec<CompositeCommit>> {
+    let Some(value) = response.data.as_ref().and_then(|data| data.get(field)) else {
+        return Ok(Vec::new());
+    };
+    let rows = value
+        .as_array()
+        .with_context(|| format!("decode {field} rows"))?;
+    decode_composite_commits(rows)
+}
+
 /// Read the exact newest composite commit exposed by a mutation's `_version`
 /// selection. DefraDB returns the full version history newest-first today; we
 /// still sort explicitly so the contract does not depend on response order.
@@ -363,8 +376,7 @@ pub async fn newest_document_composite_commit(
         escape_graphql_string(doc_id),
     );
     let response = graphql_with_transaction_retry(node, &query, operation).await?;
-    let rows = rows::<Value>(&response, "_commits")?;
-    let commits = decode_composite_commits(&rows)?;
+    let commits = response_composite_commits(&response, "_commits")?;
     unique_newest_composite_commit(commits, operation)
 }
 
@@ -393,8 +405,7 @@ pub async fn composite_commits(
     // DefraDB applies this filter in memory and an invalid GraphQL filter can
     // degrade to no filter. Fetch the field name and enforce the composite
     // selection here instead of trusting that behavior.
-    let rows = rows::<Value>(&response, "_commits")?;
-    decode_composite_commits(&rows)
+    response_composite_commits(&response, "_commits")
 }
 
 pub fn response_has_documents(value: &serde_json::Value) -> bool {

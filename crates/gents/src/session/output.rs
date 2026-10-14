@@ -1022,11 +1022,23 @@ async fn load_replay_request_facts_batch(
         .collect::<Vec<_>>();
     let mut facts = BTreeMap::new();
     for chunk in distinct.chunks(crate::rendered_request::commits::FIELD_COMMIT_ALIAS_BATCH) {
-        let mut query = String::from("{");
+        let ids = chunk
+            .iter()
+            .map(|request_doc_id| {
+                format!(
+                    r#""{}""#,
+                    crate::graphql::escape_graphql_string(request_doc_id)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut query = format!(
+            r#"{{ requests: AgentRequest(docIDs: [{ids}]) {{ _docID request_id purpose session_id node_did requester_did }}"#
+        );
         for (index, request_doc_id) in chunk.iter().enumerate() {
             let escaped = crate::graphql::escape_graphql_string(request_doc_id);
             query.push_str(&format!(
-                r#" request{index}: AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, limit: 2) {{ _docID request_id purpose session_id node_did requester_did }} commit{index}: _commits(docID: "{escaped}") {{ cid height fieldName signature {{ identity type }} }}"#
+                r#" commit{index}: _commits(docID: "{escaped}") {{ cid height fieldName signature {{ identity type }} }}"#
             ));
         }
         query.push_str(" }");
@@ -1036,14 +1048,27 @@ async fn load_replay_request_facts_batch(
         let response = ReadAccess::Node(node)
             .query(&query, "load_canonical_replay_request_facts")
             .await?;
+        let request_rows = rows_value(&response, "requests")?;
+        let allowed = chunk.iter().cloned().collect::<BTreeSet<_>>();
+        let mut grouped = chunk
+            .iter()
+            .map(|request_doc_id| (request_doc_id.clone(), Vec::new()))
+            .collect::<BTreeMap<_, Vec<_>>>();
+        for row in request_rows {
+            let request_doc_id = row
+                .get("_docID")
+                .and_then(serde_json::Value::as_str)
+                .with_context(|| "canonical replay request batch returned a row without _docID")?;
+            anyhow::ensure!(
+                allowed.contains(request_doc_id),
+                "canonical replay request batch returned an unrequested physical request"
+            );
+            grouped
+                .get_mut(request_doc_id)
+                .expect("requested request IDs were initialized")
+                .push(row.clone());
+        }
         for (index, request_doc_id) in chunk.iter().enumerate() {
-            let rows = response
-                .pointer(&format!("/data/request{index}"))
-                .and_then(serde_json::Value::as_array)
-                .with_context(|| {
-                    format!("canonical replay request batch omitted {request_doc_id}")
-                })?
-                .clone();
             let commit_rows = response
                 .pointer(&format!("/data/commit{index}"))
                 .and_then(serde_json::Value::as_array)
@@ -1051,6 +1076,9 @@ async fn load_replay_request_facts_batch(
                     format!("canonical replay commit batch omitted {request_doc_id}")
                 })?;
             let commits = crate::graphql::decode_composite_commits(commit_rows)?;
+            let rows = grouped
+                .remove(request_doc_id)
+                .expect("requested request IDs were initialized");
             facts.insert(request_doc_id.clone(), ReplayRequestFacts { rows, commits });
         }
     }
