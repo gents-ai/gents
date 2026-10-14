@@ -676,13 +676,18 @@ async fn write_gate_timeout_names_waiter_and_current_owner() {
         super::retry::is_transaction_storage_failure(&error),
         "gate wait timeouts use the standard storage-failure retry classification"
     );
+    assert!(gate
+        .pending_acquires
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .is_empty());
     drop(owner);
 }
 
 #[tokio::test]
 async fn stream_owned_gate_waiter_is_copolled_with_flush() {
     use std::future::Future;
-    use std::task::{Context, Poll};
+    use std::task::Context;
 
     use futures::StreamExt;
 
@@ -715,7 +720,29 @@ async fn stream_owned_gate_waiter_is_copolled_with_flush() {
     let waker = futures::task::noop_waker();
     let mut context = Context::from_waker(&waker);
     assert!(Future::poll(next.as_mut(), &mut context).is_pending());
+    assert_eq!(
+        gate.pending_acquires
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .len(),
+        1,
+        "the actual gate acquisition is registered after its first pending poll"
+    );
+    let pending = gate
+        .oldest_pending_acquire()
+        .expect("pending gate acquisition");
+    assert_eq!(pending.count, 1);
+    assert_eq!(pending.operation.as_str(), "test.stream_gate_capture");
+    assert!(pending.last_poll_age < Duration::from_secs(1));
     drop(next);
+    assert_eq!(
+        gate.pending_acquires
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .len(),
+        1,
+        "dropping only StreamExt::next must retain the generator's queued acquire"
+    );
     drop(owner);
 
     assert!(gate
@@ -739,6 +766,11 @@ async fn stream_owned_gate_waiter_is_copolled_with_flush() {
 
     assert_eq!(item, Some(Some(())));
     let flush_guard = flush_result.expect("flush acquires the gate");
+    assert!(gate
+        .pending_acquires
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .is_empty());
     assert!(gate
         .owner
         .lock()
@@ -818,6 +850,57 @@ async fn failed_rollback_cleanup_starts_before_transaction_retry_backoff() {
     );
     drop(transaction);
     node.shutdown().await;
+}
+
+#[tokio::test]
+async fn dropping_stream_clears_its_pending_gate_acquire() {
+    use std::future::Future;
+    use std::task::Context;
+
+    use futures::StreamExt;
+
+    let gate = Arc::new(super::MutationWriteGate::new());
+    let owner = gate
+        .acquire(
+            crate::config_client::write_telemetry::WriteOperation::new("test.stream_drop_owner")
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let stream_gate = Arc::clone(&gate);
+    let mut stream = Box::pin(async_stream::stream! {
+        let guard = stream_gate
+            .acquire(
+                crate::config_client::write_telemetry::WriteOperation::new(
+                    "test.stream_drop_waiter",
+                )
+                .unwrap(),
+            )
+            .await
+            .expect("stream acquisition follows owner release");
+        drop(guard);
+        yield ();
+    });
+    let mut next = Box::pin(stream.next());
+    let waker = futures::task::noop_waker();
+    let mut context = Context::from_waker(&waker);
+    assert!(Future::poll(next.as_mut(), &mut context).is_pending());
+    drop(next);
+    assert_eq!(
+        gate.pending_acquires
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .len(),
+        1
+    );
+
+    drop(stream);
+    assert!(gate
+        .pending_acquires
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .is_empty());
+    drop(owner);
 }
 
 #[tokio::test(start_paused = true)]

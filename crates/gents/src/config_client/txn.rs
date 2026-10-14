@@ -41,6 +41,8 @@ struct MutationWriteGate {
     lock: Arc<tokio::sync::Mutex<()>>,
     owner: StdMutex<Option<MutationWriteOwner>>,
     next_lease_id: AtomicU64,
+    pending_acquires: StdMutex<HashMap<u64, PendingWriteAcquire>>,
+    next_pending_acquire_id: AtomicU64,
 }
 
 #[derive(Clone, Copy)]
@@ -48,6 +50,67 @@ struct MutationWriteOwner {
     lease_id: u64,
     operation: WriteOperation,
     acquired_at: Instant,
+}
+
+#[derive(Clone)]
+struct PendingWriteAcquire {
+    operation: WriteOperation,
+    task_id: Option<String>,
+    span_name: Option<&'static str>,
+    first_queued_at: Instant,
+    last_polled_at: Instant,
+}
+
+struct PendingWriteAcquireRegistration {
+    gate: Arc<MutationWriteGate>,
+    id: u64,
+    operation: WriteOperation,
+    registered: bool,
+}
+
+impl PendingWriteAcquireRegistration {
+    fn record_pending_poll(&mut self) {
+        let now = Instant::now();
+        let mut pending = self
+            .gate
+            .pending_acquires
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        self.registered = true;
+        pending
+            .entry(self.id)
+            .and_modify(|entry| entry.last_polled_at = now)
+            .or_insert_with(|| PendingWriteAcquire {
+                operation: self.operation,
+                task_id: tokio::task::try_id().map(|id| id.to_string()),
+                span_name: tracing::Span::current()
+                    .metadata()
+                    .map(|metadata| metadata.name()),
+                first_queued_at: now,
+                last_polled_at: now,
+            });
+    }
+}
+
+impl Drop for PendingWriteAcquireRegistration {
+    fn drop(&mut self) {
+        if self.registered {
+            self.gate
+                .pending_acquires
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .remove(&self.id);
+        }
+    }
+}
+
+struct OldestPendingWriteAcquire {
+    count: usize,
+    operation: WriteOperation,
+    task_id: Option<String>,
+    span_name: Option<&'static str>,
+    wait_age: Duration,
+    last_poll_age: Duration,
 }
 
 struct MutationWriteGuard {
@@ -78,37 +141,70 @@ impl MutationWriteGate {
             lock: Arc::new(tokio::sync::Mutex::new(())),
             owner: StdMutex::new(None),
             next_lease_id: AtomicU64::new(1),
+            pending_acquires: StdMutex::new(HashMap::new()),
+            next_pending_acquire_id: AtomicU64::new(1),
         }
+    }
+
+    fn oldest_pending_acquire(&self) -> Option<OldestPendingWriteAcquire> {
+        let now = Instant::now();
+        let pending = self
+            .pending_acquires
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let oldest = pending.values().min_by_key(|entry| entry.first_queued_at)?;
+        Some(OldestPendingWriteAcquire {
+            count: pending.len(),
+            operation: oldest.operation,
+            task_id: oldest.task_id.clone(),
+            span_name: oldest.span_name,
+            wait_age: now.saturating_duration_since(oldest.first_queued_at),
+            last_poll_age: now.saturating_duration_since(oldest.last_polled_at),
+        })
     }
 
     async fn acquire(self: &Arc<Self>, operation: WriteOperation) -> Result<MutationWriteGuard> {
         ensure_not_reentrant_embedded_write(operation)?;
+        let mut lock = Arc::clone(&self.lock).lock_owned();
+        tokio::pin!(lock);
+        let mut registration = None;
         #[cfg(test)]
-        let lock_future = {
-            let mut lock = Box::pin(Arc::clone(&self.lock).lock_owned());
-            let observation = SUCCESSFUL_MUTATION_FAULT
-                .try_with(|fault| fault.write_gate_observation.clone())
-                .ok()
-                .flatten();
-            std::future::poll_fn(move |cx| {
-                let polled = lock.as_mut().poll(cx);
+        let observation = SUCCESSFUL_MUTATION_FAULT
+            .try_with(|fault| fault.write_gate_observation.clone())
+            .ok()
+            .flatten();
+        let lock_future = std::future::poll_fn(|cx| match lock.as_mut().poll(cx) {
+            std::task::Poll::Pending => {
+                if registration.is_none() {
+                    let id = self.next_pending_acquire_id.fetch_add(1, Ordering::Relaxed);
+                    registration = Some(PendingWriteAcquireRegistration {
+                        gate: Arc::clone(self),
+                        id,
+                        operation,
+                        registered: false,
+                    });
+                }
+                registration
+                    .as_mut()
+                    .expect("pending acquisition is registered")
+                    .record_pending_poll();
+                #[cfg(test)]
                 if let Some(observation) = observation.as_ref() {
-                    match &polled {
-                        std::task::Poll::Pending => {
-                            if !observation.queued_fired.swap(true, Ordering::Relaxed) {
-                                observation.queued.notify_one();
-                            }
-                        }
-                        std::task::Poll::Ready(_) => {
-                            observation.acquired.store(true, Ordering::Release);
-                        }
+                    if !observation.queued_fired.swap(true, Ordering::Relaxed) {
+                        observation.queued.notify_one();
                     }
                 }
-                polled
-            })
-        };
-        #[cfg(not(test))]
-        let lock_future = Arc::clone(&self.lock).lock_owned();
+                std::task::Poll::Pending
+            }
+            std::task::Poll::Ready(guard) => {
+                registration.take();
+                #[cfg(test)]
+                if let Some(observation) = observation.as_ref() {
+                    observation.acquired.store(true, Ordering::Release);
+                }
+                std::task::Poll::Ready(guard)
+            }
+        });
         let guard = match tokio::time::timeout(
             EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
             lock_future,
@@ -117,6 +213,9 @@ impl MutationWriteGate {
         {
             Ok(guard) => guard,
             Err(_) => {
+                // The timed-out acquisition must not appear in its own
+                // timeout snapshot; the pending map reports only live waiters.
+                registration.take();
                 let owner = *self
                     .owner
                     .lock()
@@ -127,11 +226,45 @@ impl MutationWriteGate {
                         u64::try_from(owner.acquired_at.elapsed().as_millis()).unwrap_or(u64::MAX),
                     )
                 });
+                let pending = self.oldest_pending_acquire();
+                let (
+                    pending_count,
+                    oldest_wait_operation,
+                    oldest_wait_age_ms,
+                    oldest_wait_last_poll_age_ms,
+                    oldest_wait_task_id,
+                    oldest_wait_span,
+                ) = pending
+                    .as_ref()
+                    .map_or((0, "none", 0, 0, None, None), |pending| {
+                        (
+                            pending.count,
+                            pending.operation.as_str(),
+                            u64::try_from(pending.wait_age.as_millis()).unwrap_or(u64::MAX),
+                            u64::try_from(pending.last_poll_age.as_millis()).unwrap_or(u64::MAX),
+                            pending.task_id.as_deref(),
+                            pending.span_name,
+                        )
+                    });
+                let owner_status = if owner.is_some() {
+                    "tracked_owner"
+                } else if pending_count > 0 {
+                    "no_tracked_owner; mutex may be reserved for a pending acquire"
+                } else {
+                    "no_tracked_owner_or_pending_acquire"
+                };
                 tracing::error!(
                     phase = "write-gate acquisition",
                     waiting_operation = operation.as_str(),
                     owner_operation,
                     owner_held_ms,
+                    owner_status,
+                    pending_acquire_count = pending_count,
+                    oldest_wait_operation,
+                    oldest_wait_age_ms,
+                    oldest_wait_last_poll_age_ms,
+                    oldest_wait_task_id = oldest_wait_task_id.unwrap_or("unknown"),
+                    oldest_wait_span = oldest_wait_span.unwrap_or("unknown"),
                     timeout_ms =
                         u64::try_from(EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT.as_millis())
                             .unwrap_or(u64::MAX),
@@ -273,7 +406,9 @@ fn post_commit_receipt_loss_for_test(operation: Option<&str>) -> bool {
 }
 
 #[derive(Debug, thiserror::Error)]
-#[error("embedded canonical write {waiting_operation} is nested inside transaction {owner_operation}; use the supplied transaction owner")]
+#[error(
+    "embedded canonical write {waiting_operation} is nested inside transaction {owner_operation}; use the supplied transaction owner"
+)]
 pub(crate) struct ReentrantEmbeddedWrite {
     waiting_operation: &'static str,
     owner_operation: &'static str,
