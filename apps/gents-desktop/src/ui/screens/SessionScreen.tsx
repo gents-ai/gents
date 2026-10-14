@@ -76,6 +76,7 @@ import {
   useSessionLoad,
 } from "@/hooks/useClient";
 import { SessionContext } from "./SessionContextMeter";
+import { StartedSessionsButton } from "./StartedSessionsButton";
 import { ParentLine, StartedByAutomation, Title, Goal } from "./SessionHeader";
 import { TranscriptPanel } from "./Transcript";
 
@@ -510,6 +511,14 @@ export function SessionScreen() {
                     )}
                   </div>
                 </div>
+                {/* the sessions this one started, in reach whether or not the
+                    header has scrolled out; the phone's bar has no room */}
+                {session && (
+                  <StartedSessionsButton
+                    sessionId={session.sessionId}
+                    className="max-md:hidden"
+                  />
+                )}
                 {/* the meter rides up with the header, next to the menu */}
                 {session?.context && (
                   <div
