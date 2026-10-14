@@ -18,6 +18,7 @@ import type {
 } from "@source-inc/gents-desktop-client";
 import { inNativeShell, listenToWindow } from "../../lib/nativeShell";
 import { useApp } from "@/app/AppContext";
+import { errorText } from "../../lib/errorText";
 
 const PLUGIN_APPROVALS_CHANGED_EVENT = "desktop://plugin-approvals-changed";
 
@@ -51,7 +52,7 @@ export function PluginAccessPrompt() {
       setQuestion(requests[0] ?? null);
     } catch (error) {
       if (!current()) return;
-      const text = error instanceof Error ? error.message : String(error);
+      const text = errorText(error);
       if (failed.current !== text) toast.error(text);
       failed.current = text;
     } finally {
@@ -131,7 +132,7 @@ export function PluginAccessPrompt() {
       answered = true;
       setQuestion(null);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : String(error));
+      toast.error(errorText(error));
     } finally {
       answering.current = false;
       if (answered || dirty.current) {

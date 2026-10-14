@@ -52,6 +52,7 @@ import { NO_SESSIONS, useFleet } from "@/hooks/useFleet";
 import { fleetNodes } from "@/lib/scope";
 import { nodeKeyOf, type NodeView } from "../../hooks/fleetStore";
 import { useShallow } from "zustand/react/shallow";
+import { errorText } from "../../lib/errorText";
 
 export function AgentsScreen() {
   const {
@@ -230,7 +231,7 @@ function AddAgentDialog({ open, onClose }: { open: boolean; onClose: () => void 
       setAddress("");
       close();
     } catch (e) {
-      const reason = e instanceof Error ? e.message : String(e);
+      const reason = errorText(e);
       setError(`Couldn't request enrolment: ${reason}`);
     } finally {
       setBusy(false);
@@ -312,7 +313,7 @@ export function RenameDialog({
       if (next && next !== value) await onSave(next);
       onClose();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errorText(e));
     }
   };
   return (
@@ -390,7 +391,7 @@ const AgentRow = memo(function AgentRow({
       };
       toast(r?.reachable ? `${d.label} is reachable` : `${d.label} is not reachable`);
     } catch (e) {
-      toast(`Status check failed: ${e instanceof Error ? e.message : String(e)}`);
+      toast(`Status check failed: ${errorText(e)}`);
     }
   };
   return (

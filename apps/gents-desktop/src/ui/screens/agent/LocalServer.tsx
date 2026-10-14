@@ -21,6 +21,7 @@ import { Fact, Group, Row, StackedRow } from "./rows";
 import { useApp } from "@/app/AppContext";
 import { ManagedRuntimeUnavailableError } from "../../../lib/managedRuntimeReadiness";
 import { useStartup } from "@/hooks/useClient";
+import { errorText } from "../../../lib/errorText";
 
 export function LocalServer() {
   const { stores, actions } = useApp();
@@ -105,7 +106,7 @@ export function LocalServer() {
       await refreshSnapshot();
       toast("Managed runtime restarted with the reviewed access");
     } catch (cause) {
-      setAuthorityError(cause instanceof Error ? cause.message : String(cause));
+      setAuthorityError(errorText(cause));
       await incompatibleHome?.adopt(cause);
     } finally {
       setBusy(false);

@@ -20,6 +20,7 @@ import { moveDisabled, moveItem } from "./pending-tray-menu";
 import { deployment } from "./config-panel-wiring/fixtures";
 import { shellStores } from "./shell-fixture";
 import { writeSession } from "../src/hooks/sessionStore";
+import { deferred } from "./deferred";
 
 const entry = (id: string, group: string | null = "same"): PendingQueueEntryView => ({
   requestDocId: `doc-${id}`,
@@ -37,16 +38,6 @@ const turn = (row: PendingQueueEntryView): PendingTurnView => ({
   origin: null,
   createdAt: null,
 });
-
-function deferred() {
-  let resolve!: () => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<void>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-}
 
 /* rows by request, since a row being edited shows its editor, not its text */
 function rowFor(id: string) {

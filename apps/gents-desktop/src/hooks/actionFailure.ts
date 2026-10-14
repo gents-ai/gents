@@ -1,7 +1,9 @@
+import { errorText } from "../lib/errorText";
+
 /** How a failed action is reported, once: what failed, as a person would say
     it, and why. */
 export function actionFailure(label: string, error: unknown): string {
-  return `Couldn’t ${label}: ${error instanceof Error ? error.message : String(error)}`;
+  return `Couldn’t ${label}: ${errorText(error)}`;
 }
 
 /* Failures an action has already shown the person. A caller that catches

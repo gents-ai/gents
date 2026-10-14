@@ -12,6 +12,7 @@ import {
 import type { ManagedServerAuthorityInput } from "@source-inc/gents-desktop-client";
 import { authoritySummary } from "@/lib/managedRuntimeAuthority";
 import { pickDirectory } from "../../lib/nativeShell";
+import { errorText } from "../../lib/errorText";
 
 type ToolCeiling = ManagedServerAuthorityInput["toolCeiling"];
 
@@ -75,7 +76,7 @@ export function ManagedRuntimeAuthorityPicker({
       onRootChange(canonical);
     } catch (cause) {
       if (generation !== validationGeneration.current) return;
-      onError(cause instanceof Error ? cause.message : String(cause));
+      onError(errorText(cause));
     } finally {
       if (generation === validationGeneration.current) setValidating(false);
     }
@@ -92,7 +93,7 @@ export function ManagedRuntimeAuthorityPicker({
       else input.current?.focus();
     } catch (cause) {
       if (generation === validationGeneration.current) {
-        onError(cause instanceof Error ? cause.message : String(cause));
+        onError(errorText(cause));
       }
     }
   };

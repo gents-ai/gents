@@ -1,3 +1,5 @@
+import { errorText } from "./errorText";
+
 /** The bridge's error code on a failure, when it carries one. */
 export function bridgeErrorCode(cause: unknown): string | null {
   if (!cause || typeof cause !== "object") return null;
@@ -16,7 +18,7 @@ export function setupErrorMessage(
   cause: unknown,
   fallback = "Something went wrong. Try again.",
 ): string {
-  const message = cause instanceof Error ? cause.message : String(cause ?? "");
+  const message = errorText(cause ?? "");
   if (!message.trim()) return fallback;
   if (INTERNAL_DETAIL.test(message)) {
     console.warn("setup error detail", cause);

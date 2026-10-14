@@ -13,6 +13,7 @@ import type {
 import { useApp } from "@/app/AppContext";
 import { canPickDirectory, pickDirectory } from "../../../lib/nativeShell";
 import { Group, Row } from "./rows";
+import { errorText } from "../../../lib/errorText";
 
 const ACCESS_LABEL: Record<AllowedFolderAccess, string> = {
   read: "Read only",
@@ -33,7 +34,7 @@ export function AllowedFoldersPanel() {
         setFolders(await command());
         return true;
       } catch (error) {
-        toast.error(error instanceof Error ? error.message : String(error));
+        toast.error(errorText(error));
         return false;
       } finally {
         setBusy(false);
