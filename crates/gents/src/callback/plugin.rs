@@ -21,7 +21,7 @@ use super::documents::{
 };
 use super::run::{deny, encode_journal, persist_journal};
 use super::{LIFECYCLE_FAILED, LIFECYCLE_RUNNING, LIFECYCLE_SUCCEEDED};
-use crate::graph_pipeline::{PortCardinality, PortSpec};
+use crate::document_config::{PortCardinality, PortSpec};
 use crate::plugin::executor::PluginExecutor;
 use crate::plugin::PluginVerdict;
 use crate::workspace::journal::advance;
