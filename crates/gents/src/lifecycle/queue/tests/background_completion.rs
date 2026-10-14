@@ -720,7 +720,7 @@ async fn restart_before_claim_preserves_pending_input_until_the_wake_completes()
         .unwrap();
     assert_eq!(recovery.background_wakes_redriven, 0);
     let before = crate::load_background_completion_diagnostics(
-        &crate::config_client::ConfigAccess::Local(node.clone()),
+        &crate::config_client::ConfigAccess::local(node.clone()),
         db.node_did(),
     )
     .await
@@ -764,7 +764,7 @@ async fn restart_before_claim_preserves_pending_input_until_the_wake_completes()
         .unwrap();
 
     let after = crate::load_background_completion_diagnostics(
-        &crate::config_client::ConfigAccess::Local(node),
+        &crate::config_client::ConfigAccess::local(node),
         db.node_did(),
     )
     .await
@@ -840,7 +840,7 @@ async fn canonical_terminal_commit_makes_acknowledgement_restart_atomic() {
     // selects the exact header and acknowledges the claimed notification set
     // atomically; startup must not infer completion from published bytes.
     let unpublished_terminal = crate::load_background_completion_diagnostics(
-        &crate::config_client::ConfigAccess::Local(node.clone()),
+        &crate::config_client::ConfigAccess::local(node.clone()),
         db.node_did(),
     )
     .await
@@ -880,7 +880,7 @@ async fn canonical_terminal_commit_makes_acknowledgement_restart_atomic() {
         .unwrap();
     assert_eq!(first_repair.repaired, 0);
     let first = crate::load_background_completion_diagnostics(
-        &crate::config_client::ConfigAccess::Local(node.clone()),
+        &crate::config_client::ConfigAccess::local(node.clone()),
         db.node_did(),
     )
     .await
@@ -894,7 +894,7 @@ async fn canonical_terminal_commit_makes_acknowledgement_restart_atomic() {
         .unwrap();
     assert_eq!(second_repair.repaired, 0);
     let second = crate::load_background_completion_diagnostics(
-        &crate::config_client::ConfigAccess::Local(node),
+        &crate::config_client::ConfigAccess::local(node),
         db.node_did(),
     )
     .await
@@ -1044,7 +1044,7 @@ async fn successor_acknowledges_input_left_by_a_failed_active_wake() {
         .await
         .unwrap();
 
-    let access = crate::config_client::ConfigAccess::Local(node);
+    let access = crate::config_client::ConfigAccess::local(node);
     let diagnostics = crate::load_background_completion_diagnostics(&access, db.node_did())
         .await
         .unwrap();
@@ -1075,7 +1075,7 @@ async fn append_sequence_index_fetches_only_latest_header() {
     let db = test_db("sequence-index").await;
     let session = "sequence-index-session";
     let query = super::super::atomic_inputs::append_sequence_query(db.node_did(), session);
-    let access = crate::config_client::ConfigAccess::Local(db.node.clone());
+    let access = crate::config_client::ConfigAccess::local(db.node.clone());
     let empty = access.execute(&query).await.unwrap();
     assert!(empty["data"]["AgentMessage"].as_array().unwrap().is_empty());
     for sequence in 1..=49 {

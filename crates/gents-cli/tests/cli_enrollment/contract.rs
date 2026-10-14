@@ -565,7 +565,7 @@ async fn wait_for_replicated_reply(
             let mut body = String::new();
             if let Some(row) = terminal_request_row {
                 match gents::session::observe_request_output(
-                    &gents::ConfigAccess::Local(core.node_arc()),
+                    &gents::ConfigAccess::local(core.node_arc()),
                     &row,
                 )
                 .await

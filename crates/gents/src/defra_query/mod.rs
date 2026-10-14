@@ -135,7 +135,7 @@ impl Tool for DefraQueryTool {
             .await
         } else {
             execute_command(
-                &crate::config_client::ConfigAccess::Local(self.node.clone()),
+                &crate::config_client::ConfigAccess::local(self.node.clone()),
                 &args,
                 &self.scope,
             )

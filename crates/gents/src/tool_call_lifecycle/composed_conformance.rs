@@ -129,7 +129,7 @@ async fn generated_composed_invariants_use_canonical_admission_owner() {
         assert_eq!(row["request_doc_id"], request_doc_id);
         let session_id = format!("session-composed-{}", witness.tool_call_id);
         let arguments = super::load_tool_call_arguments(
-            &ConfigAccess::Local(admission.node.clone()),
+            &ConfigAccess::local(admission.node.clone()),
             &tool_doc_id,
             &admission.node_did,
             &session_id,

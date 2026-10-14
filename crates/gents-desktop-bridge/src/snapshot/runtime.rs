@@ -473,7 +473,7 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
         })
         .collect::<Vec<_>>();
 
-    let access = gents::config_client::ConfigAccess::Local(core.node_arc());
+    let access = gents::config_client::ConfigAccess::local(core.node_arc());
     super::runtime_tasks::resolve_summary_starters(
         &access,
         deployments

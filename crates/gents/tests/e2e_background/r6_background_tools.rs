@@ -851,7 +851,7 @@ async fn background_tool_execution_survives_parent_request_deadline() {
     let row = load_tool_call(turn.db.node.as_ref(), &turn.session_id, &tool_call_id).await;
     assert_eq!(row.lifecycle_state.as_deref(), Some("completed"));
     let timeline = gents::run_timeline_fetch::load_run_timeline_rows(
-        &gents::config_client::ConfigAccess::Local(turn.db.node.clone()),
+        &gents::config_client::ConfigAccess::local(turn.db.node.clone()),
         "r6-background-outlives-deadline-request-2",
     )
     .await
@@ -1171,7 +1171,7 @@ async fn wait_envelope_bounds_oversized_background_tool_result() {
     let row = load_tool_call(turn.db.node.as_ref(), &turn.session_id, &tool_call_id).await;
     assert_eq!(row.lifecycle_state.as_deref(), Some("completed"));
     let timeline = gents::run_timeline_fetch::load_run_timeline_rows(
-        &gents::config_client::ConfigAccess::Local(turn.db.node.clone()),
+        &gents::config_client::ConfigAccess::local(turn.db.node.clone()),
         &turn.request_id,
     )
     .await
@@ -1891,7 +1891,7 @@ async fn same_tool_background_calls_execute_concurrently_without_registry_mutex(
         wait_for_tool_completion_message(turn.db.node.as_ref(), &turn.session_id, &handle).await;
     }
     let timeline = gents::run_timeline_fetch::load_run_timeline_rows(
-        &gents::config_client::ConfigAccess::Local(turn.db.node.clone()),
+        &gents::config_client::ConfigAccess::local(turn.db.node.clone()),
         &turn.request_id,
     )
     .await

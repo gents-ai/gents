@@ -53,7 +53,7 @@ async fn resumed_goal_tool_output_reaches_correlation_keyed_event_trigger() {
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
     let receipt = crate::goal::resume_goal_request(
-        &crate::ConfigAccess::Local(node.clone()),
+        &crate::ConfigAccess::local(node.clone()),
         &identity,
         identity.did(),
         "resumed-event-session",

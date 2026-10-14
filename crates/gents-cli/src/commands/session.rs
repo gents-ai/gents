@@ -4,7 +4,6 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
 use gents::session::{fork, fork_via_http, ForkError, ForkOutcome, ForkParams};
 use serde_json::{json, Value};
@@ -108,14 +107,17 @@ async fn session_fork(args: SessionForkArgs) -> Result<()> {
     let home = resolve_home_dir(args.home.as_deref());
     let data_dir = default_data_dir(&home);
 
-    let store = open_offline_fork_store(&home, &data_dir).await?;
-    gents::ensure_runtime_schemas(&store.node)
+    let access = open_offline_fork_store(&home, &data_dir).await?;
+    let node = access
+        .local_node()
+        .ok_or_else(|| anyhow::anyhow!("offline fork requires local DefraDB access"))?;
+    gents::migration::ensure_all_runtime_migrations(node.clone())
         .await
         .context("ensuring runtime schemas")?;
     gents::store_key::upgrade::finish(&data_dir)?;
 
     let outcome = fork(
-        &store.node,
+        node,
         ForkParams {
             source_session_id: &args.from,
             fork_at_user_turn: args.at_user_turn,
@@ -131,18 +133,9 @@ async fn session_fork(args: SessionForkArgs) -> Result<()> {
     Ok(())
 }
 
-/// Fork v1's offline store: the home's data directory opened as an embedded
-/// node under the store claim `gents init` and `gents server` take, so an
-/// overwrite cannot wipe a store mid-fork. Fields drop in declaration order:
-/// the node closes before the claim is released.
-struct OfflineForkStore {
-    node: Arc<EmbeddedNode>,
-    _claim: gents::home::StoreLock,
-}
-
-/// Initialization is checked before claiming; opening or upgrading the store
-/// requires the claim to remain held until the node closes.
-async fn open_offline_fork_store(home: &Path, data_dir: &Path) -> Result<OfflineForkStore> {
+/// Initialization is checked before claiming; the returned access owns the
+/// claim for the duration of the local fork and its Gents-owned native work.
+async fn open_offline_fork_store(home: &Path, data_dir: &Path) -> Result<ConfigAccess> {
     anyhow::ensure!(
         crate::read_init_config(home)?.is_some(),
         "gents home {} is not initialized; run `gents init --home {}` first",
@@ -169,10 +162,8 @@ async fn open_offline_fork_store(home: &Path, data_dir: &Path) -> Result<Offline
         .build()
         .await
         .with_context(|| format!("opening embedded node at {}", data_dir.display()))?;
-    Ok(OfflineForkStore {
-        node: Arc::new(node),
-        _claim: claim,
-    })
+    let node = Arc::new(node);
+    ConfigAccess::claimed_local(node, claim)
 }
 
 async fn query_sessions(access: &ConfigAccess, session_id: Option<&str>) -> Result<Vec<Value>> {

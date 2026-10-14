@@ -772,7 +772,7 @@ async fn failed_background_wake_waits_for_persisted_backoff() {
     );
     assert!(!wake_rows.is_empty());
     let diagnostics = gents::load_background_completion_diagnostics(
-        &gents::config_client::ConfigAccess::Local(db.node.clone()),
+        &gents::config_client::ConfigAccess::local(db.node.clone()),
         db.node_identity.did(),
     )
     .await
@@ -851,7 +851,7 @@ async fn failed_background_wake_waits_for_persisted_backoff() {
     )
     .await;
     let displaced = gents::load_background_completion_diagnostics(
-        &gents::config_client::ConfigAccess::Local(db.node.clone()),
+        &gents::config_client::ConfigAccess::local(db.node.clone()),
         db.node_identity.did(),
     )
     .await

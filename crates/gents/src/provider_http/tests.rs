@@ -315,7 +315,7 @@ pub(crate) async fn stored_usage_eventually(
     node: &std::sync::Arc<defra_node::EmbeddedNode>,
     account: &crate::usage_observation::UsageAccount,
 ) -> Option<crate::usage_observation::StoredUsage> {
-    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let access = crate::config_client::ConfigAccess::local(node.clone());
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
         let stored = crate::usage_observation::load_usage(&access, account)
@@ -401,7 +401,7 @@ async fn usage_capture_without_reporter_writes_nothing() {
         .await
         .expect("200");
     tokio::time::sleep(Duration::from_millis(200)).await;
-    let rows = crate::config_client::ConfigAccess::Local(node)
+    let rows = crate::config_client::ConfigAccess::local(node)
         .execute("{ ProviderAccountUsage { usage_key } }")
         .await
         .expect("read");

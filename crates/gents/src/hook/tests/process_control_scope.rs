@@ -194,7 +194,7 @@ async fn generated_wait_observer_interrupt_preserves_background_process() {
     let wait_row = fetch_tool_call_row(&node, &session_id, wait_id).await;
     assert_eq!(wait_row["lifecycle_state"], case.terminal_state);
     let persisted = crate::tool_call_lifecycle::query::load_tool_call_result(
-        &crate::config_client::ConfigAccess::Local(node.clone()),
+        &crate::config_client::ConfigAccess::local(node.clone()),
         wait_row["_docID"].as_str().expect("physical wait call"),
         &hook.node_did,
         &session_id,

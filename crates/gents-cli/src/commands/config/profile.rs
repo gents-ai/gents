@@ -265,7 +265,7 @@ async fn write_checked(
 async fn target(
     home: Option<&std::path::Path>,
     graphql: Option<&str>,
-) -> Result<(crate::CommandAccess, String)> {
+) -> Result<(gents::config_client::ConfigAccess, String)> {
     let (access, _) = crate::resolve_config_access(home, graphql).await?;
     let node_did =
         super::binding::resolve_target_node_did(None, None, home, graphql, Some(&access)).await?;
@@ -497,7 +497,7 @@ mod tests {
         use gents::oauth_credential::{set_account_enabled, store_sign_in};
         let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
         gents::ensure_runtime_schemas(&node).await.unwrap();
-        let access = ConfigAccess::Local(node);
+        let access = ConfigAccess::local(node);
         for value in [
             backend(
                 "claude",

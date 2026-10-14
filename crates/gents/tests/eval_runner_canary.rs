@@ -863,7 +863,7 @@ impl Canary {
 /// principal that launched it, and each trial gets its own DID of its own.
 async fn canary_request(endpoint: &str, run_id: &str) -> (Canary, RunRequest) {
     let home = EmbeddedHome::create_temp("eval-canary").await.unwrap();
-    let access = ConfigAccess::Local(home.node.clone());
+    let access = ConfigAccess::local(home.node.clone());
     let owner = home.did().to_string();
     gents::ensure_node(&home.node, &owner).await.unwrap();
     let canary = Canary {

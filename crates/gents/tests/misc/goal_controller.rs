@@ -1565,7 +1565,7 @@ async fn signed_goal_backed_request(
 #[tokio::test]
 async fn goal_backed_submission_commits_goal_before_request_visibility_and_retries_idempotently() {
     let db = test_db("goal-backed-submit").await;
-    let access = ConfigAccess::Local(db.node.clone());
+    let access = ConfigAccess::local(db.node.clone());
     let create = signed_goal_backed_request(&db, "goal-backed-first").await;
     let first = gents::goal::submit_goal_backed_request(
         &access,
@@ -1639,7 +1639,7 @@ async fn goal_backed_submission_commits_goal_before_request_visibility_and_retri
 #[tokio::test]
 async fn goal_backed_retry_rejects_changed_logical_request_fields() {
     let db = test_db("goal-backed-submit-fingerprint-conflict").await;
-    let access = ConfigAccess::Local(db.node.clone());
+    let access = ConfigAccess::local(db.node.clone());
     let create = signed_goal_backed_request(&db, "goal-backed-fingerprint").await;
     gents::goal::submit_goal_backed_request(
         &access,
@@ -1678,7 +1678,7 @@ async fn goal_backed_retry_rejects_changed_logical_request_fields() {
 #[tokio::test]
 async fn goal_backed_submission_rejects_a_matching_terminal_goal_without_publishing() {
     let db = test_db("goal-backed-submit-terminal-goal").await;
-    let access = ConfigAccess::Local(db.node.clone());
+    let access = ConfigAccess::local(db.node.clone());
     set_goal(
         &db.node,
         db.node_identity.did(),
@@ -1723,7 +1723,7 @@ async fn goal_backed_submission_rejects_a_matching_terminal_goal_without_publish
 #[tokio::test]
 async fn goal_backed_submission_discards_goal_when_request_staging_fails() {
     let db = test_db("goal-backed-submit-rollback").await;
-    let access = ConfigAccess::Local(db.node.clone());
+    let access = ConfigAccess::local(db.node.clone());
     let mut invalid = signed_goal_backed_request(&db, "goal-backed-invalid").await;
     invalid.initial_lifecycle_state =
         gents_protocol::client_protocol::RequestLifecycleState::Processing;
@@ -2590,7 +2590,7 @@ async fn seed_a_passed_reset(db: &TestDb, opted_in: bool) {
     .expect("set goal");
     if opted_in {
         set_goal_from_access(
-            &ConfigAccess::Local(db.node.clone()),
+            &ConfigAccess::local(db.node.clone()),
             did,
             SESSION,
             None,
@@ -3105,7 +3105,7 @@ async fn operator_resume_publishes_one_lineage_child_and_fences_old_pause() {
     set_goal(&db.node, did, SESSION, None, Some(GoalStatus::Paused), None)
         .await
         .unwrap();
-    let access = ConfigAccess::Local(db.node.clone());
+    let access = ConfigAccess::local(db.node.clone());
     let receipt = gents::goal::resume_goal_request(
         &access,
         db.node_identity.as_ref(),
@@ -3201,7 +3201,7 @@ async fn operator_resume_retry_after_goal_progress_returns_original_child_withou
     )
     .await
     .unwrap();
-    let access = ConfigAccess::Local(db.node.clone());
+    let access = ConfigAccess::local(db.node.clone());
     let first = gents::goal::resume_goal_request(
         &access,
         db.node_identity.as_ref(),
@@ -3268,7 +3268,7 @@ async fn operator_resume_rejects_foreign_identity_even_with_target_key_registere
     )
     .await
     .unwrap();
-    let access = ConfigAccess::Local(target.node.clone());
+    let access = ConfigAccess::local(target.node.clone());
     assert!(gents::goal::resume_goal_request(
         &access,
         foreign.node_identity.as_ref(),
@@ -3320,7 +3320,7 @@ async fn operator_resume_rejects_busy_session_and_old_predecessor() {
         )
         .await
         .unwrap();
-        let access = ConfigAccess::Local(db.node.clone());
+        let access = ConfigAccess::local(db.node.clone());
         assert!(gents::goal::resume_goal_request(
             &access,
             db.node_identity.as_ref(),
@@ -3361,7 +3361,7 @@ async fn resume_resets_blocked_audit_identity_and_count() {
     .unwrap();
     seed_goal_fields(db.node.as_ref(), &goal,
         r#"status: "blocked", consecutive_blocked_audits: 3, last_blocked_request_id: "request-3", last_blocked_reason: "needs approval", active_started_at: null"#).await.unwrap();
-    let access = ConfigAccess::Local(db.node.clone());
+    let access = ConfigAccess::local(db.node.clone());
     let receipt = gents::goal::resume_goal_request(
         &access,
         db.node_identity.as_ref(),
@@ -3398,7 +3398,7 @@ async fn concurrent_operator_resumes_publish_one_child() {
     )
     .await
     .unwrap();
-    let access = ConfigAccess::Local(db.node.clone());
+    let access = ConfigAccess::local(db.node.clone());
     let (left, right) = tokio::join!(
         gents::goal::resume_goal_request(
             &access,
@@ -3446,7 +3446,7 @@ async fn operator_resume_rejects_corrupted_child_receipt_without_reactivation() 
     )
     .await
     .unwrap();
-    let access = ConfigAccess::Local(db.node.clone());
+    let access = ConfigAccess::local(db.node.clone());
     let first = gents::goal::resume_goal_request(
         &access,
         db.node_identity.as_ref(),
@@ -3556,7 +3556,7 @@ async fn operator_resume_rejects_older_unfinished_siblings_without_mutation() {
         .await
         .unwrap();
         let error = gents::goal::resume_goal_request(
-            &ConfigAccess::Local(db.node.clone()),
+            &ConfigAccess::local(db.node.clone()),
             db.node_identity.as_ref(),
             did,
             SESSION,
@@ -3607,7 +3607,7 @@ async fn operator_resume_preserves_pending_wrapup_in_child_policy() {
     .await
     .unwrap();
     let receipt = gents::goal::resume_goal_request(
-        &ConfigAccess::Local(db.node.clone()),
+        &ConfigAccess::local(db.node.clone()),
         db.node_identity.as_ref(),
         did,
         SESSION,
@@ -3841,7 +3841,7 @@ async fn operator_resume_accepts_same_second_child_that_sorts_before_root() {
         let (child_id, child_doc) =
             seed_same_second_canonical_goal_child(&db, parent_id, true).await;
         let receipt = gents::goal::resume_goal_request(
-            &ConfigAccess::Local(db.node.clone()),
+            &ConfigAccess::local(db.node.clone()),
             db.node_identity.as_ref(),
             db.node_identity.did(),
             SESSION,

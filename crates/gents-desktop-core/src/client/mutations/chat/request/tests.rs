@@ -1133,7 +1133,7 @@ async fn goal_backed_desktop_submission_commits_goal_claim_and_signed_request_to
 
     let session_id = Uuid::new_v4().to_string();
     let snapshot = core.store().snapshot();
-    let access = ConfigAccess::Local(core.node_arc());
+    let access = ConfigAccess::local(core.node_arc());
     let submitted = super::submit_goal_backed_request(
         core.node(),
         snapshot.as_ref(),

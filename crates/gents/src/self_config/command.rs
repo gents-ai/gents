@@ -1953,7 +1953,7 @@ impl ConfigCommandTool {
         use crate::backend_provider::BackendProviderOauthExt;
         use crate::oauth_credential::backend_account;
         use crate::usage_observation::{load_usage, usage_view, UsageAccount};
-        let access = crate::config_client::ConfigAccess::Local(self.node.clone());
+        let access = crate::config_client::ConfigAccess::local(self.node.clone());
         let node_did = self.node_did.as_str();
         let accounts = crate::oauth_credential::list_accounts(&access, node_did).await?;
         let (backends, profiles) = crate::config_client::ConfigAccess::transact_local_readonly(

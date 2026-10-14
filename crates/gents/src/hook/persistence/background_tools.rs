@@ -597,7 +597,7 @@ impl DefraSessionHook {
         lifecycle: &crate::tool_call_lifecycle::ToolCallLifecycle,
     ) -> anyhow::Result<ToolCallHookAction> {
         let message = crate::tool_call_lifecycle::query::load_tool_call_result(
-            &crate::config_client::ConfigAccess::Local(self.node.clone()),
+            &crate::config_client::ConfigAccess::local(self.node.clone()),
             lifecycle
                 .doc_id()
                 .context("lost terminal compare requires physical tool identity")?,

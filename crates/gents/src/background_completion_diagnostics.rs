@@ -661,7 +661,7 @@ mod tests {
             .await?;
         node.add_schema(gents_protocol::schemas::AGENT_MESSAGE)
             .await?;
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         // An escaped owner exercises the distinction between raw lookup scope
         // and GraphQL spelling. Diagnostics read authoritative documents
         // directly and maintain no session cache.

@@ -44,7 +44,7 @@ async fn seeded_arrival_delivery_does_not_wait_for_the_mutation_gate() {
     let (_tx, rx) = watch::channel(snapshot.clone());
     let mut source = EventSource::new(rx, node.clone(), CancellationToken::new());
     source.reconcile_subscriptions(&snapshot).await;
-    let response = crate::config_client::ConfigAccess::Local(node.clone())
+    let response = crate::config_client::ConfigAccess::local(node.clone())
         .write(
             "test.cursor_gate_source",
             r#"mutation { create_OutcomePing(input: {message: "ready"}) {_docID} }"#,
@@ -86,7 +86,7 @@ async fn first_delivery_on(schema: &str, emit_outcome: bool) -> (Delivery, FireI
     let writer = node.clone();
     let created = tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(200)).await;
-        let response = crate::config_client::ConfigAccess::Local(writer)
+        let response = crate::config_client::ConfigAccess::local(writer)
             .write(
                 "test.outcome_ping",
                 r#"mutation { create_OutcomePing(input: {message: "train-echo-11"}) { _docID } }"#,
@@ -120,7 +120,7 @@ async fn first_delivery_on(schema: &str, emit_outcome: bool) -> (Delivery, FireI
 impl Delivery {
     async fn cursor(&self) -> String {
         let owner = event_test_behavior().node_did().to_owned();
-        crate::config_client::ConfigAccess::Local(self.node.clone())
+        crate::config_client::ConfigAccess::local(self.node.clone())
             .transact_write("test.unacknowledged_cursor", |txn| {
                 let owner = &owner;
                 Box::pin(async move {
@@ -485,7 +485,7 @@ async fn repaired_document_is_delivered_once(drop_notification: bool) {
     assert_eq!(delivery.drain(Duration::from_secs(1), |_| None).await, 0);
     delivery.trigger_error().await;
 
-    crate::config_client::ConfigAccess::Local(delivery.node.clone())
+    crate::config_client::ConfigAccess::local(delivery.node.clone())
         .write(
             "test.repair_outcome_ping",
             &format!(
@@ -520,7 +520,7 @@ async fn deleted_refused_document_releases_its_trigger() {
         FireResult::Rejected { .. }
     ));
     assert_eq!(delivery.drain(Duration::from_secs(1), |_| None).await, 0);
-    crate::config_client::ConfigAccess::Local(delivery.node.clone())
+    crate::config_client::ConfigAccess::local(delivery.node.clone())
         .write(
             "test.delete_outcome_ping",
             &format!(

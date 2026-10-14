@@ -113,7 +113,7 @@ mod tests {
             add: context.clone(),
             update: context,
         }])?;
-        ConfigAccess::Local(node.clone())
+        ConfigAccess::local(node.clone())
             .transact_write("test.context.create", |txn| {
                 let plan = &plan;
                 Box::pin(async move {
@@ -132,7 +132,7 @@ mod tests {
     async fn agent_and_profile_deletion_obey_canonical_owned_references() -> Result<()> {
         let node = Arc::new(EmbeddedNode::builder().build().await?);
         gents::ensure_runtime_schemas(&node).await?;
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         for owner in ["did:test:alpha", "did:test:beta"] {
             gents::ensure_node(&node, owner).await?;
             let backend = serde_json::from_value(json!({

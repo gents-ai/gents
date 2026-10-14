@@ -275,7 +275,7 @@ async fn generated_terminal_outcome_action_traces_use_native_owners() {
     for trace in contract()["outcome_traces"].as_array().unwrap() {
         let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
         ensure_runtime_schemas(&node).await.unwrap();
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         let mut published = std::collections::BTreeMap::new();
         let mut terminal_states = std::collections::BTreeMap::new();
         for (index, step) in trace["steps"].as_array().unwrap().iter().enumerate() {
@@ -528,7 +528,7 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
     for case in contract()["cursors"].as_array().unwrap() {
         let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
         ensure_runtime_schemas(&node).await.unwrap();
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         access
             .add_schema("type Work { label: String eligible: Boolean }")
             .await
@@ -787,7 +787,7 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
         let name = &case["name"];
         let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
         ensure_runtime_schemas(&node).await.unwrap();
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         access
             .add_schema("type Work { label: String eligible: Boolean }")
             .await

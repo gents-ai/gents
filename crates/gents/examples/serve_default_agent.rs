@@ -182,7 +182,7 @@ mod tests {
     async fn example_uses_scoped_config_preserving_auth_and_capacity() -> Result<()> {
         let node = Arc::new(EmbeddedNode::builder().build().await?);
         ensure_runtime_schemas(&node).await?;
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         for owner in ["did:test:demo-a", "did:test:demo-b"] {
             seed_demo_documents(
                 &node,

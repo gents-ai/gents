@@ -1275,7 +1275,7 @@ async fn retry_continues_recorded_tool_progress_without_republishing_input() {
     gents::sign_agent_request_create_as_registered_target(&mut create)
         .await
         .unwrap();
-    let response = gents::config_client::ConfigAccess::Local(db.node.clone())
+    let response = gents::config_client::ConfigAccess::local(db.node.clone())
         .write("test.retry_successor", &create.graphql_mutation().unwrap())
         .await
         .unwrap();

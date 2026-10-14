@@ -802,9 +802,10 @@ mod tests {
             std::sync::Arc::clone(&gate),
             promote(harness.access(), OWNER, &request.job_id, &digest, OWNER),
         );
-        let ConfigAccess::Local(node) = harness.access() else {
-            unreachable!("the harness is embedded")
-        };
+        let node = harness
+            .access()
+            .local_node()
+            .expect("the harness is embedded");
         let edit = async {
             gate.0.notified().await;
             // Lands outside the process write gate, as another writer would.

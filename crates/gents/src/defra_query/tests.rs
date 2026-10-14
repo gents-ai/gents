@@ -754,7 +754,7 @@ async fn explain_preserves_native_plan_and_requires_explicit_execution() {
     )
     .await
     .unwrap();
-    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let access = crate::config_client::ConfigAccess::local(node.clone());
     let scope = CollectionScope::restricted(vec!["PlanTicket".into()]);
     let args: QueryParams = serde_json::from_value(json!({"argv":["explain"],"collection":"PlanTicket","options":{"fields":["reference"],"filter":{"status":{"_eq":"closed"}},"limit":5}})).unwrap();
     let result = execute_command(&access, &args, &scope).await.unwrap();

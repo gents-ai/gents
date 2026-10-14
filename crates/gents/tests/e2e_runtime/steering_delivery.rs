@@ -64,7 +64,7 @@ async fn steering_case(hold_tool: bool) {
     };
     let db = test_db(name).await;
     let did = db.node_identity.did();
-    let access = ConfigAccess::Local(db.node.clone());
+    let access = ConfigAccess::local(db.node.clone());
     let first_response = if hold_tool {
         StreamResponse::streams(
             name,
@@ -356,7 +356,7 @@ async fn signed_request_cannot_forge_another_requests_queue_slot() {
         .observed_completion_bodies()
         .iter()
         .all(|body| !body.to_string().contains("forged content must not execute")));
-    let captures = ConfigAccess::Local(db.node.clone()).execute(&format!(r#"{{ RenderedRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ request_doc_id }} }}"#, escape_graphql_string("forged-slot"))).await.unwrap();
+    let captures = ConfigAccess::local(db.node.clone()).execute(&format!(r#"{{ RenderedRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ request_doc_id }} }}"#, escape_graphql_string("forged-slot"))).await.unwrap();
     assert!(captures["data"]["RenderedRequest"]
         .as_array()
         .unwrap()

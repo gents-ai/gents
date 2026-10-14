@@ -121,7 +121,7 @@ async fn agent_apply(
     preview: bool,
 ) -> Result<String> {
     agent_apply_access(
-        &ConfigAccess::Local(node.clone()),
+        &ConfigAccess::local(node.clone()),
         owner,
         args,
         ceiling,
@@ -136,7 +136,7 @@ pub(super) async fn model_agent_preview(
     args: &ConfigureAgentParams,
 ) -> Result<String> {
     match agent_apply_access(
-        &ConfigAccess::Local(core.node_handle()),
+        &ConfigAccess::local(core.node_handle()),
         core.node_did(),
         args,
         core.process_ceiling(),
@@ -162,7 +162,7 @@ pub(super) async fn model_agent_mutate(
         "agent writes require the exact local node identity"
     );
     agent_apply_access(
-        &ConfigAccess::Local(core.node_handle()),
+        &ConfigAccess::local(core.node_handle()),
         core.node_did(),
         args,
         core.process_ceiling(),
@@ -182,7 +182,8 @@ async fn agent_apply_access(
 ) -> Result<String> {
     let identity = Some(::identity::Did::new(owner.to_owned())?);
     match access {
-        ConfigAccess::Local(node) => {
+        ConfigAccess::Local(local) => {
+            let node = local.node();
             if preview {
                 ConfigAccess::transact_local_readonly(node, identity, "self_config.agent", |txn| {
                     Box::pin(agent_apply_in_txn(txn, owner, args, ceiling, preview, held))

@@ -20,7 +20,7 @@ async fn node() -> Arc<EmbeddedNode> {
 }
 
 fn local(node: &Arc<EmbeddedNode>) -> ConfigAccess {
-    ConfigAccess::Local(node.clone())
+    ConfigAccess::local(node.clone())
 }
 
 fn credential(node_did: &str, account_ref: Option<&str>, key: Option<&str>) -> OAuthCredential {

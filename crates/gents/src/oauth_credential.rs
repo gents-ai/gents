@@ -2651,7 +2651,7 @@ mod resolver_tests {
         ] {
             upsert_oauth_credential(&node, &credential).await.unwrap();
         }
-        let access = crate::config_client::ConfigAccess::Local(node);
+        let access = crate::config_client::ConfigAccess::local(node);
         for (pick, expected) in [
             (AccountPick::Reference(Some("b")), "xai-oauth:b"),
             (AccountPick::Reference(None), "xai-oauth:original"),
@@ -2714,7 +2714,7 @@ mod sign_in_tests {
     const DID: &str = "did:key:zSignIn";
 
     async fn sign_in(node: &Arc<EmbeddedNode>, credential: &OAuthCredential) -> OAuthCredential {
-        let doc_id = upsert_oauth_credential_on(&ConfigAccess::Local(node.clone()), credential)
+        let doc_id = upsert_oauth_credential_on(&ConfigAccess::local(node.clone()), credential)
             .await
             .unwrap();
         let stored = lookup_oauth_credential_by_id(node, &credential.credential_id)
@@ -2907,7 +2907,7 @@ mod lifecycle_tests {
     }
 
     async fn access() -> ConfigAccess {
-        ConfigAccess::Local(test_node().await)
+        ConfigAccess::local(test_node().await)
     }
 
     async fn store(access: &ConfigAccess, credential: OAuthCredential) -> SignIn {
@@ -3535,10 +3535,7 @@ mod lifecycle_tests {
     }
 
     fn node(access: &ConfigAccess) -> &Arc<EmbeddedNode> {
-        match access {
-            ConfigAccess::Local(node) => node,
-            ConfigAccess::Graphql(_) => unreachable!("tests run on a local node"),
-        }
+        access.local_node().expect("tests run on a local node")
     }
 
     async fn backends(access: &ConfigAccess, did: &str) -> Vec<crate::InferenceBackend> {
@@ -4253,7 +4250,7 @@ mod backfill_tests {
             },
             Utc::now(),
         );
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         let bearer = refresh_racing(&node, did, async {
             let signed = store_sign_in(&access, sign_in.clone(), None).await.unwrap();
             assert_eq!(signed.result, SignInResult::Refreshed);
@@ -4305,7 +4302,7 @@ mod backfill_tests {
             },
             Utc::now(),
         );
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         refresh_racing(&node, did, async {
             ConfigAccess::write_local(
                 &node,
@@ -4401,7 +4398,7 @@ mod backfill_tests {
     async fn upgraded_rows_keep_their_identity_and_fill_the_key_on_first_refresh() {
         let node = test_node().await;
         let did = "did:key:zUpgradedRows";
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         seed_upgraded_row(
             &node,
             did,
@@ -4679,7 +4676,7 @@ mod cooldown_tests {
             OAuthRefreshKind::Xai,
             XAI_OAUTH_PRODUCT,
         );
-        let access = crate::config_client::ConfigAccess::Local(node.clone());
+        let access = crate::config_client::ConfigAccess::local(node.clone());
         access
             .transact_write("test.remove", |txn| {
                 let credential_id = credential_id.clone();
@@ -4727,7 +4724,7 @@ mod cooldown_tests {
             OAuthRefreshKind::Xai,
             XAI_OAUTH_PRODUCT,
         );
-        let access = crate::config_client::ConfigAccess::Local(node.clone());
+        let access = crate::config_client::ConfigAccess::local(node.clone());
         set_account_enabled(&access, did, &credential_id, false)
             .await
             .unwrap();

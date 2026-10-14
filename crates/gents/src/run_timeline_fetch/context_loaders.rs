@@ -115,7 +115,7 @@ mod tests {
             let response = node.execute(&query).await;
             assert!(!response.has_errors(), "{:?}", response.errors);
         }
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         let owner_a = load_timeline_session(&access, "owner-a", "shared-label", None)
             .await
             .unwrap()

@@ -395,7 +395,7 @@ mod tests {
         )
         .await?;
 
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         let doc = ConfigureAgentParams {
             action: "create".into(),
             display_name: StringUpdate::Set("Canonical".into()),
@@ -486,7 +486,7 @@ mod tests {
             cloned_tools_id, tools_id,
             "clone must not mutate the shared source tools"
         );
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         assert!(load_document(
             &access,
             Collection::Agent,

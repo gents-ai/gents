@@ -679,7 +679,7 @@ async fn control_watcher_resolves_context_tools_into_reconciled_tool_surface() {
     }))
     .unwrap();
     crate::config_client::write_tools_document(
-        &crate::config_client::ConfigAccess::Local(node.clone()),
+        &crate::config_client::ConfigAccess::local(node.clone()),
         &tools,
     )
     .await
@@ -866,7 +866,7 @@ async fn record_plugin_install(
         dependencies: Vec::new(),
     };
     crate::pack::record_plugin_store_change(
-        &crate::config_client::ConfigAccess::Local(node.clone()),
+        &crate::config_client::ConfigAccess::local(node.clone()),
         node_did,
         plugin_home,
         &identity.coordinate,
@@ -888,7 +888,7 @@ async fn write_tools_naming_plugin(
     }))
     .unwrap();
     crate::config_client::write_tools_document(
-        &crate::config_client::ConfigAccess::Local(node.clone()),
+        &crate::config_client::ConfigAccess::local(node.clone()),
         &tools,
     )
     .await

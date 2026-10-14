@@ -178,7 +178,7 @@ async fn generated_pending_management_cases_bind_to_signed_replacement_owner() {
             Some(2) => "did:test:fold-foreign-requester",
             _ => panic!("unsupported caller in {}", case.name),
         };
-        let access = ConfigAccess::Local(db.node.clone());
+        let access = ConfigAccess::local(db.node.clone());
         let state_query = format!(
             r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID content input admission_signature lifecycle_state valid_until }} }}"#,
             escape_graphql_string(&session_id),

@@ -217,7 +217,7 @@ mod tests {
                 .unwrap(),
         );
         gents::ensure_runtime_schemas(&node).await.unwrap();
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         for owner in ["owner-a", "owner-b"] {
             let source = bundle(owner);
             let plan = DesiredStateApplyPlan::from_pack_config(&source.config).unwrap();

@@ -520,7 +520,7 @@ mod tests {
                 .unwrap(),
         );
         crate::schema::ensure_runtime_schemas(&node).await.unwrap();
-        ConfigAccess::Local(node)
+        ConfigAccess::local(node)
     }
 
     const OWNER: &str = "did:key:job-owner";

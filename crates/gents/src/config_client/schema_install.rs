@@ -165,7 +165,7 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         let base = "type EvalPatch { message: String }";
         let extended = "type EvalPatch { message: String owned_files: String @immutable }";
         let plan = preview_schema_install(&access, base).await.unwrap();
@@ -230,7 +230,7 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         let sdl = "type EvalInput { message: String }";
         let plan = preview_schema_install(&access, sdl).await.unwrap();
         assert!(plan.requires_publication);

@@ -4,6 +4,7 @@ import Proofs.Persistence
 import Proofs.StorageObservation
 import Proofs.StorageWriteGate
 import Proofs.NativeCompletion
+import Proofs.NativeClaimLifetime
 import Proofs.Scheduling
 import Proofs.Request
 import Proofs.RequestExecutionLease

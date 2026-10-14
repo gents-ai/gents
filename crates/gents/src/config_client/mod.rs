@@ -91,7 +91,7 @@ pub use tools::write_tools_document;
 pub(crate) use txn::ReentrantEmbeddedWrite;
 pub(crate) use txn::TransactionOutcome;
 pub(crate) use txn::EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT;
-pub use txn::{ConfigApplyTxn, IdempotentTransactionRetry};
+pub use txn::{ConfigApplyTxn, IdempotentTransactionRetry, LocalConfigAccess};
 
 mod tools;
 
@@ -220,9 +220,7 @@ impl std::fmt::Display for GraphqlEndpoint {
 #[derive(Clone)]
 pub enum ConfigAccess {
     Graphql(GraphqlEndpoint),
-    /// Shared so callers that already hold the node (desktop client) can
-    /// construct access without moving it; `EmbeddedNode` is not `Clone`.
-    Local(Arc<EmbeddedNode>),
+    Local(LocalConfigAccess),
 }
 
 /// Executes reads through the existing access or transaction owner. A
@@ -259,6 +257,37 @@ impl ConfigAccess {
         Self::Graphql(GraphqlEndpoint::as_principal(url, principal_did))
     }
 
+    /// Shared so callers that already hold the node can construct access
+    /// without moving it; `EmbeddedNode` is not `Clone`.
+    pub fn local(node: Arc<EmbeddedNode>) -> Self {
+        Self::Local(LocalConfigAccess::new(node))
+    }
+
+    /// Construct local access that retains the process claim for the store
+    /// until every access and Gents-owned native operation has returned.
+    pub fn claimed_local(node: Arc<EmbeddedNode>, claim: crate::home::StoreLock) -> Result<Self> {
+        Ok(Self::Local(LocalConfigAccess::claimed(node, claim)?))
+    }
+
+    pub fn local_node(&self) -> Option<&Arc<EmbeddedNode>> {
+        match self {
+            Self::Local(local) => Some(local.node()),
+            Self::Graphql(_) => None,
+        }
+    }
+
+    pub(crate) async fn run_local_owned<T, F, Fut>(&self, operation: F) -> Result<T>
+    where
+        T: Send + 'static,
+        F: FnOnce(Arc<EmbeddedNode>) -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = Result<T>> + Send + 'static,
+    {
+        match self {
+            Self::Local(local) => local.run_owned(operation).await,
+            Self::Graphql(_) => anyhow::bail!("owned native operation requires local access"),
+        }
+    }
+
     pub fn mode(&self) -> &'static str {
         match self {
             Self::Graphql(_) => "graphql",
@@ -270,8 +299,9 @@ impl ConfigAccess {
         Box::pin(async move {
             match self {
                 Self::Graphql(graphql) => post_graphql(graphql, query).await,
-                Self::Local(node) => {
-                    let response = Self::read_local_response(node, query, "config GraphQL").await?;
+                Self::Local(local) => {
+                    let response =
+                        Self::read_local_response_owned(local, query, "config GraphQL").await?;
                     crate::graphql::ensure_no_errors(&response, "config GraphQL")?;
                     Ok(crate::graphql::into_data_envelope(response.data))
                 }
@@ -308,7 +338,14 @@ impl ConfigAccess {
                 }
                 Ok(())
             }
-            Self::Local(node) => node.add_schema(sdl).await.context("adding schema SDL"),
+            Self::Local(local) => {
+                let sdl = sdl.to_owned();
+                local
+                    .run_owned(move |node| async move {
+                        node.add_schema(&sdl).await.context("adding schema SDL")
+                    })
+                    .await
+            }
         }
     }
 
@@ -331,7 +368,7 @@ impl ConfigAccess {
     /// The names of every collection the node has registered, sorted.
     pub async fn collection_names(&self) -> Result<BTreeSet<String>> {
         match self {
-            Self::Local(node) => Ok(node.list_collections()?.into_iter().collect()),
+            Self::Local(local) => Ok(local.node().list_collections()?.into_iter().collect()),
             Self::Graphql(graphql) => {
                 let api_base = graphql_api_base(graphql.url())?;
                 let url = format!("{api_base}/collections/versions");
@@ -369,7 +406,8 @@ impl ConfigAccess {
     pub async fn collection_version(&self, collection: &str) -> Result<Option<Value>> {
         crate::graphql::validate_collection_identifier(collection)?;
         match self {
-            Self::Local(node) => node
+            Self::Local(local) => local
+                .node()
                 .get_collection(collection)?
                 .map(serde_json::to_value)
                 .transpose()

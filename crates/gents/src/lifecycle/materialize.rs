@@ -1549,7 +1549,7 @@ mod task_delivery_tests {
         let _identity = pin_fixed_signing_identity(identity_dir.path());
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
-        let access = crate::config_client::ConfigAccess::Local(node.clone());
+        let access = crate::config_client::ConfigAccess::local(node.clone());
         let identity = gents_protocol::trigger_delivery::FireIdentity {
             owner_did: PIN_FIXED_DID.into(),
             trigger_id: "manual:task".into(),

@@ -61,7 +61,7 @@ impl Fixture {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
         crate::ensure_node(&node, did).await.unwrap();
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         for (provider, name) in [
             (CLAUDE_OAUTH_PROVIDER, "Claude"),
             (XAI_OAUTH_PROVIDER, "Grok"),
@@ -581,7 +581,7 @@ async fn a_bound_plugin_slot_counts_and_keeps_serving_after_the_switch() {
     crate::ensure_node(&node, did).await.unwrap();
     let fixture = Fixture {
         node: node.clone(),
-        access: ConfigAccess::Local(node),
+        access: ConfigAccess::local(node),
         did: did.to_owned(),
         credentials: BTreeMap::new(),
         backends: BTreeMap::from([("k1", "k1".to_owned()), ("k2", "k2".to_owned())]),

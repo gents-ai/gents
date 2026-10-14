@@ -22,7 +22,7 @@ pub(super) async fn write_committed(
     operation: &'static str,
     mutation: &str,
 ) -> Result<Value> {
-    ConfigAccess::Local(node.clone())
+    ConfigAccess::local(node.clone())
         .write(operation, mutation)
         .await
         .context("GENTS Codex shim mutation failed")

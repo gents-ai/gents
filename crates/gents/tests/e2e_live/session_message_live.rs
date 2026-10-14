@@ -4760,7 +4760,7 @@ async fn timeline_tools(
     node: &Arc<EmbeddedNode>,
     request_id: &str,
 ) -> Vec<gents::TimelineToolCallRow> {
-    load_run_timeline_rows(&ConfigAccess::Local(node.clone()), request_id)
+    load_run_timeline_rows(&ConfigAccess::local(node.clone()), request_id)
         .await
         .unwrap_or_else(|error| panic!("load canonical timeline for {request_id}: {error:#}"))
         .tool_calls
@@ -4918,7 +4918,7 @@ async fn load_session_messages(
     request_id: &str,
     session_id: &str,
 ) -> Vec<gents_protocol::message::Message> {
-    load_run_timeline_rows(&ConfigAccess::Local(node.clone()), request_id)
+    load_run_timeline_rows(&ConfigAccess::local(node.clone()), request_id)
         .await
         .unwrap_or_else(|error| {
             panic!("load canonical session timeline for {request_id}: {error:#}")

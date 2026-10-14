@@ -260,7 +260,7 @@ async fn session_usage(state: &ShimState) -> Option<StoredUsage> {
             return Ok(None);
         };
         let mut stored =
-            usage_for_backend(&ConfigAccess::Local(state.node.clone()), node_did, &backend).await?;
+            usage_for_backend(&ConfigAccess::local(state.node.clone()), node_did, &backend).await?;
         if backend.provider_kind != gents::BackendProviderKind::ChatGptCodex {
             if let Some(stored) = stored.as_mut() {
                 stored.report.plan = None;
@@ -325,7 +325,7 @@ mod tests {
 
     /// Binds the session's agent to `backend` through one profile.
     async fn bind(node: &Arc<EmbeddedNode>, backend: InferenceBackend) {
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         write_inference_backend_document(&access, &backend)
             .await
             .expect("backend");
@@ -489,7 +489,7 @@ mod tests {
         assert_eq!(limits["primary"]["usedPercent"], json!(12));
         assert_eq!(limits["primary"]["windowDurationMins"], json!(300));
         assert_eq!(limits["planType"], json!("plus"));
-        let stored = load_usage(&ConfigAccess::Local(node), &account)
+        let stored = load_usage(&ConfigAccess::local(node), &account)
             .await
             .unwrap()
             .unwrap();

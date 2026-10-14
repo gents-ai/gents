@@ -1617,7 +1617,7 @@ pub(super) mod tests {
             .and_then(|data| data.get("AgentMessage"))
             .and_then(serde_json::Value::as_array)
             .expect("AgentMessage rows");
-        let access = crate::config_client::ConfigAccess::Local(node.clone());
+        let access = crate::config_client::ConfigAccess::local(node.clone());
         let mut found_reply = false;
         for row in rows {
             assert_eq!(
@@ -1753,7 +1753,7 @@ pub(super) mod tests {
         );
         tokio::time::timeout(Duration::from_secs(30), async {
             loop {
-                let response = crate::config_client::ConfigAccess::Local(node.clone())
+                let response = crate::config_client::ConfigAccess::local(node.clone())
                     .execute(&format!(
                         r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{node_did}" }}, session_id: {{ _eq: "{session_id}" }}, purpose: {{ _eq: "{title_purpose}" }} }}) {{ lifecycle_state caused_by_parent_request_id caused_by_parent_request_doc_id }} }}"#
                     ))

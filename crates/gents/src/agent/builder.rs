@@ -279,7 +279,7 @@ impl GentsBuilder {
             plugins: Arc::new(crate::agent::plugin_executor(
                 self.plugin_home,
                 crate::plugin::model_calls::AccessModels(
-                    crate::config_client::ConfigAccess::Local(plugin_node),
+                    crate::config_client::ConfigAccess::local(plugin_node),
                 ),
             )),
         })

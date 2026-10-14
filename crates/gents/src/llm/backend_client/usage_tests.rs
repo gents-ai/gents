@@ -76,7 +76,7 @@ async fn usage_wiring_backend_without_id_has_no_reporter() {
     one_openai_completion(client).await;
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    let rows = crate::config_client::ConfigAccess::Local(node)
+    let rows = crate::config_client::ConfigAccess::local(node)
         .execute("{ ProviderAccountUsage { usage_key } }")
         .await
         .unwrap();

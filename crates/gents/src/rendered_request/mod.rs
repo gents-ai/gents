@@ -229,7 +229,7 @@ mod tests {
         use crate::graphql::escape_graphql_string;
         let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         let value = serde_json::json!({"model":"m", "stream":false, "padding":"x".repeat(4096)});
         let container = encoding::encode_container(
             &encoding::encode_full(&value).unwrap(),

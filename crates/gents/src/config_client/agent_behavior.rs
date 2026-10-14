@@ -61,7 +61,7 @@ mod tests {
     async fn replacement_is_scoped_clears_context_and_rolls_back_dangling_links() -> Result<()> {
         let node = Arc::new(EmbeddedNode::builder().build().await?);
         crate::ensure_runtime_schemas(&node).await?;
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         for owner in ["did:key:owner", "did:key:other"] {
             let backend = json!({"node_did":owner,"backend_id":"local","name":"Local",
                 "provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:8000/v1",

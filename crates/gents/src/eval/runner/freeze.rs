@@ -976,7 +976,7 @@ pub(crate) mod tests {
     impl Launching {
         pub(crate) async fn new() -> Self {
             let home = EmbeddedHome::create_temp("freeze").await.unwrap();
-            let access = ConfigAccess::Local(home.node.clone());
+            let access = ConfigAccess::local(home.node.clone());
             ensure_node(&home.node, OWNER).await.unwrap();
             let launching = Self {
                 home,

@@ -48,7 +48,7 @@ async fn publish(access: &ConfigAccess, docs: Vec<DesiredStateApplyDocument>) ->
 async fn fixture(enabled: bool) -> Result<(Arc<defra_node::EmbeddedNode>, ConfigAccess)> {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await?);
     crate::ensure_runtime_schemas(&node).await?;
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     access
         .add_schema(
             "type WorkA { label: String @immutable } type WorkB { label: String @immutable }",

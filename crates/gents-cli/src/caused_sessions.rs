@@ -35,7 +35,7 @@ const REQUEST_FIELDS: &str = "_docID request_id node_did session_id requester_di
      caused_by_parent_tool_call_doc_id";
 
 fn access(node: &Arc<EmbeddedNode>) -> ConfigAccess {
-    ConfigAccess::Local(node.clone())
+    ConfigAccess::local(node.clone())
 }
 
 /// Sessions started by this exact physical request.

@@ -113,7 +113,7 @@ impl P2pTool {
         let arguments = filter.map_or("limit: 50".to_owned(), |filter| {
             format!("filter: {filter}, limit: 50")
         });
-        let result = ConfigAccess::Local(self.node.clone())
+        let result = ConfigAccess::local(self.node.clone())
             .execute(&format!("{{{collection}({arguments}) {{{fields}}}}}"))
             .await?;
         ensure!(
@@ -494,7 +494,7 @@ impl P2pTool {
                 validate_collection_identifier(collection)?;
                 let doc_ids =
                     crate::graphql::graphql_string_list_literal(ids.iter().map(String::as_str));
-                let observed = ConfigAccess::Local(self.node.clone())
+                let observed = ConfigAccess::local(self.node.clone())
                     .execute(&format!("{{{collection}(docIDs: {doc_ids}) {{_docID}}}}"))
                     .await?;
                 ensure!(

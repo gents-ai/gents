@@ -44,7 +44,7 @@ async fn measured_explanation_uses_scoped_endpoint_health_not_registry_presence(
     node.add_schema(gents_protocol::schemas::TOOL_SERVICE_HEALTH_STATE)
         .await
         .unwrap();
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let service = serde_json::from_value(json!({"service_id":"service","node_did":"owner",
         "hostname":"server.invalid","mcp_port":8000,"mcp_path":"/mcp"}))
     .unwrap();

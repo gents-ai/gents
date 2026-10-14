@@ -110,7 +110,7 @@ async fn signed_node() -> (Arc<EmbeddedNode>, Arc<BlockingSigner>, ReleaseSigner
             .await
             .unwrap(),
     );
-    ConfigAccess::Local(node.clone())
+    ConfigAccess::local(node.clone())
         .add_schema("type NativeCompletionProbe { value: String }")
         .await
         .unwrap();
@@ -200,7 +200,7 @@ async fn lean_auto_commit_completion_owns_the_real_signed_worker() {
             "{} must account for its caller",
             case.name
         );
-        let data = ConfigAccess::Local(node.clone())
+        let data = ConfigAccess::local(node.clone())
             .execute("{ NativeCompletionProbe { value } }")
             .await
             .unwrap();

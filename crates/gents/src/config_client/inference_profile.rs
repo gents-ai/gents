@@ -138,7 +138,7 @@ mod tests {
     async fn replacement_preserves_other_owner_and_clears_optional_selection() -> Result<()> {
         let node = Arc::new(EmbeddedNode::builder().build().await?);
         crate::ensure_runtime_schemas(&node).await?;
-        let access = ConfigAccess::Local(node);
+        let access = ConfigAccess::local(node);
         for owner in ["did:key:owner", "did:key:other"] {
             let backend = json!({"node_did":owner,"backend_id":"local","name":"Local",
                 "provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:8000/v1",
@@ -228,7 +228,7 @@ mod tests {
         let node = Arc::new(EmbeddedNode::builder().build().await?);
         crate::ensure_runtime_schemas(&node).await?;
         crate::ensure_node(&node, did).await?;
-        let access = ConfigAccess::Local(node);
+        let access = ConfigAccess::local(node);
         let spec = crate::inference_setup::connection_spec(
             crate::inference_setup::InferenceProviderId::Anthropic,
             crate::inference_setup::InferenceAuthMethod::ClaudeOauth,
@@ -353,9 +353,10 @@ mod tests {
                 .await?;
         }
         assert_eq!(profiles().await, before, "catalog refresh");
-        let ConfigAccess::Local(node) = &access else {
+        let ConfigAccess::Local(local) = &access else {
             unreachable!()
         };
+        let node = local.node();
         crate::agent::document_view::load_document_runtime_view(node, did).await?;
         assert_eq!(profiles().await, before, "view load");
         Ok(())
@@ -368,7 +369,7 @@ mod tests {
         let node = Arc::new(EmbeddedNode::builder().build().await?);
         crate::ensure_runtime_schemas(&node).await?;
         crate::ensure_node(&node, did).await?;
-        let access = ConfigAccess::Local(node);
+        let access = ConfigAccess::local(node);
         let spec = crate::inference_setup::connection_spec(
             crate::inference_setup::InferenceProviderId::Anthropic,
             crate::inference_setup::InferenceAuthMethod::ClaudeOauth,

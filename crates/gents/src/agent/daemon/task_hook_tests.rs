@@ -281,7 +281,7 @@ impl Harness {
             .unwrap();
         let doc_id = match &fire {
             Some(fire) => {
-                let access = ConfigAccess::Local(self.node.clone());
+                let access = ConfigAccess::local(self.node.clone());
                 crate::lifecycle::write_task_delivery(&access, fire, false, &create)
                     .await
                     .expect("admit the manual Task fire and its request")

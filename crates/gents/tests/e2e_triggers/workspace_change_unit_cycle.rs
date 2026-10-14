@@ -42,7 +42,7 @@ async fn change_unit_pack_completes_writer_seal_review_and_host_integration() {
     let backend = scripted_backend();
     let db = test_db("workspace-change-unit-cycle").await;
     let owner = db.node_identity.did().to_owned();
-    let access = ConfigAccess::Local(db.node.clone());
+    let access = ConfigAccess::local(db.node.clone());
     let root = tempfile::tempdir().unwrap();
     let repo = root.path().join("source-repo");
     let (base_sha, base_tree) = create_repository(&repo);
@@ -337,7 +337,7 @@ async fn change_unit_pack_rejection_records_terminal_result_without_integration(
     let backend = rejected_backend();
     let db = test_db("workspace-change-unit-rejected-cycle").await;
     let owner = db.node_identity.did().to_owned();
-    let access = ConfigAccess::Local(db.node.clone());
+    let access = ConfigAccess::local(db.node.clone());
     let root = tempfile::tempdir().unwrap();
     let repo = root.path().join("source-repo");
     let (base_sha, _) = create_repository(&repo);
@@ -495,7 +495,7 @@ async fn failed_stage_outcome_reaches_the_existing_supervisor_session() {
     let backend = failure_inbox_backend();
     let db = test_db("workspace-change-unit-failure-inbox").await;
     let owner = db.node_identity.did().to_owned();
-    let access = ConfigAccess::Local(db.node.clone());
+    let access = ConfigAccess::local(db.node.clone());
     let root = tempfile::tempdir().unwrap();
     let repo = root.path().join("source-repo");
     let (base_sha, _) = create_repository(&repo);

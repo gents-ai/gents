@@ -18,6 +18,7 @@ use std::time::{Duration, SystemTime};
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use defra_p2p_adapter::P2POperations as P2POps;
+use gents::config_client::ConfigAccess;
 use gents::P2pSyncStatusSnapshot;
 use gents_protocol::peer_schema::ReplicatedSchemaSkew;
 use p2p::iroh::{IrohDiscoveryConfig, IrohRelayModeConfig};
@@ -351,7 +352,7 @@ enum P2PSupervisorCommand {
 }
 
 pub struct ClientCore {
-    store_lock: Mutex<Option<gents::home::StoreLock>>,
+    store_access: Mutex<Option<ConfigAccess>>,
     paths: DesktopPaths,
     options: ClientCoreOptions,
     node_identity: PrincipalIdentity,
@@ -678,7 +679,7 @@ impl ClientCore {
         }
         tracing::info!("client core shutdown: stopping embedded node");
         self.node.shutdown().await;
-        self.store_lock.lock().await.take();
+        self.store_access.lock().await.take();
         tracing::info!("client core shutdown: complete");
         Ok(())
     }

@@ -220,7 +220,7 @@ pub(crate) async fn resolve_send_target(
     session_id: &str,
 ) -> Result<Option<SessionMessageTarget>> {
     let Some(session) = crate::session_origin::load_session(
-        &ConfigAccess::Local(node.clone()),
+        &ConfigAccess::local(node.clone()),
         session_id,
         Some(caller_node_did),
     )
@@ -614,7 +614,7 @@ pub(crate) async fn load_receipt(
     requester_did: Option<&str>,
 ) -> Result<Option<SessionMessageReceipt>> {
     let read = crate::tool_call_lifecycle::query::load_tool_call_read(
-        &crate::config_client::ConfigAccess::Local(node.clone()),
+        &crate::config_client::ConfigAccess::local(node.clone()),
         tool_call_doc_id,
         node_did,
         session_id,
@@ -725,7 +725,7 @@ pub async fn interrupt_refusal(
     target: &SessionScope,
 ) -> Result<Option<String>> {
     let started_by =
-        crate::session_origin::started_by(&ConfigAccess::Local(node.clone()), target).await?;
+        crate::session_origin::started_by(&ConfigAccess::local(node.clone()), target).await?;
     let cause = started_by
         .filter(|link| link.scope == *caller)
         .map(|link| link.scope.session_id);
@@ -783,7 +783,7 @@ pub(crate) async fn agent_list(
     tools: &AgentToolConfig,
 ) -> Result<serde_json::Value> {
     let own = SessionScope::of_request(caller);
-    let lineage = crate::session_origin::lineage(&ConfigAccess::Local(node.clone()), &own).await?;
+    let lineage = crate::session_origin::lineage(&ConfigAccess::local(node.clone()), &own).await?;
     let linked = lineage
         .started_by
         .into_iter()

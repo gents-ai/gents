@@ -461,7 +461,7 @@ mod tests {
             None,
         )
         .await;
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
 
         let missing =
             document::DocID::new_v0_from_seed("missing-session-origin-request").to_string();
@@ -516,7 +516,7 @@ mod tests {
         let other = seed(&node, "o1", "other", "2026-09-26T00:00:01Z", None).await;
         seed_session(&node, "other", None).await;
         seed(&node, "a0", "started", "2026-09-26T00:00:02Z", Some(&other)).await;
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
 
         let from_parent = lineage(&access, &scope("parent")).await.unwrap();
         assert_eq!(from_parent.started_by, None);

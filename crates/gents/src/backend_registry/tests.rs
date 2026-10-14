@@ -376,7 +376,7 @@ async fn scoped_backend_replacement_preserves_observations_and_resets_defaults()
     let node = std::sync::Arc::new(EmbeddedNode::builder().build().await?);
     crate::ensure_runtime_schemas(&node).await?;
     crate::ensure_node(&node, &base_backend().node_did).await?;
-    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let access = crate::config_client::ConfigAccess::local(node.clone());
     let mut backend = base_backend();
     backend.backend_id = "reviewers\"quoted".into();
     backend.max_concurrent = Some(4);
@@ -457,7 +457,7 @@ async fn duplicate_backend_owner_keys_fail_without_overwriting_documents() -> Re
     let node = std::sync::Arc::new(EmbeddedNode::builder().build().await?);
     crate::ensure_runtime_schemas(&node).await?;
     crate::ensure_node(&node, &base_backend().node_did).await?;
-    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let access = crate::config_client::ConfigAccess::local(node.clone());
     let backend = base_backend();
     crate::config_client::write_inference_backend_document(&access, &backend).await?;
     let mut duplicate = backend.clone();
@@ -497,7 +497,7 @@ async fn backend_lists_skip_an_unknown_provider_kind_and_lookups_stay_strict() -
     crate::ensure_runtime_schemas(&node).await?;
     let owner = base_backend().node_did;
     crate::ensure_node(&node, &owner).await?;
-    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let access = crate::config_client::ConfigAccess::local(node.clone());
     crate::config_client::write_inference_backend_document(&access, &base_backend()).await?;
     let mut future = serde_json::to_value(base_backend())?;
     future["backend_id"] = "future".into();
@@ -541,7 +541,7 @@ async fn discovery_rejects_wrong_scope_and_stale_connection_without_losing_catal
     let node = std::sync::Arc::new(EmbeddedNode::builder().build().await?);
     crate::ensure_runtime_schemas(&node).await?;
     crate::ensure_node(&node, &base_backend().node_did).await?;
-    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let access = crate::config_client::ConfigAccess::local(node.clone());
     let backend = base_backend();
     crate::config_client::write_inference_backend_document(&access, &backend).await?;
     let catalog = BackendModelCatalog {
@@ -594,7 +594,7 @@ async fn catalog_transaction_preserves_explicit_empty_lists_and_rollback() -> Re
     let node = std::sync::Arc::new(EmbeddedNode::builder().build().await?);
     crate::ensure_runtime_schemas(&node).await?;
     crate::ensure_node(&node, &base_backend().node_did).await?;
-    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let access = crate::config_client::ConfigAccess::local(node.clone());
     let backend = base_backend();
     crate::config_client::write_inference_backend_document(&access, &backend).await?;
     let catalog = BackendModelCatalog {
@@ -701,7 +701,7 @@ async fn operator_discovery_publishes_scoped_credential_free_catalog() -> Result
     crate::ensure_runtime_schemas(&node).await?;
     let owner = base_backend().node_did;
     crate::ensure_node(&node, &owner).await?;
-    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let access = crate::config_client::ConfigAccess::local(node.clone());
     let endpoint = spawn_echoing_models_server(SECRET).await;
     let mut claude = base_backend();
     claude.backend_id = "claude".into();

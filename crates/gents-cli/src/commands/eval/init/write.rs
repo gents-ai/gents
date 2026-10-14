@@ -679,7 +679,7 @@ async fn install_and_read_back(
     );
 
     gents::ensure_node(&home.node, &owner).await?;
-    let access = ConfigAccess::Local(home.node.clone());
+    let access = ConfigAccess::local(home.node.clone());
     let plan = DesiredStateApplyPlan::from_pack_config(&config)?;
     access
         .transact_write("eval.init.round_trip", |txn| {
@@ -1014,7 +1014,7 @@ mod tests {
                 &|_| None,
             )?;
             let plan = DesiredStateApplyPlan::from_pack_config(&config)?;
-            let access = ConfigAccess::Local(home.node.clone());
+            let access = ConfigAccess::local(home.node.clone());
             access
                 .transact_write("cli.eval.init.test_install", |txn| {
                     let plan = &plan;

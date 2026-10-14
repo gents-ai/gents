@@ -34,10 +34,19 @@ inductive Event where
   | renewalAttemptReturned | renewalRequested
   deriving DecidableEq, Repr
 
+def nativeAdmissionAllowed (poisoned : Bool) : Bool := !poisoned
+
+def nativeWorkDrained (nativeOutstanding : Nat) : Bool := nativeOutstanding == 0
+
+def attemptFinalizationAllowed (poisoned : Bool) (nativeOutstanding : Nat)
+    (cleanupRequired rollbackReturned : Bool) : Bool :=
+  nativeAdmissionAllowed poisoned && nativeWorkDrained nativeOutstanding &&
+    (!cleanupRequired || rollbackReturned)
+
 def step (s : State) (event : Event) : State :=
   match event with
   | .nativeStarted =>
-      if s.poisoned || (!s.gateHeld && !s.periodicRenewal) then s
+      if !nativeAdmissionAllowed s.poisoned || (!s.gateHeld && !s.periodicRenewal) then s
       else { s with nativeOutstanding := s.nativeOutstanding + 1 }
   | .nativeReturned =>
       { s with nativeOutstanding := s.nativeOutstanding - 1 }
@@ -45,24 +54,26 @@ def step (s : State) (event : Event) : State :=
   | .callerTimedOut => { s with caller := .timedOut, poisoned := true }
   | .callerCancelled => { s with caller := .cancelled, poisoned := true }
   | .rollbackReturned =>
-      if s.nativeOutstanding == 0 && s.cleanupRequired then
+      if nativeWorkDrained s.nativeOutstanding && s.cleanupRequired then
         { s with rollbackReturned := true }
       else s
   | .retryRequested =>
-      if !s.poisoned && s.nativeOutstanding == 0 &&
-          (!s.cleanupRequired || s.rollbackReturned) then
+      if attemptFinalizationAllowed s.poisoned s.nativeOutstanding
+          s.cleanupRequired s.rollbackReturned then
         { s with retryStarted := true }
       else s
   | .gateReleaseRequested =>
-      if s.nativeOutstanding == 0 && (!s.cleanupRequired || s.rollbackReturned) then
+      if nativeWorkDrained s.nativeOutstanding &&
+          (!s.cleanupRequired || s.rollbackReturned) then
         { s with gateHeld := false }
       else s
   | .renewalAttemptReturned =>
-      if s.periodicRenewal && s.nativeOutstanding == 0 then
+      if s.periodicRenewal && nativeWorkDrained s.nativeOutstanding then
         { s with renewalAttemptReturned := true }
       else s
   | .renewalRequested =>
-      if s.periodicRenewal && s.renewalAttemptReturned && s.nativeOutstanding == 0 then
+      if s.periodicRenewal && s.renewalAttemptReturned &&
+          nativeWorkDrained s.nativeOutstanding then
         { s with nextRenewalStarted := true }
       else s
 
@@ -109,11 +120,11 @@ theorem abandoned_transaction_never_retries :
 theorem any_outstanding_native_work_blocks_gate_release (s : State)
     (h : 0 < s.nativeOutstanding) (gate : s.gateHeld = true) :
     (step s .gateReleaseRequested).gateHeld = true := by
-  simp [step, Nat.ne_of_gt h, gate]
+  simp [step, nativeWorkDrained, Nat.ne_of_gt h, gate]
 
 theorem poisoned_transaction_never_retries (s : State) (h : s.poisoned = true) :
     (step s .retryRequested).retryStarted = s.retryStarted := by
-  simp [step, h]
+  simp [step, attemptFinalizationAllowed, nativeAdmissionAllowed, h]
 
 theorem concurrent_operations_are_all_drained_before_rollback :
     let s := run transaction

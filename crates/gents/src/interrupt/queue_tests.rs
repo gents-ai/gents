@@ -317,7 +317,7 @@ async fn generated_interrupt_queue_events_bind_to_native_rows() {
                     wait_http_ready(&access).await;
                     access
                 }
-                None => ConfigAccess::Local(node.clone()),
+                None => ConfigAccess::local(node.clone()),
             };
             let mut bound: HashMap<u64, String> = HashMap::new();
             let mut notification_bindings = Vec::new();

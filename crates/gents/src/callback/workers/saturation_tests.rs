@@ -210,7 +210,7 @@ async fn live_engine_recovers_saturated_plugin_without_new_arrivals() {
     let plugins = Arc::new(PluginExecutor::new(Some(home.path().to_owned())));
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     access
         .add_schema(
             "type SaturationInput { item: Int correlation: String }

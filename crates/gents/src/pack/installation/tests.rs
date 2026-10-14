@@ -7,7 +7,7 @@ const OWNER: &str = "did:key:zPackInstallOwner";
 async fn access() -> ConfigAccess {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    ConfigAccess::Local(node)
+    ConfigAccess::local(node)
 }
 
 fn config(tools: &[(&str, &str)]) -> PackConfig {
@@ -468,7 +468,7 @@ async fn read_installed_pack_fails_loudly_on_more_than_one_record() {
         "",
     );
     node.add_schema(&schema).await.unwrap();
-    let access = ConfigAccess::Local(node);
+    let access = ConfigAccess::local(node);
 
     for digest_seed in ["1", "2"] {
         let input = json!({
@@ -521,7 +521,7 @@ async fn dependency_fixture() -> (
             ("verifier".into(), "grok:inference".into()),
         ]),
     };
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     (node, access, options)
 }
 

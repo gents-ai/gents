@@ -280,7 +280,7 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
             serde_json::from_value(request_row.cloned().context("live request row missing")?)
                 .context("decoding canonical Codex request")?;
         let canonical_output = gents::session::observe_request_output(
-            &ConfigAccess::Local(state.node.clone()),
+            &ConfigAccess::local(state.node.clone()),
             &canonical_request,
         )
         .await
@@ -413,7 +413,7 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
                 continue;
             }
             let tool = match hydrate_gents_tool_call_progress(
-                &ConfigAccess::Local(state.node.clone()),
+                &ConfigAccess::local(state.node.clone()),
                 row,
                 &current.node_did,
                 &current.session_id,
@@ -1234,7 +1234,7 @@ async fn announce_consumed_inputs(
         .pointer("/data/AgentRequest")
         .and_then(Value::as_array)
         .context("consumed input query omitted rows")?;
-    let access = ConfigAccess::Local(state.node.clone());
+    let access = ConfigAccess::local(state.node.clone());
     let mut ready = Vec::new();
     for raw in rows {
         let row: gents_protocol::row::AgentRequestRow = serde_json::from_value(raw.clone())?;

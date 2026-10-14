@@ -2487,7 +2487,7 @@ mod tests {
                 .unwrap(),
         );
         crate::schema::ensure_runtime_schemas(&node).await.unwrap();
-        ConfigAccess::Local(node)
+        ConfigAccess::local(node)
     }
 
     /// Ruling P-N3: the decision and the exhaustion that ends the rounds are

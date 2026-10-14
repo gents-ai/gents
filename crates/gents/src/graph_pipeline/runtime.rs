@@ -2884,7 +2884,7 @@ mod tests {
             ))
             .await;
         assert!(!changed.has_errors(), "{:?}", changed.errors);
-        let access = ConfigAccess::Local(Arc::clone(&node));
+        let access = ConfigAccess::local(Arc::clone(&node));
         let hydrated = super::super::load_graph_run_result_view_with_access(
             &access,
             graph_test_owner(),
@@ -2953,7 +2953,7 @@ mod tests {
         via_access: bool,
     ) -> crate::graph_pipeline::GraphRunView {
         if via_access {
-            let access = ConfigAccess::Local(Arc::clone(node));
+            let access = ConfigAccess::local(Arc::clone(node));
             super::super::reconcile_graph_run_with_access(&access, graph_test_owner(), run_id)
                 .await
                 .unwrap()
@@ -3135,7 +3135,7 @@ mod tests {
         if cancel_after_latch {
             let reason = Some("operator cancelled after primary cause was committed");
             let cancelled = if via_access {
-                let access = ConfigAccess::Local(Arc::clone(&node));
+                let access = ConfigAccess::local(Arc::clone(&node));
                 super::super::request_graph_run_cancellation_with_access(
                     &access,
                     graph_test_owner(),
