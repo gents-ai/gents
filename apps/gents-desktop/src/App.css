@@ -80,6 +80,17 @@ body,
   animation: startup-ellipsis 1.2s steps(4, end) infinite;
 }
 
+@keyframes tray-row-leave {
+  from {
+    grid-template-rows: 1fr;
+    opacity: 1;
+  }
+  to {
+    grid-template-rows: 0fr;
+    opacity: 0;
+  }
+}
+
 @keyframes startup-ellipsis {
   0% {
     content: "";

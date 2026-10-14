@@ -1,9 +1,9 @@
 /* The foot of an open session: what the person reads and does next, over
-   the composer (the goal, why sending waits) and the line under it. It
-   holds the draft, so a keystroke renders this and not the transcript
-   above it. */
-import type { RefCallback } from "react";
-import { ArrowDown } from "lucide-react";
+   the composer (the goal, why sending waits, the messages queued behind the
+   turn) and the line under it. It holds the draft, so a keystroke renders
+   this and not the transcript above it. */
+import { useMemo, useRef, type KeyboardEvent, type RefCallback } from "react";
+import { ArrowDown, Pencil, X } from "lucide-react";
 import type { DesktopSessionSnapshot } from "@source-inc/gents-desktop-client";
 import { Button } from "@gents/ui/components/button";
 import { Composer } from "@gents/ui/conversation";
@@ -14,11 +14,13 @@ import { agentOf } from "@/lib/agents";
 import { placeholderFor } from "@/lib/send-status";
 import { ChatFolderPicker } from "../ChatFolderPicker";
 import { LoadingStatus } from "../LoadingStatus";
+import { SelectedPendingTray, useSessionQueue } from "../PendingTray";
 import { ReplyingTo } from "../ReplyingTo";
 import { Goal } from "../SessionHeader";
 import { SlashSkillMenu } from "../SlashSkillMenu";
 import { useSlashSkills } from "../useSlashSkills";
 import { SessionSubmissionStatus, presentedComposerSendStatus } from "./composerParts";
+import { ComposerEditContext, lastEditable, useComposerEditing } from "./composerEdit";
 import { useComposerSend } from "./useComposerSend";
 
 export function OpenSessionComposer({
@@ -51,6 +53,14 @@ export function OpenSessionComposer({
   const chatFolder = useChatFolder();
   const deployment = useSelectedNode();
   const { draft, setDraft, send } = useComposerSend(agentId);
+  const textarea = useRef<HTMLTextAreaElement | null>(null);
+  const { queue, onEdit } = useSessionQueue();
+  const edit = useComposerEditing({ queue, onEdit, setDraft, send, textarea });
+  const editing = edit.editing;
+  const editContext = useMemo(
+    () => ({ editingDocId: editing?.docId ?? null, begin: edit.begin }),
+    [editing?.docId, edit.begin],
+  );
   const agent = agentOf(deployment, agentId);
   const slash = useSlashSkills(
     draft,
@@ -66,6 +76,35 @@ export function OpenSessionComposer({
   /* a status that explains why the session cannot take a message covers
      the composer it disables */
   const covered = blocked && loadingStatus !== null;
+
+  const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (editing) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        edit.cancel();
+      }
+      /* the message is already with the agent: a key meant to save must
+         not send the text as a new message */
+      if (
+        editing.reached &&
+        event.key === "Enter" &&
+        !event.shiftKey &&
+        !event.nativeEvent.isComposing
+      )
+        event.preventDefault();
+      return;
+    }
+    /* ↑ in an empty composer edits the last message still waiting */
+    if (event.key === "ArrowUp" && draft === "") {
+      const last = lastEditable(queue);
+      if (last) {
+        event.preventDefault();
+        edit.begin(last);
+        return;
+      }
+    }
+    slash.onKeyDown(event);
+  };
 
   /* Its height is published as --composer-h, so a block that sticks to the
      foot of the scroller can sit clear of it rather than hard-coding what
@@ -100,6 +139,9 @@ export function OpenSessionComposer({
         </Button>
       )}
       {!covered && <LoadingStatus />}
+      <ComposerEditContext.Provider value={editContext}>
+        <SelectedPendingTray />
+      </ComposerEditContext.Provider>
       {/* the card that covers the composer shares its cell, so a
           card taller than the composer grows the cell, not clips */}
       <div data-testid="composer" className="grid">
@@ -107,32 +149,43 @@ export function OpenSessionComposer({
           inert={covered || undefined}
           className={cn("[grid-area:1/1]", covered && "invisible")}
         >
+          {/* one composer either way, so the caret stays where it is */}
           <Composer
-            value={draft}
-            onChange={setDraft}
-            onSend={send}
-            models={[]}
-            disabled={blocked}
-            above={
-              <>
-                <ReplyingTo />
-                <SlashSkillMenu
-                  items={slash.items}
-                  active={slash.active}
-                  onPick={slash.accept}
-                />
-              </>
+            value={editing ? editing.text : draft}
+            onChange={editing ? edit.setText : setDraft}
+            onSend={
+              editing
+                ? (text) =>
+                    void (editing.reached ? edit.sendAsNew(text) : edit.save(text))
+                : send
             }
-            onKeyDown={slash.onKeyDown}
+            models={[]}
+            disabled={!editing && blocked}
+            above={
+              editing ? (
+                <EditingChip reached={editing.reached} onCancel={edit.cancel} />
+              ) : (
+                <>
+                  <ReplyingTo />
+                  <SlashSkillMenu
+                    items={slash.items}
+                    active={slash.active}
+                    onPick={slash.accept}
+                  />
+                </>
+              )
+            }
+            onKeyDown={onKeyDown}
+            textareaRef={textarea}
             leading={<ChatFolderPicker folder={chatFolder} onChange={setChatFolder} />}
-            sending={sending || (inFlight && !queueing)}
-            onStop={inFlight && !stopping ? stop : undefined}
+            sending={editing ? edit.saving : sending || (inFlight && !queueing)}
+            onStop={!editing && inFlight && !stopping ? stop : undefined}
             placeholder={
-              inFlight
-                ? sendStatus.kind === "queue"
-                  ? "Add a message; it waits for this turn"
-                  : "Ask anything"
-                : placeholderFor(status, "Ask anything")
+              editing
+                ? "Edit the message"
+                : inFlight
+                  ? "Ask anything"
+                  : placeholderFor(status, "Ask anything")
             }
           />
         </div>
@@ -148,6 +201,45 @@ export function OpenSessionComposer({
             : null
         }
       />
+    </div>
+  );
+}
+
+/* says the composer holds a waiting message, not a new one; Esc or the X
+   puts it back unchanged */
+function EditingChip({
+  reached,
+  onCancel,
+}: {
+  reached: boolean;
+  onCancel: () => void;
+}) {
+  return (
+    <div
+      className="flex items-center gap-2 px-2 pt-2"
+      data-testid="editing-message"
+      data-reached={reached || undefined}
+    >
+      <span className="inline-flex h-6 items-center gap-1.5 rounded-full border border-border bg-background pr-1 pl-2 text-xs text-muted-foreground">
+        <Pencil className="size-3 shrink-0" />
+        <span className="text-foreground">
+          {reached ? "Already reached the agent" : "Editing message"}
+        </span>
+        <button
+          type="button"
+          aria-label={reached ? "Keep as a draft" : "Cancel editing"}
+          title={reached ? "Keep as a draft (Esc)" : "Cancel (Esc)"}
+          onClick={onCancel}
+          className="grid size-4 cursor-pointer place-items-center rounded-full hover:bg-accent hover:text-foreground"
+        >
+          <X className="size-3" />
+        </button>
+      </span>
+      {reached && (
+        <span className="text-xs text-muted-foreground">
+          Send it as a new message, or keep it as a draft
+        </span>
+      )}
     </div>
   );
 }

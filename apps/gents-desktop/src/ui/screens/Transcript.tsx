@@ -47,7 +47,6 @@ import {
 import { type Workers } from "./workers";
 import {
   AutomatedInput,
-  QueuedInputs,
   UserInputWithState,
   pendingInputState,
 } from "./TranscriptInputs";
@@ -98,8 +97,6 @@ function copyActions(text: string | null | undefined) {
    labeled with its sender */
 const ParentContext = createContext<ParentWork | null>(null);
 
-const AppliedInputsContext = createContext<ReadonlySet<string>>(new Set());
-
 const TranscriptItem = memo(function TranscriptItem({
   item,
   final = false,
@@ -109,7 +106,6 @@ const TranscriptItem = memo(function TranscriptItem({
   final?: boolean;
 }) {
   const parentWork = useContext(ParentContext);
-  const appliedInputs = useContext(AppliedInputsContext);
   switch (item.kind) {
     case "automatedInput":
       return (
@@ -121,12 +117,11 @@ const TranscriptItem = memo(function TranscriptItem({
       );
     case "userMessage":
     case "pendingUserTurn": {
+      /* a sent message reads as sent: only one that did not go through says so */
       const state =
         item.kind === "pendingUserTurn"
           ? pendingInputState(item.lifecycleState, item.foldedIntoRequestId)
-          : item.inputRequestId && appliedInputs.has(item.inputRequestId)
-            ? "Applied"
-            : null;
+          : null;
       if (item.kind === "pendingUserTurn" && item.origin) {
         return (
           <AutomatedInput origin={item.origin} content={item.content} state={state} />
@@ -411,14 +406,6 @@ export const TranscriptPanel = memo(function TranscriptPanel({
     ? activityStatus(session?.timelineItems ?? [], stopping)
     : null;
   const wasInterrupted = session?.turnState === "interrupted";
-  const appliedInputIds = (session?.foldedInputs ?? [])
-    .map((input) => input.requestId)
-    .sort()
-    .join("\n");
-  const appliedInputs = useMemo(
-    () => new Set(appliedInputIds ? appliedInputIds.split("\n") : []),
-    [appliedInputIds],
-  );
   const responseError =
     latest?.failureReason?.trim() ||
     (session?.turnState === "failed"
@@ -538,40 +525,38 @@ export const TranscriptPanel = memo(function TranscriptPanel({
         </div>
       )}
       <WorkerActionsContext.Provider value={workerActions}>
-        <AppliedInputsContext.Provider value={appliedInputs}>
-          <ParentContext.Provider value={parentWork}>
-            <GroupStateContext.Provider value={groupState}>
-              <TranscriptWindowProvider scroller={scroller} session={sessionKey}>
-                {entries.map((entry, index) =>
-                  entry.kind === "item" ? (
-                    /* keyed for the pager, which holds the reader's place
+        <ParentContext.Provider value={parentWork}>
+          <GroupStateContext.Provider value={groupState}>
+            <TranscriptWindowProvider scroller={scroller} session={sessionKey}>
+              {entries.map((entry, index) =>
+                entry.kind === "item" ? (
+                  /* keyed for the pager, which holds the reader's place
                      by the row under their eye while older pages land */
-                    <ItemRow
-                      key={drawKey(keys, entry.item)}
-                      rowKey={drawKey(keys, entry.item)}
-                      timelineKey={entry.key}
-                      item={entry.item}
-                      final={finalKeys.has(entry.key)}
-                      drawn={entries.length - index <= ALWAYS_DRAWN}
-                    />
-                  ) : (
-                    <GroupRow
-                      key={entry.key}
-                      entry={entry}
-                      workers={workers}
-                      drawn={entries.length - index <= ALWAYS_DRAWN}
-                    />
-                  ),
-                )}
-              </TranscriptWindowProvider>
-            </GroupStateContext.Provider>
-            {continuing && showError && <FailedEarlier message={responseError} />}
-            {continuing &&
-              session?.timelineItems
-                .filter((item) => item.kind === "liveAssistant")
-                .map((item) => <TranscriptItem key={item.itemKey} item={item} />)}
-          </ParentContext.Provider>
-        </AppliedInputsContext.Provider>
+                  <ItemRow
+                    key={drawKey(keys, entry.item)}
+                    rowKey={drawKey(keys, entry.item)}
+                    timelineKey={entry.key}
+                    item={entry.item}
+                    final={finalKeys.has(entry.key)}
+                    drawn={entries.length - index <= ALWAYS_DRAWN}
+                  />
+                ) : (
+                  <GroupRow
+                    key={entry.key}
+                    entry={entry}
+                    workers={workers}
+                    drawn={entries.length - index <= ALWAYS_DRAWN}
+                  />
+                ),
+              )}
+            </TranscriptWindowProvider>
+          </GroupStateContext.Provider>
+          {continuing && showError && <FailedEarlier message={responseError} />}
+          {continuing &&
+            session?.timelineItems
+              .filter((item) => item.kind === "liveAssistant")
+              .map((item) => <TranscriptItem key={item.itemKey} item={item} />)}
+        </ParentContext.Provider>
       </WorkerActionsContext.Provider>
       {wasInterrupted && !inFlight && (
         <StoppedNotice
@@ -609,20 +594,6 @@ export const TranscriptPanel = memo(function TranscriptPanel({
           <ActivityLine status={status} />
         </div>
       </div>
-      <QueuedInputs
-        queued={session?.queuedTurns ?? []}
-        queue={session?.pendingQueue ?? null}
-        onEdit={
-          session?.nodeDid
-            ? (edit) =>
-                actions.editPendingQueue({
-                  ...edit,
-                  nodeDid: session.nodeDid!,
-                  sessionId: session.sessionId,
-                })
-            : undefined
-        }
-      />
     </div>
   );
 });

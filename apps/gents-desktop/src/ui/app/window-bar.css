@@ -8,7 +8,7 @@
   padding-left: 0.75rem;
 }
 
-/* while a divider or a tab is dragged nothing on the page selects, and the
+/* while a divider, a tab or a list item is dragged nothing on the page selects, and the
    pointer keeps the drag's cursor wherever it passes */
 :root[data-dragging] * {
   -webkit-user-select: none;

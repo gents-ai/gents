@@ -3,7 +3,10 @@
    pointer after a few pixels while the items it passes slide aside; it
    stays within the slots a move may reach. Let go, it glides into its slot:
    the owner applies the move to the order it draws at once, and an order
-   that later goes back animates back. With `animateReorders`, any other
+   that later goes back animates back. An owner that applies it later
+   returns a promise: the item waits in its new slot until the order
+   arrives, or goes back if the promise says the move was not made. With
+   `animateReorders`, any other
    change of order animates from where the items were. Geometry is taken at
    the press, before anything moved; items carry `data-reorder-key`. */
 import {
@@ -46,7 +49,13 @@ type Held = {
   key: string;
   /** how far from its slot the item was let go */
   dropDelta: number;
+  /** the owner is still applying the move */
+  awaiting?: boolean;
 };
+
+/* a move the owner made but whose order never arrives is let go after this,
+   so the item does not wait in a slot nothing will fill */
+const ARRIVAL_WAIT_MS = 4000;
 
 const reducedMotion = () =>
   typeof matchMedia === "function" &&
@@ -63,8 +72,9 @@ export function useDragReorder<E extends HTMLElement = HTMLElement>({
   /** the items' keys in their current order */
   keys: readonly string[];
   canMove: (from: number, to: number) => boolean;
-  /** applies the move to the order the owner draws, in this call */
-  commit: (from: number, to: number) => void;
+  /** applies the move to the order the owner draws, in this call, or
+      answers later whether it was made */
+  commit: (from: number, to: number) => void | Promise<boolean>;
   animateReorders?: boolean;
 }) {
   const container = useRef<E | null>(null);
@@ -79,7 +89,8 @@ export function useDragReorder<E extends HTMLElement = HTMLElement>({
   /* a drop the owner did not apply leaves the order as it was: the item
      goes back to its slot rather than waiting in the new one */
   useLayoutEffect(() => {
-    if (phase?.kind === "held" && phase.order === order) setPhase(null);
+    if (phase?.kind === "held" && phase.order === order && !phase.awaiting)
+      setPhase(null);
   }, [phase, order]);
   /* whether the held slot was ever painted; a move applied at once never is */
   const heldShown = useRef(false);
@@ -230,16 +241,25 @@ export function useDragReorder<E extends HTMLElement = HTMLElement>({
       return;
     }
     const held = order;
+    const key = keys[phase.from] ?? "";
+    const made = commit(phase.from, phase.to);
     setPhase({
       kind: "held",
       from: phase.from,
       to: phase.to,
       step: phase.step,
       order: held,
-      key: keys[phase.from] ?? "",
+      key,
       dropDelta: p.starts[phase.from]! + phase.delta - p.starts[phase.to]!,
+      awaiting: made instanceof Promise,
     });
-    commit(phase.from, phase.to);
+    if (!(made instanceof Promise)) return;
+    const letGo = () =>
+      setPhase((now) => (now?.kind === "held" && now.key === key ? null : now));
+    void made.then(
+      (moved) => (moved ? setTimeout(letGo, ARRIVAL_WAIT_MS) : letGo()),
+      letGo,
+    );
   };
 
   /** pointer handlers for the part an item is dragged by; it captures the

@@ -1,0 +1,474 @@
+/* Inputs waiting on the running turn, stacked on the composer's top edge:
+   they are the next thing the agent reads, not transcript. A person's own
+   messages can be edited (in the composer), removed and reordered (drag by
+   the row, or the row's menu); every change applies at the next safe step.
+   Inputs that arrived on their own (a background result, a message from
+   another session) are listed and not editable. */
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent,
+} from "react";
+import { CornerDownRight, Ellipsis, GripVertical, Pencil, Trash2 } from "lucide-react";
+import type {
+  PendingQueueEntryView,
+  PendingTurnView,
+} from "@source-inc/gents-desktop-client";
+import { Button } from "@gents/ui/components/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@gents/ui/components/dropdown-menu";
+import { cn } from "@gents/ui/lib/utils";
+import { useApp } from "../app/AppContext";
+import { useDragReorder } from "../hooks/useDragReorder";
+import { useSelectedSessionFields } from "../hooks/useSelectedSession";
+import {
+  moveEdit,
+  moveRun,
+  pendingRows,
+  removeEdit,
+  separatedBySettings,
+  type PendingRow,
+  type QueueEdit,
+} from "./pendingQueue";
+import { useComposerEdit } from "./session/composerEdit";
+import { AutomatedInput } from "./TranscriptInputs";
+
+/** The selected session's waiting messages and the edit that changes them;
+    the tray and the composer's editing share it. */
+export function useSessionQueue() {
+  const { actions } = useApp();
+  const pending = useSelectedSessionFields((session) =>
+    session
+      ? {
+          sessionId: session.sessionId,
+          nodeDid: session.nodeDid,
+          queuedTurns: session.queuedTurns,
+          pendingQueue: session.pendingQueue,
+        }
+      : null,
+  );
+  const sessionId = pending?.sessionId;
+  const nodeDid = pending?.nodeDid;
+  const onEdit =
+    sessionId && nodeDid
+      ? async (edit: QueueEdit) => {
+          await actions.editPendingQueue({ ...edit, nodeDid, sessionId });
+        }
+      : undefined;
+  return { pending, queue: pending?.pendingQueue ?? null, onEdit };
+}
+
+/** The selected session's tray, reading its own queue. */
+export function SelectedPendingTray() {
+  const { pending, queue, onEdit } = useSessionQueue();
+  const edit = useComposerEdit();
+  if (!pending?.sessionId) return null;
+  return (
+    <PendingTray
+      key={pending.sessionId}
+      queued={pending.queuedTurns ?? NO_TURNS}
+      queue={queue}
+      onEdit={onEdit}
+      editingDocId={edit?.editingDocId ?? null}
+      onBeginEdit={edit?.begin}
+    />
+  );
+}
+
+export function PendingTray({
+  queued,
+  queue = null,
+  onEdit,
+  editingDocId = null,
+  onBeginEdit,
+}: {
+  queued: readonly PendingTurnView[];
+  queue?: readonly PendingQueueEntryView[] | null;
+  onEdit?: (edit: QueueEdit) => Promise<void>;
+  /** the message the composer is editing: the tray holds still around it */
+  editingDocId?: string | null;
+  /** hands a message to the composer to edit; without it there is no Edit */
+  onBeginEdit?: (entry: PendingQueueEntryView) => void;
+}) {
+  const rows = useMemo(() => pendingRows(queued, queue), [queued, queue]);
+  const [busy, setBusy] = useState(false);
+  /* messages the person's own edits replaced or removed: they leave the
+     queue by that edit, not because the agent took them */
+  const edited = useRef(new Set<string>()).current;
+  /* Every edit fences on the queue it was made against, so the tray holds
+     still while one is on its way; and a change to the queue while a message
+     is in the composer could replace it under the edit. */
+  const locked = busy || editingDocId !== null;
+  const apply = async (edit: QueueEdit | null): Promise<boolean> => {
+    if (!edit || !onEdit || !queue || locked) return false;
+    for (const docId of edit.selectedRequestDocIds) {
+      const requestId = queue.find((entry) => entry.requestDocId === docId)?.requestId;
+      if (requestId) edited.add(requestId);
+    }
+    setBusy(true);
+    try {
+      await onEdit(edit);
+      return true;
+    } catch {
+      // The action owner reports why; the queue stays as the runtime holds it.
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
+  const editable = Boolean(onEdit && queue);
+  /* a move is open between two rows when the runtime would take it */
+  const canMove = (from: number, to: number) => {
+    const a = rows[from];
+    const b = rows[to];
+    return Boolean(
+      editable &&
+      !locked &&
+      a?.kind === "message" &&
+      a.entry &&
+      b?.kind === "message" &&
+      b.entry &&
+      moveRun(queue!, a.index, b.index),
+    );
+  };
+  const move = (from: number, to: number) => {
+    const a = rows[from];
+    const b = rows[to];
+    if (a?.kind !== "message" || b?.kind !== "message" || !queue)
+      return Promise.resolve(false);
+    return apply(moveEdit(queue, a.index, b.index));
+  };
+  /* a neighbour the runtime will not reorder with, for saying why */
+  const separated = (from: number, to: number) => {
+    const a = rows[from];
+    const b = rows[to];
+    return Boolean(
+      queue &&
+      a?.kind === "message" &&
+      b?.kind === "message" &&
+      separatedBySettings(queue, a.index, b.index),
+    );
+  };
+  const taken = useTaken(queue, edited);
+  const leaving = useLeavingRows(rows, edited);
+  const reorder = useDragReorder<HTMLDivElement>({
+    axis: "y",
+    keys: rows.map((row) => row.turn.requestId),
+    canMove,
+    /* a dropped row waits in its new slot until the runtime answers */
+    commit: move,
+    animateReorders: true,
+  });
+  if (rows.length === 0 && leaving.length === 0) return null;
+
+  return (
+    <div
+      ref={reorder.container}
+      className="mx-3 -mb-px overflow-hidden rounded-t-2xl border border-b-0 border-border bg-raised"
+      data-testid="queued-inputs"
+      role="list"
+      aria-label="Pending messages"
+    >
+      {/* the agent takes from the head, so what it took folds away there */}
+      {leaving.map((row) => (
+        <div
+          key={`leaving:${row.turn.requestId}`}
+          aria-hidden
+          data-testid="leaving-input"
+          className="grid animate-[tray-row-leave_200ms_ease-out_forwards] motion-reduce:hidden"
+        >
+          <div className="min-h-0 overflow-hidden">
+            <div className="border-b border-border/60 bg-raised px-3 py-1.5 text-sm">
+              <TakenRow row={row} />
+            </div>
+          </div>
+        </div>
+      ))}
+      {rows.map((row, position) => {
+        const entry = row.kind === "message" && editable ? row.entry : null;
+        const draggable = Boolean(
+          entry && (canMove(position, position - 1) || canMove(position, position + 1)),
+        );
+        const beingEdited = Boolean(entry && entry.requestDocId === editingDocId);
+        return (
+          <div
+            key={row.turn.requestId}
+            role="listitem"
+            data-testid="queued-input"
+            data-request-id={row.turn.requestId}
+            data-reorder-key={row.turn.requestId}
+            data-editing={beingEdited || undefined}
+            style={reorder.style(position)}
+            /* the whole row is what a person grabs; its buttons stay buttons */
+            {...(draggable ? rowDrag(reorder.handle(position)) : {})}
+            className={cn(
+              "border-b border-border/60 bg-raised px-3 py-1.5 text-sm select-none last:border-b-0",
+              draggable && "cursor-grab active:cursor-grabbing",
+              reorder.moving === position && "relative z-10",
+              reorder.lifted === position && "shadow-md ring-1 ring-border",
+              beingEdited && "shadow-[inset_2px_0_0_var(--color-brand)]",
+            )}
+          >
+            {taken(row.turn.requestId) ? (
+              <TakenRow row={row} />
+            ) : row.kind === "automated" ? (
+              row.turn.origin && (
+                <AutomatedInput
+                  origin={row.turn.origin}
+                  content={row.turn.content}
+                  state="Queued"
+                />
+              )
+            ) : (
+              <MessageRow
+                row={row}
+                own={Boolean(entry)}
+                draggable={draggable}
+                editing={beingEdited}
+                actions={
+                  entry && {
+                    locked,
+                    onEdit: onBeginEdit ? () => onBeginEdit(entry) : null,
+                    onRemove: () => void apply(removeEdit(queue!, entry)),
+                    up: canMove(position, position - 1)
+                      ? () => void move(position, position - 1)
+                      : null,
+                    down: canMove(position, position + 1)
+                      ? () => void move(position, position + 1)
+                      : null,
+                    separated:
+                      separated(position, position - 1) ||
+                      separated(position, position + 1),
+                  }
+                }
+              />
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+const NO_TURNS: readonly PendingTurnView[] = [];
+
+/* The runtime's queue is read after the rows the tray draws, so a message
+   it listed and lists no longer, while the rows still hold it, is one the
+   agent has taken and the transcript has yet to show. Only a message once
+   listed counts: the runtime lists fewer inputs than the rows hold (none
+   still binding a workspace, say). */
+function useTaken(
+  queue: readonly PendingQueueEntryView[] | null,
+  edited: ReadonlySet<string>,
+): (requestId: string) => boolean {
+  const seen = useRef(new Set<string>()).current;
+  for (const entry of queue ?? []) seen.add(entry.requestId);
+  const listed = new Set(queue?.map((entry) => entry.requestId));
+  return (requestId) =>
+    queue !== null &&
+    seen.has(requestId) &&
+    !listed.has(requestId) &&
+    !edited.has(requestId);
+}
+
+const LEAVE_MS = 200;
+
+/* Rows that just left, kept long enough to fold away. Only a plain
+   departure is drawn so: when a row arrives in the same change, one row is
+   taking another's place (an edit landing), and the person's own edits and
+   removals settle in place. */
+function useLeavingRows(rows: PendingRow[], edited: ReadonlySet<string>): PendingRow[] {
+  const previous = useRef(rows);
+  const timers = useRef(new Set<ReturnType<typeof setTimeout>>());
+  const [leaving, setLeaving] = useState<PendingRow[]>([]);
+  useLayoutEffect(() => {
+    const before = previous.current;
+    previous.current = rows;
+    const had = new Set(before.map((row) => row.turn.requestId));
+    if (rows.some((row) => !had.has(row.turn.requestId))) return;
+    const now = new Set(rows.map((row) => row.turn.requestId));
+    const gone = before.filter(
+      (row) => !now.has(row.turn.requestId) && !edited.has(row.turn.requestId),
+    );
+    if (gone.length === 0) return;
+    setLeaving((current) => [...current, ...gone]);
+    const timer = setTimeout(() => {
+      timers.current.delete(timer);
+      setLeaving((current) => current.filter((row) => !gone.includes(row)));
+    }, LEAVE_MS);
+    timers.current.add(timer);
+  }, [rows, edited]);
+  useEffect(() => {
+    const pending = timers.current;
+    return () => pending.forEach(clearTimeout);
+  }, []);
+  /* a message the runtime put back is a row again, not a leaving one */
+  return leaving.filter(
+    (row) => !rows.some((current) => current.turn.requestId === row.turn.requestId),
+  );
+}
+
+/* a waiting input the agent has taken: still drawn here until the
+   transcript shows it, with nothing left to do to it */
+function TakenRow({ row }: { row: PendingRow }) {
+  return (
+    <div className="flex min-w-0 items-center gap-2" data-taken>
+      <CornerDownRight
+        aria-hidden
+        className="size-3.5 shrink-0 text-muted-foreground"
+      />
+      <span className="min-w-0 flex-1 truncate text-muted-foreground">
+        {row.turn.content}
+      </span>
+      <span className="shrink-0 text-xs text-muted-foreground">Picked up</span>
+    </div>
+  );
+}
+
+/* A press on one of the row's controls is the control's, not a drag. React
+   hands the row presses from its menu too, which opens outside the row, so
+   only a press on the row itself starts one. */
+function rowDrag(handle: ReturnType<ReturnType<typeof useDragReorder>["handle"]>) {
+  return {
+    ...handle,
+    onPointerDown: (event: PointerEvent<HTMLElement>) => {
+      const target = event.target as HTMLElement;
+      if (!event.currentTarget.contains(target)) return;
+      if (target.closest("button, a, input, textarea")) return;
+      handle.onPointerDown(event);
+    },
+  };
+}
+
+/* a control waits while an edit is on its way, and most arrive at once: it
+   dims only if the wait is long enough to see, and comes back at once */
+const SLOW_DIM = "disabled:delay-300";
+
+function MessageRow({
+  row,
+  own,
+  draggable,
+  editing,
+  actions,
+}: {
+  row: Extract<PendingRow, { kind: "message" }>;
+  /** the person's own message: it shows the grip, dimmed while it cannot move */
+  own: boolean;
+  draggable: boolean;
+  /** in the composer right now: the row says so in place of its controls */
+  editing: boolean;
+  actions: {
+    locked: boolean;
+    onEdit: (() => void) | null;
+    onRemove: () => void;
+    up: (() => void) | null;
+    down: (() => void) | null;
+    /** a neighbour was sent with different settings */
+    separated: boolean;
+  } | null;
+}) {
+  return (
+    <div className="flex min-w-0 items-center gap-2">
+      {own ? (
+        <span
+          aria-hidden
+          data-testid="pending-grip"
+          data-draggable={draggable || undefined}
+          className={cn(
+            "-my-1 -ml-1 grid h-6 w-4 shrink-0 touch-none place-items-center text-muted-foreground",
+            !draggable && "opacity-40",
+          )}
+        >
+          <GripVertical className="size-3.5" />
+        </span>
+      ) : (
+        <CornerDownRight
+          aria-hidden
+          className="size-3.5 shrink-0 text-muted-foreground"
+        />
+      )}
+      <span
+        className={cn("min-w-0 flex-1 truncate", editing && "text-muted-foreground")}
+        title="Applies at the next safe step"
+      >
+        {row.turn.content}
+      </span>
+      {editing ? (
+        <span className="shrink-0 text-xs text-muted-foreground">Editing…</span>
+      ) : (
+        actions && (
+          <span className="flex shrink-0 items-center">
+            {actions.onEdit && (
+              <Button
+                size="icon-xs"
+                variant="quiet"
+                aria-label="Edit"
+                className={SLOW_DIM}
+                disabled={actions.locked}
+                onClick={actions.onEdit}
+              >
+                <Pencil />
+              </Button>
+            )}
+            <Button
+              size="icon-xs"
+              variant="quiet"
+              aria-label="Remove"
+              className={SLOW_DIM}
+              disabled={actions.locked}
+              onClick={actions.onRemove}
+            >
+              <Trash2 />
+            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={
+                  <Button
+                    size="icon-xs"
+                    variant="quiet"
+                    aria-label="More for this message"
+                    className={SLOW_DIM}
+                    disabled={actions.locked}
+                  />
+                }
+              >
+                <Ellipsis />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" side="top" className="w-44">
+                <DropdownMenuGroup>
+                  <DropdownMenuItem
+                    aria-label="Move pending message up"
+                    disabled={!actions.up}
+                    onClick={actions.up ?? undefined}
+                  >
+                    Move up
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    aria-label="Move pending message down"
+                    disabled={!actions.down}
+                    onClick={actions.down ?? undefined}
+                  >
+                    Move down
+                  </DropdownMenuItem>
+                </DropdownMenuGroup>
+                {actions.separated && (
+                  <p className="px-2 py-1.5 text-xs text-muted-foreground">
+                    Messages sent with different settings can’t be reordered together.
+                  </p>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </span>
+        )
+      )}
+    </div>
+  );
+}
