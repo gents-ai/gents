@@ -55,6 +55,9 @@ export type SetupForm = {
     stored: readonly ProviderAccountView[];
     signedIn: Partial<Record<ProviderId, string>>;
     pendingSave: Partial<Record<ProviderId, true>>;
+    /** providers the person set aside an account for, to sign in with
+        another: a read does not connect the stored one again */
+    switching: Partial<Record<ProviderId, true>>;
     /** a read has landed, so whether an account is connected is known */
     observed: boolean;
   };
@@ -90,6 +93,8 @@ export type SetupEvent =
     }
   | { type: "pendingSaveCleared"; provider: ProviderId }
   | { type: "connected"; provider: ProviderId; credentialId: string }
+  /** the person set the connected account aside, to sign in with another */
+  | { type: "signedOut"; provider: ProviderId }
   | { type: "autoSignInTaken" }
   | { type: "authUrl"; url: string | null }
   | { type: "hint"; hint: string | null }
@@ -110,7 +115,13 @@ export function initialSetupForm(fixedProvider?: ProviderId): SetupForm {
     provider: fixedProvider ?? null,
     connections: {},
     runtimeGate: "idle",
-    accounts: { stored: [], signedIn: {}, pendingSave: {}, observed: false },
+    accounts: {
+      stored: [],
+      signedIn: {},
+      pendingSave: {},
+      switching: {},
+      observed: false,
+    },
     accountLabel: "",
     signInHint: null,
     authUrl: null,
@@ -148,6 +159,15 @@ const asked = (form: SetupForm, provider: ProviderId) => ({
 function without<T>(state: Partial<Record<ProviderId, T>>, id: ProviderId) {
   const next = { ...state };
   delete next[id];
+  return next;
+}
+
+function withoutAll<T>(
+  state: Partial<Record<ProviderId, T>>,
+  ids: Partial<Record<ProviderId, unknown>>,
+) {
+  const next = { ...state };
+  for (const id of Object.keys(ids) as ProviderId[]) delete next[id];
   return next;
 }
 
@@ -195,7 +215,13 @@ export function setupFormReducer(form: SetupForm, event: SetupEvent): SetupForm 
     case "accountsCleared":
       return {
         ...form,
-        accounts: { ...form.accounts, signedIn: {}, pendingSave: {}, observed: false },
+        accounts: {
+          ...form.accounts,
+          signedIn: {},
+          pendingSave: {},
+          switching: {},
+          observed: false,
+        },
       };
     case "accountsRead":
       return {
@@ -203,9 +229,10 @@ export function setupFormReducer(form: SetupForm, event: SetupEvent): SetupForm 
         accounts: {
           stored: event.accounts,
           signedIn: event.seedSignedIn
-            ? providerSignInState(event.accounts)
+            ? withoutAll(providerSignInState(event.accounts), form.accounts.switching)
             : form.accounts.signedIn,
           pendingSave: providerPendingSaveState(event.accounts),
+          switching: form.accounts.switching,
           observed: true,
         },
       };
@@ -223,6 +250,17 @@ export function setupFormReducer(form: SetupForm, event: SetupEvent): SetupForm 
         accounts: {
           ...form.accounts,
           signedIn: { ...form.accounts.signedIn, [event.provider]: event.credentialId },
+          switching: without(form.accounts.switching, event.provider),
+        },
+        model: modelCleared(form.model),
+      };
+    case "signedOut":
+      return {
+        ...form,
+        accounts: {
+          ...form.accounts,
+          signedIn: without(form.accounts.signedIn, event.provider),
+          switching: { ...form.accounts.switching, [event.provider]: true },
         },
         model: modelCleared(form.model),
       };

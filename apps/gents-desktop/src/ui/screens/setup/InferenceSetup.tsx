@@ -272,6 +272,13 @@ export function InferenceSetup({
     }
   };
 
+  /* set the connected account aside to sign in with another; nothing is
+     removed, and signing in replaces or adds an account as it always does */
+  const useAnotherAccount = () => {
+    dispatch({ type: "signedOut", provider });
+    invalidateDiscovery();
+  };
+
   const cancelSignIn = () => {
     const oauthProvider = connection ? oauthProviderFor(connection.authMethod) : null;
     if (oauthProvider) void actions.cancelProviderSignIn(oauthProvider);
@@ -542,6 +549,7 @@ export function InferenceSetup({
           updateConnection,
           signIn: () => void signIn(),
           cancelSignIn,
+          useAnotherAccount,
           retrySave: () => void retrySaveSignIn(),
           discover: () => void discoverModels(),
         }}

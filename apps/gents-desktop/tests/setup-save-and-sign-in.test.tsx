@@ -215,6 +215,44 @@ describe("setup provider sign-in", () => {
   });
 });
 
+describe("a connected account in setup", () => {
+  const claude = (enabled = true) => ({
+    credentialId: "credential-claude",
+    nodeDid: NODE_DID,
+    provider: "claude-subscription",
+    accountId: "me@example.com",
+    planType: null,
+    accessTokenExpiresAt: "2099-01-01T00:00:00Z",
+    lastRefresh: null,
+    enabled,
+    pendingSave: false,
+  });
+  const openConnected = async (overrides: Partial<DesktopApiAdapter> = {}) => {
+    const setUp = setup({
+      listProviderAccounts: vi.fn().mockResolvedValue([claude()]),
+      ...overrides,
+    });
+    renderIn(
+      setUp.app,
+      <SetupScreen initialStep="inference" nodeDid={NODE_DID} onDone={vi.fn()} />,
+    );
+    await userEvent.click(await screen.findByTestId("setup-provider-anthropic"));
+    expect(await screen.findByText("Connected as me@example.com")).toBeVisible();
+    return setUp;
+  };
+
+  it("can set the account aside to sign in with another", async () => {
+    const { api } = await openConnected();
+    await userEvent.click(screen.getByRole("button", { name: "Use another account" }));
+    expect(await screen.findByRole("button", { name: "Sign in" })).toBeVisible();
+    expect(screen.queryByText("Connected as me@example.com")).not.toBeInTheDocument();
+    /* nothing is removed, and the sign-in waits for a click */
+    expect(api.claudeLogin).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    await waitFor(() => expect(api.claudeLogin).toHaveBeenCalledTimes(1));
+  });
+});
+
 describe("the provider catalog", () => {
   it("offers to read the catalog again after a failed read, and then goes on", async () => {
     const harness = createDesktopUiHarness({ scenario: "empty-fleet" });
