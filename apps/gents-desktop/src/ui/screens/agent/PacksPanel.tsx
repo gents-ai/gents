@@ -235,7 +235,7 @@ export function PacksPanel() {
       <Group title="Registry">
         <Row label="Search">
           <form
-            className="flex gap-2"
+            className="flex items-center gap-2"
             onSubmit={(event) => {
               event.preventDefault();
               void search(1);
@@ -247,7 +247,7 @@ export function PacksPanel() {
               placeholder="Packs and plugins"
               aria-label="Search the registry"
             />
-            <Button type="submit" size="sm" disabled={busy !== null}>
+            <Button type="submit" disabled={busy !== null}>
               Search
             </Button>
           </form>
@@ -299,18 +299,15 @@ export function PacksPanel() {
           </Row>
         ) : (
           <Row label="Sign in" description="A token from your registry dashboard">
-            <div className="flex gap-2">
+            <div className="flex items-center gap-2">
               <Input
                 type="password"
                 value={token}
                 onChange={(event) => setToken(event.target.value)}
+                placeholder="Registry token"
                 aria-label="Registry token"
               />
-              <Button
-                size="sm"
-                disabled={!token.trim() || busy !== null}
-                onClick={signIn}
-              >
+              <Button disabled={!token.trim() || busy !== null} onClick={signIn}>
                 Sign in
               </Button>
             </div>
