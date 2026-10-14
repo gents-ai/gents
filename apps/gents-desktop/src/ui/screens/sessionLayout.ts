@@ -55,7 +55,7 @@ export function useComposerRoom(
           : window.innerHeight;
         const gap = Math.max(0, Math.round(floor - el.getBoundingClientRect().top));
         column.current?.style.setProperty("--composer-h", `${gap}px`);
-        /* The room is padding the transcript's content observer does not see,
+        /* The composer's room is height the transcript's content observer does not see,
            and in WebKit a resize observed mid-notification lands a frame
            late: settled here, the view keeps its place in this frame. */
         settle();

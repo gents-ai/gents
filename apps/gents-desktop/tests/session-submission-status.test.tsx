@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { SessionSubmissionStatus } from "../src/ui/screens/SessionScreen";
+import { SessionSubmissionStatus } from "../src/ui/screens/session/composerParts";
 
 describe("kit session submission status", () => {
   it("announces accepted queued work from the canonical workflow projection", () => {

@@ -524,11 +524,7 @@ export const TranscriptPanel = memo(function TranscriptPanel({
     /* the condensed header floats over the scroller, so a step opening
        near the top must stop below it, not under it (h-12 plus a little) */
     <div
-      /* the composer is sticky over the foot of this scroller, so the
-         transcript keeps its height clear: without it the last thing in a
-         session sits underneath the composer, and anything that sticks to
-         the bottom lands there too */
-      className="mt-6 grid grid-cols-[minmax(0,1fr)] gap-5 pb-[var(--composer-h,0px)] [--step-scroll-inset:56]"
+      className="mt-6 grid grid-cols-[minmax(0,1fr)] gap-5 [--step-scroll-inset:56]"
       data-testid="transcript-panel"
     >
       {session?.timelinePage?.hasOlder && (
