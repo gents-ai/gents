@@ -130,6 +130,28 @@ pub fn asset_cache_root_for(
         .join(hash))
 }
 
+/// A pack's asset-cache root, keyed by its coordinate and content digest.
+pub fn asset_cache_root(home: &Path, pack: &PackArchive) -> Result<PathBuf> {
+    let manifest = pack.manifest();
+    asset_cache_root_for(
+        home,
+        &manifest.metadata.namespace,
+        &manifest.name,
+        pack.digest(),
+    )
+}
+
+/// Publishes a pack into its asset cache: shared lease first, then the
+/// assets, then the marker `release_cache_root` requires before it removes
+/// anything. The caller holds the lease while it reads the cache.
+pub fn materialize_cached(home: &Path, pack: &PackArchive) -> Result<(PathBuf, FileLock)> {
+    let root = asset_cache_root(home, pack)?;
+    let lease = FileLock::shared(cache_lock(root.parent().context("pack cache parent")?)?)?;
+    materialize(pack, &root)?;
+    write_cache_marker(&root)?;
+    Ok((root, lease))
+}
+
 /// Takes the exclusive lock on a pack's cache parent directory, the same
 /// lock `gents pack prune` takes, failing loudly rather than blocking when
 /// another pack operation already holds it.
@@ -261,6 +283,24 @@ mod tests {
             std::fs::read_to_string(root.path().join("README.md")).unwrap(),
             "operator edit"
         );
+    }
+
+    #[test]
+    fn cached_materialization_leaves_a_releasable_marked_cache_under_a_shared_lease() {
+        let pack = assets_archive();
+        let home = tempfile::tempdir().unwrap();
+        let (root, lease) = materialize_cached(home.path(), &pack).unwrap();
+        assert_eq!(root, asset_cache_root(home.path(), &pack).unwrap());
+        assert!(root.join("manifest.json").is_file());
+        assert!(matches!(
+            lock_exclusive(root.parent().unwrap()),
+            Err(error) if error.to_string().contains("in use")
+        ));
+        drop(lease);
+        assert!(matches!(
+            release_cache_root(&root, || Ok(())).unwrap(),
+            CacheRelease::Removed
+        ));
     }
 
     #[test]

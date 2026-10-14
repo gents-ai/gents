@@ -351,13 +351,7 @@ fn materialize_cached_pack(
     home: &std::path::Path,
     pack: &PackSource,
 ) -> Result<(std::path::PathBuf, gents::file_lock::FileLock)> {
-    let root = asset_cache_root(home, pack)?;
-    let lock = gents::file_lock::FileLock::shared(gents::pack::materialize::cache_lock(
-        root.parent().context("pack cache parent")?,
-    )?)?;
-    gents::pack::materialize::materialize(pack.archive(), &root)?;
-    gents::pack::materialize::write_cache_marker(&root)?;
-    Ok((root, lock))
+    gents::pack::materialize::materialize_cached(home, pack.archive())
 }
 
 /// A subject pack for `gents eval run` and `gents optimization run`: a
@@ -474,12 +468,7 @@ fn names_a_directory(spec: &str) -> bool {
 }
 
 fn asset_cache_root(home: &std::path::Path, pack: &PackSource) -> Result<std::path::PathBuf> {
-    gents::pack::materialize::asset_cache_root_for(
-        home,
-        &pack.manifest().metadata.namespace,
-        &pack.manifest().name,
-        pack.digest(),
-    )
+    gents::pack::materialize::asset_cache_root(home, pack.archive())
 }
 
 /// Thin caller over [`gents::plugin::install::install_pack_plugins`]; the
