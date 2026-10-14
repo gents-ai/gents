@@ -28,6 +28,30 @@ import { RequestStop } from "./WorkerActions";
 type Tone = "running" | "done" | "failed" | "stopped" | "unknown";
 
 const firstLine = (s: string | null | undefined) => s?.trim().split("\n")[0] ?? null;
+
+/** A failed call's reason in one line. An error written as JSON says it in a
+    field, and its first line is only the brace that opens it. */
+export function failureLine(output: string | null | undefined): string | null {
+  const text = output?.trim();
+  if (!text) return null;
+  if (!text.startsWith("{")) return firstLine(text);
+  try {
+    const value: unknown = JSON.parse(text);
+    if (value && typeof value === "object") {
+      for (const key of ["error", "message", "reason", "detail"]) {
+        const field = (value as Record<string, unknown>)[key];
+        if (typeof field === "string" && field.trim()) return firstLine(field);
+        if (field && typeof field === "object") {
+          const nested = (field as Record<string, unknown>).message;
+          if (typeof nested === "string" && nested.trim()) return firstLine(nested);
+        }
+      }
+    }
+  } catch {
+    /* not JSON after all: no line is better than a brace */
+  }
+  return null;
+}
 const since = (iso: string | null | undefined) =>
   iso ? duration(Math.max(0, Date.now() - Date.parse(iso))) : null;
 
@@ -42,7 +66,7 @@ export function workerNow(
   reached: Reached | null,
   now: number,
 ): { tone: Tone; text: string; detail?: string | null } {
-  const failure = firstLine(
+  const failure = failureLine(
     tool.presentation.kind === "agent" ? tool.presentation.output : null,
   );
   const state = reached?.request.lifecycleState ?? null;
@@ -285,7 +309,7 @@ export function WorkerStep({
         mark={mark}
         name={summary?.title ?? p.name ?? p.sessionId ?? "a session"}
         state={tool.statusKind === "success" ? "interrupted" : tool.statusKind}
-        detail={firstLine(p.output)}
+        detail={failureLine(p.output)}
         sessionId={p.sessionId}
       >
         <ToolBody tool={tool} />
