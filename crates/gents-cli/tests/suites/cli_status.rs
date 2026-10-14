@@ -120,6 +120,7 @@ async fn status_includes_p2p_runtime_info() -> Result<()> {
     )?;
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_state_graphql(&home_dir, &graphql, Duration::from_secs(30)).await?;
 
     let output = run_cli_json(&home_dir, &["status"])?;
     assert_eq!(
@@ -251,6 +252,7 @@ async fn status_and_metrics_surface_overridden_p2p_admission_knobs() -> Result<(
     )?;
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_state_graphql(&home_dir, &graphql, Duration::from_secs(30)).await?;
 
     assert_eq!(
         ready
@@ -356,6 +358,7 @@ async fn status_liveness_surfaces_expired_processing_request_and_running_tool() 
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_state_graphql(&home_dir, &graphql, Duration::from_secs(30)).await?;
 
     let stuck_request_id = format!("stuck-req-{}", Uuid::new_v4().simple());
     let stuck_session_id = format!("stuck-session-{}", Uuid::new_v4().simple());
@@ -534,6 +537,7 @@ async fn status_liveness_progress_counts_completed_tools_and_inference() -> Resu
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
+    wait_for_runtime_state_graphql(&home_dir, &graphql, Duration::from_secs(30)).await?;
 
     let now = chrono::Utc::now();
     let at = |offset_secs: i64| (now + chrono::Duration::seconds(offset_secs)).to_rfc3339();
