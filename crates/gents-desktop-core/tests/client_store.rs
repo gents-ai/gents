@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -120,7 +121,7 @@ async fn local_request_refresh_preserves_projection_boundaries_and_database_trut
     .await?;
     assert_eq!(page.store.transcript_messages.len(), 1);
     assert_eq!(page.store.output_segments.len(), 1);
-    core.shutdown().await?;
+    Arc::new(core).shutdown().await?;
     Ok(())
 }
 
@@ -191,7 +192,7 @@ async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Re
         Some("did:test:amy:research")
     );
 
-    core.shutdown().await?;
+    Arc::new(core).shutdown().await?;
     Ok(())
 }
 
@@ -244,7 +245,7 @@ async fn observer_loads_initial_snapshot_and_ticks_on_update() -> Result<()> {
     .context("timed out waiting for refreshed snapshot")??;
 
     assert_eq!(store.snapshot().nodes[0].node_did, "did:test:test-agent");
-    core.shutdown().await?;
+    Arc::new(core).shutdown().await?;
     Ok(())
 }
 
@@ -293,7 +294,7 @@ async fn bootstrap_then_observer_no_lost_writes() -> Result<()> {
         assert!(dids.contains(want.as_str()), "missing {want}");
     }
 
-    core.shutdown().await?;
+    Arc::new(core).shutdown().await?;
     Ok(())
 }
 
@@ -341,7 +342,7 @@ async fn incremental_observer_keeps_transcript_out_of_streaming_store() -> Resul
     assert_eq!(page.message_query_limit, 41);
     assert_eq!(page.store.transcript_messages.len(), 40);
     assert_eq!(page.queried_rows, 41);
-    core.shutdown().await?;
+    Arc::new(core).shutdown().await?;
     Ok(())
 }
 
@@ -390,7 +391,7 @@ async fn conflicting_immutable_transcript_facts_are_not_silently_selected() -> R
         result.is_err(),
         "conflicting immutable headers must be surfaced"
     );
-    core.shutdown().await?;
+    Arc::new(core).shutdown().await?;
     Ok(())
 }
 
@@ -490,7 +491,7 @@ async fn agent_scope_isolation_under_drop_recovery() -> Result<()> {
         "did:alpha"
     );
 
-    core.shutdown().await?;
+    Arc::new(core).shutdown().await?;
     Ok(())
 }
 

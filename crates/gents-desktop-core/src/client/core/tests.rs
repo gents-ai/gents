@@ -114,7 +114,7 @@ async fn cancelled_shutdown_waiter_keeps_claim_until_node_shutdown_returns() {
     drop(core);
 
     assert_eq!(
-        crate::home::lock_store(&home, &data).is_err(),
+        gents::home::lock_store(&home, &data).is_err(),
         claim_held_for("caller_cancelled"),
         "the claim observation after shutdown waiter cancellation"
     );
@@ -127,7 +127,7 @@ async fn cancelled_shutdown_waiter_keeps_claim_until_node_shutdown_returns() {
     .await
     .expect("native shutdown returns before the claim is released");
     assert_eq!(
-        crate::home::lock_store(&home, &data).is_err(),
+        gents::home::lock_store(&home, &data).is_err(),
         claim_held_for("native_returned"),
         "the claim observation after native shutdown return"
     );
@@ -135,10 +135,10 @@ async fn cancelled_shutdown_waiter_keeps_claim_until_node_shutdown_returns() {
     pause.allow_access_release.notify_one();
     let retry_home = home.clone();
     let retry_data = data.clone();
-    tokio::task::spawn_blocking(move || {
+    let reacquired = tokio::task::spawn_blocking(move || {
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
         loop {
-            match crate::home::lock_store(&retry_home, &retry_data) {
+            match gents::home::lock_store(&retry_home, &retry_data) {
                 Ok(lock) => return lock,
                 Err(_) if std::time::Instant::now() < deadline => {
                     std::thread::sleep(Duration::from_millis(10));
@@ -151,7 +151,7 @@ async fn cancelled_shutdown_waiter_keeps_claim_until_node_shutdown_returns() {
     .expect("store lock probe panicked");
     drop(reacquired);
     assert_eq!(
-        crate::home::lock_store(&home, &data).is_err(),
+        gents::home::lock_store(&home, &data).is_err(),
         claim_held_for("access_released"),
         "the claim observation after access release"
     );
