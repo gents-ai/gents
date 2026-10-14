@@ -491,8 +491,16 @@ enum RollbackOnDrop {
         node_identity: Option<String>,
         handle: Option<TransactionHandle>,
         write_guard: Option<MutationWriteGuard>,
+        #[cfg(test)]
+        drop_cleanup_pause: Option<Arc<RollbackDropCleanupPause>>,
         armed: bool,
     },
+}
+
+#[cfg(test)]
+pub(crate) struct RollbackDropCleanupPause {
+    pub(crate) started: Arc<tokio::sync::Notify>,
+    pub(crate) release: Arc<tokio::sync::Notify>,
 }
 
 impl RollbackOnDrop {
@@ -539,6 +547,8 @@ impl Drop for RollbackOnDrop {
                 node_identity,
                 handle,
                 write_guard,
+                #[cfg(test)]
+                drop_cleanup_pause,
                 armed,
             } => {
                 if !*armed {
@@ -550,13 +560,24 @@ impl Drop for RollbackOnDrop {
                 let runner = runner.clone();
                 let node_identity = node_identity.clone();
                 let write_guard = write_guard.take();
+                #[cfg(test)]
+                let drop_cleanup_pause = drop_cleanup_pause.take();
                 runtime.spawn(async move {
-                    match cleanup_while_holding_write_gate(
-                        write_guard,
+                    let cleanup = async move {
+                        #[cfg(test)]
+                        if let Some(pause) = drop_cleanup_pause {
+                            pause.started.notify_one();
+                            pause.release.notified().await;
+                        }
                         defra_core::current_identity::with_scoped_identity(
                             node_identity,
                             runner.rollback_txn(&handle),
-                        ),
+                        )
+                        .await
+                    };
+                    match cleanup_while_holding_write_gate(
+                        write_guard,
+                        cleanup,
                     )
                     .await {
                         Ok(Ok(())) => {}
@@ -600,6 +621,8 @@ where
         node_identity: node_identity.clone(),
         handle: None,
         write_guard,
+        #[cfg(test)]
+        drop_cleanup_pause: None,
         armed: true,
     };
     let started = Instant::now();
@@ -1071,6 +1094,21 @@ impl<'a> ConfigApplyTxn<'a> {
             EmbeddedTransactionPurpose::Mutation,
         )
         .await
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pause_drop_rollback_for_test(&mut self, pause: Arc<RollbackDropCleanupPause>) {
+        let rollback = self
+            .rollback_on_drop
+            .as_mut()
+            .expect("new transaction owns its rollback guard");
+        let RollbackOnDrop::Embedded {
+            drop_cleanup_pause, ..
+        } = rollback
+        else {
+            panic!("test cleanup pause requires an embedded transaction");
+        };
+        *drop_cleanup_pause = Some(pause);
     }
 
     async fn begin_http(

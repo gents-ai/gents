@@ -568,7 +568,7 @@ async fn load_activity(
         .map(|parent| {
             let ids = &cause_ids;
             format!(
-                r#"causes: AgentToolCall(filter: {{_docID: {{_in: [{ids}]}}, request_doc_id: {{_eq: "{}"}}}}) {{ _docID message_sequence }}"#,
+                r#"causes: AgentToolCall(docIDs: [{ids}], filter: {{ request_doc_id: {{_eq: "{}"}} }}) {{ _docID message_sequence }}"#,
                 escape_graphql_string(parent)
             )
         })
@@ -577,7 +577,7 @@ async fn load_activity(
         r#"{{
             InferenceCall(filter: {{_or: [{usage_scopes}], call_kind: {{_eq: "inference"}}, call_state: {{_in: ["completed", "failed", "cancelled"]}}}}) {{ request_doc_id prompt_tokens completion_tokens }}
             AgentToolCall(filter: {{_or: [{tool_scopes}]}}) {{ request_doc_id tool_name lifecycle_state }}
-            AgentRequest(filter: {{_docID: {{_in: [{head_ids}]}}}}) {{ _docID terminalized_at }}
+            AgentRequest(docIDs: [{head_ids}]) {{ _docID terminalized_at }}
             {causes}
         }}"#
     );

@@ -38,7 +38,7 @@ pub async fn fetch_doc_patch(
             rows.nodes = load_rows(
                 node,
                 NODE_NAME,
-                &format!("query {{ {NODE_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {NODE_FIELDS} }} }}"),
+                &format!("query {{ {NODE_NAME}(docIDs: [{in_clause}]) {{ {NODE_FIELDS} }} }}"),
             )
             .await?;
         }
@@ -46,7 +46,7 @@ pub async fn fetch_doc_patch(
             rows.agents = load_rows(
                 node,
                 AGENT_NAME,
-                &format!("query {{ {AGENT_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {AGENT_FIELDS} }} }}"),
+                &format!("query {{ {AGENT_NAME}(docIDs: [{in_clause}]) {{ {AGENT_FIELDS} }} }}"),
             )
             .await?;
         }
@@ -54,7 +54,7 @@ pub async fn fetch_doc_patch(
             rows.runtimes = load_rows(
                 node,
                 NODE_RUNTIME_NAME,
-                &format!("query {{ {NODE_RUNTIME_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {NODE_RUNTIME_FIELDS} }} }}"),
+                &format!("query {{ {NODE_RUNTIME_NAME}(docIDs: [{in_clause}]) {{ {NODE_RUNTIME_FIELDS} }} }}"),
             )
             .await?;
         }
@@ -62,7 +62,7 @@ pub async fn fetch_doc_patch(
             rows.node_readiness = load_rows(
                 node,
                 NODE_READINESS_NAME,
-                &format!("query {{ {NODE_READINESS_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {NODE_READINESS_FIELDS} }} }}"),
+                &format!("query {{ {NODE_READINESS_NAME}(docIDs: [{in_clause}]) {{ {NODE_READINESS_FIELDS} }} }}"),
             )
             .await?;
         }
@@ -70,7 +70,7 @@ pub async fn fetch_doc_patch(
             rows.requests = load_rows(
                 node,
                 AGENT_REQUEST_NAME,
-                &format!("query {{ {AGENT_REQUEST_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {AGENT_REQUEST_FIELDS} }} }}"),
+                &format!("query {{ {AGENT_REQUEST_NAME}(docIDs: [{in_clause}]) {{ {AGENT_REQUEST_FIELDS} }} }}"),
             )
             .await?;
         }
@@ -78,14 +78,14 @@ pub async fn fetch_doc_patch(
             rows.mailbox_items = load_rows(
                 node,
                 MAILBOX_ITEM_NAME,
-                &format!("query {{ {MAILBOX_ITEM_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {MAILBOX_ITEM_FIELDS} }} }}"),
+                &format!("query {{ {MAILBOX_ITEM_NAME}(docIDs: [{in_clause}]) {{ {MAILBOX_ITEM_FIELDS} }} }}"),
             )
             .await?;
         }
         AGENT_MESSAGE_NAME => {
             let data = execute_local_graphql_query(
                 node,
-                &format!("query {{ {AGENT_MESSAGE_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {AGENT_MESSAGE_FIELDS} }} }}"),
+                &format!("query {{ {AGENT_MESSAGE_NAME}(docIDs: [{in_clause}]) {{ {AGENT_MESSAGE_FIELDS} }} }}"),
                 "canonical message patch",
             ).await?;
             rows.transcript_messages =
@@ -94,7 +94,7 @@ pub async fn fetch_doc_patch(
         AGENT_OUTPUT_SEGMENT_NAME => {
             let data = execute_local_graphql_query(
                 node,
-                &format!("query {{ {AGENT_OUTPUT_SEGMENT_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"),
+                &format!("query {{ {AGENT_OUTPUT_SEGMENT_NAME}(docIDs: [{in_clause}]) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"),
                 "canonical output segment patch",
             ).await?;
             rows.output_segments =
@@ -104,7 +104,7 @@ pub async fn fetch_doc_patch(
             rows.sessions = load_rows(
                 node,
                 AGENT_SESSION_NAME,
-                &format!("query {{ {AGENT_SESSION_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {AGENT_SESSION_FIELDS} }} }}"),
+                &format!("query {{ {AGENT_SESSION_NAME}(docIDs: [{in_clause}]) {{ {AGENT_SESSION_FIELDS} }} }}"),
             )
             .await?;
         }
@@ -112,7 +112,7 @@ pub async fn fetch_doc_patch(
             rows.goals = load_rows(
                 node,
                 GOAL_NAME,
-                &format!("query {{ {GOAL_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {GOAL_FIELDS} }} }}"),
+                &format!("query {{ {GOAL_NAME}(docIDs: [{in_clause}]) {{ {GOAL_FIELDS} }} }}"),
             )
             .await?;
         }
@@ -120,7 +120,7 @@ pub async fn fetch_doc_patch(
             rows.tool_calls = load_rows(
                 node,
                 AGENT_TOOL_CALL_NAME,
-                &format!("query {{ {AGENT_TOOL_CALL_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {AGENT_TOOL_CALL_FIELDS} }} }}"),
+                &format!("query {{ {AGENT_TOOL_CALL_NAME}(docIDs: [{in_clause}]) {{ {AGENT_TOOL_CALL_FIELDS} }} }}"),
             )
             .await?;
         }
@@ -128,7 +128,7 @@ pub async fn fetch_doc_patch(
             rows.compaction_entries = load_rows(
                 node,
                 COMPACTION_ENTRY_NAME,
-                &format!("query {{ {COMPACTION_ENTRY_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {COMPACTION_ENTRY_FIELDS} }} }}"),
+                &format!("query {{ {COMPACTION_ENTRY_NAME}(docIDs: [{in_clause}]) {{ {COMPACTION_ENTRY_FIELDS} }} }}"),
             )
             .await?;
         }
@@ -136,7 +136,7 @@ pub async fn fetch_doc_patch(
             rows.tasks = load_rows(
                 node,
                 TASK_NAME,
-                &format!("query {{ {TASK_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {TASK_FIELDS} }} }}"),
+                &format!("query {{ {TASK_NAME}(docIDs: [{in_clause}]) {{ {TASK_FIELDS} }} }}"),
             )
             .await?;
         }
@@ -144,14 +144,14 @@ pub async fn fetch_doc_patch(
             rows.schedules = load_rows(
                 node,
                 SCHEDULE_NAME,
-                &format!("query {{ {SCHEDULE_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {SCHEDULE_FIELDS} }} }}"),
+                &format!("query {{ {SCHEDULE_NAME}(docIDs: [{in_clause}]) {{ {SCHEDULE_FIELDS} }} }}"),
             )
             .await?;
         }
         TRIGGER_NAME => {
             let data = execute_local_graphql_query(
                 node,
-                &format!("query {{ {TRIGGER_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {TRIGGER_FIELDS} {TRIGGER_OBSERVATION_FIELDS} {SCHEDULE_OBSERVATION_FIELDS} }} }}"),
+                &format!("query {{ {TRIGGER_NAME}(docIDs: [{in_clause}]) {{ {TRIGGER_FIELDS} {TRIGGER_OBSERVATION_FIELDS} {SCHEDULE_OBSERVATION_FIELDS} }} }}"),
                 "trigger document patch",
             ).await?;
             observed_physical_documents = Some(
@@ -183,7 +183,7 @@ pub async fn fetch_doc_patch(
             rows.skills = load_rows(
                 node,
                 SKILL_NAME,
-                &format!("query {{ {SKILL_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {SKILL_FIELDS} }} }}"),
+                &format!("query {{ {SKILL_NAME}(docIDs: [{in_clause}]) {{ {SKILL_FIELDS} }} }}"),
             )
             .await?;
         }
@@ -191,14 +191,14 @@ pub async fn fetch_doc_patch(
             rows.tools = load_rows(
                 node,
                 TOOLS_NAME,
-                &format!("query {{ {TOOLS_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {TOOLS_FIELDS} }} }}"),
+                &format!("query {{ {TOOLS_NAME}(docIDs: [{in_clause}]) {{ {TOOLS_FIELDS} }} }}"),
             )
             .await?;
         }
         INFERENCE_BACKEND_NAME => {
             let data = execute_local_graphql_query(
                 node,
-                &format!("query {{ {INFERENCE_BACKEND_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {INFERENCE_BACKEND_FIELDS} {INFERENCE_BACKEND_OBSERVATION_FIELDS} }} }}"),
+                &format!("query {{ {INFERENCE_BACKEND_NAME}(docIDs: [{in_clause}]) {{ {INFERENCE_BACKEND_FIELDS} {INFERENCE_BACKEND_OBSERVATION_FIELDS} }} }}"),
                 "inference backend document patch",
             ).await?;
             observed_physical_documents = Some(
@@ -220,19 +220,19 @@ pub async fn fetch_doc_patch(
                 Some("node_did"),
             )?;
         }
-        "AgentContext" => rows.contexts = load_rows(node, "AgentContext", &format!("query {{ AgentContext(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {AGENT_CONTEXT_FIELDS} }} }}")).await?,
-        "CompactionConfig" => rows.compactions = load_rows(node, "CompactionConfig", &format!("query {{ CompactionConfig(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {COMPACTION_CONFIG_FIELDS} }} }}")).await?,
-        "InferenceSampling" => rows.inference_sampling = load_rows(node, "InferenceSampling", &format!("query {{ InferenceSampling(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {INFERENCE_SAMPLING_FIELDS} }} }}")).await?,
-        "InferenceExecution" => rows.inference_execution = load_rows(node, "InferenceExecution", &format!("query {{ InferenceExecution(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {INFERENCE_EXECUTION_FIELDS} }} }}")).await?,
-        "EventSource" => rows.event_sources = load_rows(node, "EventSource", &format!("query {{ EventSource(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {EVENT_SOURCE_FIELDS} }} }}")).await?,
-        AGENT_TARGET_NAME => rows.agent_targets = load_rows(node, AGENT_TARGET_NAME, &format!("query {{ {AGENT_TARGET_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {AGENT_TARGET_FIELDS} }} }}")).await?,
-        "DatastoreToolSurface" => rows.datastore_tool_surfaces = load_rows(node, "DatastoreToolSurface", &format!("query {{ DatastoreToolSurface(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {DATASTORE_TOOL_SURFACE_FIELDS} }} }}")).await?,
-        "ChainKeyBinding" => rows.chain_key_bindings = load_rows(node, "ChainKeyBinding", &format!("query {{ ChainKeyBinding(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {CHAIN_KEY_BINDING_FIELDS} }} }}")).await?,
+        "AgentContext" => rows.contexts = load_rows(node, "AgentContext", &format!("query {{ AgentContext(docIDs: [{in_clause}]) {{ {AGENT_CONTEXT_FIELDS} }} }}")).await?,
+        "CompactionConfig" => rows.compactions = load_rows(node, "CompactionConfig", &format!("query {{ CompactionConfig(docIDs: [{in_clause}]) {{ {COMPACTION_CONFIG_FIELDS} }} }}")).await?,
+        "InferenceSampling" => rows.inference_sampling = load_rows(node, "InferenceSampling", &format!("query {{ InferenceSampling(docIDs: [{in_clause}]) {{ {INFERENCE_SAMPLING_FIELDS} }} }}")).await?,
+        "InferenceExecution" => rows.inference_execution = load_rows(node, "InferenceExecution", &format!("query {{ InferenceExecution(docIDs: [{in_clause}]) {{ {INFERENCE_EXECUTION_FIELDS} }} }}")).await?,
+        "EventSource" => rows.event_sources = load_rows(node, "EventSource", &format!("query {{ EventSource(docIDs: [{in_clause}]) {{ {EVENT_SOURCE_FIELDS} }} }}")).await?,
+        AGENT_TARGET_NAME => rows.agent_targets = load_rows(node, AGENT_TARGET_NAME, &format!("query {{ {AGENT_TARGET_NAME}(docIDs: [{in_clause}]) {{ {AGENT_TARGET_FIELDS} }} }}")).await?,
+        "DatastoreToolSurface" => rows.datastore_tool_surfaces = load_rows(node, "DatastoreToolSurface", &format!("query {{ DatastoreToolSurface(docIDs: [{in_clause}]) {{ {DATASTORE_TOOL_SURFACE_FIELDS} }} }}")).await?,
+        "ChainKeyBinding" => rows.chain_key_bindings = load_rows(node, "ChainKeyBinding", &format!("query {{ ChainKeyBinding(docIDs: [{in_clause}]) {{ {CHAIN_KEY_BINDING_FIELDS} }} }}")).await?,
         INFERENCE_PROFILE_NAME => {
             rows.inference_profiles = load_rows(
                 node,
                 INFERENCE_PROFILE_NAME,
-                &format!("query {{ {INFERENCE_PROFILE_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {INFERENCE_PROFILE_FIELDS} }} }}"),
+                &format!("query {{ {INFERENCE_PROFILE_NAME}(docIDs: [{in_clause}]) {{ {INFERENCE_PROFILE_FIELDS} }} }}"),
             )
             .await?;
         }
@@ -240,7 +240,7 @@ pub async fn fetch_doc_patch(
             rows.tool_service_registries = load_rows(
                 node,
                 TOOL_SERVICE_REGISTRY_NAME,
-                &format!("query {{ {TOOL_SERVICE_REGISTRY_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {TOOL_SERVICE_REGISTRY_FIELDS} }} }}"),
+                &format!("query {{ {TOOL_SERVICE_REGISTRY_NAME}(docIDs: [{in_clause}]) {{ {TOOL_SERVICE_REGISTRY_FIELDS} }} }}"),
             )
             .await?;
         }

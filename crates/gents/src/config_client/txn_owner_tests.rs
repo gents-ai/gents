@@ -9,6 +9,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::routing::post;
 use axum::{Json, Router};
 use defra_node::EmbeddedNode;
+use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::sync::{Barrier, Notify};
 use tracing::field::{Field, Visit};
@@ -920,6 +921,76 @@ async fn stalled_cancellation_cleanup_releases_the_embedded_write_gate() {
     let _guard = tokio::time::timeout(Duration::from_millis(1), gate.lock())
         .await
         .expect("the embedded write gate is released after cleanup times out");
+}
+
+#[derive(Deserialize)]
+struct StorageWriteGateCase {
+    name: String,
+    independently_scheduled: bool,
+    rollback_owner_scheduled: bool,
+    cleanup_times_out: bool,
+    expected_gate_held_after_owner_handoff: bool,
+    expected_gate_held: bool,
+}
+
+#[tokio::test(start_paused = true)]
+async fn lean_cancelled_rollback_timeout_releases_actual_transaction_gate() {
+    let cases: Vec<StorageWriteGateCase> =
+        serde_json::from_str(include_str!("../../tests/fixtures/storage_write_gate.json"))
+            .expect("Lean storage write-gate fixture");
+    let scenario = cases
+        .iter()
+        .find(|case| case.name == "cancelled_rollback_timeout_releases_canonical_gate")
+        .expect("generated cancellation and rollback-timeout scenario");
+    assert!(!scenario.independently_scheduled);
+    assert!(scenario.rollback_owner_scheduled && scenario.cleanup_times_out);
+    assert!(!scenario.expected_gate_held);
+
+    let node = EmbeddedNode::builder().build().await.unwrap();
+    let started = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let mut txn = ConfigApplyTxn::begin_local(&node, None).await.unwrap();
+    txn.pause_drop_rollback_for_test(Arc::new(super::RollbackDropCleanupPause {
+        started: started.clone(),
+        release,
+    }));
+    drop(txn);
+
+    let gate = super::mutation_write_gate(&node);
+    started.notified().await;
+    let gate_held = match gate.lock.clone().try_lock_owned() {
+        Ok(guard) => {
+            drop(guard);
+            false
+        }
+        Err(_) => true,
+    };
+    assert_eq!(
+        gate_held, scenario.expected_gate_held_after_owner_handoff,
+        "native gate observation must match the Lean handoff state"
+    );
+    if scenario.cleanup_times_out {
+        tokio::time::advance(super::EMBEDDED_TRANSACTION_ROLLBACK_TIMEOUT).await;
+    }
+    let acquisition = tokio::time::timeout(
+        Duration::from_secs(1),
+        gate.acquire(
+            crate::config_client::write_telemetry::WriteOperation::new(
+                "test.rollback_timeout_releases_transaction_gate",
+            )
+            .unwrap(),
+        ),
+    )
+    .await;
+    let gate_held = !matches!(&acquisition, Ok(Ok(_)));
+    assert_eq!(
+        gate_held, scenario.expected_gate_held,
+        "native gate observation must match the Lean cleanup-timeout state"
+    );
+    if let Ok(Ok(guard)) = acquisition {
+        drop(guard);
+    }
+    node.shutdown().await;
 }
 
 #[test]

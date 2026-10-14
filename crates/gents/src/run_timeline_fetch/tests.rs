@@ -537,32 +537,26 @@ async fn accepted_tool_arguments_read_only_the_accepted_message() {
             .is_err(),
         "premise: the session-wide reader resolves every message in the session"
     );
-    let first = load_accepted_tool_arguments(
+    let accepted = load_accepted_tool_calls(
         &access,
         &node_did,
         &session_id,
         requester_did.as_deref(),
-        &first_doc,
+        &[first_doc.clone(), second_doc.clone()],
     )
     .await
-    .expect("first binding reads only its accepted message");
-    assert_eq!(first.len(), 1);
+    .expect("selected bindings read only their accepted messages");
+    assert_eq!(accepted.len(), 2);
+    let accepted = accepted
+        .into_iter()
+        .map(|call| (call.doc_id.unwrap(), call.args))
+        .collect::<BTreeMap<_, _>>();
     assert_eq!(
-        serde_json::from_str::<Value>(&first[0]).unwrap(),
+        serde_json::from_str::<Value>(&accepted[&first_doc]).unwrap(),
         serde_json::json!({"agent": "general", "prompt": "work"})
     );
-    let second = load_accepted_tool_arguments(
-        &access,
-        &node_did,
-        &session_id,
-        requester_did.as_deref(),
-        &second_doc,
-    )
-    .await
-    .expect("second binding reads only its accepted message");
-    assert_eq!(second.len(), 1);
     assert_eq!(
-        serde_json::from_str::<Value>(&second[0]).unwrap(),
+        serde_json::from_str::<Value>(&accepted[&second_doc]).unwrap(),
         second_arguments
     );
     assert!(load_accepted_tool_arguments(

@@ -17,6 +17,8 @@ struct Case {
     name: String,
     independently_scheduled: bool,
     storage_returns: bool,
+    rollback_owner_scheduled: bool,
+    cleanup_times_out: bool,
     expected_gate_held: bool,
 }
 
@@ -43,8 +45,12 @@ async fn lean_storage_gate_scenarios_drive_stream_finalization() {
         "../../../tests/fixtures/storage_write_gate.json"
     ))
     .expect("Lean storage write-gate fixtures");
-    assert_eq!(cases.len(), 3);
-    for case in cases {
+    assert_eq!(cases.len(), 4);
+    for case in cases
+        .into_iter()
+        .filter(|case| !case.rollback_owner_scheduled)
+    {
+        assert!(!case.cleanup_times_out);
         let gate = Arc::new(Mutex::new(()));
         let (entered_tx, mut entered_rx) = oneshot::channel();
         let (return_tx, return_rx) = oneshot::channel();
