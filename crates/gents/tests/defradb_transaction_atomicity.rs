@@ -3,11 +3,13 @@
 //!
 //! These tests drive `ConfigAccess::transact_local_write` — the existing Gents
 //! gated transaction adapter (`crates/gents/src/config_client/txn.rs`) —
-//! over a disposable embedded DefraDB node with a minimal two-collection
-//! schema. They provide commit/rollback evidence for DefraDB transactions
-//! only: a committed transaction persists every write in the callback, an
-//! injected error after the first write persists neither, and a failed
-//! second mutation persists neither when the caller propagates the error.
+//! over a disposable embedded DefraDB node with a minimal atomicity schema.
+//! They provide commit/rollback evidence for DefraDB transactions only: a
+//! committed transaction persists every write in the callback, an injected
+//! error after the first write persists neither, a failed second mutation
+//! persists neither when the caller propagates the error, and a duplicate
+//! unique-indexed key fails the transaction and persists none of its writes
+//! when the caller propagates the error.
 //! An independent normal read is also sampled while the first write remains
 //! uncommitted; a blocked read is permitted, but a partial pair is not.
 //! No claim is made about host crash durability or remote P2P merge, and
