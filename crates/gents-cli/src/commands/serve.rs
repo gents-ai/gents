@@ -774,13 +774,10 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
         .await
         .context("reading client route collection versions after migrations")?;
     replicated_schema.set(schema).ok();
-    let enrollment_network = crate::http::enrollment::ensure_enrollment_network(
-        node.as_ref(),
-        identity.as_ref(),
-        &node_name,
-    )
-    .await
-    .context("ensuring authenticated enrollment network")?;
+    let enrollment_network =
+        crate::http::enrollment::ensure_enrollment_network(&node, identity.as_ref(), &node_name)
+            .await
+            .context("ensuring authenticated enrollment network")?;
     *enrollment_decisions.write().await = Some(
         crate::http::enrollment::EnrollmentDecisionService::new(identity.clone(), node.clone()),
     );

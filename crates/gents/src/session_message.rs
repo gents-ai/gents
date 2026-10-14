@@ -120,7 +120,7 @@ pub(crate) struct RenderedBody {
 /// The caller's `Tools.agents` group and its resolved targets, read through
 /// the request admission configuration walk. Absent tools leave it disabled.
 pub(crate) async fn load_caller_session_tools(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     node_did: &str,
     agent_id: &str,
 ) -> Result<AgentToolConfig> {
@@ -136,7 +136,7 @@ pub(crate) async fn load_caller_session_tools(
 /// prompt template is rendered with `task.input` as `args`, and its Goal
 /// declaration, if any, is rendered for the target session.
 pub(crate) async fn render_body(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     caller_node_did: &str,
     target_agent_id: &str,
     target_session_id: &str,
@@ -152,7 +152,7 @@ pub(crate) async fn render_body(
         MessageBody::Task(task) => task,
     };
     let task_id = task.task_id.trim();
-    let loaded = crate::config_client::ConfigAccess::transact_local(
+    let loaded = crate::config_client::ConfigAccess::transact_local_readonly(
         node,
         None,
         "session_message.load_task",
@@ -291,7 +291,7 @@ impl Plan {
 /// case the message is a new request. A Task Goal is set on a local idle target session with its
 /// request in one transaction.
 pub(crate) async fn plan(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     cause: &SessionMessageCause,
     target: &SessionMessageTarget,
     rendered: RenderedBody,
@@ -479,7 +479,7 @@ pub(crate) async fn commit(
 }
 
 async fn commit_once(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     cause: &SessionMessageCause,
     lifecycle: &mut crate::tool_call_lifecycle::ToolCallLifecycle,
     plan: Plan,
@@ -507,7 +507,7 @@ async fn commit_once(
             let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
             let (mutation, binding, create, receipt_for) =
                 (&mutation, &binding, &create, &receipt_for);
-            crate::config_client::ConfigAccess::transact_local(
+            crate::config_client::ConfigAccess::transact_local_write(
                 node,
                 None,
                 "session_message.commit_request",
@@ -543,7 +543,7 @@ async fn commit_once(
                 .context("caller DID is not ACP-addressable")?;
             let (create, objective, session_id, binding, receipt_for) =
                 (&create, &objective, &session_id, &binding, &receipt_for);
-            crate::config_client::ConfigAccess::transact_local(
+            crate::config_client::ConfigAccess::transact_local_write(
                 node,
                 Some(actor),
                 "session_message.commit_goal",
@@ -738,7 +738,7 @@ pub async fn interrupt_refusal(
 /// Stop `target`'s current turn through the single-session interrupt owner.
 /// Returns the interrupted request id, or `None` when the session is idle.
 pub async fn interrupt_session(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     target: &SessionScope,
 ) -> Result<Option<String>> {
     let Some(active) = crate::interrupt::active_session_request(
@@ -918,7 +918,7 @@ pub(crate) async fn kill(
     {
         let calling_request_id = calling_request_id(node, lifecycle).await?;
         crate::background_completion::append_background_tool_completion(
-            node.as_ref(),
+            &node,
             lifecycle.session_id(),
             &calling_request_id,
             lifecycle
@@ -1109,9 +1109,12 @@ mod agent_tools_tests {
     }
 
     /// The session a claim of `caused` materializes, with its provenance.
-    async fn materialize_session(node: &EmbeddedNode, caused: &crate::AgentRequest) {
+    async fn materialize_session(
+        node: &std::sync::Arc<EmbeddedNode>,
+        caused: &crate::AgentRequest,
+    ) {
         let caused = caused.clone();
-        ConfigAccess::transact_local(node, None, "test.materialize_session", move |txn| {
+        ConfigAccess::transact_local_write(node, None, "test.materialize_session", move |txn| {
             let caused = caused.clone();
             Box::pin(async move {
                 crate::session::ensure_session_in_txn(

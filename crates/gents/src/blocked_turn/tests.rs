@@ -508,7 +508,7 @@ async fn embedded() -> (Arc<EmbeddedNode>, ConfigAccess) {
         .collect();
     let plan = DesiredStateApplyPlan::new(documents).unwrap();
     access
-        .transact("test.blocked_turn", |txn| {
+        .transact_write("test.blocked_turn", |txn| {
             let plan = &plan;
             Box::pin(async move {
                 crate::config_client::apply_desired_state_plan(txn, plan)

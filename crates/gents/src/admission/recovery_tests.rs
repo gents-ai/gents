@@ -4,8 +4,8 @@ use serde_json::Value;
 
 const NODE_DID: &str = "did:test:inference-recovery-cas";
 
-async fn fixture(initial_state: &str) -> (EmbeddedNode, StaleInferenceCallRow) {
-    let node = EmbeddedNode::builder().build().await.unwrap();
+async fn fixture(initial_state: &str) -> (std::sync::Arc<EmbeddedNode>, StaleInferenceCallRow) {
+    let node = std::sync::Arc::new(EmbeddedNode::builder().build().await.unwrap());
     crate::schema::ensure_runtime_schemas(&node).await.unwrap();
     let state = escape_graphql_string(initial_state);
     let response = node
@@ -119,7 +119,6 @@ fn pending_call(call_id: &str) -> super::super::controller::PendingCallMetadata 
 #[tokio::test]
 async fn recovery_winner_rejects_late_running_persistence() {
     let (node, snapshot) = fixture("queued").await;
-    let node = std::sync::Arc::new(node);
     assert!(
         recover_inference_call_row(&node, &snapshot, InferenceRecoveryOutcome::Cancelled)
             .await
@@ -302,7 +301,7 @@ async fn aborting_terminal_finalizer_returns_real_permit_and_repairs_call_once()
     let blocker_entered = gate_entered.clone();
     let blocker_release = release_gate.clone();
     let blocker = tokio::spawn(async move {
-        crate::config_client::ConfigAccess::transact_local(
+        crate::config_client::ConfigAccess::transact_local_write(
             &blocker_node,
             None,
             "test.admission.abort_finalizer_gate_blocker",
@@ -387,7 +386,6 @@ async fn aborting_terminal_finalizer_returns_real_permit_and_repairs_call_once()
 #[tokio::test]
 async fn recovery_winner_preserves_terminal_stamp_and_rehydrates_late_usage() {
     let (node, snapshot) = fixture("running").await;
-    let node = std::sync::Arc::new(node);
     assert!(
         recover_inference_call_row(&node, &snapshot, InferenceRecoveryOutcome::Failed)
             .await

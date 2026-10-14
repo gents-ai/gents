@@ -656,7 +656,7 @@ mod tests {
             let mut documents = Vec::new();
             for (collection, id) in ids {
                 let found = access
-                    .transact("cli.eval.init.test_read_author", |txn| {
+                    .transact_write("cli.eval.init.test_read_author", |txn| {
                         Box::pin(async move {
                             gents::config_client::read_desired_state_record_in_txn(
                                 txn, collection, owner, id,

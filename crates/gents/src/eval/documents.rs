@@ -254,7 +254,7 @@ async fn create(
         "mutation($input: {name}MutationInputArg!) {{ create_{name}(input: $input) {{ _docID }} }}"
     );
     access
-        .transact(operation, |txn| {
+        .transact_write(operation, |txn| {
             let (variables, mutation) = (&variables, &mutation);
             Box::pin(async move {
                 txn.execute_with_variables(mutation, variables)
@@ -273,7 +273,7 @@ async fn rows(
     name: &'static str,
 ) -> Result<Vec<Value>> {
     let response = access
-        .transact(operation, |txn| {
+        .transact_readonly(operation, |txn| {
             let query = &query;
             Box::pin(async move { txn.execute(query).await })
         })
@@ -380,7 +380,7 @@ pub async fn invalidate_run(
     });
     let run_id_owned = run_id.to_owned();
     access
-        .transact("eval.invalidate_run", |txn| {
+        .transact_write("eval.invalidate_run", |txn| {
             let (filter, variables, run_id) = (&filter, &variables, &run_id_owned);
             Box::pin(async move {
                 let current = txn
@@ -453,7 +453,7 @@ pub async fn complete_trial(
     let variables = json!({ "input": { "completion": serde_json::to_value(completion)? } });
     let trial_id = trial_id.to_owned();
     access
-        .transact("eval.complete_trial", |txn| {
+        .transact_write("eval.complete_trial", |txn| {
             let (filter, variables, trial_id) = (&filter, &variables, &trial_id);
             Box::pin(async move {
                 let current = txn

@@ -284,7 +284,10 @@ mod tests {
         let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
 
-        async fn create_block(node: &defra_node::EmbeddedNode, text: &str) -> (String, Vec<u8>) {
+        async fn create_block(
+            node: &std::sync::Arc<defra_node::EmbeddedNode>,
+            text: &str,
+        ) -> (String, Vec<u8>) {
             let bytes = text.as_bytes().to_vec();
             let key = encoding::block_content_key(&bytes);
             let mutation = format!(

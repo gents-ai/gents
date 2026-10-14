@@ -203,9 +203,7 @@ impl Fixture {
             .unwrap();
         let access = ConfigAccess::Local(home.node.clone());
         let owner = home.did().to_string();
-        gents::ensure_node(home.node.as_ref(), &owner)
-            .await
-            .unwrap();
+        gents::ensure_node(&home.node, &owner).await.unwrap();
         let dirs = tempfile::tempdir().unwrap();
 
         // The pack carries both the subject and the definition.
@@ -377,7 +375,7 @@ async fn install(access: &ConfigAccess, documents: Vec<(Collection, Value)>) {
     )
     .unwrap();
     access
-        .transact("optimization_live.install", |txn| {
+        .transact_write("optimization_live.install", |txn| {
             let plan = &plan;
             Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
         })

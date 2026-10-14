@@ -133,7 +133,7 @@ struct SubmissionRecord {
 }
 
 pub(crate) async fn submit_transaction<T: JsonRpcTransport>(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     client: &EthRpcClient<T>,
     secret: &[u8; 32],
     request: SubmitRequest,
@@ -283,7 +283,7 @@ fn verify_existing(
 }
 
 async fn resume_submission<T: JsonRpcTransport>(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     client: &EthRpcClient<T>,
     record: SubmissionRecord,
     options: SubmitOptions,
@@ -369,7 +369,7 @@ async fn fetch_receipt<T: JsonRpcTransport>(
 }
 
 async fn persist_receipt(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     record: &SubmissionRecord,
     receipt: Value,
 ) -> Result<SubmitReceipt> {
@@ -611,7 +611,10 @@ async fn load_submission(
     Ok(rows.pop())
 }
 
-async fn create_submission(node: &EmbeddedNode, record: &SubmissionRecord) -> Result<()> {
+async fn create_submission(
+    node: &std::sync::Arc<EmbeddedNode>,
+    record: &SubmissionRecord,
+) -> Result<()> {
     let submission_key = escape_graphql_string(&record.submission_key);
     let principal_did = escape_graphql_string(&record.principal_did);
     let request_hash = escape_graphql_string(&record.request_hash);
@@ -648,7 +651,7 @@ async fn create_submission(node: &EmbeddedNode, record: &SubmissionRecord) -> Re
 }
 
 async fn update_submission(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     doc_id: &str,
     status: &str,
     receipt: Option<&Value>,
@@ -874,14 +877,16 @@ mod tests {
         json!({"jsonrpc":"2.0","id":1,"result": value})
     }
 
-    async fn node() -> (tempfile::TempDir, EmbeddedNode) {
+    async fn node() -> (tempfile::TempDir, Arc<EmbeddedNode>) {
         let temp = tempfile::tempdir().expect("tempdir");
-        let node = EmbeddedNode::builder()
-            .data_path(temp.path().join("data"))
-            .with_storage_backend(defra_node::StorageBackend::Regolith)
-            .build()
-            .await
-            .expect("node");
+        let node = Arc::new(
+            EmbeddedNode::builder()
+                .data_path(temp.path().join("data"))
+                .with_storage_backend(defra_node::StorageBackend::Regolith)
+                .build()
+                .await
+                .expect("node"),
+        );
         ensure_runtime_schemas(&node).await.expect("schemas");
         (temp, node)
     }

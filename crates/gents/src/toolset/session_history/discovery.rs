@@ -266,7 +266,7 @@ pub(super) async fn run(
         .context("sessions requires a valid running DID")?;
     let args = args.clone();
     let action = action.to_owned();
-    ConfigAccess::transact_local(
+    ConfigAccess::transact_local_readonly(
         &tool.node,
         Some(identity),
         "tool.sessions.discovery",
@@ -841,7 +841,7 @@ resources:
             .await
             .unwrap();
         let owner_did = owner.did().to_owned();
-        let doc = ConfigAccess::transact_local(&node, Some(owner_did.parse().unwrap()), "test.sessions.acp.create", |txn| {
+        let doc = ConfigAccess::transact_local_write(&node, Some(owner_did.parse().unwrap()), "test.sessions.acp.create", |txn| {
             let did = owner_did.clone();
             Box::pin(async move {
                 let value = txn.execute(&format!("mutation {{add_AgentSession(input: {{node_did: {}, requester_did: \"different-requester\", session_id: \"shared\", agent_id: \"engineer\", created_at: \"2026-01-01T00:00:00Z\"}}) {{_docID}}}}", quoted(&did))).await?;

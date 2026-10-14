@@ -180,7 +180,7 @@ pub(super) async fn next_steering_request_after(
         .iter()
         .map(|row| row.doc_id.clone().expect("decoded physical identity"))
         .collect::<Vec<_>>();
-    let order = gents::config_client::ConfigAccess::transact_local(
+    let order = gents::config_client::ConfigAccess::transact_local_write(
         &state.node,
         None,
         "codex.active.steering_order",
@@ -338,7 +338,7 @@ pub(in crate::commands::codex_shim) async fn interrupt_active_turn(
     );
     let request_id = active.interrupt_request_id.clone();
     if let Err(error) = gents::interrupt_request_by_doc_id(
-        state.node.as_ref(),
+        &state.node,
         &active.interrupt_request_doc_id,
         &state.node_did,
         Some(state.local_requester_did()),
@@ -386,7 +386,7 @@ pub(in crate::commands::codex_shim) async fn interrupt_active_turn(
     for (request_id, request_doc_id) in cleanup_request_ids {
         connection.take_steering_input(&request_id).await;
         if let Err(error) = gents::interrupt_request_by_doc_id(
-            state.node.as_ref(),
+            &state.node,
             &request_doc_id,
             &state.node_did,
             Some(state.local_requester_did()),
@@ -434,7 +434,7 @@ pub(in crate::commands::codex_shim) async fn interrupt_caused_thread_turn(
 ) -> Result<()> {
     cancel_stream_control(connection, &thread.session_id, turn_id).await;
     let interrupted =
-        gents::session_message::interrupt_session(state.node.as_ref(), &thread.scope()).await?;
+        gents::session_message::interrupt_session(&state.node, &thread.scope()).await?;
     trace::shim_event_fields(
         &state.trace_path,
         "turn_interrupt_caused_thread",
@@ -480,7 +480,7 @@ async fn load_thread_request_rows(
         thread_id,
         requester_did,
     ));
-    gents::config_client::ConfigAccess::transact_local(&state.node,None,"codex.active.rows",|txn| {
+    gents::config_client::ConfigAccess::transact_local_write(&state.node,None,"codex.active.rows",|txn| {
         let scope=&scope;
         Box::pin(async move {
             let response=txn.execute(&format!(r#"{{
@@ -758,7 +758,7 @@ mod tests {
                 steering,
             )],
         ] {
-            gents::config_client::ConfigAccess::transact_local(
+            gents::config_client::ConfigAccess::transact_local_write(
                 &state.node,
                 None,
                 "codex.active.test_history",

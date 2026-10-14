@@ -3014,7 +3014,7 @@ async fn boot_capture_agent_with(
     customize: impl FnOnce(AgentBuilder) -> AgentBuilder,
 ) -> BootedAgent {
     let identity: Arc<dyn NodeIdentity> = Arc::new(test_identity(test_name));
-    upsert_capture_backend(db.node.as_ref(), identity.did(), endpoint).await;
+    upsert_capture_backend(&db.node, identity.did(), endpoint).await;
     let mut builder = Gents::builder()
         .node(db.node.clone())
         .identity(identity)
@@ -3041,7 +3041,7 @@ async fn boot_capture_agent_with(
     BootedAgent::new(shutdown_tx, handle, node_did)
 }
 
-async fn upsert_capture_backend(node: &EmbeddedNode, owner: &str, endpoint: &str) {
+async fn upsert_capture_backend(node: &Arc<EmbeddedNode>, owner: &str, endpoint: &str) {
     use gents::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
     gents::ensure_node(node, owner).await.unwrap();
     let value = serde_json::json!({"node_did":owner,"backend_id":CAPTURE_BACKEND_ID,"name":CAPTURE_BACKEND_ID,"provider_kind":"OpenAiCompatible","openai_wire_api":"chat_completions","endpoint":endpoint,"auth":{"kind":"unauthenticated"},"max_concurrent":4,"max_queue_depth":100});
@@ -3063,7 +3063,7 @@ async fn upsert_capture_backend(node: &EmbeddedNode, owner: &str, endpoint: &str
         .collect(),
     )
     .unwrap();
-    ConfigAccess::transact_local(node, None, "test.install_provider_backend", |txn| {
+    ConfigAccess::transact_local_write(node, None, "test.install_provider_backend", |txn| {
         let plan = &plan;
         Box::pin(async move { gents::config_client::apply_desired_state_plan(txn, plan).await })
     })

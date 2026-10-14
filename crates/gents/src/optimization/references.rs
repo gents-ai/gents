@@ -40,7 +40,7 @@ pub fn journal_run_ids(journal: &[JournalEntry]) -> BTreeSet<String> {
 pub async fn job_ids(access: &ConfigAccess, owner: &str) -> Result<Vec<String>> {
     let owner = owner.to_owned();
     let response = access
-        .transact("optimization.job_ids", |txn| {
+        .transact_readonly("optimization.job_ids", |txn| {
             let owner = &owner;
             Box::pin(async move { job_ids_in_txn(txn, owner).await })
         })

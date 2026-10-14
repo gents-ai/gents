@@ -106,7 +106,7 @@ struct NativeFinalizer {
 impl StreamGuardLifecycle for NativeFinalizer {
     fn finish_stream(self) -> BoxFuture<'static, Result<(), crate::admission::AdmissionError>> {
         Box::pin(async move {
-            ConfigAccess::transact_local(
+            ConfigAccess::transact_local_write(
                 &self.node,
                 None,
                 "test.stream_finalization.native_owner",

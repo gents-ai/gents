@@ -610,7 +610,7 @@ async fn catalog_transaction_preserves_explicit_empty_lists_and_rollback() -> Re
         }],
     };
     access
-        .transact("test.catalog.transaction", |txn| {
+        .transact_write("test.catalog.transaction", |txn| {
             let catalog = catalog.clone();
             let backend = &backend;
             Box::pin(async move { record_model_catalog_in_txn(txn, backend, catalog).await })
@@ -629,7 +629,7 @@ async fn catalog_transaction_preserves_explicit_empty_lists_and_rollback() -> Re
         ..catalog.clone()
     };
     let failed: Result<()> = access
-        .transact("test.catalog.rollback", |txn| {
+        .transact_write("test.catalog.rollback", |txn| {
             let empty = empty.clone();
             let backend = &backend;
             Box::pin(async move {

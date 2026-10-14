@@ -104,7 +104,7 @@ fn pre_inference_agent() -> Arc<ResolvedAgent> {
 }
 
 async fn seed_titled_session(
-    node: &defra_node::EmbeddedNode,
+    node: &Arc<defra_node::EmbeddedNode>,
     request: &AgentRequest,
     agent_config: &ResolvedAgent,
 ) -> anyhow::Result<()> {
@@ -112,7 +112,7 @@ async fn seed_titled_session(
         text: "pre-inference interrupt".into(),
         source: gents_protocol::session::SessionTitleSource::Task,
     };
-    let created = crate::config_client::ConfigAccess::transact_local(
+    let created = crate::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "session.create",
@@ -210,7 +210,7 @@ async fn interrupt_while_preparing_provider_input_terminalizes_through_the_owner
     let request = create_routed_request(&node, &agent_config, &node_did).await;
     let request_doc_id = request.doc_id.clone();
     let requester_did = request.requester_did.clone();
-    seed_titled_session(node.as_ref(), &request, &agent_config)
+    seed_titled_session(&node, &request, &agent_config)
         .await
         .expect("seed a titled session through the session writer");
 
@@ -232,7 +232,7 @@ async fn interrupt_while_preparing_provider_input_terminalizes_through_the_owner
         assert_eq!(row["lifecycle_state"], "processing");
 
         crate::interrupt::interrupt_request_by_doc_id(
-            node.as_ref(),
+            &node,
             &request_doc_id,
             &node_did,
             requester_did.as_deref(),
@@ -319,7 +319,7 @@ async fn interrupt_latched_at_the_claim_terminalizes_before_execution_begins() {
     let request = create_routed_request(&node, &agent_config, &node_did).await;
     let request_doc_id = request.doc_id.clone();
     let requester_did = request.requester_did.clone();
-    seed_titled_session(node.as_ref(), &request, &agent_config)
+    seed_titled_session(&node, &request, &agent_config)
         .await
         .expect("seed a titled session through the session writer");
 
@@ -370,7 +370,7 @@ async fn interrupt_latched_at_the_claim_terminalizes_before_execution_begins() {
         ),
     );
     crate::interrupt::interrupt_request_by_doc_id(
-        node.as_ref(),
+        &node,
         &request_doc_id,
         &node_did,
         requester_did.as_deref(),
@@ -498,7 +498,7 @@ async fn interrupt_while_restoring_the_provider_checkpoint_terminalizes_through_
     let request = create_routed_request(&node, &agent_config, &node_did).await;
     let request_doc_id = request.doc_id.clone();
     let requester_did = request.requester_did.clone();
-    seed_titled_session(node.as_ref(), &request, &agent_config)
+    seed_titled_session(&node, &request, &agent_config)
         .await
         .expect("seed a titled session through the session writer");
 
@@ -524,7 +524,7 @@ async fn interrupt_while_restoring_the_provider_checkpoint_terminalizes_through_
         assert_eq!(row["lifecycle_state"], "processing");
 
         crate::interrupt::interrupt_request_by_doc_id(
-            node.as_ref(),
+            &node,
             &request_doc_id,
             &node_did,
             requester_did.as_deref(),

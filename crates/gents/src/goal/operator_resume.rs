@@ -53,7 +53,7 @@ async fn resume_goal_request_inner<'a>(
     match access {
         crate::ConfigAccess::Local(node) => {
             let did = ::identity::Did::new(identity.did().to_owned())?;
-            crate::config_client::ConfigAccess::transact_local(
+            crate::config_client::ConfigAccess::transact_local_write(
                 node,
                 Some(did),
                 "goal.resume_request",
@@ -75,7 +75,7 @@ async fn resume_goal_request_inner<'a>(
         }
         crate::ConfigAccess::Graphql(_) => {
             access
-                .transact("goal.resume_request", move |txn| {
+                .transact_write("goal.resume_request", move |txn| {
                     Box::pin(async move {
                         stage_resume_inner(
                             txn,

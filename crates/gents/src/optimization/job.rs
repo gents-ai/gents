@@ -291,7 +291,7 @@ pub async fn create_job(
         "created_at": now(),
     }});
     access
-        .transact("optimization.create_job", |txn| {
+        .transact_write("optimization.create_job", |txn| {
             let variables = &variables;
             Box::pin(async move {
                 txn.execute_with_variables(
@@ -450,7 +450,7 @@ pub async fn load_job(
 ) -> Result<Option<JobRecord>> {
     let (owner, job_id) = (owner.to_owned(), job_id.to_owned());
     access
-        .transact("optimization.load_job", |txn| {
+        .transact_readonly("optimization.load_job", |txn| {
             let (owner, job_id) = (&owner, &job_id);
             Box::pin(async move { load_job_in_txn(txn, owner, job_id).await })
         })
@@ -496,7 +496,7 @@ pub async fn append(access: &ConfigAccess, job: &mut JobRecord, entry: JournalEn
     {
         let (current, entry) = (&*job, &entry);
         access
-            .transact("optimization.append_journal", |txn| {
+            .transact_write("optimization.append_journal", |txn| {
                 Box::pin(async move { append_in_txn(txn, current, entry).await })
             })
             .await?;

@@ -151,7 +151,7 @@ async fn goal_clear(args: GoalShowArgs) -> Result<()> {
             let node_did_ref = &node_did;
             let session_id_ref = &session_id;
             access
-                .transact("cli.goal.clear", move |txn| {
+                .transact_write("cli.goal.clear", move |txn| {
                     Box::pin(async move {
                         let response = txn
                             .execute(&format!(
@@ -266,7 +266,7 @@ mod tests {
                 .unwrap(),
         );
         gents::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-        gents::ensure_node(node.as_ref(), DID).await.unwrap();
+        gents::ensure_node(&node, DID).await.unwrap();
         let access = ConfigAccess::Local(node);
         let backend = serde_json::from_value(serde_json::json!({
             "node_did": DID, "backend_id": "claude", "name": "Claude",
@@ -409,7 +409,7 @@ mod tests {
                 .unwrap(),
         );
         gents::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-        gents::ensure_node(node.as_ref(), DID).await.unwrap();
+        gents::ensure_node(&node, DID).await.unwrap();
         let access = ConfigAccess::Local(node);
         let backend = serde_json::from_value(serde_json::json!({
             "node_did": DID, "backend_id": "claude", "name": "Claude",

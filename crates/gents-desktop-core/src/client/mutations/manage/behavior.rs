@@ -6,6 +6,8 @@ use gents::collection::Collection;
 use gents::config_client::{apply_desired_state_plan, read_desired_state_record_in_txn};
 use gents::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents::AgentDocument;
+#[cfg(test)]
+use std::sync::Arc;
 
 pub async fn upsert_agent_on(access: &ConfigAccess, document: &AgentDocument) -> Result<()> {
     let value = serde_json::to_value(document)?;
@@ -18,14 +20,14 @@ pub async fn upsert_agent_on(access: &ConfigAccess, document: &AgentDocument) ->
 }
 
 #[cfg(test)]
-pub async fn upsert_agent(node: &EmbeddedNode, document: &AgentDocument) -> Result<()> {
+pub async fn upsert_agent(node: &Arc<EmbeddedNode>, document: &AgentDocument) -> Result<()> {
     let value = serde_json::to_value(document)?;
     let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
         collection: Collection::Agent,
         add: value.clone(),
         update: value,
     }])?;
-    ConfigAccess::transact_local(node, None, "desktop.agent.save", |txn| {
+    ConfigAccess::transact_local_write(node, None, "desktop.agent.save", |txn| {
         let plan = &plan;
         Box::pin(async move {
             apply_desired_state_plan(txn, plan).await?;
@@ -36,7 +38,7 @@ pub async fn upsert_agent(node: &EmbeddedNode, document: &AgentDocument) -> Resu
 }
 
 #[cfg(test)]
-pub async fn delete_agent(node: &EmbeddedNode, node_did: &str, id: &str) -> Result<usize> {
+pub async fn delete_agent(node: &Arc<EmbeddedNode>, node_did: &str, id: &str) -> Result<usize> {
     super::delete_scoped_document_local(
         node,
         "desktop.agent.delete",
@@ -59,7 +61,11 @@ pub async fn delete_agent_on(access: &ConfigAccess, node_did: &str, id: &str) ->
 }
 
 #[cfg(test)]
-pub async fn delete_agent_context(node: &EmbeddedNode, node_did: &str, id: &str) -> Result<usize> {
+pub async fn delete_agent_context(
+    node: &Arc<EmbeddedNode>,
+    node_did: &str,
+    id: &str,
+) -> Result<usize> {
     super::delete_scoped_document_local(
         node,
         "desktop.context.delete",
@@ -108,7 +114,7 @@ mod tests {
             update: context,
         }])?;
         ConfigAccess::Local(node.clone())
-            .transact("test.context.create", |txn| {
+            .transact_write("test.context.create", |txn| {
                 let plan = &plan;
                 Box::pin(async move {
                     apply_desired_state_plan(txn, plan).await?;
@@ -165,7 +171,7 @@ mod tests {
             update: target,
         }])?;
         access
-            .transact("test.target", |txn| {
+            .transact_write("test.target", |txn| {
                 let plan = &target_plan;
                 Box::pin(async move {
                     apply_desired_state_plan(txn, plan).await?;
@@ -191,7 +197,7 @@ mod tests {
             "target".into(),
         )])?;
         access
-            .transact("test.target.remove", |txn| {
+            .transact_write("test.target.remove", |txn| {
                 let plan = &remove_target;
                 Box::pin(async move {
                     apply_desired_state_plan(txn, plan).await?;
@@ -209,7 +215,7 @@ mod tests {
         upsert_agent(&node, &fallback).await?;
         for default in ["review", "fallback"] {
             access
-                .transact("test.node.default", |txn| {
+                .transact_write("test.node.default", |txn| {
                     Box::pin(async move {
                         let (_, mut value) = read_desired_state_record_in_txn(
                             txn,

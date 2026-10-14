@@ -4268,10 +4268,15 @@ async fn apply_fixture_documents(
             .collect(),
     )
     .expect("build live fixture plan");
-    gents::ConfigAccess::transact_local(node, None, "test.live_session_message_fixture", |txn| {
-        let plan = &plan;
-        Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
-    })
+    gents::ConfigAccess::transact_local_write(
+        node,
+        None,
+        "test.live_session_message_fixture",
+        |txn| {
+            let plan = &plan;
+            Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
+        },
+    )
     .await
     .expect("apply live fixture documents");
 }

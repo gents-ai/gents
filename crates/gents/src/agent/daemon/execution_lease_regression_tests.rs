@@ -981,7 +981,7 @@ async fn daemon_interrupt_completion_preserves_wake_published_after_latch() {
         gents_protocol::graphql::graphql_input_literal(&serde_json::to_value(session).unwrap())
             .unwrap();
     access
-        .transact("test.daemon_post_latch_session", |txn| {
+        .transact_write("test.daemon_post_latch_session", |txn| {
             let session_input = &session_input;
             Box::pin(async move {
                 txn.execute(&format!(
@@ -1057,7 +1057,7 @@ async fn daemon_interrupt_completion_preserves_wake_published_after_latch() {
         }},
         "created_at": chrono::Utc::now().to_rfc3339(),
     });
-    crate::config_client::ConfigAccess::transact_local(
+    crate::config_client::ConfigAccess::transact_local_write(
         &node,
         None,
         "test.daemon_post_latch_wake",

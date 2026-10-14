@@ -18,7 +18,7 @@ fn test_identity(name: &str) -> KeyIdentity {
 }
 
 async fn apply_documents(
-    node: &gents::defra_node::EmbeddedNode,
+    node: &Arc<gents::defra_node::EmbeddedNode>,
     documents: Vec<(gents::Collection, serde_json::Value)>,
 ) {
     use gents::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
@@ -33,7 +33,7 @@ async fn apply_documents(
             .collect(),
     )
     .unwrap();
-    ConfigAccess::transact_local(node, None, "test.automation_configuration", |txn| {
+    ConfigAccess::transact_local_write(node, None, "test.automation_configuration", |txn| {
         let plan = &plan;
         Box::pin(async move { gents::config_client::apply_desired_state_plan(txn, plan).await })
     })
@@ -42,7 +42,7 @@ async fn apply_documents(
 }
 
 async fn create_task(
-    node: &gents::defra_node::EmbeddedNode,
+    node: &Arc<gents::defra_node::EmbeddedNode>,
     owner: &str,
     task_id: &str,
     agent_id: &str,
@@ -52,7 +52,7 @@ async fn create_task(
 }
 
 async fn create_schedule(
-    node: &gents::defra_node::EmbeddedNode,
+    node: &Arc<gents::defra_node::EmbeddedNode>,
     owner: &str,
     schedule_id: &str,
     task_id: &str,
@@ -79,7 +79,7 @@ async fn create_schedule(
 }
 
 async fn set_trigger_enabled_and_cursor(
-    node: &gents::defra_node::EmbeddedNode,
+    node: &Arc<gents::defra_node::EmbeddedNode>,
     owner: &str,
     trigger_id: &str,
     enabled: bool,
@@ -118,7 +118,7 @@ async fn set_trigger_enabled_and_cursor(
 }
 
 async fn create_event_trigger(
-    node: &gents::defra_node::EmbeddedNode,
+    node: &Arc<gents::defra_node::EmbeddedNode>,
     owner: &str,
     trigger_id: &str,
     task_id: &str,
@@ -190,7 +190,7 @@ async fn schedule_insert_and_trigger_disable_bump_active_generation() {
     let db = test_db("schedule-snapshot-reconcile").await;
     let identity = Arc::new(test_identity("schedule-snapshot-reconcile"));
     bind_default_agent_backend(
-        db.node.as_ref(),
+        &db.node,
         identity.did(),
         "backend-schedule-snapshot-reconcile",
         UNUSED_BACKEND_ENDPOINT,
@@ -224,7 +224,7 @@ async fn schedule_insert_and_trigger_disable_bump_active_generation() {
     );
 
     create_task(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         "task-reconcile-alpha",
         &default_agent_id,
@@ -232,7 +232,7 @@ async fn schedule_insert_and_trigger_disable_bump_active_generation() {
     )
     .await;
     create_schedule(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         "schedule-reconcile-alpha",
         "task-reconcile-alpha",
@@ -257,7 +257,7 @@ async fn schedule_insert_and_trigger_disable_bump_active_generation() {
 
     let due = (Utc::now() - ChronoDuration::seconds(60)).to_rfc3339();
     set_trigger_enabled_and_cursor(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         "schedule-reconcile-alpha",
         false,
@@ -300,7 +300,7 @@ async fn scheduled_fire_persists_task_content_and_trigger_writeback() {
     let identity = Arc::new(test_identity("scheduled-fire-writeback"));
     let endpoint = MockModelEndpoint::start("default").unwrap();
     bind_default_agent_backend(
-        db.node.as_ref(),
+        &db.node,
         identity.did(),
         "backend-scheduled-fire-writeback",
         endpoint.endpoint(),
@@ -329,16 +329,9 @@ async fn scheduled_fire_persists_task_content_and_trigger_writeback() {
     const TASK_ID: &str = "task-scheduled-fire";
     const TRIGGER_ID: &str = "trigger-scheduled-fire";
     const TASK_PROMPT: &str = "render this exact configured schedule task";
-    create_task(
-        db.node.as_ref(),
-        &node_did,
-        TASK_ID,
-        &default_agent_id,
-        TASK_PROMPT,
-    )
-    .await;
+    create_task(&db.node, &node_did, TASK_ID, &default_agent_id, TASK_PROMPT).await;
     let due = (Utc::now() - ChronoDuration::seconds(2)).to_rfc3339();
-    create_schedule(db.node.as_ref(), &node_did, TRIGGER_ID, TASK_ID).await;
+    create_schedule(&db.node, &node_did, TRIGGER_ID, TASK_ID).await;
 
     let reconciled = wait_for_runtime_snapshot(db.node.as_ref(), &node_did, |snapshot| {
         is_routed_ready_after(snapshot, startup.active_generation)
@@ -350,7 +343,7 @@ async fn scheduled_fire_persists_task_content_and_trigger_writeback() {
         reconciled.last_reconcile_error
     );
 
-    set_trigger_enabled_and_cursor(db.node.as_ref(), &node_did, TRIGGER_ID, true, Some(&due)).await;
+    set_trigger_enabled_and_cursor(&db.node, &node_did, TRIGGER_ID, true, Some(&due)).await;
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
     let request = loop {
@@ -402,7 +395,7 @@ async fn event_source_trigger_insert_bumps_active_generation() {
     let db = test_db("event-trigger-snapshot-reconcile").await;
     let identity = Arc::new(test_identity("event-trigger-snapshot-reconcile"));
     bind_default_agent_backend(
-        db.node.as_ref(),
+        &db.node,
         identity.did(),
         "backend-event-trigger-snapshot-reconcile",
         UNUSED_BACKEND_ENDPOINT,
@@ -436,7 +429,7 @@ async fn event_source_trigger_insert_bumps_active_generation() {
     );
 
     create_task(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         "task-event-trigger-alpha",
         &default_agent_id,
@@ -444,7 +437,7 @@ async fn event_source_trigger_insert_bumps_active_generation() {
     )
     .await;
     create_event_trigger(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         "event-trigger-alpha",
         "task-event-trigger-alpha",

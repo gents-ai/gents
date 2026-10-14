@@ -1584,7 +1584,7 @@ impl PackInstaller {
         bindings: &crate::pack::PackInferenceBindings,
     ) -> anyhow::Result<()> {
         let owner = self.core.node_did();
-        crate::config_client::ConfigAccess::transact_local(
+        crate::config_client::ConfigAccess::transact_local_write(
             &self.node,
             Some(self.core.identity()?),
             "self_config.pack_profile_choice",

@@ -414,7 +414,7 @@ async fn read_document<T: serde::de::DeserializeOwned>(
     id: &str,
 ) -> Result<Option<T>> {
     let found = access
-        .transact("eval.freeze.read_configuration", |txn| {
+        .transact_readonly("eval.freeze.read_configuration", |txn| {
             Box::pin(
                 async move { read_desired_state_record_in_txn(txn, collection, owner, id).await },
             )
@@ -977,7 +977,7 @@ pub(crate) mod tests {
         pub(crate) async fn new() -> Self {
             let home = EmbeddedHome::create_temp("freeze").await.unwrap();
             let access = ConfigAccess::Local(home.node.clone());
-            ensure_node(home.node.as_ref(), OWNER).await.unwrap();
+            ensure_node(&home.node, OWNER).await.unwrap();
             let launching = Self {
                 home,
                 access,
@@ -1020,7 +1020,7 @@ pub(crate) mod tests {
             )
             .unwrap();
             self.access
-                .transact("freeze.test_fixture", |txn| {
+                .transact_write("freeze.test_fixture", |txn| {
                     let plan = &plan;
                     Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
                 })
@@ -1032,7 +1032,7 @@ pub(crate) mod tests {
         /// later would, leaving whatever still references it dangling.
         pub(crate) async fn delete(&self, collection: Collection, id: &str) {
             self.access
-                .transact("freeze.test_delete", |txn| {
+                .transact_write("freeze.test_delete", |txn| {
                     Box::pin(async move {
                         let (doc_id, _) =
                             read_desired_state_record_in_txn(txn, collection, OWNER, id)

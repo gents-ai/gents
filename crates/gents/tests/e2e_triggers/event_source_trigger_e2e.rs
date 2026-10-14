@@ -314,7 +314,7 @@ async fn event_trigger_fires_on_source_doc_create_end_to_end() {
     let identity = Arc::new(test_identity("event-trigger-e2e"));
     let mock_endpoint = MockModelEndpoint::start("default").unwrap();
     bind_default_agent_backend(
-        db.node.as_ref(),
+        &db.node,
         identity.did(),
         "backend-event-trigger-e2e",
         mock_endpoint.endpoint(),

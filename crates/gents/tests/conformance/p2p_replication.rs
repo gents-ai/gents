@@ -203,8 +203,8 @@ async fn assert_replicated_nonclosing_ordinal_twin_rejected() -> Result<()> {
         "twin must be nonclosing without changing the sealed byte extent"
     );
     let variables = output_segment_create_variables(&twin)?;
-    ConfigAccess::transact_local(
-        b.node.as_ref(),
+    ConfigAccess::transact_local_write(
+        &b.node,
         None,
         "test.p2p_replicated_output_conflict",
         |txn| {

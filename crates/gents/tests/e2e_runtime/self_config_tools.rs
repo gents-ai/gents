@@ -37,7 +37,7 @@ async fn seed_config(node: &Arc<EmbeddedNode>) {
     })).unwrap();
     let plan = DesiredStateApplyPlan::from_pack_config(&config).unwrap();
     ConfigAccess::Local(node.clone())
-        .transact("test.self_config.seed", |txn| {
+        .transact_write("test.self_config.seed", |txn| {
             let plan = plan.clone();
             Box::pin(async move { apply_desired_state_plan(txn, &plan).await })
         })
@@ -48,7 +48,7 @@ async fn seed_config(node: &Arc<EmbeddedNode>) {
 async fn read(node: &Arc<EmbeddedNode>, collection: Collection, id: &str) -> Value {
     let id = id.to_owned();
     ConfigAccess::Local(node.clone())
-        .transact("test.self_config.read", |txn| {
+        .transact_write("test.self_config.read", |txn| {
             let id = id.clone();
             Box::pin(async move {
                 Ok(

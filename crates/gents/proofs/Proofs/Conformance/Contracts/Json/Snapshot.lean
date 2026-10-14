@@ -144,6 +144,8 @@ def snapshotJson : String :=
     ++ "\"interrupt_queue_cases\":"
       ++ Conformance.InterruptQueueContracts.casesJson ++ ","
     ++ "\"session_input_edit_cases\":" ++ FoldQueueContracts.inputEditCasesJson ++ ","
+    ++ "\"session_input_edit_client_observation_cases\":"
+      ++ FoldQueueContracts.inputEditClientObservationCasesJson ++ ","
     ++ "\"queue_management_cases\":" ++ FoldQueueContracts.managementCasesJson ++ ","
     ++ "\"steering_publication_cases\":" ++ FoldQueueContracts.steeringPublicationCasesJson ++ ","
     ++ "\"fold_queue_cases\":"

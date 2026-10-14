@@ -117,11 +117,13 @@ async fn history_reconstruction_scans_a_shared_request_once() {
 #[tokio::test]
 async fn compaction_entries_track_files_cumulatively() {
     let data_path = std::env::temp_dir().join(format!("gents-compaction-{}", uuid::Uuid::new_v4()));
-    let node = defra_node::EmbeddedNode::builder()
-        .data_path(&data_path)
-        .build()
-        .await
-        .unwrap();
+    let node = std::sync::Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .data_path(&data_path)
+            .build()
+            .await
+            .unwrap(),
+    );
     ensure_runtime_schemas(&node).await.unwrap();
 
     save_compaction_entry(
@@ -214,7 +216,7 @@ async fn compaction_entries_track_files_cumulatively() {
 
 #[tokio::test]
 async fn concurrent_compactions_from_one_generation_persist_exactly_one_fact() {
-    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
     let generation =
         load_prompt_compaction_state(&node, "session-race", "did:test:test", None, None)
@@ -296,7 +298,7 @@ async fn concurrent_compactions_from_one_generation_persist_exactly_one_fact() {
 
 #[tokio::test]
 async fn exact_compaction_redelivery_is_idempotent() {
-    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
     let generation =
         load_prompt_compaction_state(&node, "session-redelivery", "did:test:test", None, None)
@@ -429,11 +431,13 @@ async fn history_sequence_cursor_loads_only_the_sparse_suffix() {
 #[tokio::test]
 async fn close_session_preserves_creation_time() {
     let data_path = std::env::temp_dir().join(format!("gents-session-{}", uuid::Uuid::new_v4()));
-    let node = defra_node::EmbeddedNode::builder()
-        .data_path(&data_path)
-        .build()
-        .await
-        .unwrap();
+    let node = std::sync::Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .data_path(&data_path)
+            .build()
+            .await
+            .unwrap(),
+    );
     ensure_runtime_schemas(&node).await.unwrap();
 
     create_session_with_id(&node, "session-1", "deploy-test", "did:test:test")
@@ -499,11 +503,13 @@ async fn close_session_preserves_creation_time() {
 async fn create_session_with_id_is_idempotent() {
     let data_path =
         std::env::temp_dir().join(format!("gents-session-upsert-{}", uuid::Uuid::new_v4()));
-    let node = defra_node::EmbeddedNode::builder()
-        .data_path(&data_path)
-        .build()
-        .await
-        .unwrap();
+    let node = std::sync::Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .data_path(&data_path)
+            .build()
+            .await
+            .unwrap(),
+    );
     ensure_runtime_schemas(&node).await.unwrap();
 
     create_session_with_id(&node, "session-1", "general", "did:test:test")
@@ -581,11 +587,13 @@ async fn create_session_with_id_is_idempotent() {
 async fn create_session_with_agent_id_rejects_mismatched_existing_binding() {
     let data_path =
         std::env::temp_dir().join(format!("gents-session-binding-{}", uuid::Uuid::new_v4()));
-    let node = defra_node::EmbeddedNode::builder()
-        .data_path(&data_path)
-        .build()
-        .await
-        .unwrap();
+    let node = std::sync::Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .data_path(&data_path)
+            .build()
+            .await
+            .unwrap(),
+    );
     ensure_runtime_schemas(&node).await.unwrap();
 
     create_session_with_agent_id(&node, "session-1", "did:test:test", "general")
@@ -691,7 +699,7 @@ async fn fork_rolls_back_at_every_mutation_position() {
 async fn compaction_save_fault_leaves_chain_and_generation_intact() {
     const AGENT: &str = "did:test:compaction-rollback";
     const SESSION: &str = "compaction-rollback";
-    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
     save_compaction_entry(
         &node,
@@ -1008,7 +1016,7 @@ async fn authored_keys_are_immutable_and_sequences_are_node_scoped() {
 
 #[tokio::test]
 async fn compaction_chains_with_equal_session_labels_remain_owner_scoped() {
-    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
     for (owner, summary) in [
         ("did:key:owner", "local summary"),
@@ -1182,7 +1190,7 @@ async fn single_header_transaction_matches_bulk_coordinate_validation() {
             None,
         )
         .await;
-        ConfigAccess::transact_local(&node, None, "test.single_header_coordinates", |txn| {
+        ConfigAccess::transact_local_write(&node, None, "test.single_header_coordinates", |txn| {
             Box::pin(async move {
                 let response = txn
                     .execute(&format!("{{ AgentMessage {{ {AGENT_MESSAGE_FIELDS} }} }}"))

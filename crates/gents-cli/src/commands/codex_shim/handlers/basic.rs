@@ -86,7 +86,7 @@ pub(super) async fn handle_basic_request(
         }
         codex::ClientRequest::ConfigRead { request_id, .. } => {
             let model_id = load_bound_model_selection_id_for_state(
-                state.node.as_ref(),
+                &state.node,
                 &state.node_did,
                 &state.agent_id,
             )
@@ -252,13 +252,10 @@ async fn session_usage(state: &ShimState) -> Option<StoredUsage> {
         let profile = load_bound_agent(state).await?.inference_profile;
         let node_did = state.node_did.as_ref();
         let backend_id = profile.backend_id.as_str();
-        let backend =
-            ConfigAccess::transact_local(state.node.as_ref(), None, "codex.usage", |txn| {
-                Box::pin(
-                    async move { load_inference_backend_in_txn(txn, node_did, backend_id).await },
-                )
-            })
-            .await?;
+        let backend = ConfigAccess::transact_local_write(&state.node, None, "codex.usage", |txn| {
+            Box::pin(async move { load_inference_backend_in_txn(txn, node_did, backend_id).await })
+        })
+        .await?;
         let Some(backend) = backend else {
             return Ok(None);
         };
@@ -332,7 +329,7 @@ mod tests {
         write_inference_backend_document(&access, &backend)
             .await
             .expect("backend");
-        ConfigAccess::transact_local(node.as_ref(), None, "codex.usage.test.catalog", |txn| {
+        ConfigAccess::transact_local_write(node, None, "codex.usage.test.catalog", |txn| {
             let backend = &backend;
             Box::pin(async move {
                 record_model_catalog_in_txn(

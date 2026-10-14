@@ -222,7 +222,7 @@ pub(crate) struct Snapshot {
 pub(crate) async fn snapshot(access: &ConfigAccess, node_did: &str) -> Result<Snapshot> {
     let accounts = gents::oauth_credential::list_accounts(access, node_did).await?;
     let (backends, profiles) = access
-        .transact("accounts.config", |txn| {
+        .transact_write("accounts.config", |txn| {
             Box::pin(async move {
                 Ok((
                     gents::config_client::list_inference_backends_in_txn(txn, node_did).await?,
@@ -728,7 +728,7 @@ pub async fn remove_account(
         "removing an account asks for confirmation; pass --yes when not running in a terminal"
     );
     let (deleted, kept) = access
-        .transact("accounts.remove", |txn| {
+        .transact_write("accounts.remove", |txn| {
             let account = account.clone();
             Box::pin(async move {
                 gents::oauth_credential::remove_account_in_txn(

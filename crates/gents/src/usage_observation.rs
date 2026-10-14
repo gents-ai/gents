@@ -387,7 +387,7 @@ async fn write(
     }
     let access = ConfigAccess::Local(node.clone());
     access
-        .transact("usage_observation.record", |txn| {
+        .transact_write("usage_observation.record", |txn| {
             let (report, read, access) = (report.clone(), read.clone(), &access);
             Box::pin(async move {
                 let target = match account {

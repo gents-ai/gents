@@ -223,15 +223,22 @@ pub(crate) async fn load_session_current_hop_in_txn(
 
 /// [`load_session_current_hop_in_txn`] in its own read transaction.
 pub(crate) async fn load_session_current_hop(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
     session_id: &str,
 ) -> Result<u32> {
     let (node_did, session_id) = (node_did.to_owned(), session_id.to_owned());
-    crate::config_client::ConfigAccess::transact_local(node, None, "session.current_hop", |txn| {
-        let (node_did, session_id) = (node_did.clone(), session_id.clone());
-        Box::pin(async move { load_session_current_hop_in_txn(txn, &node_did, &session_id).await })
-    })
+    crate::config_client::ConfigAccess::transact_local_readonly(
+        node,
+        None,
+        "session.current_hop",
+        |txn| {
+            let (node_did, session_id) = (node_did.clone(), session_id.clone());
+            Box::pin(
+                async move { load_session_current_hop_in_txn(txn, &node_did, &session_id).await },
+            )
+        },
+    )
     .await
 }
 
@@ -508,7 +515,7 @@ pub(crate) async fn refresh_session_request_observation_in_txn(
 }
 
 pub(crate) async fn update_session_title_with_source(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
     requester_did: Option<&str>,
     session_id: &str,
@@ -517,7 +524,7 @@ pub(crate) async fn update_session_title_with_source(
 ) -> Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
     chrono::DateTime::parse_from_rfc3339(&now).context("invalid title update timestamp")?;
-    crate::config_client::ConfigAccess::transact_local(
+    crate::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "session.update_title",
@@ -707,11 +714,13 @@ mod observation_refresh_tests {
     #[tokio::test]
     async fn request_head_uses_exact_scope_and_timestamp_then_logical_id() {
         let temp = tempfile::tempdir().unwrap();
-        let node = defra_node::EmbeddedNode::builder()
-            .data_path(temp.path())
-            .build()
-            .await
-            .unwrap();
+        let node = std::sync::Arc::new(
+            defra_node::EmbeddedNode::builder()
+                .data_path(temp.path())
+                .build()
+                .await
+                .unwrap(),
+        );
         crate::ensure_runtime_schemas(&node).await.unwrap();
         ConfigAccess::transact_local_idempotent(
             &node, None, IdempotentTransactionRetry::Standard, "test.session.request_head",
@@ -744,11 +753,13 @@ mod observation_refresh_tests {
     #[tokio::test]
     async fn refresh_accepts_null_requester_and_rejects_changed_session_scope() {
         let temp = tempfile::tempdir().unwrap();
-        let node = defra_node::EmbeddedNode::builder()
-            .data_path(temp.path())
-            .build()
-            .await
-            .unwrap();
+        let node = std::sync::Arc::new(
+            defra_node::EmbeddedNode::builder()
+                .data_path(temp.path())
+                .build()
+                .await
+                .unwrap(),
+        );
         crate::ensure_runtime_schemas(&node).await.unwrap();
         let response = node
             .execute(

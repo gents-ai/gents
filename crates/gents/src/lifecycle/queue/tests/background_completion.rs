@@ -670,7 +670,7 @@ async fn many_concurrent_notifications_publish_one_wake_identity() {
         let parent = parent.clone();
         async move {
             persist_background_completion_with_message(
-                node.as_ref(),
+                &node,
                 &parent,
                 &format!("concurrent notification {index}"),
                 &format!("background-completion-notification:many-race-{index}:tool"),
@@ -704,7 +704,7 @@ async fn restart_before_claim_preserves_pending_input_until_the_wake_completes()
     let parent = root_parent(db.node_did(), "background-restart-before-claim-session");
     let hints = background_hints(&parent);
     let enqueued = persist_background_completion_with_message(
-        node.as_ref(),
+        &node,
         &parent,
         "restart-safe notification",
         "background-completion-notification:restart-before-claim:tool",
@@ -715,7 +715,7 @@ async fn restart_before_claim_preserves_pending_input_until_the_wake_completes()
     .await
     .unwrap();
 
-    let recovery = crate::RequestLifecycle::recover_all(node.as_ref(), db.node_did())
+    let recovery = crate::RequestLifecycle::recover_all(&node, db.node_did())
         .await
         .unwrap();
     assert_eq!(recovery.background_wakes_redriven, 0);
@@ -781,7 +781,7 @@ async fn canonical_terminal_commit_makes_acknowledgement_restart_atomic() {
     let parent = root_parent(db.node_did(), "background-response-repair-ack-session");
     let hints = background_hints(&parent);
     let enqueued = persist_background_completion_with_message(
-        node.as_ref(),
+        &node,
         &parent,
         "response-persisted notification",
         "background-completion-notification:response-persisted:tool",
@@ -875,10 +875,9 @@ async fn canonical_terminal_commit_makes_acknowledgement_restart_atomic() {
         .unwrap()
     );
 
-    let first_repair =
-        crate::RequestLifecycle::repair_terminal_requests(node.as_ref(), db.node_did())
-            .await
-            .unwrap();
+    let first_repair = crate::RequestLifecycle::repair_terminal_requests(&node, db.node_did())
+        .await
+        .unwrap();
     assert_eq!(first_repair.repaired, 0);
     let first = crate::load_background_completion_diagnostics(
         &crate::config_client::ConfigAccess::Local(node.clone()),
@@ -890,10 +889,9 @@ async fn canonical_terminal_commit_makes_acknowledgement_restart_atomic() {
     assert_eq!(first.acknowledged_notifications, 1);
     assert_eq!(first.epochs[0].state, "acknowledged");
 
-    let second_repair =
-        crate::RequestLifecycle::repair_terminal_requests(node.as_ref(), db.node_did())
-            .await
-            .unwrap();
+    let second_repair = crate::RequestLifecycle::repair_terminal_requests(&node, db.node_did())
+        .await
+        .unwrap();
     assert_eq!(second_repair.repaired, 0);
     let second = crate::load_background_completion_diagnostics(
         &crate::config_client::ConfigAccess::Local(node),
@@ -914,7 +912,7 @@ async fn successor_acknowledges_input_left_by_a_failed_active_wake() {
     let parent = root_parent(db.node_did(), "background-successor-ack-session");
     let hints = background_hints(&parent);
     let first = persist_background_completion_with_message(
-        node.as_ref(),
+        &node,
         &parent,
         "first notification",
         "background-completion-notification:successor-first:tool",
@@ -957,7 +955,7 @@ async fn successor_acknowledges_input_left_by_a_failed_active_wake() {
     .await;
 
     let second = persist_background_completion_with_message(
-        node.as_ref(),
+        &node,
         &parent,
         "second notification",
         "background-completion-notification:successor-second:tool",

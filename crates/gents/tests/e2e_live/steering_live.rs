@@ -123,7 +123,7 @@ async fn live_steering_edits_reorders_and_removes_before_same_request_continues(
         add: backend.clone(),
         update: backend,
     }])?;
-    ConfigAccess::transact_local(&db.node, None, "test.live_steering.backend", |txn| {
+    ConfigAccess::transact_local_write(&db.node, None, "test.live_steering.backend", |txn| {
         let plan = &plan;
         Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
     })

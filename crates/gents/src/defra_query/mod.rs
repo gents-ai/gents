@@ -126,7 +126,7 @@ impl Tool for DefraQueryTool {
     }
     async fn call(&self, args: Self::Args) -> Result<String, Self::Error> {
         let result = if let Some(actor) = &self.actor {
-            crate::config_client::ConfigAccess::transact_local(
+            crate::config_client::ConfigAccess::transact_local_readonly(
                 &self.node,
                 Some(actor.clone()),
                 "application_query",

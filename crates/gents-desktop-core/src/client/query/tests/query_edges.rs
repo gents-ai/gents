@@ -323,7 +323,7 @@ async fn fetch_doc_patch_empty_input_is_no_op() {
         .await
         .expect("schemas");
 
-    let patch = fetch_doc_patch(node.as_ref(), AGENT_MESSAGE_NAME, &[])
+    let patch = fetch_doc_patch(&node, AGENT_MESSAGE_NAME, &[])
         .await
         .expect("fetch_doc_patch");
     assert_eq!(patch.store.row_count(), 0);
@@ -337,7 +337,7 @@ async fn trigger_patch_counts_physical_documents_for_mixed_present_and_missing_i
         .await
         .expect("schemas");
     gents::config_client::ConfigAccess::write_local(
-        node.as_ref(),
+        &node,
         "test.trigger_patch",
         r#"mutation {
             create_Trigger(input: {

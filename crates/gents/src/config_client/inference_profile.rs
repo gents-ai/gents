@@ -35,7 +35,7 @@ pub async fn write_inference_profile_document(
 ) -> Result<String> {
     profile.validate()?;
     access
-        .transact("config.inference_profile.write", |txn| {
+        .transact_write("config.inference_profile.write", |txn| {
             Box::pin(async move {
                 let value = serde_json::to_value(profile)?;
                 let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
@@ -67,7 +67,7 @@ pub async fn agent_accounts(
     agent_id: &str,
 ) -> Result<Vec<(String, ServingAccount)>> {
     let profile_backends = access
-        .transact("config.agent_accounts", |txn| {
+        .transact_readonly("config.agent_accounts", |txn| {
             Box::pin(async move {
                 let agent: crate::document_config::Agent =
                     read(txn, Collection::Agent, node_did, agent_id)
@@ -149,7 +149,7 @@ mod tests {
                 update: backend,
             }])?;
             access
-                .transact("test.profile.seed", |txn| {
+                .transact_write("test.profile.seed", |txn| {
                     let plan = &plan;
                     Box::pin(async move {
                         super::super::apply_desired_state_plan(txn, plan)
@@ -178,7 +178,7 @@ mod tests {
             first_id
         );
         access
-            .transact("test.profile.read", |txn| {
+            .transact_write("test.profile.read", |txn| {
                 let initial = &initial;
                 let foreign = &foreign;
                 Box::pin(async move {
@@ -270,7 +270,7 @@ mod tests {
         }
         let profiles = || async {
             access
-                .transact("test.profiles", |txn| {
+                .transact_write("test.profiles", |txn| {
                     Box::pin(async move {
                         let mut records = Vec::new();
                         for id in ["on-a", "on-b", "compaction"] {
@@ -296,7 +296,7 @@ mod tests {
             let access = &access;
             async move {
                 access
-                    .transact("test.remove", |txn| {
+                    .transact_write("test.remove", |txn| {
                         let credential_id = credential_id.clone();
                         Box::pin(
                             async move { remove_account_in_txn(txn, did, &credential_id).await },
@@ -342,7 +342,7 @@ mod tests {
         assert_eq!(resolved.doc_id.as_deref(), Some(reused.doc_id.as_str()));
 
         let backends = access
-            .transact("test.backends", |txn| {
+            .transact_write("test.backends", |txn| {
                 Box::pin(
                     async move { super::super::list_inference_backends_in_txn(txn, did).await },
                 )
@@ -405,7 +405,7 @@ mod tests {
         .collect();
         let plan = DesiredStateApplyPlan::new(documents)?;
         access
-            .transact("test.agent_accounts", |txn| {
+            .transact_write("test.agent_accounts", |txn| {
                 let plan = &plan;
                 Box::pin(async move {
                     super::super::apply_desired_state_plan(txn, plan)

@@ -223,7 +223,7 @@ pub(crate) fn retained_partial_blocks(
 }
 
 pub(crate) async fn close_provider_attempt(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     generation: &str,
     prepared: &OutputSegment,
     close: ProviderAttemptClose,
@@ -235,7 +235,7 @@ pub(crate) async fn close_provider_attempt(
 /// auxiliary closure without authorizing another write. Ordinary provider
 /// closes and every fresh auxiliary close remain fenced to the writer generation.
 pub(crate) async fn close_provider_attempt_at(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     generation: &str,
     prepared: &OutputSegment,
     close: ProviderAttemptClose,
@@ -671,7 +671,7 @@ use crate::graphql::created_doc_id;
 /// entry deliberately rejects them rather than publishing executable intent
 /// without its lifecycle documents.
 pub(crate) async fn publish_provider_turn(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     generation: &str,
     plan: ProviderPublicationPlan,
 ) -> Result<PublishedProviderTurn> {
@@ -680,7 +680,7 @@ pub(crate) async fn publish_provider_turn(
 
 #[cfg(test)]
 pub(crate) async fn publish_provider_turn_at(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     generation: &str,
     plan: ProviderPublicationPlan,
     now: DateTime<Utc>,
@@ -689,7 +689,7 @@ pub(crate) async fn publish_provider_turn_at(
 }
 
 pub(super) async fn publish_provider_turn_with_time(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     generation: &str,
     plan: ProviderPublicationPlan,
     fixture_now: Option<DateTime<Utc>>,
@@ -1062,7 +1062,7 @@ async fn replay_publication_in_txn(
 /// Append exactly one provider flush. Replaying the same committed fact is a
 /// read, even after expiry; it never renews or reopens its source.
 pub(crate) async fn append_provider_segment(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     generation: &str,
     prepared: &OutputSegment,
 ) -> Result<String> {
@@ -1078,7 +1078,7 @@ pub(crate) async fn append_provider_segment(
 
 #[cfg(test)]
 pub(crate) async fn append_provider_segment_at(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     generation: &str,
     prepared: &OutputSegment,
     now: DateTime<Utc>,

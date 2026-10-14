@@ -170,7 +170,7 @@ impl ToolCallLifecycle {
             .or(spawned_by_tool_call_doc_id.as_deref())
             .unwrap_or(&row.doc_id);
         let accepted = Self::load_direct_binding(
-            node.as_ref(),
+            &node,
             admission_doc_id,
             owner,
             &row.session_id,

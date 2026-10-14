@@ -645,7 +645,7 @@ async fn equal_collection_grants_read_only_the_bound_principals_acp_rows() {
             "mutation {{ add_PrivateRecord(input: {{label: \"{}\"}}) {{_docID}} }}",
             crate::graphql::escape_graphql_string(label)
         );
-        crate::config_client::ConfigAccess::transact_local(
+        crate::config_client::ConfigAccess::transact_local_write(
             &node,
             Some(::identity::Did::new(did).unwrap()),
             "seed_private_query",
@@ -657,7 +657,7 @@ async fn equal_collection_grants_read_only_the_bound_principals_acp_rows() {
     let mut ids = std::collections::HashMap::new();
     for (did, label) in [(alice_did, "Alice-only"), (bob_did, "Bob-only")] {
         let actor = ::identity::Did::new(did).unwrap();
-        let rows = crate::config_client::ConfigAccess::transact_local(
+        let rows = crate::config_client::ConfigAccess::transact_local_write(
             &node,
             Some(actor),
             "test.private_field_ids",

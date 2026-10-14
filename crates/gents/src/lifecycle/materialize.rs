@@ -84,7 +84,7 @@ async fn resolve_created_agent_request_doc_id(
 /// the request continues; absent mints a new session.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn write_pending_agent_request_with_lineage_workspace_and_conversation_title(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     actor: ::identity::Did,
     node_did: &str,
     agent_id: &str,
@@ -136,7 +136,7 @@ pub(crate) async fn write_pending_agent_request_with_lineage_workspace_and_conve
 
     // A trigger fire is not replayable: `event_kind: created` is first-seen, so
     // dropping this create on a transient conflict loses the stage for good.
-    let response = crate::config_client::ConfigAccess::transact_local(
+    let response = crate::config_client::ConfigAccess::transact_local_write(
         node,
         Some(actor),
         "lifecycle.materialize_pending",
@@ -165,13 +165,13 @@ pub(crate) async fn write_pending_agent_request_with_lineage_workspace_and_conve
 /// first-seen trigger event cannot be replayed, so retrying only its row create
 /// would either lose the stage or bypass a newly committed graph closure.
 async fn publish_graph_root_request(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     actor: ::identity::Did,
     create: &gents_protocol::request_admission::AgentRequestCreate,
 ) -> Result<EnqueuedAgentRequest> {
     let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
     let mutation = &mutation;
-    let doc_id = crate::config_client::ConfigAccess::transact_local(
+    let doc_id = crate::config_client::ConfigAccess::transact_local_write(
         node,
         Some(actor),
         "lifecycle.publish_graph_root",
@@ -520,7 +520,7 @@ pub async fn build_signed_request(
 /// The parent link is provenance only. The persisted pending request is the
 /// crash-recoverable owner of title inference, including after its parent ends.
 pub(crate) async fn write_pending_title_request(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     parent: &AgentRequest,
     content: String,
 ) -> Result<AgentRequest> {
@@ -692,7 +692,7 @@ pub(crate) async fn build_session_message_request(
 }
 
 pub async fn activate_workspace_bound_request(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     request_doc_id: &str,
 ) -> Result<()> {
     let mutation = format!(
@@ -881,7 +881,7 @@ impl RequestLifecycle {
         let create = build_signed_request(spec, RequestSigner::Identity(identity.as_ref())).await?;
         let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
         let resp = crate::config_client::ConfigAccess::write_local(
-            node.as_ref(),
+            &node,
             "lifecycle.materialize_before_claim",
             &mutation,
         )
@@ -931,7 +931,7 @@ impl RequestLifecycle {
             workspace_seal_hash: None,
         };
         let request = crate::request_admission::verify_fresh_local_self_request(
-            node.as_ref(),
+            &node,
             identity.as_ref(),
             &queued_request,
             &agent_id,
@@ -1357,20 +1357,20 @@ pub async fn write_task_delivery(
     create: &gents_protocol::request_admission::AgentRequestCreate,
 ) -> Result<TaskDeliveryAdmission> {
     access
-        .transact("lifecycle.admit_task_delivery", |txn| {
+        .transact_write("lifecycle.admit_task_delivery", |txn| {
             Box::pin(async move { stage_task_delivery(txn, fire, continue_existing, create).await })
         })
         .await
 }
 
 pub async fn write_task_delivery_local(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     actor: ::identity::Did,
     fire: &gents_protocol::trigger_delivery::TriggerFire,
     continue_existing: bool,
     create: &gents_protocol::request_admission::AgentRequestCreate,
 ) -> Result<TaskDeliveryAdmission> {
-    crate::config_client::ConfigAccess::transact_local(
+    crate::config_client::ConfigAccess::transact_local_write(
         node,
         Some(actor),
         "lifecycle.admit_task_delivery",
@@ -1382,7 +1382,7 @@ pub async fn write_task_delivery_local(
 }
 
 pub(crate) async fn write_trigger_delivery(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     actor: ::identity::Did,
     prepared: &crate::trigger_engine::durable::PreparedFire,
     create: &gents_protocol::request_admission::AgentRequestCreate,

@@ -60,7 +60,7 @@ pub async fn write_inference_backend_document(
 ) -> Result<String> {
     backend.validate()?;
     access
-        .transact("config.inference_backend.upsert", |txn| {
+        .transact_write("config.inference_backend.upsert", |txn| {
             Box::pin(async move {
                 write_inference_backend_in_txn(txn, backend).await?;
                 super::desired_state::read_record(
@@ -84,7 +84,7 @@ pub async fn serving_accounts(
 ) -> Result<BTreeMap<String, ServingAccount>> {
     let accounts = crate::oauth_credential::list_accounts(access, node_did).await?;
     let backends = access
-        .transact("config.serving_accounts", |txn| {
+        .transact_readonly("config.serving_accounts", |txn| {
             Box::pin(async move { list_inference_backends_in_txn(txn, node_did).await })
         })
         .await?;

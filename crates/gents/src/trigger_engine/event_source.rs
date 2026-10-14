@@ -580,7 +580,7 @@ impl EventSource {
             };
             let owner = delivery.owner();
             let consumer = delivery.consumer();
-            if let Err(error) = crate::config_client::ConfigAccess::transact_local(
+            if let Err(error) = crate::config_client::ConfigAccess::transact_local_write(
                 &self.node,
                 None,
                 "trigger.seed_arrival_cursor",

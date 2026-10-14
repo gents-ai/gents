@@ -648,7 +648,7 @@ async fn apply_fixture_documents(
             .collect(),
     )
     .expect("build live interrupt fixture plan");
-    ConfigAccess::transact_local(node, None, "test.live_interrupt_fixture", |txn| {
+    ConfigAccess::transact_local_write(node, None, "test.live_interrupt_fixture", |txn| {
         let plan = &plan;
         Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
     })

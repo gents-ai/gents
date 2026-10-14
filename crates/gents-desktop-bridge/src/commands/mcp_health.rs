@@ -257,7 +257,7 @@ mod probe_scope_tests {
     async fn registry_probe_resolves_the_node_and_service_compound_key() -> Result<()> {
         let (core, _tempdir) = crate::tests::support::boot_core().await;
         gents::config_client::ConfigAccess::write_local(
-            &core.node(),
+            &core.node_arc(),
             "test.mcp_probe_scope",
             r#"mutation {
                 create_ToolServiceRegistry(input: {

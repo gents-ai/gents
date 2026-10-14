@@ -172,7 +172,7 @@ fn public_binding_json(doc: &ChainKeyBindingDocument) -> Value {
 
 async fn write_binding(access: &ConfigAccess, doc: &ChainKeyBindingDocument) -> Result<()> {
     access
-        .transact("cli.chain_key.binding.upsert", |txn| {
+        .transact_write("cli.chain_key.binding.upsert", |txn| {
             Box::pin(async move {
                 let rows = decode_binding_rows(
                     &txn.execute(&chain_key_binding_by_id_query(
@@ -195,7 +195,7 @@ async fn write_binding(access: &ConfigAccess, doc: &ChainKeyBindingDocument) -> 
 
 async fn create_binding(access: &ConfigAccess, doc: &ChainKeyBindingDocument) -> Result<String> {
     access
-        .transact("cli.chain_key.binding.create", |txn| {
+        .transact_write("cli.chain_key.binding.create", |txn| {
             Box::pin(async move {
                 let rows = decode_binding_rows(
                     &txn.execute(&chain_key_binding_by_id_query(

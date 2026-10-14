@@ -891,7 +891,7 @@ mod tests {
         .collect();
         let plan = gents::config_client::DesiredStateApplyPlan::new(documents).unwrap();
         access
-            .transact("test.profile.agents", |txn| {
+            .transact_write("test.profile.agents", |txn| {
                 let plan = &plan;
                 Box::pin(async move {
                     gents::config_client::apply_desired_state_plan(txn, plan)

@@ -384,10 +384,15 @@ mod tests {
             (Collection::InferenceProfile,json!({"node_did":owner,"profile_id":"profile-1","backend_id":"backend","model_name":"test"})),
         ].into_iter().map(|(collection,value)| DesiredStateApplyDocument{collection,add:value.clone(),update:value}).collect();
         let plan = DesiredStateApplyPlan::new(documents)?;
-        ConfigAccess::transact_local(&node, Some(actor.clone()), "test.agent.profile", |txn| {
-            let plan = &plan;
-            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
-        })
+        ConfigAccess::transact_local_write(
+            &node,
+            Some(actor.clone()),
+            "test.agent.profile",
+            |txn| {
+                let plan = &plan;
+                Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+            },
+        )
         .await?;
 
         let access = ConfigAccess::Local(node.clone());

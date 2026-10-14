@@ -69,7 +69,7 @@ pub async fn graphql_mutation_with_variables(
     variables: &Value,
 ) -> Result<Value> {
     access
-        .transact("test.fixture.variables", |txn| {
+        .transact_write("test.fixture.variables", |txn| {
             let query = query.to_owned();
             let variables = variables.clone();
             Box::pin(async move { txn.execute_with_variables(&query, &variables).await })

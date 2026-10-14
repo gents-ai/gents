@@ -1,8 +1,8 @@
 use super::*;
 use serde_json::{json, Value};
 
-async fn insert(node: &EmbeddedNode, collection: &str, value: Value) -> String {
-    crate::config_client::ConfigAccess::transact_local(node, None, "test.physical_cancel_fixture", |txn| {
+async fn insert(node: &Arc<EmbeddedNode>, collection: &str, value: Value) -> String {
+    crate::config_client::ConfigAccess::transact_local_write(node, None, "test.physical_cancel_fixture", |txn| {
         let value = &value;
         Box::pin(async move {
             let query = format!("mutation($input: {collection}MutationInputArg!) {{create_{collection}(input:$input){{_docID}}}}");

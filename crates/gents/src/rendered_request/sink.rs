@@ -301,8 +301,8 @@ impl DefraRenderedRequestSink {
         request_json: &str,
     ) -> Result<()> {
         let provenance_json = canonical_json_string(&rendered.provenance_json)?;
-        crate::config_client::ConfigAccess::transact_local(
-            self.node.as_ref(),
+        crate::config_client::ConfigAccess::transact_local_write(
+            &self.node,
             None,
             "rendered_request.create_stored_for_test",
             |txn| {
@@ -340,8 +340,8 @@ impl DefraRenderedRequestSink {
         // inside the same transaction as the creates it gates, and the
         // transaction owner replays this whole closure on conflict, where a
         // fresh snapshot re-decides what is missing.
-        let capture_container = crate::config_client::ConfigAccess::transact_local(
-            self.node.as_ref(),
+        let capture_container = crate::config_client::ConfigAccess::transact_local_write(
+            &self.node,
             None,
             "rendered_request.capture",
             |txn| {

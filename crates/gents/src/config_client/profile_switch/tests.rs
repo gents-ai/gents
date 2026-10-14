@@ -157,7 +157,7 @@ impl Fixture {
         )
         .unwrap();
         self.access
-            .transact("test.switch.apply", |txn| {
+            .transact_write("test.switch.apply", |txn| {
                 let plan = &plan;
                 Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
             })
@@ -169,7 +169,7 @@ impl Fixture {
         let did = self.did.as_str();
         let backends = self
             .access
-            .transact("test.switch.backends", |txn| {
+            .transact_write("test.switch.backends", |txn| {
                 Box::pin(async move { list_inference_backends_in_txn(txn, did).await })
             })
             .await
@@ -202,7 +202,7 @@ impl Fixture {
     async fn profiles(&self) -> BTreeMap<String, Value> {
         let did = self.did.as_str();
         self.access
-            .transact("test.switch.profiles", |txn| {
+            .transact_write("test.switch.profiles", |txn| {
                 Box::pin(async move {
                     let mut records = BTreeMap::new();
                     for id in ["p", "summ", "q", "k", "m", "o"] {
@@ -373,7 +373,7 @@ async fn next_turns_use_the_target_credentials() {
     let did_ref = did.as_str();
     let references = fixture
         .access
-        .transact("test.switch.references", |txn| {
+        .transact_write("test.switch.references", |txn| {
             Box::pin(async move { crate::ConfigReferences::load_in_txn(txn, did_ref).await })
         })
         .await
@@ -531,7 +531,7 @@ async fn refusals_write_nothing() {
     let b = fixture.credentials["b"].credential_id.clone();
     fixture
         .access
-        .transact("test.switch.remove", |txn| {
+        .transact_write("test.switch.remove", |txn| {
             let b = b.clone();
             Box::pin(async move { remove_account_in_txn(txn, did, &b).await.map(|_| ()) })
         })

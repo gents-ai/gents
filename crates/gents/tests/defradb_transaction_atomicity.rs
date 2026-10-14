@@ -1,7 +1,7 @@
 //! Bounded native external-premise experiment: real multi-document
 //! transaction atomicity against the pinned embedded DefraDB node.
 //!
-//! These tests drive `ConfigAccess::transact_local` — the existing Gents
+//! These tests drive `ConfigAccess::transact_local_write` — the existing Gents
 //! gated transaction adapter (`crates/gents/src/config_client/txn.rs`) —
 //! over a disposable embedded DefraDB node with a minimal two-collection
 //! schema. They provide commit/rollback evidence for DefraDB transactions
@@ -20,6 +20,7 @@ use gents::graphql::escape_graphql_string;
 use serde_json::Value;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::Poll;
 use std::time::Duration;
 use tokio::sync::watch;
@@ -30,8 +31,8 @@ type TxnAtomicityRight { label: String amount: Int }
 ";
 
 /// Disposable node with only the minimal two-collection schema installed.
-async fn disposable_node() -> Result<EmbeddedNode> {
-    let node = EmbeddedNode::builder().build().await?;
+async fn disposable_node() -> Result<Arc<EmbeddedNode>> {
+    let node = Arc::new(EmbeddedNode::builder().build().await?);
     node.add_schema(ATOMICITY_SCHEMA).await?;
     Ok(node)
 }
@@ -126,7 +127,7 @@ fn write_right(label: &str, amount: i64) -> String {
 async fn committed_transaction_persists_both_writes() -> Result<()> {
     let node = disposable_node().await?;
 
-    let (left, right) = ConfigAccess::transact_local(
+    let (left, right) = ConfigAccess::transact_local_write(
         &node,
         None,
         "txn_atomicity_commit",
@@ -156,7 +157,7 @@ async fn committed_transaction_persists_both_writes() -> Result<()> {
 async fn injected_error_after_first_write_persists_neither() -> Result<()> {
     let node = disposable_node().await?;
 
-    let outcome: Result<()> = ConfigAccess::transact_local(
+    let outcome: Result<()> = ConfigAccess::transact_local_write(
         &node,
         None,
         "txn_atomicity_injected_rollback",
@@ -192,7 +193,7 @@ async fn injected_error_after_first_write_persists_neither() -> Result<()> {
 async fn failed_second_mutation_persists_neither_when_propagated() -> Result<()> {
     let node = disposable_node().await?;
 
-    let outcome: Result<()> = ConfigAccess::transact_local(
+    let outcome: Result<()> = ConfigAccess::transact_local_write(
         &node,
         None,
         "txn_atomicity_second_failure",
@@ -242,7 +243,7 @@ async fn independent_reader_never_observes_half_of_a_two_document_commit() -> Re
     let (release_tx, release_rx) = watch::channel(false);
     let release_on_timeout = release_tx.clone();
 
-    let writer = ConfigAccess::transact_local(
+    let writer = ConfigAccess::transact_local_write(
         &node,
         None,
         "txn_atomicity_reader_visibility",

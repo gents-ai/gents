@@ -28,7 +28,7 @@ const OPENAI_USAGE_HEADERS: &[(&str, &str)] = &[
 
 #[tokio::test]
 async fn usage_wiring_openai_compatible_records_under_the_backend_id() {
-    let node = Arc::new(crate::oauth_credential::test_support::test_node().await);
+    let node = crate::oauth_credential::test_support::test_node().await;
     for (wire, backend_id) in [
         (crate::OpenAiWireApi::ChatCompletions, "backend-usage-chat"),
         (crate::OpenAiWireApi::Responses, "backend-usage-responses"),
@@ -60,7 +60,7 @@ async fn usage_wiring_openai_compatible_records_under_the_backend_id() {
 
 #[tokio::test]
 async fn usage_wiring_backend_without_id_has_no_reporter() {
-    let node = Arc::new(crate::oauth_credential::test_support::test_node().await);
+    let node = crate::oauth_credential::test_support::test_node().await;
     let url =
         crate::provider_http::tests::one_shot_server("200 OK", OPENAI_USAGE_HEADERS, "").await;
     let mut behavior = test_agent(

@@ -226,7 +226,7 @@ resources:
             r#"{{ AgentRequest(filter: {{node_did: {{_eq: "{}"}}}}) {{content}} }}"#,
             escape_graphql_string(&did)
         );
-        let denied_rows = ConfigAccess::transact_local(
+        let denied_rows = ConfigAccess::transact_local_write(
             &node,
             Some(denied.did().parse().unwrap()),
             "eval.inspect.test.denied_read",

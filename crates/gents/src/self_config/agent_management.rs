@@ -38,7 +38,7 @@ pub(super) async fn load_agent_catalog(
     node: &Arc<EmbeddedNode>,
     owner: &str,
 ) -> Result<agent::AgentCatalogView> {
-    ConfigAccess::transact_local(
+    ConfigAccess::transact_local_readonly(
         node,
         Some(::identity::Did::new(owner.to_owned())?),
         "self_config.agent_catalog",
@@ -180,22 +180,35 @@ async fn agent_apply_access(
     preview: bool,
     held: Option<&ops::OperatorGrants>,
 ) -> Result<String> {
+    let identity = Some(::identity::Did::new(owner.to_owned())?);
     match access {
         ConfigAccess::Local(node) => {
-            ConfigAccess::transact_local(
-                node,
-                Some(::identity::Did::new(owner.to_owned())?),
-                "self_config.agent",
-                |txn| Box::pin(agent_apply_in_txn(txn, owner, args, ceiling, preview, held)),
-            )
-            .await
-        }
-        ConfigAccess::Graphql(_) => {
-            access
-                .transact("self_config.agent", |txn| {
+            if preview {
+                ConfigAccess::transact_local_readonly(node, identity, "self_config.agent", |txn| {
                     Box::pin(agent_apply_in_txn(txn, owner, args, ceiling, preview, held))
                 })
                 .await
+            } else {
+                ConfigAccess::transact_local_write(node, identity, "self_config.agent", |txn| {
+                    Box::pin(agent_apply_in_txn(txn, owner, args, ceiling, preview, held))
+                })
+                .await
+            }
+        }
+        ConfigAccess::Graphql(_) => {
+            if preview {
+                access
+                    .transact_readonly("self_config.agent", |txn| {
+                        Box::pin(agent_apply_in_txn(txn, owner, args, ceiling, preview, held))
+                    })
+                    .await
+            } else {
+                access
+                    .transact_write("self_config.agent", |txn| {
+                        Box::pin(agent_apply_in_txn(txn, owner, args, ceiling, preview, held))
+                    })
+                    .await
+            }
         }
     }
 }

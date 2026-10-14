@@ -35,6 +35,55 @@ use crate::client::peer_directory::RemovalCause;
 
 const REQUEST_PATCH_SIGNATURE_CAPACITY: usize = 2_048;
 
+/// A validated applied receipt is the command result. The local projection is
+/// a separate replica observation; if it is unavailable, the selected-session
+/// refresh and normal observer path reconcile it without inviting replay.
+async fn merge_accepted_edit_projection(
+    access: &ConfigAccess,
+    store: &ObservedStore,
+    receipt: gents_protocol::session_input_edit::SessionInputEditReceipt,
+    selected_doc_ids: &[String],
+    node_did: &str,
+    session_id: &str,
+    requester_did: &str,
+) -> gents_protocol::session_input_edit::SessionInputEditReceipt {
+    let result = async {
+        let mut doc_ids = selected_doc_ids.to_vec();
+        doc_ids.extend(receipt.request_doc_ids.iter().cloned());
+        let mut unique = std::collections::HashSet::with_capacity(doc_ids.len());
+        doc_ids.retain(|doc_id| unique.insert(doc_id.clone()));
+        if doc_ids.is_empty() {
+            return anyhow::Result::<()>::Ok(());
+        }
+        let rows = crate::client::load_request_documents_on(access, &doc_ids).await?;
+        for row in &rows {
+            anyhow::ensure!(
+                row.node_did.as_deref() == Some(node_did)
+                    && row.session_id.as_deref() == Some(session_id)
+                    && row.requester_did.as_deref() == Some(requester_did),
+                "pending edit request patch crossed its node, session, or requester scope"
+            );
+        }
+        let patch = ClientStore::from_rows(ClientStoreRows {
+            requests: rows,
+            ..ClientStoreRows::default()
+        });
+        store.merge_chat_patch(patch);
+        anyhow::Result::<()>::Ok(())
+    }
+    .await;
+    if let Err(error) = result {
+        tracing::warn!(
+            command_id = %receipt.command_id,
+            node_did,
+            session_id,
+            error = %error,
+            "accepted pending edit awaits local projection refresh"
+        );
+    }
+    receipt
+}
+
 fn request_in_scope(
     rows: &[AgentRequestRow],
     request_id: &str,
@@ -214,12 +263,9 @@ impl ClientCore {
 
     /// Dismiss an open mailbox item as the authenticated local node.
     pub async fn dismiss_mailbox_item(&self, doc_id: &str) -> Result<gents::mailbox::MailboxItem> {
-        let result = gents::mailbox::dismiss_mailbox_item(
-            self.node.as_ref(),
-            doc_id,
-            self.node_identity.did(),
-        )
-        .await;
+        let result =
+            gents::mailbox::dismiss_mailbox_item(&self.node, doc_id, self.node_identity.did())
+                .await;
         match result {
             Ok(item) => {
                 self.refresh_store().await?;
@@ -268,7 +314,7 @@ impl ClientCore {
         // DefraDB. The local-runtime HTTP endpoint is a configuration control
         // plane; bypassing the replica here breaks the durable client contract.
         match mutations::submit_request(
-            self.node.as_ref(),
+            &self.node,
             snapshot.as_ref(),
             session_id,
             node_did,
@@ -354,6 +400,7 @@ impl ClientCore {
             .await?;
         ensure_peer_chat_ready_at(node_did, peer.as_ref(), Utc::now())?;
         let (signer, admission, _) = self.request_authority(node_did, peer.as_ref()).await?;
+        let selected_doc_ids = edit.selected_request_doc_ids.clone();
         let result = gents::lifecycle::submit_pending_user_edit(
             &self.session_queue_access(node_did),
             signer.as_ref(),
@@ -366,7 +413,20 @@ impl ClientCore {
         .await;
         match result {
             Ok(receipt) => {
-                self.refresh_store().await?;
+                let requester_did = peer
+                    .as_ref()
+                    .map(|record| self.requester_did(record))
+                    .unwrap_or_else(|| self.node_identity.did().to_string());
+                let receipt = merge_accepted_edit_projection(
+                    &self.session_queue_access(node_did),
+                    self.store.as_ref(),
+                    receipt,
+                    &selected_doc_ids,
+                    node_did,
+                    session_id,
+                    &requester_did,
+                )
+                .await;
                 self.clear_mutation_error();
                 Ok(receipt)
             }
@@ -618,7 +678,7 @@ impl ClientCore {
     ) -> Result<()> {
         let snapshot = self.store.snapshot();
         let result = mutations::rename_session(
-            self.node.as_ref(),
+            &self.node,
             snapshot.as_ref(),
             node_did,
             self.node_identity.did(),
@@ -1009,7 +1069,7 @@ impl ClientCore {
             .request_authority(node_did, peer_record.as_ref())
             .await?;
         let result = mutations::resend_request(
-            self.node.as_ref(),
+            &self.node,
             snapshot.as_ref(),
             stale_request_id,
             node_did,
@@ -1064,7 +1124,7 @@ impl ClientCore {
             .peer_record_for_chat_write(node_did, Utc::now())
             .await?;
         ensure_peer_chat_ready_at(node_did, peer_record.as_ref(), Utc::now())?;
-        match mutations::interrupt_request(self.node.as_ref(), request_id).await {
+        match mutations::interrupt_request(&self.node, request_id).await {
             Ok(()) => {
                 self.clear_mutation_error();
                 tracing::info!(
@@ -1093,7 +1153,7 @@ impl ClientCore {
             .request_authority(node_did, peer_record.as_ref())
             .await?;
         let result = mutations::retry_request(
-            self.node.as_ref(),
+            &self.node,
             snapshot.as_ref(),
             parent,
             &requester_did,
@@ -1241,7 +1301,7 @@ impl ClientCore {
         let result = mutations::upsert_agent_on(&access, row).await;
         match result {
             Ok(()) => {
-                self.refresh_store().await?;
+                self.refresh_config_source(&row.node_did).await?;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
@@ -1267,7 +1327,7 @@ impl ClientCore {
         let access = self.operator_access(node_did)?;
         match mutations::patch_config_components_on(&access, node_did, patches).await {
             Ok(()) => {
-                self.refresh_store().await?;
+                self.refresh_config_source(node_did).await?;
                 self.clear_mutation_error();
                 Ok(())
             }
@@ -1282,7 +1342,7 @@ impl ClientCore {
         let access = self.operator_access(&document.node.node_did)?;
         match mutations::apply_config_components_on(&access, document).await {
             Ok(()) => {
-                self.refresh_store().await?;
+                self.refresh_config_source(&document.node.node_did).await?;
                 self.clear_mutation_error();
                 Ok(())
             }
@@ -1295,7 +1355,7 @@ impl ClientCore {
         let result = mutations::upsert_node_on(&access, row).await;
         match result {
             Ok(()) => {
-                self.refresh_store().await?;
+                self.refresh_config_source(&row.node_did).await?;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
@@ -1313,7 +1373,7 @@ impl ClientCore {
         let access = self.operator_access(node_did)?;
         match mutations::set_default_agent_on(&access, node_did, agent_id).await {
             Ok(()) => {
-                self.refresh_store().await?;
+                self.refresh_config_source(node_did).await?;
                 self.clear_mutation_error();
                 Ok(())
             }
@@ -1325,7 +1385,7 @@ impl ClientCore {
         let access = self.operator_access(&row.node_did)?;
         match mutations::upsert_inference_backend_on(&access, row).await {
             Ok(()) => {
-                self.refresh_store().await?;
+                self.refresh_config_source(&row.node_did).await?;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
@@ -1344,7 +1404,7 @@ impl ClientCore {
         let result = mutations::upsert_tools_on(&access, row).await;
         match result {
             Ok(()) => {
-                self.refresh_store().await?;
+                self.refresh_config_source(&row.node_did).await?;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
@@ -1365,7 +1425,7 @@ impl ClientCore {
         let access = self.operator_access(&row.node_did)?;
         match mutations::upsert_tool_service_registry_on(&access, row).await {
             Ok(()) => {
-                self.refresh_store().await?;
+                self.refresh_config_source(&row.node_did).await?;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
@@ -1383,7 +1443,7 @@ impl ClientCore {
         let access = self.operator_access(&row.node_did)?;
         match mutations::upsert_inference_profile_on(&access, row).await {
             Ok(()) => {
-                self.refresh_store().await?;
+                self.refresh_config_source(&row.node_did).await?;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
@@ -1401,7 +1461,7 @@ impl ClientCore {
         let access = self.operator_access(&row.node_did)?;
         match mutations::upsert_task_on(&access, row).await {
             Ok(()) => {
-                self.refresh_store().await?;
+                self.refresh_config_source(&row.node_did).await?;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
@@ -1419,7 +1479,7 @@ impl ClientCore {
         let access = self.operator_access(&row.node_did)?;
         match mutations::upsert_skill_on(&access, row).await {
             Ok(()) => {
-                self.refresh_store().await?;
+                self.refresh_config_source(&row.node_did).await?;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
@@ -1437,7 +1497,7 @@ impl ClientCore {
         let access = self.operator_access(&row.node_did)?;
         match mutations::upsert_schedule_on(&access, row).await {
             Ok(()) => {
-                self.refresh_store().await?;
+                self.refresh_config_source(&row.node_did).await?;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
@@ -1455,7 +1515,7 @@ impl ClientCore {
         let access = self.operator_access(&row.node_did)?;
         match mutations::upsert_trigger_on(&access, row).await {
             Ok(()) => {
-                self.refresh_store().await?;
+                self.refresh_config_source(&row.node_did).await?;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
@@ -1476,7 +1536,7 @@ impl ClientCore {
         let access = self.operator_access(&document.node_did)?;
         match mutations::upsert_event_source_on(&access, document).await {
             Ok(()) => {
-                self.refresh_store().await?;
+                self.refresh_config_source(&document.node_did).await?;
                 self.clear_mutation_error();
                 Ok(())
             }
@@ -1492,7 +1552,7 @@ impl ClientCore {
                 anyhow::anyhow!("no EventSource document with event_source_id {event_source_id:?}"),
             )),
             Ok(_) => {
-                self.refresh_store().await?;
+                self.refresh_config_source(node_did).await?;
                 self.clear_mutation_error();
                 Ok(())
             }
@@ -1503,7 +1563,7 @@ impl ClientCore {
     pub async fn fire_task_now(&self, task_row: &Task, args: serde_json::Value) -> Result<String> {
         let actor = identity::Did::new(self.node_identity.did().to_owned())
             .context("desktop node DID is not ACP-addressable")?;
-        match mutations::fire_task_now(self.node.as_ref(), actor, task_row, args).await {
+        match mutations::fire_task_now(&self.node, actor, task_row, args).await {
             Ok(doc_id) => {
                 self.refresh_store().await?;
                 self.clear_mutation_error();
@@ -1536,7 +1596,7 @@ impl ClientCore {
     pub async fn fire_schedule_now(&self, row: &Schedule) -> Result<String> {
         let actor = identity::Did::new(self.node_identity.did().to_owned())
             .context("desktop node DID is not ACP-addressable")?;
-        match mutations::fire_schedule_now(self.node.as_ref(), actor, row).await {
+        match mutations::fire_schedule_now(&self.node, actor, row).await {
             Ok(doc_id) => {
                 self.refresh_store().await?;
                 self.clear_mutation_error();
@@ -2578,4 +2638,150 @@ pub struct NetworkReplicator {
     pub collections: Vec<String>,
     pub status: Option<u8>,
     pub last_status_change: Option<String>,
+}
+
+#[cfg(test)]
+mod accepted_edit_projection_tests {
+    use super::*;
+    use gents_protocol::session_input_edit::{
+        SessionInputEditOutcome, SessionInputEditReceipt, SESSION_INPUT_EDIT_VERSION,
+    };
+
+    fn applied_receipt() -> SessionInputEditReceipt {
+        SessionInputEditReceipt {
+            version: SESSION_INPUT_EDIT_VERSION,
+            command_id: "accepted-edit".to_string(),
+            command_digest: "sha256:test".to_string(),
+            requester_did: "did:test:requester".to_string(),
+            node_did: "did:test:node".to_string(),
+            session_id: "session".to_string(),
+            outcome: SessionInputEditOutcome::Applied,
+            reason: String::new(),
+            request_doc_ids: vec!["replacement-doc".to_string()],
+            request_ids: vec!["replacement-request".to_string()],
+            processed_at: "2026-10-14T00:00:00Z".to_string(),
+            signature: vec![0; 64],
+        }
+    }
+
+    fn modeled_command_outcome(case: &serde_json::Value) -> SessionInputEditOutcome {
+        serde_json::from_value(case["command_outcome"].clone()).expect("modeled receipt outcome")
+    }
+
+    #[tokio::test]
+    async fn generated_accepted_receipt_survives_projection_refresh_failure() {
+        let contracts: serde_json::Value =
+            gents_lean_contract::load_contract_snapshot().expect("Lean contract snapshot");
+        let case = contracts["session_input_edit_client_observation_cases"]
+            .as_array()
+            .and_then(|cases| {
+                cases
+                    .iter()
+                    .find(|case| case["name"] == "applied_receipt_projection_failure")
+            })
+            .expect("modeled applied receipt with failed projection");
+        let (store, _version) = ObservedStore::new(ClientStore::default());
+        let before = store.projection_revision().store_version;
+        let receipt = applied_receipt();
+        let accepted = merge_accepted_edit_projection(
+            &ConfigAccess::Graphql(gents::config_client::GraphqlEndpoint::anonymous(
+                "invalid endpoint",
+            )),
+            store.as_ref(),
+            receipt,
+            &["selected-doc".to_string()],
+            "did:test:node",
+            "session",
+            "did:test:requester",
+        )
+        .await;
+
+        assert_eq!(
+            serde_json::to_value(accepted.outcome).expect("serialize outcome"),
+            serde_json::to_value(modeled_command_outcome(case)).expect("serialize modeled outcome")
+        );
+        assert_eq!(case["projection_fresh"], false);
+        assert_eq!(store.projection_revision().store_version, before);
+        assert!(store.snapshot().requests.is_empty());
+    }
+
+    #[tokio::test]
+    async fn incomplete_or_foreign_edit_projection_keeps_store_and_receipt() {
+        let node = Arc::new(
+            defra_node::NodeBuilder::default()
+                .build()
+                .await
+                .expect("local projection node"),
+        );
+        crate::client::schema::ensure_runtime_schemas(node.as_ref())
+            .await
+            .expect("schemas");
+        let access = ConfigAccess::Local(node.clone());
+        let seed = access
+            .write(
+                "test.foreign_edit_projection_row",
+                r#"mutation {
+                    create_AgentRequest(input: {
+                        request_id: "foreign-projection-row",
+                        purpose: "normal",
+                        node_did: "did:test:other-node",
+                        requester_did: "did:test:requester",
+                        agent_id: "default",
+                        session_id: "other-session",
+                        content: "foreign row",
+                        lifecycle_state: "pending",
+                        execution_origin: "interactive",
+                        created_at: "2026-10-14T00:00:00Z"
+                    }) { _docID }
+                }"#,
+            )
+            .await
+            .expect("seed foreign row");
+        let foreign_id = seed["data"]["add_AgentRequest"][0]["_docID"]
+            .as_str()
+            .expect("physical ID")
+            .to_owned();
+        let (store, _version) = ObservedStore::new(ClientStore::default());
+        let before = store.projection_revision().store_version;
+
+        let missing = merge_accepted_edit_projection(
+            &access,
+            store.as_ref(),
+            applied_receipt(),
+            &["physically-missing".to_string()],
+            "did:test:node",
+            "session",
+            "did:test:requester",
+        )
+        .await;
+        let foreign = merge_accepted_edit_projection(
+            &access,
+            store.as_ref(),
+            applied_receipt(),
+            &[foreign_id],
+            "did:test:node",
+            "session",
+            "did:test:requester",
+        )
+        .await;
+        let mut empty_receipt = applied_receipt();
+        empty_receipt.request_doc_ids.clear();
+        empty_receipt.request_ids.clear();
+        let empty = merge_accepted_edit_projection(
+            &access,
+            store.as_ref(),
+            empty_receipt,
+            &[],
+            "did:test:node",
+            "session",
+            "did:test:requester",
+        )
+        .await;
+
+        for receipt in [missing, foreign, empty] {
+            assert_eq!(receipt.outcome, SessionInputEditOutcome::Applied);
+        }
+        assert_eq!(store.projection_revision().store_version, before);
+        assert!(store.snapshot().requests.is_empty());
+    }
 }

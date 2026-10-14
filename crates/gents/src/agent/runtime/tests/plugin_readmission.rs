@@ -70,7 +70,7 @@ async fn demoted_agent_is_readmitted_when_its_named_plugin_installs_midrun() {
     let identity = Arc::new(test_identity("plugin-readmission"));
     let endpoint = MockModelEndpoint::start("default").unwrap();
     bind_default_agent_backend(
-        node.as_ref(),
+        &node,
         identity.did(),
         "backend-plugin-readmit",
         endpoint.endpoint(),

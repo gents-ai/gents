@@ -54,7 +54,7 @@ async fn edit_tools(access: &ConfigAccess, id: &str, name: &str) {
     }])
     .unwrap();
     access
-        .transact("test.edit", |txn| {
+        .transact_write("test.edit", |txn| {
             let edit = &edit;
             Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, edit).await })
         })
@@ -353,7 +353,7 @@ async fn corrupt_installation_field(
     let variables = json!({ "input": Value::Object(input) });
     let variables = &variables;
     let response = access
-        .transact("test.corrupt_installation_field", |txn| {
+        .transact_write("test.corrupt_installation_field", |txn| {
             Box::pin(async move {
                 txn.execute_with_variables(
                     &format!(
@@ -769,7 +769,7 @@ async fn installing_a_pack_keeps_the_users_default_behavior() {
     ])
     .unwrap();
     access
-        .transact("test.seed", |txn| {
+        .transact_write("test.seed", |txn| {
             let seed = &seed;
             Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, seed).await })
         })

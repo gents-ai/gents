@@ -1707,7 +1707,7 @@ fn operator_grants_project_from_the_tools_group() {
 
 /// Replace a Tools document through the operator route (no self-config
 /// guard), as the desktop and `config apply` do.
-async fn operator_replace_tools(node: &defra_node::EmbeddedNode, tools: Value) {
+async fn operator_replace_tools(node: &Arc<defra_node::EmbeddedNode>, tools: Value) {
     use crate::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
     let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
         collection: crate::Collection::Tools,
@@ -1715,7 +1715,7 @@ async fn operator_replace_tools(node: &defra_node::EmbeddedNode, tools: Value) {
         update: tools,
     }])
     .unwrap();
-    ConfigAccess::transact_local(node, None, "test.operator_tools", |txn| {
+    ConfigAccess::transact_local_write(node, None, "test.operator_tools", |txn| {
         let plan = &plan;
         Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, plan).await })
     })
@@ -1724,7 +1724,11 @@ async fn operator_replace_tools(node: &defra_node::EmbeddedNode, tools: Value) {
 }
 
 /// The operator grants pack installation on `tools_id`.
-async fn operator_grant_pack_install(node: &defra_node::EmbeddedNode, owner: &str, tools_id: &str) {
+async fn operator_grant_pack_install(
+    node: &Arc<defra_node::EmbeddedNode>,
+    owner: &str,
+    tools_id: &str,
+) {
     operator_replace_tools(
         node,
         json!({"node_did": owner, "tools_id": tools_id,
@@ -4281,7 +4285,7 @@ async fn agent_create_commits_and_resolves_after_restart() {
     );
 
     let snapshot = crate::agent::resolve_document_runtime_snapshot(
-        node.as_ref(),
+        &node,
         &crate::agent::DocumentResolveContext::for_tests(
             identity,
             crate::tool_surface::ToolCeiling::readonly(),
@@ -4306,7 +4310,7 @@ async fn agent_create_commits_and_resolves_after_restart() {
     );
     let names = runtime_agent
         .tools
-        .resolve(node.as_ref(), &node_did, &Default::default())
+        .resolve(&node, &node_did, &Default::default())
         .await
         .expect("new agent tool surface resolves after restart")
         .tool_names();
@@ -4611,7 +4615,7 @@ async fn direct_tools_preview_and_apply_enforce_and_persist_canonical_workspace_
     let tools_id = format!("{agent_id}:tools");
     let persisted: crate::document_config::Tools =
         crate::config_client::ConfigAccess::Local(node.clone())
-            .transact("test.self_config.read_tools", |txn| {
+            .transact_write("test.self_config.read_tools", |txn| {
                 let owner = owner.clone();
                 let tools_id = tools_id.clone();
                 Box::pin(async move {
@@ -4679,7 +4683,7 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
     let workspace_root_mutation = format!(
         r#"mutation {{ create_WorkspaceRoot(input: {{root_path:"{escaped_selected}", enabled:true}}) {{_docID}} }}"#
     );
-    crate::config_client::ConfigAccess::transact_local(
+    crate::config_client::ConfigAccess::transact_local_write(
         &node,
         Some(fixture_actor.clone()),
         "test.agent.workspace_root",
@@ -4770,7 +4774,7 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
     );
 
     let snapshot = crate::agent::resolve_document_runtime_snapshot(
-        node.as_ref(),
+        &node,
         &crate::agent::DocumentResolveContext::for_tests(
             identity.clone(),
             crate::tool_surface::ToolCeiling::readonly_at(operator_root.path()),
@@ -4787,7 +4791,7 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
     let surface = Arc::new(
         runtime_agent
             .tools
-            .resolve(node.as_ref(), &owner, &Default::default())
+            .resolve(&node, &owner, &Default::default())
             .await
             .expect("resolve fresh-request tool surface"),
     );
@@ -5183,10 +5187,15 @@ async fn account_choice_core(
         .collect(),
     )
     .unwrap();
-    crate::config_client::ConfigAccess::transact_local(&node, None, "test.compaction", |txn| {
-        let plan = &plan;
-        Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, plan).await })
-    })
+    crate::config_client::ConfigAccess::transact_local_write(
+        &node,
+        None,
+        "test.compaction",
+        |txn| {
+            let plan = &plan;
+            Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, plan).await })
+        },
+    )
     .await
     .unwrap();
     let core = SelfConfigCore::new(node.clone(), owner, agent.into()).unwrap();
@@ -5517,7 +5526,7 @@ async fn agent_clone_inherited_compaction_cannot_switch_account() {
         })
         .collect();
     let plan = crate::config_client::DesiredStateApplyPlan::new(sources).unwrap();
-    crate::config_client::ConfigAccess::transact_local(&node, None, "test.sources", |txn| {
+    crate::config_client::ConfigAccess::transact_local_write(&node, None, "test.sources", |txn| {
         let plan = &plan;
         Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, plan).await })
     })
@@ -7305,7 +7314,11 @@ fn operator_grants_decode_and_preserve_main_bounds() {
     .is_ok());
 }
 
-async fn grant_pack_install_for_test(node: &defra_node::EmbeddedNode, owner: &str, tools_id: &str) {
+async fn grant_pack_install_for_test(
+    node: &Arc<defra_node::EmbeddedNode>,
+    owner: &str,
+    tools_id: &str,
+) {
     let value = json!({"node_did":owner,"tools_id":tools_id,"self_config":{"enable_self_config":true,"enable_pack_install":true}});
     let plan = crate::config_client::DesiredStateApplyPlan::new(vec![
         crate::config_client::DesiredStateApplyDocument {
@@ -7315,10 +7328,15 @@ async fn grant_pack_install_for_test(node: &defra_node::EmbeddedNode, owner: &st
         },
     ])
     .unwrap();
-    crate::config_client::ConfigAccess::transact_local(node, None, "test.operator_grant", |txn| {
-        let plan = &plan;
-        Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, plan).await })
-    })
+    crate::config_client::ConfigAccess::transact_local_write(
+        node,
+        None,
+        "test.operator_grant",
+        |txn| {
+            let plan = &plan;
+            Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, plan).await })
+        },
+    )
     .await
     .unwrap();
 }

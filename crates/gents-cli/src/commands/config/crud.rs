@@ -156,7 +156,7 @@ pub(super) async fn config_rm(spec: ConfigDocumentSpec, args: ConfigShowArgs) ->
     let node_did = &live.node.node_did;
     let id_ref = &id;
     let deleted = access
-        .transact("cli.config.delete", move |txn| {
+        .transact_write("cli.config.delete", move |txn| {
             Box::pin(async move {
                 apply_delete_collection(txn, collection, node_did, std::slice::from_ref(id_ref))
                     .await
@@ -390,7 +390,7 @@ mod tests {
             }))?;
             let plan = DesiredStateApplyPlan::from_pack_config(&config)?;
             access
-                .transact("test.config.crud.seed", |txn| {
+                .transact_write("test.config.crud.seed", |txn| {
                     let plan = &plan;
                     Box::pin(async move { apply_desired_state_plan(txn, plan).await })
                 })

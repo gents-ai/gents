@@ -746,7 +746,7 @@ async fn canonical_output_started_at_ms(
         return Ok(header.and_then(|header| timestamp_millis(&header.created_at)));
     };
     let response = query_node_json(
-        state.node.as_ref(),
+        &state.node,
         &format!(
             r#"{{ AgentOutputSegment(
                 filter: {{ request_doc_id: {{ _eq: "{}" }} }},
@@ -1137,7 +1137,7 @@ async fn send_thread_token_usage_update(
 ) -> Result<()> {
     let total_usage = submitted_token_usage(state, request, None).await?;
     let model_context_window = load_bound_context_window(
-        state.node.as_ref(),
+        &state.node,
         &request.node_did,
         request
             .agent_id
@@ -1307,7 +1307,7 @@ async fn cancel_pending_steering_request(
 ) {
     connection.take_steering_input(&request.request_id).await;
     if let Err(error) = gents::interrupt_request_by_doc_id(
-        state.node.as_ref(),
+        &state.node,
         &request.request_doc_id,
         &state.node_did,
         Some(state.local_requester_did()),

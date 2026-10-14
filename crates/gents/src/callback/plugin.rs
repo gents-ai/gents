@@ -160,7 +160,7 @@ pub(super) struct PluginHandler<'a> {
 
 /// Runs a claimed, running invocation whose callback is a plugin.
 pub(super) async fn execute(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     invocation: &mut CallbackInvocationDoc,
     handler: PluginHandler<'_>,
     source: &Value,
@@ -251,7 +251,7 @@ pub(super) async fn execute(
 /// Writes the outputs, marks the invocation succeeded and records its result,
 /// all or nothing.
 async fn commit_success(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     invocation: &mut CallbackInvocationDoc,
     journal: &[ActionJournalEntry],
     documents: Vec<(String, Value)>,
@@ -283,7 +283,7 @@ async fn commit_success(
         })
         .collect::<Result<Vec<_>>>()?;
     let invocation_id = invocation.invocation_id.clone();
-    crate::config_client::ConfigAccess::transact_local(
+    crate::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "callback.plugin_result",

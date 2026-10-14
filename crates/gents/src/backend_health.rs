@@ -350,7 +350,7 @@ fn probe_timeout(backend: &InferenceBackend) -> Duration {
 /// `Some(node)` is that node's OAuth scope. Failures never write,
 /// so a previous catalog and its `observed_at` are preserved.
 async fn record_discovered_catalog(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     backend: &InferenceBackend,
     node_did: Option<&str>,
     models: Vec<crate::document_config::AdvertisedModel>,
@@ -374,7 +374,7 @@ async fn record_discovered_catalog(
 }
 
 pub async fn probe_backends_cycle(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     client: &reqwest::Client,
     backends: &[InferenceBackend],
     now: DateTime<Utc>,
@@ -389,7 +389,7 @@ pub async fn probe_backends_cycle(
 }
 
 async fn probe_selected_backends(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     client: &reqwest::Client,
     backends: &[InferenceBackend],
     now: DateTime<Utc>,
@@ -429,7 +429,7 @@ async fn probe_selected_backends(
                     match probe_result {
                         Ok(Ok(models)) => {
                             record_discovered_catalog(
-                                context.node.as_ref(),
+                                &context.node,
                                 backend,
                                 Some(context.node_did),
                                 models,
@@ -501,7 +501,7 @@ async fn probe_selected_backends(
 }
 
 async fn record_probe_event(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     backend: &InferenceBackend,
     event: ProbeEvent,
     error_text: Option<String>,
@@ -602,7 +602,7 @@ async fn run_scheduled_backend_probe_cycle(
     let selected = schedule.map(|(schedule, periodic)| schedule.select(&backends, periodic));
     let now = Utc::now();
     let outcome = probe_selected_backends(
-        node.as_ref(),
+        &node,
         client,
         &backends,
         now,
@@ -623,7 +623,7 @@ async fn run_scheduled_backend_probe_cycle(
             .any(|backend_id| backend_id == &backend.backend_id)
     }) {
         match set_backend_probe_status_with_last_probe(
-            node.as_ref(),
+            &node,
             &backend.node_did,
             &backend.backend_id,
             "healthy",
@@ -1019,7 +1019,10 @@ mod tests {
         }
     }
 
-    async fn upsert_backend_configuration(node: &EmbeddedNode, backend: &InferenceBackend) {
+    async fn upsert_backend_configuration(
+        node: &std::sync::Arc<EmbeddedNode>,
+        backend: &InferenceBackend,
+    ) {
         use crate::config_client::{
             ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
         };
@@ -1030,7 +1033,7 @@ mod tests {
             update: value,
         }])
         .unwrap();
-        ConfigAccess::transact_local(node, None, "test.backend.seed", |txn| {
+        ConfigAccess::transact_local_write(node, None, "test.backend.seed", |txn| {
             let plan = &plan;
             Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, plan).await })
         })
@@ -1039,7 +1042,7 @@ mod tests {
     }
 
     async fn seed_backend_observation(
-        node: &EmbeddedNode,
+        node: &Arc<EmbeddedNode>,
         backend: &InferenceBackend,
         status: &str,
     ) {
@@ -1100,7 +1103,7 @@ mod tests {
         assert_eq!(current.failure_count as usize, modeled.next_count);
     }
 
-    async fn wait_for_promotion(node: &EmbeddedNode, backend: &InferenceBackend) {
+    async fn wait_for_promotion(node: &Arc<EmbeddedNode>, backend: &InferenceBackend) {
         tokio::time::timeout(Duration::from_secs(10), async {
             loop {
                 let observation = crate::backend_registry::lookup_backend_observation(
@@ -1125,7 +1128,7 @@ mod tests {
 
     #[tokio::test]
     async fn spawned_prober_observes_a_new_backend_before_the_next_periodic_tick() {
-        let node = Arc::new(test_node().await);
+        let node = test_node().await;
         let listener = ModelsListener::start();
         let initial = backend("initial", listener.endpoint());
         seed_backend_observation(&node, &initial, "unknown").await;
@@ -1172,7 +1175,7 @@ mod tests {
 
     #[tokio::test]
     async fn scheduled_cycles_preserve_health_across_observations_and_unrelated_edits() {
-        let node = Arc::new(test_node().await);
+        let node = test_node().await;
         let listener = ModelsListener::start();
         let mut reachable = backend("reachable", listener.endpoint());
         let failing = backend("failing", format!("{}/missing", listener.endpoint()));
@@ -1247,7 +1250,7 @@ mod tests {
 
     #[tokio::test]
     async fn disabled_and_removed_backends_are_probed_again_when_observed_enabled() {
-        let node = Arc::new(test_node().await);
+        let node = test_node().await;
         let listener = ModelsListener::start();
         let mut value = backend("returning", format!("{}/missing", listener.endpoint()));
         let health = BackendHealthMap::new();
@@ -1282,7 +1285,7 @@ mod tests {
                 value.backend_id.clone(),
             )])
             .unwrap();
-        crate::config_client::ConfigAccess::transact_local(
+        crate::config_client::ConfigAccess::transact_local_write(
             &node,
             None,
             "test.backend.remove",
@@ -1316,7 +1319,7 @@ mod tests {
             .build()
             .unwrap();
         let health_map = BackendHealthMap::new();
-        let node = Arc::new(test_node().await);
+        let node = test_node().await;
 
         // Healthy while the endpoint answers.
         let listener = ModelsListener::start();
@@ -1397,7 +1400,7 @@ mod tests {
             .build()
             .unwrap();
         let health_map = BackendHealthMap::new();
-        let node = Arc::new(test_node().await);
+        let node = test_node().await;
         let listener = ModelsListener::start();
         let key_backend = |backend_id: &str, endpoint: String| {
             let mut backend = backend(backend_id, endpoint);
@@ -1437,7 +1440,7 @@ mod tests {
         let options = probe_options();
         let client = reqwest::Client::new();
         let health_map = BackendHealthMap::new();
-        let node = Arc::new(test_node().await);
+        let node = test_node().await;
         let listener = ModelsListener::start();
 
         let backends = vec![backend("late-arrival", listener.endpoint())];
@@ -1510,7 +1513,7 @@ mod tests {
 
     #[tokio::test]
     async fn runtime_probe_cycle_scopes_same_named_backends_to_its_node() {
-        let node = Arc::new(test_node().await);
+        let node = test_node().await;
         let listener = ModelsListener::start();
         let local = backend("same", listener.endpoint());
         let mut foreign = backend("same", "http://127.0.0.1:1/v1".into());
@@ -1548,7 +1551,7 @@ mod tests {
         let options = probe_options();
         let client = reqwest::Client::new();
         let health_map = BackendHealthMap::new();
-        let node = Arc::new(test_node().await);
+        let node = test_node().await;
 
         // Dead endpoint, but ChatGPT-Codex: OAuthCredential is agent-scoped,
         // so the runtime-level prober must leave it alone entirely.
@@ -1593,7 +1596,7 @@ mod tests {
 
     #[tokio::test]
     async fn oauth_kinds_probe_the_credential_document_fresh_is_healthy_and_promotes() {
-        let node = Arc::new(test_node().await);
+        let node = test_node().await;
         let did = "did:key:z6MkProbe";
         seed_credential(
             &node,
@@ -1633,7 +1636,7 @@ mod tests {
 
     #[tokio::test]
     async fn oauth_account_reference_is_probed_with_its_own_account() {
-        let node = Arc::new(test_node().await);
+        let node = test_node().await;
         let did = "did:key:z6MkProbeAccount";
         let provider = crate::xai_grok_oauth::XAI_OAUTH_PROVIDER;
         let account = crate::oauth_credential::OAuthCredential {
@@ -1700,7 +1703,7 @@ mod tests {
 
     #[tokio::test]
     async fn oauth_account_reference_without_its_row_is_not_probed() {
-        let node = Arc::new(test_node().await);
+        let node = test_node().await;
         let did = "did:key:z6MkProbe";
         seed_credential(
             &node,
@@ -1756,7 +1759,7 @@ mod tests {
 
     #[tokio::test]
     async fn oauth_kinds_fresh_grok_credential_stays_healthy_and_promotes() {
-        let node = Arc::new(test_node().await);
+        let node = test_node().await;
         let did = "did:key:z6MkProbe";
         seed_credential(
             &node,
@@ -1805,7 +1808,7 @@ mod tests {
 
     #[tokio::test]
     async fn oauth_kinds_stale_credential_without_refresh_token_still_demotes_after_k() {
-        let node = Arc::new(test_node().await);
+        let node = test_node().await;
         let did = "did:key:z6MkProbe";
         seed_credential_with_refresh_token(
             &node,
@@ -1862,7 +1865,7 @@ mod tests {
 
     #[tokio::test]
     async fn oauth_kinds_refresh_an_expired_credential_on_probe_and_recover() {
-        let node = Arc::new(test_node().await);
+        let node = test_node().await;
         let did = "did:key:z6MkProbeExpired";
         let provider = crate::claude_oauth::CLAUDE_OAUTH_PROVIDER;
         seed_credential_with_refresh_token(
@@ -1952,7 +1955,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_hung_token_endpoint_does_not_stall_the_next_backend_probe() {
-        let node = Arc::new(test_node().await);
+        let node = test_node().await;
         let did = "did:key:z6MkProbeHungRefresh";
         let provider = crate::claude_oauth::CLAUDE_OAUTH_PROVIDER;
         seed_credential_with_refresh_token(
@@ -2029,7 +2032,7 @@ mod tests {
 
     #[tokio::test]
     async fn oauth_kinds_missing_credential_fails_with_login_hint() {
-        let node = Arc::new(test_node().await);
+        let node = test_node().await;
         let (options, client, health_map) = (
             probe_options(),
             reqwest::Client::new(),
@@ -2069,7 +2072,7 @@ mod tests {
             reqwest::Client::new(),
             BackendHealthMap::new(),
         );
-        let node = Arc::new(test_node().await);
+        let node = test_node().await;
         let outcome = probe_backends_cycle(
             &node,
             &client,
@@ -2110,7 +2113,7 @@ mod tests {
             .set_for_test("retired", BackendHealthState::Unhealthy, 5)
             .await;
 
-        let node = Arc::new(test_node().await);
+        let node = test_node().await;
         let listener = ModelsListener::start();
         let backends = vec![backend("current", listener.endpoint())];
         probe_backends_cycle(

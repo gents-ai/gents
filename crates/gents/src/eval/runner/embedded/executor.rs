@@ -659,7 +659,7 @@ async fn apply(
     plan: &DesiredStateApplyPlan,
 ) -> Result<()> {
     access
-        .transact(operation, |txn| {
+        .transact_write(operation, |txn| {
             let plan = &plan;
             Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
         })
@@ -756,7 +756,10 @@ fn object<'a>(value: &'a mut Value, named: &str) -> Result<&'a mut serde_json::M
 
 /// The trial's workspace, published the way the configurator evals publish
 /// theirs: an operator-owned root the trial's host tools may reach.
-async fn install_workspace_root(node: &EmbeddedNode, workspace: &Path) -> Result<()> {
+async fn install_workspace_root(
+    node: &std::sync::Arc<EmbeddedNode>,
+    workspace: &Path,
+) -> Result<()> {
     let root = escape_graphql_string(
         workspace
             .to_str()
@@ -853,7 +856,7 @@ async fn create_document(
     );
     let variables = json!({ "input": document });
     access
-        .transact(label, |txn| {
+        .transact_write(label, |txn| {
             let (mutation, variables) = (&mutation, &variables);
             Box::pin(async move {
                 let response = txn.execute_with_variables(mutation, variables).await?;
@@ -1020,7 +1023,7 @@ enum StageSubmission {
 }
 
 async fn observe_stage_terminal(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     cancel: &CancellationToken,
     runtime: &RunningRuntime,
     request_id: &str,
@@ -1560,7 +1563,7 @@ async fn runtime_exited(runtime: &RunningRuntime) {
 /// uses: the request is interrupted, then watched until it settles, so the
 /// evidence names a state the home actually reached.
 async fn interrupt_and_settle(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     request_id: &str,
 ) -> Result<TerminalObservation> {
     crate::interrupt::interrupt_request(node, request_id)
@@ -1576,7 +1579,7 @@ async fn interrupt_and_settle(
 /// `valid_until` and `retry` are unset for a request that is nobody's retry,
 /// which is exactly what `RequestSpec::new` already carries.
 async fn submit_stage(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     locator: &TrialLocator,
     agent_id: &str,
     stage: &StageSpec,

@@ -315,7 +315,7 @@ impl DefraSessionHook {
                         if let Some(Err(error)) = project_background_completion_if_owned(
                             won_terminal_compare,
                             crate::background_completion::append_background_tool_completion(
-                                node.as_ref(),
+                                &node,
                                 &execution_session_id,
                                 &execution_request_id,
                                 &execution_tool_doc_id,
@@ -349,7 +349,7 @@ impl DefraSessionHook {
                         if let Some(Err(error)) = project_background_completion_if_owned(
                             won_terminal_compare,
                             crate::background_completion::append_background_tool_completion(
-                                node.as_ref(),
+                                &node,
                                 &execution_session_id,
                                 &execution_request_id,
                                 &execution_tool_doc_id,
@@ -422,7 +422,7 @@ impl DefraSessionHook {
                         if let Some(Err(error)) = project_background_completion_if_owned(
                             won_terminal_compare,
                             crate::background_completion::append_background_tool_completion(
-                                node.as_ref(),
+                                &node,
                                 &execution_session_id,
                                 &execution_request_id,
                                 &execution_tool_doc_id,
@@ -499,7 +499,7 @@ impl DefraSessionHook {
                         if let Some(Err(error)) = project_background_completion_if_owned(
                             won_terminal_compare,
                             crate::background_completion::append_background_tool_completion(
-                                node.as_ref(),
+                                &node,
                                 &execution_session_id,
                                 &execution_request_id,
                                 &execution_tool_doc_id,
@@ -536,7 +536,7 @@ impl DefraSessionHook {
                     if let Some(Err(error)) = project_background_completion_if_owned(
                         won_terminal_compare,
                         crate::background_completion::append_background_tool_completion(
-                            node.as_ref(),
+                            &node,
                             &execution_session_id,
                             &execution_request_id,
                             &execution_tool_doc_id,
@@ -1066,7 +1066,7 @@ impl DefraSessionHook {
                 .await;
         }
         if let Err(error) = crate::background_completion::append_background_tool_completion(
-            self.node.as_ref(),
+            &self.node,
             &session_id,
             &notification_request_id,
             lifecycle.doc_id().ok_or_else(|| {

@@ -321,7 +321,7 @@ async fn engineer_p2p_live_comparison() -> Result<()> {
             ..Default::default()
         });
         let plan = DesiredStateApplyPlan::from_pack_config(&config)?;
-        ConfigAccess::transact_local(&local.node, None, "eval.p2p.subject", |txn| {
+        ConfigAccess::transact_local_write(&local.node, None, "eval.p2p.subject", |txn| {
             let plan = &plan;
             Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
         })

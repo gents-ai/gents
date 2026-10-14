@@ -377,7 +377,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                             let reduction_index = compaction_request.prior_reduction_keys.len() + 1;
                             let (row, _) =
                                 crate::provider_context_reduction::persist_exact(
-                                node.as_ref(),
+                                &node,
                                 crate::provider_context_reduction::NewExactProviderContextReduction {
                                     node_did: &request.node_did,
                                     requester_did: request.requester_did.as_deref(),
@@ -1271,7 +1271,7 @@ pub(super) mod tests {
     }
 
     async fn create_routed_request(
-        node: &defra_node::EmbeddedNode,
+        node: &std::sync::Arc<defra_node::EmbeddedNode>,
         agent_config: &ResolvedAgent,
         requester_did: &str,
     ) -> AgentRequest {
@@ -1325,7 +1325,7 @@ pub(super) mod tests {
     }
 
     async fn create_enrollment_daemon_request(
-        node: &defra_node::EmbeddedNode,
+        node: &std::sync::Arc<defra_node::EmbeddedNode>,
         agent_config: &ResolvedAgent,
         member: &dyn NodeIdentity,
         fence: &crate::agent::p2p_reconcile::enrollment_reconcile::EnrollmentAuthorizationFence,
@@ -1549,7 +1549,7 @@ pub(super) mod tests {
 
         let agent_config = test_agent();
         let requester_did = agent_config.node_did().to_string();
-        let request = create_routed_request(node.as_ref(), &agent_config, &requester_did).await;
+        let request = create_routed_request(&node, &agent_config, &requester_did).await;
         let prompt_builder = LayeredPromptBuilder::for_agent(
             &agent_config.system_prompt,
             &agent_config.agent_id,
@@ -1856,7 +1856,7 @@ pub(super) mod tests {
 
         let agent_config = test_agent();
         let requester_did = agent_config.node_did().to_string();
-        let first = create_routed_request(node.as_ref(), &agent_config, &requester_did).await;
+        let first = create_routed_request(&node, &agent_config, &requester_did).await;
         let prompt_builder = LayeredPromptBuilder::for_agent(
             &agent_config.system_prompt,
             &agent_config.agent_id,
@@ -1941,7 +1941,7 @@ pub(super) mod tests {
             ))
             .await;
         assert!(!revoked.has_errors(), "{:?}", revoked.errors);
-        let second = create_routed_request(node.as_ref(), &agent_config, &requester_did).await;
+        let second = create_routed_request(&node, &agent_config, &requester_did).await;
         let second_doc_id = second.doc_id.clone();
         daemon.process_request(second, shutdown_rx).await.unwrap();
         assert_eq!(
@@ -2014,7 +2014,7 @@ pub(super) mod tests {
         };
         let generation_one = fence(1, "enrollment-1");
         let revoked = create_enrollment_daemon_request(
-            node.as_ref(),
+            &node,
             &agent_config,
             member.as_ref(),
             &generation_one,
@@ -2088,7 +2088,7 @@ pub(super) mod tests {
         let generation_two = fence(2, "enrollment-2");
         authority.replace(Some(generation_two.clone())).await;
         let replacement = create_enrollment_daemon_request(
-            node.as_ref(),
+            &node,
             &agent_config,
             member.as_ref(),
             &generation_two,

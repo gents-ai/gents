@@ -120,7 +120,7 @@ async fn apply_with_counts(
 ) -> Result<DesiredStateApplyCounts> {
     let plan = DesiredStateApplyPlan::new(docs)?;
     access
-        .transact("test.desired.apply", |txn| {
+        .transact_write("test.desired.apply", |txn| {
             let plan = &plan;
             Box::pin(async move { apply_desired_state_plan(txn, plan).await })
         })
@@ -328,7 +328,7 @@ async fn read_records_pages_across_batches_and_omits_missing_ids() -> Result<()>
         apply(&access, vec![document(backend(owner, id))]).await?;
     }
     let records = access
-        .transact("test.read_records.paged", |txn| {
+        .transact_write("test.read_records.paged", |txn| {
             Box::pin(async move {
                 // A page size smaller than the ID set forces several pages,
                 // exercising the pager rather than a single query.
@@ -372,7 +372,7 @@ async fn read_records_rejects_duplicate_live_documents_naming_them() -> Result<(
         )
         .await?;
     let error = access
-        .transact("test.read_records.duplicate.read", |txn| {
+        .transact_write("test.read_records.duplicate.read", |txn| {
             Box::pin(async move {
                 read_records(txn, Collection::InferenceBackend, owner, &["dup"]).await
             })
@@ -470,19 +470,19 @@ async fn generated_default_replacements_preserve_runtime_startup_selection() -> 
         replacement.add["default_agent_id"] = json!("coding");
         let plan = DesiredStateApplyPlan::new(vec![replacement])?;
         let before = access
-            .transact("test.default.before", |txn| {
+            .transact_write("test.default.before", |txn| {
                 let owner = &owner;
                 Box::pin(async move { read_record(txn, Collection::Node, owner, owner).await })
             })
             .await?;
         let preview = access
-            .transact("test.default.preview", |txn| {
+            .transact_write("test.default.preview", |txn| {
                 let plan = &plan;
                 Box::pin(async move { validate_desired_state_plan(txn, plan).await })
             })
             .await;
         let published = access
-            .transact("test.default.publish", |txn| {
+            .transact_write("test.default.publish", |txn| {
                 let plan = &plan;
                 Box::pin(async move { apply_desired_state_plan(txn, plan).await })
             })
@@ -491,7 +491,7 @@ async fn generated_default_replacements_preserve_runtime_startup_selection() -> 
         assert_eq!(preview.is_ok(), allowed, "preview: {case}: {preview:?}");
         assert_eq!(published.is_ok(), allowed, "publish: {case}: {published:?}");
         let after = access
-            .transact("test.default.after", |txn| {
+            .transact_write("test.default.after", |txn| {
                 let owner = &owner;
                 Box::pin(async move { read_record(txn, Collection::Node, owner, owner).await })
             })
@@ -537,7 +537,7 @@ async fn retained_inbound_references_and_cycles_share_atomic_publication() -> Re
     drifted_replacement.update["context_id"] = "absent".into();
     let preview_plan = DesiredStateApplyPlan::new(vec![drifted_replacement])?;
     assert!(access
-        .transact("test.preview.replacement", |txn| {
+        .transact_write("test.preview.replacement", |txn| {
             let plan = &preview_plan;
             Box::pin(async move { validate_desired_state_plan(txn, plan).await })
         })
@@ -550,7 +550,7 @@ async fn retained_inbound_references_and_cycles_share_atomic_publication() -> Re
         "context".into(),
     )])?;
     assert!(access
-        .transact("test.preview.removal", |txn| {
+        .transact_write("test.preview.removal", |txn| {
             let plan = &preview_removal;
             Box::pin(async move { validate_desired_state_plan(txn, plan).await })
         })
@@ -560,7 +560,7 @@ async fn retained_inbound_references_and_cycles_share_atomic_publication() -> Re
     let preview_addition =
         DesiredStateApplyPlan::new(vec![document(backend(owner, "preview-only"))])?;
     access
-        .transact("test.preview.addition", |txn| {
+        .transact_write("test.preview.addition", |txn| {
             let plan = &preview_addition;
             Box::pin(async move { validate_desired_state_plan(txn, plan).await })
         })
@@ -586,7 +586,7 @@ async fn retained_inbound_references_and_cycles_share_atomic_publication() -> Re
         "context".into(),
     )])?;
     let error = access
-        .transact("test.reject.removal", |txn| {
+        .transact_write("test.reject.removal", |txn| {
             let plan = &plan;
             Box::pin(async move { apply_desired_state_plan(txn, plan).await })
         })
@@ -615,7 +615,7 @@ async fn retained_inbound_references_and_cycles_share_atomic_publication() -> Re
         .collect();
     let plan = DesiredStateApplyPlan::new(Vec::new())?.with_removals(removals)?;
     access
-        .transact("test.remove.cycle", |txn| {
+        .transact_write("test.remove.cycle", |txn| {
             let plan = &plan;
             Box::pin(async move { apply_desired_state_plan(txn, plan).await })
         })
@@ -680,7 +680,7 @@ async fn expect_existing_documents_unchanged_rejects_drifted_live_rows() -> Resu
     // The matching plan (authored digest == live projection) verifies clean.
     let matching = DesiredStateApplyPlan::new(vec![document(backend(owner, "packaged"))])?;
     access
-        .transact("test.verify.matching", |txn| {
+        .transact_write("test.verify.matching", |txn| {
             let plan = &matching;
             Box::pin(async move { expect_existing_documents_unchanged(txn, plan).await })
         })
@@ -689,7 +689,7 @@ async fn expect_existing_documents_unchanged_rejects_drifted_live_rows() -> Resu
     // Mutate a non-committed live field out of band; the same plan now drifts.
     access.write("test.drift", r#"mutation { update_InferenceBackend(filter:{node_did:{_eq:"did:key:owner"},backend_id:{_eq:"packaged"}},input:{name:"out-of-band"}){_docID} }"#).await?;
     let error = access
-        .transact("test.verify.drifted", |txn| {
+        .transact_write("test.verify.drifted", |txn| {
             let plan = &matching;
             Box::pin(async move { expect_existing_documents_unchanged(txn, plan).await })
         })
@@ -745,7 +745,7 @@ async fn cas_node() -> Result<(ConfigAccess, &'static str)> {
 async fn live_digest(access: &ConfigAccess, owner: &str, id: &str) -> Result<Option<String>> {
     let (owner, id) = (owner.to_owned(), id.to_owned());
     access
-        .transact("test.cas.read", |txn| {
+        .transact_write("test.cas.read", |txn| {
             let (owner, id) = (owner.clone(), id.clone());
             Box::pin(async move {
                 read_desired_state_document_in_txn(txn, Collection::InferenceBackend, &owner, &id)
@@ -771,7 +771,7 @@ async fn matching_expectation_applies_the_plan() -> Result<()> {
     let plan = DesiredStateApplyPlan::new(vec![document(renamed(owner, "target", "Promoted"))])?
         .with_expected(vec![expectation(owner, "target", digest)])?;
     access
-        .transact("test.cas.apply", |txn| {
+        .transact_write("test.cas.apply", |txn| {
             let plan = &plan;
             Box::pin(async move { apply_desired_state_plan(txn, plan).await })
         })
@@ -803,7 +803,7 @@ async fn drifted_expectation_refuses_and_writes_nothing() -> Result<()> {
             expectation(owner, "other", frozen_other.clone()),
         ])?;
     let error = access
-        .transact("test.cas.stale", |txn| {
+        .transact_write("test.cas.stale", |txn| {
             let plan = &plan;
             Box::pin(async move { apply_desired_state_plan(txn, plan).await })
         })
@@ -830,7 +830,7 @@ async fn absent_expectations_are_checked_in_both_directions() -> Result<()> {
     let must_be_absent = DesiredStateApplyPlan::new(vec![document(backend(owner, "fresh"))])?
         .with_expected(vec![expectation(owner, "fresh", None)])?;
     access
-        .transact("test.cas.absent_ok", |txn| {
+        .transact_write("test.cas.absent_ok", |txn| {
             let plan = &must_be_absent;
             Box::pin(async move { apply_desired_state_plan(txn, plan).await })
         })
@@ -839,7 +839,7 @@ async fn absent_expectations_are_checked_in_both_directions() -> Result<()> {
     let wrongly_absent = DesiredStateApplyPlan::new(vec![document(backend(owner, "again"))])?
         .with_expected(vec![expectation(owner, "present", None)])?;
     let error = access
-        .transact("test.cas.absent_stale", |txn| {
+        .transact_write("test.cas.absent_stale", |txn| {
             let plan = &wrongly_absent;
             Box::pin(async move { apply_desired_state_plan(txn, plan).await })
         })
@@ -852,7 +852,7 @@ async fn absent_expectations_are_checked_in_both_directions() -> Result<()> {
             vec![expectation(owner, "missing", Some("sha256:00".into()))],
         )?;
     let error = access
-        .transact("test.cas.present_stale", |txn| {
+        .transact_write("test.cas.present_stale", |txn| {
             let plan = &wrongly_present;
             Box::pin(async move { apply_desired_state_plan(txn, plan).await })
         })
@@ -917,7 +917,7 @@ async fn guarded_publication_matches_lean_publish_if_cases() -> Result<()> {
         .with_expected(expected)?;
 
         let outcome = access
-            .transact("test.cas.lean", |txn| {
+            .transact_write("test.cas.lean", |txn| {
                 let plan = &plan;
                 Box::pin(async move { apply_desired_state_plan(txn, plan).await })
             })
@@ -962,7 +962,7 @@ async fn guarded_publication_matches_lean_publish_if_cases() -> Result<()> {
                     == expectation.content.as_deref()
             });
             let replay = access
-                .transact("test.cas.lean.replay", |txn| {
+                .transact_write("test.cas.lean.replay", |txn| {
                     let plan = &plan;
                     Box::pin(async move { apply_desired_state_plan(txn, plan).await })
                 })
@@ -1039,7 +1039,7 @@ async fn canonical_replacement_preserves_revocation_and_attested_creation() {
     })).unwrap();
     let plan = DesiredStateApplyPlan::from_pack_config(&original).unwrap();
     access
-        .transact("seed_revoked_binding", |txn| {
+        .transact_write("seed_revoked_binding", |txn| {
             let plan = plan.clone();
             Box::pin(async move { apply_desired_state_plan(txn, &plan).await.map(|_| ()) })
         })
@@ -1066,7 +1066,7 @@ async fn canonical_replacement_preserves_revocation_and_attested_creation() {
         let config = serde_json::from_value(raw).unwrap();
         let plan = DesiredStateApplyPlan::from_pack_config(&config).unwrap();
         access
-            .transact("stale_binding_update", |txn| {
+            .transact_write("stale_binding_update", |txn| {
                 let plan = plan.clone();
                 Box::pin(async move { apply_desired_state_plan(txn, &plan).await.map(|_| ()) })
             })
@@ -1132,7 +1132,7 @@ async fn preview_window(
 ) -> Result<()> {
     let plan = DesiredStateApplyPlan::new(vec![profile(json!(window))])?;
     access
-        .transact("test.preview.context_window", |txn| {
+        .transact_write("test.preview.context_window", |txn| {
             let plan = &plan;
             Box::pin(async move { validate_desired_state_plan(txn, plan).await })
         })
@@ -1250,7 +1250,7 @@ async fn output_obligation_count_field_must_hold_a_count_on_the_target_collectio
         "flag",
     )])?;
     let previewed = access
-        .transact("test.obligation.preview", |txn| {
+        .transact_write("test.obligation.preview", |txn| {
             let plan = &plan;
             Box::pin(async move { validate_desired_state_plan(txn, plan).await })
         })
@@ -1410,7 +1410,7 @@ async fn creation_judges_the_count_field_of_the_add_payload() -> Result<()> {
         owner, "created", "flag", "total",
     )])?;
     let previewed = access
-        .transact("test.obligation.preview.add", |txn| {
+        .transact_write("test.obligation.preview.add", |txn| {
             let plan = &plan;
             Box::pin(async move { validate_desired_state_plan(txn, plan).await })
         })
@@ -1473,7 +1473,7 @@ async fn replacement_judges_the_count_field_of_the_update_payload() -> Result<()
         owner, "replaced", "amount", "flag",
     )])?;
     let previewed = access
-        .transact("test.obligation.preview.update", |txn| {
+        .transact_write("test.obligation.preview.update", |txn| {
             let plan = &plan;
             Box::pin(async move { validate_desired_state_plan(txn, plan).await })
         })
@@ -1636,7 +1636,7 @@ async fn event_source_count_field_must_hold_a_count_on_the_source_collection() -
         "flag",
     )])?;
     let previewed = access
-        .transact("test.event_source.preview", |txn| {
+        .transact_write("test.event_source.preview", |txn| {
             let plan = &plan;
             Box::pin(async move { validate_desired_state_plan(txn, plan).await })
         })
@@ -1838,7 +1838,7 @@ async fn creation_judges_the_count_field_of_the_event_source_add_payload() -> Re
         "total",
     )])?;
     let previewed = access
-        .transact("test.event_source.preview.add", |txn| {
+        .transact_write("test.event_source.preview.add", |txn| {
             let plan = &plan;
             Box::pin(async move { validate_desired_state_plan(txn, plan).await })
         })
@@ -1908,7 +1908,7 @@ async fn replacement_judges_the_count_field_of_the_event_source_update_payload()
         "flag",
     )])?;
     let previewed = access
-        .transact("test.event_source.preview.update", |txn| {
+        .transact_write("test.event_source.preview.update", |txn| {
             let plan = &plan;
             Box::pin(async move { validate_desired_state_plan(txn, plan).await })
         })
@@ -2292,7 +2292,7 @@ async fn publication_applies_native_route_template_fields_the_schema_does_not_de
     ];
     let plan = DesiredStateApplyPlan::new(documents.clone())?;
     access
-        .transact("test.native_route.preview", |txn| {
+        .transact_write("test.native_route.preview", |txn| {
             let plan = &plan;
             Box::pin(async move { validate_desired_state_plan(txn, plan).await })
         })

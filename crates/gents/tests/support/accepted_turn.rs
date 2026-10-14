@@ -127,7 +127,7 @@ pub async fn prepare_accepted_turn_as(
         .expect("start accepted-turn backend");
     for agent_id in spec.configured_agent_ids {
         bind_agent_backend(
-            db.node.as_ref(),
+            &db.node,
             identity.did(),
             agent_id,
             spec.backend_id,
@@ -283,8 +283,8 @@ async fn boot_accepted_turn_with_backend_capacity_inner(
         DesiredStateApplyPlan,
     };
     let did = db.node_identity.did();
-    gents::ConfigAccess::transact_local(
-        db.node.as_ref(),
+    gents::ConfigAccess::transact_local_write(
+        &db.node,
         None,
         "test.accepted_turn_backend_capacity",
         |txn| {

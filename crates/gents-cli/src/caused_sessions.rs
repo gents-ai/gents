@@ -262,7 +262,7 @@ pub(crate) async fn load_session_head(
     node: &Arc<EmbeddedNode>,
     scope: &SessionScope,
 ) -> Result<Option<AgentRequestRow>> {
-    let head = ConfigAccess::transact_local(node, None, "caused_sessions.head", |txn| {
+    let head = ConfigAccess::transact_local_write(node, None, "caused_sessions.head", |txn| {
         Box::pin(async move {
             load_latest_request_in_txn(
                 txn,

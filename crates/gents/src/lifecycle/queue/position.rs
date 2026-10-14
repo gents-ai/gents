@@ -253,15 +253,17 @@ mod tests {
         use crate::defra_node::EmbeddedNode;
 
         let dir = tempfile::tempdir().unwrap();
-        let node = EmbeddedNode::builder()
-            .data_path(dir.path().join("node"))
-            .build()
-            .await
-            .unwrap();
+        let node = std::sync::Arc::new(
+            EmbeddedNode::builder()
+                .data_path(dir.path().join("node"))
+                .build()
+                .await
+                .unwrap(),
+        );
         crate::ensure_runtime_schemas(&node).await.unwrap();
 
         async fn create_request(
-            node: &EmbeddedNode,
+            node: &std::sync::Arc<EmbeddedNode>,
             request_id: &str,
             node_did: &str,
             session_id: &str,

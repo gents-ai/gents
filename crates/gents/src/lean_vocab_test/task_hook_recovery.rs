@@ -36,7 +36,7 @@ impl Fixture {
         let identity: Arc<dyn NodeIdentity> = Arc::new(
             KeyIdentity::load_or_create(data.path().join("agent.key"), None).expect("identity"),
         );
-        crate::test_support::install_test_agent(node.as_ref(), identity.did(), AGENT_ID).await;
+        crate::test_support::install_test_agent(&node, identity.did(), AGENT_ID).await;
         Self {
             node,
             identity,
@@ -76,7 +76,7 @@ impl Fixture {
         let doc_id = lifecycle.request().doc_id.clone();
         if interrupt_requested {
             crate::interrupt::interrupt_request_by_doc_id(
-                self.node.as_ref(),
+                &self.node,
                 &doc_id,
                 self.did(),
                 Some(self.did()),

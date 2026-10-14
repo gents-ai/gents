@@ -163,7 +163,7 @@ async fn configure_seed_and_compaction(
         DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
 
-    gents::ConfigAccess::transact_local(node, None, "test.configure_live_seed", |txn| {
+    gents::ConfigAccess::transact_local_write(node, None, "test.configure_live_seed", |txn| {
         Box::pin(async move {
             let (_, profile) = read(txn, Collection::InferenceProfile, node_did, profile_id)
                 .await?

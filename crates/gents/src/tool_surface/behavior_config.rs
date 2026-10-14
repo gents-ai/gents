@@ -476,7 +476,7 @@ impl AgentToolSurfaceConfig {
 
     pub async fn resolve(
         &self,
-        node: &EmbeddedNode,
+        node: &std::sync::Arc<EmbeddedNode>,
         node_did: &str,
         plugins: &crate::plugin::executor::PluginExecutor,
     ) -> Result<ToolSurface> {
@@ -486,7 +486,7 @@ impl AgentToolSurfaceConfig {
 
     async fn resolve_with_agent_tools(
         &self,
-        node: &EmbeddedNode,
+        node: &std::sync::Arc<EmbeddedNode>,
         node_did: &str,
         plugins: &crate::plugin::executor::PluginExecutor,
         agent_tools: AgentToolConfig,
@@ -667,7 +667,7 @@ impl AgentToolSurfaceConfig {
     /// node's ACP.
     pub(crate) async fn resolve_with_available_agent_targets(
         &self,
-        node: &EmbeddedNode,
+        node: &std::sync::Arc<EmbeddedNode>,
         own_node_did: &str,
         active_agent_ids: &HashSet<String>,
         plugins: &crate::plugin::executor::PluginExecutor,

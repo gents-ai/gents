@@ -65,7 +65,7 @@ async fn main() -> Result<()> {
     );
     ensure_runtime_schemas(node.as_ref()).await?;
     seed_demo_documents(
-        node.as_ref(),
+        &node,
         identity.did(),
         &backend_id,
         &model_endpoint,
@@ -106,7 +106,7 @@ async fn main() -> Result<()> {
 }
 
 async fn seed_demo_documents(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     node_did: &str,
     backend_id: &str,
     model_endpoint: &str,
@@ -115,7 +115,7 @@ async fn seed_demo_documents(
     deadline_secs: u64,
 ) -> Result<()> {
     let deadline_secs = i64::try_from(deadline_secs).context("deadline exceeds supported range")?;
-    ConfigAccess::transact_local(node, None, "example.default_config", |txn| {
+    ConfigAccess::transact_local_write(node, None, "example.default_config", |txn| {
         Box::pin(async move {
             let mut principal: Node = match read_desired_state_record_in_txn(
                 txn, Collection::Node, node_did, node_did,
@@ -212,7 +212,7 @@ mod tests {
         )
         .await?;
         access
-            .transact("example.verify", |txn| {
+            .transact_write("example.verify", |txn| {
                 Box::pin(async move {
                     let backend = load_inference_backend_in_txn(txn, "did:test:demo-a", "backend")
                         .await?

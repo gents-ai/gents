@@ -46,7 +46,7 @@ pub async fn run_openai_oneshot_with_tools(
     let tool_surface = agent
         .tools
         .resolve(
-            node.as_ref(),
+            &node,
             agent.node_did(),
             // The oneshot path has no host plugin store; a plugin tool it
             // names resolves no identity and fails closed at build time.

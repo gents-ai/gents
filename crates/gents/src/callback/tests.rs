@@ -1215,7 +1215,7 @@ async fn callback_results_are_selectable_by_their_binding() {
         ("inv-b", "other"),
     ] {
         let stored = super::documents::create_callback_result(
-            node.as_ref(),
+            &node,
             &super::documents::CallbackResultDoc {
                 result_id: format!("res-{invocation_id}"),
                 invocation_id: invocation_id.to_owned(),
@@ -1326,7 +1326,7 @@ impl Backlog {
         let plan = DesiredStateApplyPlan::new(documents).unwrap();
         backlog
             .access
-            .transact("test.backlog_config", |txn| {
+            .transact_write("test.backlog_config", |txn| {
                 let plan = &plan;
                 Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
             })
@@ -1380,7 +1380,7 @@ impl Backlog {
 
     async fn cursor(&self) -> String {
         self.access
-            .transact("test.backlog_cursor", |txn| {
+            .transact_write("test.backlog_cursor", |txn| {
                 Box::pin(async move {
                     Ok(crate::config_client::event_source_cursor::load_or_seed(
                         txn,

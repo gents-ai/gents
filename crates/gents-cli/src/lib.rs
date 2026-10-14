@@ -628,13 +628,11 @@ pub(crate) async fn resolve_config_access(
             .await
             .map_err(|error| gents::storage_backend::classify_store_error(error, &data_dir))?;
         gents::store_key::upgrade::finish(&data_dir)?;
-        Arc::try_unwrap(node_arc).unwrap_or_else(|_| {
-            unreachable!("node_arc had exactly one strong reference at this point")
-        })
+        node_arc
     };
     Ok((
         CommandAccess {
-            access: ConfigAccess::Local(std::sync::Arc::new(node)),
+            access: ConfigAccess::Local(node),
             _claim: Some(claim),
         },
         home_dir,
