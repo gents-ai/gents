@@ -11,10 +11,11 @@ use std::sync::Arc;
 use std::thread;
 
 use base64::Engine;
+use gents_login_ui::CallbackPage;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tiny_http::{Response, Server};
+use tiny_http::Server;
 use tokio::sync::{mpsc, Notify};
 use url::Url;
 
@@ -145,8 +146,8 @@ pub fn run_loopback_login(options: LoginOptions) -> io::Result<LoginServer> {
                     let outcome =
                         handle_callback_request(request.url(), &options, &redirect_uri, &pkce, &state)
                             .await;
-                    let (status, body, completed) = outcome.into_parts();
-                    let response = text_response(status, body);
+                    let (page, completed) = outcome.into_parts();
+                    let response = gents_login_ui::response(page);
                     let _ = tokio::task::spawn_blocking(move || request.respond(response)).await;
                     if let Some(result) = completed {
                         break result;
@@ -204,26 +205,18 @@ pub(crate) fn parse_manual_code(pasted: &str, expected_state: &str) -> io::Resul
 }
 
 enum CallbackOutcome {
-    Continue {
-        status: u16,
-        body: String,
-    },
+    Continue(CallbackPage),
     Complete {
-        status: u16,
-        body: String,
+        page: CallbackPage,
         result: io::Result<LoginTokens>,
     },
 }
 
 impl CallbackOutcome {
-    fn into_parts(self) -> (u16, String, Option<io::Result<LoginTokens>>) {
+    fn into_parts(self) -> (CallbackPage, Option<io::Result<LoginTokens>>) {
         match self {
-            Self::Continue { status, body } => (status, body, None),
-            Self::Complete {
-                status,
-                body,
-                result,
-            } => (status, body, Some(result)),
+            Self::Continue(page) => (page, None),
+            Self::Complete { page, result } => (page, Some(result)),
         }
     }
 }
@@ -236,24 +229,15 @@ async fn handle_callback_request(
     expected_state: &str,
 ) -> CallbackOutcome {
     let Ok(parsed) = Url::parse(&format!("http://localhost{request_target}")) else {
-        return CallbackOutcome::Continue {
-            status: 400,
-            body: "Invalid callback request.".into(),
-        };
+        return CallbackOutcome::Continue(CallbackPage::Incomplete);
     };
     if parsed.path() != "/callback" {
-        return CallbackOutcome::Continue {
-            status: 404,
-            body: "Not found.".into(),
-        };
+        return CallbackOutcome::Continue(CallbackPage::NotFound);
     }
     let params: HashMap<String, String> = parsed.query_pairs().into_owned().collect();
     if params.get("state").map(String::as_str) != Some(expected_state) {
         tracing::warn!("rejected Claude OAuth callback with mismatched state");
-        return CallbackOutcome::Continue {
-            status: 400,
-            body: "OAuth state mismatch. Return to the terminal and retry sign-in.".into(),
-        };
+        return CallbackOutcome::Continue(CallbackPage::StaleLink);
     }
     if let Some(error) = params.get("error") {
         let message = params
@@ -262,8 +246,7 @@ async fn handle_callback_request(
             .filter(|v| !v.trim().is_empty())
             .unwrap_or(error);
         return CallbackOutcome::Complete {
-            status: 400,
-            body: "Claude sign-in was not completed. Return to Gents for details.".into(),
+            page: CallbackPage::NotCompleted,
             result: Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 format!("Claude authorization failed: {message}"),
@@ -275,27 +258,18 @@ async fn handle_callback_request(
         .map(String::as_str)
         .filter(|v| !v.is_empty())
     else {
-        return CallbackOutcome::Continue {
-            status: 400,
-            body: "The callback omitted its authorization code.".into(),
-        };
+        return CallbackOutcome::Continue(CallbackPage::Incomplete);
     };
     match exchange_code(options, redirect_uri, pkce, code, expected_state).await {
         Ok(tokens) => CallbackOutcome::Complete {
-            status: 200,
-            body: "Claude sign-in complete. You may close this window.".into(),
+            page: CallbackPage::SignedIn,
             result: Ok(tokens),
         },
         Err(error) => CallbackOutcome::Complete {
-            status: 502,
-            body: "Claude token exchange failed. Return to Gents for details.".into(),
+            page: CallbackPage::ExchangeFailed,
             result: Err(error),
         },
     }
-}
-
-fn text_response(status: u16, body: String) -> Response<std::io::Cursor<Vec<u8>>> {
-    gents_login_ui::response(status, body)
 }
 
 #[derive(Clone)]
@@ -561,8 +535,8 @@ mod tests {
             "state-1",
         )
         .await;
-        let (status, _, completed) = outcome.into_parts();
-        assert_eq!(status, 400);
+        let (page, completed) = outcome.into_parts();
+        assert_eq!(page, CallbackPage::StaleLink);
         assert!(completed.is_none());
     }
 
