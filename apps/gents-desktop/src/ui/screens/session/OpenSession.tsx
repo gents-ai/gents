@@ -29,6 +29,7 @@ import { agentName } from "../behavior";
 import { NodeAgentStack } from "../NodeBehaviorStack";
 import { useParentWork } from "../parentWork";
 import { SessionContext } from "../SessionContextMeter";
+import { StartedSessionsButton } from "../StartedSessionsButton";
 import { ParentLine, StartedByAutomation, Title } from "../SessionHeader";
 import { SessionLoading } from "../SessionLoading";
 import { useComposerRoom, useHeaderScrolledOut } from "../sessionLayout";
@@ -199,6 +200,13 @@ export function OpenSession() {
                     )}
                   </div>
                 </div>
+                {/* Keep started sessions reachable after the main header scrolls away. */}
+                {session && (
+                  <StartedSessionsButton
+                    sessionId={session.sessionId}
+                    className="max-md:hidden"
+                  />
+                )}
                 {/* the meter rides up with the header, next to the menu */}
                 {session?.context && (
                   <div
