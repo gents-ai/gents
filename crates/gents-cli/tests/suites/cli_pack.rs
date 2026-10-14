@@ -20,6 +20,7 @@ fn a_document_pack_with_a_plugin_installs_and_removes_completely() -> Result<()>
         Ok(std::process::Command::new(support::cli_bin())
             .env("HOME", temp.path())
             .env("RUST_LOG", "error")
+            .env_remove("CARGO_TARGET_DIR")
             .current_dir(temp.path())
             .args(args)
             .output()?)
