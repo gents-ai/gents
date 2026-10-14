@@ -1,6 +1,6 @@
 /* The pieces both session views put around their composer. */
+import type { ReactNode } from "react";
 import type { SendStatus } from "@source-inc/gents-desktop-chat";
-import { cn } from "@gents/ui/lib/utils";
 import type { ShellView } from "@/../hooks/shellView";
 
 /** Add only local composer emptiness; every other blocker belongs to ClientShell. */
@@ -17,30 +17,39 @@ export function presentedComposerSendStatus(
       };
 }
 
+/* The line under the composer: the chat's folder at its start, the send's
+   status at its end. It keeps one line of room whether or not either has
+   anything to show, so a status arriving and leaving never moves the
+   composer, or a person's eye with it. */
+export function ComposerFooter({
+  folder,
+  status,
+}: {
+  folder: ReactNode;
+  status: ReactNode;
+}) {
+  return (
+    <div className="mt-1.5 flex min-h-7 items-center gap-3 px-1">
+      {folder}
+      <div className="ml-auto min-w-0 text-right">{status}</div>
+    </div>
+  );
+}
+
 /** Display the existing workflow owner's observation, never infer queue health. */
-/* The line under the composer holds its place whether or not it has
-   anything to say: a status arriving and leaving moved the composer up
-   and down, and a person's eye with it. One line of the small size is
-   always reserved; an error, being rarer and longer, may still grow it. */
+/* A running turn is left out: the transcript's activity line and the Stop
+   button already say it, and every message sent during it steers. */
 export function SessionSubmissionStatus({
   activityStatus,
   hint,
-  reserve = true,
 }: {
   activityStatus: ShellView["shellProjection"]["activityStatus"];
   hint?: string | null;
-  /** a new chat has no transcript above to hold still, so its line may
-      take no room until it has something to say */
-  reserve?: boolean;
 }) {
-  const status = activityStatus;
+  const status = activityStatus?.kind === "working" ? null : activityStatus;
   const quiet = !status && hint;
-  const empty = !status && !quiet;
   return (
-    <div
-      className={cn("px-1", reserve ? "mt-2 min-h-4" : !empty && "mt-2")}
-      data-testid="composer-status"
-    >
+    <div className="min-w-0" data-testid="composer-status">
       {status && (
         <div
           role="status"

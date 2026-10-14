@@ -4,6 +4,8 @@
    mcp, generic). Used by the activity steps in the transcript and by the
    trace panel. */
 
+import { shortPath } from "@/lib/paths";
+import { useHomeFolder } from "@/hooks/useHomeFolder";
 import type { RenderedToolCallView } from "@source-inc/gents-desktop-client";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { cn } from "@gents/ui/lib/utils";
@@ -50,7 +52,10 @@ export function ToolSummary({
   return (
     <span className={cn("flex min-w-0 items-baseline gap-2 text-sm", className)}>
       {kind && <span className="shrink-0 text-muted-foreground">{kind}</span>}
-      <span className={cn("min-w-0 truncate", s.mono && "font-mono text-[13px]")}>
+      <span
+        title={s.full}
+        className={cn("min-w-0 truncate", s.mono && "font-mono text-[13px]")}
+      >
         {s.primary}
       </span>
       {s.secondary && (
@@ -270,6 +275,7 @@ function RevealFile({ path }: { path: string }) {
   const node = useSelectedNode();
   const homeDid = useHomeDid();
   const label = revealInFolderLabel();
+  const home = useHomeFolder();
   if (!label || !node || !isWorkingNode(node, homeDid) || !isAbsolutePath(path))
     return null;
   return (
@@ -279,7 +285,9 @@ function RevealFile({ path }: { path: string }) {
       className="justify-self-start font-sans"
       onClick={() =>
         void revealInFolder(path).catch((error: unknown) =>
-          toast(`Couldn't find ${path} on this computer: ${String(error)}`),
+          toast(
+            `Couldn't find ${shortPath(path, { home })} on this computer: ${String(error)}`,
+          ),
         )
       }
     >

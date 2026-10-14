@@ -1,5 +1,7 @@
 /* A running plugin call asking whether it may read a path outside the
    working folder and the allowed folders. The call waits for the answer. */
+import { shortPath } from "@/lib/paths";
+import { useHomeFolder } from "@/hooks/useHomeFolder";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@gents/ui/components/button";
 import {
@@ -22,6 +24,7 @@ const POLL_MS = 1000;
 
 export function PluginAccessPrompt() {
   const { actions } = useApp();
+  const home = useHomeFolder();
   const [question, setQuestion] = useState<PluginApprovalRequest | null>(null);
   const answering = useRef(false);
   const failed = useRef<string | null>(null);
@@ -78,7 +81,11 @@ export function PluginAccessPrompt() {
         <DialogHeader>
           <DialogTitle>{question?.prompt}</DialogTitle>
           <DialogDescription>
-            Always allow this folder remembers {question?.folder}.
+            Always allow this folder remembers{" "}
+            <span title={question?.folder}>
+              {question?.folder ? shortPath(question.folder, { home }) : null}
+            </span>
+            .
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>

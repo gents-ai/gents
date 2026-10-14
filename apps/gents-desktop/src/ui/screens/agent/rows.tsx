@@ -1,5 +1,7 @@
 /* the settings-group pattern from the kit, with the pieces this screen repeats */
 import type { ReactNode } from "react";
+import { useHomeFolder } from "@/hooks/useHomeFolder";
+import { shortPath } from "@/lib/paths";
 import {
   FieldContent,
   FieldDescription,
@@ -88,15 +90,30 @@ export function StackedRow({
 export function Fact({
   children,
   mono = false,
+  title,
 }: {
   children: ReactNode;
   mono?: boolean;
+  title?: string;
 }) {
   return (
     <span
+      title={title}
       className={`max-w-[28rem] truncate text-sm text-muted-foreground max-md:max-w-full max-md:break-all max-md:whitespace-normal ${mono ? "font-mono text-xs" : ""}`}
     >
       {children ?? "—"}
     </span>
+  );
+}
+
+/* A path as it reads: from ~ when it is on this computer, shortened from
+   the left so its own name stays, and whole in its title. */
+export function PathFact({ path, local }: { path: string | null; local: boolean }) {
+  const home = useHomeFolder();
+  if (!path) return <Fact>{null}</Fact>;
+  return (
+    <Fact mono title={path}>
+      {shortPath(path, { home: local ? home : null, max: 56 })}
+    </Fact>
   );
 }

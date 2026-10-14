@@ -15,6 +15,7 @@ vi.mock("../src/lib/shellPlatform", async (original) => ({
 
 vi.mock("../src/lib/nativeShell", () => ({
   revealInFolder: vi.fn().mockResolvedValue(undefined),
+  homeFolder: vi.fn().mockResolvedValue(null),
 }));
 
 const edited: RenderedToolCallView = {
