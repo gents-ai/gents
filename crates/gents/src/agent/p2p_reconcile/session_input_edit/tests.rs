@@ -443,6 +443,33 @@ impl ModeledQueue {
 }
 
 #[tokio::test]
+async fn unanswered_sweep_discovers_malformed_command_for_transactional_validation() {
+    let fixture = Fixture::empty().await;
+    let response = ConfigAccess::Local(fixture.node.clone())
+        .write(
+            "test.edit.malformed_intent",
+            &format!(
+                r#"mutation {{ create_AgentSessionInputEdit(input: {{ command_id: "malformed", requester_did: "{}", node_did: "{}", session_id: "{}", intent_json: "not-json" }}) {{ _docID }} }}"#,
+                escape_graphql_string(fixture.identity.did()),
+                escape_graphql_string(fixture.identity.did()),
+                escape_graphql_string(SESSION),
+            ),
+        )
+        .await
+        .unwrap();
+    let doc_id = crate::graphql::created_doc_id(&response, "AgentSessionInputEdit").unwrap();
+
+    let unanswered =
+        unanswered_commands(&fixture.node, fixture.identity.as_ref(), Sweep::Unanswered)
+            .await
+            .unwrap();
+    assert_eq!(unanswered, vec![doc_id.clone()]);
+    assert!(process_command(&fixture.node, &fixture.identity, &doc_id)
+        .await
+        .is_err());
+}
+
+#[tokio::test]
 async fn generated_commands_bind_to_atomic_queue_owner() {
     let cases = crate::lean_vocab_test::lean_session_input_edit_cases()
         .iter()
