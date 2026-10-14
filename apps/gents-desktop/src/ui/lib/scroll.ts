@@ -116,6 +116,137 @@ const INTENT_MS = 300;
 /* how long an animated scroll of the reader's may stall between frames and
    still be theirs when it moves on (WebKitGTK under load) */
 const TAIL_MS = 1000;
+type ScrollCorrection = ReturnType<typeof createScrollCorrection>;
+const corrections = new WeakMap<
+  HTMLElement,
+  { owner: ScrollCorrection; users: number }
+>();
+
+/* WebKit drops position writes during momentum and can stop drawing until a
+   later write takes. One offset compensates every above-row change; it is
+   exchanged for a position write only after rest, and retained if that write
+   is dropped. Wheel events can outlast visible movement, and touchend can
+   precede momentum, so neither scrollend nor finger lift establishes rest. */
+function createScrollCorrection(viewport: HTMLElement, content: HTMLElement) {
+  let hidden = 0;
+  let movedAt = -Infinity;
+  let touching = false;
+  let timer = 0;
+  const listeners = new Set<() => void>();
+  const resting = () => !touching && performance.now() - movedAt >= TAIL_MS;
+  const schedule = (delay = TAIL_MS) => {
+    window.clearTimeout(timer);
+    timer = window.setTimeout(flush, Math.max(0, delay));
+  };
+  const clear = () => {
+    window.clearTimeout(timer);
+    timer = 0;
+    hidden = 0;
+    content.style.removeProperty("margin-top");
+  };
+  const flush = () => {
+    window.clearTimeout(timer);
+    timer = 0;
+    if (!hidden) return;
+    if (!resting() && viewport.scrollTop > 0) {
+      if (!touching) schedule(TAIL_MS - (performance.now() - movedAt));
+      return;
+    }
+    const top = viewport.scrollTop;
+    content.style.removeProperty("margin-top");
+    const target = Math.max(
+      0,
+      Math.min(top + hidden, viewport.scrollHeight - viewport.clientHeight),
+    );
+    setScroll(viewport, target);
+    if (Math.abs(target - viewport.scrollTop) > 2) {
+      content.style.marginTop = `${-hidden}px`;
+      schedule();
+      return;
+    }
+    hidden = 0;
+    for (const listener of listeners) listener();
+  };
+  const motion = () => {
+    movedAt = performance.now();
+  };
+  const scroll = () => {
+    motion();
+    if (hidden && viewport.scrollTop <= 0) flush();
+  };
+  const key = (event: KeyboardEvent) => {
+    const target = event.target instanceof Element ? event.target : null;
+    if (
+      !target?.closest('input, textarea, [contenteditable="true"]') &&
+      NAV_KEYS.has(event.key)
+    )
+      motion();
+  };
+  const touchStart = () => {
+    touching = true;
+    motion();
+  };
+  const touchEnd = (event: TouchEvent) => {
+    if (event.touches.length) return;
+    touching = false;
+    motion();
+    if (hidden) schedule();
+  };
+  viewport.addEventListener("scroll", scroll, { passive: true });
+  viewport.addEventListener("wheel", motion, { passive: true });
+  viewport.addEventListener("touchstart", touchStart, { passive: true });
+  viewport.addEventListener("touchmove", motion, { passive: true });
+  viewport.addEventListener("touchend", touchEnd, { passive: true });
+  viewport.addEventListener("touchcancel", touchEnd, { passive: true });
+  window.addEventListener("keydown", key);
+  return {
+    correct(shift: number) {
+      if (Math.abs(shift) < 0.5) return;
+      hidden += shift;
+      content.style.marginTop = `${-hidden}px`;
+      if (viewport.scrollTop <= 0 || resting()) flush();
+      else if (!timer) schedule();
+    },
+    pending: () => hidden !== 0,
+    clear,
+    onRest(listener: () => void) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    dispose() {
+      clear();
+      listeners.clear();
+      viewport.removeEventListener("scroll", scroll);
+      viewport.removeEventListener("wheel", motion);
+      viewport.removeEventListener("touchstart", touchStart);
+      viewport.removeEventListener("touchmove", motion);
+      viewport.removeEventListener("touchend", touchEnd);
+      viewport.removeEventListener("touchcancel", touchEnd);
+      window.removeEventListener("keydown", key);
+    },
+  };
+}
+
+function retainCorrection(viewport: HTMLElement, content: HTMLElement) {
+  let entry = corrections.get(viewport);
+  if (!entry) {
+    entry = { owner: createScrollCorrection(viewport, content), users: 0 };
+    corrections.set(viewport, entry);
+  }
+  entry.users += 1;
+  return {
+    owner: entry.owner,
+    release() {
+      if (--entry.users === 0) {
+        entry.owner.dispose();
+        corrections.delete(viewport);
+      }
+    },
+  };
+}
+
 /* the line a reader's eye is on, this far below the scroller's top */
 const READING_LINE_PX = 72;
 const NAV_KEYS = new Set([
@@ -179,7 +310,11 @@ export function holdRow(el: Element | null) {
  * scroll anchoring is off: WebKit has none, and Chromium's corrected some of
  * the same changes a second time. A new subject starts at its foot.
  */
-export function useFollowTail(scroller: HTMLElement | null, subject: string | null) {
+export function useFollowTail(
+  scroller: HTMLElement | null,
+  subject: string | null,
+  content?: HTMLElement | null,
+) {
   const following = useRef(true);
   /* shown as "at the foot" exactly when following: the way back is offered
      the moment the view stops coming to the reader */
@@ -208,7 +343,13 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
     };
     scroller.dataset.following = "true";
     const top = () => scroller.getBoundingClientRect().top;
+    const offsetContent = content === undefined ? scroller.firstElementChild : content;
+    const correction =
+      offsetContent instanceof HTMLElement
+        ? retainCorrection(scroller, offsetContent)
+        : null;
     const pin = () => {
+      correction?.owner.clear();
       const foot = scroller.scrollHeight - scroller.clientHeight;
       if (Math.abs(scroller.scrollTop - foot) >= 0.5) setScroll(scroller, foot);
     };
@@ -261,7 +402,8 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
         settled.set(scroller, scroller.scrollTop);
       }
       const delta = el.getBoundingClientRect().top - top() - anchor.offset;
-      if (Math.abs(delta) >= 0.5) setScroll(scroller, scroller.scrollTop + delta);
+      if (correction) correction.owner.correct(delta);
+      else if (Math.abs(delta) >= 0.5) setScroll(scroller, scroller.scrollTop + delta);
     };
     let intentUntil = 0;
     /* when and which way (+1 down, -1 up) the reader's own scroll last moved the view */
@@ -412,6 +554,7 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
     scroller.addEventListener("scroll", onScroll, { passive: true });
     scroller.addEventListener("transcript:hold", onHold);
     return () => {
+      correction?.release();
       settleRef.current = null;
       sizes.disconnect();
       changes.disconnect();
@@ -424,12 +567,13 @@ export function useFollowTail(scroller: HTMLElement | null, subject: string | nu
       scroller.removeEventListener("scroll", onScroll);
       scroller.removeEventListener("transcript:hold", onHold);
     };
-  }, [scroller, subject]);
+  }, [scroller, subject, content]);
 
   /* straight there: a smooth scroll is abandoned by the first write the
      stream makes, and following takes over as soon as it arrives */
   const toBottom = useCallback(() => {
     if (!scroller) return;
+    corrections.get(scroller)?.owner.clear();
     following.current = true;
     leaving.current = false;
     scroller.dataset.following = "true";
@@ -452,22 +596,6 @@ const OLDER_AHEAD_VIEWS = 3;
 const OLDER_AHEAD_PX = 160;
 /* moving up this recently, the next page follows the one that landed */
 const OLDER_INTENT_MS = 1000;
-/* A page that lands while the view is moving is not put back with a write
-   to the position: a write while WebKit's own scrolling (a wheel's
-   animation, a held key's glide) is under way stops it, and one during a
-   fling's momentum is dropped. Its rows are kept out of sight above the
-   content's top instead, the content pulled up by their height, and that
-   becomes one write once the view has rested, or once the reader reaches
-   the top, where the view has stopped against the end (there is no
-   bounce) and a write takes. Resting waits out TAIL_MS — the same bound
-   the follow hook's attribution uses, because WebKitGTK under load
-   starts a wheel's animation late and stalls it between frames, so any
-   shorter silence is not rest — with no scroll, wheel or key event and
-   no finger on a touchscreen: a trackpad's momentum goes on sending
-   wheel events after it is too slow to move the view a pixel, a finger
-   held still is still scrolling, and WebKit reports `scrollend` as the
-   fingers lift, before the momentum. */
-
 /* the row under the reader when an older page was asked for, and where it was */
 type Hold = {
   row: HTMLElement | undefined;
@@ -550,56 +678,11 @@ export function useOlderPages(
     let disposed = false;
     let lastTop = viewport.scrollTop;
     let movedUpAt = -Infinity;
-    let movedAt = -Infinity;
-    let touching = false;
-    const resting = () => !touching && performance.now() - movedAt >= TAIL_MS;
-    /* the height of rows kept out of sight above the content's top */
-    let hidden = 0;
-    let unhideTimer = 0;
-    const unhide = () => {
-      window.clearTimeout(unhideTimer);
-      unhideTimer = 0;
-      if (!hidden || !content) return;
-      if (!resting() && viewport.scrollTop > 0) {
-        /* a finger on the screen: its lift asks again */
-        if (!touching)
-          unhideTimer = window.setTimeout(
-            unhide,
-            TAIL_MS - (performance.now() - movedAt),
-          );
-        return;
-      }
-      const top = viewport.scrollTop;
-      content.style.removeProperty("margin-top");
-      /* a view that grew while the rows were hidden clamps the write to
-         its foot, a position the write still reaches */
-      const target = Math.min(
-        top + hidden,
-        viewport.scrollHeight - viewport.clientHeight,
-      );
-      setScroll(viewport, target);
-      /* WebKit drops a write made while its own scrolling is still under
-         way, and rounds the position of one that takes: only a write that
-         fell short by more than that rounding was dropped, and the rows go
-         back out of sight to be retried at the next rest, rather than the
-         reader left a page up with nothing compensating */
-      if (target - viewport.scrollTop > 2) {
-        content.style.marginTop = `${-hidden}px`;
-        unhideTimer = window.setTimeout(unhide, TAIL_MS);
-        return;
-      }
-      hidden = 0;
-      again.current();
-    };
+    const correction = content ? retainCorrection(viewport, content) : null;
+    const removeRestListener = correction?.owner.onRest(() => again.current());
     land.current = (shift) => {
-      if (Math.abs(shift) < 0.5) return;
-      if (!content || viewport.scrollTop <= 0 || resting()) {
-        setScroll(viewport, viewport.scrollTop + shift);
-        return;
-      }
-      hidden += shift;
-      content.style.marginTop = `${-hidden}px`;
-      if (!unhideTimer) unhideTimer = window.setTimeout(unhide, TAIL_MS);
+      if (correction) correction.owner.correct(shift);
+      else if (Math.abs(shift) >= 0.5) setScroll(viewport, viewport.scrollTop + shift);
     };
     hold.current = null;
     setLoading(false);
@@ -607,7 +690,7 @@ export function useOlderPages(
       if (
         disposed ||
         hold.current ||
-        hidden !== 0 ||
+        correction?.owner.pending() ||
         !latest.current.hasOlder ||
         viewport.scrollTop >
           Math.max(OLDER_AHEAD_PX, OLDER_AHEAD_VIEWS * viewport.clientHeight)
@@ -646,58 +729,41 @@ export function useOlderPages(
       if (performance.now() - movedUpAt < OLDER_INTENT_MS) void fetchOlder();
     };
     const onScroll = () => {
-      movedAt = performance.now();
-      if (hidden && viewport.scrollTop <= 0) unhide();
       const upward = viewport.scrollTop < lastTop;
       lastTop = viewport.scrollTop;
       if (upward) up();
     };
     const onWheel = (event: WheelEvent) => {
-      movedAt = performance.now();
       if (event.deltaY < 0) up();
     };
     let touchY: number | undefined;
     const onTouchStart = (event: TouchEvent) => {
-      touching = true;
-      movedAt = performance.now();
       touchY = event.touches[0]?.clientY;
     };
-    const onTouchEnd = (event: TouchEvent) => {
-      if (event.touches.length) return;
-      touching = false;
-      movedAt = performance.now();
-      if (hidden && !unhideTimer) unhideTimer = window.setTimeout(unhide, TAIL_MS);
-    };
     const onTouchMove = (event: TouchEvent) => {
-      movedAt = performance.now();
       const nextY = event.touches[0]?.clientY;
       if (touchY !== undefined && nextY !== undefined && nextY > touchY) up();
       touchY = nextY;
     };
     const onKeyDown = (event: KeyboardEvent) => {
-      movedAt = performance.now();
       if (["ArrowUp", "PageUp", "Home"].includes(event.key)) up();
     };
     viewport.addEventListener("scroll", onScroll, { passive: true });
     viewport.addEventListener("wheel", onWheel, { passive: true });
     viewport.addEventListener("touchstart", onTouchStart, { passive: true });
     viewport.addEventListener("touchmove", onTouchMove, { passive: true });
-    viewport.addEventListener("touchend", onTouchEnd, { passive: true });
-    viewport.addEventListener("touchcancel", onTouchEnd, { passive: true });
     viewport.addEventListener("keydown", onKeyDown);
     return () => {
       disposed = true;
       again.current = () => {};
       land.current = () => {};
-      window.clearTimeout(unhideTimer);
-      if (hidden) content?.style.removeProperty("margin-top");
+      removeRestListener?.();
+      correction?.release();
       hold.current = null;
       viewport.removeEventListener("scroll", onScroll);
       viewport.removeEventListener("wheel", onWheel);
       viewport.removeEventListener("touchstart", onTouchStart);
       viewport.removeEventListener("touchmove", onTouchMove);
-      viewport.removeEventListener("touchend", onTouchEnd);
-      viewport.removeEventListener("touchcancel", onTouchEnd);
       viewport.removeEventListener("keydown", onKeyDown);
     };
   }, [scroller, content, subject]);

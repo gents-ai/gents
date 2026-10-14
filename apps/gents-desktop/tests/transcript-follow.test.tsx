@@ -16,11 +16,13 @@ class FakeResizeObserver {
   }
 }
 vi.stubGlobal("ResizeObserver", FakeResizeObserver);
+afterEach(() => document.body.replaceChildren());
 
 function transcriptFixture() {
   const viewport = document.createElement("div");
   viewport.dataset.slot = "scroll-area-viewport";
   viewport.append(document.createElement("div"));
+  document.body.append(viewport);
 
   let scrollHeight = 500;
   Object.defineProperties(viewport, {
@@ -270,8 +272,14 @@ function readingFixture() {
     row.dataset.timelineKey = key;
     row.getBoundingClientRect = () =>
       ({
-        top: top() - fixture.viewport.scrollTop,
-        bottom: bottom() - fixture.viewport.scrollTop,
+        top:
+          top() -
+          fixture.viewport.scrollTop +
+          (parseFloat(content.style.marginTop) || 0),
+        bottom:
+          bottom() -
+          fixture.viewport.scrollTop +
+          (parseFloat(content.style.marginTop) || 0),
       }) as DOMRect;
     content.append(row);
     return row;
@@ -334,8 +342,13 @@ describe("a reader's place through their own scroll", () => {
     act(() => input(fixture.viewport));
     await act(async () => vi.advanceTimersByTimeAsync(200));
     act(() => holdRow(fixture.last));
+    const before = fixture.last.getBoundingClientRect().top;
     fixture.growAbove(100);
+    expect(fixture.viewport.scrollTop).toBe(800);
+    expect(fixture.last.getBoundingClientRect().top).toBe(before);
+    await act(async () => vi.advanceTimersByTimeAsync(1000));
     expect(fixture.viewport.scrollTop).toBe(900);
+    expect(fixture.last.getBoundingClientRect().top).toBe(before);
   });
 
   it("holds where an animated scroll that outlasts its input window rests", async () => {
@@ -348,8 +361,13 @@ describe("a reader's place through their own scroll", () => {
     await fixture.animate(800, 450, 600);
     await act(async () => vi.advanceTimersByTimeAsync(200));
     expect(fixture.viewport.scrollTop).toBe(450);
+    const before = fixture.last.getBoundingClientRect().top;
     fixture.growAbove(100);
+    expect(fixture.viewport.scrollTop).toBe(450);
+    expect(fixture.last.getBoundingClientRect().top).toBe(before);
+    await act(async () => vi.advanceTimersByTimeAsync(1000));
     expect(fixture.viewport.scrollTop).toBe(550);
+    expect(fixture.last.getBoundingClientRect().top).toBe(before);
   });
 
   /* WebKitGTK under load stalls an animation between frames, past the
@@ -366,8 +384,13 @@ describe("a reader's place through their own scroll", () => {
       fixture.viewport.scrollTop = 450;
       fixture.viewport.dispatchEvent(new Event("scroll"));
     });
+    const before = fixture.last.getBoundingClientRect().top;
     fixture.growAbove(100);
+    expect(fixture.viewport.scrollTop).toBe(450);
+    expect(fixture.last.getBoundingClientRect().top).toBe(before);
+    await act(async () => vi.advanceTimersByTimeAsync(1000));
     expect(fixture.viewport.scrollTop).toBe(550);
+    expect(fixture.last.getBoundingClientRect().top).toBe(before);
   });
 
   /* the stalled animation's next frame moves the view, and the reply
@@ -388,7 +411,7 @@ describe("a reader's place through their own scroll", () => {
   });
 
   /* content shrinking below clamps the view up onto the foot */
-  it("puts back a clamp onto the foot just after the reader's upward scroll", async () => {
+  it("compensates a clamp during motion and settles within the shortened transcript", async () => {
     const fixture = readingFixture();
     renderHook(() => useFollowTail(fixture.viewport, "session-1"));
     act(() => {
@@ -397,12 +420,17 @@ describe("a reader's place through their own scroll", () => {
     await fixture.animate(800, 500, 200);
     await act(async () => vi.advanceTimersByTimeAsync(400));
     /* the change that shrank the content is seen before the clamp's scroll event */
+    const before = fixture.last.getBoundingClientRect().top;
     fixture.setHeight(600);
     fixture.viewport.scrollTop = 400;
     await act(async () => {
       fixture.last.append(document.createElement("span"));
     });
-    expect(fixture.viewport.scrollTop).toBe(500);
+    expect(fixture.viewport.scrollTop).toBe(400);
+    expect(fixture.last.getBoundingClientRect().top).toBe(before);
+    await act(async () => vi.advanceTimersByTimeAsync(1000));
+    expect(fixture.viewport.scrollTop).toBe(foot(600));
+    expect(fixture.content.style.marginTop).toBe("");
   });
 
   /* the reply below streams between the animation's last frames */
@@ -438,8 +466,13 @@ describe("a reader's place through their own scroll", () => {
     /* the reader holds the thumb still before letting go */
     await act(async () => vi.advanceTimersByTimeAsync(200));
     fireEvent.pointerUp(window);
+    const before = fixture.last.getBoundingClientRect().top;
     fixture.growAbove(100);
+    expect(fixture.viewport.scrollTop).toBe(450);
+    expect(fixture.last.getBoundingClientRect().top).toBe(before);
+    await act(async () => vi.advanceTimersByTimeAsync(1000));
     expect(fixture.viewport.scrollTop).toBe(550);
+    expect(fixture.last.getBoundingClientRect().top).toBe(before);
   });
 });
 

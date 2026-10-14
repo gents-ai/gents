@@ -107,6 +107,155 @@ test.describe("a reader scrolled up in a transcript", () => {
     expect(Math.abs(moved)).toBe(0);
   });
 
+  test("defers held-row corrections until wheel motion rests", async ({ page }) => {
+    const viewport = page.locator('[data-slot="scroll-area-viewport"][data-following]');
+    await wheelUp(page, viewport);
+    await viewport.evaluate((scroller) => {
+      const real = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop")!;
+      const probe = { writes: [] as number[], growth: 0, lastMotion: -Infinity };
+      Object.assign(window, { __heldCorrectionProbe: probe });
+      Object.defineProperty(scroller, "scrollTop", {
+        configurable: true,
+        get: () => real.get!.call(scroller) as number,
+        set: (value: number) => {
+          if (performance.now() - probe.lastMotion < 1000) probe.writes.push(value);
+          real.set!.call(scroller, value);
+        },
+      });
+      scroller.addEventListener("scroll", () => {
+        probe.lastMotion = performance.now();
+      });
+      scroller.addEventListener(
+        "wheel",
+        () => {
+          probe.lastMotion = performance.now();
+          const top = scroller.getBoundingClientRect().top;
+          const above = Array.from(
+            scroller.querySelectorAll<HTMLElement>("[data-timeline-key]"),
+          )
+            .filter((row) => row.getBoundingClientRect().bottom < top)
+            .at(-1)!;
+          const height = above.getBoundingClientRect().height;
+          let frames = 0;
+          const grow = () => {
+            above.style.minHeight = `${height + ++frames * 100}px`;
+            above.append(document.createElement("span"));
+            probe.growth += 1;
+            if (frames < 3) requestAnimationFrame(grow);
+          };
+          requestAnimationFrame(grow);
+        },
+        { once: true },
+      );
+    });
+    await page.mouse.wheel(0, -250);
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __heldCorrectionProbe: { growth: number } })
+              .__heldCorrectionProbe.growth,
+        ),
+      )
+      .toBe(3);
+    expect(
+      await page.evaluate(
+        () =>
+          (window as unknown as { __heldCorrectionProbe: { writes: number[] } })
+            .__heldCorrectionProbe.writes,
+      ),
+    ).toEqual([]);
+    await expect
+      .poll(() =>
+        viewport.evaluate(
+          (scroller) =>
+            scroller.querySelector<HTMLElement>("[style*=margin-top]")?.style
+              .marginTop ?? "",
+        ),
+      )
+      .toBe("");
+    await restingScrollTop(page, viewport);
+    await expect(viewport).toHaveAttribute("data-following", "false");
+  });
+
+  test("retains a held-row correction when WebKit drops its resting write", async ({
+    page,
+  }) => {
+    const viewport = page.locator('[data-slot="scroll-area-viewport"][data-following]');
+    await wheelUp(page, viewport);
+    await expect
+      .poll(() =>
+        viewport.evaluate(
+          (scroller) =>
+            scroller.querySelector<HTMLElement>("[style*=margin-top]")?.style
+              .marginTop ?? "",
+        ),
+      )
+      .toBe("");
+    const before = await readerRow(viewport);
+    const during = await viewport.evaluate(async (scroller, key) => {
+      const rows = Array.from(
+        scroller.querySelectorAll<HTMLElement>("[data-timeline-key]"),
+      );
+      const reader = rows.find((row) => row.dataset.timelineKey === key)!;
+      reader.dispatchEvent(new CustomEvent("transcript:hold", { bubbles: true }));
+      const real = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop")!;
+      const probe = { dropped: false, writesDuringMotion: [] as number[] };
+      Object.assign(window, { __heldDropProbe: probe });
+      let moving = true;
+      Object.defineProperty(scroller, "scrollTop", {
+        configurable: true,
+        get: () => real.get!.call(scroller) as number,
+        set: (value: number) => {
+          if (moving) probe.writesDuringMotion.push(value);
+          else if (!probe.dropped && Math.abs(value - real.get!.call(scroller)) > 2) {
+            probe.dropped = true;
+            return;
+          }
+          real.set!.call(scroller, value);
+        },
+      });
+      scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -1, bubbles: true }));
+      const top = scroller.getBoundingClientRect().top;
+      const above = rows
+        .filter((row) => row.getBoundingClientRect().bottom < top)
+        .at(-1)!;
+      above.style.minHeight = `${above.getBoundingClientRect().height + 300}px`;
+      above.append(document.createElement("span"));
+      await new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(resolve)),
+      );
+      moving = false;
+      return {
+        offset: Math.round(reader.getBoundingClientRect().top - top),
+        writes: probe.writesDuringMotion,
+      };
+    }, before.key);
+    expect(during.writes).toEqual([]);
+    expect(Math.abs(during.offset - before.offset)).toBeLessThanOrEqual(1);
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as unknown as { __heldDropProbe: { dropped: boolean } })
+              .__heldDropProbe.dropped,
+        ),
+      )
+      .toBe(true);
+    await expect
+      .poll(() =>
+        viewport.evaluate(
+          (scroller) =>
+            scroller.querySelector<HTMLElement>("[style*=margin-top]")?.style
+              .marginTop ?? "",
+        ),
+      )
+      .toBe("");
+    expect(
+      Math.abs((await readerRow(viewport, before.key)).offset - before.offset),
+    ).toBeLessThanOrEqual(1);
+  });
+
   /* A held arrow key or a trackpad's momentum moves the view a little each
      frame, and the scroll event saying so comes after; a row swapping or a
      reply growing in between must not pull the reader back by the move they

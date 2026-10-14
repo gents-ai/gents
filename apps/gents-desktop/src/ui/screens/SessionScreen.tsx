@@ -247,7 +247,11 @@ export function SessionScreen() {
     [ownScroller],
   );
   /* away from the bottom, a button offers the way back; scrolling is the cue */
-  const { atBottom, toBottom, settle } = useFollowTail(scroller, selectedSessionId);
+  const { atBottom, toBottom, settle } = useFollowTail(
+    scroller,
+    selectedSessionId,
+    content,
+  );
   /* once the full header scrolls out, a condensed one sticks to the top */
   const [condensed, headerEnd] = useHeaderScrolledOut(scroller);
   const choice = useAgentChoice();
