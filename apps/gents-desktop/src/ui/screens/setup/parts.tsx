@@ -7,6 +7,7 @@ import { Spinner } from "@gents/ui/components/spinner";
 import { cn } from "@gents/ui/lib/utils";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { preferences, useTheme } from "@/preferences";
+import { InfoTip } from "../InfoTip";
 
 export function Frame({
   children,
@@ -172,11 +173,30 @@ export function Nav({
 
 export function Field({
   label,
+  info,
+  htmlFor,
   children,
 }: {
   label: string;
+  /** more about the field, behind an icon beside its label; it sits outside
+      the label, so the field needs its id here, and its name stays the label */
+  info?: React.ReactNode;
+  htmlFor?: string;
   children: React.ReactNode;
 }) {
+  if (info && htmlFor) {
+    return (
+      <div className="grid gap-1">
+        <span className="flex items-center gap-1.5">
+          <label htmlFor={htmlFor} className="text-xs text-muted-foreground">
+            {label}
+          </label>
+          <InfoTip about={label}>{info}</InfoTip>
+        </span>
+        {children}
+      </div>
+    );
+  }
   return (
     <label className="grid gap-1">
       <span className="text-xs text-muted-foreground">{label}</span>
