@@ -1606,9 +1606,6 @@ pub(crate) async fn load_canonical_assistant_candidates_with(
     Ok(candidates)
 }
 
-/// One assistant of the bounded canonical view that passed every check a
-/// capture read does not participate in: bounded-header, coordinate, tag
-/// selection and physical-request validation.
 struct PendingReplayCandidate {
     capture_key: String,
     header_doc_id: String,
@@ -1622,6 +1619,9 @@ struct PendingReplayCandidate {
     message: gents_protocol::message::Message,
 }
 
+/// One assistant of the bounded canonical view that passed every check a
+/// capture read does not participate in: bounded-header, coordinate, tag
+/// selection and physical-request validation.
 struct SelectedReplayCandidate {
     capture_key: String,
     header_doc_id: String,
