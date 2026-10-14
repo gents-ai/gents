@@ -977,3 +977,61 @@ pub(crate) fn validate_non_document_task_options(
     );
     Ok(())
 }
+
+pub(crate) fn validate_scheduled_task_options(
+    emit_outcome: bool,
+    concurrency: crate::runtime_snapshot::ConcurrencyMode,
+    session_template: bool,
+) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        !emit_outcome,
+        "emit_outcome requires document-triggered delivery or explicit CLI/desktop Task admission"
+    );
+    anyhow::ensure!(
+        session_template || concurrency != crate::runtime_snapshot::ConcurrencyMode::QueuedSerial,
+        "queued_serial requires an explicit session_id_template for scheduled delivery"
+    );
+    Ok(())
+}
+
+#[cfg(test)]
+mod scheduled_task_options_tests {
+    use super::validate_scheduled_task_options;
+    use crate::runtime_snapshot::ConcurrencyMode;
+
+    #[test]
+    fn targeted_queued_serial_is_accepted() {
+        assert!(validate_scheduled_task_options(false, ConcurrencyMode::QueuedSerial, true).is_ok());
+    }
+
+    #[test]
+    fn untargeted_queued_serial_is_rejected() {
+        let err = validate_scheduled_task_options(false, ConcurrencyMode::QueuedSerial, false)
+            .expect_err("untargeted queued_serial must be rejected");
+        assert!(err
+            .to_string()
+            .contains("queued_serial requires an explicit session_id_template"));
+    }
+
+    #[test]
+    fn emit_outcome_is_rejected_even_when_targeted() {
+        let err = validate_scheduled_task_options(true, ConcurrencyMode::default(), true)
+            .expect_err("emit_outcome must be rejected for scheduled delivery");
+        assert!(err.to_string().contains("emit_outcome"));
+    }
+
+    #[test]
+    fn untargeted_default_concurrency_is_accepted() {
+        assert!(validate_scheduled_task_options(false, ConcurrencyMode::default(), false).is_ok());
+    }
+
+    #[test]
+    fn non_document_helper_still_rejects_session_template() {
+        assert!(super::validate_non_document_task_options(
+            false,
+            ConcurrencyMode::default(),
+            true,
+        )
+        .is_err());
+    }
+}
