@@ -779,9 +779,28 @@ pub(in crate::commands::codex_shim) mod tests {
                 );
             }
             if case.item_completed {
+                // Establish the completed precondition through the shipping owner,
+                // not by inserting into its completion tracker. A different item
+                // models the cursor boundary after a reset/source change, so the
+                // terminal observation must reach aggregate backfill suppression.
+                assert!(!case.item_open, "{}", case.witness);
+                let text = case.durable_text.as_deref().expect("completed reasoning");
                 projection
-                    .completed_reasoning_items
-                    .record("reasoning".to_string());
+                    .finish_reasoning(&outbound, "previous-reasoning", Some(text))
+                    .await
+                    .expect("complete previous reasoning");
+                let mut setup_events = Vec::new();
+                while let Ok(payload) = notifications.try_recv() {
+                    let notification: codex::ServerNotification =
+                        serde_json::from_str(&payload).expect("setup notification");
+                    setup_events.push(match notification {
+                        codex::ServerNotification::ItemStarted(_) => "started",
+                        codex::ServerNotification::ReasoningTextDelta(_) => "rawTextDelta",
+                        codex::ServerNotification::ItemCompleted(_) => "completed",
+                        other => panic!("unexpected setup notification: {other:?}"),
+                    });
+                }
+                assert_eq!(setup_events, ["started", "rawTextDelta", "completed"]);
             }
             if let Some(delta) = case.live_delta.as_deref() {
                 projection
@@ -827,6 +846,19 @@ pub(in crate::commands::codex_shim) mod tests {
                 case.witness
             );
             assert_eq!(completed_text, case.completed_text, "{}", case.witness);
+            if case.terminal {
+                // Re-observe the same terminal snapshot on the SAME projection.
+                // This must rely on completion recorded by the first observation.
+                projection
+                    .finish_reasoning(&outbound, "reasoning", case.durable_text.as_deref())
+                    .await
+                    .expect("re-observe terminal reasoning");
+                assert!(
+                    notifications.try_recv().is_err(),
+                    "terminal reasoning replayed: {}",
+                    case.witness
+                );
+            }
         }
         node.shutdown().await;
     }

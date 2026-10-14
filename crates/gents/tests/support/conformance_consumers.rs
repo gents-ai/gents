@@ -441,6 +441,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_reasoning_projection_cases_drive_turn_projection_notifications",
         },
         ConformanceConsumer::RustTest {
+            id: "commands::codex_shim::turn_projection::tests::generated_tool_metadata_cases_drive_the_tool_item_owner",
+            package: "gents-cli",
+            source_path: "crates/gents-cli/src/commands/codex_shim/turn_projection.rs",
+            module_path: "commands::codex_shim::turn_projection::tests",
+            function: "generated_tool_metadata_cases_drive_the_tool_item_owner",
+        },
+        ConformanceConsumer::RustTest {
             id: "commands::codex_shim::thread_projection::conformance::generated_thread_status_cases_drive_thread_projection",
             package: "gents-cli",
             source_path: "crates/gents-cli/src/commands/codex_shim/thread_projection/conformance.rs",
