@@ -1316,7 +1316,7 @@ pub(crate) trait ReplayRequestReader: Sync {
 
 #[derive(Clone)]
 pub(crate) struct ReplayRequestFacts {
-    rows: Vec<serde_json::Value>,
+    pub(super) rows: Vec<serde_json::Value>,
     commits: Vec<crate::graphql::CompositeCommit>,
 }
 
@@ -2450,7 +2450,10 @@ mod tests {
         let node = EmbeddedNode::builder().build().await.unwrap();
         crate::ensure_runtime_schemas(&node).await.unwrap();
         let mut request_doc_ids = (0..=crate::rendered_request::commits::FIELD_COMMIT_ALIAS_BATCH)
-            .map(|index| format!("missing-replay-request-{index}"))
+            .map(|index| {
+                document::DocID::new_v0_from_seed(&format!("missing-replay-request-{index}"))
+                    .to_string()
+            })
             .collect::<Vec<_>>();
         request_doc_ids.push(request_doc_ids[0].clone());
         let distinct_request_count = crate::rendered_request::commits::FIELD_COMMIT_ALIAS_BATCH + 1;
