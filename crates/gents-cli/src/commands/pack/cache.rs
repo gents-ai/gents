@@ -302,12 +302,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn graph_pack_prune_rejects_without_creating_a_cache_tree() {
+    async fn pack_prune_rejects_without_creating_a_cache_tree() {
         let home = tempfile::tempdir().unwrap();
         // Store the fixture first, the way an install would have.
-        let _ = super::super::test_support::fixture_pack_source("review_graph", home.path());
+        let _ = super::super::test_support::fixture_pack_source("slot_fixture", home.path());
         let error = prune(PackPruneArgs {
-            package: "fixture/review_graph".to_owned(),
+            package: "fixture/slot_fixture".to_owned(),
             home: Some(home.path().to_path_buf()),
         })
         .await
