@@ -396,6 +396,33 @@ mod tests {
     }
 
     #[test]
+    fn cached_materialization_leaves_a_releasable_marked_cache_under_a_shared_lease() {
+        let pack = assets_archive();
+        let home = tempfile::tempdir().unwrap();
+        let (root, lease) = cached(home.path(), &pack).unwrap();
+        assert_eq!(
+            root,
+            cache_root(
+                home.path(),
+                &pack.manifest().metadata.namespace,
+                &pack.manifest().name,
+                pack.digest(),
+            )
+            .unwrap()
+        );
+        assert!(root.join("manifest.json").is_file());
+        assert!(matches!(
+            lock_exclusive(root.parent().unwrap()),
+            Err(error) if error.to_string().contains("in use")
+        ));
+        drop(lease);
+        assert!(matches!(
+            release_cache_root(&root, || Ok(())).unwrap(),
+            CacheRelease::Removed
+        ));
+    }
+
+    #[test]
     fn cache_pruning_removes_only_owned_versions_without_runs() {
         let parent = tempfile::tempdir().unwrap();
         let current = parent.path().join("a".repeat(64));
