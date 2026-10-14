@@ -912,7 +912,6 @@ fn persist_seal_docs(
             head_sha: None,
             changed_files: changed_files_json(&snapshot.changed_files),
             diff_artifact: bound_diff_artifact(&snapshot.diff),
-            checks_run: None,
             unresolved_conflicts: None,
             integration_instructions: None,
         }
@@ -1359,7 +1358,6 @@ fn integrate_workspace_action(
         head_sha: Some(effect.head_sha.clone()),
         changed_files: changed_files_json(&effect.changed_files),
         diff_artifact: bound_diff_artifact(&effect.diff),
-        checks_run: None,
         unresolved_conflicts: None,
         integration_instructions: None,
     };

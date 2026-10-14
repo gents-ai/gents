@@ -14,7 +14,6 @@ type WorkspaceReceipt @branchable {
     head_sha: String
     changed_files: String
     diff_artifact: String
-    checks_run: String
     unresolved_conflicts: String
     integration_instructions: String
 }
