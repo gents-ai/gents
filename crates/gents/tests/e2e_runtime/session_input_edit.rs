@@ -480,6 +480,15 @@ impl RemoteEdit<'_> {
             active.claim().await.unwrap(),
             gents::lifecycle::ClaimOutcome::Claimed
         );
+        wait_row(
+            self.client,
+            "AgentRequest",
+            "_docID",
+            &active_doc,
+            "execution_generation",
+            "execution_generation",
+        )
+        .await;
         let model = &case["command"];
         let authority = &case["authority"];
         let (offset, count) = (

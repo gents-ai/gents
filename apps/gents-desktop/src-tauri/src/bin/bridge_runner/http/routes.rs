@@ -129,7 +129,7 @@ pub(super) fn handle_request(
             let identity: Arc<dyn gents::NodeIdentity> = Arc::new(server.node_identity().clone());
             let network =
                 runtime.block_on(gents_desktop_bridge::enrollment::ensure_enrollment_network(
-                    server.node(),
+                    &server.node_arc(),
                     identity.as_ref(),
                     fixture.deployment_label(),
                 ))?;

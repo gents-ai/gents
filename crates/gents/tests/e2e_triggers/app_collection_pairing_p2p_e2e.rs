@@ -628,14 +628,14 @@ async fn app_collection_pairing_fires_event_trigger_via_reconcile() {
     let mock_a = MockModelEndpoint::start("default").unwrap();
     let mock_b = MockModelEndpoint::start("default").unwrap();
     bind_default_agent_backend(
-        db_a.node.as_ref(),
+        &db_a.node,
         &did_a,
         "backend-app-collection-a",
         mock_a.endpoint(),
     )
     .await;
     bind_default_agent_backend(
-        db_b.node.as_ref(),
+        &db_b.node,
         &did_b,
         "backend-app-collection-b",
         mock_b.endpoint(),
@@ -884,20 +884,8 @@ async fn empty_app_collection_row_does_not_stall_control_pairing() {
 
     let mock_a = MockModelEndpoint::start("default").unwrap();
     let mock_b = MockModelEndpoint::start("default").unwrap();
-    bind_default_agent_backend(
-        db_a.node.as_ref(),
-        &did_a,
-        "backend-soft-a",
-        mock_a.endpoint(),
-    )
-    .await;
-    bind_default_agent_backend(
-        db_b.node.as_ref(),
-        &did_b,
-        "backend-soft-b",
-        mock_b.endpoint(),
-    )
-    .await;
+    bind_default_agent_backend(&db_a.node, &did_a, "backend-soft-a", mock_a.endpoint()).await;
+    bind_default_agent_backend(&db_b.node, &did_b, "backend-soft-b", mock_b.endpoint()).await;
 
     let agent_a = Gents::from_default_agent_documents(
         db_a.node.clone(),

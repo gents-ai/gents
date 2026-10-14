@@ -7,6 +7,8 @@ use gents::config_client::{
     apply_desired_state_plan, ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
 use gents::document_config::Node;
+#[cfg(test)]
+use std::sync::Arc;
 
 pub async fn upsert_node_on(access: &ConfigAccess, document: &Node) -> Result<()> {
     let value = serde_json::to_value(document)?;
@@ -19,14 +21,14 @@ pub async fn upsert_node_on(access: &ConfigAccess, document: &Node) -> Result<()
 }
 
 #[cfg(test)]
-pub async fn upsert_node(node: &EmbeddedNode, document: &Node) -> Result<()> {
+pub async fn upsert_node(node: &Arc<EmbeddedNode>, document: &Node) -> Result<()> {
     let value = serde_json::to_value(document)?;
     let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
         collection: Collection::Node,
         add: value.clone(),
         update: value,
     }])?;
-    ConfigAccess::transact_local(node, None, "desktop.node.save", |txn| {
+    ConfigAccess::transact_local_write(node, None, "desktop.node.save", |txn| {
         let plan = &plan;
         Box::pin(async move {
             apply_desired_state_plan(txn, plan).await?;
@@ -45,15 +47,19 @@ pub async fn set_default_agent_on(
     agent_id: &str,
 ) -> Result<()> {
     access
-        .transact("desktop.node.default_agent", |txn| {
+        .transact_write("desktop.node.default_agent", |txn| {
             Box::pin(async move { set_default_agent_in_txn(txn, node_did, agent_id).await })
         })
         .await
 }
 
 #[cfg(test)]
-pub async fn set_default_agent(node: &EmbeddedNode, node_did: &str, agent_id: &str) -> Result<()> {
-    ConfigAccess::transact_local(node, None, "desktop.node.default_agent", |txn| {
+pub async fn set_default_agent(
+    node: &Arc<EmbeddedNode>,
+    node_did: &str,
+    agent_id: &str,
+) -> Result<()> {
+    ConfigAccess::transact_local_write(node, None, "desktop.node.default_agent", |txn| {
         Box::pin(async move { set_default_agent_in_txn(txn, node_did, agent_id).await })
     })
     .await
@@ -96,12 +102,12 @@ async fn set_default_agent_in_txn(
 /// node creation, or graph compilation are implied by this operation.
 #[cfg(test)]
 pub async fn apply_config_components(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     document: &gents::document_config::PackConfig,
 ) -> Result<()> {
     use anyhow::Context;
     let (owner, plan) = config_components_plan(document)?;
-    ConfigAccess::transact_local(node, None, "desktop.config.components", |txn| {
+    ConfigAccess::transact_local_write(node, None, "desktop.config.components", |txn| {
         let plan = &plan;
         let owner = &owner;
         Box::pin(async move {
@@ -127,7 +133,7 @@ pub async fn apply_config_components_on(
     use anyhow::Context;
     let (owner, plan) = config_components_plan(document)?;
     access
-        .transact("desktop.config.components", |txn| {
+        .transact_write("desktop.config.components", |txn| {
             let plan = &plan;
             let owner = &owner;
             Box::pin(async move {
@@ -196,7 +202,7 @@ pub async fn patch_config_components_on(
 
 #[cfg(test)]
 pub async fn patch_config_components(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     node_did: &str,
     patches: &[(
         gents::config_client::patch::SelfConfigTarget,
@@ -204,7 +210,7 @@ pub async fn patch_config_components(
         gents::config_client::patch::SelfConfigPatch,
     )],
 ) -> Result<()> {
-    ConfigAccess::transact_local(node, None, "desktop.config.components.patch", |txn| {
+    ConfigAccess::transact_local_write(node, None, "desktop.config.components.patch", |txn| {
         Box::pin(async move { patch_config_components_in_txn(txn, node_did, patches).await })
     })
     .await
@@ -220,7 +226,7 @@ async fn patch_config_components_with(
     )],
 ) -> Result<()> {
     access
-        .transact("desktop.config.components.patch", |txn| {
+        .transact_write("desktop.config.components.patch", |txn| {
             Box::pin(async move { patch_config_components_in_txn(txn, node_did, patches).await })
         })
         .await
@@ -294,7 +300,7 @@ mod tests {
 
     #[tokio::test]
     async fn node_replacement_keeps_authored_metadata_and_scoped_default_binding() -> Result<()> {
-        let node = EmbeddedNode::builder().build().await?;
+        let node = Arc::new(EmbeddedNode::builder().build().await?);
         gents::ensure_runtime_schemas(&node).await?;
         let config: gents::document_config::PackConfig = serde_json::from_value(json!({
             "node":{"node_did":"did:test:other"},
@@ -303,7 +309,7 @@ mod tests {
             "agents":[{"node_did":"did:test:other","agent_id":"default","inference_profile_id":"profile"}]
         }))?;
         let plan = DesiredStateApplyPlan::from_pack_config(&config)?;
-        ConfigAccess::transact_local(&node, None, "desktop.node.seed", |txn| {
+        ConfigAccess::transact_local_write(&node, None, "desktop.node.seed", |txn| {
             let plan = &plan;
             Box::pin(async move {
                 apply_desired_state_plan(txn, plan).await?;
@@ -317,7 +323,7 @@ mod tests {
         upsert_node(&node, &document).await?;
         document.default_agent_id = Some("default".into());
         assert!(upsert_node(&node, &document).await.is_err());
-        ConfigAccess::transact_local(&node, None, "desktop.node.verify", |txn| {
+        ConfigAccess::transact_local_write(&node, None, "desktop.node.verify", |txn| {
             Box::pin(async move {
                 let (_, value) = read_desired_state_record_in_txn(
                     txn,
@@ -340,7 +346,7 @@ mod tests {
     }
     #[tokio::test]
     async fn setting_the_default_enables_it_and_recovers_a_stored_disabled_default() -> Result<()> {
-        let node = EmbeddedNode::builder().build().await?;
+        let node = Arc::new(EmbeddedNode::builder().build().await?);
         gents::ensure_runtime_schemas(&node).await?;
         let owner = "did:test:default";
         let seed: gents::document_config::PackConfig = serde_json::from_value(json!({
@@ -353,7 +359,7 @@ mod tests {
             ]
         }))?;
         let plan = DesiredStateApplyPlan::from_pack_config(&seed)?;
-        ConfigAccess::transact_local(&node, None, "desktop.default.seed", |txn| {
+        ConfigAccess::transact_local_write(&node, None, "desktop.default.seed", |txn| {
             let plan = &plan;
             Box::pin(async move {
                 apply_desired_state_plan(txn, plan).await?;
@@ -375,7 +381,7 @@ mod tests {
 
         assert!(set_default_agent(&node, owner, "missing").await.is_err());
         set_default_agent(&node, owner, "second").await?;
-        ConfigAccess::transact_local(&node, None, "desktop.default.verify", |txn| {
+        ConfigAccess::transact_local_write(&node, None, "desktop.default.verify", |txn| {
             Box::pin(async move {
                 let (_, node) = read_desired_state_record_in_txn(
                     txn,
@@ -405,7 +411,7 @@ mod tests {
 
     #[tokio::test]
     async fn component_apply_is_partial_atomic_scoped_and_preserves_node() -> Result<()> {
-        let node = EmbeddedNode::builder().build().await?;
+        let node = Arc::new(EmbeddedNode::builder().build().await?);
         gents::ensure_runtime_schemas(&node).await?;
         let owner = "did:test:components";
         let seed: gents::document_config::PackConfig = serde_json::from_value(json!({
@@ -416,7 +422,7 @@ mod tests {
             "contexts":[{"node_did":owner,"context_id":"context","system_prompt":"initial"}]
         }))?;
         let plan = DesiredStateApplyPlan::from_pack_config(&seed)?;
-        ConfigAccess::transact_local(&node, None, "desktop.component.seed", |txn| {
+        ConfigAccess::transact_local_write(&node, None, "desktop.component.seed", |txn| {
             let plan = &plan;
             Box::pin(async move {
                 apply_desired_state_plan(txn, plan).await?;
@@ -468,7 +474,7 @@ mod tests {
         );
         let absent = serde_json::from_value(json!({"node":{"node_did":"did:test:missing"}}))?;
         assert!(apply_config_components(&node, &absent).await.is_err());
-        ConfigAccess::transact_local(&node, None, "desktop.component.verify", |txn| {
+        ConfigAccess::transact_local_write(&node, None, "desktop.component.verify", |txn| {
             Box::pin(async move {
                 let (_, node) =
                     read_desired_state_record_in_txn(txn, Collection::Node, owner, owner)
@@ -524,7 +530,7 @@ mod tests {
     async fn component_patch_preserves_hidden_auth_and_rolls_back_invalid_companion() -> Result<()>
     {
         use gents::config_client::patch::SelfConfigTarget;
-        let node = EmbeddedNode::builder().build().await?;
+        let node = Arc::new(EmbeddedNode::builder().build().await?);
         gents::ensure_runtime_schemas(&node).await?;
         let owner = "did:test:patch";
         for scope in [owner, "did:test:other-patch"] {
@@ -534,7 +540,7 @@ mod tests {
                 "inference_profiles":[{"node_did":scope,"profile_id":"profile","backend_id":" backend ","model_name":"initial"}]
             }))?;
             let plan = DesiredStateApplyPlan::from_pack_config(&config)?;
-            ConfigAccess::transact_local(&node, None, "test.patch.seed", |txn| {
+            ConfigAccess::transact_local_write(&node, None, "test.patch.seed", |txn| {
                 let plan = &plan;
                 Box::pin(async move {
                     apply_desired_state_plan(txn, plan).await?;
@@ -573,7 +579,7 @@ mod tests {
         )
         .await?;
         let read = || {
-            ConfigAccess::transact_local(&node, None, "test.patch.read", |txn| {
+            ConfigAccess::transact_local_write(&node, None, "test.patch.read", |txn| {
                 Box::pin(async move {
                     let (_, backend) = read_desired_state_record_in_txn(
                         txn,
@@ -659,7 +665,7 @@ mod tests {
         )
         .await?;
         assert_eq!(read().await?.0["auth"], json!({"kind":"unauthenticated"}));
-        ConfigAccess::transact_local(&node, None, "test.patch.foreign", |txn| {
+        ConfigAccess::transact_local_write(&node, None, "test.patch.foreign", |txn| {
             Box::pin(async move {
                 let (_, other) = read_desired_state_record_in_txn(
                     txn,

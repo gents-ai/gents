@@ -146,7 +146,7 @@ pub async fn switch_profile_account(
     let accounts = list_accounts(access, node_did).await?;
     let accounts = &accounts;
     access
-        .transact("config.profile_switch.move", |txn| {
+        .transact_write("config.profile_switch.move", |txn| {
             Box::pin(async move {
                 let snapshot = Snapshot::load_in_txn(txn, node_did, profile_id).await?;
                 let (target, observation) = snapshot

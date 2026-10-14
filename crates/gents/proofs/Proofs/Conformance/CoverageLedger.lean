@@ -1169,6 +1169,11 @@ def caseCoverage : List CoverageEntry :=
       "SessionInputEditRemoteCases"
       "e2e_runtime::session_input_edit::generated_remote_edits_replicate_signed_effect_and_receipt")
       "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "session_input_edit_client_observation_cases"
+      "SessionInputEditClientObservationCases"
+      "client::core::writes::accepted_edit_projection_tests::generated_accepted_receipt_survives_projection_refresh_failure")
+      "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "queue_management_cases"
       "QueueManagementCases"

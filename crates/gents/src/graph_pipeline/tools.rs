@@ -105,8 +105,7 @@ impl Tool for CompileGraphTool {
             }
         };
         let digest = plan.digest.clone();
-        let published =
-            publish_graph_plan(self.node.as_ref(), self.identity.clone(), &plan).await?;
+        let published = publish_graph_plan(&self.node, self.identity.clone(), &plan).await?;
         Ok(CompileGraphResponse {
             accepted: true,
             digest: Some(digest),

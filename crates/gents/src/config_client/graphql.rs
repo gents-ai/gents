@@ -63,10 +63,19 @@ pub(super) async fn query_with_options(
     execute_graphql_async(endpoint.url(), authorization.as_deref(), query, options).await
 }
 
-pub(super) async fn txn_begin(endpoint: &GraphqlEndpoint) -> Result<(reqwest::Client, String)> {
+pub(super) async fn txn_begin(
+    endpoint: &GraphqlEndpoint,
+    read_only: bool,
+) -> Result<(reqwest::Client, String)> {
     let client = http_client().await?.clone();
+    let path = format!("{}/tx", graphql_api_base(endpoint.url())?);
+    let url = if read_only {
+        format!("{path}?read_only=true")
+    } else {
+        path
+    };
     let response = endpoint
-        .authorize(client.post(format!("{}/tx", graphql_api_base(endpoint.url())?)))?
+        .authorize(client.post(url))?
         .send()
         .await
         .with_context(|| format!("posting tx begin to {endpoint}"))?;
@@ -359,7 +368,7 @@ mod tests {
                 .unwrap();
         let did = crate::identity::NodeIdentity::did(&identity).to_string();
         super::super::ConfigAccess::graphql_as(endpoint, &did)
-            .transact("test.per_request_bearer", |txn| {
+            .transact_write("test.per_request_bearer", |txn| {
                 Box::pin(async move {
                     // Bearers carry second-resolution issue times.
                     tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
@@ -390,6 +399,58 @@ mod tests {
         assert_eq!(steps, ["begin", "execute", "commit"]);
         assert!(issued_at(&seen[1].1) > issued_at(&seen[0].1), "{seen:?}");
         assert!(issued_at(&seen[2].1) >= issued_at(&seen[1].1), "{seen:?}");
+    }
+
+    #[tokio::test]
+    async fn readonly_transaction_sends_defradb_read_only_begin_flag() {
+        use axum::{extract::State, http::Uri, routing::post, Json, Router};
+        use std::sync::{Arc, Mutex};
+
+        let begins: Arc<Mutex<Vec<Option<String>>>> = Arc::default();
+        let app = Router::new()
+            .route(
+                "/api/v0/tx",
+                post(
+                    |State(begins): State<Arc<Mutex<Vec<Option<String>>>>>, uri: Uri| async move {
+                        begins
+                            .lock()
+                            .unwrap()
+                            .push(uri.query().map(ToOwned::to_owned));
+                        Json(serde_json::json!({"id": 17}))
+                    },
+                ),
+            )
+            .route(
+                "/api/v0/graphql",
+                post(|| async { Json(serde_json::json!({"data": {"Probe": [{"id": "x"}]}})) }),
+            )
+            .route("/api/v0/tx/{id}", post(|| async { "" }))
+            .with_state(Arc::clone(&begins));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let result = super::super::ConfigAccess::graphql(endpoint.clone())
+            .transact_readonly("test.http_readonly", |txn| {
+                Box::pin(async move { txn.execute("query { Probe { id } }").await })
+            })
+            .await
+            .unwrap();
+        assert_eq!(result["data"]["Probe"][0]["id"], "x");
+        super::super::ConfigAccess::graphql(endpoint)
+            .transact_write("test.http_write", |txn| {
+                Box::pin(async move {
+                    txn.execute("mutation { create_Probe(input: {id: \"y\"}) { id } }")
+                        .await
+                })
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            begins.lock().unwrap().as_slice(),
+            &[Some("read_only=true".to_owned()), None]
+        );
+        server.abort();
     }
 
     #[test]

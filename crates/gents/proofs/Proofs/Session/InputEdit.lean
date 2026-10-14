@@ -44,6 +44,27 @@ structure Receipt where
   requestIds : List RequestId
   deriving DecidableEq, Repr
 
+/-- The client keeps the authenticated command result separate from whether its
+local projection has caught up. `receiveValidatedReceipt` is downstream of the
+native signature and command checks; a later read failure cannot rewrite that
+already-observed result. -/
+structure ClientObservation where
+  commandOutcome : Outcome
+  projectionFresh : Bool
+  deriving DecidableEq, Repr
+
+def receiveValidatedReceipt (receipt : Receipt) : ClientObservation :=
+  ⟨receipt.outcome, false⟩
+
+def observeProjectionRefresh (observation : ClientObservation) (succeeded : Bool) : ClientObservation :=
+  { observation with projectionFresh := succeeded }
+
+theorem projection_refresh_preserves_command_outcome
+    (receipt : Receipt) (succeeded : Bool) :
+    (observeProjectionRefresh (receiveValidatedReceipt receipt) succeeded).commandOutcome =
+      receipt.outcome := by
+  rfl
+
 structure State where
   queue : SessionQueueState
   receipts : List Receipt

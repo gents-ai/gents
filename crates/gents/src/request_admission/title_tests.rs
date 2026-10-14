@@ -70,7 +70,7 @@ fn native_input(case: &LeanTitleRequestAdmissionCase) -> RequestInput {
     .expect("generated title input has native representation")
 }
 
-async fn insert_request(node: &EmbeddedNode, create: &AgentRequestCreate) -> String {
+async fn insert_request(node: &Arc<EmbeddedNode>, create: &AgentRequestCreate) -> String {
     let response = crate::config_client::ConfigAccess::write_local_response(
         node,
         "test.title_admission.create_request",
@@ -86,7 +86,7 @@ async fn insert_request(node: &EmbeddedNode, create: &AgentRequestCreate) -> Str
         .to_owned()
 }
 
-async fn update_request_field(node: &EmbeddedNode, doc_id: &str, field: &str, value: &str) {
+async fn update_request_field(node: &Arc<EmbeddedNode>, doc_id: &str, field: &str, value: &str) {
     assert!(matches!(field, "lifecycle_state" | "deadline"));
     let doc_id = crate::graphql::escape_graphql_string(doc_id);
     let value = crate::graphql::escape_graphql_string(value);
@@ -170,9 +170,9 @@ async fn verify_generated_case(case: &LeanTitleRequestAdmissionCase) {
     super::sign_agent_request_create(identity.as_ref(), &mut parent_create)
         .await
         .expect("sign physical parent");
-    let parent_doc_id = insert_request(node.as_ref(), &parent_create).await;
+    let parent_doc_id = insert_request(&node, &parent_create).await;
     update_request_field(
-        node.as_ref(),
+        &node,
         &parent_doc_id,
         "lifecycle_state",
         &case.parent_observed_state,
@@ -249,12 +249,12 @@ async fn verify_generated_case(case: &LeanTitleRequestAdmissionCase) {
             .expect("sign modeled title request");
     }
 
-    let doc_id = insert_request(node.as_ref(), &create).await;
+    let doc_id = insert_request(&node, &create).await;
     let queued = super::load_request_for_admission_test(node.as_ref(), &doc_id)
         .await
         .expect("load queued request");
     if !case.pending_deadline_absent {
-        update_request_field(node.as_ref(), &doc_id, "deadline", &case.request.created_at).await;
+        update_request_field(&node, &doc_id, "deadline", &case.request.created_at).await;
     }
     let (_owner, enrollment) = enrollment_authority_channel();
     let verifier = AgentRequestAdmissionVerifier::new(node.clone(), identity, enrollment);

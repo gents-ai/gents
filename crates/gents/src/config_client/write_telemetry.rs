@@ -69,6 +69,7 @@ pub(crate) enum WriteOutcome {
     ConflictObserved,
     Recovered,
     Retrying,
+    PendingNative,
     Failed,
     Cancelled,
 }
@@ -160,6 +161,7 @@ impl WriteAttemptEvent {
                 WriteOutcome::ConflictObserved => "conflict_observed",
                 WriteOutcome::Recovered => "recovered",
                 WriteOutcome::Retrying => "retrying",
+                WriteOutcome::PendingNative => "pending_native",
                 WriteOutcome::Failed => "failed",
                 WriteOutcome::Cancelled => "cancelled",
             },
@@ -179,6 +181,7 @@ impl WriteAttemptEvent {
             receipt_recovered = matches!(self.outcome, WriteOutcome::Recovered),
             conflict_observed = matches!(self.outcome, WriteOutcome::ConflictObserved),
             will_retry = matches!(self.outcome, WriteOutcome::Retrying),
+            settled = !matches!(self.outcome, WriteOutcome::PendingNative) && !matches!(self.rollback, RollbackStatus::Scheduled),
             backoff_scheduled = self.backoff.is_some(),
             backoff_ms = millis(self.backoff.unwrap_or_default()),
             elapsed_ms = millis(self.elapsed),
@@ -190,7 +193,7 @@ impl WriteAttemptEvent {
                 RollbackStatus::Scheduled => "scheduled",
             },
             cancelled = matches!(self.outcome, WriteOutcome::Cancelled),
-            "DefraDB committed-write attempt finished"
+            "DefraDB write attempt observation"
                 );
             };
         }

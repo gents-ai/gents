@@ -287,7 +287,7 @@ async fn a_collection_grant_cannot_bypass_native_document_acp() {
     assert!(apply(&reader, call("delete", Value::Null, Some(filter)))
         .await
         .is_err());
-    let rows = ConfigAccess::transact_local(
+    let rows = ConfigAccess::transact_local_write(
         &node,
         Some(identity::Did::new(OWNER).unwrap()),
         "verify_application_acp",

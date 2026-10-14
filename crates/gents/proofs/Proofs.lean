@@ -3,6 +3,7 @@ import Proofs.Process
 import Proofs.Persistence
 import Proofs.StorageObservation
 import Proofs.StorageWriteGate
+import Proofs.NativeCompletion
 import Proofs.Scheduling
 import Proofs.Request
 import Proofs.RequestExecutionLease

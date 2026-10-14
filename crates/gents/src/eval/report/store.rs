@@ -25,7 +25,7 @@ pub async fn load_runs(access: &ConfigAccess, owner: &str) -> Result<Vec<RunReco
         owner = escape_graphql_string(owner),
     );
     let response = access
-        .transact("eval.report.load_runs", |txn| {
+        .transact_readonly("eval.report.load_runs", |txn| {
             let query = &query;
             Box::pin(async move { txn.execute(query).await })
         })

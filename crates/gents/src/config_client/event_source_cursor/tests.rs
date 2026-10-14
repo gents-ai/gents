@@ -38,7 +38,7 @@ fn trigger(enabled: bool) -> DesiredStateApplyDocument {
 async fn publish(access: &ConfigAccess, docs: Vec<DesiredStateApplyDocument>) -> Result<()> {
     let plan = DesiredStateApplyPlan::new(docs)?;
     access
-        .transact("test.cursor.publish", |txn| {
+        .transact_write("test.cursor.publish", |txn| {
             let plan = &plan;
             Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
         })
@@ -67,7 +67,7 @@ async fn fixture(enabled: bool) -> Result<(Arc<defra_node::EmbeddedNode>, Config
 async fn create_source(access: &ConfigAccess, collection: &str, label: &str) -> Result<String> {
     crate::graphql::validate_collection_identifier(collection)?;
     access
-        .transact("test.cursor.source", |txn| {
+        .transact_write("test.cursor.source", |txn| {
             Box::pin(async move {
                 let field = format!("create_{collection}");
                 let response = txn
@@ -90,7 +90,7 @@ fn trigger_consumer() -> EventConsumer {
 
 async fn cursor(access: &ConfigAccess, collection: &str) -> Result<String> {
     access
-        .transact("test.cursor.saved", |txn| {
+        .transact_write("test.cursor.saved", |txn| {
             Box::pin(async move {
                 Ok(
                     load_or_seed_for_source(txn, PIN_FIXED_DID, &trigger_consumer(), collection)
@@ -151,7 +151,7 @@ async fn persisted_disable_blocks_stale_admission_and_exclusion_but_not_committe
             .is_err()
     );
     assert!(access
-        .transact("test.cursor.exclude_disabled", |txn| Box::pin(async move {
+        .transact_write("test.cursor.exclude_disabled", |txn| Box::pin(async move {
             exclude_arrival(txn, PIN_FIXED_DID, &trigger_consumer(), "WorkA", "1").await
         }))
         .await
@@ -173,7 +173,7 @@ async fn persisted_disable_blocks_stale_admission_and_exclusion_but_not_committe
     assert!(duplicate.duplicate);
     assert_eq!(duplicate.request.doc_id, admitted.request.doc_id);
     access
-        .transact("test.cursor.ack_disabled", |txn| {
+        .transact_write("test.cursor.ack_disabled", |txn| {
             let doc_id = &doc_id;
             Box::pin(async move {
                 acknowledge_fire(
@@ -208,7 +208,7 @@ async fn source_only_replacement_seeds_disabled_consumers_before_later_arrivals(
         json!([{"docID":held,"cursor":"2"}])
     );
     assert!(access
-        .transact("test.cursor.stale_source", |txn| Box::pin(async move {
+        .transact_write("test.cursor.stale_source", |txn| Box::pin(async move {
             exclude_arrival(txn, PIN_FIXED_DID, &trigger_consumer(), "WorkA", "1").await
         }))
         .await

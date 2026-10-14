@@ -847,7 +847,7 @@ impl Canary {
         )
         .unwrap();
         self.access
-            .transact("canary.install", |txn| {
+            .transact_write("canary.install", |txn| {
                 let plan = &plan;
                 Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
             })
@@ -865,9 +865,7 @@ async fn canary_request(endpoint: &str, run_id: &str) -> (Canary, RunRequest) {
     let home = EmbeddedHome::create_temp("eval-canary").await.unwrap();
     let access = ConfigAccess::Local(home.node.clone());
     let owner = home.did().to_string();
-    gents::ensure_node(home.node.as_ref(), &owner)
-        .await
-        .unwrap();
+    gents::ensure_node(&home.node, &owner).await.unwrap();
     let canary = Canary {
         access,
         owner: owner.clone(),

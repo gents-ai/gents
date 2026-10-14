@@ -189,6 +189,53 @@ pub async fn load_chat_patch_on(
     chat_patch_from_data(&data)
 }
 
+pub(crate) async fn load_request_documents_on(
+    access: &gents::config_client::ConfigAccess,
+    doc_ids: &[String],
+) -> Result<Vec<AgentRequestRow>> {
+    if doc_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    const BATCH_SIZE: usize = 128;
+    let mut expected = std::collections::HashSet::with_capacity(doc_ids.len());
+    let mut unique_doc_ids = Vec::with_capacity(doc_ids.len());
+    for doc_id in doc_ids {
+        if expected.insert(doc_id.clone()) {
+            unique_doc_ids.push(doc_id.clone());
+        }
+    }
+    let mut rows = Vec::with_capacity(unique_doc_ids.len());
+    let mut observed = std::collections::HashSet::with_capacity(unique_doc_ids.len());
+    for batch in unique_doc_ids.chunks(BATCH_SIZE) {
+        let ids = gents::graphql::graphql_string_list_literal(batch.iter().map(String::as_str));
+        let query =
+            format!(r#"{{ {AGENT_REQUEST_NAME}(docIDs: {ids}) {{ {AGENT_REQUEST_FIELDS} }} }}"#);
+        let data =
+            execute_access_graphql_query(access, &query, "pending edit request patch").await?;
+        let batch_rows: Vec<AgentRequestRow> = parse_query_rows(&data, AGENT_REQUEST_NAME)?;
+        for row in &batch_rows {
+            let doc_id = row
+                .doc_id
+                .as_ref()
+                .context("pending edit request patch lacks physical identity")?;
+            anyhow::ensure!(
+                batch.contains(doc_id),
+                "pending edit request patch returned an unrelated document"
+            );
+            anyhow::ensure!(
+                observed.insert(doc_id.to_owned()),
+                "pending edit request patch duplicated a document"
+            );
+        }
+        rows.extend(batch_rows);
+    }
+    anyhow::ensure!(
+        observed.len() == expected.len(),
+        "pending edit request patch is incomplete"
+    );
+    Ok(rows)
+}
+
 fn chat_patch_from_data(data: &Value) -> Result<ClientStore> {
     Ok(ClientStore::from_rows(ClientStoreRows {
         requests: parse_query_rows(&data, "AgentRequest")?,

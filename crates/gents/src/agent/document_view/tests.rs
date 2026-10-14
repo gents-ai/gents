@@ -38,7 +38,7 @@ fn test_identity(name: &str) -> KeyIdentity {
 /// `agent_id` (`<agent_id>:context`, `:tools`, `:inference`,
 /// `:backend`); there is no implicit node default.
 async fn bind_default_agent_backend(
-    node: &defra_node::EmbeddedNode,
+    node: &Arc<defra_node::EmbeddedNode>,
     node_did: &str,
     agent_id: &str,
 ) {
@@ -61,11 +61,11 @@ async fn existing_document_runtime_view_does_not_wait_for_mutation_gate() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let owner = "did:key:runtime-view-reader";
-    let principal = crate::document_config::ensure_node(node.as_ref(), owner)
+    let principal = crate::document_config::ensure_node(&node, owner)
         .await
         .unwrap();
     let response = crate::config_client::ConfigAccess::write_local_response(
-        node.as_ref(),
+        &node,
         "test.runtime_view_skill",
         &format!(
             r#"mutation {{ create_Skill(input: {{
@@ -78,12 +78,12 @@ async fn existing_document_runtime_view_does_not_wait_for_mutation_gate() {
     .await
     .unwrap();
     let skill_doc_id = created_skill_doc_id(response.data.as_ref()).unwrap();
-    let held = crate::config_client::ConfigApplyTxn::begin_local(node.as_ref(), None)
+    let held = crate::config_client::ConfigApplyTxn::begin_local(&node, None)
         .await
         .unwrap();
     let view = tokio::time::timeout(
         std::time::Duration::from_secs(5),
-        load_document_runtime_view(node.as_ref(), owner),
+        load_document_runtime_view(&node, owner),
     )
     .await
     .expect("runtime configuration reads must not wait for the mutation gate")
@@ -104,9 +104,9 @@ async fn load_document_runtime_view_includes_referenced_documents() {
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("document-view-load"));
     let default_agent_id = crate::default_agent_id_for_node(identity.did());
-    bind_default_agent_backend(node.as_ref(), identity.did(), &default_agent_id).await;
+    bind_default_agent_backend(&node, identity.did(), &default_agent_id).await;
 
-    let view = load_document_runtime_view(node.as_ref(), identity.did())
+    let view = load_document_runtime_view(&node, identity.did())
         .await
         .expect("document view should load");
 
@@ -140,14 +140,14 @@ async fn apply_control_update_reconciles_tool_selection_via_doc_id() {
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("document-view-update"));
     let default_agent_id = crate::default_agent_id_for_node(identity.did());
-    bind_default_agent_backend(node.as_ref(), identity.did(), &default_agent_id).await;
+    bind_default_agent_backend(&node, identity.did(), &default_agent_id).await;
 
     let resolve_context = DocumentResolveContext::for_tests(
         identity.clone(),
         ToolCeiling::readonly(),
         crate::backend_health::BackendHealthMap::new(),
     );
-    let mut view = load_document_runtime_view(node.as_ref(), identity.did())
+    let mut view = load_document_runtime_view(&node, identity.did())
         .await
         .expect("initial document view");
 
@@ -196,7 +196,7 @@ async fn apply_control_update_reconciles_tool_selection_via_doc_id() {
     .is_ok_and(|outcome| outcome == ControlUpdateOutcome::FullReload));
 
     // Hot reload must pull the patched Tools document, not retain the stale one.
-    let reloaded = load_document_runtime_view(node.as_ref(), identity.did())
+    let reloaded = load_document_runtime_view(&node, identity.did())
         .await
         .expect("reloaded document view");
     assert_eq!(
@@ -211,10 +211,9 @@ async fn apply_control_update_reconciles_tool_selection_via_doc_id() {
     );
     view = reloaded;
 
-    let snapshot =
-        resolve_document_runtime_snapshot_from_view(node.as_ref(), &resolve_context, &view)
-            .await
-            .expect("snapshot from updated document view");
+    let snapshot = resolve_document_runtime_snapshot_from_view(&node, &resolve_context, &view)
+        .await
+        .expect("snapshot from updated document view");
     let tool_surface = snapshot
         .tool_surfaces
         .get(&default_agent_id)
@@ -237,7 +236,7 @@ async fn resolve_composes_explicitly_selected_skill_into_prompt() {
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("document-view-skill"));
     let default_agent_id = crate::default_agent_id_for_node(identity.did());
-    bind_default_agent_backend(node.as_ref(), identity.did(), &default_agent_id).await;
+    bind_default_agent_backend(&node, identity.did(), &default_agent_id).await;
 
     // Principal-scoped skill referencing one in-ceiling tool (read_file) and one
     // ungranted tool (exercises the D3 degrade note).
@@ -273,13 +272,12 @@ async fn resolve_composes_explicitly_selected_skill_into_prompt() {
         ToolCeiling::readonly(),
         crate::backend_health::BackendHealthMap::new(),
     );
-    let view = load_document_runtime_view(node.as_ref(), identity.did())
+    let view = load_document_runtime_view(&node, identity.did())
         .await
         .expect("document view");
-    let snapshot =
-        resolve_document_runtime_snapshot_from_view(node.as_ref(), &resolve_context, &view)
-            .await
-            .expect("snapshot");
+    let snapshot = resolve_document_runtime_snapshot_from_view(&node, &resolve_context, &view)
+        .await
+        .expect("snapshot");
 
     let agent_config = snapshot
         .agents
@@ -401,9 +399,9 @@ async fn apply_control_update_hot_reloads_skill() {
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("document-view-skill-reload"));
     let default_agent_id = crate::default_agent_id_for_node(identity.did());
-    bind_default_agent_backend(node.as_ref(), identity.did(), &default_agent_id).await;
+    bind_default_agent_backend(&node, identity.did(), &default_agent_id).await;
 
-    let mut view = load_document_runtime_view(node.as_ref(), identity.did())
+    let mut view = load_document_runtime_view(&node, identity.did())
         .await
         .expect("document view");
     assert!(view.skills.is_empty(), "no skills before create");
@@ -423,7 +421,7 @@ async fn apply_control_update_hot_reloads_skill() {
         .await
         .expect("apply skill create");
     assert_eq!(outcome, ControlUpdateOutcome::FullReload);
-    let mut view = load_document_runtime_view(node.as_ref(), identity.did())
+    let mut view = load_document_runtime_view(&node, identity.did())
         .await
         .expect("reloaded view after skill create");
     assert!(view.skills.contains_key("s-reload"), "skill added to view");
@@ -443,7 +441,7 @@ async fn apply_control_update_hot_reloads_skill() {
     .await
     .expect("apply foreign skill");
     assert_eq!(outcome, ControlUpdateOutcome::FullReload);
-    view = load_document_runtime_view(node.as_ref(), identity.did())
+    view = load_document_runtime_view(&node, identity.did())
         .await
         .unwrap();
     assert!(!view.skills.contains_key("s-foreign"));
@@ -456,7 +454,7 @@ async fn apply_control_update_hot_reloads_skill() {
         .await
         .expect("apply skill delete");
     assert_eq!(outcome, ControlUpdateOutcome::FullReload);
-    let view = load_document_runtime_view(node.as_ref(), identity.did())
+    let view = load_document_runtime_view(&node, identity.did())
         .await
         .expect("reloaded view after skill delete");
     assert!(
@@ -501,7 +499,7 @@ async fn resolve_quarantines_behavior_with_empty_agent_target_id() {
     let identity = Arc::new(test_identity("document-view-invalid-tool-selection"));
     let node_did = identity.did();
     let default_agent_id = crate::default_agent_id_for_node(node_did);
-    bind_default_agent_backend(node.as_ref(), node_did, &default_agent_id).await;
+    bind_default_agent_backend(&node, node_did, &default_agent_id).await;
 
     // The Tools row carries an empty target id — valid at the DB level but
     // invalid per Tools::validate(); scope resolution must quarantine the
@@ -514,13 +512,12 @@ async fn resolve_quarantines_behavior_with_empty_agent_target_id() {
         ToolCeiling::readonly(),
         crate::backend_health::BackendHealthMap::new(),
     );
-    let view = load_document_runtime_view(node.as_ref(), node_did)
+    let view = load_document_runtime_view(&node, node_did)
         .await
         .expect("document view should load");
-    let snapshot =
-        resolve_document_runtime_snapshot_from_view(node.as_ref(), &resolve_context, &view)
-            .await
-            .expect("snapshot resolves; quarantine is per-agent");
+    let snapshot = resolve_document_runtime_snapshot_from_view(&node, &resolve_context, &view)
+        .await
+        .expect("snapshot resolves; quarantine is per-agent");
 
     assert!(
         !snapshot.agents.contains_key(&default_agent_id),
@@ -544,7 +541,7 @@ async fn resolve_quarantines_behavior_with_missing_local_agent_target() {
     let identity = Arc::new(test_identity("document-view-missing-agent-target"));
     let node_did = identity.did();
     let default_agent_id = crate::default_agent_id_for_node(node_did);
-    bind_default_agent_backend(node.as_ref(), node_did, &default_agent_id).await;
+    bind_default_agent_backend(&node, node_did, &default_agent_id).await;
 
     // A LOCAL target (own node_did) naming an agent_config that does not exist
     // locally must be rejected; remote targets are exempt (delegation
@@ -578,13 +575,12 @@ async fn resolve_quarantines_behavior_with_missing_local_agent_target() {
         ToolCeiling::readonly(),
         crate::backend_health::BackendHealthMap::new(),
     );
-    let view = load_document_runtime_view(node.as_ref(), node_did)
+    let view = load_document_runtime_view(&node, node_did)
         .await
         .expect("document view should load");
-    let snapshot =
-        resolve_document_runtime_snapshot_from_view(node.as_ref(), &resolve_context, &view)
-            .await
-            .expect("snapshot resolves; quarantine is per-agent");
+    let snapshot = resolve_document_runtime_snapshot_from_view(&node, &resolve_context, &view)
+        .await
+        .expect("snapshot resolves; quarantine is per-agent");
 
     assert!(
         !snapshot.agents.contains_key(&default_agent_id),
@@ -604,10 +600,10 @@ async fn resolve_quarantines_behavior_with_missing_local_agent_target() {
 /// Model replicated automation rows, including deliberately invalid references.
 /// These loader tests bypass installer admission so they exercise quarantine.
 async fn seed_automation(
-    node: &defra_node::EmbeddedNode,
+    node: &Arc<defra_node::EmbeddedNode>,
     documents: Vec<(crate::Collection, serde_json::Value)>,
 ) {
-    crate::config_client::ConfigAccess::transact_local(node, None, "test.replicated_automation", |txn| {
+    crate::config_client::ConfigAccess::transact_local_write(node, None, "test.replicated_automation", |txn| {
         let documents = &documents;
         Box::pin(async move {
             for (collection, input) in documents {
@@ -623,7 +619,7 @@ async fn seed_automation(
 }
 
 async fn create_task_bound(
-    node: &defra_node::EmbeddedNode,
+    node: &Arc<defra_node::EmbeddedNode>,
     node_did: &str,
     task_id: &str,
     agent_id: &str,
@@ -631,7 +627,7 @@ async fn create_task_bound(
     enabled: bool,
 ) {
     seed_automation(
-        node,
+        &node,
         vec![(
             crate::Collection::Task,
             serde_json::json!({
@@ -647,7 +643,7 @@ async fn create_task_bound(
 }
 
 async fn create_schedule_with_concurrency(
-    node: &defra_node::EmbeddedNode,
+    node: &Arc<defra_node::EmbeddedNode>,
     node_did: &str,
     trigger_id: &str,
     task_id: &str,
@@ -656,7 +652,7 @@ async fn create_schedule_with_concurrency(
     concurrency: &str,
 ) {
     seed_automation(
-        node,
+        &node,
         vec![
             (
                 crate::Collection::Schedule,
@@ -683,7 +679,7 @@ async fn create_schedule_with_concurrency(
 }
 
 async fn create_event_trigger(
-    node: &defra_node::EmbeddedNode,
+    node: &Arc<defra_node::EmbeddedNode>,
     node_did: &str,
     trigger_id: &str,
     task_id: &str,
@@ -729,12 +725,12 @@ async fn apply_control_update_full_reloads_reserved_graph_triggers() {
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("document-view-graph-trigger"));
     bind_default_agent_backend(
-        node.as_ref(),
+        &node,
         identity.did(),
         &crate::default_agent_id_for_node(identity.did()),
     )
     .await;
-    let mut view = load_document_runtime_view(node.as_ref(), identity.did())
+    let mut view = load_document_runtime_view(&node, identity.did())
         .await
         .expect("initial document view");
 
@@ -775,12 +771,12 @@ async fn usage_collection_write_never_reloads_the_runtime_view() {
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("document-view-usage"));
     bind_default_agent_backend(
-        node.as_ref(),
+        &node,
         identity.did(),
         &crate::default_agent_id_for_node(identity.did()),
     )
     .await;
-    let mut view = load_document_runtime_view(node.as_ref(), identity.did())
+    let mut view = load_document_runtime_view(&node, identity.did())
         .await
         .expect("initial document view");
 
@@ -804,15 +800,10 @@ async fn load_document_runtime_view_populates_tasks_and_schedules() {
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("document-view-tasks-schedules"));
     let node_did = identity.did();
-    bind_default_agent_backend(
-        node.as_ref(),
-        node_did,
-        &crate::default_agent_id_for_node(node_did),
-    )
-    .await;
+    bind_default_agent_backend(&node, node_did, &crate::default_agent_id_for_node(node_did)).await;
 
     create_task_bound(
-        node.as_ref(),
+        &node,
         node_did,
         "task-alpha",
         "agent-that-never-existed",
@@ -821,7 +812,7 @@ async fn load_document_runtime_view_populates_tasks_and_schedules() {
     )
     .await;
     create_task_bound(
-        node.as_ref(),
+        &node,
         node_did,
         "task-beta",
         "agent-that-never-existed",
@@ -830,7 +821,7 @@ async fn load_document_runtime_view_populates_tasks_and_schedules() {
     )
     .await;
     create_schedule_with_concurrency(
-        node.as_ref(),
+        &node,
         node_did,
         "trigger-schedule-alpha",
         "task-alpha",
@@ -840,7 +831,7 @@ async fn load_document_runtime_view_populates_tasks_and_schedules() {
     )
     .await;
 
-    let view = load_document_runtime_view(node.as_ref(), node_did)
+    let view = load_document_runtime_view(&node, node_did)
         .await
         .expect("document view should load");
 
@@ -885,15 +876,10 @@ async fn load_document_runtime_view_populates_event_triggers() {
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("document-view-event-triggers"));
     let node_did = identity.did();
-    bind_default_agent_backend(
-        node.as_ref(),
-        node_did,
-        &crate::default_agent_id_for_node(node_did),
-    )
-    .await;
+    bind_default_agent_backend(&node, node_did, &crate::default_agent_id_for_node(node_did)).await;
 
     create_task_bound(
-        node.as_ref(),
+        &node,
         node_did,
         "task-1",
         "agent-that-never-existed",
@@ -902,7 +888,7 @@ async fn load_document_runtime_view_populates_event_triggers() {
     )
     .await;
     create_event_trigger(
-        node.as_ref(),
+        &node,
         node_did,
         "trig-1",
         "task-1",
@@ -912,7 +898,7 @@ async fn load_document_runtime_view_populates_event_triggers() {
     )
     .await;
 
-    let view = load_document_runtime_view(node.as_ref(), node_did)
+    let view = load_document_runtime_view(&node, node_did)
         .await
         .expect("document view should load");
 
@@ -945,10 +931,10 @@ async fn resolve_produces_active_schedule_when_task_and_behavior_exist() {
     let identity = Arc::new(test_identity("document-view-resolve-schedule-active"));
     let node_did = identity.did();
     let default_agent_id = crate::default_agent_id_for_node(node_did);
-    bind_default_agent_backend(node.as_ref(), node_did, &default_agent_id).await;
+    bind_default_agent_backend(&node, node_did, &default_agent_id).await;
 
     create_task_bound(
-        node.as_ref(),
+        &node,
         node_did,
         "task-resolve-active",
         &default_agent_id,
@@ -957,7 +943,7 @@ async fn resolve_produces_active_schedule_when_task_and_behavior_exist() {
     )
     .await;
     create_schedule_with_concurrency(
-        node.as_ref(),
+        &node,
         node_did,
         "trigger-resolve-active",
         "task-resolve-active",
@@ -972,14 +958,13 @@ async fn resolve_produces_active_schedule_when_task_and_behavior_exist() {
         ToolCeiling::readonly(),
         crate::backend_health::BackendHealthMap::new(),
     );
-    let view = load_document_runtime_view(node.as_ref(), node_did)
+    let view = load_document_runtime_view(&node, node_did)
         .await
         .expect("document view should load");
 
-    let snapshot =
-        resolve_document_runtime_snapshot_from_view(node.as_ref(), &resolve_context, &view)
-            .await
-            .expect("resolve should succeed");
+    let snapshot = resolve_document_runtime_snapshot_from_view(&node, &resolve_context, &view)
+        .await
+        .expect("resolve should succeed");
 
     assert_eq!(
         snapshot.active_schedules.len(),
@@ -1017,10 +1002,10 @@ async fn resolve_produces_active_event_trigger_when_task_and_behavior_exist() {
     let identity = Arc::new(test_identity("document-view-resolve-trigger-active"));
     let node_did = identity.did();
     let default_agent_id = crate::default_agent_id_for_node(node_did);
-    bind_default_agent_backend(node.as_ref(), node_did, &default_agent_id).await;
+    bind_default_agent_backend(&node, node_did, &default_agent_id).await;
 
     create_task_bound(
-        node.as_ref(),
+        &node,
         node_did,
         "task-trigger-active",
         &default_agent_id,
@@ -1029,7 +1014,7 @@ async fn resolve_produces_active_event_trigger_when_task_and_behavior_exist() {
     )
     .await;
     create_event_trigger(
-        node.as_ref(),
+        &node,
         node_did,
         "trigger-active",
         "task-trigger-active",
@@ -1044,14 +1029,13 @@ async fn resolve_produces_active_event_trigger_when_task_and_behavior_exist() {
         ToolCeiling::readonly(),
         crate::backend_health::BackendHealthMap::new(),
     );
-    let view = load_document_runtime_view(node.as_ref(), node_did)
+    let view = load_document_runtime_view(&node, node_did)
         .await
         .expect("document view should load");
 
-    let snapshot =
-        resolve_document_runtime_snapshot_from_view(node.as_ref(), &resolve_context, &view)
-            .await
-            .expect("resolve should succeed");
+    let snapshot = resolve_document_runtime_snapshot_from_view(&node, &resolve_context, &view)
+        .await
+        .expect("resolve should succeed");
 
     assert_eq!(
         snapshot.active_event_triggers.len(),
@@ -1086,12 +1070,12 @@ async fn resolve_marks_event_trigger_unavailable_when_task_missing_or_disabled()
     let identity = Arc::new(test_identity("document-view-resolve-trigger-unavailable"));
     let node_did = identity.did();
     let default_agent_id = crate::default_agent_id_for_node(node_did);
-    bind_default_agent_backend(node.as_ref(), node_did, &default_agent_id).await;
+    bind_default_agent_backend(&node, node_did, &default_agent_id).await;
 
     // Disabled task — trigger should be unavailable even though the task
     // document exists.
     create_task_bound(
-        node.as_ref(),
+        &node,
         node_did,
         "task-trigger-disabled",
         &default_agent_id,
@@ -1100,7 +1084,7 @@ async fn resolve_marks_event_trigger_unavailable_when_task_missing_or_disabled()
     )
     .await;
     create_event_trigger(
-        node.as_ref(),
+        &node,
         node_did,
         "trigger-task-disabled",
         "task-trigger-disabled",
@@ -1111,7 +1095,7 @@ async fn resolve_marks_event_trigger_unavailable_when_task_missing_or_disabled()
     .await;
     // Trigger whose task_id does not match any Task document.
     create_event_trigger(
-        node.as_ref(),
+        &node,
         node_did,
         "trigger-task-missing",
         "task-that-never-existed",
@@ -1126,14 +1110,13 @@ async fn resolve_marks_event_trigger_unavailable_when_task_missing_or_disabled()
         ToolCeiling::readonly(),
         crate::backend_health::BackendHealthMap::new(),
     );
-    let view = load_document_runtime_view(node.as_ref(), identity.did())
+    let view = load_document_runtime_view(&node, identity.did())
         .await
         .expect("document view should load");
 
-    let snapshot =
-        resolve_document_runtime_snapshot_from_view(node.as_ref(), &resolve_context, &view)
-            .await
-            .expect("resolve should succeed");
+    let snapshot = resolve_document_runtime_snapshot_from_view(&node, &resolve_context, &view)
+        .await
+        .expect("resolve should succeed");
 
     assert!(
         snapshot.active_event_triggers.is_empty(),
@@ -1169,10 +1152,10 @@ async fn resolve_quarantines_event_trigger_with_invalid_source_collection() {
     let identity = Arc::new(test_identity("document-view-resolve-trigger-injection"));
     let node_did = identity.did();
     let default_agent_id = crate::default_agent_id_for_node(node_did);
-    bind_default_agent_backend(node.as_ref(), node_did, &default_agent_id).await;
+    bind_default_agent_backend(&node, node_did, &default_agent_id).await;
 
     create_task_bound(
-        node.as_ref(),
+        &node,
         node_did,
         "task-trigger-injection",
         &default_agent_id,
@@ -1181,7 +1164,7 @@ async fn resolve_quarantines_event_trigger_with_invalid_source_collection() {
     )
     .await;
     create_event_trigger(
-        node.as_ref(),
+        &node,
         node_did,
         "trigger-injection",
         "task-trigger-injection",
@@ -1191,7 +1174,7 @@ async fn resolve_quarantines_event_trigger_with_invalid_source_collection() {
     )
     .await;
     create_event_trigger(
-        node.as_ref(),
+        &node,
         node_did,
         "trigger-introspection",
         "task-trigger-injection",
@@ -1206,14 +1189,13 @@ async fn resolve_quarantines_event_trigger_with_invalid_source_collection() {
         ToolCeiling::readonly(),
         crate::backend_health::BackendHealthMap::new(),
     );
-    let view = load_document_runtime_view(node.as_ref(), node_did)
+    let view = load_document_runtime_view(&node, node_did)
         .await
         .expect("document view should load");
 
-    let snapshot =
-        resolve_document_runtime_snapshot_from_view(node.as_ref(), &resolve_context, &view)
-            .await
-            .expect("resolve should succeed");
+    let snapshot = resolve_document_runtime_snapshot_from_view(&node, &resolve_context, &view)
+        .await
+        .expect("resolve should succeed");
 
     assert!(
         snapshot.active_event_triggers.is_empty(),
@@ -1236,12 +1218,12 @@ async fn resolve_marks_schedule_unavailable_when_task_missing_or_disabled() {
     let identity = Arc::new(test_identity("document-view-resolve-schedule-unavailable"));
     let node_did = identity.did();
     let default_agent_id = crate::default_agent_id_for_node(node_did);
-    bind_default_agent_backend(node.as_ref(), node_did, &default_agent_id).await;
+    bind_default_agent_backend(&node, node_did, &default_agent_id).await;
 
     // Disabled task — schedule should be unavailable even though the task
     // document exists.
     create_task_bound(
-        node.as_ref(),
+        &node,
         node_did,
         "task-resolve-disabled",
         &default_agent_id,
@@ -1250,7 +1232,7 @@ async fn resolve_marks_schedule_unavailable_when_task_missing_or_disabled() {
     )
     .await;
     create_schedule_with_concurrency(
-        node.as_ref(),
+        &node,
         node_did,
         "trigger-resolve-task-disabled",
         "task-resolve-disabled",
@@ -1261,7 +1243,7 @@ async fn resolve_marks_schedule_unavailable_when_task_missing_or_disabled() {
     .await;
     // Schedule whose task_id does not match any Task document.
     create_schedule_with_concurrency(
-        node.as_ref(),
+        &node,
         node_did,
         "trigger-resolve-task-missing",
         "task-that-never-existed",
@@ -1276,14 +1258,13 @@ async fn resolve_marks_schedule_unavailable_when_task_missing_or_disabled() {
         ToolCeiling::readonly(),
         crate::backend_health::BackendHealthMap::new(),
     );
-    let view = load_document_runtime_view(node.as_ref(), node_did)
+    let view = load_document_runtime_view(&node, node_did)
         .await
         .expect("document view should load");
 
-    let snapshot =
-        resolve_document_runtime_snapshot_from_view(node.as_ref(), &resolve_context, &view)
-            .await
-            .expect("resolve should succeed");
+    let snapshot = resolve_document_runtime_snapshot_from_view(&node, &resolve_context, &view)
+        .await
+        .expect("resolve should succeed");
 
     assert!(
         snapshot.active_schedules.is_empty(),
@@ -1314,12 +1295,12 @@ async fn resolve_populates_active_tasks_for_enabled_tasks_with_ready_behaviors()
     let identity = Arc::new(test_identity("document-view-resolve-active-tasks"));
     let node_did = identity.did();
     let default_agent_id = crate::default_agent_id_for_node(node_did);
-    bind_default_agent_backend(node.as_ref(), node_did, &default_agent_id).await;
+    bind_default_agent_backend(&node, node_did, &default_agent_id).await;
 
     // Enabled task bound to the ready default agent_config — should land in
     // active_tasks.
     create_task_bound(
-        node.as_ref(),
+        &node,
         node_did,
         "task-active",
         &default_agent_id,
@@ -1330,7 +1311,7 @@ async fn resolve_populates_active_tasks_for_enabled_tasks_with_ready_behaviors()
     // Disabled task — should NOT land in active_tasks even though its
     // agent_config is ready.
     create_task_bound(
-        node.as_ref(),
+        &node,
         node_did,
         "task-disabled",
         &default_agent_id,
@@ -1341,7 +1322,7 @@ async fn resolve_populates_active_tasks_for_enabled_tasks_with_ready_behaviors()
     // Task bound to an agent_id that does not resolve to any agent_config
     // document — should NOT land in active_tasks.
     create_task_bound(
-        node.as_ref(),
+        &node,
         node_did,
         "task-missing-agent",
         "agent-that-never-existed",
@@ -1355,14 +1336,13 @@ async fn resolve_populates_active_tasks_for_enabled_tasks_with_ready_behaviors()
         ToolCeiling::readonly(),
         crate::backend_health::BackendHealthMap::new(),
     );
-    let view = load_document_runtime_view(node.as_ref(), node_did)
+    let view = load_document_runtime_view(&node, node_did)
         .await
         .expect("document view should load");
 
-    let snapshot =
-        resolve_document_runtime_snapshot_from_view(node.as_ref(), &resolve_context, &view)
-            .await
-            .expect("resolve should succeed");
+    let snapshot = resolve_document_runtime_snapshot_from_view(&node, &resolve_context, &view)
+        .await
+        .expect("resolve should succeed");
 
     assert_eq!(
         snapshot.active_tasks.len(),
@@ -1398,7 +1378,7 @@ async fn resolve_populates_active_tasks_for_enabled_tasks_with_ready_behaviors()
 /// explicit default, then swap the chain's InferenceBackend to the ChatGptCodex
 /// provider so resolution requires a ChatGPT OAuthCredential.
 async fn bind_subscription_backend(
-    node: &defra_node::EmbeddedNode,
+    node: &Arc<defra_node::EmbeddedNode>,
     node_did: &str,
     agent_id: &str,
     provider: &str,
@@ -1421,7 +1401,7 @@ async fn bind_subscription_backend(
     )
     .await
     .unwrap();
-    ConfigAccess::transact_local(node, None, "test.subscription_backend", |txn| {
+    ConfigAccess::transact_local_write(node, None, "test.subscription_backend", |txn| {
         Box::pin(async move {
             let mut documents = Vec::new();
             for (collection, id, patch) in [
@@ -1438,7 +1418,7 @@ async fn bind_subscription_backend(
 }
 
 async fn bind_default_agent_chatgpt_backend(
-    node: &defra_node::EmbeddedNode,
+    node: &Arc<defra_node::EmbeddedNode>,
     node_did: &str,
     agent_id: &str,
 ) {
@@ -1491,7 +1471,7 @@ async fn chatgpt_codex_behavior_without_credential_is_unavailable() {
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("document-view-chatgpt-nocred"));
     bind_default_agent_chatgpt_backend(
-        node.as_ref(),
+        &node,
         identity.did(),
         &crate::default_agent_id_for_node(identity.did()),
     )
@@ -1503,13 +1483,12 @@ async fn chatgpt_codex_behavior_without_credential_is_unavailable() {
         ToolCeiling::readonly(),
         crate::backend_health::BackendHealthMap::new(),
     );
-    let view = load_document_runtime_view(node.as_ref(), identity.did())
+    let view = load_document_runtime_view(&node, identity.did())
         .await
         .expect("document view");
-    let snapshot =
-        resolve_document_runtime_snapshot_from_view(node.as_ref(), &resolve_context, &view)
-            .await
-            .expect("snapshot");
+    let snapshot = resolve_document_runtime_snapshot_from_view(&node, &resolve_context, &view)
+        .await
+        .expect("snapshot");
 
     assert!(
         !snapshot.agents.contains_key(&default_agent_id),
@@ -1535,8 +1514,8 @@ async fn runtime_snapshot_skips_an_unknown_provider_kind_backend() {
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("document-view-unknown-kind"));
     let did = identity.did();
-    bind_default_agent_backend(node.as_ref(), did, "known").await;
-    crate::test_support::install_test_agent(node.as_ref(), did, "future").await;
+    bind_default_agent_backend(&node, did, "known").await;
+    crate::test_support::install_test_agent(&node, did, "future").await;
     // A raw write bypasses validate(), like a row a newer peer wrote.
     let response = node
         .execute(&format!(
@@ -1546,7 +1525,7 @@ async fn runtime_snapshot_skips_an_unknown_provider_kind_backend() {
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
 
-    let view = load_document_runtime_view(node.as_ref(), did)
+    let view = load_document_runtime_view(&node, did)
         .await
         .expect("an unknown provider kind must not fail the whole view");
     assert!(
@@ -1559,10 +1538,9 @@ async fn runtime_snapshot_skips_an_unknown_provider_kind_backend() {
         ToolCeiling::readonly(),
         crate::backend_health::BackendHealthMap::new(),
     );
-    let snapshot =
-        resolve_document_runtime_snapshot_from_view(node.as_ref(), &resolve_context, &view)
-            .await
-            .expect("snapshot");
+    let snapshot = resolve_document_runtime_snapshot_from_view(&node, &resolve_context, &view)
+        .await
+        .expect("snapshot");
     assert!(
         snapshot.agents.contains_key("known"),
         "unavailable: {:?}",
@@ -1589,7 +1567,7 @@ async fn chatgpt_codex_behavior_with_enabled_credential_is_runnable() {
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("document-view-chatgpt-cred"));
     bind_default_agent_chatgpt_backend(
-        node.as_ref(),
+        &node,
         identity.did(),
         &crate::default_agent_id_for_node(identity.did()),
     )
@@ -1602,13 +1580,12 @@ async fn chatgpt_codex_behavior_with_enabled_credential_is_runnable() {
         ToolCeiling::readonly(),
         crate::backend_health::BackendHealthMap::new(),
     );
-    let view = load_document_runtime_view(node.as_ref(), identity.did())
+    let view = load_document_runtime_view(&node, identity.did())
         .await
         .expect("document view");
-    let snapshot =
-        resolve_document_runtime_snapshot_from_view(node.as_ref(), &resolve_context, &view)
-            .await
-            .expect("snapshot");
+    let snapshot = resolve_document_runtime_snapshot_from_view(&node, &resolve_context, &view)
+        .await
+        .expect("snapshot");
 
     assert!(
         snapshot.agents.contains_key(&default_agent_id),
@@ -1623,14 +1600,14 @@ async fn readiness_follows_the_backend_account_reference() {
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("document-view-account-ref"));
     let default_agent_id = crate::default_agent_id_for_node(identity.did());
-    bind_default_agent_chatgpt_backend(node.as_ref(), identity.did(), &default_agent_id).await;
+    bind_default_agent_chatgpt_backend(&node, identity.did(), &default_agent_id).await;
     insert_enabled_oauth_credential(node.as_ref(), identity.did()).await;
     let resolve_context = DocumentResolveContext::for_tests(
         identity.clone(),
         ToolCeiling::readonly(),
         crate::backend_health::BackendHealthMap::new(),
     );
-    let mut view = load_document_runtime_view(node.as_ref(), identity.did())
+    let mut view = load_document_runtime_view(&node, identity.did())
         .await
         .expect("document view");
     for backend in view.backends.values_mut() {
@@ -1644,7 +1621,7 @@ async fn readiness_follows_the_backend_account_reference() {
         let default_agent_id = default_agent_id.clone();
         async move {
             let snapshot =
-                resolve_document_runtime_snapshot_from_view(node.as_ref(), resolve_context, &view)
+                resolve_document_runtime_snapshot_from_view(&node, resolve_context, &view)
                     .await
                     .expect("snapshot");
             match snapshot.unavailable_agents.get(&default_agent_id) {
@@ -1693,7 +1670,7 @@ async fn disabling_or_removing_an_account_stops_only_its_behaviors() {
     let identity = Arc::new(test_identity("document-view-account-lifecycle"));
     let did = identity.did().to_string();
     let default_agent_id = crate::default_agent_id_for_node(&did);
-    bind_default_agent_claude_backend(node.as_ref(), &did, &default_agent_id).await;
+    bind_default_agent_claude_backend(&node, &did, &default_agent_id).await;
     let access = ConfigAccess::Local(node.clone());
     let sign_in = |who: &str| {
         crate::claude_oauth::credential_from_login_tokens(
@@ -1726,7 +1703,7 @@ async fn disabling_or_removing_an_account_stops_only_its_behaviors() {
         let resolve_context = &resolve_context;
         let default_agent_id = default_agent_id.clone();
         async move {
-            let mut view = load_document_runtime_view(node.as_ref(), &did)
+            let mut view = load_document_runtime_view(&node, &did)
                 .await
                 .expect("document view");
             for backend in view.backends.values_mut() {
@@ -1735,7 +1712,7 @@ async fn disabling_or_removing_an_account_stops_only_its_behaviors() {
                 };
             }
             let snapshot =
-                resolve_document_runtime_snapshot_from_view(node.as_ref(), resolve_context, &view)
+                resolve_document_runtime_snapshot_from_view(&node, resolve_context, &view)
                     .await
                     .expect("snapshot");
             !snapshot.unavailable_agents.contains_key(&default_agent_id)
@@ -1753,7 +1730,7 @@ async fn disabling_or_removing_an_account_stops_only_its_behaviors() {
     assert!(ready_on(None).await, "the other account keeps running");
 
     access
-        .transact("test.remove_account", |txn| {
+        .transact_write("test.remove_account", |txn| {
             let did = did.clone();
             let credential_id = b.credential.credential_id.clone();
             Box::pin(async move {
@@ -1777,7 +1754,7 @@ async fn an_unavailable_account_is_a_behavior_unavailable_rejection() {
     let identity = Arc::new(test_identity("document-view-account-rejection"));
     let did = identity.did().to_string();
     let x = crate::default_agent_id_for_node(&did);
-    bind_default_agent_claude_backend(node.as_ref(), &did, &x).await;
+    bind_default_agent_claude_backend(&node, &did, &x).await;
     let access = ConfigAccess::Local(node.clone());
     let sign_in = |who: &str| {
         crate::claude_oauth::credential_from_login_tokens(
@@ -1805,7 +1782,7 @@ async fn an_unavailable_account_is_a_behavior_unavailable_rejection() {
             .as_deref()
             .expect("b has a reference")
     );
-    crate::backend_registry::set_backend_probe_status(node.as_ref(), &did, &b_backend, "healthy")
+    crate::backend_registry::set_backend_probe_status(&node, &did, &b_backend, "healthy")
         .await
         .unwrap();
     let resolve_context = DocumentResolveContext::for_tests(
@@ -1829,7 +1806,7 @@ async fn an_unavailable_account_is_a_behavior_unavailable_rejection() {
             b_backend.clone(),
         );
         async move {
-            let mut view = load_document_runtime_view(node.as_ref(), &did)
+            let mut view = load_document_runtime_view(&node, &did)
                 .await
                 .expect("document view");
             let mut b_profile = view.inference_profiles[&on_a].clone();
@@ -1864,7 +1841,7 @@ async fn an_unavailable_account_is_a_behavior_unavailable_rejection() {
                 x_record.value.inference_profile_id = on_b;
             }
             let snapshot =
-                resolve_document_runtime_snapshot_from_view(node.as_ref(), resolve_context, &view)
+                resolve_document_runtime_snapshot_from_view(&node, resolve_context, &view)
                     .await
                     .expect("snapshot");
             let reason = |id: &str| {
@@ -1892,7 +1869,7 @@ async fn an_unavailable_account_is_a_behavior_unavailable_rejection() {
     rejected_only_x(reasons(true).await, Reason::ToolConfigurationInvalid);
 
     access
-        .transact("test.remove_account", |txn| {
+        .transact_write("test.remove_account", |txn| {
             let did = did.clone();
             let credential_id = b.credential.credential_id.clone();
             Box::pin(async move {
@@ -1910,7 +1887,7 @@ async fn an_unavailable_account_is_a_behavior_unavailable_rejection() {
 /// ClaudeCliSubscription provider so resolution requires a Claude
 /// OAuthCredential.
 async fn bind_default_agent_claude_backend(
-    node: &defra_node::EmbeddedNode,
+    node: &Arc<defra_node::EmbeddedNode>,
     node_did: &str,
     agent_id: &str,
 ) {
@@ -1931,7 +1908,7 @@ async fn claude_subscription_behavior_requires_enabled_credential() {
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("document-view-claude-cred"));
     bind_default_agent_claude_backend(
-        node.as_ref(),
+        &node,
         identity.did(),
         &crate::default_agent_id_for_node(identity.did()),
     )
@@ -1943,13 +1920,12 @@ async fn claude_subscription_behavior_requires_enabled_credential() {
         crate::backend_health::BackendHealthMap::new(),
     );
 
-    let view = load_document_runtime_view(node.as_ref(), identity.did())
+    let view = load_document_runtime_view(&node, identity.did())
         .await
         .expect("document view");
-    let snapshot =
-        resolve_document_runtime_snapshot_from_view(node.as_ref(), &resolve_context, &view)
-            .await
-            .expect("snapshot");
+    let snapshot = resolve_document_runtime_snapshot_from_view(&node, &resolve_context, &view)
+        .await
+        .expect("snapshot");
     assert!(
         !snapshot.agents.contains_key(&default_agent_id),
         "a ClaudeCliSubscription agent_config without an OAuthCredential must not be runnable"
@@ -1984,17 +1960,16 @@ async fn claude_subscription_behavior_requires_enabled_credential() {
         },
         chrono::Utc::now(),
     );
-    crate::oauth_credential::upsert_oauth_credential(node.as_ref(), &credential)
+    crate::oauth_credential::upsert_oauth_credential(&node, &credential)
         .await
         .expect("upsert credential");
 
-    let view = load_document_runtime_view(node.as_ref(), identity.did())
+    let view = load_document_runtime_view(&node, identity.did())
         .await
         .expect("document view");
-    let snapshot =
-        resolve_document_runtime_snapshot_from_view(node.as_ref(), &resolve_context, &view)
-            .await
-            .expect("snapshot");
+    let snapshot = resolve_document_runtime_snapshot_from_view(&node, &resolve_context, &view)
+        .await
+        .expect("snapshot");
     assert!(
         snapshot.agents.contains_key(&default_agent_id),
         "a ClaudeCliSubscription agent_config with an enabled OAuthCredential must be runnable; unavailable: {:?}",
@@ -2008,7 +1983,7 @@ async fn apply_control_update_admits_chatgpt_behavior_when_credential_added() {
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("document-view-chatgpt-apply"));
     bind_default_agent_chatgpt_backend(
-        node.as_ref(),
+        &node,
         identity.did(),
         &crate::default_agent_id_for_node(identity.did()),
     )
@@ -2020,13 +1995,12 @@ async fn apply_control_update_admits_chatgpt_behavior_when_credential_added() {
         crate::backend_health::BackendHealthMap::new(),
     );
 
-    let mut view = load_document_runtime_view(node.as_ref(), identity.did())
+    let mut view = load_document_runtime_view(&node, identity.did())
         .await
         .expect("document view");
-    let before =
-        resolve_document_runtime_snapshot_from_view(node.as_ref(), &resolve_context, &view)
-            .await
-            .expect("snapshot");
+    let before = resolve_document_runtime_snapshot_from_view(&node, &resolve_context, &view)
+        .await
+        .expect("snapshot");
     assert!(
         !before.agents.contains_key(&default_agent_id),
         "agent_config must start unavailable without a credential"
@@ -2055,7 +2029,7 @@ async fn apply_control_update_admits_chatgpt_behavior_when_credential_added() {
         provider_account_key: None,
         label: None,
     };
-    let doc_id = crate::oauth_credential::upsert_oauth_credential(node.as_ref(), &credential)
+    let doc_id = crate::oauth_credential::upsert_oauth_credential(&node, &credential)
         .await
         .expect("upsert credential");
 
@@ -2074,10 +2048,10 @@ async fn apply_control_update_admits_chatgpt_behavior_when_credential_added() {
         "creating an OAuthCredential must drive a full reload reconcile"
     );
 
-    let view = load_document_runtime_view(node.as_ref(), identity.did())
+    let view = load_document_runtime_view(&node, identity.did())
         .await
         .expect("reloaded document view");
-    let after = resolve_document_runtime_snapshot_from_view(node.as_ref(), &resolve_context, &view)
+    let after = resolve_document_runtime_snapshot_from_view(&node, &resolve_context, &view)
         .await
         .expect("snapshot");
     assert!(
@@ -2468,14 +2442,9 @@ async fn apply_control_update_evicts_surface_when_ownership_moves_away() {
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("document-view-surface-revoke"));
     let node_did = identity.did();
-    bind_default_agent_backend(
-        node.as_ref(),
-        node_did,
-        &crate::default_agent_id_for_node(node_did),
-    )
-    .await;
+    bind_default_agent_backend(&node, node_did, &crate::default_agent_id_for_node(node_did)).await;
 
-    let mut view = load_document_runtime_view(node.as_ref(), node_did)
+    let mut view = load_document_runtime_view(&node, node_did)
         .await
         .expect("document view");
 
@@ -2508,7 +2477,7 @@ async fn apply_control_update_evicts_surface_when_ownership_moves_away() {
     .await
     .expect("apply surface create");
     assert_eq!(outcome, ControlUpdateOutcome::FullReload);
-    let mut view = load_document_runtime_view(node.as_ref(), node_did)
+    let mut view = load_document_runtime_view(&node, node_did)
         .await
         .expect("reloaded view with surface");
     assert!(view
@@ -2541,7 +2510,7 @@ async fn apply_control_update_evicts_surface_when_ownership_moves_away() {
     .await
     .expect("apply surface reassign");
     assert_eq!(outcome, ControlUpdateOutcome::FullReload);
-    let view = load_document_runtime_view(node.as_ref(), node_did)
+    let view = load_document_runtime_view(&node, node_did)
         .await
         .expect("reloaded view after ownership move");
     assert!(

@@ -2562,7 +2562,7 @@ mod tests {
         let backend =
             MockStreamingBackend::start_with_plans("grok-control-model", plans(&agent_id)).unwrap();
         configure_runtime_agent(
-            node.as_ref(),
+            &node,
             &node_did,
             &agent_id,
             &format!("grok-control-{name}"),
@@ -2784,7 +2784,7 @@ mod tests {
             .await
             .expect("runtime schemas");
         super::super::seed_test_agent_configuration(
-            config.node.as_ref(),
+            &config.node,
             &node_did,
             &agent_id,
             &agent_id,

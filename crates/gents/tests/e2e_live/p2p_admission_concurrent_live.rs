@@ -297,22 +297,11 @@ async fn concurrent_multiwave_single_push_worker_converges_with_live_inference()
 
     let mut topo = LiveTopologyGuard::new(owner, peer_a, peer_b);
 
-    install_one_way_replicator(
-        topo.owner().node.as_ref(),
-        topo.peer_a().node.as_ref(),
-        REPLICATED,
-    )
-    .await;
-    install_one_way_replicator(
-        topo.owner().node.as_ref(),
-        topo.peer_b().node.as_ref(),
-        REPLICATED,
-    )
-    .await;
+    install_one_way_replicator(&topo.owner().node, &topo.peer_a().node, REPLICATED).await;
+    install_one_way_replicator(&topo.owner().node, &topo.peer_b().node, REPLICATED).await;
 
     let identity: Arc<dyn NodeIdentity> = Arc::new(test_identity("p2p-adm-live-owner"));
-    let (node_did, agent_id) =
-        bind_target(topo.owner().node.as_ref(), identity.as_ref(), &target).await;
+    let (node_did, agent_id) = bind_target(&topo.owner().node, identity.as_ref(), &target).await;
     let agent = boot_live_agent(topo.owner(), identity).await?;
     topo.set_agent(agent);
     eprintln!("[p2p-admission-live] owner ready did={node_did}");
@@ -327,7 +316,7 @@ async fn concurrent_multiwave_single_push_worker_converges_with_live_inference()
     let submit_start = Instant::now();
     for (i, request_id) in wave_ids.iter().enumerate() {
         create_runtime_request(
-            topo.owner().node.as_ref(),
+            &topo.owner().node,
             &node_did,
             &agent_id,
             request_id,
@@ -343,7 +332,7 @@ async fn concurrent_multiwave_single_push_worker_converges_with_live_inference()
 
     let owner_deadline = Duration::from_secs(180);
     for request_id in &wave_ids {
-        let state = wait_for_terminal(topo.owner().node.as_ref(), request_id, owner_deadline).await;
+        let state = wait_for_terminal(&topo.owner().node, request_id, owner_deadline).await;
         assert_eq!(
             state, "completed",
             "owner wave {request_id} must complete against target {}, got {state}",
@@ -355,7 +344,7 @@ async fn concurrent_multiwave_single_push_worker_converges_with_live_inference()
     let peer_deadline = Duration::from_secs(180);
     for request_id in &wave_ids {
         wait_for_peer_request(
-            topo.peer_a().node.as_ref(),
+            &topo.peer_a().node,
             request_id,
             &node_did,
             peer_deadline,
@@ -363,7 +352,7 @@ async fn concurrent_multiwave_single_push_worker_converges_with_live_inference()
         )
         .await;
         wait_for_peer_request(
-            topo.peer_b().node.as_ref(),
+            &topo.peer_b().node,
             request_id,
             &node_did,
             peer_deadline,

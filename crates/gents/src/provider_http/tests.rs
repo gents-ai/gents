@@ -301,7 +301,7 @@ fn usage_account(backend_id: &str) -> crate::usage_observation::UsageAccount {
 async fn usage_client(
     backend_id: &str,
 ) -> (std::sync::Arc<defra_node::EmbeddedNode>, ProviderHttpClient) {
-    let node = std::sync::Arc::new(crate::oauth_credential::test_support::test_node().await);
+    let node = crate::oauth_credential::test_support::test_node().await;
     let reporter =
         crate::usage_observation::UsageReporter::new(node.clone(), usage_account(backend_id));
     (
@@ -394,7 +394,7 @@ async fn usage_capture_rejected_records_error_source_and_keeps_the_marker() {
 
 #[tokio::test]
 async fn usage_capture_without_reporter_writes_nothing() {
-    let node = std::sync::Arc::new(crate::oauth_credential::test_support::test_node().await);
+    let node = crate::oauth_credential::test_support::test_node().await;
     let url = one_shot_server("200 OK", CODEX_USAGE_HEADERS, r#"{"ok":true}"#).await;
     ProviderHttpClient::default()
         .send::<Bytes, Bytes>(post(&url))

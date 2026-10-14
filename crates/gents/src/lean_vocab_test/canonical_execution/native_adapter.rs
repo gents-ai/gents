@@ -165,7 +165,7 @@ fn auxiliary_publication_candidate(
 }
 
 async fn create_signed_fixture_request(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     identity: &dyn NodeIdentity,
     spec: crate::lifecycle::RequestSpec,
 ) -> Result<crate::watcher::AgentRequest> {
@@ -1738,7 +1738,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                     let nested_node = Arc::clone(&node);
                     let generation = symbolic_generation(*generation);
                     let now = native.fixture_time(*now)?;
-                    let attempted = crate::config_client::ConfigAccess::transact_local(
+                    let attempted = crate::config_client::ConfigAccess::transact_local_write(
                         &node,
                         None,
                         "lean.same_task_holder",

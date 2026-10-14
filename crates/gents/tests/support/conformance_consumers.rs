@@ -56,6 +56,13 @@ impl ConformanceConsumer {
 pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
     &[
         ConformanceConsumer::RustTest {
+            id: "client::core::writes::accepted_edit_projection_tests::generated_accepted_receipt_survives_projection_refresh_failure",
+            package: "gents-desktop-core",
+            source_path: "crates/gents-desktop-core/src/client/core/writes.rs",
+            module_path: "client::core::writes::accepted_edit_projection_tests",
+            function: "generated_accepted_receipt_survives_projection_refresh_failure",
+        },
+        ConformanceConsumer::RustTest {
             id: "e2e_runtime::session_input_edit::generated_remote_edits_replicate_signed_effect_and_receipt",
             package: "gents",
             source_path: "crates/gents/tests/e2e_runtime/session_input_edit.rs",

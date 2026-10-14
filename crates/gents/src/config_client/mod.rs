@@ -5,7 +5,7 @@
 //! writers under `gents-cli/src/config_writes`) and the runtime
 //! self-configuration tools (`crate::self_config`).
 //!
-//! The client is DID-parameterized: [`ConfigAccess::transact_local`] accepts an
+//! The client is DID-parameterized: [`ConfigAccess::transact_local_write`] accepts an
 //! optional `identity::Did`, and every statement executed inside that
 //! transaction carries it as the DefraDB ACP actor. Authorization remains at
 //! the node. Embedded CLI paths default to the node DID and signer. HTTP paths
@@ -35,8 +35,6 @@ mod schema_install;
 mod schema_management;
 mod txn;
 pub(crate) mod write_telemetry;
-
-pub(crate) use graphql::ensure_query_document;
 
 /// A transaction step this owner classified as unavailable (a conflict that
 /// outlived its retries, a storage failure, or a step timeout), as opposed to
@@ -270,16 +268,11 @@ impl ConfigAccess {
 
     pub fn execute<'a>(&'a self, query: &'a str) -> BoxFuture<'a, Result<Value>> {
         Box::pin(async move {
-            graphql::ensure_query_document(query)?;
             match self {
                 Self::Graphql(graphql) => post_graphql(graphql, query).await,
                 Self::Local(node) => {
-                    let response = crate::graphql::graphql_with_transaction_retry(
-                        node,
-                        query,
-                        "config GraphQL",
-                    )
-                    .await?;
+                    let response = Self::read_local_response(node, query, "config GraphQL").await?;
+                    crate::graphql::ensure_no_errors(&response, "config GraphQL")?;
                     Ok(crate::graphql::into_data_envelope(response.data))
                 }
             }

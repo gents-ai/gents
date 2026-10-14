@@ -47,7 +47,7 @@ async fn apply_config(
     }
     let bundle = desired_state::export_bundle_from_manifest(desired, "test")?;
     access
-        .transact("test.config_import", |txn| {
+        .transact_write("test.config_import", |txn| {
             let bundle = &bundle;
             let report = &report;
             Box::pin(async move { apply_desired_state_changes(txn, bundle, report).await })
@@ -57,7 +57,7 @@ async fn apply_config(
 
 async fn tools_id(access: &ConfigAccess, owner: &str, id: &str) -> Result<Option<String>> {
     access
-        .transact("test.config_import.read", |txn| {
+        .transact_write("test.config_import.read", |txn| {
             Box::pin(async move {
                 Ok(
                     read_desired_state_record_in_txn(txn, Collection::Tools, owner, id)
@@ -104,7 +104,7 @@ async fn imports_complete_candidate_and_recreates_only_the_scoped_tombstone() ->
 
     // Retained inbound references prohibit an independently requested deletion.
     let rejected = access
-        .transact("test.config_import.dangling_delete", |txn| {
+        .transact_write("test.config_import.dangling_delete", |txn| {
             Box::pin(async move {
                 apply_delete_collection(txn, Collection::Tools, "owner-a", &["tools".into()]).await
             })

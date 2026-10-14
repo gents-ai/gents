@@ -56,7 +56,7 @@ async fn flush_workspace_documents(
         return Ok(());
     }
     access
-        .transact("workspace.documents.flush", move |txn| {
+        .transact_write("workspace.documents.flush", move |txn| {
             Box::pin(async move {
                 for workspace in documents.workspaces.values() {
                     txn.execute(&isolated_workspace_upsert_mutation(workspace))

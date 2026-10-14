@@ -849,7 +849,7 @@ mod tests {
         fixture
             .desktop_core()
             .operator_access(node_did)?
-            .transact("desktop.fixture.skill", |txn| {
+            .transact_write("desktop.fixture.skill", |txn| {
                 Box::pin(async move {
                     let (_, agent) = read_desired_state_record_in_txn(
                         txn,

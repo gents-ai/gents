@@ -405,7 +405,7 @@ async fn persist_event_bindings(
     for trigger in snapshot.active_event_triggers().values() {
         let behavior = snapshot.agent(&trigger.task.agent_id).unwrap();
         let owner = behavior.node_did();
-        access.transact("test.event_binding", |txn| Box::pin(async move {
+        access.transact_write("test.event_binding", |txn| Box::pin(async move {
             txn.execute_with_variables(
                 "mutation($input:EventSourceMutationInputArg!){create_EventSource(input:$input){_docID}}",
                 &serde_json::json!({"input":{"node_did":owner,"event_source_id":trigger.trigger_id,
@@ -458,7 +458,7 @@ async fn admit_observed_event(
     let mutation = format!("mutation {{create_AgentRequest(input: {{request_id: \"{}\", node_did: \"{}\", session_id: \"{}\", agent_id: \"general\", content: \"fixture delivery\", purpose: \"normal\", lifecycle_state: \"pending\", created_at: \"2030-01-01T00:00:00Z\"}}) {{_docID}}}}",
         escape_graphql_string(&fire.request_id), escape_graphql_string(&fire.identity.owner_did), escape_graphql_string(&fire.session_id));
     crate::config_client::ConfigAccess::Local(node.clone())
-        .transact("test.event_admission", |txn| {
+        .transact_write("test.event_admission", |txn| {
             let fire = &fire;
             let mutation = &mutation;
             Box::pin(async move {
@@ -701,7 +701,7 @@ async fn a_callback_result_fires_its_bindings_event_source_once() {
             ("inv-wanted", "maintenance-execute-workspace"),
         ] {
             crate::callback::create_callback_result(
-                node_for_write.as_ref(),
+                &node_for_write,
                 &crate::callback::CallbackResultDoc {
                     result_id: format!("res-{invocation_id}"),
                     invocation_id: invocation_id.to_string(),
@@ -1572,23 +1572,28 @@ async fn event_source_hydrates_doc_vars_from_source_doc_fields() {
 /// is required so the runtime's `fire_count += 1` increment has a value to
 /// read back.
 async fn create_event_trigger_doc(
-    node: &defra_node::EmbeddedNode,
+    node: &Arc<defra_node::EmbeddedNode>,
     trigger_id: &str,
     task_id: &str,
     source_collection: &str,
 ) {
     let input = serde_json::json!({"node_did":event_test_behavior().node_did(),"trigger_id":trigger_id,"task_id":task_id,"source":{"kind":"event","event_source_id":source_collection},"enabled":true,"concurrency":"serial","fire_count":0});
-    crate::config_client::ConfigAccess::transact_local(node, None, "test.trigger_fixture", |txn| {
-        let input = &input;
-        Box::pin(async move {
-            txn.execute_with_variables(
+    crate::config_client::ConfigAccess::transact_local_write(
+        node,
+        None,
+        "test.trigger_fixture",
+        |txn| {
+            let input = &input;
+            Box::pin(async move {
+                txn.execute_with_variables(
                 "mutation($input:TriggerMutationInputArg!){create_Trigger(input:$input){_docID}}",
                 &serde_json::json!({"input":input}),
             )
             .await?;
-            Ok(())
-        })
-    })
+                Ok(())
+            })
+        },
+    )
     .await
     .unwrap();
 }
@@ -1630,13 +1635,7 @@ async fn event_source_on_result_writes_runtime_fields_on_fired() {
     // Seed the Trigger doc so `update_trigger_runtime_fields` has
     // a row to write back against. Apply-path fields are set here; the
     // runtime writeback must leave them alone.
-    create_event_trigger_doc(
-        node.as_ref(),
-        "trigger-fired",
-        "task-webhook",
-        "WebhookEvent",
-    )
-    .await;
+    create_event_trigger_doc(&node, "trigger-fired", "task-webhook", "WebhookEvent").await;
 
     let task = ResolvedTask {
         emit_outcome: false,
@@ -1755,13 +1754,7 @@ async fn event_source_on_result_writes_runtime_fields_on_skipped_or_errored() {
         .await
         .expect("add_schema for WebhookEvent");
 
-    create_event_trigger_doc(
-        node.as_ref(),
-        "trigger-skip-err",
-        "task-webhook",
-        "WebhookEvent",
-    )
-    .await;
+    create_event_trigger_doc(&node, "trigger-skip-err", "task-webhook", "WebhookEvent").await;
 
     let task = ResolvedTask {
         emit_outcome: false,

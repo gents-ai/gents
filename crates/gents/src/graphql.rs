@@ -16,10 +16,8 @@
 //! source filter is by the trigger engine's filter probe — is
 //! covered by neither. See #1038.
 
-use std::time::Duration;
-
 use anyhow::{Context, Result};
-use defra_node::{EmbeddedNode, ExecuteRetryPolicy, QueryResponse};
+use defra_node::{EmbeddedNode, QueryResponse};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::Value;
@@ -28,44 +26,6 @@ pub use gents_protocol::graphql::{
     escape_graphql_string, validate_collection_identifier, validate_graphql_filter_fragment,
     validate_graphql_name,
 };
-
-const GRAPHQL_READ_MAX_RETRIES: u32 = 3;
-const GRAPHQL_READ_INITIAL_BACKOFF_MS: u64 = 100;
-
-const GRAPHQL_RETRY_POLICY: ExecuteRetryPolicy = ExecuteRetryPolicy::new(
-    GRAPHQL_READ_MAX_RETRIES,
-    Duration::from_millis(GRAPHQL_READ_INITIAL_BACKOFF_MS),
-    Duration::from_millis(800),
-);
-async fn graphql_response_with_policy(
-    node: &EmbeddedNode,
-    graphql: &str,
-    operation: &str,
-    retry_policy: ExecuteRetryPolicy,
-) -> QueryResponse {
-    let started = std::time::Instant::now();
-    let response = crate::config_client::ConfigAccess::execute_local_response_with_retry(
-        node,
-        graphql,
-        retry_policy,
-    )
-    .await;
-    let elapsed = started.elapsed();
-    if elapsed > Duration::from_secs(1) {
-        tracing::warn!(
-            operation,
-            elapsed_ms = elapsed.as_millis() as u64,
-            "DefraDB GraphQL completed"
-        );
-    } else {
-        tracing::debug!(
-            operation,
-            elapsed_ms = elapsed.as_millis() as u64,
-            "DefraDB GraphQL completed"
-        );
-    }
-    response
-}
 
 /// Execute GraphQL through the node's identity-aware retry path.
 ///
@@ -104,8 +64,7 @@ pub async fn graphql_response_with_transaction_retry(
     graphql: &str,
     operation: &str,
 ) -> Result<QueryResponse> {
-    crate::config_client::ensure_query_document(graphql)?;
-    Ok(graphql_response_with_policy(node, graphql, operation, GRAPHQL_RETRY_POLICY).await)
+    crate::config_client::ConfigAccess::read_local_response(node, graphql, operation).await
 }
 
 /// Execute identity-aware GraphQL with transaction-conflict retry and fail on

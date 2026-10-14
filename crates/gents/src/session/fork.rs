@@ -67,9 +67,12 @@ fn fork_error(error: anyhow::Error) -> ForkError {
     }
 }
 
-pub async fn fork(node: &EmbeddedNode, params: ForkParams<'_>) -> Result<ForkOutcome, ForkError> {
+pub async fn fork(
+    node: &std::sync::Arc<EmbeddedNode>,
+    params: ForkParams<'_>,
+) -> Result<ForkOutcome, ForkError> {
     let child = uuid::Uuid::new_v4().to_string();
-    ConfigAccess::transact_local(node, None, "session.fork", |txn| {
+    ConfigAccess::transact_local_write(node, None, "session.fork", |txn| {
         let child = child.clone();
         let params = params.clone();
         Box::pin(async move { fork_in_txn(txn, &params, &child).await })
@@ -84,7 +87,7 @@ pub async fn fork_via_http(
 ) -> Result<ForkOutcome, ForkError> {
     let child = uuid::Uuid::new_v4().to_string();
     ConfigAccess::Graphql(endpoint.clone())
-        .transact("session.fork", |txn| {
+        .transact_write("session.fork", |txn| {
             let child = child.clone();
             let params = params.clone();
             Box::pin(async move { fork_in_txn(txn, &params, &child).await })

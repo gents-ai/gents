@@ -103,7 +103,9 @@ impl ConfigAccess {
     pub async fn materialize_schema_collection(&self, collection: &str) -> Result<usize> {
         match self {
             Self::Local(node) => node.materialize_collection(collection).await,
-            Self::Graphql(_) => anyhow::bail!("the pinned DefraDB HTTP API does not expose collection materialization; use the schema tool on the runtime node"),
+            Self::Graphql(_) => anyhow::bail!(
+                "the pinned DefraDB HTTP API does not expose collection materialization; use the schema tool on the runtime node"
+            ),
         }
     }
 

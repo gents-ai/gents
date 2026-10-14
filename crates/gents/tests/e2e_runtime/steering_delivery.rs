@@ -84,15 +84,7 @@ async fn steering_case(hold_tool: bool) {
         )],
     )
     .unwrap();
-    bind_agent_backend(
-        db.node.as_ref(),
-        did,
-        AGENT,
-        BACKEND,
-        backend.endpoint(),
-        MODEL,
-    )
-    .await;
+    bind_agent_backend(&db.node, did, AGENT, BACKEND, backend.endpoint(), MODEL).await;
     let mut session = session_document(name, AGENT, &chrono::Utc::now().to_rfc3339());
     session.node_did = did.into();
     session.requester_did = Some(did.into());
@@ -280,15 +272,7 @@ async fn signed_request_cannot_forge_another_requests_queue_slot() {
         )],
     )
     .unwrap();
-    bind_agent_backend(
-        db.node.as_ref(),
-        did,
-        AGENT,
-        BACKEND,
-        backend.endpoint(),
-        MODEL,
-    )
-    .await;
+    bind_agent_backend(&db.node, did, AGENT, BACKEND, backend.endpoint(), MODEL).await;
     let mut session = session_document(session_id, AGENT, &chrono::Utc::now().to_rfc3339());
     session.node_did = did.into();
     session.requester_did = Some(did.into());

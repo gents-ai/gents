@@ -49,7 +49,7 @@ impl BackgroundCompletionClaimSnapshot {
 }
 
 async fn claim_request_with_projection<F>(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     session_id: &str,
     capture_background_snapshot: bool,
     request: &AgentRequest,
@@ -85,7 +85,7 @@ where
     );
     let snapshot_query = &snapshot_query;
     let build_mutation = &build_mutation;
-    crate::config_client::ConfigAccess::transact_local(
+    crate::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "lifecycle.claim_request",
@@ -764,7 +764,7 @@ impl RequestLifecycle {
             == gents_protocol::request_admission::RequestPurpose::Normal
             && crate::lifecycle::is_background_completion_request(&self.request.input);
         let Some((resp, snapshot, folded_selection)) = claim_request_with_projection(
-            self.node.as_ref(),
+            &self.node,
             &self.request.session_id,
             is_background_completion,
             &self.request,
@@ -931,7 +931,7 @@ mod tests {
     }
 
     async fn insert_pending_request(
-        node: &EmbeddedNode,
+        node: &std::sync::Arc<EmbeddedNode>,
         request_id: &str,
         session_id: &str,
         created_at: &str,
@@ -951,7 +951,7 @@ mod tests {
     }
 
     async fn insert_pending_request_for_owner(
-        node: &EmbeddedNode,
+        node: &std::sync::Arc<EmbeddedNode>,
         owner: &str,
         request_id: &str,
         session_id: &str,
@@ -1149,7 +1149,7 @@ mod tests {
             .await;
         }
         for (request, expected) in [(&first, true), (&second, false)] {
-            let allowed = crate::config_client::ConfigAccess::transact_local(
+            let allowed = crate::config_client::ConfigAccess::transact_local_write(
                 &node,
                 None,
                 "test.claim_queue_arrival_order",
@@ -1240,7 +1240,7 @@ mod tests {
                 })
             })
             .collect::<Vec<_>>();
-        crate::config_client::ConfigAccess::transact_local(
+        crate::config_client::ConfigAccess::transact_local_write(
             &node,
             None,
             "test.seed_serial_claim_receipts",
@@ -1271,7 +1271,7 @@ mod tests {
                 .unwrap()["can_claim"]
                 .as_bool()
                 .unwrap();
-            let allowed = crate::config_client::ConfigAccess::transact_local(
+            let allowed = crate::config_client::ConfigAccess::transact_local_write(
                 &node,
                 None,
                 "test.serial_claim_trigger_cohort",
@@ -1332,7 +1332,7 @@ mod tests {
                     "goal_id": original.goal_id, "goal_objective": "perform next assignment",
                     "goal_token_budget": task_budget, "goal_assignment_applied": false,
                 });
-                crate::config_client::ConfigAccess::transact_local(&node, None, "test.task_assignment", |txn| {
+                crate::config_client::ConfigAccess::transact_local_write(&node, None, "test.task_assignment", |txn| {
             let receipt = receipt.clone();
             Box::pin(async move {
                 txn.execute_with_variables("mutation($input: TriggerFireMutationInputArg!) { create_TriggerFire(input: $input) { _docID } }",
@@ -1387,7 +1387,7 @@ mod tests {
         }}"#,
                     escape_graphql_string(&first_doc_id)
                 );
-                crate::config_client::ConfigAccess::transact_local(
+                crate::config_client::ConfigAccess::transact_local_write(
                     &node,
                     None,
                     "test.finish_prior_assignment",
@@ -1492,7 +1492,7 @@ mod tests {
                 "queued_serial": true,
                 "goal_assignment_applied": false,
             });
-            crate::config_client::ConfigAccess::transact_local(
+            crate::config_client::ConfigAccess::transact_local_write(
                 &node, None, "test.serial_claim_receipt", |txn| {
                     let input = input.clone();
                     Box::pin(async move {
@@ -1562,7 +1562,7 @@ mod tests {
     async fn claim_preserves_same_session_ordering() {
         let node = test_node().await;
         let first = insert_pending_request(
-            node.as_ref(),
+            &node,
             "same-session-request-1",
             "same-session",
             "2026-01-01T00:00:00Z",
@@ -1585,7 +1585,7 @@ mod tests {
             "immutable request content changed"
         );
         let second = insert_pending_request(
-            node.as_ref(),
+            &node,
             "same-session-request-2",
             "same-session",
             "2026-01-01T00:00:01Z",
@@ -1668,7 +1668,7 @@ mod tests {
             ..Default::default()
         };
         let request = insert_pending_request(
-            node.as_ref(),
+            &node,
             "background-wake-1",
             session_id,
             "2026-08-12T22:00:00Z",

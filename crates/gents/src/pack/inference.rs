@@ -96,7 +96,7 @@ pub async fn inference_profile_options(
     node_did: &str,
 ) -> Result<Vec<PackInferenceProfileOption>> {
     let (node_enabled, profiles, backends) = access
-        .transact("pack.inference_binding_preview", |txn| {
+        .transact_readonly("pack.inference_binding_preview", |txn| {
             Box::pin(async move {
                 let refs = crate::ConfigReferences::load_in_txn(txn, node_did).await?;
                 let node_enabled = refs

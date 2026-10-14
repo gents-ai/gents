@@ -555,7 +555,7 @@ pub async fn record_plugin_store_change(
             .iter()
             .any(|plugin| plugin.owner_pack_coordinate.as_deref() == Some(coordinate));
     access
-        .transact("pack.record_plugin_store", |txn| {
+        .transact_write("pack.record_plugin_store", |txn| {
             Box::pin(async move {
                 let prior = read_record(txn, owner, coordinate).await?;
                 let documents: Vec<RecordedDocument> = prior.documents.values().cloned().collect();
@@ -758,7 +758,7 @@ pub async fn remove_pack(
     policy: DriftPolicy,
 ) -> Result<RemoveReport> {
     access
-        .transact("pack.remove", |txn| {
+        .transact_write("pack.remove", |txn| {
             Box::pin(async move {
                 let record = read_record(txn, owner, coordinate).await?;
                 anyhow::ensure!(

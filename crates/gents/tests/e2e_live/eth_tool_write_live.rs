@@ -372,7 +372,7 @@ async fn start_local_chain() -> LocalChain {
     panic!("could not start a local Anvil or Hardhat JSON-RPC on 127.0.0.1")
 }
 
-async fn provision_key(node: &EmbeddedNode, identity: &dyn NodeIdentity) -> ProvisionedKey {
+async fn provision_key(node: &Arc<EmbeddedNode>, identity: &dyn NodeIdentity) -> ProvisionedKey {
     let principal_did = identity.did().to_string();
     let binding_id = format!("{BINDING_PREFIX}-{}", uuid::Uuid::new_v4());
     let secret = generate_secp256k1_secret();
@@ -433,7 +433,7 @@ fn graphql_string_list(values: &[String]) -> String {
 }
 
 async fn create_write_eth_tool(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     node_did: &str,
     rpc_url: &str,
     chain_id: u64,
@@ -602,7 +602,7 @@ async fn eth_tool_live_model_writes_on_local_chain() {
     let db = test_db("eth-tool-write-live").await;
     let identity: Arc<dyn NodeIdentity> = Arc::new(test_identity("eth-tool-write-live"));
     let (node_did, agent_id) = bind_eth_target(
-        db.node.as_ref(),
+        &db.node,
         identity.as_ref(),
         &target,
         "You are an Ethereum operator on a local Hardhat chain. \
@@ -613,7 +613,7 @@ async fn eth_tool_live_model_writes_on_local_chain() {
     )
     .await;
 
-    let key = provision_key(db.node.as_ref(), identity.as_ref()).await;
+    let key = provision_key(&db.node, identity.as_ref()).await;
     let funded = send_unlocked(
         &chain.rpc_url,
         FUNDER,
@@ -644,7 +644,7 @@ async fn eth_tool_live_model_writes_on_local_chain() {
     );
 
     create_write_eth_tool(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         &chain.rpc_url,
         chain.chain_id,
@@ -654,7 +654,7 @@ async fn eth_tool_live_model_writes_on_local_chain() {
     .await;
 
     configure_agent_tools(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         &agent_id,
         None,
@@ -683,12 +683,12 @@ async fn eth_tool_live_model_writes_on_local_chain() {
     .expect("boot agent");
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
-    wait_for_runtime_ready(db.node.as_ref(), &node_did).await;
+    wait_for_runtime_ready(&db.node, &node_did).await;
     let _booted = BootedAgent::new(shutdown_tx, handle, node_did.clone());
 
     let transfer_id = "eth-write-live-transfer-1";
     create_runtime_request(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         &agent_id,
         transfer_id,
@@ -699,8 +699,7 @@ async fn eth_tool_live_model_writes_on_local_chain() {
         ),
     )
     .await;
-    let terminal =
-        wait_for_request_terminal(db.node.as_ref(), transfer_id, Duration::from_secs(180)).await;
+    let terminal = wait_for_request_terminal(&db.node, transfer_id, Duration::from_secs(180)).await;
     assert_eq!(
         terminal, "completed",
         "native transfer request must complete; last={terminal}"
@@ -728,7 +727,7 @@ async fn eth_tool_live_model_writes_on_local_chain() {
 
     let increment_id = "eth-write-live-increment-1";
     create_runtime_request(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         &agent_id,
         increment_id,
@@ -737,7 +736,7 @@ async fn eth_tool_live_model_writes_on_local_chain() {
     )
     .await;
     let terminal =
-        wait_for_request_terminal(db.node.as_ref(), increment_id, Duration::from_secs(180)).await;
+        wait_for_request_terminal(&db.node, increment_id, Duration::from_secs(180)).await;
     assert_eq!(
         terminal, "completed",
         "counter increment request must complete; last={terminal}"
@@ -766,7 +765,7 @@ async fn eth_tool_live_model_writes_on_local_chain() {
         "Counter.number must be 1 after increment, got {number_hex}"
     );
 
-    let submissions = fetch_submissions(db.node.as_ref(), &node_did).await;
+    let submissions = fetch_submissions(&db.node, &node_did).await;
     let confirmed = submissions
         .iter()
         .filter(|row| row.get("status").and_then(Value::as_str) == Some("confirmed_success"))

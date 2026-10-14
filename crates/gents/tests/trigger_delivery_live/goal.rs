@@ -20,7 +20,7 @@ async fn evidence(access: &ConfigAccess, owner: &str) -> Result<Value> {
     }}"#
     );
     access
-        .transact("test.delivery_goal.snapshot", |txn| {
+        .transact_write("test.delivery_goal.snapshot", |txn| {
             let query = &query;
             Box::pin(async move { txn.execute(query).await })
         })

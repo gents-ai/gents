@@ -121,7 +121,7 @@ impl Delivery {
     async fn cursor(&self) -> String {
         let owner = event_test_behavior().node_did().to_owned();
         crate::config_client::ConfigAccess::Local(self.node.clone())
-            .transact("test.unacknowledged_cursor", |txn| {
+            .transact_write("test.unacknowledged_cursor", |txn| {
                 let owner = &owner;
                 Box::pin(async move {
                     Ok(

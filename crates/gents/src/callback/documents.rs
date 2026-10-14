@@ -9,13 +9,6 @@ use serde_json::Value;
 
 use crate::graphql::{escape_graphql_string, first_row, graphql_with_transaction_retry, rows};
 
-async fn committed_mutation(
-    node: &EmbeddedNode,
-    operation: &'static str,
-    mutation: &str,
-) -> Result<defra_node::QueryResponse> {
-    crate::config_client::ConfigAccess::write_local_response(node, operation, mutation).await
-}
 use crate::workspace::{
     isolated_workspace_upsert_mutation, workspace_placement_upsert_mutation, IsolatedWorkspaceDoc,
     MemoryWorkspaceDocuments, RepositoryPlacementRef, WorkspaceDocuments, WorkspacePlacementDoc,
@@ -308,7 +301,7 @@ pub fn strip_secret_fields(value: Value) -> Value {
 }
 
 async fn load_config<T: serde::de::DeserializeOwned + Send>(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     collection: crate::Collection,
     owner: &str,
     id: &str,
@@ -356,28 +349,28 @@ pub async fn list_enabled_bindings(
 }
 
 pub async fn load_callback_module(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     module_id: &str,
     owner: &str,
 ) -> Result<Option<CallbackModuleDoc>> {
     load_config(node, crate::Collection::CallbackModule, owner, module_id).await
 }
 pub async fn load_callback(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     callback_id: &str,
     owner: &str,
 ) -> Result<Option<crate::document_config::Callback>> {
     load_config(node, crate::Collection::Callback, owner, callback_id).await
 }
 pub async fn load_binding(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     binding_id: &str,
     owner: &str,
 ) -> Result<Option<CallbackBindingDoc>> {
     load_config(node, crate::Collection::CallbackBinding, owner, binding_id).await
 }
 pub async fn load_event_source(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     source_id: &str,
     owner: &str,
 ) -> Result<Option<crate::document_config::EventSource>> {
@@ -633,7 +626,7 @@ pub async fn load_callback_result(
 }
 
 pub async fn create_pending_invocation(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     invocation: &CallbackInvocationDoc,
 ) -> Result<CallbackInvocationDoc> {
     if let Some(existing) = load_invocation_by_key(
@@ -661,7 +654,7 @@ pub async fn create_pending_invocation(
     });
     let variables = serde_json::json!({"input": input});
     let mutation = "mutation($input: CallbackInvocationMutationInputArg!) { create_CallbackInvocation(input: $input) { _docID } }";
-    let written = crate::config_client::ConfigAccess::transact_local(
+    let written = crate::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "callback.create_invocation",
@@ -746,12 +739,17 @@ fn optional_graphql_string_field(name: &str, value: Option<&str>) -> String {
 }
 
 pub async fn update_invocation(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     invocation: &CallbackInvocationDoc,
     expected_state: Option<&str>,
 ) -> Result<bool> {
     let mutation = update_invocation_mutation(invocation, expected_state);
-    let response = committed_mutation(node, "callback.update_invocation", &mutation).await?;
+    let response = crate::config_client::ConfigAccess::write_local_response(
+        node,
+        "callback.update_invocation",
+        &mutation,
+    )
+    .await?;
     Ok(crate::graphql::single_mutation_document(&response, "update_CallbackInvocation")?.is_some())
 }
 
@@ -790,7 +788,7 @@ pub(super) fn create_callback_result_mutation(result: &CallbackResultDoc) -> Str
 }
 
 pub async fn create_callback_result(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     result: &CallbackResultDoc,
 ) -> Result<CallbackResultDoc> {
     if let Some(existing) =
@@ -799,7 +797,13 @@ pub async fn create_callback_result(
         return Ok(existing);
     }
     let mutation = create_callback_result_mutation(result);
-    match committed_mutation(node, "callback.create_result", &mutation).await {
+    match crate::config_client::ConfigAccess::write_local_response(
+        node,
+        "callback.create_result",
+        &mutation,
+    )
+    .await
+    {
         Ok(_) => load_callback_result(node, &result.invocation_id, &result.owner_node_did)
             .await?
             .ok_or_else(|| anyhow!("created CallbackResult missing after write")),
@@ -815,7 +819,7 @@ pub async fn create_callback_result(
 }
 
 pub async fn load_repository_placement(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     repository_id: &str,
     owner: &str,
 ) -> Result<Option<RepositoryPlacementRef>> {
@@ -850,21 +854,29 @@ pub async fn load_memory_workspace_docs(
 }
 
 pub async fn flush_workspace_docs(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     docs: &MemoryWorkspaceDocuments,
 ) -> Result<()> {
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     for workspace in docs.workspaces.values() {
         let mutation = isolated_workspace_upsert_mutation(workspace);
-        committed_mutation(node, "callback.upsert_isolated_workspace", &mutation)
-            .await
-            .with_context(|| format!("persist IsolatedWorkspace {}", workspace.workspace_id))?;
+        crate::config_client::ConfigAccess::write_local_response(
+            node,
+            "callback.upsert_isolated_workspace",
+            &mutation,
+        )
+        .await
+        .with_context(|| format!("persist IsolatedWorkspace {}", workspace.workspace_id))?;
     }
     for placement in docs.placements.values() {
         let mutation = workspace_placement_upsert_mutation(placement, &now);
-        committed_mutation(node, "callback.upsert_workspace_placement", &mutation)
-            .await
-            .with_context(|| format!("persist WorkspacePlacement {}", placement.workspace_id))?;
+        crate::config_client::ConfigAccess::write_local_response(
+            node,
+            "callback.upsert_workspace_placement",
+            &mutation,
+        )
+        .await
+        .with_context(|| format!("persist WorkspacePlacement {}", placement.workspace_id))?;
     }
     Ok(())
 }

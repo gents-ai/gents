@@ -516,7 +516,7 @@ async fn accepted_tool_arguments_read_only_the_accepted_message() {
     };
     let variables =
         crate::session::canonical_rows::transcript_message_create_variables(&unresolvable).unwrap();
-    ConfigAccess::transact_local(node.as_ref(), None, "test.unrelated_message", |txn| {
+    ConfigAccess::transact_local_write(&node, None, "test.unrelated_message", |txn| {
         let variables = variables.clone();
         Box::pin(async move {
             txn.execute_with_variables(

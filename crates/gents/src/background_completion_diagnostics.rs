@@ -91,7 +91,7 @@ pub async fn load_background_completion_diagnostics(
         }}"#
     );
     access
-        .transact("background_completion.diagnostics", |txn| {
+        .transact_readonly("background_completion.diagnostics", |txn| {
             let query = &query;
             Box::pin(async move {
                 let response = txn.execute(query).await?;

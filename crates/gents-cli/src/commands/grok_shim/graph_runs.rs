@@ -1257,7 +1257,7 @@ mod tests {
             .collect(),
         )
         .unwrap();
-        ConfigAccess::transact_local(node, None, "grok.graph.fixture", |txn| {
+        ConfigAccess::transact_local_write(node, None, "grok.graph.fixture", |txn| {
             let plan = &plan;
             Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(drop) })
         })

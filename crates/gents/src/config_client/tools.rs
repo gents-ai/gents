@@ -10,7 +10,7 @@ use super::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
 pub async fn write_tools_document(access: &ConfigAccess, tools: &Tools) -> Result<String> {
     tools.validate()?;
     access
-        .transact("config.tools.write", |txn| {
+        .transact_write("config.tools.write", |txn| {
             Box::pin(async move {
                 let value = serde_json::to_value(tools)?;
                 let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
@@ -59,7 +59,7 @@ mod tests {
         tools.tags.clear();
         assert_eq!(write_tools_document(&access, &tools).await?, first_id);
         access
-            .transact("test.tools.read", |txn| {
+            .transact_write("test.tools.read", |txn| {
                 let tools = &tools;
                 let foreign = &foreign;
                 Box::pin(async move {

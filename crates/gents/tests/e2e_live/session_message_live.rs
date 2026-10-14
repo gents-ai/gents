@@ -129,9 +129,9 @@ async fn live_local_create_session() -> Result<()> {
     let node_did = identity.did().to_string();
     let orchestrator_agent_id = default_agent_id_for_node(&node_did);
     let profile_id = default_inference_profile_id_for_agent(&orchestrator_agent_id);
-    upsert_live_backend(db.node.as_ref(), &node_did, &target).await;
+    upsert_live_backend(&db.node, &node_did, &target).await;
     configure_agent(
-        db.node.as_ref(),
+        &db.node,
         &orchestrator_agent_id,
         &node_did,
         &target,
@@ -142,7 +142,7 @@ async fn live_local_create_session() -> Result<()> {
     )
     .await;
     configure_agent(
-        db.node.as_ref(),
+        &db.node,
         RESEARCHER_AGENT_ID,
         &node_did,
         &target,
@@ -153,7 +153,7 @@ async fn live_local_create_session() -> Result<()> {
     )
     .await;
     authorize_session_targets(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         &orchestrator_agent_id,
         vec![AgentTargetDocument {
@@ -173,7 +173,7 @@ async fn live_local_create_session() -> Result<()> {
     let request_id = "req-live-local-create-session";
     let session_id = "session-live-local-create-session";
     create_runtime_request(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         &orchestrator_agent_id,
         request_id,
@@ -191,9 +191,9 @@ async fn live_local_create_session() -> Result<()> {
     )
     .await;
     let Some(caused) =
-        wait_for_caused_request(db.node.as_ref(), request_id, Duration::from_secs(120)).await
+        wait_for_caused_request(&db.node, request_id, Duration::from_secs(120)).await
     else {
-        dump_session_diagnostics(db.node.as_ref(), session_id).await;
+        dump_session_diagnostics(&db.node, session_id).await;
         panic!("agent_new must cause an AgentRequest linked to the orchestrator request");
     };
     tracing::info!("[live-local] caused request = {caused:?}");
@@ -223,19 +223,11 @@ async fn live_local_create_session() -> Result<()> {
         "agent_new must start a new session"
     );
 
-    let caused_terminal = wait_for_request_terminal(
-        db.node.as_ref(),
-        &caused.request_id,
-        Duration::from_secs(180),
-    )
-    .await;
+    let caused_terminal =
+        wait_for_request_terminal(&db.node, &caused.request_id, Duration::from_secs(180)).await;
     assert_eq!(caused_terminal, "completed");
-    let caused_answer = wait_for_assistant_answer(
-        db.node.as_ref(),
-        &caused.request_id,
-        Duration::from_secs(30),
-    )
-    .await;
+    let caused_answer =
+        wait_for_assistant_answer(&db.node, &caused.request_id, Duration::from_secs(30)).await;
     tracing::info!("[live-local] started session answer = {caused_answer:?}");
     assert!(
         !caused_answer.trim().is_empty(),
@@ -273,20 +265,14 @@ async fn live_local_create_session() -> Result<()> {
         Duration::from_secs(60),
     )
     .await;
-    let wake = wait_for_background_wake(
-        db.node.as_ref(),
-        session_id,
-        request_id,
-        Duration::from_secs(60),
-    )
-    .await;
+    let wake =
+        wait_for_background_wake(&db.node, session_id, request_id, Duration::from_secs(60)).await;
     let wake_state =
-        wait_for_request_terminal(db.node.as_ref(), &wake.request_id, Duration::from_secs(180))
-            .await;
+        wait_for_request_terminal(&db.node, &wake.request_id, Duration::from_secs(180)).await;
     assert_eq!(wake_state, "completed");
 
     let parent_terminal =
-        wait_for_request_terminal(db.node.as_ref(), request_id, Duration::from_secs(60)).await;
+        wait_for_request_terminal(&db.node, request_id, Duration::from_secs(60)).await;
     assert_eq!(parent_terminal, "completed");
 
     agent.shutdown().await;
@@ -394,9 +380,9 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     let node_did = identity.did().to_string();
     let orchestrator_agent_id = default_agent_id_for_node(&node_did);
     let profile_id = default_inference_profile_id_for_agent(&orchestrator_agent_id);
-    upsert_live_backend(db.node.as_ref(), &node_did, &target).await;
+    upsert_live_backend(&db.node, &node_did, &target).await;
     configure_agent(
-        db.node.as_ref(),
+        &db.node,
         &orchestrator_agent_id,
         &node_did,
         &target,
@@ -407,7 +393,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     )
     .await;
     configure_agent(
-        db.node.as_ref(),
+        &db.node,
         BACKGROUND_WORKER_AGENT_ID,
         &node_did,
         &target,
@@ -418,7 +404,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     )
     .await;
     configure_standard_backgrounding_tools(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         &orchestrator_agent_id,
         workspace.path(),
@@ -428,7 +414,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     // Runtime startup probes before resolving its runnable snapshot. This test
     // inspects the resolved surfaces before `run`, so perform the same probe
     // first rather than assuming an unobserved backend is already healthy.
-    gents::backend_registry::probe_and_promote_enabled_backends(db.node.as_ref()).await;
+    gents::backend_registry::probe_and_promote_enabled_backends(&db.node).await;
     let loaded_agent = Gents::from_default_agent_documents(
         db.node.clone(),
         identity,
@@ -445,7 +431,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     let agent_request_id = "req-live-standard-background-agent";
     let agent_session_id = "session-live-standard-background-agent";
     create_runtime_request(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         &orchestrator_agent_id,
         agent_request_id,
@@ -463,20 +449,17 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     )
     .await;
     let parent_state =
-        wait_for_request_terminal(db.node.as_ref(), agent_request_id, Duration::from_secs(180))
-            .await;
+        wait_for_request_terminal(&db.node, agent_request_id, Duration::from_secs(180)).await;
     assert_eq!(parent_state, "completed");
     let parent_answer =
-        wait_for_assistant_answer(db.node.as_ref(), agent_request_id, Duration::from_secs(30))
-            .await;
+        wait_for_assistant_answer(&db.node, agent_request_id, Duration::from_secs(30)).await;
     assert!(
         parent_answer.contains("PARENT_RETURNED_AGENT_BACKGROUND"),
         "parent did not acknowledge the agent_new receipt: {parent_answer:?}"
     );
-    let caused =
-        wait_for_caused_request(db.node.as_ref(), agent_request_id, Duration::from_secs(60))
-            .await
-            .expect("agent_new must cause a request");
+    let caused = wait_for_caused_request(&db.node, agent_request_id, Duration::from_secs(60))
+        .await
+        .expect("agent_new must cause a request");
     assert_eq!(caused.agent_id, BACKGROUND_WORKER_AGENT_ID);
     assert_eq!(
         caused.caused_by_parent_tool_call_id.as_deref(),
@@ -493,7 +476,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
         "parent blocked on the started session; it was already {caused_state}"
     );
     assert!(
-        fetch_runtime_snapshot(db.node.as_ref(), &node_did)
+        fetch_runtime_snapshot(&db.node, &node_did)
             .await
             .is_some_and(|snapshot| snapshot.process_state == "ready"),
         "runtime must remain ready while the started session runs; caused={caused:?}"
@@ -516,7 +499,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     assert_eq!(receipt["status"], "running");
     assert_eq!(receipt["session_id"], caused.session_id.as_str());
     assert_no_tool_call(
-        db.node.as_ref(),
+        &db.node,
         agent_session_id,
         &[
             AGENT_MESSAGE_TOOL_NAME,
@@ -526,18 +509,14 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
         ],
     )
     .await;
-    assert_min_completed_inference_calls(db.node.as_ref(), agent_request_id, 2).await;
+    assert_min_completed_inference_calls(&db.node, agent_request_id, 2).await;
 
     std::fs::write(&child_release, b"release").expect("release started session");
-    let caused_terminal = wait_for_request_terminal(
-        db.node.as_ref(),
-        &caused.request_id,
-        Duration::from_secs(180),
-    )
-    .await;
+    let caused_terminal =
+        wait_for_request_terminal(&db.node, &caused.request_id, Duration::from_secs(180)).await;
     assert_eq!(caused_terminal, "completed");
-    assert_min_completed_inference_calls(db.node.as_ref(), &caused.request_id, 2).await;
-    let caused_answer = terminal_assistant_answer(db.node.as_ref(), &caused.request_id).await;
+    assert_min_completed_inference_calls(&db.node, &caused.request_id, 2).await;
+    let caused_answer = terminal_assistant_answer(&db.node, &caused.request_id).await;
     assert!(
         caused_answer.contains("CHILD_BACKGROUND_DONE"),
         "completed session lacks its selected canonical terminal output: {caused_answer:?}"
@@ -559,13 +538,13 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
         Duration::from_secs(60),
     )
     .await;
-    assert_wake_observed(db.node.as_ref(), agent_session_id, agent_request_id).await;
+    assert_wake_observed(&db.node, agent_session_id, agent_request_id).await;
 
     // Lane 2: spawn_process fire-and-continue.
     let tool_request_id = "req-live-standard-background-tool";
     let tool_session_id = "session-live-standard-background-tool";
     create_runtime_request(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         &orchestrator_agent_id,
         tool_request_id,
@@ -594,11 +573,10 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     );
 
     let tool_parent_state =
-        wait_for_request_terminal(db.node.as_ref(), tool_request_id, Duration::from_secs(180))
-            .await;
+        wait_for_request_terminal(&db.node, tool_request_id, Duration::from_secs(180)).await;
     assert_eq!(tool_parent_state, "completed");
     let tool_parent_answer =
-        wait_for_assistant_answer(db.node.as_ref(), tool_request_id, Duration::from_secs(30)).await;
+        wait_for_assistant_answer(&db.node, tool_request_id, Duration::from_secs(30)).await;
     assert!(
         tool_parent_answer.contains("PARENT_RETURNED_TOOL_BACKGROUND"),
         "parent did not acknowledge the background process receipt: {tool_parent_answer:?}"
@@ -616,12 +594,12 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
         "parent blocked on the native background tool"
     );
     assert_no_tool_call(
-        db.node.as_ref(),
+        &db.node,
         tool_session_id,
         &["wait_process", "cancel_process"],
     )
     .await;
-    assert_min_completed_inference_calls(db.node.as_ref(), tool_request_id, 2).await;
+    assert_min_completed_inference_calls(&db.node, tool_request_id, 2).await;
 
     std::fs::write(&tool_release, b"release").expect("release native background tool");
     let completed_tool = wait_for_tool_call_state(
@@ -650,7 +628,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
         Duration::from_secs(60),
     )
     .await;
-    assert_wake_observed(db.node.as_ref(), tool_session_id, tool_request_id).await;
+    assert_wake_observed(&db.node, tool_session_id, tool_request_id).await;
 
     // Lane 3: a managed session. Each step is its own request so the test
     // observes the started session still blocked at every step.
@@ -658,7 +636,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     let managed_agent_session_id = "session-live-managed-background-agent";
     let managed_create_request_id = "req-live-managed-background-agent-create";
     create_runtime_request(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         &orchestrator_agent_id,
         managed_create_request_id,
@@ -676,20 +654,17 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     .await;
     assert_eq!(
         wait_for_request_terminal(
-            db.node.as_ref(),
+            &db.node,
             managed_create_request_id,
             Duration::from_secs(180)
         )
         .await,
         "completed"
     );
-    let managed_caused = wait_for_caused_request(
-        db.node.as_ref(),
-        managed_create_request_id,
-        Duration::from_secs(60),
-    )
-    .await
-    .expect("managed agent_new must cause a request");
+    let managed_caused =
+        wait_for_caused_request(&db.node, managed_create_request_id, Duration::from_secs(60))
+            .await
+            .expect("managed agent_new must cause a request");
     // The started session is busy once its shell reports it is blocking.
     wait_for_model_tool_call(
         &db.node,
@@ -708,7 +683,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
 
     let managed_list_request_id = "req-live-managed-background-agent-list";
     create_runtime_request(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         &orchestrator_agent_id,
         managed_list_request_id,
@@ -725,16 +700,12 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     )
     .await;
     assert_eq!(
-        wait_for_request_terminal(
-            db.node.as_ref(),
-            managed_list_request_id,
-            Duration::from_secs(180)
-        )
-        .await,
+        wait_for_request_terminal(&db.node, managed_list_request_id, Duration::from_secs(180))
+            .await,
         "completed"
     );
 
-    let managed_state = fetch_request_lifecycle(db.node.as_ref(), &managed_caused.request_id)
+    let managed_state = fetch_request_lifecycle(&db.node, &managed_caused.request_id)
         .await
         .expect("managed caused lifecycle");
     assert!(
@@ -747,7 +718,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
         managed_caused.session_id
     );
     create_runtime_request(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         &orchestrator_agent_id,
         managed_message_request_id,
@@ -765,7 +736,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     .await;
     assert_eq!(
         wait_for_request_terminal(
-            db.node.as_ref(),
+            &db.node,
             managed_message_request_id,
             Duration::from_secs(180)
         )
@@ -792,7 +763,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     );
     assert!(
         !is_terminal(
-            &fetch_request_lifecycle(db.node.as_ref(), &managed_caused.request_id)
+            &fetch_request_lifecycle(&db.node, &managed_caused.request_id)
                 .await
                 .expect("managed caused lifecycle")
         ),
@@ -814,15 +785,14 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     std::fs::write(&managed_child_release, b"release").expect("release managed session");
     assert_eq!(
         wait_for_request_terminal(
-            db.node.as_ref(),
+            &db.node,
             &managed_caused.request_id,
             Duration::from_secs(240)
         )
         .await,
         "completed"
     );
-    let managed_answer =
-        terminal_assistant_answer(db.node.as_ref(), &managed_caused.request_id).await;
+    let managed_answer = terminal_assistant_answer(&db.node, &managed_caused.request_id).await;
     assert!(
         managed_answer.contains("CHILD_MANAGED_DONE"),
         "managed session lacks its terminal output: {managed_answer:?}"
@@ -898,7 +868,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     let managed_tool_request_id = "req-live-managed-background-tool-spawn";
     let managed_tool_session_id = "session-live-managed-background-tool";
     create_runtime_request(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         &orchestrator_agent_id,
         managed_tool_request_id,
@@ -916,19 +886,15 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     )
     .await;
     assert_eq!(
-        wait_for_request_terminal(
-            db.node.as_ref(),
-            managed_tool_request_id,
-            Duration::from_secs(180),
-        )
-        .await,
+        wait_for_request_terminal(&db.node, managed_tool_request_id, Duration::from_secs(180),)
+            .await,
         "completed"
     );
     let managed_process_handle = managed_tool.tool_call_id.clone();
 
     let managed_tool_list_request_id = "req-live-managed-background-tool-list";
     create_runtime_request(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         &orchestrator_agent_id,
         managed_tool_list_request_id,
@@ -946,7 +912,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     .await;
     assert_eq!(
         wait_for_request_terminal(
-            db.node.as_ref(),
+            &db.node,
             managed_tool_list_request_id,
             Duration::from_secs(180)
         )
@@ -959,7 +925,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
         "MANAGE_BACKGROUND_TOOL_READ_RUNNING: Call read_process exactly once now with tool_call_id {managed_process_handle:?} and offset 0. Do not call wait_process or any other tool."
     );
     create_runtime_request(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         &orchestrator_agent_id,
         managed_tool_read_request_id,
@@ -985,7 +951,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     .await;
     assert_eq!(
         wait_for_request_terminal(
-            db.node.as_ref(),
+            &db.node,
             managed_tool_read_request_id,
             Duration::from_secs(180)
         )
@@ -998,7 +964,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
         "MANAGE_BACKGROUND_TOOL_WAIT: Call wait_process exactly once now with tool_call_id {managed_process_handle:?}. Do not call any other tool."
     );
     create_runtime_request(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         &orchestrator_agent_id,
         managed_tool_wait_request_id,
@@ -1033,7 +999,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
         .expect("release managed native background tool");
 
     let managed_tool_wait_state = wait_for_request_terminal(
-        db.node.as_ref(),
+        &db.node,
         managed_tool_wait_request_id,
         Duration::from_secs(240),
     )
@@ -1045,7 +1011,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
         "MANAGE_BACKGROUND_TOOL_READ_TERMINAL: Call read_process exactly once now with tool_call_id {managed_process_handle:?} and offset 0. Do not call any other tool."
     );
     create_runtime_request(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         &orchestrator_agent_id,
         managed_tool_terminal_read_request_id,
@@ -1070,14 +1036,14 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     )
     .await;
     let managed_tool_state = wait_for_request_terminal(
-        db.node.as_ref(),
+        &db.node,
         managed_tool_terminal_read_request_id,
         Duration::from_secs(180),
     )
     .await;
     assert_eq!(managed_tool_state, "completed");
     let managed_tool_answer = wait_for_assistant_answer(
-        db.node.as_ref(),
+        &db.node,
         managed_tool_terminal_read_request_id,
         Duration::from_secs(30),
     )
@@ -1133,9 +1099,9 @@ async fn live_cross_node_create_session() -> Result<()> {
 
     // Node B hosts the fast-worker agent owned by DID-B.
     let profile_b = default_inference_profile_id_for_agent(&default_agent_id_for_node(&did_b));
-    upsert_live_backend(db_b.node.as_ref(), &did_b, &target).await;
+    upsert_live_backend(&db_b.node, &did_b, &target).await;
     configure_agent(
-        db_b.node.as_ref(),
+        &db_b.node,
         FAST_WORKER_AGENT_ID,
         &did_b,
         &target,
@@ -1149,9 +1115,9 @@ async fn live_cross_node_create_session() -> Result<()> {
     // Node A hosts the orchestrator owned by DID-A. Its allowlist names the
     // (DID-B, fast-worker) pair; B's agent is not mirrored onto A.
     let profile_a = default_inference_profile_id_for_agent(&orchestrator_agent_id);
-    upsert_live_backend(db_a.node.as_ref(), &did_a, &target).await;
+    upsert_live_backend(&db_a.node, &did_a, &target).await;
     configure_agent(
-        db_a.node.as_ref(),
+        &db_a.node,
         &orchestrator_agent_id,
         &did_a,
         &target,
@@ -1162,7 +1128,7 @@ async fn live_cross_node_create_session() -> Result<()> {
     )
     .await;
     authorize_session_targets(
-        db_a.node.as_ref(),
+        &db_a.node,
         &did_a,
         &orchestrator_agent_id,
         vec![AgentTargetDocument {
@@ -1185,7 +1151,7 @@ async fn live_cross_node_create_session() -> Result<()> {
     let request_id = "req-live-cross-node";
     let session_id = "session-live-cross-node";
     create_runtime_request(
-        db_a.node.as_ref(),
+        &db_a.node,
         &did_a,
         &orchestrator_agent_id,
         request_id,
@@ -1202,7 +1168,7 @@ async fn live_cross_node_create_session() -> Result<()> {
         Duration::from_secs(180),
     )
     .await;
-    let caused_a = wait_for_caused_request(db_a.node.as_ref(), request_id, Duration::from_secs(60))
+    let caused_a = wait_for_caused_request(&db_a.node, request_id, Duration::from_secs(60))
         .await
         .expect("agent_new on A must author the caused request");
     tracing::info!("[live-cross] caused request on A = {caused_a:?}");
@@ -1215,18 +1181,15 @@ async fn live_cross_node_create_session() -> Result<()> {
         Some(row.tool_call_id.as_str())
     );
 
-    let caused_b = wait_for_request_on_node(
-        db_b.node.as_ref(),
-        &caused_a.request_id,
-        Duration::from_secs(120),
-    )
-    .await
-    .unwrap_or_else(|| {
-        panic!(
-            "caused request {} must replicate to node B",
-            caused_a.request_id
-        )
-    });
+    let caused_b =
+        wait_for_request_on_node(&db_b.node, &caused_a.request_id, Duration::from_secs(120))
+            .await
+            .unwrap_or_else(|| {
+                panic!(
+                    "caused request {} must replicate to node B",
+                    caused_a.request_id
+                )
+            });
     tracing::info!("[live-cross] caused request on B = {caused_b:?}");
     assert_eq!(caused_b.node_did, did_b);
     assert_eq!(caused_b.requester_did.as_deref(), Some(did_a.as_str()));
@@ -1236,22 +1199,14 @@ async fn live_cross_node_create_session() -> Result<()> {
         Some(request_id)
     );
 
-    let terminal_b = wait_for_request_terminal(
-        db_b.node.as_ref(),
-        &caused_a.request_id,
-        Duration::from_secs(180),
-    )
-    .await;
+    let terminal_b =
+        wait_for_request_terminal(&db_b.node, &caused_a.request_id, Duration::from_secs(180)).await;
     assert_eq!(
         terminal_b, "completed",
         "B must admit and run the Peer request"
     );
-    let answer_b = wait_for_assistant_answer(
-        db_b.node.as_ref(),
-        &caused_a.request_id,
-        Duration::from_secs(30),
-    )
-    .await;
+    let answer_b =
+        wait_for_assistant_answer(&db_b.node, &caused_a.request_id, Duration::from_secs(30)).await;
     tracing::info!("[live-cross] answer on B = {answer_b:?}");
     assert!(
         !answer_b.trim().is_empty(),
@@ -1261,22 +1216,14 @@ async fn live_cross_node_create_session() -> Result<()> {
         tracing::warn!("[live-cross] SOFT-WARN: answer did not contain 'Paris': {answer_b:?}");
     }
 
-    let terminal_a = wait_for_request_terminal(
-        db_a.node.as_ref(),
-        &caused_a.request_id,
-        Duration::from_secs(120),
-    )
-    .await;
+    let terminal_a =
+        wait_for_request_terminal(&db_a.node, &caused_a.request_id, Duration::from_secs(120)).await;
     assert_eq!(
         terminal_a, "completed",
         "the terminal must replicate back to A"
     );
-    let answer_a = wait_for_assistant_answer(
-        db_a.node.as_ref(),
-        &caused_a.request_id,
-        Duration::from_secs(60),
-    )
-    .await;
+    let answer_a =
+        wait_for_assistant_answer(&db_a.node, &caused_a.request_id, Duration::from_secs(60)).await;
     assert!(
         !answer_a.trim().is_empty(),
         "the started session's terminal output must replicate back to A"
@@ -1299,7 +1246,7 @@ async fn live_cross_node_create_session() -> Result<()> {
     )
     .await;
     assert_eq!(
-        wait_for_request_terminal(db_a.node.as_ref(), request_id, Duration::from_secs(60)).await,
+        wait_for_request_terminal(&db_a.node, request_id, Duration::from_secs(60)).await,
         "completed"
     );
 
@@ -1310,7 +1257,7 @@ async fn live_cross_node_create_session() -> Result<()> {
     let restarted_b = boot_document_agent(&db_b, identity_b).await?;
     let restarted_a = boot_document_agent(&db_a, identity_a).await?;
     wait_for_session_message_routes(&db_a, &peer_b, &db_b, &peer_a).await;
-    for (node, label) in [(db_a.node.as_ref(), "A"), (db_b.node.as_ref(), "B")] {
+    for (node, label) in [(&db_a.node, "A"), (&db_b.node, "B")] {
         let caused = fetch_caused_requests(node, request_id).await;
         assert_eq!(
             caused.len(),
@@ -1388,9 +1335,9 @@ async fn live_fan_out_list_and_continue() -> Result<()> {
     let node_did = identity.did().to_string();
     let orchestrator_agent_id = default_agent_id_for_node(&node_did);
     let profile_id = default_inference_profile_id_for_agent(&orchestrator_agent_id);
-    upsert_live_backend(db.node.as_ref(), &node_did, &target).await;
+    upsert_live_backend(&db.node, &node_did, &target).await;
     configure_agent(
-        db.node.as_ref(),
+        &db.node,
         &orchestrator_agent_id,
         &node_did,
         &target,
@@ -1405,7 +1352,7 @@ async fn live_fan_out_list_and_continue() -> Result<()> {
         (BETA_AGENT_ID, "beta", &beta_first, &code_word("BETATWO")),
     ] {
         configure_agent(
-            db.node.as_ref(),
+            &db.node,
             agent_id,
             &node_did,
             &target,
@@ -1417,7 +1364,7 @@ async fn live_fan_out_list_and_continue() -> Result<()> {
         .await;
     }
     authorize_session_targets(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         &orchestrator_agent_id,
         vec![
@@ -1431,7 +1378,7 @@ async fn live_fan_out_list_and_continue() -> Result<()> {
     let session_id = "session-live-fan-out";
     let fan_out_request_id = "req-live-fan-out";
     create_runtime_request(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         &orchestrator_agent_id,
         fan_out_request_id,
@@ -1440,22 +1387,12 @@ async fn live_fan_out_list_and_continue() -> Result<()> {
     )
     .await;
     assert_eq!(
-        wait_for_request_terminal(
-            db.node.as_ref(),
-            fan_out_request_id,
-            Duration::from_secs(240)
-        )
-        .await,
+        wait_for_request_terminal(&db.node, fan_out_request_id, Duration::from_secs(240)).await,
         "completed"
     );
-    let caused = wait_for_caused_requests(
-        db.node.as_ref(),
-        fan_out_request_id,
-        2,
-        Duration::from_secs(60),
-    )
-    .await;
-    let rows = session_tool_rows(db.node.as_ref(), session_id, AGENT_NEW_TOOL_NAME).await;
+    let caused =
+        wait_for_caused_requests(&db.node, fan_out_request_id, 2, Duration::from_secs(60)).await;
+    let rows = session_tool_rows(&db.node, session_id, AGENT_NEW_TOOL_NAME).await;
     assert_eq!(
         rows.len(),
         2,
@@ -1491,12 +1428,8 @@ async fn live_fan_out_list_and_continue() -> Result<()> {
     assert_ne!(alpha.session_id, beta.session_id);
     for started in [&alpha, &beta] {
         assert_eq!(
-            wait_for_request_terminal(
-                db.node.as_ref(),
-                &started.request_id,
-                Duration::from_secs(240)
-            )
-            .await,
+            wait_for_request_terminal(&db.node, &started.request_id, Duration::from_secs(240))
+                .await,
             "completed"
         );
         wait_for_message_containing(
@@ -1511,13 +1444,12 @@ async fn live_fan_out_list_and_continue() -> Result<()> {
         )
         .await;
     }
-    wait_for_session_quiescent(db.node.as_ref(), session_id, Duration::from_secs(240)).await;
+    wait_for_session_quiescent(&db.node, session_id, Duration::from_secs(240)).await;
     let delivered = rows
         .iter()
         .map(|row| row.doc_id.as_str())
         .collect::<Vec<_>>();
-    let wakes =
-        assert_deliveries_bound_to_completed_wakes(db.node.as_ref(), session_id, &delivered).await;
+    let wakes = assert_deliveries_bound_to_completed_wakes(&db.node, session_id, &delivered).await;
     tracing::info!(
         parent_session = session_id,
         alpha_session = %alpha.session_id,
@@ -1529,7 +1461,7 @@ async fn live_fan_out_list_and_continue() -> Result<()> {
     // agent_list reports both started sessions and their relationship.
     let list_request_id = "req-live-fan-out-list";
     create_runtime_request(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         &orchestrator_agent_id,
         list_request_id,
@@ -1571,16 +1503,15 @@ async fn live_fan_out_list_and_continue() -> Result<()> {
         .collect::<HashSet<_>>();
     assert_eq!(listed_agents, HashSet::from(["alpha", "beta"]));
     assert_eq!(
-        wait_for_request_terminal(db.node.as_ref(), list_request_id, Duration::from_secs(180))
-            .await,
+        wait_for_request_terminal(&db.node, list_request_id, Duration::from_secs(180)).await,
         "completed"
     );
-    wait_for_session_quiescent(db.node.as_ref(), session_id, Duration::from_secs(120)).await;
+    wait_for_session_quiescent(&db.node, session_id, Duration::from_secs(120)).await;
 
     // agent_message continues the idle alpha session with a new request.
     let message_request_id = "req-live-fan-out-message";
     create_runtime_request(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         &orchestrator_agent_id,
         message_request_id,
@@ -1599,13 +1530,9 @@ async fn live_fan_out_list_and_continue() -> Result<()> {
         Duration::from_secs(240),
     )
     .await;
-    let continued = wait_for_caused_request(
-        db.node.as_ref(),
-        message_request_id,
-        Duration::from_secs(120),
-    )
-    .await
-    .expect("agent_message must cause a request in the idle session");
+    let continued = wait_for_caused_request(&db.node, message_request_id, Duration::from_secs(120))
+        .await
+        .expect("agent_message must cause a request in the idle session");
     assert_eq!(continued.session_id, alpha.session_id);
     assert_eq!(continued.agent_id, ALPHA_AGENT_ID);
     assert_eq!(
@@ -1617,12 +1544,7 @@ async fn live_fan_out_list_and_continue() -> Result<()> {
         .unwrap_or_else(|| panic!("agent_message receipt missing; transcript={messages:#?}"));
     assert_eq!(receipt["delivery"], "request");
     assert_eq!(
-        wait_for_request_terminal(
-            db.node.as_ref(),
-            &continued.request_id,
-            Duration::from_secs(240)
-        )
-        .await,
+        wait_for_request_terminal(&db.node, &continued.request_id, Duration::from_secs(240)).await,
         "completed"
     );
     wait_for_message_containing(
@@ -1634,7 +1556,7 @@ async fn live_fan_out_list_and_continue() -> Result<()> {
     )
     .await;
     let continued_wake = wait_for_completion_wake(
-        db.node.as_ref(),
+        &db.node,
         session_id,
         message_request_id,
         Duration::from_secs(300),
@@ -1645,8 +1567,7 @@ async fn live_fan_out_list_and_continue() -> Result<()> {
         Some("completed"),
         "the wake for the agent_message completion must run: {continued_wake:?}"
     );
-    let continued_answer =
-        terminal_assistant_answer(db.node.as_ref(), &continued_wake.request_id).await;
+    let continued_answer = terminal_assistant_answer(&db.node, &continued_wake.request_id).await;
     assert!(
         continued_answer.contains(&alpha_second),
         "the wake for the agent_message completion must use the continued session's result"
@@ -1688,9 +1609,9 @@ async fn live_agent_interrupt_is_spawner_only() -> Result<()> {
     let node_did = identity.did().to_string();
     let orchestrator_agent_id = default_agent_id_for_node(&node_did);
     let profile_id = default_inference_profile_id_for_agent(&orchestrator_agent_id);
-    upsert_live_backend(db.node.as_ref(), &node_did, &target).await;
+    upsert_live_backend(&db.node, &node_did, &target).await;
     configure_agent(
-        db.node.as_ref(),
+        &db.node,
         &orchestrator_agent_id,
         &node_did,
         &target,
@@ -1701,7 +1622,7 @@ async fn live_agent_interrupt_is_spawner_only() -> Result<()> {
     )
     .await;
     configure_agent(
-        db.node.as_ref(),
+        &db.node,
         BLOCKER_AGENT_ID,
         &node_did,
         &target,
@@ -1716,7 +1637,7 @@ reply exactly BLOCKED_JOB_DONE. Do not call any other tool."
     )
     .await;
     authorize_session_targets(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         &orchestrator_agent_id,
         vec![agent_target(
@@ -1728,7 +1649,7 @@ reply exactly BLOCKED_JOB_DONE. Do not call any other tool."
     )
     .await;
     configure_bash_agent_tools(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         BLOCKER_AGENT_ID,
         workspace.path(),
@@ -1741,7 +1662,7 @@ reply exactly BLOCKED_JOB_DONE. Do not call any other tool."
     let spawner_session = "session-live-interrupt-spawner";
     let start_request_id = "req-live-interrupt-start";
     create_runtime_request(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         &orchestrator_agent_id,
         start_request_id,
@@ -1757,10 +1678,9 @@ reply exactly BLOCKED_JOB_DONE. Do not call any other tool."
         Duration::from_secs(240),
     )
     .await;
-    let worker =
-        wait_for_caused_request(db.node.as_ref(), start_request_id, Duration::from_secs(120))
-            .await
-            .expect("agent_new must start the blocker");
+    let worker = wait_for_caused_request(&db.node, start_request_id, Duration::from_secs(120))
+        .await
+        .expect("agent_new must start the blocker");
     assert_eq!(worker.agent_id, BLOCKER_AGENT_ID);
     wait_for_model_tool_call(
         &db.node,
@@ -1772,8 +1692,7 @@ reply exactly BLOCKED_JOB_DONE. Do not call any other tool."
     .await;
     wait_for_started_marker(&release, "BLOCKER_STARTED", Duration::from_secs(120)).await;
     assert_eq!(
-        wait_for_request_terminal(db.node.as_ref(), start_request_id, Duration::from_secs(240))
-            .await,
+        wait_for_request_terminal(&db.node, start_request_id, Duration::from_secs(240)).await,
         "completed"
     );
 
@@ -1781,7 +1700,7 @@ reply exactly BLOCKED_JOB_DONE. Do not call any other tool."
     let other_session = "session-live-interrupt-other";
     let refused_request_id = "req-live-interrupt-refused";
     create_runtime_request(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         &orchestrator_agent_id,
         refused_request_id,
@@ -1803,15 +1722,10 @@ reply exactly BLOCKED_JOB_DONE. Do not call any other tool."
     assert_eq!(refusal["ok"], false, "non-spawner interrupt: {refusal}");
     assert_eq!(refusal["code"], "interrupt_not_permitted");
     assert_eq!(
-        wait_for_request_terminal(
-            db.node.as_ref(),
-            refused_request_id,
-            Duration::from_secs(180)
-        )
-        .await,
+        wait_for_request_terminal(&db.node, refused_request_id, Duration::from_secs(180)).await,
         "completed"
     );
-    let still = fetch_request_lifecycle(db.node.as_ref(), &worker.request_id)
+    let still = fetch_request_lifecycle(&db.node, &worker.request_id)
         .await
         .expect("worker lifecycle");
     assert!(
@@ -1822,7 +1736,7 @@ reply exactly BLOCKED_JOB_DONE. Do not call any other tool."
     // The starting session may interrupt.
     let interrupt_request_id = "req-live-interrupt-spawner";
     create_runtime_request(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         &orchestrator_agent_id,
         interrupt_request_id,
@@ -1847,12 +1761,8 @@ reply exactly BLOCKED_JOB_DONE. Do not call any other tool."
     assert_eq!(accepted["ok"], true, "spawner interrupt: {accepted}");
     assert_eq!(accepted["status"], "interrupting");
     assert_eq!(accepted["request_id"], worker.request_id.as_str());
-    let worker_terminal = wait_for_request_terminal(
-        db.node.as_ref(),
-        &worker.request_id,
-        Duration::from_secs(120),
-    )
-    .await;
+    let worker_terminal =
+        wait_for_request_terminal(&db.node, &worker.request_id, Duration::from_secs(120)).await;
     assert_eq!(worker_terminal, "interrupted");
     assert!(
         !release.exists(),
@@ -1878,7 +1788,7 @@ reply exactly BLOCKED_JOB_DONE. Do not call any other tool."
     )
     .await;
     let wake = wait_for_completion_wake(
-        db.node.as_ref(),
+        &db.node,
         spawner_session,
         start_request_id,
         Duration::from_secs(240),
@@ -1898,7 +1808,7 @@ reply exactly BLOCKED_JOB_DONE. Do not call any other tool."
         "[live-interrupt] non-spawner refused; spawner interrupted; notification delivered and wake completed"
     );
 
-    wait_for_session_quiescent(db.node.as_ref(), spawner_session, Duration::from_secs(240)).await;
+    wait_for_session_quiescent(&db.node, spawner_session, Duration::from_secs(240)).await;
     agent.shutdown().await;
     Ok(())
 }
@@ -1926,9 +1836,9 @@ async fn live_hop_bound_stops_chain() -> Result<()> {
     let node_did = identity.did().to_string();
     let orchestrator_agent_id = default_agent_id_for_node(&node_did);
     let profile_id = default_inference_profile_id_for_agent(&orchestrator_agent_id);
-    upsert_live_backend(db.node.as_ref(), &node_did, &target).await;
+    upsert_live_backend(&db.node, &node_did, &target).await;
     configure_agent(
-        db.node.as_ref(),
+        &db.node,
         &orchestrator_agent_id,
         &node_did,
         &target,
@@ -1939,7 +1849,7 @@ async fn live_hop_bound_stops_chain() -> Result<()> {
     )
     .await;
     configure_agent(
-        db.node.as_ref(),
+        &db.node,
         RELAY_AGENT_ID,
         &node_did,
         &target,
@@ -1952,20 +1862,12 @@ agent_new returns, including an error, then reply exactly RELAY_DONE and call no
     )
     .await;
     let relay = || agent_target(&node_did, "relay", node_did.clone(), RELAY_AGENT_ID);
-    authorize_session_targets(
-        db.node.as_ref(),
-        &node_did,
-        &orchestrator_agent_id,
-        vec![relay()],
-    )
-    .await;
-    authorize_session_targets(db.node.as_ref(), &node_did, RELAY_AGENT_ID, vec![relay()]).await;
-    let mut node_config = ensure_node(db.node.as_ref(), &node_did)
-        .await
-        .expect("node_config");
+    authorize_session_targets(&db.node, &node_did, &orchestrator_agent_id, vec![relay()]).await;
+    authorize_session_targets(&db.node, &node_did, RELAY_AGENT_ID, vec![relay()]).await;
+    let mut node_config = ensure_node(&db.node, &node_did).await.expect("node_config");
     node_config.max_request_hop = Some(1);
     apply_fixture_documents(
-        db.node.as_ref(),
+        &db.node,
         vec![(
             Collection::Node,
             serde_json::to_value(node_config).expect("serialize node_config"),
@@ -1977,7 +1879,7 @@ agent_new returns, including an error, then reply exactly RELAY_DONE and call no
     let root_session = "session-live-hop-root";
     let root_request_id = "req-live-hop-root";
     create_runtime_request(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         &orchestrator_agent_id,
         root_request_id,
@@ -1993,19 +1895,13 @@ agent_new returns, including an error, then reply exactly RELAY_DONE and call no
         Duration::from_secs(240),
     )
     .await;
-    let first =
-        wait_for_caused_request(db.node.as_ref(), root_request_id, Duration::from_secs(120))
-            .await
-            .expect("the root must start the relay");
+    let first = wait_for_caused_request(&db.node, root_request_id, Duration::from_secs(120))
+        .await
+        .expect("the root must start the relay");
     assert_eq!(first.agent_id, RELAY_AGENT_ID);
     assert_eq!(first.request_hop, Some(1));
     assert_eq!(
-        wait_for_request_terminal(
-            db.node.as_ref(),
-            &first.request_id,
-            Duration::from_secs(300)
-        )
-        .await,
+        wait_for_request_terminal(&db.node, &first.request_id, Duration::from_secs(300)).await,
         "completed",
         "the relay must finish its turn after its onward start is refused"
     );
@@ -2041,7 +1937,7 @@ agent_new returns, including an error, then reply exactly RELAY_DONE and call no
     assert_eq!(refused["code"], "request_hop_exceeded");
     assert_eq!(refused["hop"], 2);
     assert_eq!(refused["max_request_hop"], 1);
-    let caused_by_relay = fetch_caused_requests(db.node.as_ref(), &first.request_id).await;
+    let caused_by_relay = fetch_caused_requests(&db.node, &first.request_id).await;
     assert!(
         caused_by_relay.is_empty(),
         "no session may be started beyond the hop bound: {caused_by_relay:?}"
@@ -2065,8 +1961,8 @@ agent_new returns, including an error, then reply exactly RELAY_DONE and call no
     )
     .await;
     assert_eq!(settled.lifecycle_state, "completed");
-    wait_for_session_quiescent(db.node.as_ref(), root_session, Duration::from_secs(240)).await;
-    let wakes = session_requests(db.node.as_ref(), root_session)
+    wait_for_session_quiescent(&db.node, root_session, Duration::from_secs(240)).await;
+    let wakes = session_requests(&db.node, root_session)
         .await
         .into_iter()
         .filter(SessionRequestRow::is_background_completion_wake)
@@ -2122,9 +2018,9 @@ impl LiveNode {
         let did = identity.did().to_string();
         let orchestrator = default_agent_id_for_node(&did);
         let profile = default_inference_profile_id_for_agent(&orchestrator);
-        upsert_live_backend(db.node.as_ref(), &did, target).await;
+        upsert_live_backend(&db.node, &did, target).await;
         configure_agent(
-            db.node.as_ref(),
+            &db.node,
             &orchestrator,
             &did,
             target,
@@ -2143,8 +2039,8 @@ impl LiveNode {
         }
     }
 
-    fn node(&self) -> &EmbeddedNode {
-        self.db.node.as_ref()
+    fn node(&self) -> &Arc<EmbeddedNode> {
+        &self.db.node
     }
 
     async fn agent(
@@ -2952,9 +2848,9 @@ async fn live_restart_mid_delegation_recovers() -> Result<()> {
     let orchestrator = default_agent_id_for_node(&did_a);
 
     let profile_b = default_inference_profile_id_for_agent(&default_agent_id_for_node(&did_b));
-    upsert_live_backend(db_b.node.as_ref(), &did_b, &target).await;
+    upsert_live_backend(&db_b.node, &did_b, &target).await;
     configure_agent(
-        db_b.node.as_ref(),
+        &db_b.node,
         RESTART_WORKER_AGENT_ID,
         &did_b,
         &target,
@@ -2965,7 +2861,7 @@ async fn live_restart_mid_delegation_recovers() -> Result<()> {
     )
     .await;
     configure_bash_agent_tools(
-        db_b.node.as_ref(),
+        &db_b.node,
         &did_b,
         RESTART_WORKER_AGENT_ID,
         workspace.path(),
@@ -2973,9 +2869,9 @@ async fn live_restart_mid_delegation_recovers() -> Result<()> {
     )
     .await;
     let profile_a = default_inference_profile_id_for_agent(&orchestrator);
-    upsert_live_backend(db_a.node.as_ref(), &did_a, &target).await;
+    upsert_live_backend(&db_a.node, &did_a, &target).await;
     configure_agent(
-        db_a.node.as_ref(),
+        &db_a.node,
         &orchestrator,
         &did_a,
         &target,
@@ -2986,7 +2882,7 @@ async fn live_restart_mid_delegation_recovers() -> Result<()> {
     )
     .await;
     authorize_session_targets(
-        db_a.node.as_ref(),
+        &db_a.node,
         &did_a,
         &orchestrator,
         vec![agent_target(
@@ -3005,7 +2901,7 @@ async fn live_restart_mid_delegation_recovers() -> Result<()> {
     let session = "session-live-restart-parent";
     let start_request_id = "req-live-restart-start";
     create_runtime_request(
-        db_a.node.as_ref(),
+        &db_a.node,
         &did_a,
         &orchestrator,
         start_request_id,
@@ -3021,15 +2917,11 @@ async fn live_restart_mid_delegation_recovers() -> Result<()> {
         Duration::from_secs(240),
     )
     .await;
-    let worker = wait_for_caused_request(
-        db_a.node.as_ref(),
-        start_request_id,
-        Duration::from_secs(120),
-    )
-    .await
-    .expect("the caller must start the worker");
+    let worker = wait_for_caused_request(&db_a.node, start_request_id, Duration::from_secs(120))
+        .await
+        .expect("the caller must start the worker");
     let caller_doc_id = requests_where(
-        db_a.node.as_ref(),
+        &db_a.node,
         "request_id",
         &format!(
             r#"{{ _eq: "{}" }}"#,
@@ -3056,27 +2948,18 @@ async fn live_restart_mid_delegation_recovers() -> Result<()> {
     );
     assert_eq!(worker.node_did, did_b);
     assert_eq!(worker.admission_kind.as_deref(), Some("peer"));
-    wait_for_request_on_node(
-        db_b.node.as_ref(),
-        &worker.request_id,
-        Duration::from_secs(120),
-    )
-    .await
-    .expect("the caused request must replicate to the worker's node");
+    wait_for_request_on_node(&db_b.node, &worker.request_id, Duration::from_secs(120))
+        .await
+        .expect("the caused request must replicate to the worker's node");
     wait_for_started_marker(&release, "RESTART_WORKER_STARTED", Duration::from_secs(240)).await;
     assert_eq!(
-        wait_for_request_terminal(
-            db_a.node.as_ref(),
-            start_request_id,
-            Duration::from_secs(240)
-        )
-        .await,
+        wait_for_request_terminal(&db_a.node, start_request_id, Duration::from_secs(240)).await,
         "completed"
     );
 
     agent_a.shutdown().await;
     tokio::time::sleep(Duration::from_secs(3)).await;
-    let worker_state = fetch_request_lifecycle(db_b.node.as_ref(), &worker.request_id)
+    let worker_state = fetch_request_lifecycle(&db_b.node, &worker.request_id)
         .await
         .expect("worker lifecycle on its node");
     assert!(
@@ -3093,7 +2976,7 @@ async fn live_restart_mid_delegation_recovers() -> Result<()> {
     let restarted_a = boot_document_agent(&db_a, identity_a.clone()).await?;
     wait_for_session_message_routes(&db_a, &peer_b, &db_b, &peer_a).await;
     assert!(
-        completion_notifications(db_a.node.as_ref(), &row.doc_id)
+        completion_notifications(&db_a.node, &row.doc_id)
             .await
             .is_empty(),
         "nothing may be delivered before the worker finishes"
@@ -3101,30 +2984,16 @@ async fn live_restart_mid_delegation_recovers() -> Result<()> {
 
     std::fs::write(&release, b"release").expect("release restart worker");
     assert_eq!(
-        wait_for_request_terminal(
-            db_b.node.as_ref(),
-            &worker.request_id,
-            Duration::from_secs(240)
-        )
-        .await,
+        wait_for_request_terminal(&db_b.node, &worker.request_id, Duration::from_secs(240)).await,
         "completed"
     );
     assert_eq!(
-        wait_for_request_terminal(
-            db_a.node.as_ref(),
-            &worker.request_id,
-            Duration::from_secs(120)
-        )
-        .await,
+        wait_for_request_terminal(&db_a.node, &worker.request_id, Duration::from_secs(120)).await,
         "completed",
         "the worker's terminal must replicate back to the restarted caller"
     );
-    let answer = wait_for_assistant_answer(
-        db_a.node.as_ref(),
-        &worker.request_id,
-        Duration::from_secs(60),
-    )
-    .await;
+    let answer =
+        wait_for_assistant_answer(&db_a.node, &worker.request_id, Duration::from_secs(60)).await;
     if !answer.contains(&worker_code) {
         tracing::warn!("[live-restart] SOFT-WARN: worker answer lacks {worker_code}: {answer:?}");
     }
@@ -3138,12 +3007,11 @@ async fn live_restart_mid_delegation_recovers() -> Result<()> {
     )
     .await;
     let notification =
-        wait_for_completion_notification(db_a.node.as_ref(), &row.doc_id, Duration::from_secs(120))
-            .await;
+        wait_for_completion_notification(&db_a.node, &row.doc_id, Duration::from_secs(120)).await;
     assert_eq!(notification.session_id.as_deref(), Some(session));
-    let wake = wait_for_bound_wake(db_a.node.as_ref(), session, &notification).await;
-    wait_for_session_quiescent(db_a.node.as_ref(), session, Duration::from_secs(240)).await;
-    assert_deliveries_bound_to_completed_wakes(db_a.node.as_ref(), session, &[&row.doc_id]).await;
+    let wake = wait_for_bound_wake(&db_a.node, session, &notification).await;
+    wait_for_session_quiescent(&db_a.node, session, Duration::from_secs(240)).await;
+    assert_deliveries_bound_to_completed_wakes(&db_a.node, session, &[&row.doc_id]).await;
 
     // A crash and restart re-runs every recovery owner over the same facts;
     // none may deliver the completion again.
@@ -3151,11 +3019,8 @@ async fn live_restart_mid_delegation_recovers() -> Result<()> {
     let again = boot_document_agent(&db_a, identity_a).await?;
     wait_for_session_message_routes(&db_a, &peer_b, &db_b, &peer_a).await;
     tokio::time::sleep(Duration::from_secs(5)).await;
-    wait_for_session_quiescent(db_a.node.as_ref(), session, Duration::from_secs(120)).await;
-    for (node, label) in [
-        (db_a.node.as_ref(), "caller"),
-        (db_b.node.as_ref(), "worker"),
-    ] {
+    wait_for_session_quiescent(&db_a.node, session, Duration::from_secs(120)).await;
+    for (node, label) in [(&db_a.node, "caller"), (&db_b.node, "worker")] {
         let caused = requests_caused_by_row(node, &row.doc_id).await;
         assert_eq!(
             caused
@@ -3167,13 +3032,13 @@ async fn live_restart_mid_delegation_recovers() -> Result<()> {
         );
     }
     assert_eq!(
-        completion_notifications(db_a.node.as_ref(), &row.doc_id)
+        completion_notifications(&db_a.node, &row.doc_id)
             .await
             .len(),
         1,
         "the completion notification must be delivered exactly once"
     );
-    assert_deliveries_bound_to_completed_wakes(db_a.node.as_ref(), session, &[&row.doc_id]).await;
+    assert_deliveries_bound_to_completed_wakes(&db_a.node, session, &[&row.doc_id]).await;
     tracing::info!(
         worker = %worker.request_id,
         wake = %wake.request_id,
@@ -3983,7 +3848,7 @@ async fn boot_loaded_document_agent(db: &TestDb, agent: Gents) -> BootedAgent {
     let node_did = agent.node_did().to_string();
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
-    wait_for_runtime_ready(db.node.as_ref(), &node_did).await;
+    wait_for_runtime_ready(&db.node, &node_did).await;
     BootedAgent::new(shutdown_tx, handle, node_did)
 }
 
@@ -4032,7 +3897,7 @@ fn blocked_bash_args(started: &str, release: &Path, done: &str) -> serde_json::V
 /// Give `agent_id` a foreground `bash_unrestricted` rooted at `workspace`
 /// and, when `targets` is non-empty, the agents tools over them.
 async fn configure_bash_agent_tools(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     node_did: &str,
     agent_id: &str,
     workspace: &Path,
@@ -4155,7 +4020,7 @@ fn assert_standard_backgrounding_tool_surfaces(
     }
 }
 
-async fn upsert_live_backend(node: &EmbeddedNode, node_did: &str, target: &InferenceTarget) {
+async fn upsert_live_backend(node: &Arc<EmbeddedNode>, node_did: &str, target: &InferenceTarget) {
     let backend = target.backend(node_did);
     apply_fixture_documents(
         node,
@@ -4171,7 +4036,7 @@ async fn upsert_live_backend(node: &EmbeddedNode, node_did: &str, target: &Infer
 /// optional `description` (surfaced in the caller's agent list).
 #[allow(clippy::too_many_arguments)]
 async fn configure_agent(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     agent_id: &str,
     node_did: &str,
     target: &InferenceTarget,
@@ -4250,7 +4115,7 @@ async fn configure_agent(
 }
 
 async fn apply_fixture_documents(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     documents: Vec<(Collection, serde_json::Value)>,
 ) {
     use gents::config_client::{
@@ -4268,10 +4133,15 @@ async fn apply_fixture_documents(
             .collect(),
     )
     .expect("build live fixture plan");
-    gents::ConfigAccess::transact_local(node, None, "test.live_session_message_fixture", |txn| {
-        let plan = &plan;
-        Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
-    })
+    gents::ConfigAccess::transact_local_write(
+        node,
+        None,
+        "test.live_session_message_fixture",
+        |txn| {
+            let plan = &plan;
+            Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
+        },
+    )
     .await
     .expect("apply live fixture documents");
 }
@@ -4301,7 +4171,7 @@ fn target_documents(targets: Vec<AgentTargetDocument>) -> Vec<(Collection, serde
 /// Publish canonical tools enabling `agent_new`/`agent_message` over
 /// `targets` for `agent_id`.
 async fn authorize_session_targets(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     node_did: &str,
     agent_id: &str,
     targets: Vec<AgentTargetDocument>,
@@ -4326,7 +4196,7 @@ async fn authorize_session_targets(
 /// foreground bash tool used to hold its request open until the test
 /// releases it.
 async fn configure_standard_backgrounding_tools(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     node_did: &str,
     parent_agent_id: &str,
     workspace: &Path,
@@ -5365,8 +5235,8 @@ async fn pair_session_message_nodes(
 ) -> (String, String) {
     let did_a = identity_a.did().to_string();
     let did_b = identity_b.did().to_string();
-    let (peer_a, addr_a) = wait_for_peer_identity(db_a.node.as_ref()).await;
-    let (peer_b, addr_b) = wait_for_peer_identity(db_b.node.as_ref()).await;
+    let (peer_a, addr_a) = wait_for_peer_identity(&db_a.node).await;
+    let (peer_b, addr_b) = wait_for_peer_identity(&db_b.node).await;
     authorize_enrollment_peer(
         db_a.node.clone(),
         CROSS_NODE_NETWORK_ID,
@@ -5388,7 +5258,7 @@ async fn pair_session_message_nodes(
     )
     .await;
     write_data_plane_pairing(
-        db_a.node.as_ref(),
+        &db_a.node,
         &peer_b,
         &did_a,
         &addr_b,
@@ -5396,7 +5266,7 @@ async fn pair_session_message_nodes(
     )
     .await;
     write_data_plane_pairing(
-        db_b.node.as_ref(),
+        &db_b.node,
         &peer_a,
         &did_b,
         &addr_a,
@@ -5408,15 +5278,9 @@ async fn pair_session_message_nodes(
 }
 
 async fn wait_for_session_message_routes(db_a: &TestDb, peer_b: &str, db_b: &TestDb, peer_a: &str) {
+    wait_for_pairing_applied(&db_a.node, peer_b, "AgentRequest", Duration::from_secs(120)).await;
     wait_for_pairing_applied(
-        db_a.node.as_ref(),
-        peer_b,
-        "AgentRequest",
-        Duration::from_secs(120),
-    )
-    .await;
-    wait_for_pairing_applied(
-        db_b.node.as_ref(),
+        &db_b.node,
         peer_a,
         "AgentOutputSegment",
         Duration::from_secs(120),

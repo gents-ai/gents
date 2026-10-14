@@ -678,11 +678,11 @@ async fn install_and_read_back(
         "the loaded definition differs from the validated draft"
     );
 
-    gents::ensure_node(home.node.as_ref(), &owner).await?;
+    gents::ensure_node(&home.node, &owner).await?;
     let access = ConfigAccess::Local(home.node.clone());
     let plan = DesiredStateApplyPlan::from_pack_config(&config)?;
     access
-        .transact("eval.init.round_trip", |txn| {
+        .transact_write("eval.init.round_trip", |txn| {
             let plan = &plan;
             Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
         })
@@ -690,7 +690,7 @@ async fn install_and_read_back(
         .context("installing the definition pack into a scratch home")?;
     let definition_id = loaded.definition_id.as_str();
     let installed = access
-        .transact("eval.init.round_trip_read", |txn| {
+        .transact_write("eval.init.round_trip_read", |txn| {
             let owner = owner.as_str();
             Box::pin(async move {
                 read_desired_state_record_in_txn(
@@ -1003,7 +1003,7 @@ mod tests {
         // Every step reports rather than panics, so the node is shut down
         // before any assertion can fail.
         let found = async {
-            gents::ensure_node(home.node.as_ref(), &owner).await?;
+            gents::ensure_node(&home.node, &owner).await?;
             let (manifest, assets) = read_pack(&out)?;
             let config = load_pack_config(
                 &manifest,
@@ -1016,13 +1016,13 @@ mod tests {
             let plan = DesiredStateApplyPlan::from_pack_config(&config)?;
             let access = ConfigAccess::Local(home.node.clone());
             access
-                .transact("cli.eval.init.test_install", |txn| {
+                .transact_write("cli.eval.init.test_install", |txn| {
                     let plan = &plan;
                     Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
                 })
                 .await?;
             access
-                .transact("cli.eval.init.test_read", |txn| {
+                .transact_write("cli.eval.init.test_read", |txn| {
                     let owner = owner.as_str();
                     Box::pin(async move {
                         read_desired_state_record_in_txn(

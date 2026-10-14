@@ -202,35 +202,78 @@ impl WriteTool {
         );
         match &self.access {
             ConfigAccess::Local(node) => {
-                ConfigAccess::transact_local(node, self.actor.clone(), "application_write", |txn| {
-                    Box::pin(self.in_transaction(
-                        txn,
-                        args,
-                        operation,
-                        preview,
-                        collection,
-                        limit,
-                        filter.clone(),
-                        input.clone(),
-                    ))
-                })
-                .await
+                if preview {
+                    ConfigAccess::transact_local_readonly(
+                        node,
+                        self.actor.clone(),
+                        "application_write",
+                        |txn| {
+                            Box::pin(self.in_transaction(
+                                txn,
+                                args,
+                                operation,
+                                preview,
+                                collection,
+                                limit,
+                                filter.clone(),
+                                input.clone(),
+                            ))
+                        },
+                    )
+                    .await
+                } else {
+                    ConfigAccess::transact_local_write(
+                        node,
+                        self.actor.clone(),
+                        "application_write",
+                        |txn| {
+                            Box::pin(self.in_transaction(
+                                txn,
+                                args,
+                                operation,
+                                preview,
+                                collection,
+                                limit,
+                                filter.clone(),
+                                input.clone(),
+                            ))
+                        },
+                    )
+                    .await
+                }
             }
             ConfigAccess::Graphql(_) => {
-                self.access
-                    .transact("application_write", |txn| {
-                        Box::pin(self.in_transaction(
-                            txn,
-                            args,
-                            operation,
-                            preview,
-                            collection,
-                            limit,
-                            filter.clone(),
-                            input.clone(),
-                        ))
-                    })
-                    .await
+                if preview {
+                    self.access
+                        .transact_readonly("application_write", |txn| {
+                            Box::pin(self.in_transaction(
+                                txn,
+                                args,
+                                operation,
+                                preview,
+                                collection,
+                                limit,
+                                filter.clone(),
+                                input.clone(),
+                            ))
+                        })
+                        .await
+                } else {
+                    self.access
+                        .transact_write("application_write", |txn| {
+                            Box::pin(self.in_transaction(
+                                txn,
+                                args,
+                                operation,
+                                preview,
+                                collection,
+                                limit,
+                                filter.clone(),
+                                input.clone(),
+                            ))
+                        })
+                        .await
+                }
             }
         }
     }

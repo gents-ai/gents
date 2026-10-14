@@ -54,9 +54,7 @@ impl Fixture {
     pub(crate) async fn new() -> Self {
         let home = EmbeddedHome::create_temp("cli-eval").await.unwrap();
         let owner = home.did().to_string();
-        gents::ensure_node(home.node.as_ref(), &owner)
-            .await
-            .unwrap();
+        gents::ensure_node(&home.node, &owner).await.unwrap();
         let dirs = tempfile::tempdir().unwrap();
         let pack = dirs.path().join("subject");
         write_pack(&pack);
@@ -331,7 +329,7 @@ async fn install(access: &ConfigAccess, documents: Vec<(Collection, Value)>) {
     )
     .unwrap();
     access
-        .transact("cli.eval.test_fixture", |txn| {
+        .transact_write("cli.eval.test_fixture", |txn| {
             let plan = &plan;
             Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
         })

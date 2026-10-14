@@ -1187,7 +1187,7 @@ impl ConfigCommandTool {
             None => {
                 let owner = self.node_did.clone();
                 let target_id = target_id.to_owned();
-                crate::config_client::ConfigAccess::transact_local(
+                crate::config_client::ConfigAccess::transact_local_readonly(
                     &self.node,
                     Some(self.core.identity()?),
                     "self_config.agent_target_owner",
@@ -1399,76 +1399,47 @@ impl ConfigCommandTool {
         if !preview {
             self.execution.enter_mutation();
         }
-        let (receipt_targets, plan_digest) = crate::config_client::ConfigAccess::transact_local(
-            &self.node,
-            Some(self.core.identity()?),
-            if preview {
-                "self_config.cleanup_preview"
-            } else {
-                "self_config.cleanup_remove"
-            },
-            |txn| {
-                let owner = owner.clone();
-                let targets = targets.clone();
-                let expected_digest = expected_digest.clone();
-                let plan = &plan;
-                Box::pin(async move {
-                    let mut receipt = Vec::with_capacity(targets.len());
-                    for (resource, target, id) in &targets {
-                        let document = ops::read_owned_doc(txn, *target, &owner, id)
-                            .await?
-                            .map(|(_, document)| document)
-                            .with_context(|| {
-                                format!(
-                                    "no owned {} with ID {id:?}; list or inspect exact IDs before cleanup",
-                                    target.collection_name()
-                                )
-                            })?;
-                        if *target == SelfConfigTarget::Agent {
-                            let protected = document
-                                .get("tags")
-                                .and_then(Value::as_array)
-                                .is_some_and(|tags| {
-                                    tags.iter().any(|tag| {
-                                        tag.as_str()
-                                            == Some(super::ENGINEER_AGENT_TAG)
-                                    })
-                                });
-                            anyhow::ensure!(
-                                !protected,
-                                "target agent {id:?} is the protected Engineer configurator and cannot be removed"
-                            );
-                        }
-                        receipt.push(json!({
-                            "resource": resource,
-                            "collection": target.collection_name(),
-                            "id": id,
-                            "content_digest": crate::config_client::desired_state_document_digest(&Value::Object(document))?,
-                        }));
-                    }
-                    let plan_digest = cleanup_plan_digest(&owner, &receipt)?;
-                    if let Some(expected) = expected_digest.as_deref() {
-                        anyhow::ensure!(
-                            expected == plan_digest,
-                            "cleanup target content changed: preview authorized {expected:?}, current plan is {plan_digest:?}; preview again"
-                        );
-                    }
-                    crate::config_client::validate_desired_state_plan(txn, plan).await?;
-                    if !preview {
-                        crate::config_client::apply_desired_state_plan(txn, plan).await?;
-                        for (_, target, id) in &targets {
-                            anyhow::ensure!(
-                                ops::read_owned_doc(txn, *target, &owner, id).await?.is_none(),
-                                "cleanup did not remove {} {id:?}",
-                                target.collection_name()
-                            );
-                        }
-                    }
-                    Ok((receipt, plan_digest))
-                })
-            },
-        )
-        .await?;
+        let operation = if preview {
+            "self_config.cleanup_preview"
+        } else {
+            "self_config.cleanup_remove"
+        };
+        let identity = Some(self.core.identity()?);
+        let (receipt_targets, plan_digest) = if preview {
+            crate::config_client::ConfigAccess::transact_local_readonly(
+                &self.node,
+                identity,
+                operation,
+                |txn| {
+                    Box::pin(cleanup_in_txn(
+                        txn,
+                        &owner,
+                        &targets,
+                        expected_digest.as_deref(),
+                        &plan,
+                        preview,
+                    ))
+                },
+            )
+            .await?
+        } else {
+            crate::config_client::ConfigAccess::transact_local_write(
+                &self.node,
+                identity,
+                operation,
+                |txn| {
+                    Box::pin(cleanup_in_txn(
+                        txn,
+                        &owner,
+                        &targets,
+                        expected_digest.as_deref(),
+                        &plan,
+                        preview,
+                    ))
+                },
+            )
+            .await?
+        };
         ordered! {
             "committed": !preview,
             "operation": if preview { "preview cleanup" } else { "cleanup" },
@@ -1646,7 +1617,7 @@ impl ConfigCommandTool {
             "{{ Agent(filter: {{node_did: {{_eq: \"{}\"}}}}) {{agent_id display_name}} }}",
             escape_graphql_string(&owner)
         );
-        let found = crate::config_client::ConfigAccess::transact_local(
+        let found = crate::config_client::ConfigAccess::transact_local_readonly(
             &self.node,
             Some(self.core.identity()?),
             "self_config.resolve_agent",
@@ -1702,7 +1673,7 @@ impl ConfigCommandTool {
     async fn require_named_profile_owner(&self, verb: &str) -> Result<()> {
         let owner = escape_graphql_string(&self.node_did);
         let query = format!("{{ Agent(filter: {{node_did: {{_eq: \"{owner}\"}}}}) {{agent_id}} }}");
-        let response = crate::config_client::ConfigAccess::transact_local(
+        let response = crate::config_client::ConfigAccess::transact_local_readonly(
             &self.node,
             Some(self.core.identity()?),
             "self_config.profile_owners",
@@ -1870,7 +1841,7 @@ impl ConfigCommandTool {
     ) -> Result<Value> {
         let owner = self.node_did.clone();
         let backend_id = backend_id.to_owned();
-        let observation = crate::config_client::ConfigAccess::transact_local(
+        let observation = crate::config_client::ConfigAccess::transact_local_readonly(
             &self.node,
             Some(self.core.identity()?),
             "self_config.backend_observation",
@@ -1915,7 +1886,7 @@ impl ConfigCommandTool {
         let id = id.to_owned();
         let lookup_id = id.clone();
         let owner = self.node_did.clone();
-        let mut document = crate::config_client::ConfigAccess::transact_local(
+        let mut document = crate::config_client::ConfigAccess::transact_local_readonly(
             &self.node,
             Some(self.core.identity()?),
             "self_config.command_read",
@@ -1985,7 +1956,7 @@ impl ConfigCommandTool {
         let access = crate::config_client::ConfigAccess::Local(self.node.clone());
         let node_did = self.node_did.as_str();
         let accounts = crate::oauth_credential::list_accounts(&access, node_did).await?;
-        let (backends, profiles) = crate::config_client::ConfigAccess::transact_local(
+        let (backends, profiles) = crate::config_client::ConfigAccess::transact_local_readonly(
             &self.node,
             Some(self.core.identity()?),
             "self_config.account_inventory",
@@ -2144,7 +2115,7 @@ impl ConfigCommandTool {
         let owner = escape_graphql_string(&self.node_did);
         let query =
             format!("{{ {collection}(filter: {{node_did: {{_eq: \"{owner}\"}}}}) {{{fields}}} }}");
-        let response = crate::config_client::ConfigAccess::transact_local(
+        let response = crate::config_client::ConfigAccess::transact_local_readonly(
             &self.node,
             Some(self.core.identity()?),
             "self_config.inference_inventory",
@@ -2271,6 +2242,68 @@ fn cleanup_plan_digest(owner: &str, targets: &[Value]) -> Result<String> {
             "targets": targets,
         }))?)
     ))
+}
+
+async fn cleanup_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    owner: &str,
+    targets: &[(String, SelfConfigTarget, String)],
+    expected_digest: Option<&str>,
+    plan: &crate::config_client::DesiredStateApplyPlan,
+    preview: bool,
+) -> Result<(Vec<Value>, String)> {
+    let mut receipt = Vec::with_capacity(targets.len());
+    for (resource, target, id) in targets {
+        let document = ops::read_owned_doc(txn, *target, owner, id)
+            .await?
+            .map(|(_, document)| document)
+            .with_context(|| {
+                format!(
+                    "no owned {} with ID {id:?}; list or inspect exact IDs before cleanup",
+                    target.collection_name()
+                )
+            })?;
+        if *target == SelfConfigTarget::Agent {
+            let protected = document
+                .get("tags")
+                .and_then(Value::as_array)
+                .is_some_and(|tags| {
+                    tags.iter()
+                        .any(|tag| tag.as_str() == Some(super::ENGINEER_AGENT_TAG))
+                });
+            anyhow::ensure!(
+                !protected,
+                "target agent {id:?} is the protected Engineer configurator and cannot be removed"
+            );
+        }
+        receipt.push(json!({
+            "resource": resource,
+            "collection": target.collection_name(),
+            "id": id,
+            "content_digest": crate::config_client::desired_state_document_digest(&Value::Object(document))?,
+        }));
+    }
+    let plan_digest = cleanup_plan_digest(owner, &receipt)?;
+    if let Some(expected) = expected_digest {
+        anyhow::ensure!(
+            expected == plan_digest,
+            "cleanup target content changed: preview authorized {expected:?}, current plan is {plan_digest:?}; preview again"
+        );
+    }
+    crate::config_client::validate_desired_state_plan(txn, plan).await?;
+    if !preview {
+        crate::config_client::apply_desired_state_plan(txn, plan).await?;
+        for (_, target, id) in targets {
+            anyhow::ensure!(
+                ops::read_owned_doc(txn, *target, owner, id)
+                    .await?
+                    .is_none(),
+                "cleanup did not remove {} {id:?}",
+                target.collection_name()
+            );
+        }
+    }
+    Ok((receipt, plan_digest))
 }
 
 fn default_agent_params(action: &str, agent_id: &str) -> ConfigureAgentParams {

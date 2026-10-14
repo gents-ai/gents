@@ -545,7 +545,7 @@ mod tests {
             remove_account_in_txn, store_sign_in, test_support::test_node, AccountPick,
             OAuthRefreshKind, SignInResult,
         };
-        let node = Arc::new(test_node().await);
+        let node = test_node().await;
         let access = ConfigAccess::Local(node.clone());
         let did = "did:key:z6MkTestRebuiltClient";
         let sign_in = |who: &str, expires_in| {
@@ -596,7 +596,7 @@ mod tests {
 
         let credential_id = a.credential.credential_id.as_str();
         access
-            .transact("test.remove_account", |txn| {
+            .transact_write("test.remove_account", |txn| {
                 Box::pin(async move { remove_account_in_txn(txn, did, credential_id).await })
             })
             .await

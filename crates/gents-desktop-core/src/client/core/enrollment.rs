@@ -518,7 +518,7 @@ impl ClientCore {
             }}"#
         );
         let committed = gents::config_client::ConfigAccess::write_local(
-            self.node.as_ref(),
+            &self.node,
             "desktop.enrollment.create_admin_pin",
             &mutation,
         )
@@ -547,7 +547,7 @@ impl ClientCore {
         let mutation =
             format!("mutation {{ create_NetworkEnrollmentRequest(input: {input}) {{ _docID }} }}");
         let response = gents::config_client::ConfigAccess::write_local(
-            self.node.as_ref(),
+            &self.node,
             "desktop.enrollment.create_request",
             &mutation,
         )
@@ -3365,7 +3365,7 @@ mod tests {
     }
 
     async fn commit_document(core: &ClientCore, stage: &'static str, mutation: &str) {
-        gents::config_client::ConfigAccess::write_local(core.node(), stage, mutation)
+        gents::config_client::ConfigAccess::write_local(&core.node_arc(), stage, mutation)
             .await
             .expect("commit enrollment authority document");
     }

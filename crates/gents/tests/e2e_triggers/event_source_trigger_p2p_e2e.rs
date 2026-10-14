@@ -65,7 +65,7 @@ async fn register_replicated_event_schema(node: &EmbeddedNode) {
 }
 
 async fn create_task(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     owner: &str,
     task_id: &str,
     agent_id: &str,
@@ -93,7 +93,7 @@ async fn create_task(
 }
 
 async fn create_event_trigger_with_filter(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     owner: &str,
     trigger_id: &str,
     task_id: &str,
@@ -263,7 +263,7 @@ async fn fetch_event_trigger(node: &EmbeddedNode, trigger_id: &str) -> EventTrig
     row
 }
 
-async fn write_replicated_event(node: &EmbeddedNode, external_id: &str, kind: &str) -> String {
+async fn write_replicated_event(node: &Arc<EmbeddedNode>, external_id: &str, kind: &str) -> String {
     let escaped_external_id = escape_graphql_string(external_id);
     let escaped_kind = escape_graphql_string(kind);
     // Dynamically-added collections on DefraDB expose `add_<Collection>` as
@@ -392,7 +392,7 @@ async fn p2p_replicated_doc_fires_event_trigger() {
     let identity = Arc::new(test_identity("event-trigger-p2p-agent"));
     let mock_endpoint = MockModelEndpoint::start("default").unwrap();
     bind_default_agent_backend(
-        db_agent.node.as_ref(),
+        &db_agent.node,
         identity.did(),
         "backend-event-trigger-p2p",
         mock_endpoint.endpoint(),
@@ -423,7 +423,7 @@ async fn p2p_replicated_doc_fires_event_trigger() {
 
     // Task + Trigger on node B, watching ReplicatedEvent.
     create_task(
-        db_agent.node.as_ref(),
+        &db_agent.node,
         &node_did,
         TASK_ID,
         &default_agent_id,
@@ -431,7 +431,7 @@ async fn p2p_replicated_doc_fires_event_trigger() {
     )
     .await;
     create_event_trigger_with_filter(
-        db_agent.node.as_ref(),
+        &db_agent.node,
         &node_did,
         TRIGGER_ID,
         TASK_ID,
@@ -455,8 +455,7 @@ async fn p2p_replicated_doc_fires_event_trigger() {
     .await;
 
     // Write the source doc on node A; it must replicate to B and fire B's trigger.
-    let source_doc_id =
-        write_replicated_event(db_writer.node.as_ref(), EXTERNAL_ID, "signup").await;
+    let source_doc_id = write_replicated_event(&db_writer.node, EXTERNAL_ID, "signup").await;
 
     // Assert B materialized exactly one event-driven AgentRequest with the
     // rendered template. If this poll times out, we run a replication-vs-firing

@@ -57,8 +57,8 @@ async fn finish_owned_request(hook: &DefraSessionHook, request_id: &str) {
     let session_id = hook.session_id().await.expect("owned session");
     let node_did = hook.node_did.clone();
     let requester_did = hook.active_requester_did().await;
-    let headers = crate::config_client::ConfigAccess::transact_local(
-        hook.node.as_ref(),
+    let headers = crate::config_client::ConfigAccess::transact_local_write(
+        &hook.node,
         None,
         "test.process_control_scope.headers",
         |txn| {

@@ -1118,6 +1118,15 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             emitted.insert(("session_input_edit_cases".to_string(), domain.to_string()));
         }
     }
+    if !snapshot
+        .session_input_edit_client_observation_cases
+        .is_empty()
+    {
+        emitted.insert((
+            "session_input_edit_client_observation_cases".to_string(),
+            "SessionInputEditClientObservationCases".to_string(),
+        ));
+    }
     if !snapshot.queue_management_cases.is_empty() {
         emitted.insert((
             "queue_management_cases".to_string(),

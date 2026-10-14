@@ -933,7 +933,7 @@ fn proposed_candidate(
 async fn read_closure(access: &ConfigAccess, owner: &str) -> Result<Closure> {
     let owner = owner.to_owned();
     access
-        .transact("optimization.capture_closure", |txn| {
+        .transact_write("optimization.capture_closure", |txn| {
             let owner = &owner;
             Box::pin(async move { capture_closure(txn, owner).await })
         })
@@ -951,7 +951,7 @@ async fn append_all(
     {
         let (current, entries) = (&*job, &entries);
         access
-            .transact("optimization.append_journal", |txn| {
+            .transact_write("optimization.append_journal", |txn| {
                 Box::pin(async move {
                     let mut advanced = current.clone();
                     for entry in entries {

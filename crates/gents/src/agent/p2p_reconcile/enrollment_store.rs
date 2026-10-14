@@ -370,7 +370,7 @@ impl GraphqlEnrollmentStore {
         let mutation = decision_mutation(&decision, revision.as_ref());
         let committed = async {
             let response = crate::config_client::ConfigAccess::write_local_response(
-                self.node.as_ref(),
+                &self.node,
                 "p2p.write_enrollment_decision",
                 &mutation,
             )
@@ -512,7 +512,7 @@ impl GraphqlEnrollmentStore {
         revision.validate_against_approval(&active.request, &active.decision)?;
         let mutation = revision_mutation(&revision);
         let response = crate::config_client::ConfigAccess::write_local_response(
-            self.node.as_ref(),
+            &self.node,
             "p2p.write_enrollment_revocation",
             &mutation,
         )
@@ -685,7 +685,7 @@ impl GraphqlEnrollmentStore {
         receipt.validate_against_approval(&active.request, &active.decision)?;
         let mutation = route_receipt_mutation(&receipt);
         let committed = crate::config_client::ConfigAccess::write_local_response(
-            self.node.as_ref(),
+            &self.node,
             "p2p.write_enrollment_route_receipt",
             &mutation,
         )

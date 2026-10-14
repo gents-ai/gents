@@ -382,14 +382,15 @@ async fn task_assignment_root_fences_older_chain_even_when_its_child_is_newer() 
             .find(|row| row.request_id == child.request_id)
             .unwrap();
         let request = crate::watcher::AgentRequest::try_from(old_child.clone()).unwrap();
-        let allowed = ConfigAccess::transact_local(&node, None, "test.late_goal_claim", |txn| {
-            let request = &request;
-            Box::pin(async move {
-                fence_goal_continuation_claim_in_txn(txn, request, "2026-01-01T00:00:03Z").await
+        let allowed =
+            ConfigAccess::transact_local_write(&node, None, "test.late_goal_claim", |txn| {
+                let request = &request;
+                Box::pin(async move {
+                    fence_goal_continuation_claim_in_txn(txn, request, "2026-01-01T00:00:03Z").await
+                })
             })
-        })
-        .await
-        .unwrap();
+            .await
+            .unwrap();
         assert!(!allowed);
         let response = access.execute(&query).await.unwrap();
         let rows: Vec<AgentRequestRow> =

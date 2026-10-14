@@ -300,7 +300,7 @@ impl ConfigCommandTool {
             return self.target_core(agent, "automation").await;
         }
         let owner = &self.node_did;
-        let task = crate::config_client::ConfigAccess::transact_local(
+        let task = crate::config_client::ConfigAccess::transact_local_readonly(
             &self.node,
             Some(self.core.identity()?),
             "self_config.automation_owner",
@@ -362,7 +362,7 @@ impl ConfigCommandTool {
 
     async fn document_agent(&self, target: SelfConfigTarget, id: &str) -> Result<Option<String>> {
         let owner = &self.node_did;
-        crate::config_client::ConfigAccess::transact_local(
+        crate::config_client::ConfigAccess::transact_local_readonly(
             &self.node,
             Some(self.core.identity()?),
             "self_config.document_agent",

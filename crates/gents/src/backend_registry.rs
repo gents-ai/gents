@@ -8,6 +8,8 @@ use crate::document_config::{
 };
 use crate::graphql::escape_graphql_string;
 use crate::openai_wire::OpenAiWireApi;
+use std::sync::Arc;
+
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 
@@ -357,11 +359,11 @@ pub async fn list_enabled_backends_for_agent(
 }
 
 pub async fn lookup_backend_observation(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
     backend_id: &str,
 ) -> Result<Option<InferenceBackendObservation>> {
-    crate::config_client::ConfigAccess::transact_local(
+    crate::config_client::ConfigAccess::transact_local_readonly(
         node,
         None,
         "backend_registry.observation",
@@ -396,7 +398,7 @@ pub async fn lookup_backend_observation_in_txn(
 }
 
 pub async fn set_backend_probe_status(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     node_did: &str,
     backend_id: &str,
     probe_status: &str,
@@ -411,7 +413,7 @@ pub async fn set_backend_probe_status(
 }
 
 pub async fn set_backend_probe_status_with_last_probe(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     node_did: &str,
     backend_id: &str,
     probe_status: &str,
@@ -427,7 +429,7 @@ pub async fn set_backend_probe_status_with_last_probe(
 }
 
 async fn write_probe_observation(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
     backend_id: &str,
     input: serde_json::Value,
@@ -455,11 +457,11 @@ async fn write_probe_observation(
 /// The connection is checked again in the transaction so an in-flight probe
 /// cannot publish a catalog for a replaced provider/authentication selection.
 pub(crate) async fn record_model_catalog(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     backend: &InferenceBackend,
     catalog: BackendModelCatalog,
 ) -> Result<()> {
-    crate::config_client::ConfigAccess::transact_local(
+    crate::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "backend_registry.record_catalog",
@@ -576,7 +578,7 @@ pub async fn record_discovered_catalog_on(
         models,
     };
     access
-        .transact("backend_registry.record_operator_catalog", |txn| {
+        .transact_write("backend_registry.record_operator_catalog", |txn| {
             let catalog = catalog.clone();
             Box::pin(async move { record_model_catalog_in_txn(txn, backend, catalog).await })
         })
@@ -604,7 +606,7 @@ pub async fn record_connection_catalog_on(
     );
     let observed_at = chrono::Utc::now().to_rfc3339();
     access
-        .transact("backend_registry.record_connection_catalog", |txn| {
+        .transact_write("backend_registry.record_connection_catalog", |txn| {
             let (query, models, observed_at) = (&query, &models, &observed_at);
             Box::pin(async move {
                 let response = txn.execute(query).await?;
@@ -656,7 +658,7 @@ pub fn scoped_observation_view(
     }))
 }
 
-pub async fn probe_and_promote_enabled_backends(node: &EmbeddedNode) {
+pub async fn probe_and_promote_enabled_backends(node: &Arc<EmbeddedNode>) {
     let backends = match list_enabled_backends(node).await {
         Ok(backends) => backends,
         Err(error) => {
@@ -680,7 +682,7 @@ pub async fn probe_and_promote_enabled_backends(node: &EmbeddedNode) {
 /// provider and observation owners. Callers must resolve and authorize the
 /// backend document first; this function never accepts a free-standing URL.
 pub(crate) async fn discover_shared_backend(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     backend: &InferenceBackend,
 ) -> Result<InferenceBackendObservation> {
     backend.validate()?;
@@ -728,3 +730,6 @@ pub(crate) async fn discover_shared_backend(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod read_ownership_tests;

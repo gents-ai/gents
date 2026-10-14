@@ -105,7 +105,7 @@ async fn configure_live_research_inference_profile(
 ) -> Result<()> {
     let access = ConfigAccess::Graphql(crate::support::graphql::served_endpoint(&graphql));
     access
-        .transact("test.web_research.inference", |txn| {
+        .transact_write("test.web_research.inference", |txn| {
             Box::pin(async move {
                 let (_, value) = read_desired_state_record_in_txn(
                     txn,

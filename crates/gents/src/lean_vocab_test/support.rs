@@ -233,6 +233,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) steering_publication_cases: Vec<LeanFoldPublicationCase>,
     pub(crate) queue_management_cases: Vec<LeanQueueManagementCase>,
     pub(crate) session_input_edit_cases: Vec<LeanSessionInputEditCase>,
+    pub(crate) session_input_edit_client_observation_cases: Vec<serde_json::Value>,
     pub(crate) retry_selection_cases: Vec<LeanRetrySelectionCase>,
     pub(crate) canonical_worker_capacity_cases: Vec<LeanWorkerCapacityCase>,
     pub(crate) canonical_payload_presentation_cases: Vec<LeanPayloadPresentationCase>,

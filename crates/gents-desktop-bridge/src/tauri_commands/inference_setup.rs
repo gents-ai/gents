@@ -1106,7 +1106,7 @@ async fn backend_usage_views(
     use gents::usage_observation::{account_usage::UsageSource, UsageRead};
 
     let backends = access
-        .transact("desktop.usage_views", |txn| {
+        .transact_write("desktop.usage_views", |txn| {
             Box::pin(async move {
                 gents::config_client::list_inference_backends_in_txn(txn, node_did).await
             })

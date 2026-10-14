@@ -14,7 +14,7 @@ use gents_loop::provider_limit::{classify_provider_limit, ProviderLimit};
 /// Goal's recorded limit gates the transaction, so nothing is read before
 /// that reset passes.
 pub async fn resume_at_reset(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     identity: &dyn NodeIdentity,
     goal: &GoalDocument,
     now: DateTime<Utc>,
@@ -25,7 +25,7 @@ pub async fn resume_at_reset(
         return Ok(None);
     }
     let (node_did, session_id) = (goal.node_did.as_str(), goal.session_id.as_str());
-    ConfigAccess::transact_local(node, None, "goal.resume_at_reset", move |txn| {
+    ConfigAccess::transact_local_write(node, None, "goal.resume_at_reset", move |txn| {
         Box::pin(stage_reset_resume(txn, identity, node_did, session_id, now))
     })
     .await

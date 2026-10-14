@@ -267,11 +267,7 @@ pub(crate) async fn init(mut args: InitArgs) -> Result<()> {
     );
     gents::migration::ensure_all_runtime_migrations(node_arc.clone()).await?;
     gents::store_key::upgrade::finish(&data_dir)?;
-    let node = std::sync::Arc::try_unwrap(node_arc).unwrap_or_else(|_| {
-        unreachable!("node_arc had exactly one strong reference at this point")
-    });
-
-    let access = ConfigAccess::Local(std::sync::Arc::new(node));
+    let access = ConfigAccess::Local(node_arc);
     let summary = initialize_runtime_home(
         &access,
         &args,
@@ -1084,7 +1080,7 @@ async fn publish_home_config(
     documents: Vec<DesiredStateApplyDocument>,
 ) -> Result<()> {
     access
-        .transact("init.initialize_runtime_home", |txn| {
+        .transact_write("init.initialize_runtime_home", |txn| {
             let mut documents = documents.clone();
             Box::pin(async move {
                 let mut node_document =

@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use gents::defra_node::EmbeddedNode;
@@ -135,7 +136,7 @@ async fn session_fork(args: SessionForkArgs) -> Result<()> {
 /// overwrite cannot wipe a store mid-fork. Fields drop in declaration order:
 /// the node closes before the claim is released.
 struct OfflineForkStore {
-    node: EmbeddedNode,
+    node: Arc<EmbeddedNode>,
     _claim: gents::home::StoreLock,
 }
 
@@ -169,7 +170,7 @@ async fn open_offline_fork_store(home: &Path, data_dir: &Path) -> Result<Offline
         .await
         .with_context(|| format!("opening embedded node at {}", data_dir.display()))?;
     Ok(OfflineForkStore {
-        node,
+        node: Arc::new(node),
         _claim: claim,
     })
 }

@@ -333,7 +333,7 @@ async fn provider_publication_request_size_benchmark() {
             segments: 1,
             stream_bytes: vec![noise.payload.len().try_into().unwrap()],
         });
-        ConfigAccess::transact_local(&node, None, "test.publication_benchmark_seed", |txn| {
+        ConfigAccess::transact_local_write(&node, None, "test.publication_benchmark_seed", |txn| {
             let mut noise = noise.clone();
             Box::pin(async move {
                 for index in 0..sources {
@@ -452,7 +452,7 @@ async fn first_publication_rejects_native_message_that_differs_from_reconstructi
 }
 
 async fn publish_tool_turn_for_rollback_test(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     lifecycle: &RequestLifecycle,
     message: &gents_protocol::message::Message,
 ) -> anyhow::Result<super::canonical::PublishedProviderTurn> {
@@ -568,7 +568,7 @@ async fn recovery_receipt_fixture(
 ) {
     let (node, path, lifecycle, writer) = fixture(name).await;
     let request = lifecycle.request();
-    crate::config_client::ConfigAccess::transact_local(
+    crate::config_client::ConfigAccess::transact_local_write(
         &node,
         None,
         "test.recovery_session_observation",

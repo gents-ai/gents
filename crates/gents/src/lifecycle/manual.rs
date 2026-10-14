@@ -9,7 +9,7 @@ use crate::lifecycle::{
 use crate::template::{render_template, task_node_ctx, TemplateScope};
 
 pub async fn write_manual_agent_request(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     actor: ::identity::Did,
     node_did: &str,
     agent_id: &str,
@@ -31,7 +31,7 @@ pub async fn write_manual_agent_request(
 }
 
 pub async fn write_manual_agent_request_with_conversation_title(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     actor: ::identity::Did,
     node_did: &str,
     agent_id: &str,
@@ -121,7 +121,7 @@ mod tests {
         let actor = ::identity::Did::new(node_did.clone()).unwrap();
 
         let doc_id = write_manual_agent_request(
-            node.as_ref(),
+            &node,
             actor,
             &node_did,
             "behavior-1",
@@ -180,7 +180,7 @@ mod tests {
         let (node, node_did) = test_node().await;
         let actor = ::identity::Did::new(node_did.clone()).unwrap();
         let doc_id = write_manual_agent_request(
-            node.as_ref(),
+            &node,
             actor,
             &node_did,
             "behavior-1",
@@ -225,7 +225,7 @@ mod tests {
         let actor = ::identity::Did::new(node_did.clone()).unwrap();
 
         let doc_id = write_manual_agent_request(
-            node.as_ref(),
+            &node,
             actor,
             &node_did,
             "behavior-1",
@@ -268,7 +268,7 @@ mod tests {
         let actor = ::identity::Did::new(node_did.clone()).unwrap();
 
         let doc_id = write_manual_agent_request_with_conversation_title(
-            node.as_ref(),
+            &node,
             actor,
             &node_did,
             "behavior-1",
@@ -346,7 +346,7 @@ mod tests {
         let (node, node_did) = test_node().await;
         let actor = ::identity::Did::new(node_did).unwrap();
         let err = write_manual_agent_request(
-            node.as_ref(),
+            &node,
             actor,
             "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK",
             "behavior-1",

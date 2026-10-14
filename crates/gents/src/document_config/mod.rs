@@ -131,7 +131,7 @@ pub fn default_agent_id_for_node(node_did: &str) -> String {
 
 /// Ensure the runtime's node exists without inventing executable configuration.
 /// Packs or explicit configuration select agents, contexts and inference.
-pub async fn ensure_node(node: &EmbeddedNode, node_did: &str) -> Result<Node> {
+pub async fn ensure_node(node: &std::sync::Arc<EmbeddedNode>, node_did: &str) -> Result<Node> {
     use crate::collection::Collection;
     use crate::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
     anyhow::ensure!(!node_did.trim().is_empty(), "node DID must not be blank");
@@ -155,7 +155,7 @@ pub async fn ensure_node(node: &EmbeddedNode, node_did: &str) -> Result<Node> {
     if let Some(principal) = existing {
         return Ok(principal);
     }
-    ConfigAccess::transact_local(node, None, "ensure_node", move |txn| {
+    ConfigAccess::transact_local_write(node, None, "ensure_node", move |txn| {
         let owner = owner.clone();
         Box::pin(async move {
             if let Some((_, value)) = crate::config_client::read_desired_state_record_in_txn(
@@ -203,7 +203,7 @@ mod principal_bootstrap_tests {
 
     #[tokio::test]
     async fn bootstrap_is_idempotent_and_does_not_invent_executable_configuration() -> Result<()> {
-        let node = EmbeddedNode::builder().build().await?;
+        let node = std::sync::Arc::new(EmbeddedNode::builder().build().await?);
         crate::ensure_runtime_schemas(&node).await?;
         let principal = ensure_node(&node, "did:key:bootstrap").await?;
         assert_eq!(principal.default_agent_id, None);

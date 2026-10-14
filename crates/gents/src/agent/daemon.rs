@@ -119,7 +119,7 @@ pub(crate) async fn verify_request_at_claim_boundary(
             record_current_request_outcome("admission_denied");
             if let Err(persist_error) =
                 crate::request_admission::terminalize_pending_request_rejection(
-                    node.as_ref(),
+                    &node,
                     &request.doc_id,
                     &request.node_did,
                     &reason,
@@ -729,7 +729,7 @@ impl<M: ProviderModel> AgentDaemon<M> {
 
         let sealed = request::prepare_unless_interrupted(
             &mut interrupt_rx,
-            crate::workspace::writer_request_already_sealed(self.node.as_ref(), &request),
+            crate::workspace::writer_request_already_sealed(&self.node, &request),
         )
         .await;
         let Some(sealed) = sealed else {
@@ -758,7 +758,7 @@ impl<M: ProviderModel> AgentDaemon<M> {
                     return Ok(());
                 }
                 if let Err(error) = crate::workspace::seal_on_writer_success(
-                    self.node.as_ref(),
+                    &self.node,
                     &request,
                     self.operator_tool_root.as_deref(),
                 )
@@ -989,7 +989,7 @@ impl<M: ProviderModel> AgentDaemon<M> {
                 }
                 self.record_request_interruption(&request, interruption_source);
                 if let Err(error) =
-                    crate::workspace::release_writer_binding(self.node.as_ref(), &request).await
+                    crate::workspace::release_writer_binding(&self.node, &request).await
                 {
                     tracing::warn!(
                         request_id = %request.request_id,
@@ -1019,9 +1019,7 @@ impl<M: ProviderModel> AgentDaemon<M> {
     }
 
     async fn release_failed_writer_binding(&self, request: &AgentRequest) {
-        if let Err(error) =
-            crate::workspace::release_writer_binding(self.node.as_ref(), request).await
-        {
+        if let Err(error) = crate::workspace::release_writer_binding(&self.node, request).await {
             tracing::warn!(
                 request_id = %request.request_id,
                 error = %error,
@@ -1046,7 +1044,7 @@ impl<M: ProviderModel> AgentDaemon<M> {
         {
             record_current_request_outcome("interrupted");
             self.record_request_interruption(request, RequestInterruptionSource::Claimed);
-            crate::workspace::release_writer_binding(self.node.as_ref(), request).await?;
+            crate::workspace::release_writer_binding(&self.node, request).await?;
         }
         Ok(())
     }
@@ -1140,7 +1138,7 @@ impl<M: ProviderModel> AgentDaemon<M> {
                     return OwnedWorkOutcome::OwnershipLost;
                 }
                 if let Err(error) = crate::workspace::seal_on_writer_success(
-                    self.node.as_ref(),
+                    &self.node,
                     request,
                     self.operator_tool_root.as_deref(),
                 )
@@ -1163,7 +1161,7 @@ impl<M: ProviderModel> AgentDaemon<M> {
                     return OwnedWorkOutcome::OwnershipLost;
                 }
                 if let Err(error) = crate::workspace::integrate_on_integrator_success(
-                    self.node.as_ref(),
+                    &self.node,
                     request,
                     self.operator_tool_root.as_deref(),
                 )

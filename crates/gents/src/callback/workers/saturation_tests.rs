@@ -254,7 +254,7 @@ async fn live_engine_recovers_saturated_plugin_without_new_arrivals() {
     .collect();
     let plan = DesiredStateApplyPlan::new(documents).unwrap();
     access
-        .transact("test.callback_saturation_config", |txn| {
+        .transact_write("test.callback_saturation_config", |txn| {
             let plan = &plan;
             Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
         })

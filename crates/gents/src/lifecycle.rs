@@ -941,7 +941,7 @@ mod tests {
                 .unwrap(),
         );
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-        crate::test_support::install_test_agent(node.as_ref(), "did:test:test", "default").await;
+        crate::test_support::install_test_agent(&node, "did:test:test", "default").await;
         let mut lifecycle = RequestLifecycle::materialize_claimed_with_execution_binding(
             node.clone(),
             "default",

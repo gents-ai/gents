@@ -300,12 +300,12 @@ pub(crate) async fn load_runtime_graph_artifacts_in_txn(
 /// or mutable install state is consulted at runtime.
 #[cfg(test)]
 pub(crate) async fn load_visible_package_artifact_ids(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
     active_revision_digests: &BTreeSet<String>,
     pinned_revision_digests: &BTreeSet<String>,
 ) -> Result<(BTreeSet<String>, BTreeSet<String>)> {
-    ConfigAccess::transact_local(node, None, "graph_pipeline.visible_artifacts", |txn| {
+    ConfigAccess::transact_local_readonly(node, None, "graph_pipeline.visible_artifacts", |txn| {
         Box::pin(load_visible_package_artifact_ids_in_txn(
             txn,
             node_did,
@@ -788,7 +788,7 @@ async fn update_document(
 /// must already exist and be enabled. The triggers remain invisible to runtime
 /// reconciliation until activation advances the graph definition pointer.
 pub async fn materialize_graph_revision(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     identity: Option<Did>,
     owner_did: &str,
     plan: &GraphPlan,
@@ -801,7 +801,7 @@ pub async fn materialize_graph_revision(
     let now = chrono::Utc::now().to_rfc3339();
     let plan_json = &plan_json;
     let now = &now;
-    ConfigAccess::transact_local(
+    ConfigAccess::transact_local_write(
         node,
         identity,
         "graph_pipeline.materialize_revision",
@@ -815,7 +815,7 @@ pub async fn materialize_graph_revision(
 /// Publish through the immutable revision machinery while preserving the
 /// foundation tool's compact receipt. Publication never starts execution.
 pub async fn publish_graph_plan(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     identity: Did,
     plan: &GraphPlan,
 ) -> Result<PublishedGraph> {
@@ -1105,7 +1105,7 @@ async fn planned_route_documents(
 /// Compare-and-swap the one mutable pointer that makes a complete immutable
 /// revision visible to runtime reconciliation.
 pub async fn activate_graph_revision(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     identity: Option<Did>,
     owner_did: &str,
     graph_id: &str,
@@ -1115,7 +1115,7 @@ pub async fn activate_graph_revision(
     digest_hex(digest)?;
     let now = chrono::Utc::now().to_rfc3339();
     let now = &now;
-    ConfigAccess::transact_local(
+    ConfigAccess::transact_local_write(
         node,
         identity,
         "graph_pipeline.activate_revision",
@@ -1141,7 +1141,7 @@ pub async fn activate_graph_revision_with_access(
     let now = chrono::Utc::now().to_rfc3339();
     let now = &now;
     access
-        .transact("graph_pipeline.activate_revision", move |txn| {
+        .transact_write("graph_pipeline.activate_revision", move |txn| {
             Box::pin(async move {
                 activate_in_txn(txn, owner_did, graph_id, digest, expected_previous, now).await
             })
@@ -1311,7 +1311,7 @@ pub async fn load_active_graph_plan_with_access(
     graph_id: &str,
 ) -> Result<Option<GraphPlan>> {
     access
-        .transact("graph_pipeline.load_active_plan", move |txn| {
+        .transact_readonly("graph_pipeline.load_active_plan", move |txn| {
             Box::pin(async move { load_active_graph_plan_in_txn(txn, owner_did, graph_id).await })
         })
         .await
@@ -1380,7 +1380,7 @@ pub async fn set_graph_enabled_with_access(
     let now = chrono::Utc::now().to_rfc3339();
     let now = &now;
     access
-        .transact("graph_pipeline.set_enabled", move |txn| {
+        .transact_write("graph_pipeline.set_enabled", move |txn| {
             Box::pin(async move {
                 set_graph_enabled_in_txn(txn, owner_did, graph_id, enabled, now).await
             })
@@ -1392,7 +1392,7 @@ pub async fn set_graph_enabled_with_access(
 /// entry collection in the same transaction as the GraphRun record.
 #[allow(clippy::too_many_arguments)]
 pub async fn start_graph_run(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     identity: Option<Did>,
     caller_did: &str,
     graph_id: &str,
@@ -1406,7 +1406,7 @@ pub async fn start_graph_run(
     let run_id = &run_id;
     let now = chrono::Utc::now().to_rfc3339();
     let now = &now;
-    ConfigAccess::transact_local(node, identity, "graph_pipeline.start_run", move |txn| {
+    ConfigAccess::transact_local_write(node, identity, "graph_pipeline.start_run", move |txn| {
         Box::pin(async move {
             start_run_in_txn(
                 txn,
@@ -1441,7 +1441,7 @@ pub async fn start_graph_run_with_access(
     let now = chrono::Utc::now().to_rfc3339();
     let now = &now;
     access
-        .transact("graph_pipeline.start_run", move |txn| {
+        .transact_write("graph_pipeline.start_run", move |txn| {
             Box::pin(async move {
                 start_run_in_txn(
                     txn,
@@ -1688,7 +1688,7 @@ mod tests {
 
     #[tokio::test]
     async fn unavailable_package_revisions_fail_closed_without_failing_the_runtime_view() {
-        let node = EmbeddedNode::builder().build().await.unwrap();
+        let node = std::sync::Arc::new(EmbeddedNode::builder().build().await.unwrap());
         node.add_schema(gents_protocol::schemas::GRAPH_REVISION)
             .await
             .unwrap();
@@ -1735,7 +1735,7 @@ mod tests {
 
     #[tokio::test]
     async fn package_schema_readiness_reuses_live_schema_introspection_and_fails_closed() {
-        let node = EmbeddedNode::builder().build().await.unwrap();
+        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         node.add_schema("type ReadyInput { graph_run_id: String }")
             .await
             .unwrap();
@@ -2116,7 +2116,7 @@ mod tests {
         assert!(!revision_visibility_authorized("draft", true, true));
     }
 
-    async fn install_plan_tasks(node: &EmbeddedNode, plan: &GraphPlan) {
+    async fn install_plan_tasks(node: &Arc<EmbeddedNode>, plan: &GraphPlan) {
         install_graph_test_tasks(
             node,
             graph_test_owner(),
@@ -2131,7 +2131,7 @@ mod tests {
     }
 
     pub(crate) async fn install_graph_test_tasks(
-        node: &EmbeddedNode,
+        node: &std::sync::Arc<EmbeddedNode>,
         owner: &str,
         agent: &str,
         tasks: &[&str],
@@ -2155,7 +2155,7 @@ mod tests {
                 .collect(),
         )
         .unwrap();
-        ConfigAccess::transact_local(node, None, "test.graph.tasks", |txn| {
+        ConfigAccess::transact_local_write(node, None, "test.graph.tasks", |txn| {
             let plan = &plan;
             Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
         })
@@ -2165,7 +2165,11 @@ mod tests {
 
     #[tokio::test]
     async fn revision_publication_and_run_start_are_transactional_and_pinned() {
-        async fn assert_visible(node: &EmbeddedNode, trigger_id: &str, expected: bool) {
+        async fn assert_visible(
+            node: &std::sync::Arc<EmbeddedNode>,
+            trigger_id: &str,
+            expected: bool,
+        ) {
             let view = crate::agent::load_document_runtime_view(node, graph_test_owner())
                 .await
                 .unwrap();
@@ -2175,7 +2179,7 @@ mod tests {
                 "runtime visibility for {trigger_id}"
             );
         }
-        let node = EmbeddedNode::builder().build().await.unwrap();
+        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
         for schema in [
             r#"type PipelineInput {
@@ -2330,7 +2334,7 @@ mod tests {
         assert_eq!(run.revision_digest, first.digest);
         assert_eq!(run.correlation, run.run_id);
         assert!(super::super::derive_graph_workspace(
-            &node,
+            node.as_ref(),
             &materialized.trigger_ids[0],
             Some(&run.correlation),
             graph_test_owner(),
@@ -2341,7 +2345,7 @@ mod tests {
         .unwrap()
         .is_some());
         assert!(super::super::derive_graph_workspace(
-            &node,
+            node.as_ref(),
             "operator-trigger",
             None,
             graph_test_owner(),
@@ -2352,7 +2356,7 @@ mod tests {
         .unwrap()
         .is_none());
         assert!(super::super::derive_graph_workspace(
-            &node,
+            node.as_ref(),
             &materialized.trigger_ids[0],
             Some("unknown-run"),
             graph_test_owner(),
@@ -2499,7 +2503,7 @@ mod tests {
             Some("operator stopped the run")
         );
         assert!(super::super::derive_graph_workspace(
-            &node,
+            node.as_ref(),
             &materialized.trigger_ids[0],
             Some(&run.correlation),
             graph_test_owner(),
@@ -2526,7 +2530,7 @@ mod tests {
     /// reaches `admit_operator_input`.
     #[tokio::test]
     async fn start_run_refuses_operator_origin_when_the_entry_declares_prepare() {
-        let node = EmbeddedNode::builder().build().await.unwrap();
+        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
         for schema in [
             "type PipelineInput { graph_run_id: String @index(unique: true) payload: String }",
@@ -2579,7 +2583,7 @@ mod tests {
     /// for it.
     #[tokio::test]
     async fn start_run_refuses_prepared_origin_when_the_entry_has_no_prepare() {
-        let node = EmbeddedNode::builder().build().await.unwrap();
+        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
         for schema in [
             "type PipelineInput { graph_run_id: String @index(unique: true) payload: String }",
@@ -2628,7 +2632,7 @@ mod tests {
     /// operator left out.
     #[tokio::test]
     async fn start_run_validates_operator_input_against_the_entry_schema() {
-        let node = EmbeddedNode::builder().build().await.unwrap();
+        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
         for schema in [
             "type PipelineInput { graph_run_id: String @index(unique: true) payload: String }",
@@ -2900,7 +2904,7 @@ mod tests {
 
     #[tokio::test]
     async fn grouped_delivery_reuses_canonical_event_source_and_trigger_contract() {
-        let node = EmbeddedNode::builder().build().await.unwrap();
+        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
 
         let plan = grouped_test_plan();

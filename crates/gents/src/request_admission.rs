@@ -145,7 +145,7 @@ fn deny_if(condition: bool, message: &'static str) -> AdmissionResult<()> {
 /// possession of the target key authors the request, while a fresh durable
 /// reload proves the row still matches that signature before claim.
 pub(crate) async fn verify_fresh_local_self_request(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     identity: &dyn NodeIdentity,
     request: &AgentRequest,
     target_agent_id: &str,
@@ -211,7 +211,7 @@ pub async fn sign_agent_request_create(
 /// hostile-row ingest and final authority verification; ordinary lifecycle
 /// failure starts only after a successful claim.
 pub(crate) async fn terminalize_pending_request_rejection(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     doc_id: &str,
     node_did: &str,
     reason: &str,
@@ -568,7 +568,7 @@ impl AgentRequestAdmissionVerifier {
             }
         }
         require_admitted_observation(observation, denied)?;
-        verify_request_input(self.node.as_ref(), &row, &admission).await?;
+        verify_request_input(&self.node, &row, &admission).await?;
         row_into_agent_request(row, &request.doc_id).map_err(AgentRequestAdmissionError::denied)
     }
 }
@@ -622,7 +622,7 @@ fn verify_title_request_shape(
 
 /// Signed input remains subordinate to the resolved context and issuance owner.
 async fn verify_request_input(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     row: &AgentRequestRow,
     admission: &AgentRequestAdmissionRecord,
 ) -> AdmissionResult<()> {
@@ -847,7 +847,7 @@ async fn load_exact_parent_request(
 
 /// Read the existing canonical configuration owner in one scoped snapshot.
 pub(crate) async fn load_request_context(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     node_did: &str,
     agent_id: &str,
 ) -> AdmissionResult<(
@@ -860,7 +860,7 @@ pub(crate) async fn load_request_context(
     use crate::document_config::{Agent, AgentContext, AgentTargetDocument, Tools};
     let owner = node_did.to_owned();
     let agent_id = agent_id.to_owned();
-    ConfigAccess::transact_local(node, None, "request_admission.context", move |txn| {
+    ConfigAccess::transact_local_readonly(node, None, "request_admission.context", move |txn| {
         let owner = owner.clone();
         let agent_id = agent_id.clone();
         Box::pin(async move {
@@ -1235,7 +1235,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let identity =
             KeyIdentity::load_or_create(temp.path().join("rejection.key"), None).unwrap();
-        let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+        let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
         ensure_runtime_schemas(&node).await.unwrap();
         let mut create = AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
@@ -1298,7 +1298,7 @@ mod tests {
     async fn signed_input_cannot_expand_context_or_spoof_runtime_queue() {
         let temp = tempfile::tempdir().unwrap();
         let identity = KeyIdentity::load_or_create(temp.path().join("input.key"), None).unwrap();
-        let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+        let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
         ensure_runtime_schemas(&node).await.unwrap();
         let owner = crate::graphql::escape_graphql_string(identity.did());
         for mutation in [
@@ -1373,7 +1373,7 @@ mod tests {
         let identity =
             KeyIdentity::load_or_create(temp.path().join("projection.key"), None).unwrap();
         let foreign = KeyIdentity::load_or_create(temp.path().join("foreign.key"), None).unwrap();
-        let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+        let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
         ensure_runtime_schemas(&node).await.unwrap();
         let owner = crate::graphql::escape_graphql_string(identity.did());
         for mutation in [
@@ -1533,7 +1533,7 @@ mod tests {
             KeyIdentity::load_or_create(temp.path().join("corrupt-session.key"), None).unwrap();
         let foreign =
             KeyIdentity::load_or_create(temp.path().join("corrupt-foreign.key"), None).unwrap();
-        let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+        let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
         ensure_runtime_schemas(&node).await.unwrap();
         let node_did = crate::graphql::escape_graphql_string(identity.did());
         for (session_id, requester_did) in [
@@ -1617,7 +1617,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let identity =
             KeyIdentity::load_or_create(temp.path().join("corrupt-facts.key"), None).unwrap();
-        let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+        let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
         ensure_runtime_schemas(&node).await.unwrap();
         let node_did = crate::graphql::escape_graphql_string(identity.did());
         for (session_id, sibling_request_id, sibling_created_at) in [
@@ -1753,7 +1753,7 @@ mod tests {
                 let temp = tempfile::tempdir().unwrap();
                 let identity = KeyIdentity::load_or_create(temp.path().join("skew.key"), None)
                     .unwrap();
-                let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+                let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
                 ensure_runtime_schemas(&node).await.unwrap();
                 let node_did = crate::graphql::escape_graphql_string(identity.did());
                 let created = node
@@ -1813,7 +1813,7 @@ mod tests {
     async fn runtime_receipt_authenticates_terminal_expired_child_and_rejects_forgery() {
         let temp = tempfile::tempdir().unwrap();
         let identity = KeyIdentity::load_or_create(temp.path().join("receipt.key"), None).unwrap();
-        let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+        let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
         ensure_runtime_schemas(&node).await.unwrap();
         let mut create = AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
@@ -1987,7 +1987,7 @@ mod tests {
 
     #[tokio::test]
     async fn runtime_trigger_source_requires_current_trigger_and_target_policy() {
-        let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+        let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
         ensure_runtime_schemas(&node).await.unwrap();
         let response = node
             .execute(

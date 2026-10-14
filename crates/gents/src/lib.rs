@@ -218,7 +218,7 @@ pub(crate) mod test_support {
     /// Install an explicit, inert inference/context/tools chain for a named test agent.
     /// Schemas must already be registered. The principal's default is never changed.
     pub(crate) async fn install_test_agent(
-        node: &defra_node::EmbeddedNode,
+        node: &std::sync::Arc<defra_node::EmbeddedNode>,
         owner: &str,
         agent_id: &str,
     ) {
@@ -240,7 +240,7 @@ pub(crate) mod test_support {
             (Collection::InferenceBackend, json!({"node_did":owner,"backend_id":backend,"name":"Test inference","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:1/v1","auth":{"kind":"unauthenticated"}})),
         ].into_iter().map(|(collection,value)| DesiredStateApplyDocument {collection,add:value.clone(),update:value}).collect();
         let plan = DesiredStateApplyPlan::new(documents).unwrap();
-        ConfigAccess::transact_local(node, None, "test.install_agent", |txn| {
+        ConfigAccess::transact_local_write(node, None, "test.install_agent", |txn| {
             let plan = &plan;
             Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, plan).await })
         })

@@ -160,7 +160,7 @@ impl P2pTool {
         let identity = actor.parse()?;
         let peer = peer.to_owned();
         let collections_scope = self.collections.clone();
-        ConfigAccess::transact_local(&self.node, Some(identity), "tool.p2p.overlay", move |txn| {
+        ConfigAccess::transact_local_write(&self.node, Some(identity), "tool.p2p.overlay", move |txn| {
             let actor = actor.clone();
             let peer = peer.clone();
             let desired = desired.clone();

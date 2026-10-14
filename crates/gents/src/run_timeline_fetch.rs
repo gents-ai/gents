@@ -163,7 +163,7 @@ async fn name_serving_accounts(
 ) -> Result<()> {
     let accounts = crate::oauth_credential::list_accounts(access, node_did).await?;
     let backends = access
-        .transact("timeline.serving_accounts", |txn| {
+        .transact_readonly("timeline.serving_accounts", |txn| {
             Box::pin(async move {
                 crate::config_client::list_inference_backends_in_txn(txn, node_did).await
             })
@@ -938,7 +938,7 @@ mod tests {
 
         for account in list_accounts(&access, did).await.unwrap() {
             access
-                .transact("test.remove", |txn| {
+                .transact_write("test.remove", |txn| {
                     let credential_id = account.credential_id.clone();
                     Box::pin(async move { remove_account_in_txn(txn, did, &credential_id).await })
                 })
@@ -1008,7 +1008,7 @@ mod tests {
         );
 
         let active = crate::goal::set_goal(
-            node.as_ref(),
+            &node,
             "did:test:agent",
             "session-goal-history",
             Some("ship the timeline"),
@@ -1017,11 +1017,11 @@ mod tests {
         )
         .await
         .expect("create goal");
-        crate::goal::refresh_goal_usage(node.as_ref(), &active)
+        crate::goal::refresh_goal_usage(&node, &active)
             .await
             .expect("refresh usage");
         crate::goal::set_goal(
-            node.as_ref(),
+            &node,
             "did:test:agent",
             "session-goal-history",
             None,

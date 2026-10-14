@@ -109,7 +109,7 @@ async fn apply(
         .collect();
     let plan = DesiredStateApplyPlan::new(documents)?;
     access
-        .transact("test.delivery_live.configure", |txn| {
+        .transact_write("test.delivery_live.configure", |txn| {
             let plan = &plan;
             Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
         })
@@ -145,7 +145,7 @@ fn string<'a>(row: &'a Value, field: &str) -> Result<&'a str> {
 
 async fn configure(
     access: &ConfigAccess,
-    node: &gents::defra_node::EmbeddedNode,
+    node: &std::sync::Arc<gents::defra_node::EmbeddedNode>,
     owner: &str,
     endpoints: &[String; 2],
 ) -> Result<()> {

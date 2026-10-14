@@ -281,7 +281,7 @@ fn group_query(delivery: Delivery<'_>, correlation: &str) -> String {
 }
 
 pub(crate) async fn load_or_create_group(
-    node: &defra_node::EmbeddedNode,
+    node: &std::sync::Arc<defra_node::EmbeddedNode>,
     delivery: Delivery<'_>,
     correlation: &str,
 ) -> Result<GroupRecord> {
@@ -290,7 +290,7 @@ pub(crate) async fn load_or_create_group(
         !correlation.trim().is_empty(),
         "group correlation is missing"
     );
-    crate::config_client::ConfigAccess::transact_local(node,None,"event.group_clock",|txn| Box::pin(async move {
+    crate::config_client::ConfigAccess::transact_local_write(node,None,"event.group_clock",|txn| Box::pin(async move {
         let query=group_query(delivery,correlation);
         if let Some(row)=decode_group(&txn.execute(&query).await?,delivery,correlation)? {return Ok(row);}
         let state=EventGroupState {group_key:delivery.group_key(correlation),node_did:delivery.owner().into(),consumer:delivery.consumer(),correlation:correlation.into(),consumer_config_key:delivery.config_key(),first_seen_at:Utc::now().to_rfc3339_opts(SecondsFormat::Millis,true),quiesced_at:None,quiesced_reason:None};
@@ -300,7 +300,7 @@ pub(crate) async fn load_or_create_group(
 }
 
 pub(crate) async fn quiesce_group(
-    node: &defra_node::EmbeddedNode,
+    node: &std::sync::Arc<defra_node::EmbeddedNode>,
     record: &GroupRecord,
     reason: &str,
 ) -> Result<()> {
@@ -326,7 +326,7 @@ pub(crate) enum GroupOutcome {
 }
 
 pub(crate) async fn evaluate_group(
-    node: &defra_node::EmbeddedNode,
+    node: &std::sync::Arc<defra_node::EmbeddedNode>,
     cache: &SourceSchemaCache,
     delivery: Delivery<'_>,
     correlation: &str,
@@ -615,7 +615,7 @@ mod tests {
 
     #[tokio::test]
     async fn shared_clock_survives_restart_and_quiescence_is_owner_scoped() {
-        let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+        let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
         node.add_schema(gents_protocol::schemas::EVENT_GROUP_STATE)
             .await
             .unwrap();

@@ -130,7 +130,7 @@ async fn config_apply_txn_round_trip_against_recorder() {
     let access = ConfigAccess::graphql(graphql);
     let recorder_in_tx = recorder.clone();
     access
-        .transact("test.config_apply.round_trip", move |txn| {
+        .transact_write("test.config_apply.round_trip", move |txn| {
             let recorder_in_tx = recorder_in_tx.clone();
             Box::pin(async move {
                 txn.execute(
@@ -156,7 +156,7 @@ async fn config_apply_txn_discard_leaves_committed_empty() {
     let (graphql, recorder) = start_recording_graphql().await;
     let access = ConfigAccess::graphql(graphql);
     let result: Result<()> = access
-        .transact("test.config_apply.discard", move |txn| {
+        .transact_write("test.config_apply.discard", move |txn| {
             Box::pin(async move {
                 txn.execute(
                     "mutation { doc_0: create_Task(input: { task_id: \"task-a\" }) { _docID } }",

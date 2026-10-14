@@ -306,7 +306,7 @@ impl TitleFixture {
 
     async fn terminalize_parent(&self) {
         crate::request_admission::terminalize_pending_request_rejection(
-            self.node.as_ref(),
+            &self.node,
             &self.parent.doc_id,
             &self.parent.node_did,
             "parent ended before title inference",
@@ -340,7 +340,7 @@ impl TitleFixture {
             crate::lifecycle::ClaimOutcome::Claimed
         );
         crate::interrupt::interrupt_request_by_doc_id(
-            self.node.as_ref(),
+            &self.node,
             &self.parent.doc_id,
             &self.parent.node_did,
             self.parent.requester_did.as_deref(),
@@ -882,7 +882,7 @@ async fn crashed_title_recovers_committed_reasoning_without_publication() {
         fixture.title.doc_id
     );
 
-    let first = crate::RequestLifecycle::recover_all(fixture.node.as_ref(), fixture.identity.did())
+    let first = crate::RequestLifecycle::recover_all(&fixture.node, fixture.identity.did())
         .await
         .expect("recover crashed title");
     assert_eq!(first.requests_recovered, 1);
@@ -905,10 +905,9 @@ async fn crashed_title_recovers_committed_reasoning_without_publication() {
         .iter()
         .all(|id| after.iter().any(|row| &row.doc_id == id)));
 
-    let replay =
-        crate::RequestLifecycle::recover_all(fixture.node.as_ref(), fixture.identity.did())
-            .await
-            .expect("repeat title recovery");
+    let replay = crate::RequestLifecycle::recover_all(&fixture.node, fixture.identity.did())
+        .await
+        .expect("repeat title recovery");
     assert_eq!(replay.requests_recovered, 0);
     assert_title_audit(&fixture, &fields, outcome, 1, false).await;
     assert_eq!(fixture.output_rows().await.0.len(), after.len());
@@ -949,7 +948,7 @@ async fn title_audit_is_dispatched_once_by_watcher_router_and_daemon() {
         fixture.terminalize_parent().await;
         if !preexisting {
             crate::request_admission::terminalize_pending_request_rejection(
-                fixture.node.as_ref(),
+                &fixture.node,
                 &fixture.title.doc_id,
                 &fixture.title.node_did,
                 "retire setup title before live creation",
@@ -1377,7 +1376,7 @@ async fn owned_title_interrupt_drains_buffered_reasoning_before_terminal() {
         RequestLifecycleState::Processing
     );
     crate::interrupt::interrupt_request_by_doc_id(
-        fixture.node.as_ref(),
+        &fixture.node,
         &fixture.title.doc_id,
         &fixture.title.node_did,
         fixture.title.requester_did.as_deref(),
