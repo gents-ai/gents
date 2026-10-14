@@ -2,7 +2,7 @@
    name it, watch it come online, then connect one inference provider
    (InferenceSetup). */
 import { useEffect, useReducer, useState } from "react";
-import { Server, Wifi } from "lucide-react";
+import { ArrowRight, Server, Wifi } from "lucide-react";
 import type {
   DesktopClientSnapshot,
   ManagedServerAuthorityInput,
@@ -13,9 +13,10 @@ import { Input } from "@gents/ui/components/input";
 import { Spinner } from "@gents/ui/components/spinner";
 import {
   projectStartupLoadingStatus,
+  startupSteps,
   type DesktopStartupPhase,
 } from "../../../lib/loadingStatus";
-import { SETUP_COMPLETE_DWELL_MS, SetupProgress } from "./SetupProgress";
+import { SETUP_COMPLETE_DWELL_MS, StartupProgress } from "./StartupProgress";
 import { engineerPatches } from "@/lib/engineer";
 import { supportsLocalManagedServer } from "../../../lib/shellPlatform";
 import { NodeAvatar } from "@/screens/AgentAvatar";
@@ -183,14 +184,20 @@ export function OnboardingWizard({
                 "The user home directory is unavailable."),
         );
     });
+  /* setup goes on by itself a while after the progress shows it ready,
+     not after it is ready: the steps' cards had their time first */
+  const [readyShownAt, setReadyShownAt] = useState<number | null>(null);
   useEffect(() => {
-    if (provisionedAt === null) return;
+    if (provisionedAt === null) setReadyShownAt(null);
+  }, [provisionedAt]);
+  useEffect(() => {
+    if (readyShownAt === null) return;
     const timer = window.setTimeout(
       () => dispatch({ type: "continued" }),
-      Math.max(0, provisionedAt + SETUP_COMPLETE_DWELL_MS - Date.now()),
+      Math.max(0, readyShownAt + SETUP_COMPLETE_DWELL_MS - Date.now()),
     );
     return () => window.clearTimeout(timer);
-  }, [provisionedAt]);
+  }, [readyShownAt]);
   const root = bootstrap?.defaultNodeHome ?? "~/.gents";
   const toolRoot = selectedDirectory === undefined ? homeRoot : selectedDirectory;
   const authority = authorityForSelection(toolCeiling, toolRoot);
@@ -450,45 +457,48 @@ export function OnboardingWizard({
   if (step === "starting") {
     const status = projectStartupLoadingStatus(phase, true);
     const done = provisionedAt !== null;
-    const saying: Record<string, string> = {
-      "checking-managed-server": "Starting your local node…",
-      "loading-configuration": "Loading node configuration…",
-      "starting-client": "Starting the secure client…",
+    const detail = {
+      node: startupDetails.managedServer,
+      connections: startupDetails.configuration,
+      client: startupDetails.client,
     };
     return (
       <Frame>
-        <SetupProgress
-          title={status.failed ? status.title : done ? "Ready" : "Starting"}
-          label={done ? "Everything started." : (saying[phase] ?? status.currentLabel)}
-          failed={status.failed}
+        <StartupProgress
+          title={status.title}
+          doneTitle="Gents is ready"
+          steps={startupSteps(status, { remote: where !== "local" }).map((s) => ({
+            ...s,
+            state: done ? "complete" : s.state,
+            detail: detail[s.key] ?? null,
+          }))}
+          failedLabel={status.currentLabel}
           done={done}
-          steps={[
-            {
-              label: where === "local" ? "Start local node" : "Connect to server",
-              state: done ? "complete" : status.managedServerState,
-              detail: startupDetails.managedServer ?? null,
-            },
-            {
-              label: "Load configuration",
-              state: done ? "complete" : status.connectionState,
-              detail: startupDetails.configuration ?? null,
-            },
-            {
-              label: "Start secure client",
-              state: done ? "complete" : status.clientState,
-              detail: startupDetails.client ?? null,
-            },
-          ]}
           wait={managedWait}
-          error={error}
-          onRetry={() => dispatch({ type: "retried" })}
-          onContinue={() => dispatch({ type: "continued" })}
+          waitTestId="setup-managed-server-wait"
+          loginItemsTestId="setup-open-login-items"
           onOpenLoginItems={
             actions.localServerOffers.loginItems
               ? actions.openLocalServerLoginItems
               : undefined
           }
+          error={error}
           diagnosticsHint={diagnosticsHint ?? bootstrap?.diagnosticsHint}
+          actions={
+            <Button variant="brand" onClick={() => dispatch({ type: "retried" })}>
+              Try again
+            </Button>
+          }
+          onFinished={() => setReadyShownAt(Date.now())}
+          footer={
+            <Button
+              data-testid="setup-continue"
+              variant="brand"
+              onClick={() => dispatch({ type: "continued" })}
+            >
+              Continue <ArrowRight />
+            </Button>
+          }
         />
       </Frame>
     );
