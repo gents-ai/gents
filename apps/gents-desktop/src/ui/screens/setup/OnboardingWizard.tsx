@@ -44,14 +44,22 @@ type Run = {
   error: string | null;
   phase: FailedPhase;
   details: Partial<Record<StartupDetail, string>>;
+  /** the node it started and the one it finished on, for the summary */
+  startedDid: string | null;
+  readyName: string | null;
   /** when everything started; the provider step follows a moment later */
   provisionedAt: number | null;
 };
 
 type RunEvent =
   | { type: "begun"; phase: FailedPhase }
-  | { type: "reached"; phase: FailedPhase; detail?: [StartupDetail, string] }
-  | { type: "provisioned"; at: number; client: string }
+  | {
+      type: "reached";
+      phase: FailedPhase;
+      detail?: [StartupDetail, string];
+      startedDid?: string | null;
+    }
+  | { type: "provisioned"; at: number; client: string; name: string | null }
   | { type: "failed"; phase: FailedPhase; error: string }
   | { type: "ended" }
   /** Try again after a failure: back to the welcome step without it */
@@ -70,6 +78,8 @@ function runReducer(run: Run, event: RunEvent): Run {
         error: null,
         phase: event.phase,
         details: {},
+        startedDid: null,
+        readyName: null,
         provisionedAt: null,
       };
     case "reached":
@@ -79,11 +89,13 @@ function runReducer(run: Run, event: RunEvent): Run {
         details: event.detail
           ? { ...run.details, [event.detail[0]]: event.detail[1] }
           : run.details,
+        startedDid: event.startedDid === undefined ? run.startedDid : event.startedDid,
       };
     case "provisioned":
       return {
         ...run,
         details: { ...run.details, client: event.client },
+        readyName: event.name,
         provisionedAt: event.at,
       };
     case "failed":
@@ -143,9 +155,20 @@ export function OnboardingWizard({
     error: null,
     phase: "checking-managed-server",
     details: {},
+    startedDid: null,
+    readyName: null,
     provisionedAt: null,
   });
-  const { step, busy, error, phase, details: startupDetails, provisionedAt } = run;
+  const {
+    step,
+    busy,
+    error,
+    phase,
+    details: startupDetails,
+    startedDid,
+    readyName,
+    provisionedAt,
+  } = run;
   const allowLocal = supportsLocalManagedServer();
   const [where, setWhere] = useState<"local" | "remote">(
     allowLocal ? "local" : "remote",
@@ -237,6 +260,7 @@ export function OnboardingWizard({
       client: nextDeployment
         ? `Connected securely to ${nextDeployment.label}`
         : "Secure client started",
+      name: nextDeployment?.label ?? null,
     });
   };
 
@@ -279,10 +303,8 @@ export function OnboardingWizard({
         dispatch({
           type: "reached",
           phase: "checking-managed-server",
-          detail: [
-            "managedServer",
-            `${requestedName} is running as ${shortDid(status.nodeDid)}, with its identity and data in ${root}`,
-          ],
+          detail: ["managedServer", `${requestedName} is running`],
+          startedDid: status.nodeDid,
         });
       }
       dispatch({ type: "reached", phase: "loading-configuration" });
@@ -291,7 +313,7 @@ export function OnboardingWizard({
       dispatch({
         type: "reached",
         phase: "starting-client",
-        detail: ["configuration", `Saved the local connection to ${requestedName}`],
+        detail: ["configuration", `Saved the connection to ${requestedName}`],
       });
       failedPhase = "client-error";
       await actions.commitLocalServerAutoStart(requestedName);
@@ -471,6 +493,28 @@ export function OnboardingWizard({
         <StartupProgress
           title={status.title}
           doneTitle="Gents is ready"
+          summary={
+            readyName
+              ? {
+                  title:
+                    where === "local"
+                      ? `${readyName} is running`
+                      : `Connected to ${readyName}`,
+                  facts: [
+                    ...(startedDid
+                      ? [
+                          {
+                            label: "Identity",
+                            value: shortDid(startedDid),
+                            full: startedDid,
+                          },
+                        ]
+                      : []),
+                    ...(where === "local" ? [{ label: "Data", value: root }] : []),
+                  ],
+                }
+              : undefined
+          }
           steps={startupSteps(status, { remote: where !== "local" }).map((s) => ({
             ...s,
             state: done ? "complete" : s.state,

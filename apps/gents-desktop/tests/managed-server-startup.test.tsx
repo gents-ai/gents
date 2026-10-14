@@ -480,7 +480,7 @@ describe("first-run local node startup", () => {
     };
   }
 
-  it("waits for macOS approval and a slow boot, then says what each step did", async () => {
+  it("waits for macOS approval and a slow boot, then names the node that is up", async () => {
     const run = firstRun();
     renderIn(
       testApp({ api: run.api, snapshot: run.snapshot }),
@@ -515,12 +515,11 @@ describe("first-run local node startup", () => {
 
     run.finishStart();
     await screen.findByRole("heading", { name: "Gents is ready" }, { timeout: 4_000 });
-    /* the finished card says what each step did */
+    /* the finished card names the node that is up, and where it lives */
     const summary = screen.getByTestId("startup-step");
-    expect(summary).toHaveTextContent("Everything started.");
-    expect(summary).toHaveTextContent("Forge is running as did:key:z6MkFo");
-    expect(summary).toHaveTextContent("Saved the local connection to Forge");
-    expect(summary).toHaveTextContent(`Connected securely to ${deployment.label}`);
+    expect(summary).toHaveTextContent(`${deployment.label} is running`);
+    expect(summary).toHaveTextContent("Identitydid:key:z6MkFo");
+    expect(summary).toHaveTextContent("Data");
     expect(screen.queryByTestId("setup-managed-server-wait")).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByTestId("setup-continue"));
@@ -550,7 +549,7 @@ describe("first-run local node startup", () => {
 
     await screen.findByRole("heading", { name: "Gents is ready" }, { timeout: 4_000 });
     const summary = screen.getByTestId("startup-step");
-    expect(summary).toHaveTextContent(`Connected securely to ${deployment.label}`);
+    expect(summary).toHaveTextContent(`${deployment.label} is running`);
     expect(summary).not.toHaveTextContent("Remote Node");
   }, 15_000);
 
