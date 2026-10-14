@@ -60,7 +60,7 @@ export function Frame({
 export function Title({ children, note }: { children: React.ReactNode; note: string }) {
   return (
     <div className="mb-6">
-      <h1 className="font-heading text-2xl font-medium text-heading">{children}</h1>
+      <h1 className="font-heading text-xl font-medium text-heading">{children}</h1>
       <p className="mt-1.5 text-sm text-muted-foreground">{note}</p>
     </div>
   );

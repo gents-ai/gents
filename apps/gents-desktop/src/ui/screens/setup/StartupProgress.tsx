@@ -203,9 +203,9 @@ export function StartupProgress({
   const details = steps.flatMap((s) => (s.detail ? [s.detail] : []));
   return (
     <div className="grid gap-6">
-      <div className="grid gap-4">
-        <Mark className="h-4 w-fit text-ink" />
-        <h1 id={titleId} className="font-heading text-2xl font-medium text-heading">
+      <div className="grid gap-6">
+        <Mark className="h-5 w-fit text-ink" />
+        <h1 id={titleId} className="font-heading text-xl font-medium text-heading">
           {finished ? doneTitle : title}
         </h1>
       </div>

@@ -54,12 +54,12 @@ export function IncompatibleHomeScreen({ home, error }: IncompatibleHomeScreenPr
       data-testid="incompatible-home"
     >
       <div className="grid w-full max-w-lg gap-6">
-        <Mark className="h-4 text-ink" />
+        <Mark className="h-5 text-ink" />
         {report.completed ? (
           <div className="grid gap-3" data-testid="incompatible-home-done">
             <h2
               id="incompatible-home-title"
-              className="font-heading text-2xl font-medium text-heading"
+              className="font-heading text-xl font-medium text-heading"
             >
               {report.disposition === "delete"
                 ? "Old home deleted"
@@ -94,7 +94,7 @@ export function IncompatibleHomeScreen({ home, error }: IncompatibleHomeScreenPr
             <div className="grid gap-2">
               <h2
                 id="incompatible-home-title"
-                className="font-heading text-2xl font-medium text-heading"
+                className="font-heading text-xl font-medium text-heading"
               >
                 {home.fullReset
                   ? "Reset Gents on this Mac"
