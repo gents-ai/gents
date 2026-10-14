@@ -2574,6 +2574,16 @@ pub async fn claim_retry_continuation(
         .is_some_and(mutation_returned_rows))
 }
 
+/// Tokens charged against a session's budget. `input` and `output` are the
+/// durable `InferenceCall` prompt and completion columns; `total` is their
+/// charged sum (`crate::provider_usage::sum_charged_from_persisted_parts`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SessionTokenUsage {
+    pub input: u64,
+    pub output: u64,
+    pub total: u64,
+}
+
 pub async fn session_token_usage(
     node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
@@ -2593,10 +2603,18 @@ async fn session_token_usage_in_txn(
     node_did: &str,
     session_id: &str,
 ) -> Result<i64> {
-    let charged = crate::toolset::load_session_goal_usage(txn, node_did, session_id)
+    let usage = session_token_usage_breakdown_in_txn(txn, node_did, session_id).await?;
+    Ok(i64::try_from(usage.total).unwrap_or(i64::MAX))
+}
+
+pub(crate) async fn session_token_usage_breakdown_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    node_did: &str,
+    session_id: &str,
+) -> Result<SessionTokenUsage> {
+    crate::toolset::load_session_goal_usage(txn, node_did, session_id)
         .await
-        .context("summing goal inference usage")?;
-    Ok(i64::try_from(charged).unwrap_or(i64::MAX))
+        .context("summing goal inference usage")
 }
 
 pub async fn refresh_goal_usage(
@@ -2657,6 +2675,73 @@ fn optional_string_graphql_field(name: &str, value: Option<&str>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn session_token_usage_breakdown_sums_to_the_total() {
+        let node = std::sync::Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        crate::schema::ensure_runtime_schemas(&node).await.unwrap();
+        let owner = "did:key:z6MkTestOwner";
+        let request = format!(
+            r#"mutation {{ create_AgentRequest(input: {{
+                request_id: "usage-request", purpose: "normal", node_did: "{owner}",
+                session_id: "usage-session", agent_id: "general", content: "test",
+                lifecycle_state: "completed", backend_id: "",
+                created_at: "2026-07-15T00:00:00Z", retry_count: 0, max_retries: 0
+            }}) {{ _docID }} }}"#
+        );
+        let response = node.execute(&request).await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+        let request_doc_id = response
+            .data
+            .as_ref()
+            .and_then(|data| data.pointer("/create_AgentRequest/0/_docID"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap()
+            .to_owned();
+        for (seq, prompt, completion) in [(1, 1000, 50), (2, 200, 7)] {
+            let call = format!(
+                r#"mutation {{ add_InferenceCall(input: {{
+                    call_id: "usage-call-{seq}", runtime_instance_id: "goal-test",
+                    request_id: "usage-request", request_doc_id: "{request_doc_id}", call_seq: {seq}, backend_id: "backend-test",
+                    agent_id: "test", node_did: "{owner}", call_kind: "inference", attempt: 1,
+                    call_state: "completed", queued_at: "2026-07-15T00:00:00Z",
+                    started_at: "2026-07-15T00:00:00Z", ended_at: "2026-07-15T00:00:01Z",
+                    priority: 0, queue_depth_at_enqueue: 0, controller_generation: 1,
+                    backend_config_fingerprint: "goal-test",
+                    prompt_tokens: {prompt}, completion_tokens: {completion}
+                }}) {{ _docID }} }}"#
+            );
+            let response = node.execute(&call).await;
+            assert!(!response.has_errors(), "{:?}", response.errors);
+        }
+        let usage = crate::config_client::ConfigAccess::transact_local_readonly(
+            &node,
+            None,
+            "goal.session_usage_breakdown_test",
+            |txn| {
+                Box::pin(async move {
+                    session_token_usage_breakdown_in_txn(txn, owner, "usage-session").await
+                })
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            usage,
+            SessionTokenUsage {
+                input: 1200,
+                output: 57,
+                total: 1257
+            }
+        );
+        assert_eq!(usage.input + usage.output, usage.total);
+        assert_eq!(
+            session_token_usage(&node, owner, "usage-session")
+                .await
+                .unwrap(),
+            1257
+        );
+    }
 
     #[tokio::test]
     async fn auto_resume_field_round_trips_through_the_live_schema() {

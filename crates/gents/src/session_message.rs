@@ -368,6 +368,7 @@ pub(crate) async fn plan(
             Some(format!("session-message:{}", cause.tool_call_doc_id)),
             hop,
             None,
+            None,
         )
         .await?;
         PlannedWrite::Goal {
@@ -399,6 +400,7 @@ pub(crate) async fn plan(
                 None,
                 hop,
                 queue,
+                None,
             )
             .await?,
             delivery: if steering.is_some() {
