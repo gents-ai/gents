@@ -46,11 +46,17 @@ export const SESSION_HEADER_ACTIONS_AREA = "session.header.actions";
 /** data: TranscriptDirectiveContribution. First registration of a name wins. */
 export const TRANSCRIPT_DIRECTIVE_AREA = "transcript.directives";
 
+/** render only. A plugin's own full page: what the plugin route
+ *  (`{ name: "plugin", pluginId }`, the main nav's destination for a plugin's
+ *  row) draws. One per plugin: the first the plugin registered here. */
+export const PLUGIN_PAGE_AREA = "plugin.pages";
+
 export const KNOWN_AREAS = [
   NAV_AREA,
   AGENT_SECTIONS_AREA,
   SESSION_HEADER_ACTIONS_AREA,
   TRANSCRIPT_DIRECTIVE_AREA,
+  PLUGIN_PAGE_AREA,
 ] as const;
 export type KnownArea = (typeof KNOWN_AREAS)[number];
 

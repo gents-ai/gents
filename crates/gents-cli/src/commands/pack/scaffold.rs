@@ -209,7 +209,7 @@ pub(crate) fn scaffold(dir: &Path, name: &str, args: &PackScaffoldArgs) -> Resul
             "description": format!("{} page, nav row and ::{directive} directive.", names.title),
             "entry": path,
             "contributes": {
-                "areas": ["nav", "agent.sections", "transcript.directives"],
+                "areas": ["nav", "plugin.pages", "transcript.directives"],
                 "directives": [directive],
             },
         }]);
@@ -258,7 +258,7 @@ pub(crate) fn scaffold(dir: &Path, name: &str, args: &PackScaffoldArgs) -> Resul
 /// The scaffolded UX plugin: a plain ESM file (no build) that lands a nav
 /// row, an agent section page and a transcript directive, each in the
 /// smallest shape that works. Returns its pack-relative path and source.
-pub(crate) fn ux_plugin_source(names: &Names) -> (String, String) {
+fn ux_plugin_source(names: &Names) -> (String, String) {
     let path = format!("ux/{}/plugin.js", names.name);
     let directive = names.name.replace('_', "-");
     let source = format!(
@@ -267,13 +267,15 @@ pub(crate) fn ux_plugin_source(names: &Names) -> (String, String) {
 // imported. Everything it does goes through `ctx`, so disabling the plugin
 // undoes all of it. Run `gents pack check` to lint, `gents ux module` to
 // see what the desktop receives.
-import {{ AGENT_SECTIONS_AREA, NAV_AREA, TRANSCRIPT_DIRECTIVE_AREA, Group, Row }} from '@gents/ux-sdk'
+import {{ NAV_AREA, PLUGIN_PAGE_AREA, TRANSCRIPT_DIRECTIVE_AREA, Group, Row }} from '@gents/ux-sdk'
 import {{ jsx, jsxs }} from 'react/jsx-runtime'
 
-function Page({{ agentDid }}) {{
+/* the plugin's own page, where its nav row goes; a configuration page
+   would be an AGENT_SECTIONS_AREA contribution instead */
+function Page() {{
   return jsx(Group, {{ title: '{title}', children:
-    jsx(Row, {{ label: 'Agent', description: 'the agent this page was opened for', children:
-      jsx('code', {{ className: 'font-mono text-xs', children: agentDid }}) }}) }})
+    jsx(Row, {{ label: 'Page', description: 'the plugin\'s own page', children:
+      jsx('code', {{ className: 'font-mono text-xs', children: '/plugins/{name}' }}) }}) }})
 }}
 
 function Card({{ attrs }}) {{
@@ -289,9 +291,10 @@ export default {{
     ctx.registerMany([
       {{ id: 'nav', area: NAV_AREA, order: 80, data: {{
         id: '{name}:nav', label: '{title}', icon: null,
-        to: {{ name: 'agents' }}, active: () => false, placement: 'footer', order: 80 }} }},
-      {{ id: 'page', area: AGENT_SECTIONS_AREA, data: {{
-        group: 'Packs', label: '{title}', render: (props) => jsx(Page, props) }} }},
+        to: {{ name: 'plugin', pluginId: '{name}' }},
+        active: (route) => route.name === 'plugin' && route.pluginId === '{name}',
+        placement: 'footer', order: 80 }} }},
+      {{ id: 'page', area: PLUGIN_PAGE_AREA, render: () => jsx(Page, {{}}) }},
       {{ id: 'directive', area: TRANSCRIPT_DIRECTIVE_AREA, data: {{
         name: '{directive}', render: ({{ attrs }}) => jsx(Card, {{ attrs }}) }} }},
     ])

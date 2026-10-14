@@ -50,6 +50,7 @@ import { useSwipeNav } from "./ui/lib/swipe-nav";
 import { AgentScreen } from "./ui/screens/agent/AgentScreen";
 import { AgentsScreen } from "./ui/screens/AgentsScreen";
 import { MailboxScreen } from "./ui/screens/MailboxScreen";
+import { PluginPageScreen } from "./ui/screens/PluginPageScreen";
 import { PluginAccessPrompt } from "./ui/screens/PluginAccessPrompt";
 import { SessionScreen } from "./ui/screens/SessionScreen";
 import { SessionsScreen } from "./ui/screens/SessionsScreen";
@@ -227,6 +228,8 @@ function RouteScreen({ route }: { route: Route }) {
           item={route.item}
         />
       );
+    case "plugin":
+      return <PluginPageScreen pluginId={route.pluginId} />;
   }
 }
 

@@ -21,6 +21,7 @@ import { registry } from "@/contrib/registry";
 import {
   AGENT_SECTIONS_AREA,
   NAV_AREA,
+  PLUGIN_PAGE_AREA,
   SESSION_HEADER_ACTIONS_AREA,
   TRANSCRIPT_DIRECTIVE_AREA,
 } from "@/contrib/types";
@@ -163,7 +164,7 @@ describe("example plugins", () => {
         door: "pack",
         pack: "examples/board_pack",
         declared: {
-          areas: [NAV_AREA, AGENT_SECTIONS_AREA, TRANSCRIPT_DIRECTIVE_AREA],
+          areas: [NAV_AREA, PLUGIN_PAGE_AREA, TRANSCRIPT_DIRECTIVE_AREA],
           directives: ["board"],
         },
       },
@@ -172,10 +173,14 @@ describe("example plugins", () => {
     expect(uxPluginRecords().board?.status).toBe("disabled");
     await setUxPluginEnabled("board", true);
     expect(uxPluginRecords().board?.status).toBe("loaded");
-    expect(registry.getArea(NAV_AREA).some((c) => c.id === "board:nav")).toBe(true);
-    expect(registry.getArea(AGENT_SECTIONS_AREA).map((c) => c.id)).toEqual([
-      "board:page",
-    ]);
+    /* the nav row opens the plugin's own page, never the agent's configuration */
+    const nav = registry.getArea(NAV_AREA).find((c) => c.id === "board:nav");
+    expect((nav?.data as { to: unknown }).to).toEqual({
+      name: "plugin",
+      pluginId: "board",
+    });
+    expect(registry.getArea(PLUGIN_PAGE_AREA).map((c) => c.id)).toEqual(["board:page"]);
+    expect(registry.getArea(AGENT_SECTIONS_AREA)).toEqual([]);
     const directive = registry
       .getArea(TRANSCRIPT_DIRECTIVE_AREA)
       .find((c) => c.id === "board:directive");

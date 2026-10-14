@@ -333,6 +333,7 @@ pub const UX_PLUGIN_AREAS: &[&str] = &[
     "agent.sections",
     "session.header.actions",
     "transcript.directives",
+    "plugin.pages",
 ];
 
 /// One UX plugin a pack ships: a module the desktop webview evaluates.

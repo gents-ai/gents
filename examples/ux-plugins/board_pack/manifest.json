@@ -43,11 +43,11 @@
   "ux": [
     {
       "name": "board",
-      "description": "Board page under the agent, a Board nav row, and a ::board{id=...} card the agent can emit in chat.",
+      "description": "A Board page of its own, a Board nav row that opens it, and a ::board{id=...} card the agent can emit in chat.",
       "entry": "ux/board/plugin.js",
       "css": "ux/board/plugin.css",
       "contributes": {
-        "areas": ["nav", "agent.sections", "transcript.directives"],
+        "areas": ["nav", "plugin.pages", "transcript.directives"],
         "directives": ["board"]
       }
     }

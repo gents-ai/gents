@@ -13,9 +13,7 @@ use anyhow::Result;
 use gents::pack_registry::{index, RegistryClient};
 use serde_json::{json, Value};
 
-use crate::cli::args::{
-    RegistryAddArgs, RegistryCommand, RegistryListArgs, RegistryRefreshArgs, RegistryRemoveArgs,
-};
+use crate::cli::args::RegistryCommand;
 
 pub(crate) async fn dispatch(command: RegistryCommand) -> Result<()> {
     let report = match command {

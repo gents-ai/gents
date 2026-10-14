@@ -2,7 +2,8 @@
    exercised on every boot and a regression in any area shows up in the
    first screen. Ships OFF by default: it inventories in Agent ▸ UX Plugins
    and registers nothing until the switch is flipped. Mirrors hermes-agent's
-   hello-runtime, which proves the same pipeline there. */
+   hello-runtime, which proves the same pipeline there. Its nav row opens
+   its own page; the agent section is its configuration page. */
 import { Sparkles } from "lucide-react";
 import {
   AGENT_SECTIONS_AREA,
@@ -10,6 +11,7 @@ import {
   Group,
   Hint,
   NAV_AREA,
+  PLUGIN_PAGE_AREA,
   Row,
   SESSION_HEADER_ACTIONS_AREA,
   TRANSCRIPT_DIRECTIVE_AREA,
@@ -64,7 +66,8 @@ function HelloDirective({ attrs }: { attrs: Readonly<Record<string, string>> }) 
 const plugin: GentsUxPlugin = {
   id: "hello",
   name: "Hello",
-  description: "A nav row, an agent section, a header action and a ::hello directive.",
+  description:
+    "A nav row, a page, an agent section, a header action and a ::hello directive.",
   defaultEnabled: false,
   register(ctx) {
     ctx.registerMany([
@@ -76,14 +79,25 @@ const plugin: GentsUxPlugin = {
           id: "hello:nav",
           label: "Hello",
           icon: <Sparkles className="size-4" />,
-          to: ({ selectedAgentDid }) =>
-            selectedAgentDid
-              ? { name: "agent", agentDid: selectedAgentDid, section: "hello:page" }
-              : null,
-          active: (route) => route.name === "agent" && route.section === "hello:page",
+          to: { name: "plugin", pluginId: "hello" },
+          active: (route) => route.name === "plugin" && route.pluginId === "hello",
           placement: "footer",
           order: 90,
         } satisfies NavItem,
+      },
+      {
+        id: "home",
+        area: PLUGIN_PAGE_AREA,
+        render: () => (
+          <Group title="Hello">
+            <Row
+              label="Page"
+              description="the plugin's own page, where its nav row goes"
+            >
+              <code className="font-mono text-xs">/plugins/hello</code>
+            </Row>
+          </Group>
+        ),
       },
       {
         id: "page",

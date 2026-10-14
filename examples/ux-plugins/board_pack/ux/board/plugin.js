@@ -1,15 +1,15 @@
-// Board: the shape of hermes-agent's kanban plugin on Gents. A page under
-// the agent (AGENT_SECTIONS_AREA stands in for ROUTES_AREA), a nav row
-// (NAV_AREA for SIDEBAR_NAV_AREA), a ::board{id} card the agent can emit
-// (TRANSCRIPT_DIRECTIVE_AREA, as in Hermes), and the pack's own
+// Board: the shape of hermes-agent's kanban plugin on Gents. The plugin's
+// own page (PLUGIN_PAGE_AREA stands in for ROUTES_AREA), a nav row that
+// opens it (NAV_AREA for SIDEBAR_NAV_AREA), a ::board{id} card the agent
+// can emit (TRANSCRIPT_DIRECTIVE_AREA, as in Hermes), and the pack's own
 // board_store plugin as the backend half: ctx.plugin() where Hermes uses
 // ctx.rest(). Plain ESM, lint-clean, no build.
 import {
-  AGENT_SECTIONS_AREA,
   Button,
   Group,
   Input,
   NAV_AREA,
+  PLUGIN_PAGE_AREA,
   Row,
   TRANSCRIPT_DIRECTIVE_AREA,
   toast,
@@ -18,6 +18,10 @@ import { useCallback, useEffect, useState } from 'react'
 import { jsx, jsxs } from 'react/jsx-runtime'
 
 const LANES = ['triage', 'ready', 'running', 'done']
+
+/* the task a ::board{id} card points at: set by the card's click, read by
+   the page it opens, cleared once drawn */
+let highlightTask = null
 
 /* the refresh signal: `client-updated` (the agent may have moved a card
    through the board_store tool) bumps it, and every mounted page re-reads */
@@ -102,11 +106,14 @@ function Lane({ lane, tasks, highlight, onMove, onRemove }) {
   })
 }
 
-/* `item` is the route's item: the task id a ::board{id} card deep-links
-   to, drawn highlighted when the board has it */
-function BoardPage({ ctx, item }) {
+function BoardPage({ ctx }) {
   const board = useBoard(ctx)
-  const highlight = typeof item === 'string' && /^\d{1,9}$/.test(item) ? item : null
+  /* the task a card deep-linked to, drawn highlighted when the board has it */
+  const [highlight] = useState(() => {
+    const id = highlightTask
+    highlightTask = null
+    return id
+  })
   const [title, setTitle] = useState('')
   const add = async () => {
     if (!title.trim()) return
@@ -179,13 +186,14 @@ function BoardPage({ ctx, item }) {
    the page; attrs are untrusted model output, so the id is validated */
 function BoardCard({ ctx, attrs }) {
   const id = /^\d{1,9}$/.test(attrs.id ?? '') ? attrs.id : null
-  const deployment = ctx.shell.selectedDeployment()
   return jsx(Button, {
     size: 'sm',
     variant: 'outline',
     className: 'gents-board-chip',
-    disabled: !deployment,
-    onClick: () => deployment && ctx.shell.navigate({ name: 'agent', agentDid: deployment.agentDid, section: 'board:page', item: id ?? undefined }),
+    onClick: () => {
+      highlightTask = id
+      ctx.shell.navigate({ name: 'plugin', pluginId: 'board' })
+    },
     children: id ? `Board · task #${id}` : 'Board',
   })
 }
@@ -193,7 +201,7 @@ function BoardCard({ ctx, attrs }) {
 export default {
   id: 'board',
   name: 'Board',
-  description: 'Task board: a Board page, nav row, and a ::board card; backed by the pack\'s board_store plugin.',
+  description: 'Task board: its own Board page, a nav row that opens it, and a ::board card; backed by the pack\'s board_store plugin.',
   /* ships off, as the kanban plugin does: it inventories, and registers
      once the operator turns it on */
   defaultEnabled: false,
@@ -207,18 +215,17 @@ export default {
           id: 'board:nav',
           label: 'Board',
           icon: null,
-          /* the selected agent's Board tab; the row waits until there is one */
-          to: ({ selectedAgentDid }) =>
-            selectedAgentDid ? { name: 'agent', agentDid: selectedAgentDid, section: 'board:page' } : null,
-          active: (route) => route.name === 'agent' && route.section === 'board:page',
+          /* the plugin's own page, not the agent's configuration */
+          to: { name: 'plugin', pluginId: 'board' },
+          active: (route) => route.name === 'plugin' && route.pluginId === 'board',
           placement: 'footer',
           order: 60,
         },
       },
       {
         id: 'page',
-        area: AGENT_SECTIONS_AREA,
-        data: { group: 'Packs', label: 'Board', render: ({ item }) => jsx(BoardPage, { ctx, item }) },
+        area: PLUGIN_PAGE_AREA,
+        render: () => jsx(BoardPage, { ctx }),
       },
       {
         id: 'directive',
