@@ -248,16 +248,9 @@ async function runSample(browserInstance, sampleIndex) {
       cdp,
       "page_older_transcript_rows",
       async () => {
-        await page.getByTestId("transcript-panel").evaluate((panel) => {
-          const viewport = panel.closest('[data-slot="scroll-area-viewport"]') ?? panel;
-          viewport.scrollTop = 0;
-          viewport.dispatchEvent(
-            new WheelEvent("wheel", { deltaY: -100, bubbles: true }),
-          );
-        });
-        await page.waitForFunction(
-          ([selector, count]) => document.querySelectorAll(selector).length >= count,
-          [TRANSCRIPT_ROWS, rowsBeforeOlderPage + 40],
+        await loadOlderTranscriptPage(
+          page,
+          rowsBeforeOlderPage + fixture.transcriptPageSize,
         );
       },
       async () => ({
@@ -290,18 +283,7 @@ async function runSample(browserInstance, sampleIndex) {
         for (let index = 0; index < additionalPages; index += 1) {
           const expectedRows =
             typingStartingRows + (index + 1) * fixture.transcriptPageSize;
-          await page.getByTestId("transcript-panel").evaluate((panel) => {
-            const viewport =
-              panel.closest('[data-slot="scroll-area-viewport"]') ?? panel;
-            viewport.scrollTop = 0;
-            viewport.dispatchEvent(
-              new WheelEvent("wheel", { deltaY: -100, bubbles: true }),
-            );
-          });
-          await page.waitForFunction(
-            ([selector, count]) => document.querySelectorAll(selector).length === count,
-            [TRANSCRIPT_ROWS, expectedRows],
-          );
+          await loadOlderTranscriptPage(page, expectedRows);
         }
       },
       async () => ({
@@ -982,6 +964,28 @@ async function settleRender(page) {
         requestAnimationFrame(() => requestAnimationFrame(resolve)),
       ),
   );
+}
+
+async function loadOlderTranscriptPage(page, expectedRows) {
+  const panel = page.getByTestId("transcript-panel");
+  await panel.evaluate((panel) => {
+    const viewport = panel.closest('[data-slot="scroll-area-viewport"]') ?? panel;
+    viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -100, bubbles: true }));
+    viewport.scrollTop = 0;
+  });
+  await page.waitForFunction(
+    ([selector, count]) => document.querySelectorAll(selector).length === count,
+    [TRANSCRIPT_ROWS, expectedRows],
+  );
+  /* Rows commit before their momentum offset settles. Wait for its removal
+     so the next synthetic jump reaches the older-page threshold. */
+  await page.waitForFunction(() => {
+    const viewport = document
+      .querySelector('[data-testid="transcript-panel"]')
+      ?.closest('[data-slot="scroll-area-viewport"]');
+    const content = viewport?.firstElementChild;
+    return content != null && getComputedStyle(content).marginTop === "0px";
+  });
 }
 
 async function waitForHttp(url) {
