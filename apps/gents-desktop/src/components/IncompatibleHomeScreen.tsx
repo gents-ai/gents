@@ -54,7 +54,7 @@ export function IncompatibleHomeScreen({ home, error }: IncompatibleHomeScreenPr
       data-testid="incompatible-home"
     >
       <div className="grid w-full max-w-lg gap-6">
-        <Mark className="h-5 text-ink" />
+        <Mark className="h-5 w-7 text-ink" />
         {report.completed ? (
           <div className="grid gap-3" data-testid="incompatible-home-done">
             <h2
