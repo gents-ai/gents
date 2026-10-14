@@ -294,9 +294,7 @@ impl ConfigAccess {
             Self::Graphql(graphql) => {
                 let api_base = graphql_api_base(graphql.url())?;
                 let url = format!("{api_base}/schema");
-                let client = reqwest::Client::builder()
-                    .timeout(std::time::Duration::from_secs(30))
-                    .build()?;
+                let client = graphql::http_client().await?;
                 let response = graphql
                     .authorize(client.post(&url))?
                     .header(reqwest::header::CONTENT_TYPE, "text/plain; charset=utf-8")
@@ -344,9 +342,7 @@ impl ConfigAccess {
             Self::Graphql(graphql) => {
                 let api_base = graphql_api_base(graphql.url())?;
                 let url = format!("{api_base}/collections/versions");
-                let client = reqwest::Client::builder()
-                    .timeout(std::time::Duration::from_secs(30))
-                    .build()?;
+                let client = graphql::http_client().await?;
                 let versions: Value = graphql
                     .authorize(client.get(&url))?
                     .send()
@@ -388,9 +384,7 @@ impl ConfigAccess {
             Self::Graphql(graphql) => {
                 let api_base = graphql_api_base(graphql.url())?;
                 let url = format!("{api_base}/collections/versions");
-                let client = reqwest::Client::builder()
-                    .timeout(std::time::Duration::from_secs(30))
-                    .build()?;
+                let client = graphql::http_client().await?;
                 let versions: Value = graphql
                     .authorize(client.get(&url))?
                     .send()

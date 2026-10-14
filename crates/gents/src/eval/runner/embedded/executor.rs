@@ -1019,6 +1019,48 @@ enum StageSubmission {
     Failed(OutcomeKind),
 }
 
+async fn observe_stage_terminal(
+    node: &EmbeddedNode,
+    cancel: &CancellationToken,
+    runtime: &RunningRuntime,
+    request_id: &str,
+    remaining: Duration,
+) -> (Result<TerminalObservation>, bool) {
+    let watch_started = std::time::Instant::now();
+    let stopped;
+    let observed = tokio::select! {
+        observed = await_terminal(node, request_id, remaining, GRACE, POLL) => {
+            stopped = false;
+            observed
+        }
+        () = cancel.cancelled() => {
+            stopped = true;
+            interrupt_and_settle(node, request_id).await
+        }
+        // Nothing is left to settle the request, so its row would only be
+        // watched until the stage deadline and read as a deadline. One last
+        // read first, unbounded: the request may have settled within the same
+        // poll, and a slow read must not turn that into a dead runtime.
+        () = runtime_exited(runtime) => {
+            let row = poll_request(node, request_id).await.ok().flatten();
+            let settled = row.and_then(|row| {
+                let terminal_state = RequestLifecycleState::parse(row.lifecycle_state.as_deref()?)
+                    .ok()
+                    .filter(|state| state.is_terminal())?;
+                Some(TerminalObservation {
+                    terminal_state,
+                    session_id: row.session_id,
+                    interrupted_on_deadline: false,
+                    elapsed: watch_started.elapsed(),
+                })
+            });
+            stopped = settled.is_none();
+            settled.ok_or_else(|| anyhow!("the trial runtime exited before the request settled"))
+        }
+    };
+    (observed, stopped)
+}
+
 async fn submit_and_observe(
     spec: &TrialSpec,
     cancel: &CancellationToken,
@@ -1080,38 +1122,8 @@ async fn submit_and_observe(
         }
     };
 
-    let watch_started = std::time::Instant::now();
-    let stopped;
-    let observed = tokio::select! {
-        observed = await_terminal(&home.node, &request_id, remaining, GRACE, POLL) => {
-            stopped = false;
-            observed
-        }
-        () = cancel.cancelled() => {
-            stopped = true;
-            interrupt_and_settle(&home.node, &request_id).await
-        }
-        // Nothing is left to settle the request, so its row would only be
-        // watched until the stage deadline and read as a deadline. One last
-        // read first, unbounded: the request may have settled within the same
-        // poll, and a slow read must not turn that into a dead runtime.
-        () = runtime_exited(runtime) => {
-            let row = poll_request(&home.node, &request_id).await.ok().flatten();
-            let settled = row.and_then(|row| {
-                let terminal_state = RequestLifecycleState::parse(row.lifecycle_state.as_deref()?)
-                    .ok()
-                    .filter(|state| state.is_terminal())?;
-                Some(TerminalObservation {
-                    terminal_state,
-                    session_id: row.session_id,
-                    interrupted_on_deadline: false,
-                    elapsed: watch_started.elapsed(),
-                })
-            });
-            stopped = settled.is_none();
-            settled.ok_or_else(|| anyhow!("the trial runtime exited before the request settled"))
-        }
-    };
+    let (observed, stopped) =
+        observe_stage_terminal(&home.node, cancel, runtime, &request_id, remaining).await;
     let observed = match observed {
         Ok(observed) => Some(observed),
         Err(error) => {
@@ -3593,83 +3605,44 @@ mod tests {
         assert!(response.errors.is_empty(), "{:?}", response.errors);
     }
 
-    /// The request settled and then the runtime exited, both inside one poll
-    /// of the stage's watch: the stage is what the request did, not a dead
-    /// runtime. The runtime pauses the clock as it exits, so any bound on the
-    /// last read of the request expires while that read waits on the node, as
-    /// it would on a loaded host.
+    /// A terminal read after runtime exit remains unbounded even when virtual
+    /// time is paused. Resume virtual time before gathering unrelated stage
+    /// evidence so native transaction timers keep their ordinary behavior.
     #[tokio::test]
     async fn a_request_that_settled_before_its_runtime_exited_keeps_its_outcome() {
-        let dir = tempfile::tempdir().unwrap();
-        let workspace = dir.path().join("workspace");
-        std::fs::create_dir_all(&workspace).unwrap();
         let home = EmbeddedHome::create_temp("settled-then-exit")
             .await
             .unwrap();
-        let locator = TrialLocator {
-            trial_node_did: home.did().to_string(),
-            session_id: "s-1".to_string(),
-            home_hint: None,
-        };
-        let stage = StageSpec {
-            stage_id: "only".to_string(),
-            prompt: "hello".to_string(),
-            seed: None,
-            deadline_secs: 600,
-            settle: false,
-            continuation: None,
-            review_previous: false,
-            captures: Vec::new(),
-        };
-        // Completes the request once it is written, pauses the clock, exits.
-        let node = home.node.clone();
-        let runtime = RunningRuntime {
-            shutdown: tokio::sync::watch::channel(false).0,
-            handle: tokio::spawn(async move {
-                loop {
-                    let response = crate::ConfigAccess::write_local_response(
-                            &node,
-                            "eval.test.complete",
-                            r#"mutation { update_AgentRequest(filter: {lifecycle_state: {_ne: "completed"}}, input: {lifecycle_state: "completed"}) { _docID } }"#,
-                        )
-                        .await.unwrap();
-                    let updated = response
-                        .data
-                        .as_ref()
-                        .and_then(|data| data["update_AgentRequest"].as_array().map(Vec::len));
-                    assert!(response.errors.is_empty(), "{:?}", response.errors);
-                    if updated.unwrap_or(0) > 0 {
-                        tokio::time::pause();
-                        return Ok(());
-                    }
-                    tokio::time::sleep(Duration::from_millis(10)).await;
-                }
-            }),
-            node_did: String::new(),
-        };
+        let request_id = "settled-request";
+        seed_request(&home, request_id).await;
+        let runtime = exited_runtime();
+        while !runtime.handle.is_finished() {
+            tokio::task::yield_now().await;
+        }
+        assert!(runtime.handle.is_finished());
 
-        // No outer timeout: on the paused clock it would expire during the
-        // first node read after the runtime exits.
-        let evidence = run_stage(
-            &TrialSpec {
-                agent_id: "subject".to_string(),
-                ..TrialSpec::empty_for_tests("t1")
-            },
+        tokio::time::pause();
+        let (observed, stopped) = observe_stage_terminal(
+            &home.node,
             &CancellationToken::new(),
-            &home,
             &runtime,
-            &locator,
-            &workspace,
-            &stage,
-            &watch::channel(None).1,
+            request_id,
+            Duration::from_secs(600),
         )
         .await;
+        tokio::time::resume();
 
+        let observed = observed.expect("settled request should remain observable after exit");
+        assert_eq!(observed.terminal_state, RequestLifecycleState::Completed);
+        assert!(!stopped);
+
+        let evidence = collect_request_evidence(&home.node, request_id)
+            .await
+            .expect("evidence should be gathered after virtual time resumes");
         assert_eq!(
-            evidence.terminal_state,
-            Some(RequestLifecycleState::Completed)
+            stage_failure_kind(Some(&observed), true, stopped, &evidence),
+            None
         );
-        assert_eq!(evidence.failure_kind, None);
         home.node.shutdown().await;
     }
 
@@ -3685,7 +3658,7 @@ mod tests {
         let node_did = escape_graphql_string(home.did());
         let request_id = escape_graphql_string(request_id);
         let mutation = format!(
-            r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", node_did: "{node_did}", requester_did: "{node_did}", agent_id: "seeded-agent", session_id: "s-1", content: "x", execution_origin: "interactive", lifecycle_state: "completed", created_at: "2026-01-01T00:00:00Z" }}) {{ _docID }} }}"#
+            r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", purpose: "normal", node_did: "{node_did}", requester_did: "{node_did}", agent_id: "seeded-agent", session_id: "s-1", content: "x", execution_origin: "interactive", lifecycle_state: "completed", created_at: "2026-01-01T00:00:00Z" }}) {{ _docID }} }}"#
         );
         let response = home.node.execute(&mutation).await;
         assert!(response.errors.is_empty(), "{:?}", response.errors);

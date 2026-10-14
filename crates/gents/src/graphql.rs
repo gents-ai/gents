@@ -182,7 +182,7 @@ where
     let Some(value) = response.data.as_ref().and_then(|data| data.get(field)) else {
         return Ok(Vec::new());
     };
-    serde_json::from_value(value.clone()).with_context(|| format!("decode {field} rows"))
+    Vec::<T>::deserialize(value).with_context(|| format!("decode {field} rows"))
 }
 
 pub fn first_row<T>(response: &QueryResponse, field: &str) -> Result<Option<T>>

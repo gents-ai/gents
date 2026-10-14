@@ -109,9 +109,12 @@ pub use datastore_tool_surface::{list_datastore_tool_surfaces, DatastoreToolSurf
 pub use eth_tool::{eth_tool_by_id_query, list_eth_tools, EthToolDocument};
 pub use skill::SkillDocument;
 
+#[cfg(test)]
+pub(crate) use event_trigger::count_trigger_cursor_batch_queries;
 #[allow(unused_imports)]
 pub(crate) use event_trigger::{
-    load_trigger_next_run_at, update_trigger_runtime_fields, TriggerRuntimeUpdate,
+    load_trigger_next_run_at_batch, update_trigger_runtime_fields, TriggerRuntimeUpdate,
+    TRIGGER_CURSOR_BATCH_SIZE,
 };
 pub use event_trigger::{EventGroup, EventGroupCount, EventSource};
 pub use schedule::{Schedule, ScheduleCadence, ScheduleObservation};

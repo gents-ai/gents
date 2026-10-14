@@ -383,9 +383,6 @@ impl<'a, 'txn> TxnCanonicalReader<'a, 'txn> {
         }
     }
 
-    /// Resolve these headers, read by an exact scoped query in this
-    /// transaction, without a physical-ID lookup: DefraDB reads a whole
-    /// collection (or the node's part of it) to find one `_docID`.
     pub(crate) fn observe_headers(
         &mut self,
         headers: &[super::canonical_rows::TranscriptMessageRow],
@@ -395,6 +392,10 @@ impl<'a, 'txn> TxnCanonicalReader<'a, 'txn> {
                 .observed
                 .insert(header.doc_id.clone(), header.clone());
         }
+    }
+
+    pub(crate) fn clear_output_cache(&mut self) {
+        self.cache.requests.clear();
     }
 
     pub(crate) async fn load_source(

@@ -329,6 +329,23 @@ fn decode(row: &Value) -> Result<JobRecord> {
     })
 }
 
+pub(crate) async fn job_ids_in_txn(txn: &ConfigApplyTxn<'_>, owner: &str) -> Result<Vec<String>> {
+    let query = format!(
+        "{{ OptimizationJob(filter: {{ owner_node_did: {{ _eq: \"{}\" }} }}) {{ job_id }} }}",
+        escape_graphql_string(owner),
+    );
+    let response = txn.execute(&query).await?;
+    let mut ids = response["data"]["OptimizationJob"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|row| row["job_id"].as_str().map(str::to_owned))
+        .collect::<Vec<_>>();
+    ids.sort();
+    ids.dedup();
+    Ok(ids)
+}
+
 pub(crate) async fn load_job_in_txn(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,
@@ -345,6 +362,85 @@ pub(crate) async fn load_job_in_txn(
         .and_then(|rows| rows.first())
         .map(decode)
         .transpose()
+}
+
+pub(crate) async fn fold_jobs_for_owner<T, F>(
+    access: &ConfigAccess,
+    owner: &str,
+    fold: F,
+) -> Result<T>
+where
+    T: Default + Send + 'static,
+    F: Fn(&mut T, JobRecord) -> Result<()> + Send + Sync + 'static,
+{
+    const JOB_BATCH_SIZE: usize = 64;
+    let owner = owner.to_owned();
+    let fold = std::sync::Arc::new(fold);
+    access
+        .transact_readonly("optimization.fold_jobs_for_owner", move |txn| {
+            let owner = owner.clone();
+            let fold = std::sync::Arc::clone(&fold);
+            Box::pin(async move {
+                let escaped_owner = escape_graphql_string(&owner);
+                let job_ids = job_ids_in_txn(txn, &owner).await?;
+
+                let mut aggregate = T::default();
+                for batch in job_ids.chunks(JOB_BATCH_SIZE) {
+                    #[cfg(test)]
+                    record_owner_job_batch();
+                    let ids = batch
+                        .iter()
+                        .map(|id| format!("\"{}\"", escape_graphql_string(id)))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let query = format!(
+                        "{{ OptimizationJob(filter: {{ owner_node_did: {{ _eq: \"{escaped_owner}\" }}, job_id: {{ _in: [{ids}] }} }}) {{ {JOB_FIELDS} }} }}"
+                    );
+                    let response = txn.execute(&query).await?;
+                    let Some(rows) = response["data"]["OptimizationJob"].as_array() else {
+                        continue;
+                    };
+                    let mut first_by_id = std::collections::BTreeMap::new();
+                    for row in rows {
+                        if let Some(job_id) = row["job_id"].as_str() {
+                            first_by_id.entry(job_id.to_owned()).or_insert(row);
+                        }
+                    }
+                    for job_id in batch {
+                        if let Some(row) = first_by_id.get(job_id) {
+                            let job = decode(row)?;
+                            anyhow::ensure!(
+                                job.owner == owner,
+                                "OptimizationJob query returned a row for another owner"
+                            );
+                            fold(&mut aggregate, job)?;
+                        }
+                    }
+                }
+                Ok(aggregate)
+            })
+        })
+        .await
+}
+
+#[cfg(test)]
+tokio::task_local! {
+    static OWNER_JOB_BATCHES: std::sync::Arc<std::sync::atomic::AtomicUsize>;
+}
+
+#[cfg(test)]
+fn record_owner_job_batch() {
+    let _ = OWNER_JOB_BATCHES
+        .try_with(|batches| batches.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+}
+
+#[cfg(test)]
+pub(crate) async fn count_owner_job_batches<F: std::future::Future>(
+    future: F,
+) -> (F::Output, usize) {
+    let batches = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let output = OWNER_JOB_BATCHES.scope(batches.clone(), future).await;
+    (output, batches.load(std::sync::atomic::Ordering::Relaxed))
 }
 
 pub async fn load_job(

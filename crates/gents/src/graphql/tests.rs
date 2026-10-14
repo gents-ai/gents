@@ -1,6 +1,83 @@
 use super::*;
 use std::sync::Arc;
 
+#[derive(Debug, PartialEq, Eq)]
+enum StringInput {
+    Borrowed,
+    Owned,
+}
+
+impl<'de> Deserialize<'de> for StringInput {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct StringInputVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for StringInputVisitor {
+            type Value = StringInput;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a string")
+            }
+
+            fn visit_borrowed_str<E>(self, _value: &str) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(StringInput::Borrowed)
+            }
+
+            fn visit_str<E>(self, _value: &str) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(StringInput::Owned)
+            }
+
+            fn visit_string<E>(self, _value: String) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(StringInput::Owned)
+            }
+        }
+
+        deserializer.deserialize_str(StringInputVisitor)
+    }
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+struct TypedRow {
+    name: String,
+    count: u32,
+}
+
+#[test]
+fn rows_deserializes_borrowed_data_and_preserves_shape_errors() {
+    let response = QueryResponse::success(serde_json::json!({
+        "Large": ["x".repeat(1024 * 1024)],
+        "Typed": [{"name": "row", "count": 3}],
+        "Null": null,
+        "Object": {"name": "row", "count": 3}
+    }));
+
+    assert_eq!(
+        rows::<StringInput>(&response, "Large").unwrap(),
+        [StringInput::Borrowed]
+    );
+    assert_eq!(
+        rows::<TypedRow>(&response, "Typed").unwrap(),
+        [TypedRow {
+            name: "row".into(),
+            count: 3,
+        }]
+    );
+    assert!(rows::<TypedRow>(&response, "Missing").unwrap().is_empty());
+    assert!(rows::<TypedRow>(&response, "Null").is_err());
+    assert!(rows::<TypedRow>(&response, "Object").is_err());
+}
+
 #[test]
 fn native_data_envelope_preserves_payload_allocations_and_null_data() {
     let payload = "x".repeat(1024 * 1024);

@@ -254,6 +254,23 @@ fn document_change_batch_wakes_request_scan(
         })
 }
 
+async fn wait_for_request_change(
+    subscription: &mut events::DocumentChangeSubscription,
+    request_collection_id: Option<&str>,
+) -> Result<Option<events::DocumentChangeBatch>, tokio::time::error::Elapsed> {
+    // Unrelated output writes must not reset the deadline for aging/cooldown scans.
+    tokio::time::timeout(GOSSIP_FALLBACK_POLL, async {
+        loop {
+            let batch = subscription.recv().await?;
+            if document_change_batch_wakes_request_scan(&batch, request_collection_id) {
+                return Some(batch);
+            }
+            tokio::task::consume_budget().await;
+        }
+    })
+    .await
+}
+
 impl Watcher for DefraWatcher {
     async fn next_request(&mut self) -> Option<Result<AgentRequest>> {
         loop {
@@ -282,22 +299,19 @@ impl Watcher for DefraWatcher {
                 Err(e) => return Some(Err(e)),
             }
 
-            let batch =
-                match tokio::time::timeout(GOSSIP_FALLBACK_POLL, self.subscription.recv()).await {
-                    Ok(Some(batch)) => batch,
-                    Ok(None) => return None,
-                    Err(_timeout) => {
-                        tracing::trace!("gossip quiet, polling for pending requests");
-                        continue;
-                    }
-                };
-
-            if !document_change_batch_wakes_request_scan(
-                &batch,
+            let batch = match wait_for_request_change(
+                &mut self.subscription,
                 self.request_collection_id.as_deref(),
-            ) {
-                continue;
-            }
+            )
+            .await
+            {
+                Ok(Some(batch)) => batch,
+                Ok(None) => return None,
+                Err(_timeout) => {
+                    tracing::trace!("gossip quiet, polling for pending requests");
+                    continue;
+                }
+            };
 
             if batch.resync_required {
                 tracing::warn!(

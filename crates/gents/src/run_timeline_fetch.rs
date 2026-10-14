@@ -217,16 +217,15 @@ pub async fn load_run_activity_rows(
             ));
         }
     }
-    let mut sessions = Vec::new();
-    for (owner, session_id, requester) in session_scopes.iter().take(MAX_RUN_ACTIVITY_ROWS + 1) {
-        if let Some(mut session) =
-            load_timeline_session(access, owner, session_id, requester.as_deref()).await?
-        {
-            session.session.title = None;
-            if let Some(observation) = &mut session.session.observation {
-                observation.preview = None;
-            }
-            sessions.push(session);
+    let session_scopes = session_scopes
+        .into_iter()
+        .take(MAX_RUN_ACTIVITY_ROWS + 1)
+        .collect::<Vec<_>>();
+    let mut sessions = load_timeline_sessions(access, &session_scopes).await?;
+    for session in &mut sessions {
+        session.session.title = None;
+        if let Some(observation) = &mut session.session.observation {
+            observation.preview = None;
         }
     }
     let limit = MAX_RUN_ACTIVITY_ROWS + 1;
@@ -396,15 +395,11 @@ pub async fn load_run_timeline_rows(
         }
         None => Vec::new(),
     };
-    let mut inference_calls = Vec::new();
-    let mut provider_context_reductions = Vec::new();
-    for request_doc_id in timeline_request_doc_ids(&requests)? {
-        inference_calls
-            .extend(load_timeline_inference_calls_for_request(access, &request_doc_id).await?);
-        provider_context_reductions.extend(
-            load_timeline_provider_context_reductions_for_request(access, &request_doc_id).await?,
-        );
-    }
+    let request_doc_ids = timeline_request_doc_ids(&requests)?;
+    let mut inference_calls =
+        load_timeline_inference_calls_for_requests(access, &request_doc_ids).await?;
+    let mut provider_context_reductions =
+        load_timeline_provider_context_reductions_for_requests(access, &request_doc_ids).await?;
     let mut rendered_requests = Vec::new();
     for (owner, session_id, requester) in &session_scopes {
         rendered_requests.extend(
@@ -574,10 +569,10 @@ mod request_loaders;
 mod tool_payload_tests;
 mod validation;
 
-use context_loaders::load_timeline_session;
+use context_loaders::{load_timeline_session, load_timeline_sessions};
 use event_loaders::{
-    load_timeline_compactions_for_session, load_timeline_inference_calls_for_request,
-    load_timeline_provider_context_reductions_for_request, load_timeline_rendered_request_refs,
+    load_timeline_compactions_for_session, load_timeline_inference_calls_for_requests,
+    load_timeline_provider_context_reductions_for_requests, load_timeline_rendered_request_refs,
     load_timeline_rendered_requests_for_request, load_timeline_rendered_requests_for_session,
     load_timeline_tool_observations_for_session,
 };
