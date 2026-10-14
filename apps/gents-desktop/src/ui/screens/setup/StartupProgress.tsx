@@ -225,7 +225,7 @@ export function StartupProgress({
   return (
     <div className="grid gap-6">
       <div className="grid gap-6">
-        <Mark className="h-5 w-fit text-ink" />
+        <Mark className="h-5 w-7 text-ink" />
         <h1 id={titleId} className="font-heading text-xl font-medium text-heading">
           {finished ? doneTitle : title}
         </h1>
