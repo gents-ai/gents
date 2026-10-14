@@ -15,6 +15,8 @@ use crate::pack_archive::PackArchive;
 const CACHE_MARKER: &str = ".gents-pack-cache-v1";
 const CACHE_LOCK: &str = ".cache.lock";
 
+/// The caller holds `FileLock::shared(cache_lock(root.parent()))` so prune and
+/// remove cannot delete `root` mid-write.
 pub fn materialize(pack: &PackArchive, root: &Path) -> Result<()> {
     use std::io::Write;
     for path in std::iter::once("manifest.json")
@@ -58,6 +60,7 @@ fn set_distribution_permissions(file: &std::fs::File) -> Result<()> {
     Ok(())
 }
 
+/// The caller holds `FileLock::shared(cache_lock(root.parent()))`.
 pub fn write_cache_marker(root: &Path) -> Result<()> {
     let marker = root.join(CACHE_MARKER);
     if marker.exists() {
@@ -82,6 +85,8 @@ pub fn cache_lock(parent: &Path) -> Result<File> {
         .open(parent.join(CACHE_LOCK))?)
 }
 
+/// The caller holds [`lock_exclusive`] on `parent`, so no scenario can acquire
+/// or use a sibling cache root while the probe and removal occur.
 pub fn prune_stale_asset_cache(parent: &Path, current: &Path) -> Result<Vec<String>> {
     let mut removed = Vec::new();
     for entry in std::fs::read_dir(parent)? {
@@ -96,10 +101,6 @@ pub fn prune_stale_asset_cache(parent: &Path, current: &Path) -> Result<Vec<Stri
         if name.len() != 64 || !name.bytes().all(|byte| byte.is_ascii_hexdigit()) {
             continue;
         }
-        // The caller holds the exclusive per-pack lock, so no Gents scenario
-        // can acquire or use any sibling cache root while the probe and
-        // removal occur. Shares `release_cache_root`'s marker/`runs/` rule so
-        // the two cannot diverge on when a cache version is safe to delete.
         if let CacheRelease::Removed = release_cache_root(&root, || Ok(()))? {
             removed.push(name.to_owned());
         }
@@ -176,7 +177,8 @@ pub enum CacheRelease {
 /// this directly so the two cannot diverge on when a cache version is safe to
 /// delete. A digest directory that is already gone (for example `gents pack
 /// prune` removed it after a newer version became current) is reported as
-/// already absent, never as "not created by gents".
+/// already absent, never as "not created by gents". The caller holds
+/// [`lock_exclusive`] on `root.parent()`.
 pub fn release_cache_root(
     root: &Path,
     check_owner: impl FnOnce() -> Result<()>,
