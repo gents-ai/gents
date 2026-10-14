@@ -184,6 +184,10 @@ pub use transition::IllegalToolCallTransition;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ToolRowKind {
     Native,
+    /// An `agent_new`/`agent_message` row. It has no deadline (Lean
+    /// `session_message_row_left_running`): the stored `deadline_at` is the
+    /// accepted dispatch deadline, never a terminal cause, so the caused
+    /// request's result always reaches the calling session.
     SessionMessage,
 }
 
@@ -451,6 +455,7 @@ impl ToolCallLifecycle {
         self.deadline_at <= now
     }
 
+    /// The owner that terminates this row; see [`ToolRowKind`].
     pub(crate) fn kind(&self) -> ToolRowKind {
         self.kind
     }
