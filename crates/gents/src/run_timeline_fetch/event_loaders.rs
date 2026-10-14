@@ -1,6 +1,5 @@
 use super::query_helpers::required_rows;
 use super::*;
-#[cfg(test)]
 use crate::session::load_canonical_message;
 use crate::session::{
     canonical_rows::{decode_transcript_message_row, AGENT_MESSAGE_FIELDS},
@@ -131,26 +130,32 @@ pub(super) async fn resolve_timeline_messages_for_session(
 
 /// The canonical messages at one accepted sequence of an exact session scope.
 /// Duplicate headers at a sequence are returned, never silently picked.
-#[cfg(test)]
-pub(super) async fn resolve_timeline_messages_at_sequence(
+pub(super) async fn resolve_timeline_messages_at_sequences(
     access: &ConfigAccess,
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
-    sequence: i64,
+    sequences: &[i64],
 ) -> Result<Vec<TimelineMessageRow>> {
+    if sequences.is_empty() {
+        return Ok(Vec::new());
+    }
+    let sequence_filter = sequences
+        .iter()
+        .map(i64::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
     let header_doc_ids = load_message_header_ids(
         access,
         node_did,
         session_id,
         requester_did,
-        &format!(", sequence: {{ _eq: {sequence} }}"),
+        &format!(", sequence: {{ _in: [{sequence_filter}] }}"),
     )
     .await?;
     resolve_timeline_messages(access, node_did, session_id, requester_did, header_doc_ids).await
 }
 
-#[cfg(test)]
 async fn resolve_timeline_messages(
     access: &ConfigAccess,
     node_did: &str,
@@ -181,7 +186,6 @@ async fn resolve_timeline_messages(
     Ok(rows)
 }
 
-#[cfg(test)]
 async fn load_message_header_ids(
     access: &ConfigAccess,
     node_did: &str,
@@ -222,23 +226,25 @@ pub(super) async fn load_timeline_tool_observations_for_session(
     load_tool_observations(access, node_did, session_id, requester_did, "").await
 }
 
-/// Lifecycle observations for one exact physical tool document in a session
-/// scope. A document outside the scope yields no rows.
-#[cfg(test)]
-pub(super) async fn load_timeline_tool_observation(
+/// Lifecycle observations for selected physical tool documents in a session
+/// scope. Documents outside the scope yield no rows.
+pub(super) async fn load_timeline_tool_observations(
     access: &ConfigAccess,
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
-    tool_doc_id: &str,
+    tool_doc_ids: &[String],
 ) -> Result<Vec<ToolLifecycleObservation>> {
-    let tool_doc_id = escape_graphql_string(tool_doc_id);
+    if tool_doc_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let doc_ids = gents_protocol::graphql::graphql_string_list_literal(tool_doc_ids);
     load_tool_observations(
         access,
         node_did,
         session_id,
         requester_did,
-        &format!(r#", _docID: {{ _eq: "{tool_doc_id}" }}"#),
+        &format!(r#"docIDs: {doc_ids},"#),
     )
     .await
 }
@@ -248,13 +254,14 @@ async fn load_tool_observations(
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
-    extra_filter: &str,
+    extra_args: &str,
 ) -> Result<Vec<ToolLifecycleObservation>> {
     let scope = crate::session::session_scope_filter(node_did, session_id, requester_did);
     let query = format!(
         r#"{{
             AgentToolCall(
-                filter: {{ {scope}{extra_filter} }},
+                {extra_args}
+                filter: {{ {scope} }},
                 order: {{ started_at: ASC }}
             ) {{
                 _docID

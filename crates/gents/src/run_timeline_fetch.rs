@@ -47,12 +47,65 @@ pub(crate) async fn load_session_tool_calls(
     .await
 }
 
+/// Canonical accepted calls for selected physical tool documents in an
+/// authorized session scope. Reads only those tool rows and their accepted
+/// message sequences; deliveries are not resolved.
+pub(crate) async fn load_accepted_tool_calls(
+    access: &ConfigAccess,
+    node_did: &str,
+    session_id: &str,
+    requester_did: Option<&str>,
+    tool_doc_ids: &[String],
+) -> Result<Vec<TimelineToolCallRow>> {
+    let observations = event_loaders::load_timeline_tool_observations(
+        access,
+        node_did,
+        session_id,
+        requester_did,
+        tool_doc_ids,
+    )
+    .await?;
+    let sequences = observations
+        .iter()
+        .filter_map(|observation| observation.row.message_sequence)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let messages = event_loaders::resolve_timeline_messages_at_sequences(
+        access,
+        node_did,
+        session_id,
+        requester_did,
+        &sequences,
+    )
+    .await?;
+    let mut messages_by_sequence = BTreeMap::<i64, Vec<TimelineMessageRow>>::new();
+    for message in messages {
+        messages_by_sequence
+            .entry(message.sequence)
+            .or_default()
+            .push(message);
+    }
+    let mut calls = Vec::with_capacity(observations.len());
+    for observation in observations {
+        let sequence = observation
+            .row
+            .message_sequence
+            .context("accepted tool lacks its accepted message sequence")?;
+        let messages = messages_by_sequence
+            .get(&sequence)
+            .context("accepted tool sequence has no canonical messages")?;
+        let call = event_loaders::resolve_tool_payloads(observation, messages)?;
+        anyhow::ensure!(
+            call.session_id == session_id,
+            "accepted tool call crossed the requested session scope"
+        );
+        calls.push(call);
+    }
+    Ok(calls)
+}
+
 #[cfg(test)]
-/// Canonical accepted arguments of one exact physical tool document in an
-/// authorized session scope, one entry per matching physical row. Reads only
-/// the tool row and the messages at its accepted sequence, binding them with
-/// the session timeline's accepted-header rules, so the cost is independent of
-/// the session or run transcript. Deliveries are not resolved.
 pub(crate) async fn load_accepted_tool_arguments(
     access: &ConfigAccess,
     node_did: &str,
@@ -60,31 +113,14 @@ pub(crate) async fn load_accepted_tool_arguments(
     requester_did: Option<&str>,
     tool_doc_id: &str,
 ) -> Result<Vec<String>> {
-    let observations = event_loaders::load_timeline_tool_observation(
-        access,
-        node_did,
-        session_id,
-        requester_did,
-        tool_doc_id,
+    let tool_doc_id = tool_doc_id.to_owned();
+    Ok(
+        load_accepted_tool_calls(access, node_did, session_id, requester_did, &[tool_doc_id])
+            .await?
+            .into_iter()
+            .map(|call| call.args)
+            .collect(),
     )
-    .await?;
-    let mut arguments = Vec::with_capacity(observations.len());
-    for observation in observations {
-        let sequence = observation
-            .row
-            .message_sequence
-            .context("accepted tool lacks its accepted message sequence")?;
-        let messages = event_loaders::resolve_timeline_messages_at_sequence(
-            access,
-            node_did,
-            session_id,
-            requester_did,
-            sequence,
-        )
-        .await?;
-        arguments.push(event_loaders::resolve_tool_payloads(observation, &messages)?.args);
-    }
-    Ok(arguments)
 }
 
 pub async fn load_run_timeline(access: &ConfigAccess, request_id: &str) -> Result<RunTimeline> {

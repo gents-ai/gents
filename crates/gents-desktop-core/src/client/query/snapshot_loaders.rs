@@ -223,22 +223,68 @@ fn parse_rows_with_source<T>(
 where
     T: DeserializeOwned,
 {
+    let (parsed, sources, _) = parse_rows_with_source_completeness(
+        data,
+        root,
+        fields,
+        sibling_fields,
+        source_field,
+        exact_projection,
+    )?;
+    Ok((parsed, sources))
+}
+
+fn parse_query_rows_with_completeness<T>(data: &Value, root: &str) -> Result<(Vec<T>, bool)>
+where
+    T: DeserializeOwned,
+{
+    let (rows, _, complete) = parse_rows_with_source_completeness(data, root, "", "", None, false)?;
+    Ok((rows, complete))
+}
+
+fn parse_projected_query_rows_with_completeness<T>(
+    data: &Value,
+    root: &str,
+    fields: &str,
+    sibling_fields: &str,
+) -> Result<(Vec<T>, bool)>
+where
+    T: DeserializeOwned,
+{
+    let (rows, _, complete) =
+        parse_rows_with_source_completeness(data, root, fields, sibling_fields, None, false)?;
+    Ok((rows, complete))
+}
+
+fn parse_rows_with_source_completeness<T>(
+    data: &Value,
+    root: &str,
+    fields: &str,
+    sibling_fields: &str,
+    source_field: Option<&str>,
+    exact_projection: bool,
+) -> Result<(Vec<T>, Vec<Option<String>>, bool)>
+where
+    T: DeserializeOwned,
+{
     let rows = data
         .get(root)
         .ok_or_else(|| anyhow!("query result missing root field {root}"))?;
     match rows {
-        Value::Null => Ok((Vec::new(), Vec::new())),
+        Value::Null => Ok((Vec::new(), Vec::new(), true)),
         Value::Array(rows) => {
             let fields: Vec<&str> = fields.split_whitespace().collect();
             let sibling_fields: Vec<&str> = sibling_fields.split_whitespace().collect();
             let mut parsed = Vec::with_capacity(rows.len());
             let mut sources = Vec::with_capacity(rows.len());
+            let mut complete = true;
             for row in rows {
                 let source = source_field
                     .and_then(|field| row.get(field))
                     .and_then(Value::as_str)
                     .map(ToOwned::to_owned);
                 let Some(object) = row.as_object() else {
+                    complete = false;
                     tracing::warn!(target: "gents_desktop_core::query", root, "skipping malformed query row");
                     continue;
                 };
@@ -262,11 +308,12 @@ where
                         sources.push(source);
                     }
                     Err(error) => {
+                        complete = false;
                         tracing::warn!(target: "gents_desktop_core::query", root, error = %error, "skipping malformed query row")
                     }
                 }
             }
-            Ok((parsed, sources))
+            Ok((parsed, sources, complete))
         }
         other => Err(anyhow!(
             "query result for {root} returned non-array payload: {other}"
@@ -352,56 +399,70 @@ async fn load_operator_config(
         }}"
     );
     let data = execute_access_graphql_query(access, &query, "operator config").await?;
-    Ok(ClientStore::from_rows(ClientStoreRows {
-        nodes: parse_query_rows(&data, "nodes")?,
-        agents: parse_query_rows(&data, "agents")?,
-        runtimes: parse_query_rows(&data, "runtimes")?,
-        node_readiness: parse_query_rows(&data, "node_readiness")?,
-        contexts: parse_query_rows(&data, "contexts")?,
-        tools: parse_query_rows(&data, "tools")?,
-        inference_backends: parse_projected_query_rows(
-            &data,
-            "inference_backends",
-            INFERENCE_BACKEND_FIELDS,
-            INFERENCE_BACKEND_OBSERVATION_FIELDS,
-        )?,
+    operator_config_store_from_data(&data, node_did)
+}
+
+pub(crate) fn operator_config_store_from_data(data: &Value, node_did: &str) -> Result<ClientStore> {
+    let (nodes, nodes_complete) = parse_query_rows_with_completeness(data, "nodes")?;
+    let (agents, agents_complete) = parse_query_rows_with_completeness(data, "agents")?;
+    let (inference_profiles, profiles_complete) =
+        parse_query_rows_with_completeness(data, "inference_profiles")?;
+    let (inference_backends, backends_complete) = parse_projected_query_rows_with_completeness(
+        data,
+        "inference_backends",
+        INFERENCE_BACKEND_FIELDS,
+        INFERENCE_BACKEND_OBSERVATION_FIELDS,
+    )?;
+    let mut rows = ClientStoreRows {
+        nodes,
+        agents,
+        runtimes: parse_query_rows(data, "runtimes")?,
+        node_readiness: parse_query_rows(data, "node_readiness")?,
+        contexts: parse_query_rows(data, "contexts")?,
+        tools: parse_query_rows(data, "tools")?,
+        inference_backends,
         backend_observations: parse_observation_query_rows(
-            &data,
+            data,
             "inference_backends",
             INFERENCE_BACKEND_OBSERVATION_FIELDS,
         )?,
-        inference_profiles: parse_query_rows(&data, "inference_profiles")?,
-        inference_sampling: parse_query_rows(&data, "inference_sampling")?,
-        inference_execution: parse_query_rows(&data, "inference_execution")?,
-        tasks: parse_query_rows(&data, "tasks")?,
-        schedules: parse_query_rows(&data, "schedules")?,
+        inference_profiles,
+        inference_sampling: parse_query_rows(data, "inference_sampling")?,
+        inference_execution: parse_query_rows(data, "inference_execution")?,
+        tasks: parse_query_rows(data, "tasks")?,
+        schedules: parse_query_rows(data, "schedules")?,
         schedule_observations: parse_observation_query_rows(
-            &data,
+            data,
             "triggers",
             SCHEDULE_OBSERVATION_FIELDS,
         )?,
         triggers: parse_projected_query_rows(
-            &data,
+            data,
             "triggers",
             TRIGGER_FIELDS,
             &format!("{TRIGGER_OBSERVATION_FIELDS} {SCHEDULE_OBSERVATION_FIELDS}"),
         )?,
         trigger_observations: parse_observation_query_rows(
-            &data,
+            data,
             "triggers",
             TRIGGER_OBSERVATION_FIELDS,
         )?,
-        skills: parse_query_rows(&data, "skills")?,
-        compactions: parse_query_rows(&data, "compactions")?,
-        tool_service_registries: parse_query_rows(&data, "tool_service_registries")?,
-        event_sources: parse_query_rows(&data, "event_sources")?,
-        agent_targets: parse_query_rows(&data, "agent_targets")?,
-        datastore_tool_surfaces: parse_query_rows(&data, "datastore_tool_surfaces")?,
-        chain_key_bindings: parse_query_rows(&data, "chain_key_bindings")?,
-        sessions: parse_query_rows(&data, "sessions")?,
-        requests: parse_query_rows(&data, "requests")?,
+        skills: parse_query_rows(data, "skills")?,
+        compactions: parse_query_rows(data, "compactions")?,
+        tool_service_registries: parse_query_rows(data, "tool_service_registries")?,
+        event_sources: parse_query_rows(data, "event_sources")?,
+        agent_targets: parse_query_rows(data, "agent_targets")?,
+        datastore_tool_surfaces: parse_query_rows(data, "datastore_tool_surfaces")?,
+        chain_key_bindings: parse_query_rows(data, "chain_key_bindings")?,
+        sessions: parse_query_rows(data, "sessions")?,
+        requests: parse_query_rows(data, "requests")?,
         ..ClientStoreRows::default()
-    }))
+    };
+    if nodes_complete && agents_complete && profiles_complete && backends_complete {
+        rows.operator_config_authoritative_node_dids
+            .insert(node_did.to_owned());
+    }
+    Ok(ClientStore::from_rows(rows))
 }
 
 pub async fn load_node_scoped_snapshot_with_peer_records(

@@ -276,6 +276,70 @@ mod tests {
         node.shutdown().await;
     }
 
+    #[tokio::test]
+    async fn manifest_block_batch_reads_only_requested_physical_documents() {
+        use crate::config_client::ConfigAccess;
+        use crate::graphql::escape_graphql_string;
+
+        let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        crate::ensure_runtime_schemas(&node).await.unwrap();
+
+        async fn create_block(node: &defra_node::EmbeddedNode, text: &str) -> (String, Vec<u8>) {
+            let bytes = text.as_bytes().to_vec();
+            let key = encoding::block_content_key(&bytes);
+            let mutation = format!(
+                r#"mutation {{ create_RenderedRequestBlock(input: {{
+                    content_key: "{key}", payload: "{}", byte_len: {}
+                }}) {{ _docID }} }}"#,
+                escape_graphql_string(text),
+                bytes.len(),
+            );
+            let created = ConfigAccess::write_local_response(node, "test.capture_block", &mutation)
+                .await
+                .unwrap();
+            let data = created.data.unwrap();
+            let doc_id = data.as_object().unwrap().values().next().unwrap()[0]["_docID"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            (doc_id, bytes)
+        }
+
+        let (requested_id, requested_bytes) = create_block(&node, "requested block").await;
+        let (unrequested_id, _) = create_block(&node, "unrequested block").await;
+        let requested_entry = encoding::ManifestEntry {
+            doc_id: requested_id.clone(),
+            content_key: encoding::block_content_key(&requested_bytes),
+            field_commit_cid: String::new(),
+            byte_len: requested_bytes.len() as u64,
+        };
+        let missing_entry = encoding::ManifestEntry {
+            doc_id: document::DocID::new_v0_from_seed("missing-manifest-block").to_string(),
+            content_key: "missing-content-key".into(),
+            field_commit_cid: "missing-commit".into(),
+            byte_len: 10,
+        };
+        let missing_id = missing_entry.doc_id.clone();
+
+        let mut cache = std::collections::BTreeMap::new();
+        read_manifest_blocks(
+            node.as_ref(),
+            &[requested_entry.clone(), missing_entry],
+            &mut cache,
+        )
+        .await
+        .unwrap();
+
+        let cached = cache
+            .get(&requested_id)
+            .expect("requested block was loaded");
+        assert_eq!(cached.bytes, requested_bytes);
+        assert_eq!(cached.content_key, requested_entry.content_key);
+        assert!(!cache.contains_key(&missing_id));
+        assert!(!cache.contains_key(&unrequested_id));
+        node.shutdown().await;
+    }
+
     /// Replay drops a turn only for a capture that fails verification; a store
     /// read failure while resolving its base is typed so it propagates.
     #[tokio::test]
@@ -928,6 +992,10 @@ async fn decode_capture_json_from_cached<R: CaptureBaseReader + Sync>(
 /// Read the block documents a manifest names that are not cached yet: one
 /// batched row query plus batched field-commit reads.
 ///
+/// DefraDB's collection `docIDs` argument fetches physical documents directly;
+/// `_docID: {_in: ...}` remains a collection predicate. The query plan still
+/// applies app-read and ACP checks to these rows.
+///
 /// A failed query is a [`CaptureStoreReadError`]: it says the store is broken,
 /// not that the capture is unverifiable. A block document that is simply
 /// absent is left uncached, so resolution reports it as a verification failure
@@ -960,7 +1028,7 @@ async fn read_manifest_blocks<R: CaptureBaseReader + Sync>(
         .collect::<Vec<_>>()
         .join(", ");
     let query = format!(
-        r#"{{ RenderedRequestBlock(filter: {{_docID: {{_in: [{doc_ids}] }} }}) {{
+        r#"{{ RenderedRequestBlock(docIDs: [{doc_ids}]) {{
             _docID payload byte_len
         }} }}"#,
     );

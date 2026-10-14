@@ -36,6 +36,16 @@ impl ClientStore {
     /// matches the process that will actually run inference.
     pub fn overlay_node_operator_config(&self, node_did: &str, incoming: &ClientStore) -> Self {
         let mut rows = self.to_rows();
+        if incoming
+            .operator_config_authoritative_node_dids
+            .contains(node_did)
+        {
+            rows.operator_config_authoritative_node_dids
+                .insert(node_did.to_owned());
+        } else {
+            rows.operator_config_authoritative_node_dids
+                .remove(node_did);
+        }
         let remote = incoming.to_rows();
         replace_node_rows(&mut rows.nodes, remote.nodes, node_did, |row| {
             row.node_did.as_str()
@@ -450,6 +460,15 @@ impl ClientStore {
     /// absent from the database snapshot cannot survive indefinitely in memory.
     pub fn replace_node_scope(&self, node_did: &str, snapshot: ClientStore) -> Self {
         let mut rows = self.to_rows();
+        rows.operator_config_authoritative_node_dids
+            .remove(node_did);
+        if snapshot
+            .operator_config_authoritative_node_dids
+            .contains(node_did)
+        {
+            rows.operator_config_authoritative_node_dids
+                .insert(node_did.to_owned());
+        }
         let mut node_session_ids = rows
             .sessions
             .iter()
@@ -728,6 +747,9 @@ impl ClientStore {
                 .datastore_tool_surface_source_node_dids
                 .clone(),
             chain_key_binding_source_node_dids: self.chain_key_binding_source_node_dids.clone(),
+            operator_config_authoritative_node_dids: self
+                .operator_config_authoritative_node_dids
+                .clone(),
         }
     }
 }
@@ -777,9 +799,15 @@ mod overlay_tests {
             inference_backends: vec![backend("did:test:local", "Agent backend")],
             backend_observations: vec![backend_observation("healthy")],
             tasks: vec![task("did:test:local", "canonical-task", true)],
+            operator_config_authoritative_node_dids: ["did:test:local".to_owned()]
+                .into_iter()
+                .collect(),
             ..ClientStoreRows::default()
         });
         let overlayed = local.overlay_node_operator_config("did:test:local", &remote);
+        assert!(overlayed
+            .operator_config_authoritative_node_dids
+            .contains("did:test:local"));
         assert_eq!(overlayed.nodes.len(), 2);
         assert_eq!(
             overlayed

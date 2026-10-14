@@ -505,6 +505,15 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
             .count(),
         row_count: store.row_count(),
         approx_serialized_bytes: store.approx_serialized_bytes(),
+        operator_config_authoritative_node_dids: {
+            let mut dids = store
+                .operator_config_authoritative_node_dids
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>();
+            dids.sort();
+            (!dids.is_empty()).then_some(dids)
+        },
         deployments,
     }
 }

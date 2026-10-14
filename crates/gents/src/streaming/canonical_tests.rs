@@ -1441,13 +1441,25 @@ async fn accepted_tool_publication_replay_returns_exact_physical_bindings() {
         .await;
     let message = Message::Assistant {
         id: Some("provider-message".into()),
-        content: vec![AssistantContent::ToolCall(ToolCall {
-            id: "native-tool".into(),
-            call_id: Some("provider-call".into()),
-            function: ToolFunction::new("read".into(), serde_json::json!({"path":"文.txt"})),
-            signature: Some("sig".into()),
-            additional_params: None,
-        })],
+        content: vec![
+            AssistantContent::ToolCall(ToolCall {
+                id: "native-tool".into(),
+                call_id: Some("provider-call".into()),
+                function: ToolFunction::new("read".into(), serde_json::json!({"path":"文.txt"})),
+                signature: Some("sig".into()),
+                additional_params: None,
+            }),
+            AssistantContent::ToolCall(ToolCall {
+                id: "native-tool-2".into(),
+                call_id: Some("provider-call-2".into()),
+                function: ToolFunction::new(
+                    "write".into(),
+                    serde_json::json!({"path":"other.txt"}),
+                ),
+                signature: None,
+                additional_params: None,
+            }),
+        ],
     };
     let first = writer
         .publish_native_turn(&lifecycle, 0, 0, &message)
@@ -1459,15 +1471,43 @@ async fn accepted_tool_publication_replay_returns_exact_physical_bindings() {
         .unwrap();
     assert_eq!(first.message_doc_id, replay.message_doc_id);
     assert_eq!(first.sequence, replay.sequence);
-    assert_eq!(first.accepted_tools.len(), 1);
-    assert_eq!(replay.accepted_tools.len(), 1);
-    let a = &first.accepted_tools[0];
-    let b = &replay.accepted_tools[0];
-    assert_eq!(a.tool_call_doc_id, b.tool_call_doc_id);
-    assert_eq!(a.accepted_header_doc_id, b.accepted_header_doc_id);
-    assert_eq!(a.arguments, b.arguments);
-    assert_eq!(a.id, "native-tool");
-    assert_eq!(a.call_id.as_deref(), Some("provider-call"));
+    assert_eq!(first.accepted_tools.len(), 2);
+    assert_eq!(replay.accepted_tools.len(), 2);
+    let tool_rows = node
+        .execute(&format!(
+            r#"{{ AgentToolCall(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ _docID tool_call_id }} }}"#,
+            crate::graphql::escape_graphql_string(&lifecycle.request().doc_id),
+        ))
+        .await;
+    assert!(!tool_rows.has_errors(), "{:?}", tool_rows.errors);
+    let rows = tool_rows.data.unwrap()["AgentToolCall"]
+        .as_array()
+        .unwrap()
+        .clone();
+    let doc_id_for = |tool_call_id: &str| {
+        rows.iter()
+            .find(|row| row["tool_call_id"] == tool_call_id)
+            .unwrap()["_docID"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    for (index, (tool_id, call_id)) in [
+        ("native-tool", Some("provider-call")),
+        ("native-tool-2", Some("provider-call-2")),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let a = &first.accepted_tools[index];
+        let b = &replay.accepted_tools[index];
+        assert_eq!(a.id, tool_id);
+        assert_eq!(a.call_id.as_deref(), call_id);
+        assert_eq!(a.tool_call_doc_id, doc_id_for(tool_id));
+        assert_eq!(a.tool_call_doc_id, b.tool_call_doc_id);
+        assert_eq!(a.accepted_header_doc_id, b.accepted_header_doc_id);
+        assert_eq!(a.arguments, b.arguments);
+    }
     node.shutdown().await;
     let _ = std::fs::remove_dir_all(path);
 }

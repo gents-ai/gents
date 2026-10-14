@@ -129,6 +129,24 @@ inductive StartupPhase where
   | managedServerError | configurationError | clientError | ready
   deriving DecidableEq, Repr
 
+inductive FirstRunPhase where
+  | unknown | active | done
+  deriving DecidableEq, Repr
+
+/-- First-run enters setup only after the local init-config owner explicitly
+reports absence, or after a configured home has a complete operator snapshot.
+Unreadable init state and partial operator snapshots remain unresolved. Once
+setup owns the window, observations cannot restart or dismiss it. -/
+def observeFirstRun (phase : FirstRunPhase) (snapshotReady initConfigAbsent needsSetup authoritative : Bool) : FirstRunPhase :=
+  match phase with
+  | .active => .active
+  | .done => .done
+  | .unknown =>
+      if !snapshotReady then .unknown
+      else if initConfigAbsent then .active
+      else if !authoritative then .unknown
+      else if needsSetup then .active else .done
+
 /-- A client observation can recover a client error, not managed-server authority.
 
 `autostartDeclined` is true exactly when the desktop will not autostart the

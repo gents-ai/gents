@@ -80,3 +80,20 @@ export function needsFirstRunSetup(snapshot: DesktopClientSnapshot): boolean {
       !inferenceIsConfigured(deployment),
   );
 }
+
+export type FirstRunPhase = "unknown" | "active" | "done";
+
+export function projectFirstRunPhase(
+  phase: FirstRunPhase,
+  snapshotReady: boolean,
+  initConfigStatus: DesktopClientSnapshot["bootstrap"]["initConfigStatus"],
+  needsSetup: boolean,
+  authoritative: boolean,
+): FirstRunPhase {
+  if (phase !== "unknown") return phase;
+  if (!snapshotReady) return "unknown";
+  if (initConfigStatus === "absent") return "active";
+  if (initConfigStatus !== "configured") return "unknown";
+  if (!authoritative) return "unknown";
+  return needsSetup ? "active" : "done";
+}

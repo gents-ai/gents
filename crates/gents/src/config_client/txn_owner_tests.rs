@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, HashSet};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -9,6 +9,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::routing::post;
 use axum::{Json, Router};
 use defra_node::EmbeddedNode;
+use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::sync::{Barrier, Notify};
 use tracing::field::{Field, Visit};
@@ -676,6 +677,230 @@ async fn write_gate_timeout_names_waiter_and_current_owner() {
         super::retry::is_transaction_storage_failure(&error),
         "gate wait timeouts use the standard storage-failure retry classification"
     );
+    assert!(gate
+        .pending_acquires
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .is_empty());
+    drop(owner);
+}
+
+#[tokio::test]
+async fn stream_owned_gate_waiter_is_copolled_with_flush() {
+    use std::future::Future;
+    use std::task::Context;
+
+    use futures::StreamExt;
+
+    let gate = Arc::new(super::MutationWriteGate::new());
+    let owner = gate
+        .acquire(
+            crate::config_client::write_telemetry::WriteOperation::new(
+                "test.stream_gate_initial_owner",
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let stream_gate = Arc::clone(&gate);
+    let mut stream = Box::pin(async_stream::stream! {
+        let guard = stream_gate
+            .acquire(
+                crate::config_client::write_telemetry::WriteOperation::new(
+                    "test.stream_gate_capture",
+                )
+                .unwrap(),
+            )
+            .await
+            .expect("stream capture acquires the gate");
+        drop(guard);
+        yield ();
+    });
+    let mut next = Box::pin(stream.next());
+    let waker = futures::task::noop_waker();
+    let mut context = Context::from_waker(&waker);
+    assert!(Future::poll(next.as_mut(), &mut context).is_pending());
+    assert_eq!(
+        gate.pending_acquires
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .len(),
+        1,
+        "the actual gate acquisition is registered after its first pending poll"
+    );
+    let pending = gate
+        .oldest_pending_acquire()
+        .expect("pending gate acquisition");
+    assert_eq!(pending.count, 1);
+    assert_eq!(pending.operation.as_str(), "test.stream_gate_capture");
+    assert!(pending.last_poll_age < Duration::from_secs(1));
+    drop(next);
+    assert_eq!(
+        gate.pending_acquires
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .len(),
+        1,
+        "dropping only StreamExt::next must retain the generator's queued acquire"
+    );
+    drop(owner);
+
+    assert!(gate
+        .owner
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .is_none());
+    assert!(gate.lock.try_lock().is_err());
+
+    let flush_gate = Arc::clone(&gate);
+    let flush = flush_gate.acquire(
+        crate::config_client::write_telemetry::WriteOperation::new("test.stream_gate_flush")
+            .unwrap(),
+    );
+    let (flush_result, item) = tokio::time::timeout(
+        Duration::from_secs(1),
+        gents_loop::stream_processor::flush_while_polling(flush, stream.next()),
+    )
+    .await
+    .expect("co-polling must release the retained stream waiter");
+
+    assert_eq!(item, Some(Some(())));
+    let flush_guard = flush_result.expect("flush acquires the gate");
+    assert!(gate
+        .pending_acquires
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .is_empty());
+    assert!(gate
+        .owner
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .is_some());
+    drop(flush_guard);
+    assert!(gate
+        .owner
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .is_none());
+}
+
+#[tokio::test]
+async fn failed_rollback_cleanup_starts_before_transaction_retry_backoff() {
+    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    let node_for_begin = &node;
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let attempts_for_transaction = Arc::clone(&attempts);
+    let cleanup_scheduled = Arc::new(AtomicBool::new(false));
+    let retry_boundary = Arc::new(Notify::new());
+    let cancellation_scheduled = Arc::new(Mutex::new(None::<Arc<AtomicBool>>));
+    let cancellation_scheduled_for_begin = Arc::clone(&cancellation_scheduled);
+
+    let mut transaction = Box::pin(super::ConfigApplyTxn::with_rollback_failure_retry_boundary(
+        Arc::clone(&retry_boundary),
+        Arc::clone(&cleanup_scheduled),
+        super::transact_owned(
+            "test.rollback_before_retry_backoff",
+            crate::config_client::write_telemetry::WriteBackend::Embedded,
+            super::TransactionMode::Idempotent(IdempotentTransactionRetry::Standard),
+            move |operation, cancellation_rollback_scheduled| {
+                let node = node_for_begin;
+                let attempts = Arc::clone(&attempts_for_transaction);
+                let retained = Arc::clone(&cancellation_scheduled_for_begin);
+                Box::pin(async move {
+                    attempts.fetch_add(1, Ordering::SeqCst);
+                    *lock(&retained) = Some(Arc::clone(&cancellation_rollback_scheduled));
+                    ConfigApplyTxn::begin_local_owned(
+                        node.as_ref(),
+                        None,
+                        operation,
+                        cancellation_rollback_scheduled,
+                        super::EmbeddedTransactionPurpose::Mutation,
+                    )
+                    .await
+                })
+            },
+            |_| {
+                Box::pin(async {
+                    Err::<(), anyhow::Error>(super::retry::transaction_storage_failure(
+                        anyhow::anyhow!("retry after a failed transaction callback"),
+                    ))
+                })
+            },
+        ),
+    ));
+
+    tokio::time::timeout(Duration::from_secs(30), async {
+        tokio::select! {
+            () = retry_boundary.notified() => {}
+            result = &mut transaction => panic!("transaction completed before retry backoff: {result:?}"),
+        }
+    })
+    .await
+    .expect("transaction did not reach its retry boundary");
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    assert!(
+        lock(&cancellation_scheduled)
+            .as_ref()
+            .is_some_and(|scheduled| scheduled.load(Ordering::Acquire)),
+        "the transaction begin must publish its cleanup owner before retry"
+    );
+    assert!(
+        cleanup_scheduled.load(Ordering::Acquire),
+        "dropping the failed attempt must schedule detached rollback before retry backoff"
+    );
+    drop(transaction);
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn dropping_stream_clears_its_pending_gate_acquire() {
+    use std::future::Future;
+    use std::task::Context;
+
+    use futures::StreamExt;
+
+    let gate = Arc::new(super::MutationWriteGate::new());
+    let owner = gate
+        .acquire(
+            crate::config_client::write_telemetry::WriteOperation::new("test.stream_drop_owner")
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let stream_gate = Arc::clone(&gate);
+    let mut stream = Box::pin(async_stream::stream! {
+        let guard = stream_gate
+            .acquire(
+                crate::config_client::write_telemetry::WriteOperation::new(
+                    "test.stream_drop_waiter",
+                )
+                .unwrap(),
+            )
+            .await
+            .expect("stream acquisition follows owner release");
+        drop(guard);
+        yield ();
+    });
+    let mut next = Box::pin(stream.next());
+    let waker = futures::task::noop_waker();
+    let mut context = Context::from_waker(&waker);
+    assert!(Future::poll(next.as_mut(), &mut context).is_pending());
+    drop(next);
+    assert_eq!(
+        gate.pending_acquires
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .len(),
+        1
+    );
+
+    drop(stream);
+    assert!(gate
+        .pending_acquires
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .is_empty());
     drop(owner);
 }
 
@@ -696,6 +921,76 @@ async fn stalled_cancellation_cleanup_releases_the_embedded_write_gate() {
     let _guard = tokio::time::timeout(Duration::from_millis(1), gate.lock())
         .await
         .expect("the embedded write gate is released after cleanup times out");
+}
+
+#[derive(Deserialize)]
+struct StorageWriteGateCase {
+    name: String,
+    independently_scheduled: bool,
+    rollback_owner_scheduled: bool,
+    cleanup_times_out: bool,
+    expected_gate_held_after_owner_handoff: bool,
+    expected_gate_held: bool,
+}
+
+#[tokio::test(start_paused = true)]
+async fn lean_cancelled_rollback_timeout_releases_actual_transaction_gate() {
+    let cases: Vec<StorageWriteGateCase> =
+        serde_json::from_str(include_str!("../../tests/fixtures/storage_write_gate.json"))
+            .expect("Lean storage write-gate fixture");
+    let scenario = cases
+        .iter()
+        .find(|case| case.name == "cancelled_rollback_timeout_releases_canonical_gate")
+        .expect("generated cancellation and rollback-timeout scenario");
+    assert!(!scenario.independently_scheduled);
+    assert!(scenario.rollback_owner_scheduled && scenario.cleanup_times_out);
+    assert!(!scenario.expected_gate_held);
+
+    let node = EmbeddedNode::builder().build().await.unwrap();
+    let started = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let mut txn = ConfigApplyTxn::begin_local(&node, None).await.unwrap();
+    txn.pause_drop_rollback_for_test(Arc::new(super::RollbackDropCleanupPause {
+        started: started.clone(),
+        release,
+    }));
+    drop(txn);
+
+    let gate = super::mutation_write_gate(&node);
+    started.notified().await;
+    let gate_held = match gate.lock.clone().try_lock_owned() {
+        Ok(guard) => {
+            drop(guard);
+            false
+        }
+        Err(_) => true,
+    };
+    assert_eq!(
+        gate_held, scenario.expected_gate_held_after_owner_handoff,
+        "native gate observation must match the Lean handoff state"
+    );
+    if scenario.cleanup_times_out {
+        tokio::time::advance(super::EMBEDDED_TRANSACTION_ROLLBACK_TIMEOUT).await;
+    }
+    let acquisition = tokio::time::timeout(
+        Duration::from_secs(1),
+        gate.acquire(
+            crate::config_client::write_telemetry::WriteOperation::new(
+                "test.rollback_timeout_releases_transaction_gate",
+            )
+            .unwrap(),
+        ),
+    )
+    .await;
+    let gate_held = !matches!(&acquisition, Ok(Ok(_)));
+    assert_eq!(
+        gate_held, scenario.expected_gate_held,
+        "native gate observation must match the Lean cleanup-timeout state"
+    );
+    if let Ok(Ok(guard)) = acquisition {
+        drop(guard);
+    }
+    node.shutdown().await;
 }
 
 #[test]

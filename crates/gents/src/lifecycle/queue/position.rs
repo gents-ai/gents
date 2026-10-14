@@ -84,10 +84,13 @@ pub(crate) async fn effective_slots(
     txn: &ConfigApplyTxn<'_>,
     ids: &[String],
 ) -> Result<Vec<(String, String)>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
     let literal = crate::graphql::graphql_string_list_literal(ids.iter().map(String::as_str));
     let response = txn
         .execute(&format!(
-            r#"{{ AgentRequest(filter: {{ _docID: {{ _in: {literal} }} }}) {{
+            r#"{{ AgentRequest(docIDs: {literal}) {{
             _docID request_id node_did requester_did session_id agent_id input
             workspace_id workspace_owner_node_did workspace_authority workspace_seal_hash
         }} }}"#,
@@ -242,5 +245,65 @@ mod tests {
                 .unwrap_err()
                 .is::<InvalidQueuePosition>()
         );
+    }
+
+    #[tokio::test]
+    async fn effective_slot_batch_uses_only_found_physical_requests() {
+        use crate::config_client::ConfigAccess;
+        use crate::defra_node::EmbeddedNode;
+
+        let dir = tempfile::tempdir().unwrap();
+        let node = EmbeddedNode::builder()
+            .data_path(dir.path().join("node"))
+            .build()
+            .await
+            .unwrap();
+        crate::ensure_runtime_schemas(&node).await.unwrap();
+
+        async fn create_request(
+            node: &EmbeddedNode,
+            request_id: &str,
+            node_did: &str,
+            session_id: &str,
+        ) -> String {
+            let mutation = format!(
+                r#"mutation {{ create_AgentRequest(input: {{
+                    purpose: "normal", request_id: "{request_id}",
+                    node_did: "{node_did}", requester_did: "did:test:requester",
+                    agent_id: "worker", session_id: "{session_id}", content: "work",
+                    lifecycle_state: "completed", backend_id: "",
+                    execution_origin: "interactive", failure_reason: "",
+                    created_at: "2026-10-10T00:00:00Z", retry_count: 0, max_retries: 3
+                }}) {{ _docID }} }}"#
+            );
+            let created =
+                ConfigAccess::write_local_response(node, "test.queue_position", &mutation)
+                    .await
+                    .unwrap();
+            let data = created.data.unwrap();
+            data.as_object().unwrap().values().next().unwrap()[0]["_docID"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        }
+
+        let requested = create_request(&node, "requested", "did:test:node", "queue").await;
+        let _foreign = create_request(&node, "foreign", "did:test:other", "other-queue").await;
+        let missing =
+            document::DocID::new_v0_from_seed("missing-queue-position-request").to_string();
+        let ids = vec![requested.clone(), missing];
+        let slots = ConfigAccess::transact_local_readonly(
+            &node,
+            None,
+            "test.queue_position_direct_ids",
+            |txn| {
+                let ids = ids.clone();
+                Box::pin(async move { effective_slots(txn, &ids).await })
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(slots, vec![(requested.clone(), requested)]);
+        node.shutdown().await;
     }
 }

@@ -383,6 +383,9 @@ impl<'a, 'txn> TxnCanonicalReader<'a, 'txn> {
         }
     }
 
+    /// Reuse headers from an exact scoped batch read. A separate `_docID`
+    /// equality is a point lookup, but reusing the rows avoids another read
+    /// per header in this transaction.
     pub(crate) fn observe_headers(
         &mut self,
         headers: &[super::canonical_rows::TranscriptMessageRow],

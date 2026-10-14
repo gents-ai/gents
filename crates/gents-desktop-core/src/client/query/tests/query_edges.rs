@@ -147,6 +147,56 @@ fn combined_snapshot_keeps_unknown_config_fields_rejected_and_observations_indep
 }
 
 #[test]
+fn malformed_default_backend_keeps_operator_config_authority_unresolved() {
+    let mut data = serde_json::json!({
+        "nodes": [], "agents": [], "runtimes": [], "node_readiness": [],
+        "contexts": [], "tools": [], "inference_profiles": [], "inference_sampling": [],
+        "inference_execution": [], "tasks": [], "schedules": [], "triggers": [],
+        "skills": [], "compactions": [], "tool_service_registries": [],
+        "event_sources": [], "agent_targets": [], "datastore_tool_surfaces": [],
+        "chain_key_bindings": [], "sessions": [], "requests": [],
+        "inference_backends": [{
+            "node_did": "did:alpha", "backend_id": "b", "name": "backend",
+            "provider_kind": "OpenAiCompatible", "openai_wire_api": "chat_completions",
+            "endpoint": "http://localhost:8000/v1", "auth": {"kind": "unauthenticated"},
+            "enabled": true, "future_backend_config": true, "catalogs": [],
+            "last_probe": null, "probe_status": "ready"
+        }]
+    });
+
+    let partial = operator_config_store_from_data(&data, "did:alpha")
+        .expect("malformed config rows remain a query result");
+    assert!(partial.inference_backends.is_empty());
+    assert_eq!(partial.backend_observations.len(), 1);
+    assert!(!partial
+        .operator_config_authoritative_node_dids
+        .contains("did:alpha"));
+    let local = ClientStore::from_rows(ClientStoreRows {
+        operator_config_authoritative_node_dids: ["did:alpha".to_owned()].into_iter().collect(),
+        ..ClientStoreRows::default()
+    });
+    let projected = local.overlay_node_operator_config("did:alpha", &partial);
+    assert!(!projected
+        .operator_config_authoritative_node_dids
+        .contains("did:alpha"));
+
+    data["inference_backends"][0]
+        .as_object_mut()
+        .expect("backend row")
+        .remove("future_backend_config");
+    let complete =
+        operator_config_store_from_data(&data, "did:alpha").expect("canonical config rows decode");
+    assert_eq!(complete.inference_backends.len(), 1);
+    assert!(complete
+        .operator_config_authoritative_node_dids
+        .contains("did:alpha"));
+    let projected = local.overlay_node_operator_config("did:alpha", &complete);
+    assert!(projected
+        .operator_config_authoritative_node_dids
+        .contains("did:alpha"));
+}
+
+#[test]
 fn patch_observation_provenance_stays_aligned_for_repeated_logical_ids() {
     let data = serde_json::json!({
         "triggers": [

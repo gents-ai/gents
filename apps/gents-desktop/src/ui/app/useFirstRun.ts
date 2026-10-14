@@ -2,43 +2,61 @@ import { useState } from "react";
 import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 
-import { needsFirstRunSetup } from "../lib/firstRun";
+import {
+  needsFirstRunSetup,
+  projectFirstRunPhase,
+  type FirstRunPhase,
+} from "../lib/firstRun";
 import { useApp } from "./AppContext";
 
-type Phase = "unknown" | "active" | "done";
-
 /**
- * Whether first-run setup owns the window. Decided once startup is ready
- * and its snapshot says a home needs it, then held: the wizard owns its
- * own starting page and must not remount at welcome when the server it
- * started comes up. A completed home reset (a new `generation`) starts
- * over from detection.
+ * Setup starts only when init.json is explicitly absent or a configured
+ * home has a complete operator config read. Unreadable and partial state
+ * remain pending. Once the wizard owns the window, it remains there until
+ * its own completion callback releases it.
  */
 export function useFirstRun(generation: number, startupReady: boolean) {
-  /* what of the client decides it, as two facts, so a read that changes
-     neither re-renders nothing */
-  const { read, needsSetup } = useStore(
-    useApp().stores.client,
-    useShallow((state) => ({
-      read: state.snapshot !== null,
-      needsSetup: state.snapshot !== null && needsFirstRunSetup(state.snapshot),
-    })),
+  const { stores } = useApp();
+  const facts = useStore(
+    stores.client,
+    useShallow((state) => {
+      const snapshot = state.snapshot;
+      const initConfigStatus = snapshot?.bootstrap.initConfigStatus;
+      const initNodeDid = snapshot?.bootstrap.initNodeDid;
+      return {
+        hasSnapshot: snapshot !== null,
+        initConfigStatus,
+        needsSetup: snapshot !== null && needsFirstRunSetup(snapshot),
+        authoritative: Boolean(
+          initConfigStatus === "configured" &&
+          initNodeDid &&
+          snapshot?.client?.operatorConfigAuthoritativeNodeDids?.includes(initNodeDid),
+        ),
+      };
+    }),
   );
-  const [held, setHeld] = useState<{ generation: number; phase: Phase }>({
+  const [held, setHeld] = useState<{ generation: number; phase: FirstRunPhase }>({
     generation,
     phase: "unknown",
   });
-  let phase: Phase = held.generation === generation ? held.phase : "unknown";
-  /* decided either way: a home that needed no setup at startup does not get
-     the wizard later because its agent loses its inference */
-  if (phase === "unknown" && startupReady && read) {
-    phase = needsSetup ? "active" : "done";
+  let phase: FirstRunPhase = held.generation === generation ? held.phase : "unknown";
+  if (phase === "unknown") {
+    phase = projectFirstRunPhase(
+      phase,
+      startupReady && facts.hasSnapshot,
+      facts.initConfigStatus,
+      facts.needsSetup,
+      facts.authoritative,
+    );
+  }
+  if (held.generation !== generation || held.phase !== phase) {
     setHeld({ generation, phase });
   }
   return {
     phase,
-    /** the snapshot has been read and setup is not needed, or is done */
-    settled: phase === "done" || (phase === "unknown" && read),
+    initConfigStatus: facts.initConfigStatus,
+    /** An authoritative setup decision was made or the wizard completed. */
+    settled: phase !== "unknown",
     finish: () => setHeld({ generation, phase: "done" }),
   };
 }
