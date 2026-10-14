@@ -5,13 +5,15 @@ import Proofs.NativeCompletion
 
 A local store claim is attached to the per-node gate resource, independently
 of the mutation mutex. Access owners retain that resource while live; admitted
-native work and detached cleanup retain it until they actually return. Read-only
+native work, cancellation-safe client shutdown, and detached cleanup retain it
+until they actually return. Read-only
 transactions, renewals, claimed reads, and schema registration retain the
 resource without holding the mutation mutex. `nativeOutstanding` counts
-Gents-owned native dispatch/future lifetime, including a detached dispatch or
-an async schema call whose completion owner remains live; timeout/cancellation
+Gents-owned native dispatch/future lifetime, including a detached dispatch, an
+async schema call, or a single-flight client shutdown whose completion owner
+remains live; timeout/cancellation
 does not establish native completion. This model does not claim eventual
-native completion, OS lock behavior, or shutdown completion.
+completion or OS lock behavior.
 -/
 namespace NativeClaimLifetime
 
@@ -22,6 +24,7 @@ inductive Lane where
   | periodicRenewal
   | claimedRead
   | claimedSchema
+  | clientShutdown
   deriving DecidableEq, Repr
 
 inductive Caller where
@@ -42,6 +45,7 @@ structure State where
   retryStarted : Bool
   renewalAttemptReturned : Bool
   nextRenewalStarted : Bool
+  lifecycleGuardHeld : Bool
   deriving DecidableEq, Repr
 
 def claimHeld (s : State) : Bool :=
@@ -52,19 +56,21 @@ def claimHeld (s : State) : Bool :=
 inductive Event where
   | nativeStarted | nativeReturned | callerReturned | callerTimedOut | callerCancelled
   | accessReleased | transactionDropped | transactionCommitted | rollbackReturned
-  | retryRequested | gateReleaseRequested | renewalAttemptReturned | renewalRequested
+  | retryRequested | gateReleaseRequested | lifecycleGuardReleased
+  | renewalAttemptReturned | renewalRequested
   deriving DecidableEq, Repr
 
 def isTransaction (lane : Lane) : Bool :=
   match lane with
   | .mutationTransaction | .readOnlyTransaction | .periodicRenewal => true
-  | .autoCommitWrite | .claimedRead | .claimedSchema => false
+  | .autoCommitWrite | .claimedRead | .claimedSchema | .clientShutdown => false
 
 def step (s : State) (event : Event) : State :=
   match event with
   | .nativeStarted =>
       if NativeCompletion.nativeAdmissionAllowed s.poisoned &&
           (if isTransaction s.lane then s.transactionOwnerAlive else s.accessOwnerAlive) &&
+          (s.lane != .clientShutdown || s.lifecycleGuardHeld) &&
           (s.lane != .mutationTransaction || s.mutationGateHeld) then
         { s with nativeOutstanding := s.nativeOutstanding + 1 }
       else s
@@ -98,6 +104,11 @@ def step (s : State) (event : Event) : State :=
       if s.nativeOutstanding == 0 && !s.cleanupPending then
         { s with mutationGateHeld := false }
       else s
+  | .lifecycleGuardReleased =>
+      if s.lane == .clientShutdown && s.nativeOutstanding == 0 &&
+          !s.accessOwnerAlive then
+        { s with lifecycleGuardHeld := false }
+      else s
   | .renewalAttemptReturned =>
       if s.lane == .periodicRenewal && s.nativeOutstanding == 0 then
         { s with renewalAttemptReturned := true }
@@ -112,27 +123,31 @@ def run (s : State) (events : List Event) : State := events.foldl step s
 
 def mutationTransaction : State :=
   ⟨.mutationTransaction, .waiting, true, true, true, 0, false, false, false,
-    true, false, false, false⟩
+    true, false, false, false, false⟩
 
 def autoCommitWrite : State :=
   ⟨.autoCommitWrite, .waiting, true, true, false, 0, false, false, false,
-    true, false, false, false⟩
+    true, false, false, false, false⟩
 
 def readOnlyTransaction : State :=
   ⟨.readOnlyTransaction, .waiting, true, true, true, 0, false, false, false,
-    false, false, false, false⟩
+    false, false, false, false, false⟩
 
 def periodicRenewal : State :=
   ⟨.periodicRenewal, .waiting, true, true, true, 0, false, false, false,
-    false, false, false, false⟩
+    false, false, false, false, false⟩
 
 def claimedRead : State :=
   ⟨.claimedRead, .waiting, true, true, false, 0, false, false, false,
-    false, false, false, false⟩
+    false, false, false, false, false⟩
 
 def claimedSchema : State :=
   ⟨.claimedSchema, .waiting, true, true, false, 0, false, false, false,
-    false, false, false, false⟩
+    false, false, false, false, false⟩
+
+def clientShutdown : State :=
+  ⟨.clientShutdown, .waiting, true, true, false, 0, false, false, false,
+    false, false, false, false, true⟩
 
 theorem timeout_does_not_release_claim_while_native_live :
     let s := run claimedRead
@@ -157,6 +172,33 @@ theorem schema_future_retains_claim_until_actual_return :
     let after := run before [.nativeReturned, .gateReleaseRequested]
     before.mutationGateHeld = false ∧ before.nativeOutstanding = 1 ∧
       claimHeld before = true ∧ claimHeld after = false := by
+  decide
+
+/-- A cancelled shutdown waiter does not terminate the single-flight owner.
+The spawned owner must retain the client core and its store access until the
+observed shutdown future returns. -/
+theorem cancelled_shutdown_waiter_does_not_release_claim_before_owner_returns :
+    let before := run clientShutdown [.nativeStarted, .callerCancelled]
+    let returned := run before [.nativeReturned]
+    let after := run returned
+      [.accessReleased, .lifecycleGuardReleased, .gateReleaseRequested]
+    before.nativeOutstanding = 1 ∧ before.accessOwnerAlive = true ∧
+      claimHeld before = true ∧ returned.accessOwnerAlive = true ∧
+      claimHeld returned = true ∧ returned.lifecycleGuardHeld = true ∧
+      after.lifecycleGuardHeld = false ∧ claimHeld after = false := by
+  decide
+
+/-- Caller cancellation cannot release the client-lifecycle exclusion before
+the spawned shutdown owner returns and drops the core's store access. -/
+theorem shutdown_exclusion_cannot_release_while_owner_or_access_live :
+    let started := run clientShutdown [.nativeStarted, .callerCancelled]
+    let earlyRelease := step started .lifecycleGuardReleased
+    let returned := run earlyRelease [.nativeReturned]
+    let accessReleased := step returned .accessReleased
+    let after := step accessReleased .lifecycleGuardReleased
+    started.lifecycleGuardHeld = true ∧ earlyRelease.lifecycleGuardHeld = true ∧
+      returned.lifecycleGuardHeld = true ∧ accessReleased.lifecycleGuardHeld = true ∧
+      after.lifecycleGuardHeld = false := by
   decide
 
 theorem transaction_drop_transfers_claim_to_pending_cleanup :

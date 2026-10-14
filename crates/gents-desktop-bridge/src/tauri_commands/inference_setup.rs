@@ -2091,7 +2091,7 @@ mod provider_account_tests {
                 .any(|id| id.starts_with("claude-subscription-")),
             "the added account's backend is in the client snapshot: {backends:?}"
         );
-        core.shutdown().await.expect("shutdown");
+        Arc::new(core).shutdown().await.expect("shutdown");
     }
 
     #[tokio::test]

@@ -216,6 +216,9 @@ impl ClientCore {
                 last_loaded_for: tokio::sync::Mutex::new(std::collections::HashMap::new()),
                 request_patch_signatures: tokio::sync::Mutex::new(std::collections::HashMap::new()),
                 p2p_control: tokio::sync::Mutex::new(Some(p2p_control)),
+                shutdown_completion: tokio::sync::Mutex::new(None),
+                #[cfg(test)]
+                shutdown_test_pause: tokio::sync::Mutex::new(None),
                 last_mutation_error: std::sync::RwLock::new(None),
                 local_peer_id,
                 listen_addresses,
@@ -673,6 +676,7 @@ mod tests {
             assert!(sensitive.iter().all(|name| subscriptions.contains(name)));
             drop(admin);
             drop(access);
+            let core = Arc::new(core);
             core.shutdown().await.unwrap();
             drop(core);
             assert!(paths.store_encryption_path().is_file());
@@ -710,7 +714,7 @@ mod tests {
             .unwrap();
         assert_eq!(std::fs::read(paths.store_key_path()).unwrap(), key);
         assert_eq!(std::fs::read(paths.identity_key_path()).unwrap(), identity);
-        core.shutdown().await.unwrap();
+        Arc::new(core).shutdown().await.unwrap();
     }
 
     #[tokio::test]
@@ -739,6 +743,7 @@ mod tests {
             "{error:#}"
         );
         assert_eq!(std::fs::read(paths.store_key_path()).unwrap(), key);
+        let core = Arc::new(core);
         core.shutdown().await.unwrap();
         drop(core);
         let reopened =
@@ -746,6 +751,6 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(reopened.node_identity().did(), did);
-        reopened.shutdown().await.unwrap();
+        Arc::new(reopened).shutdown().await.unwrap();
     }
 }

@@ -364,5 +364,5 @@ async fn operator_delta_uses_fresh_rows_with_a_payload_free_observer_and_snapsho
     .unwrap();
     assert_eq!(terminal.outcome, "snapshotRequired");
     assert!(core.store().snapshot().output_segments.is_empty());
-    core.shutdown().await.unwrap();
+    Arc::new(core).shutdown().await.unwrap();
 }

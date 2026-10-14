@@ -30,6 +30,9 @@ def cases : List Case :=
   , ⟨"schema_future_timeout_retains_claim_until_return", claimedSchema,
       [.nativeStarted, .callerTimedOut, .accessReleased, .gateReleaseRequested,
         .nativeReturned, .gateReleaseRequested]⟩
+  , ⟨"client_shutdown_cancel_retains_claim_until_return", clientShutdown,
+      [.nativeStarted, .callerCancelled, .nativeReturned, .accessReleased,
+        .lifecycleGuardReleased, .gateReleaseRequested]⟩
   , ⟨"committed_transaction_keeps_live_access_claim", readOnlyTransaction,
       [.nativeStarted, .nativeReturned, .transactionCommitted,
         .gateReleaseRequested, .accessReleased]⟩ ]
@@ -41,6 +44,7 @@ def laneName : Lane → String
   | .periodicRenewal => "periodic_renewal"
   | .claimedRead => "claimed_read"
   | .claimedSchema => "claimed_schema"
+  | .clientShutdown => "client_shutdown"
 
 def callerName : Caller → String
   | .waiting => "waiting"
@@ -60,6 +64,7 @@ def eventName : Event → String
   | .rollbackReturned => "rollback_returned"
   | .retryRequested => "retry_requested"
   | .gateReleaseRequested => "gate_release_requested"
+  | .lifecycleGuardReleased => "lifecycle_guard_released"
   | .renewalAttemptReturned => "renewal_attempt_returned"
   | .renewalRequested => "renewal_requested"
 
@@ -79,7 +84,8 @@ def observationJson (state : State) : String :=
   ",\"mutation_gate_held\":" ++ boolJson state.mutationGateHeld ++
   ",\"retry_started\":" ++ boolJson state.retryStarted ++
   ",\"renewal_attempt_returned\":" ++ boolJson state.renewalAttemptReturned ++
-  ",\"next_renewal_started\":" ++ boolJson state.nextRenewalStarted ++ "}"
+  ",\"next_renewal_started\":" ++ boolJson state.nextRenewalStarted ++
+  ",\"lifecycle_guard_held\":" ++ boolJson state.lifecycleGuardHeld ++ "}"
 
 def caseJson (c : Case) : String :=
   let observations := (c.events.scanl step c.initial).drop 1
