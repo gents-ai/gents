@@ -819,7 +819,7 @@ async fn install_schema(access: &ConfigAccess, sdl: &str) -> Result<()> {
     Ok(())
 }
 
-fn bind_fixture_owner(value: &Value, trial_did: &str) -> Value {
+pub(crate) fn bind_fixture_owner(value: &Value, trial_did: &str) -> Value {
     match value {
         Value::String(text) if text == "$trial" => Value::String(trial_did.into()),
         Value::Array(values) => Value::Array(

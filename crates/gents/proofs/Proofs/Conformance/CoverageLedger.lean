@@ -865,6 +865,16 @@ def caseCoverage : List CoverageEntry :=
       "optimization::driver::matrix::an_unexercised_task_target_is_refused_before_any_job_or_trial_is_created")
       "optimization" [Surface.operatorCli]
   , tagged (consumerCoverage
+      "optimization_cases"
+      "OptimizationCases"
+      "optimization::gate::seeds::tests::exact_seed_rendering_matches_lean")
+      "optimization" [Surface.operatorCli]
+  , tagged (consumerCoverage
+      "optimization_cases"
+      "OptimizationCases"
+      "optimization::driver::matrix::exact_seed_failures_reject_candidates_before_validation")
+      "optimization" [Surface.operatorCli]
+  , tagged (consumerCoverage
       "tool_policy_cases"
       "ToolPolicyCases"
       "conformance::generated_tool_policy_cases_match_lean_composition")

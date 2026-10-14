@@ -94,6 +94,84 @@ private def decisionRows : List String :=
         ++ ",\"improves\":" ++ boolJson i
         ++ ",\"decision\":" ++ decisionJson (decideGates m s r c i) ++ "}"
 
+private structure ExactSeed where
+  caseId : String := "case"
+  stageId : String := "seed"
+  collection : String := "PlanItem"
+  document : String := "{\"goal\":\"ship\",\"owner\":\"alex\"}"
+  rendered : Bool := true
+
+private def ExactSeed.rendering (seed : ExactSeed) : SeedRendering :=
+  ⟨seed.caseId, seed.stageId, seed.collection, seed.rendered⟩
+
+private structure SeedRenderingScenario where
+  name : String
+  target : Option String := some "plan"
+  taskEnabled : Bool := true
+  triggers : List SeedTrigger := [⟨"plan", some "plan-source", true⟩]
+  sources : List SeedSource := [⟨"plan-source", "PlanItem", none⟩]
+  text : String := "Plan {{ doc.goal }} for {{ doc.owner }}."
+  seeds : List ExactSeed := [{}]
+
+private def seedRenderingScenarios : List SeedRenderingScenario :=
+  [{ name := "all_exact_seeds_render" },
+   { name := "missing_baseline_field", seeds :=
+       [{ document := "{\"goal\":\"ship\"}", rendered := false }] },
+   { name := "missing_added_field", text :=
+       "Plan {{ doc.goal }} for {{ doc.owner }} using {{ doc.missing }}.",
+       seeds := [{ rendered := false }] },
+   { name := "nested_missing_field", text :=
+       "Plan {{ doc.goal }} for {{ doc.owner }} using {{ doc.detail.name }}.",
+       seeds := [{ document := "{\"goal\":\"ship\",\"owner\":\"alex\",\"detail\":{}}",
+                   rendered := false }] },
+   { name := "one_of_multiple_seeds_fails", text :=
+       "Plan {{ doc.goal }} for {{ doc.owner }} using {{ doc.detail }}.", seeds :=
+       [{ caseId := "first", document := "{\"goal\":\"ship\",\"owner\":\"alex\",\"detail\":\"ready\"}" },
+        { caseId := "second", rendered := false }] },
+   { name := "added_field_present_in_every_seed", text :=
+       "Plan {{ doc.goal }} for {{ doc.owner }} using {{ doc.detail }}.", seeds :=
+       [{ caseId := "first", document := "{\"goal\":\"ship\",\"owner\":\"alex\",\"detail\":\"ready\"}" },
+        { caseId := "second", document := "{\"goal\":\"test\",\"owner\":\"sam\",\"detail\":\"complete\"}" }] },
+   { name := "guarded_absent_field_renders", text :=
+       "Plan {{ doc.goal }} for {{ doc.owner }}{% if doc.detail is defined %}: {{ doc.detail }}{% endif %}." },
+   { name := "runtime_document_id_is_available", text :=
+       "Plan {{ doc.goal }} for {{ doc.owner }} ({{ doc._docID }})." },
+   { name := "trial_owner_binding_reaches_the_guarded_missing_field", text :=
+       "Plan {{ doc.goal }} for {{ doc.owner }}{% if doc.node_did == node.node_did %}: {{ doc.detail }}{% endif %}.",
+       seeds := [{ document := "{\"goal\":\"ship\",\"owner\":\"alex\",\"node_did\":\"$trial\"}", rendered := false }] },
+   { name := "context_is_not_a_template", target := none,
+       text := "Plan {{ doc.missing }}.", seeds := [{ rendered := false }] },
+   { name := "unrelated_seed_is_not_rendered", seeds :=
+       [{}, { collection := "Other", document := "{}", rendered := false }] },
+   { name := "disabled_task_has_no_seed_rendering", taskEnabled := false,
+       seeds := [{ document := "{}", rendered := false }] },
+   { name := "disabled_trigger_has_no_seed_rendering", triggers :=
+       [⟨"plan", some "plan-source", false⟩], seeds := [{ document := "{}", rendered := false }] },
+   { name := "schedule_is_not_a_seed_route", triggers := [⟨"plan", none, true⟩],
+       seeds := [{ document := "{}", rendered := false }] },
+   { name := "updated_source_is_not_a_created_seed_route", sources :=
+       [⟨"plan-source", "PlanItem", some "updated"⟩], seeds := [{ document := "{}", rendered := false }] }]
+
+private def exactSeedJson (seed : ExactSeed) : String :=
+  "{\"case_id\":" ++ jsonString seed.caseId
+    ++ ",\"stage_id\":" ++ jsonString seed.stageId
+    ++ ",\"collection\":" ++ jsonString seed.collection
+    ++ ",\"document\":" ++ seed.document
+    ++ ",\"rendered\":" ++ boolJson seed.rendered ++ "}"
+
+private def seedRenderingRow (s : SeedRenderingScenario) : String :=
+  let failures := failedTaskSeedRenders s.target s.taskEnabled s.triggers s.sources
+    (s.seeds.map ExactSeed.rendering)
+  "{\"name\":" ++ jsonString s.name
+    ++ ",\"target_task\":" ++ optionalStringJson s.target
+    ++ ",\"task_enabled\":" ++ boolJson s.taskEnabled
+    ++ ",\"triggers\":" ++ jsonArray (s.triggers.map seedTriggerJson)
+    ++ ",\"sources\":" ++ jsonArray (s.sources.map seedSourceJson)
+    ++ ",\"text\":" ++ jsonString s.text
+    ++ ",\"seeds\":" ++ jsonArray (s.seeds.map exactSeedJson)
+    ++ ",\"failed_stages\":" ++ jsonArray (failures.map fun seed =>
+      "[" ++ jsonString seed.caseId ++ "," ++ jsonString seed.stageId ++ "]") ++ "}"
+
 private def params : Params :=
   { minPairs := 2, maxNotEvidenceBp := 2000, maxAsymmetryBp := 1000, caseToleranceBp := 3000,
     alphaPpm := 50000, maxRounds := 3, maxTokenIncreaseBp := 2500 }
@@ -156,6 +234,7 @@ def optimizationCasesJson : String :=
     ++ ",\"decisions\":" ++ jsonArray decisionRows
     ++ ",\"gates\":" ++ jsonArray (gateScenarios.map fun (n, e) => gateRow n e)
     ++ ",\"costs\":" ++ jsonArray (costScenarios.map costRow)
-    ++ ",\"seed_coverage\":" ++ jsonArray (seedCoverageScenarios.map seedCoverageRow) ++ "}"
+    ++ ",\"seed_coverage\":" ++ jsonArray (seedCoverageScenarios.map seedCoverageRow)
+    ++ ",\"seed_rendering\":" ++ jsonArray (seedRenderingScenarios.map seedRenderingRow) ++ "}"
 
 end Conformance.Optimization

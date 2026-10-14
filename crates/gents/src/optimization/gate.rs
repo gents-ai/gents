@@ -22,16 +22,18 @@ use crate::config_client::DesiredStateApplyPlan;
 use crate::optimization::subject::{baseline_text, MaterializedPack};
 use crate::optimization::target::TargetField;
 use crate::pack::interpolate;
-use crate::template::catalog::{default_catalog, Site};
 use crate::template::parse_template_for_validation;
 use crate::{Collection, ConfigReferences};
+
+mod seeds;
+pub(crate) use seeds::seed_gate;
 
 const CONFIG_ASSET: &str = "pack_config.json";
 
 /// Why a candidate never reached a validation run. `reason` is a closed
 /// vocabulary for the journal — `empty_text`, `text_too_long`,
 /// `template_invalid`, `template_variables_dropped`,
-/// `template_variables_added`, `unexpected_change`,
+/// `template_seed_invalid`, `unexpected_change`,
 /// `text_mismatch` or `duplicate_candidate` — and `detail` is diagnostics for
 /// an operator.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -135,23 +137,6 @@ pub fn text_gate(
             ));
         }
         owner_validation(baseline, text)?;
-        // Every added path is refused, guarded or not: rendering is
-        // strict-undefined, so an unguarded path the seed document lacks
-        // errors the fire, and the gate does not parse guards. Only the
-        // baseline's paths and the runtime catalog are known to render. The
-        // owner's refusals above name the finer reason for a catalog or
-        // source violation.
-        let catalog = default_catalog();
-        let added: Vec<&String> = candidate
-            .difference(&current)
-            .filter(|path| !catalog.is_available_at(path, Site::Task))
-            .collect();
-        if !added.is_empty() {
-            return Err(reject(
-                "template_variables_added",
-                format!("the candidate template newly references {added:?}"),
-            ));
-        }
     }
     Ok(())
 }
@@ -470,38 +455,6 @@ mod tests {
         // A context prompt is not a template: braces there are only text.
         let context = fixture(false);
         text_gate(&context.baseline, "Watch {{ nothing }}.\n", 32 * 1024).unwrap();
-    }
-
-    /// Rendering is strict-undefined, so a variable the seed document does
-    /// not carry errors the fire instead of rendering a prompt; only the
-    /// baseline's own paths and the runtime catalog are known to be there.
-    #[test]
-    fn a_task_candidate_that_adds_a_template_variable_is_rejected() {
-        let task = task_fixture(false);
-        let rejection = text_gate(
-            &task.baseline,
-            "Do {{ doc.goal }} for {{ doc.owner }} by {{ doc.missing }}.\n",
-            32 * 1024,
-        )
-        .unwrap_err();
-        assert_eq!(rejection.reason, "template_variables_added");
-        assert!(
-            rejection.detail.contains("doc.missing"),
-            "{}",
-            rejection.detail
-        );
-        assert!(
-            !rejection.detail.contains("doc.goal"),
-            "{}",
-            rejection.detail
-        );
-
-        text_gate(
-            &task.baseline,
-            "Do {{ doc.goal }} for {{ doc.owner }} on {{ node.node_did }} at {{ ctx.now }}.\n",
-            32 * 1024,
-        )
-        .unwrap();
     }
 
     /// The owner's install-time checks run on the candidate: a `node.*` or
