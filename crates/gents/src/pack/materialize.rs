@@ -12,6 +12,9 @@ use anyhow::{Context, Result};
 /// swapped before a later use. The staging temp file and the published
 /// destination both live in the same parent directory, so the publish does
 /// not traverse a path outside that directory.
+///
+/// The caller holds `FileLock::shared(cache_lock(root.parent()))` so prune and
+/// remove cannot delete `root` mid-write.
 pub fn materialize(pack: &crate::pack_archive::PackArchive, root: &std::path::Path) -> Result<()> {
     use std::io::Write;
     for path in std::iter::once("manifest.json")
@@ -210,6 +213,7 @@ pub fn cached(
 const CACHE_MARKER: &str = ".gents-pack-cache-v1";
 const CACHE_LOCK: &str = ".cache.lock";
 
+/// The caller holds `FileLock::shared(cache_lock(root.parent()))`.
 pub fn write_cache_marker(root: &std::path::Path) -> Result<()> {
     let marker = root.join(CACHE_MARKER);
     if marker.exists() {
@@ -234,6 +238,8 @@ pub fn cache_lock(parent: &std::path::Path) -> Result<std::fs::File> {
         .open(parent.join(CACHE_LOCK))?)
 }
 
+/// The caller holds [`lock_exclusive`] on `parent`, so no scenario can acquire
+/// or use a sibling cache root while the probe and removal occur.
 pub fn prune_stale_asset_cache(
     parent: &std::path::Path,
     current: &std::path::Path,
@@ -251,9 +257,6 @@ pub fn prune_stale_asset_cache(
         if name.len() != 64 || !name.bytes().all(|byte| byte.is_ascii_hexdigit()) {
             continue;
         }
-        // The caller holds the exclusive per-pack lock, so no scenario can
-        // acquire or use any sibling cache root while the probe and removal
-        // occur.
         if let CacheRelease::Removed = release_cache_root(&root, || Ok(()))? {
             removed.push(name.to_owned());
         }
@@ -277,6 +280,7 @@ pub enum CacheRelease {
     Retained(&'static str),
 }
 
+/// The caller holds [`lock_exclusive`] on `root.parent()`.
 fn release_cache_root(
     root: &std::path::Path,
     check_owner: impl FnOnce() -> Result<()>,
