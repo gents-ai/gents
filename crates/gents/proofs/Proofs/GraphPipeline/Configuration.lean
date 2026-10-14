@@ -1,6 +1,7 @@
 import Proofs.Configuration
 import Proofs.GraphPipeline
 import Proofs.Triggers.Groups
+import Proofs.ToolPolicy.PluginInvocation
 
 namespace GraphPipeline
 
@@ -115,6 +116,21 @@ theorem plugin_digest_substitution_denied (capabilities : String → Option Capa
     resolveStage capabilities registry installs caller capabilityId =
       .error .pluginDigestMismatch := by
   simp [resolveStage, resolvePlugin, hc, ha, ht, hi, hne]
+
+/-- The graph stage pin is the shared per-call plugin admission
+(`ToolPolicy.PluginInvocation.admitted`, owner `PluginExecutor::run`). -/
+theorem resolvePlugin_ok_iff_invocation_admitted
+    (installs : PluginInstalls) (node plugin digest : String)
+    (toRecord : String → ToolPolicy.PluginInvocation.Record)
+    (hdigest : ∀ d, (toRecord d).digest = d) :
+    (∃ e, resolvePlugin installs node plugin digest = .ok e) ↔
+      ToolPolicy.PluginInvocation.admitted ((installs node plugin).map toRecord) digest none = true := by
+  cases hi : installs node plugin with
+  | none => simp [resolvePlugin, ToolPolicy.PluginInvocation.admitted, hi]
+  | some installed =>
+    by_cases h : installed = digest
+    · simp [resolvePlugin, ToolPolicy.PluginInvocation.admitted, hi, hdigest, h]
+    · simp [resolvePlugin, ToolPolicy.PluginInvocation.admitted, hi, hdigest, h]
 
 /-- A graph edge's concurrency is admissible unless it is `latest_only`. On a
 per-document edge a `latest_only` trigger supersedes the same trigger's
