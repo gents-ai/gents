@@ -443,6 +443,18 @@ async fn pack_install_uses_current_node_and_inference_chain() {
             "verifier": "verifier:inference",
         })
     );
+    let graphs = node
+        .execute("{ GraphDefinition {graph_id} GraphRevision {digest} }")
+        .await;
+    assert!(!graphs.has_errors(), "{:?}", graphs.errors);
+    assert!(graphs.data.as_ref().unwrap()["GraphDefinition"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert!(graphs.data.as_ref().unwrap()["GraphRevision"]
+        .as_array()
+        .unwrap()
+        .is_empty());
     let inspected: Value = serde_json::from_str(
         &tool
             .call(json!({"argv": ["pack", "get", "fixture/plugin_documents_fixture"]}).to_string())
@@ -630,6 +642,7 @@ async fn graph_pack_install_writes_definition_and_revision() {
         .await
         .expect("a stored pack installs");
     let output: serde_json::Value = serde_json::from_str(&output).expect("JSON receipt");
+    assert_eq!(output["install"]["package_name"], "review_graph");
     assert_eq!(output["activation"]["graph_id"], "code-review");
     assert_eq!(
         output["activation"]["active_digest"],
