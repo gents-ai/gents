@@ -174,16 +174,16 @@ export function LocalServer() {
       </Row>
       <Row
         label="Desktop app"
-        description="Closing the window keeps controls in the menu bar. Quit Desktop closes only this frontend; the node keeps running."
+        description="Closing the window keeps controls in the menu bar. Quitting stops the local node unless background running is enabled."
       >
-        <Fact>Independent</Fact>
+        <Fact>{status?.autoStart ? "Runs in background" : "Stops on quit"}</Fact>
       </Row>
       <Row
-        label="Start at login"
-        description="Let your operating system—not the desktop app—start the node when you sign in. Stop node keeps this preference, so it may start again at your next login."
+        label="Keep running after quit"
+        description="Keep triggers, schedules and sync running after quitting, and start the node when you sign in. Stop node keeps this setting."
       >
         <Switch
-          aria-label="Start at login"
+          aria-label="Keep running after quit"
           checked={status?.autoStart ?? false}
           disabled={busy || !status}
           onCheckedChange={(on) =>

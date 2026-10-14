@@ -40,11 +40,24 @@ pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
                         "could not restart the agent service that predates this app"
                     );
                 }
+                if let Err(error) = tauri::async_runtime::block_on(
+                    tauri_commands::managed_server::start_configured_managed_server(
+                        &handle, &state,
+                    ),
+                ) {
+                    tracing::warn!(
+                        error = %error.message,
+                        "could not start the configured local node"
+                    );
+                }
             });
             Ok(())
         })
         .on_webview_ready(register_window)
         .on_event(|app, event| {
+            if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
+                crate::app_exit::requested(app, api, *code);
+            }
             if let tauri::RunEvent::WindowEvent { label, event, .. } = event {
                 app.state::<DesktopAppState>().window_event(label, event);
             }
