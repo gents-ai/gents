@@ -617,34 +617,44 @@ mod reload_tests {
         {
             let name = case["name"].as_str().expect("case name");
             let expected = case["accepted"].as_bool().expect("model decision");
-            let (store, _) = ObservedStore::new(requests(&["old"]));
+            let initial_ids: Vec<String> = case["initial_request_ids"]
+                .as_array()
+                .expect("modeled initial request IDs")
+                .iter()
+                .map(|id| id.as_str().expect("request ID").to_owned())
+                .collect();
+            let initial_refs: Vec<&str> = initial_ids.iter().map(String::as_str).collect();
+            let publish_ids: Vec<String> = case["publish_request_ids"]
+                .as_array()
+                .expect("modeled publication request IDs")
+                .iter()
+                .map(|id| id.as_str().expect("request ID").to_owned())
+                .collect();
+            let publish_refs: Vec<&str> = publish_ids.iter().map(String::as_str).collect();
+            let (store, _) = ObservedStore::new(requests(&initial_refs));
             let (captured, revision) = store.snapshot_with_revision();
-            match name {
-                "uncached_request_event_fences_old_read" => {
-                    store.observe_request_event();
+            for action in case["actions"].as_array().expect("modeled actions") {
+                match action.as_str().expect("publication action") {
+                    "request_event" => {
+                        store.observe_request_event();
+                    }
+                    "transcript_invalidation" => {
+                        store.invalidate_projection(false);
+                    }
+                    "replace_requests" => {
+                        store.replace_snapshot(requests(&[]));
+                    }
+                    other => panic!("unrecognized modeled publication action {other}"),
                 }
-                "transcript_invalidation_preserves_read" => {
-                    store.invalidate_projection(false);
-                }
-                "newer_data_publication_rejects_old_read" => {
-                    store.replace_snapshot(requests(&[]));
-                }
-                other => panic!("unrecognized modeled publication case {other}"),
             }
             let published = store
                 .merge_chat_patch_at_snapshot(
                     &captured,
                     revision.request_event_version,
-                    requests(&["old"]),
+                    requests(&publish_refs),
                 )
                 .is_some();
             assert_eq!(published, expected, "modeled case {name}");
-            if name == "newer_data_publication_rejects_old_read" {
-                assert!(
-                    store.snapshot().requests.is_empty(),
-                    "deletion must stay published"
-                );
-            }
         }
     }
 
@@ -656,54 +666,95 @@ mod reload_tests {
         .expect("generated ClientDataPublication cases");
         for case in fixture["recovery"].as_array().expect("recovery cases") {
             let name = case["name"].as_str().expect("case name");
-            let retry_scheduled = case["retry_scheduled"]
-                .as_bool()
-                .expect("modeled retry deadline state");
-            let now = tokio::time::Instant::now();
-            let deadline = now + std::time::Duration::from_millis(1);
-            assert_eq!(
-                super::super::resync_retry_ready(retry_scheduled.then_some(deadline), now),
-                !retry_scheduled,
-                "observer retry gate for modeled recovery case {name}"
-            );
-            assert!(
-                super::super::resync_retry_ready(retry_scheduled.then_some(deadline), deadline),
-                "timer releases observer retry gate for modeled recovery case {name}"
-            );
             let expected_scopes: Vec<String> = case["pending_scopes"]
                 .as_array()
                 .expect("modeled pending scopes")
                 .iter()
                 .map(|scope| format!("scope-{}", scope.as_u64().expect("scope id")))
                 .collect();
+            let expected_generation = case["generation"].as_u64().expect("model generation");
+            let expected_full = case["full"].as_bool().expect("modeled full-reload state");
+            let retry_scheduled = case["retry_scheduled"]
+                .as_bool()
+                .expect("modeled retry deadline state");
+            assert_eq!(case["initial"]["full"].as_bool(), Some(false));
+            assert!(case["initial"]["pending_scopes"]
+                .as_array()
+                .expect("modeled initial scopes")
+                .is_empty());
+            assert_eq!(case["initial"]["generation"].as_u64(), Some(0));
+            assert_eq!(case["initial"]["retry_scheduled"].as_bool(), Some(false));
             let (store, _) = ObservedStore::new(ClientStore::default());
             let mut wake = store.subscribe_resync_requests();
-            for scope in ["scope-1", "scope-2", "scope-3"] {
-                store.request_resync(Some(scope));
-            }
-            wake.changed().await.expect("initial batch notification");
-            let (full, in_flight) = store.take_resync_requests();
-            assert!(!full);
-            assert_eq!(in_flight.len(), 3);
-            let generation = *wake.borrow_and_update();
-
-            // The first in-flight scope failed; it and all unprocessed scopes
-            // are requeued without notifying the observer to retry immediately.
-            for scope in [&in_flight[0], &in_flight[1], &in_flight[2]] {
-                store.enqueue_resync_request(Some(scope));
-            }
-            if name == "new_scope_during_retry_is_retained" {
-                store.request_resync(Some("scope-4"));
-                assert!(wake.has_changed().expect("watch remains open"));
-            } else {
-                assert!(!wake.has_changed().expect("watch remains open"));
+            assert_eq!(
+                *wake.borrow(),
+                case["initial"]["generation"].as_u64().unwrap()
+            );
+            let mut in_flight = Vec::new();
+            let mut observed_generation = 0;
+            let mut batch_taken = false;
+            let mut retry_not_before = None;
+            let now = tokio::time::Instant::now();
+            for action in case["actions"]
+                .as_array()
+                .expect("modeled recovery actions")
+            {
+                match action["op"].as_str().expect("recovery action op") {
+                    "request_scope" if batch_taken => {
+                        let scope =
+                            format!("scope-{}", action["scope"].as_u64().expect("modeled scope"));
+                        store.request_resync(Some(&scope));
+                        assert!(wake.has_changed().expect("watch remains open"));
+                        observed_generation = *wake.borrow_and_update();
+                    }
+                    "request_scope" => {
+                        let scope =
+                            format!("scope-{}", action["scope"].as_u64().expect("modeled scope"));
+                        store.request_resync(Some(&scope));
+                    }
+                    "take_batch" => {
+                        wake.changed().await.expect("initial batch notification");
+                        let (full, batch) = store.take_resync_requests();
+                        assert_eq!(full, case["initial"]["full"].as_bool().unwrap());
+                        in_flight = batch;
+                        observed_generation = *wake.borrow_and_update();
+                        batch_taken = true;
+                    }
+                    "fail_batch" => {
+                        let failed_scopes =
+                            action["scopes"].as_array().expect("modeled failed scopes");
+                        for scope in failed_scopes {
+                            let scope =
+                                format!("scope-{}", scope.as_u64().expect("modeled failed scope"));
+                            assert!(in_flight.contains(&scope), "failed scope was not in flight");
+                            store.enqueue_resync_request(Some(&scope));
+                        }
+                        assert!(!wake.has_changed().expect("watch remains open"));
+                        assert_eq!(*wake.borrow(), observed_generation);
+                        retry_not_before = Some(now + std::time::Duration::from_millis(1));
+                    }
+                    "retry_timer" => {
+                        retry_not_before = None;
+                    }
+                    other => panic!("unrecognized modeled recovery action {other}"),
+                }
             }
             assert_eq!(
                 *wake.borrow(),
-                generation + u64::from(name == "new_scope_during_retry_is_retained")
+                expected_generation,
+                "model generation {name}"
             );
+            assert_eq!(
+                super::super::resync_retry_ready(retry_not_before, now),
+                !retry_scheduled,
+                "observer retry gate for modeled recovery actions {name}"
+            );
+            if retry_scheduled {
+                let deadline = retry_not_before.expect("failed batch has a retry deadline");
+                assert!(super::super::resync_retry_ready(Some(deadline), deadline));
+            }
             let (full, pending) = store.take_resync_requests();
-            assert!(!full);
+            assert_eq!(full, expected_full);
             assert_eq!(pending, expected_scopes, "modeled recovery case {name}");
         }
     }

@@ -242,6 +242,9 @@ def requestScope (r : Recovery) (scope : Nat) : Recovery :=
 def requestFull (r : Recovery) : Recovery :=
   { r with full := true, pendingScopes := [], generation := r.generation + 1 }
 
+def takeBatch (r : Recovery) : Recovery × List Nat :=
+  ({ r with pendingScopes := [] }, r.pendingScopes)
+
 /-- A failed batch retains the failed and not-yet-processed scopes. It schedules
 the existing observer timer without publishing another wake notification. -/
 def failBatch (r : Recovery) (remainingScopes : List Nat) : Recovery :=
