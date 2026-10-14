@@ -8,8 +8,9 @@
 //! committed transaction persists every write in the callback, an injected
 //! error after the first write persists neither, a failed second mutation
 //! persists neither when the caller propagates the error, and a duplicate
-//! unique-indexed key errors with "violates unique index" and, when the
-//! caller propagates that error, none of the transaction's writes persists.
+//! key on a single-field or a composite unique index errors with "violates
+//! unique index" and, when the caller propagates that error, none of the
+//! transaction's writes persists.
 //! An independent normal read is also sampled while the first write remains
 //! uncommitted; a blocked read is permitted, but a partial pair is not.
 //! No claim is made about host crash durability or remote P2P merge, and
@@ -27,11 +28,12 @@ use std::task::Poll;
 use std::time::Duration;
 use tokio::sync::watch;
 
-const ATOMICITY_SCHEMA: &str = "
+const ATOMICITY_SCHEMA: &str = r#"
 type TxnAtomicityLeft { label: String amount: Int }
 type TxnAtomicityRight { label: String amount: Int }
 type TxnAtomicityUnique { key: String @index(unique: true) label: String }
-";
+type TxnAtomicityNote @index(fields: ["chain_root_doc_id", "note_id"], unique: true) { chain_root_doc_id: String note_id: String label: String }
+"#;
 
 /// Disposable node with only the minimal atomicity schema installed.
 async fn disposable_node() -> Result<Arc<EmbeddedNode>> {
@@ -323,6 +325,17 @@ fn write_unique(key: &str, label: &str) -> String {
     )
 }
 
+/// `label` is outside the index so rows sharing the key pair still get
+/// distinct docIDs; only the composite unique index can reject them.
+fn write_note(chain_root_doc_id: &str, note_id: &str, label: &str) -> String {
+    format!(
+        r#"mutation {{ create_TxnAtomicityNote(input: {{ chain_root_doc_id: "{}", note_id: "{}", label: "{}" }}) {{ _docID }} }}"#,
+        escape_graphql_string(chain_root_doc_id),
+        escape_graphql_string(note_id),
+        escape_graphql_string(label)
+    )
+}
+
 /// Read the key inside the transaction and insert it only when absent.
 async fn read_then_insert_unique(txn: &ConfigApplyTxn<'_>, key: &str) -> Result<bool> {
     let read = ensure_no_errors(
@@ -380,6 +393,66 @@ async fn duplicate_unique_key_errors_and_propagated_error_rolls_back() -> Result
     );
     assert_eq!(collection_count(&node, "TxnAtomicityLeft").await?, 0);
     assert_eq!(collection_count(&node, "TxnAtomicityUnique").await?, 0);
+    Ok(())
+}
+
+/// The composite form of the premise above, on the same pinned DefraDB rev:
+/// a duplicate insert on the composite `(chain_root_doc_id, note_id)` unique
+/// index errors with "violates unique index", and the error, propagated out
+/// of `transact_local`, rolls back the transaction, so neither its earlier
+/// writes nor the duplicate persists. Rows that share only one of the two
+/// fields are accepted.
+#[tokio::test]
+async fn duplicate_composite_note_key_errors_and_propagated_error_rolls_back() -> Result<()> {
+    let node = disposable_node().await?;
+
+    ConfigAccess::transact_local(
+        &node,
+        None,
+        "txn_atomicity_seed_composite_notes",
+        |txn: &ConfigApplyTxn<'_>| {
+            Box::pin(async move {
+                ensure_no_errors(txn.execute(&write_note("root-a", "note-1", "seed")).await?)?;
+                ensure_no_errors(txn.execute(&write_note("root-a", "note-2", "seed")).await?)?;
+                ensure_no_errors(txn.execute(&write_note("root-b", "note-1", "seed")).await?)?;
+                Ok(())
+            })
+        },
+    )
+    .await?;
+    assert_eq!(collection_count(&node, "TxnAtomicityNote").await?, 3);
+
+    let outcome: Result<()> = ConfigAccess::transact_local(
+        &node,
+        None,
+        "txn_atomicity_composite_violation",
+        |txn: &ConfigApplyTxn<'_>| {
+            Box::pin(async move {
+                ensure_no_errors(txn.execute(&write_left("composite-abort", 1)).await?)?;
+                ensure_no_errors(
+                    txn.execute(&write_note("root-c", "note-1", "fresh"))
+                        .await?,
+                )?;
+                ensure_no_errors(
+                    txn.execute(&write_note("root-a", "note-1", "duplicate"))
+                        .await?,
+                )?;
+                Ok(())
+            })
+        },
+    )
+    .await;
+
+    let error = format!(
+        "{:#}",
+        outcome.expect_err("a duplicate composite-key insert must fail")
+    );
+    assert!(
+        error.contains("violates unique index"),
+        "the composite unique index must reject the duplicate pair: {error}"
+    );
+    assert_eq!(collection_count(&node, "TxnAtomicityLeft").await?, 0);
+    assert_eq!(collection_count(&node, "TxnAtomicityNote").await?, 3);
     Ok(())
 }
 
