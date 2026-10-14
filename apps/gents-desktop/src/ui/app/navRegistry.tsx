@@ -8,13 +8,18 @@
    referentially stable until a mutation so useSyncExternalStore does not
    loop. */
 import { useSyncExternalStore, type ReactNode } from "react";
-import { pathFor, type Route } from "@/lib/router";
+import type { Route } from "@/lib/router";
 import { registry } from "@/contrib/registry";
 import { NAV_AREA, type Contribution } from "@/contrib/types";
 
-/** what an item's badge may be derived from; extend as badge sources appear */
+/** what a row's destination and badge may be derived from: the shell's
+    current selection, read at render time, so a plugin's row can point at
+    the selected agent without knowing it when it registered */
 export interface NavContext {
   mailboxCount: number;
+  /** the selected node's agent, or the first while nothing is selected;
+      null before there is one */
+  selectedAgentDid: string | null;
 }
 
 export interface NavItem {
@@ -22,7 +27,9 @@ export interface NavItem {
   id: string;
   label: string;
   icon: ReactNode;
-  to: Route;
+  /** where the row goes: a route, or a function of the current context
+      (null while there is nowhere to go, which hides the row) */
+  to: Route | ((ctx: NavContext) => Route | null);
   /** whether the row is the current place; a row may own several route shapes */
   active: (route: Route) => boolean;
   /** a count badge; omit or return 0 for none */
@@ -34,9 +41,32 @@ export interface NavItem {
   order?: number;
 }
 
+/* a route the router knows: the shape `to` must resolve to. The union is
+   closed in @gents/shell, and pathFor prints any name, so the names and
+   their required fields are checked here. */
+function isRoute(value: unknown): value is Route {
+  if (typeof value !== "object" || value === null) return false;
+  const route = value as Partial<Record<string, unknown>>;
+  switch (route.name) {
+    case "sessions":
+    case "mailbox":
+    case "nodes":
+    case "agents":
+      return true;
+    case "session":
+      return route.sessionId === null || typeof route.sessionId === "string";
+    case "agent":
+      return typeof route.agentDid === "string" && typeof route.section === "string";
+    case "plugin":
+      return typeof route.pluginId === "string";
+    default:
+      return false;
+  }
+}
+
 /* the whole payload, so one bad row is dropped here rather than thrown
-   from the Rail: a label, a route pathFor can print, a predicate, a
-   placement, and a badge that is a function if it is anything */
+   from the Rail: a label, a route (or a function that yields one), a
+   predicate, a placement, and a badge that is a function if it is anything */
 function isNavItem(data: unknown): data is NavItem {
   if (typeof data !== "object" || data === null) return false;
   const item = data as Partial<NavItem>;
@@ -44,28 +74,26 @@ function isNavItem(data: unknown): data is NavItem {
   if (typeof item.active !== "function") return false;
   if (item.placement !== "primary" && item.placement !== "footer") return false;
   if (item.count !== undefined && typeof item.count !== "function") return false;
-  if (
-    typeof item.to !== "object" ||
-    item.to === null ||
-    typeof item.to.name !== "string"
-  )
-    return false;
-  try {
-    return typeof pathFor(item.to) === "string";
-  } catch {
-    return false;
-  }
+  return typeof item.to === "function" || isRoute(item.to);
 }
 
 /** a row's live state, with the plugin's predicates kept to themselves:
-    a throw reads as inactive / no badge, and is logged once per call */
+    a throw reads as inactive / no badge / nowhere to go, and is logged once
+    per call. `to` is null when the row has nowhere to go right now. */
 export function navRowState(
   item: NavItem,
   route: Route,
   ctx: NavContext,
-): { active: boolean; count: number | undefined } {
+): { to: Route | null; active: boolean; count: number | undefined } {
+  let to: Route | null = null;
   let active = false;
   let count: number | undefined;
+  try {
+    const resolved = typeof item.to === "function" ? item.to(ctx) : item.to;
+    if (isRoute(resolved)) to = resolved;
+  } catch (error) {
+    console.error(`[ux-plugins] nav:${item.id} to() threw`, error);
+  }
   try {
     active = item.active(route) === true;
   } catch (error) {
@@ -77,7 +105,7 @@ export function navRowState(
   } catch (error) {
     console.error(`[ux-plugins] nav:${item.id} count() threw`, error);
   }
-  return { active, count };
+  return { to, active, count };
 }
 
 export function registerNavItem(item: NavItem): () => void {

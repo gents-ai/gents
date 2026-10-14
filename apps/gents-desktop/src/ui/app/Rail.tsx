@@ -7,7 +7,7 @@ import { AgentAvatar } from "@/screens/AgentAvatar";
 import { AgentHoverCard } from "@/screens/HoverCards";
 import { FlyoutOpenContext } from "./RailFlyout";
 import { SyncHealth } from "./SyncHealth";
-import { navRowState, useNavItems, type NavItem } from "./navRegistry";
+import { navRowState, useNavItems, type NavContext, type NavItem } from "./navRegistry";
 import { ContribBoundary } from "@/contrib/react/boundary";
 import {
   useMailboxCount,
@@ -128,16 +128,22 @@ function RailSyncDot() {
     contributes follow the app's own in each group. */
 export function Rail({ route, settings }: { route: Route; settings: ReactNode }) {
   const mailboxCount = useMailboxCount();
+  const selected = useSelectedNode();
   const primary = useNavItems("primary");
   const footer = useNavItems("footer");
-  const navContext = { mailboxCount };
+  const navContext: NavContext = {
+    mailboxCount,
+    selectedAgentDid: selected?.agentDid ?? null,
+  };
   /* a row a UX plugin contributed: its predicates are evaluated apart and
-     its icon drawn behind a boundary, so one bad row costs that row */
+     its icon drawn behind a boundary, so one bad row costs that row; a row
+     with nowhere to go right now is not drawn */
   const contributed = (item: NavItem) => {
-    const { active, count } = navRowState(item, route, navContext);
+    const { to, active, count } = navRowState(item, route, navContext);
+    if (!to) return null;
     return (
       <ContribBoundary key={item.id} id={item.id} variant="chip">
-        <RailItem label={item.label} to={item.to} active={active} count={count}>
+        <RailItem label={item.label} to={to} active={active} count={count}>
           {item.icon}
         </RailItem>
       </ContribBoundary>

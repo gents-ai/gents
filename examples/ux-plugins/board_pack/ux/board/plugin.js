@@ -207,7 +207,9 @@ export default {
           id: 'board:nav',
           label: 'Board',
           icon: null,
-          to: { name: 'agents' },
+          /* the selected agent's Board tab; the row waits until there is one */
+          to: ({ selectedAgentDid }) =>
+            selectedAgentDid ? { name: 'agent', agentDid: selectedAgentDid, section: 'board:page' } : null,
           active: (route) => route.name === 'agent' && route.section === 'board:page',
           placement: 'footer',
           order: 60,

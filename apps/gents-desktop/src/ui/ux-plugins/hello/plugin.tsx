@@ -76,8 +76,11 @@ const plugin: GentsUxPlugin = {
           id: "hello:nav",
           label: "Hello",
           icon: <Sparkles className="size-4" />,
-          to: { name: "agents" },
-          active: () => false,
+          to: ({ selectedAgentDid }) =>
+            selectedAgentDid
+              ? { name: "agent", agentDid: selectedAgentDid, section: "hello:page" }
+              : null,
+          active: (route) => route.name === "agent" && route.section === "hello:page",
           placement: "footer",
           order: 90,
         } satisfies NavItem,

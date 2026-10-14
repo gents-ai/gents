@@ -18,13 +18,14 @@ import type { NavMode } from "@/preferences";
 import { AgentAvatar } from "@/screens/AgentAvatar";
 import { SessionStatus } from "@/screens/SessionStatus";
 import { SyncHealth } from "./SyncHealth";
-import { navRowState, useNavItems, type NavItem } from "./navRegistry";
+import { navRowState, useNavItems, type NavContext, type NavItem } from "./navRegistry";
 import { ContribBoundary } from "@/contrib/react/boundary";
 import {
   useMailboxCount,
   useNodeCount,
   useOnline,
   useRecentSessions,
+  useSelectedNode,
   useSyncHealth,
   useWorkingNode,
 } from "@/hooks/useClient";
@@ -86,17 +87,23 @@ export function NavPanel({
   const working = useWorkingNode();
   const nodeCount = useNodeCount();
   const syncHealth = useSyncHealth();
+  const selected = useSelectedNode();
   const primary = useNavItems("primary");
   const footer = useNavItems("footer");
-  const navContext = { mailboxCount };
+  const navContext: NavContext = {
+    mailboxCount,
+    selectedAgentDid: selected?.agentDid ?? null,
+  };
   /* a row a UX plugin contributed, drawn like the app's own; its
      predicates are evaluated apart and its icon drawn behind a boundary,
-     so one bad row costs that row */
+     so one bad row costs that row; a row with nowhere to go right now is
+     not drawn */
   const contributed = (item: NavItem) => {
-    const { active, count } = navRowState(item, route, navContext);
+    const { to, active, count } = navRowState(item, route, navContext);
+    if (!to) return null;
     return (
       <ContribBoundary key={item.id} id={item.id} variant="chip">
-        <Item to={href(item.to)} active={active} count={count} icon={item.icon}>
+        <Item to={href(to)} active={active} count={count} icon={item.icon}>
           {item.label}
         </Item>
       </ContribBoundary>

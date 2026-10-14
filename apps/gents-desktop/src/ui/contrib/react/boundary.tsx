@@ -3,7 +3,13 @@
    the surface around it keeps working. Class component by necessity: React
    only exposes error boundaries through lifecycle methods. After
    hermes-agent's contrib/react/boundary.tsx. */
-import { Component, createElement, type ErrorInfo, type ReactNode } from "react";
+import {
+  Component,
+  createElement,
+  useMemo,
+  type ErrorInfo,
+  type ReactNode,
+} from "react";
 import { TriangleAlert } from "lucide-react";
 
 interface ContribBoundaryProps {
@@ -78,8 +84,22 @@ export class ContribBoundary extends Component<
   }
 }
 
-/* mount a render callback as a component so its hooks and errors belong to
-   the contribution, not to whichever surface happened to call it */
-export function ContribRender({ render }: { render: () => ReactNode }) {
-  return createElement(render);
+/* mount a contribution's render function as a component so its hooks and
+   errors belong to the contribution, not to whichever surface called it.
+   The component type is fixed per render function: a surface that
+   re-renders (a node's status moved, the route gained an item) passes new
+   props to the same mounted page, instead of unmounting it as a new type
+   would, which reset every draft and every in-flight fetch. */
+export function ContribRender<P extends object>({
+  render,
+  props,
+}: {
+  render: (props: P) => ReactNode;
+  props?: P;
+}) {
+  const Mounted = useMemo(() => {
+    const Contributed = (p: P) => render(p);
+    return Contributed;
+  }, [render]);
+  return createElement(Mounted, props ?? ({} as P));
 }

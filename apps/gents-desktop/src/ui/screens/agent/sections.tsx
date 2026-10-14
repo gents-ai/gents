@@ -204,10 +204,12 @@ function contributedSection(id: string, data: AgentSectionData): AgentSection {
     icon: iconOf(data.icon),
     Panel: ({ deployment, item }) => (
       <ContribBoundary id={id} variant="pane">
-        {/* mounted as a component, so a throw in the page's render is the
-            boundary's to catch and its hooks are its own */}
+        {/* the plugin's own render function, mounted once per registration:
+            a throw is the boundary's to catch, its hooks are its own, and the
+            screen's re-renders reach it as new props */}
         <ContribRender
-          render={() => data.render({ agentDid: deployment.agentDid, item })}
+          render={data.render}
+          props={{ agentDid: deployment.agentDid, item }}
         />
       </ContribBoundary>
     ),

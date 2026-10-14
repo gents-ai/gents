@@ -2,9 +2,14 @@
    rows (New session, Mailbox, Sessions, Nodes) are placed by hand in Rail
    and NavPanel, so the registry starts empty and the contract under test
    is ordering, replacement and disposal. */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { navItems, registerNavItem, type NavItem } from "@/app/navRegistry";
+import {
+  navItems,
+  navRowState,
+  registerNavItem,
+  type NavItem,
+} from "@/app/navRegistry";
 import { createUxContext } from "@/contrib/plugin";
 import { NAV_AREA } from "@/contrib/types";
 import type { Route } from "@/lib/router";
@@ -57,6 +62,42 @@ describe("nav registry", () => {
     ctx.register({ id: "nav", area: NAV_AREA, data: make("dup") });
     other.register({ id: "nav", area: NAV_AREA, data: make("dup") });
     expect(navItems().map((item) => item.id)).toEqual(["acme:nav", "beta:nav"]);
+  });
+
+  it("resolves a row's destination from the context, hiding one with nowhere to go", () => {
+    disposers.push(
+      registerNavItem(
+        make("ctx", {
+          to: (ctx) =>
+            ctx.selectedAgentDid ? { ...agent, agentDid: ctx.selectedAgentDid } : null,
+        }),
+      ),
+    );
+    disposers.push(
+      registerNavItem(
+        make("throws", {
+          to: () => {
+            throw new Error("no");
+          },
+        }),
+      ),
+    );
+    disposers.push(
+      registerNavItem(make("bad", { to: () => ({ name: "nowhere" }) as never })),
+    );
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const route: Route = { name: "sessions" };
+    const none = { mailboxCount: 0, selectedAgentDid: null };
+    expect(navRowState(byId("ctx"), route, none).to).toBeNull();
+    expect(
+      navRowState(byId("ctx"), route, { ...none, selectedAgentDid: "did:x" }).to,
+    ).toEqual({
+      ...agent,
+      agentDid: "did:x",
+    });
+    expect(navRowState(byId("throws"), route, none).to).toBeNull();
+    expect(navRowState(byId("bad"), route, none).to).toBeNull();
+    expect(navRowState(byId("ctx"), agent, none).active).toBe(false);
   });
 
   it("keeps a row's active predicate, badge and placement", () => {
