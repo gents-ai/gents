@@ -17,7 +17,7 @@ import {
   describeManagedServerWait,
   managedServerWaitKind,
 } from "../../../lib/managedServerStartup";
-import { Fact, Group, Row, StackedRow } from "./rows";
+import { Fact, Group, PathFact, Row, StackedRow } from "./rows";
 import { useApp } from "@/app/AppContext";
 import { ManagedRuntimeUnavailableError } from "../../../lib/managedRuntimeReadiness";
 import { useStartup } from "@/hooks/useClient";
@@ -208,7 +208,11 @@ export function LocalServer() {
             within it rather than spill over the description */}
         <div className="grid justify-items-end gap-1 text-right *:max-w-full max-md:justify-items-start max-md:text-left md:max-w-1/2 md:shrink-0">
           <Fact>{status?.effectiveToolCeiling ?? "—"}</Fact>
-          <Fact mono>{status?.effectiveToolRoot ?? "No host path"}</Fact>
+          {status?.effectiveToolRoot ? (
+            <PathFact path={status.effectiveToolRoot} local />
+          ) : (
+            <Fact mono>No host path</Fact>
+          )}
           {running && status?.state !== "external" ? (
             <Button size="sm" variant="outline" onClick={beginAuthorityEdit}>
               Change access…

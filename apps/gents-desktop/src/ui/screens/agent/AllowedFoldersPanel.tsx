@@ -2,6 +2,8 @@
    path (for example "read ~/Documents/x.pdf"). The session's working folder
    is always readable; a path elsewhere is asked about, or refused in a
    graph, unless its folder is listed here. */
+import { shortPath } from "@/lib/paths";
+import { useHomeFolder } from "@/hooks/useHomeFolder";
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@gents/ui/components/button";
 import { Input } from "@gents/ui/components/input";
@@ -22,6 +24,8 @@ const ACCESS_LABEL: Record<AllowedFolderAccess, string> = {
 
 export function AllowedFoldersPanel() {
   const { actions } = useApp();
+  /* the desktop's own approvals: paths on this computer */
+  const home = useHomeFolder();
   const [folders, setFolders] = useState<AllowedFolders | null>(null);
   const [typed, setTyped] = useState("");
   const [busy, setBusy] = useState(false);
@@ -66,7 +70,14 @@ export function AllowedFoldersPanel() {
           />
         )}
         {folders?.dirs.map((folder) => (
-          <Row key={folder.path} label={folder.path}>
+          <Row
+            key={folder.path}
+            label={
+              <span title={folder.path}>
+                {shortPath(folder.path, { home, max: 48 })}
+              </span>
+            }
+          >
             <div className="flex gap-2">
               <Button
                 size="sm"

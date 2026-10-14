@@ -2,6 +2,7 @@
    opener and the shell's own commands. It is the only app module that
    imports Tauri; the bridge's commands go through the client package. */
 import { invoke } from "@tauri-apps/api/core";
+import { homeDir } from "@tauri-apps/api/path";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 /** Whether the app runs in the desktop shell rather than a plain browser. */
@@ -96,6 +97,12 @@ export async function pickDirectory(options: {
     title: options.title,
   });
   return typeof picked === "string" ? picked : null;
+}
+
+/** This computer's home folder; null without the shell. */
+export async function homeFolder(): Promise<string | null> {
+  if (!inNativeShell()) return null;
+  return homeDir();
 }
 
 export async function revealInFolder(path: string): Promise<void> {

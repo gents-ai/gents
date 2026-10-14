@@ -26,6 +26,8 @@ import { ManagedRuntimeAuthorityPicker } from "@/components/ManagedRuntimeAuthor
 import { authoritiesEqual, authorityForSelection } from "@/lib/managedRuntimeAuthority";
 import { useApp } from "@/app/AppContext";
 import { useBootstrap, useStartup } from "@/hooks/useClient";
+import { useHomeFolder } from "@/hooks/useHomeFolder";
+import { shortPath } from "@/lib/paths";
 import { Field, Frame, Nav, Option, Title } from "./parts";
 import { InferenceSetup } from "./InferenceSetup";
 import { nodeSetUp } from "@/lib/firstRun";
@@ -145,6 +147,7 @@ export function OnboardingWizard({
   provider?: ProviderId;
 }) {
   const bootstrap = useBootstrap();
+  const home = useHomeFolder();
   const { stores, actions } = useApp();
   const { initLocalRuntime, refreshSnapshot, changeConfig } = actions;
   const { diagnosticsHint } = useStartup();
@@ -432,6 +435,12 @@ export function OnboardingWizard({
                   )}
                 </div>
               )}
+              <p className="break-all text-xs text-muted-foreground">
+                Node data:{" "}
+                <span className="font-mono" title={root}>
+                  {shortPath(root, { home })}
+                </span>
+              </p>
               {existingHome ? (
                 <p className="text-xs text-muted-foreground">
                   Found an existing Gents home

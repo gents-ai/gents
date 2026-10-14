@@ -18,14 +18,25 @@ import { agentReadiness } from "@/lib/agent-readiness";
 import { access, agentName, bashAccess, fileAccess, network } from "./behavior";
 import { agentOf, backendOf } from "@/lib/agents";
 import { ProviderLogo } from "./ProviderLogo";
-import { useHomeDid, useToolAuthority } from "@/hooks/useClient";
-import { isWorkingNode } from "@/lib/nodes";
+import { useNodeReach } from "@/hooks/useClient";
+import { useHomeFolder } from "@/hooks/useHomeFolder";
+import { shortPath } from "@/lib/paths";
 
-function Line({ label, children }: { label: string; children: React.ReactNode }) {
+function Line({
+  label,
+  title,
+  children,
+}: {
+  label: string;
+  title?: string;
+  children: React.ReactNode;
+}) {
   return (
     <>
       <dt className="text-muted-foreground">{label}</dt>
-      <dd className="min-w-0 truncate text-foreground">{children}</dd>
+      <dd title={title} className="min-w-0 truncate text-foreground">
+        {children}
+      </dd>
     </>
   );
 }
@@ -37,17 +48,13 @@ const shortDid = (did: string) =>
    with are its own node's; any other node says it through its default
    agent's environment. */
 function NodeReach({ deployment }: { deployment: NodeView }) {
-  const homeDid = useHomeDid();
-  const own = useToolAuthority();
-  const { root, ceiling } = isWorkingNode(deployment, homeDid)
-    ? own
-    : { root: null, ceiling: null };
-  const env =
-    deployment.agentEnvironments.find((e) => e.isDefault) ??
-    deployment.agentEnvironments[0];
+  const { local, root, ceiling, env } = useNodeReach(deployment);
+  const home = useHomeFolder();
   return (
     <>
-      <Line label="Can touch">{root ?? env?.workspaceRoot ?? "—"}</Line>
+      <Line label="Can touch" title={root ?? undefined}>
+        {root ? shortPath(root, { home: local ? home : null, max: 40 }) : "—"}
+      </Line>
       <Line label="At most">
         {ceiling ? access(ceiling) : env ? access(env.fileAccess) : "—"}
         {env ? `, ${network(env.networkAccess)}` : ""}
