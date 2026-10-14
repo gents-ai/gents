@@ -207,18 +207,21 @@ export function OpenSession() {
                     className="max-md:hidden"
                   />
                 )}
-                {/* the meter rides up with the header, next to the menu */}
+                {/* Hidden, the meter gives back its width and gap; condensed,
+                    it opens into that space without shifting the menu. */}
                 {session?.context && (
                   <div
                     aria-hidden={!condensed}
                     className={cn(
-                      "flex shrink-0 items-center transition-[opacity,transform] duration-150 ease-out",
+                      "grid shrink-0 transition-[grid-template-columns,margin,opacity,transform] duration-150 ease-out",
                       condensed
-                        ? "translate-y-0 opacity-100"
-                        : "pointer-events-none translate-y-1 opacity-0",
+                        ? "ml-0 translate-y-0 grid-cols-[1fr] opacity-100"
+                        : "pointer-events-none -ml-2 translate-y-1 grid-cols-[0fr] opacity-0",
                     )}
                   >
-                    <SessionContext context={session.context} compact />
+                    <div className="flex min-w-0 items-center overflow-hidden">
+                      <SessionContext context={session.context} compact />
+                    </div>
                   </div>
                 )}
                 <PanelMenu routeName="session" />
