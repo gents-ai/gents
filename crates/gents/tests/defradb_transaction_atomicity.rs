@@ -1,7 +1,9 @@
 //! Bounded native external-premise experiment: real multi-document
 //! transaction atomicity against the pinned embedded DefraDB node, through
-//! `ConfigAccess::transact_local_write`. Commit/rollback evidence only:
-//! no claim about host crash durability or remote P2P merge. A blocked
+//! `ConfigAccess::transact_local_write`. Commit/rollback evidence only,
+//! including that a duplicate unique-indexed key fails the transaction and
+//! persists none of its writes when the caller propagates the error: no
+//! claim about host crash durability or remote P2P merge. A blocked
 //! outside read is permitted; a partial pair is not.
 
 use anyhow::{bail, Context, Result};
