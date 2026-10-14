@@ -3,7 +3,7 @@ import Proofs.Conformance.Contracts.Json.Helpers
 
 namespace Conformance.LogicalOutputObligationContracts
 open CompletionRetry.OutputObligation CompletionRetry.OutputObligation.Logical
-open GraphPipeline.LogicalInvocation Conformance.Contracts
+open GoalAutomation.RequestAncestry Conformance.Contracts
 
 structure Case where
   name : String
