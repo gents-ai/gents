@@ -2,7 +2,6 @@
    method, then a sign-in for a subscription or a key and endpoint, and the
    way on to its models. */
 import type { Dispatch } from "react";
-import { CircleCheck } from "lucide-react";
 import type {
   InferenceAuthMethod,
   InferenceProviderOption,
@@ -128,13 +127,11 @@ export function ConnectionFields({
               /* the action sits where Sign in does before connecting, so
                  the row keeps its shape across the two states */
               <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
-                <p className="flex min-w-0 items-center gap-2">
-                  <CircleCheck className="size-4 shrink-0" />
-                  <span className="truncate">
-                    {connectedAccount?.accountId || connectedAccount?.label
-                      ? `Connected as ${connectedAccount.accountId || connectedAccount.label}`
-                      : "Account connected"}
-                  </span>
+                {/* no mark of its own: the provider's selected mark above says it */}
+                <p className="min-w-0 truncate">
+                  {connectedAccount?.accountId || connectedAccount?.label
+                    ? `Connected as ${connectedAccount.accountId || connectedAccount.label}`
+                    : "Account connected"}
                 </p>
                 {/* a way to a different login, not account management: that
                     lives on the agent's account rows */}
