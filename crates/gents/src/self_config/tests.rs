@@ -680,14 +680,14 @@ async fn config_call(
 
 #[tokio::test]
 async fn pack_list_pages_the_packs_the_home_store_holds() {
-    let (_home, plugins) = crate::test_support::home_with_fixture_pack("review_graph");
+    let (_home, plugins) = crate::test_support::home_with_fixture_pack("documents_fixture");
     let (_node, _did, tools) = pack_tool("pack-list", plugins).await;
     let page: Value =
         serde_json::from_str(&config_call(&tools, &["pack", "list"]).await.unwrap()).unwrap();
     assert_eq!(page["source"], "store");
     assert_eq!(page["page"]["total"], 1);
     assert_eq!(page["page"]["truncated"], false);
-    assert_eq!(page["items"][0]["name"], "fixture/review_graph");
+    assert_eq!(page["items"][0]["name"], "fixture/documents_fixture");
     assert_eq!(page["items"][0]["version"], "1.0.0");
     assert_eq!(page["items"][0]["installable"], true);
     assert_eq!(page["items"][0]["installed"], Value::Null);
@@ -696,7 +696,7 @@ async fn pack_list_pages_the_packs_the_home_store_holds() {
     let after: Value = serde_json::from_str(
         &config_call(
             &tools,
-            &["pack", "list", "--cursor", "fixture/review_graph"],
+            &["pack", "list", "--cursor", "fixture/documents_fixture"],
         )
         .await
         .unwrap(),
@@ -719,7 +719,7 @@ async fn pack_list_pages_the_packs_the_home_store_holds() {
 
 #[tokio::test]
 async fn pack_list_reports_a_damaged_archive_as_an_error_row() {
-    let (home, plugins) = crate::test_support::home_with_fixture_pack("review_graph");
+    let (home, plugins) = crate::test_support::home_with_fixture_pack("documents_fixture");
     let (_node, _did, tools) = pack_tool("pack-list-damaged", plugins).await;
     let page: Value =
         serde_json::from_str(&config_call(&tools, &["pack", "list"]).await.unwrap()).unwrap();
@@ -734,7 +734,7 @@ async fn pack_list_reports_a_damaged_archive_as_an_error_row() {
     let page: Value =
         serde_json::from_str(&config_call(&tools, &["pack", "list"]).await.unwrap()).unwrap();
     assert_eq!(page["page"]["returned"], 1);
-    assert_eq!(page["items"][0]["name"], "fixture/review_graph");
+    assert_eq!(page["items"][0]["name"], "fixture/documents_fixture");
     assert_eq!(page["items"][0]["installable"], false);
     assert!(page["items"][0]["error"]
         .as_str()
@@ -748,23 +748,28 @@ static PACK_REGISTRY_ENV: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new
 async fn pack_update_without_a_version_asks_the_registry_and_fails_loudly_offline() {
     let _registry_lock = PACK_REGISTRY_ENV.lock().await;
     let _registry = crate::test_support::EnvVarGuard::set("GENTS_REGISTRY", "http://127.0.0.1:9");
-    let (_home, plugins) = crate::test_support::home_with_fixture_pack("review_graph");
+    let (_home, plugins) = crate::test_support::home_with_fixture_pack("documents_fixture");
     let (_node, _did, tools) = pack_tool("pack-update-offline", plugins).await;
     let error = config_call(
         &tools,
-        &["pack", "preview", "update", "fixture/review_graph"],
+        &["pack", "preview", "update", "fixture/documents_fixture"],
     )
     .await
     .unwrap_err()
     .to_string();
     assert!(
-        error.contains("the newest version of fixture/review_graph could not be looked up"),
+        error.contains("the newest version of fixture/documents_fixture could not be looked up"),
         "{error}"
     );
     // A pinned version resolves from the store with no network call.
     let error = config_call(
         &tools,
-        &["pack", "preview", "update", "fixture/review_graph@1.0.0"],
+        &[
+            "pack",
+            "preview",
+            "update",
+            "fixture/documents_fixture@1.0.0",
+        ],
     )
     .await
     .unwrap_err()
@@ -6324,7 +6329,7 @@ async fn pack_search_uses_registry_pagination_without_installing() {
         |axum::extract::Query(query): axum::extract::Query<BTreeMap<String, String>>| async move {
             assert_eq!(query.get("q").map(String::as_str), Some("code review"));
             let page = &query["page"];
-            axum::Json(json!({"packs":[{"namespace":"fixture","name":"review_graph","latest":"1.0.0","description":"Code review"}],"has_more":page == "1"}))
+            axum::Json(json!({"packs":[{"namespace":"fixture","name":"documents_fixture","latest":"1.0.0","description":"Code review"}],"has_more":page == "1"}))
         }
     ));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -6343,7 +6348,7 @@ async fn pack_search_uses_registry_pagination_without_installing() {
     .unwrap();
     assert_eq!(
         first["items"][0]["inspect"],
-        json!({"argv":["pack","get","fixture/review_graph"]})
+        json!({"argv":["pack","get","fixture/documents_fixture"]})
     );
     let next: Value =
         serde_json::from_str(&tool.call(first["next_call"].to_string()).await.unwrap()).unwrap();
@@ -6361,7 +6366,7 @@ async fn pack_search_uses_registry_pagination_without_installing() {
     }
     let access = crate::config_client::ConfigAccess::Local(node);
     assert!(
-        crate::pack::read_installed_pack(&access, &did, "fixture/review_graph")
+        crate::pack::read_installed_pack(&access, &did, "fixture/documents_fixture")
             .await
             .unwrap()
             .is_none()
