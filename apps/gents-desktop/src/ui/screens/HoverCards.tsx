@@ -85,7 +85,7 @@ export function NodeHoverCard({
             {online ? "Online" : "Offline"}
           </span>
         </div>
-        <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-sm">
+        <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
           <NodeReach deployment={deployment} />
           <Line label="Agents">{deployment.agents.length}</Line>
           <Line label="Tasks">{deployment.tasks.length}</Line>
@@ -148,7 +148,7 @@ export function AgentHoverCard({
           )}
         </div>
         {summary && <p className="mt-1.5 text-sm text-muted-foreground">{summary}</p>}
-        <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-sm">
+        <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
           <Line label="Status">
             {!b.enabled
               ? "Disabled"
@@ -180,9 +180,9 @@ export function AgentHoverCard({
             section: "agents",
             item: b.agentId,
           })}
-          className="mt-3 inline-flex items-center gap-1 text-sm text-foreground underline-offset-2 hover:underline"
+          className="mt-3 inline-flex items-center gap-1 text-xs text-foreground underline-offset-2 hover:underline"
         >
-          Settings <ArrowUpRight className="size-3.5" />
+          Settings <ArrowUpRight className="size-3" />
         </a>
       </HoverCardContent>
     </HoverCard>
