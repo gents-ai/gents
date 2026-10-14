@@ -178,6 +178,25 @@ pub use recovery::{
 pub use transition::CausedRequestTerminal;
 pub use transition::IllegalToolCallTransition;
 
+/// Which owner terminates a tool-call row. A [`Self::SessionMessage`] row
+/// (Lean `ToolOperation.sessionMessage`) has no host process: its terminal
+/// is the terminal output of the request it caused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ToolRowKind {
+    Native,
+    SessionMessage,
+}
+
+impl ToolRowKind {
+    pub(crate) fn of(tool_name: &str) -> Self {
+        if crate::toolset::is_session_message_tool(tool_name) {
+            Self::SessionMessage
+        } else {
+            Self::Native
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct ToolCallLifecycle {
     node: Arc<EmbeddedNode>,
@@ -192,6 +211,7 @@ pub struct ToolCallLifecycle {
     call_id: Option<String>,
     message_sequence: u32,
     tool_name: String,
+    kind: ToolRowKind,
     /// Exact accepted assistant header that introduced this physical call.
     accepted_header_doc_id: Option<String>,
     arguments: Option<gents_protocol::output::PayloadRef>,
@@ -286,6 +306,7 @@ impl ToolCallLifecycle {
             tool_call_id: accepted.id,
             call_id: accepted.call_id,
             message_sequence: accepted.message_sequence,
+            kind: ToolRowKind::of(&accepted.tool_name),
             tool_name: accepted.tool_name,
             accepted_header_doc_id: Some(accepted.accepted_header_doc_id),
             arguments: Some(accepted.arguments),
@@ -339,6 +360,7 @@ impl ToolCallLifecycle {
             tool_call_id,
             call_id: None,
             message_sequence,
+            kind: ToolRowKind::of(&tool_name),
             tool_name,
             accepted_header_doc_id: None,
             arguments: None,
@@ -405,6 +427,7 @@ impl ToolCallLifecycle {
             tool_call_id,
             call_id: None,
             message_sequence,
+            kind: ToolRowKind::of(&tool_name),
             tool_name,
             accepted_header_doc_id: None,
             arguments: None,
@@ -428,8 +451,8 @@ impl ToolCallLifecycle {
         self.deadline_at <= now
     }
 
-    pub(crate) fn is_session_message(&self) -> bool {
-        crate::toolset::is_session_message_tool(&self.tool_name)
+    pub(crate) fn kind(&self) -> ToolRowKind {
+        self.kind
     }
 
     pub(crate) fn interrupt_disposition(&self) -> InterruptDisposition {
@@ -573,6 +596,36 @@ impl ToolCallLifecycle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn tool_row_kind_is_session_message_for_agent_new_and_agent_message() {
+        let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        let deadline = chrono::Utc::now() + chrono::Duration::minutes(1);
+        let kind_of = |tool_name: &str| {
+            ToolCallLifecycle::new(
+                node.clone(),
+                "request".into(),
+                "session".into(),
+                "did:test:owner".into(),
+                "call".into(),
+                0,
+                tool_name.into(),
+                "{}".into(),
+                deadline,
+            )
+            .kind()
+        };
+        assert_eq!(
+            kind_of(crate::toolset::AGENT_NEW_TOOL_NAME),
+            ToolRowKind::SessionMessage
+        );
+        assert_eq!(
+            kind_of(crate::toolset::AGENT_MESSAGE_TOOL_NAME),
+            ToolRowKind::SessionMessage
+        );
+        assert_eq!(kind_of("tool"), ToolRowKind::Native);
+        node.shutdown().await;
+    }
 
     use crate::lean_vocab_test::{
         assert_lean_contract_vocabulary_matches, assert_state_machine_contract_is_complete,

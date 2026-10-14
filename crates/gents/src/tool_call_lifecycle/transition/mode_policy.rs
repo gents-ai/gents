@@ -63,7 +63,7 @@ impl ToolCallLifecycle {
 
     pub async fn foreground(&mut self) -> Result<()> {
         self.ensure_state(&[ToolCallState::Running], "foreground")?;
-        if self.is_session_message() {
+        if self.kind() == ToolRowKind::SessionMessage {
             return Err(IllegalToolCallTransition::SessionMessageIsBackgroundOnly.into());
         }
         if self.await_mode == AwaitMode::Foreground {

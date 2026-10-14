@@ -16,7 +16,7 @@ use crate::session::canonical_rows::{
     CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
 };
 
-use super::{CancelCause, FailureClass, ToolCallLifecycle, ToolCallState};
+use super::{CancelCause, FailureClass, ToolCallLifecycle, ToolCallState, ToolRowKind};
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ToolDispatchRejection {
@@ -603,7 +603,7 @@ impl ToolCallLifecycle {
     pub(crate) fn background_receipt_binding(&self) -> Result<BackgroundReceiptBinding> {
         anyhow::ensure!(
             self.await_mode == super::AwaitMode::Background
-                && self.is_session_message()
+                && self.kind() == ToolRowKind::SessionMessage
                 && !self.is_spawned_background(),
             "background receipt requires an accepted background session-message row"
         );
@@ -647,7 +647,7 @@ impl ToolCallLifecycle {
     ) -> Result<bool> {
         let publish_native_result = !(expected != ToolCallState::Pending
             && self.await_mode == super::AwaitMode::Background
-            && self.is_session_message()
+            && self.kind() == ToolRowKind::SessionMessage
             && !self.is_spawned_background());
         self.terminalize_with_options(
             expected,
@@ -671,7 +671,7 @@ impl ToolCallLifecycle {
     ) -> Result<bool> {
         let publish_native_result = !(expected != ToolCallState::Pending
             && self.await_mode == super::AwaitMode::Background
-            && self.is_session_message()
+            && self.kind() == ToolRowKind::SessionMessage
             && !self.is_spawned_background());
         self.terminalize_with_options(
             expected,
