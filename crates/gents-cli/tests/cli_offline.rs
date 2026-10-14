@@ -1,3 +1,6 @@
+//! The `cli_pack` suite builds a Rust plugin, so it also needs the wasm32-wasip1
+//! target and the Afterburner tools on PATH.
+
 mod support;
 
 #[path = "suites/cli_config_diff.rs"]
