@@ -755,10 +755,11 @@ pub(crate) enum KillOutcome {
     Cancelled,
 }
 
-/// The caused-request step of a kill: `Some` when the kill is decided here (a
-/// terminal request settles the row; a live local request is interrupted),
-/// `None` when the row is still to be cancelled directly (a live remote
-/// request is interrupted with a warning).
+/// The caused-request step of a kill: `Some` when this step decides the kill
+/// (the terminal request settled the row, or the live local request was
+/// interrupted). `None` when the caller must cancel the row directly: a
+/// terminal request this step did not settle, or a live remote request
+/// (interrupted; a failed peer interrupt is only logged).
 pub(crate) async fn kill_caused_request(
     node: &std::sync::Arc<EmbeddedNode>,
     lifecycle: &mut crate::tool_call_lifecycle::ToolCallLifecycle,
