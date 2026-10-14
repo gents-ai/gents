@@ -21,10 +21,13 @@ every first-wave area at once.
 cp -r examples/ux-plugins/hello_runtime ~/.gents/ux-plugins/
 cp -r examples/ux-plugins/focus_timer  ~/.gents/ux-plugins/
 
-# pack door: build (compiles the .afb), check (lints the ux module), install
+# pack door: build (compiles the .afb), check (lints the ux module), install.
+# `install` takes a pack spec, so a local path must be explicit (`./`, `../`,
+# absolute, or a `.pack` file); a bare path reads as a registry coordinate.
+# Without the CLI installed: `cargo run -q -p gents-cli --bin gents -- pack …`
 gents pack build  examples/ux-plugins/board_pack
 gents pack check  examples/ux-plugins/board_pack
-gents pack install examples/ux-plugins/board_pack --home ~/.gents
+gents pack install ./examples/ux-plugins/board_pack --home ~/.gents
 
 # see what the desktop will receive
 gents ux list
