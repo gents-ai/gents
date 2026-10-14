@@ -16,7 +16,8 @@ import { cn } from "@gents/ui/lib/utils";
 import { href } from "@/lib/router";
 import { agentReadiness } from "@/lib/agent-readiness";
 import { access, agentName, bashAccess, fileAccess, network } from "./behavior";
-import { agentOf } from "@/lib/agents";
+import { agentOf, backendOf } from "@/lib/agents";
+import { ProviderLogo } from "./ProviderLogo";
 import { useHomeDid, useToolAuthority } from "@/hooks/useClient";
 import { isWorkingNode } from "@/lib/nodes";
 
@@ -72,7 +73,7 @@ export function NodeHoverCard({
       <HoverCardTrigger delay={500} render={children} />
       <HoverCardContent side={side} align="start" className="w-80">
         <div className="flex items-baseline justify-between gap-3">
-          <span className="font-heading text-lg font-medium text-heading">
+          <span className="font-heading text-base font-medium text-heading">
             {deployment.node.displayName ?? deployment.label}
           </span>
           <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -119,6 +120,7 @@ export function AgentHoverCard({
   const b = agentOf(deployment, agentId);
   const env = deployment?.agentEnvironments.find((e) => e.agentId === agentId);
   if (!deployment || !b) return children;
+  const backend = backendOf(deployment, b);
   const readiness = agentReadiness(deployment, b.agentId);
   const hasInstructions = Boolean(
     b.contextId &&
@@ -140,7 +142,7 @@ export function AgentHoverCard({
         data-testid="agent-hover-card"
       >
         <div className="flex items-baseline justify-between gap-3">
-          <span className="font-heading text-lg font-medium text-heading">
+          <span className="font-heading text-base font-medium text-heading">
             {agentName(agentId, deployment)}
           </span>
           {b.isDefault && (
@@ -156,7 +158,23 @@ export function AgentHoverCard({
                 ? "Enabled"
                 : `Enabled, can’t run: ${readiness.reason}`}
           </Line>
-          <Line label="Runs on">{env?.modelName ?? "no backend"}</Line>
+          <Line label="Runs on">
+            {env?.modelName ? (
+              /* the provider's mark, by the rule the inference settings use */
+              <span className="flex min-w-0 items-center gap-1.5">
+                {backend && (
+                  <ProviderLogo
+                    kind={backend.providerKind}
+                    endpoint={backend.endpoint}
+                    className="size-3"
+                  />
+                )}
+                <span className="truncate">{env.modelName}</span>
+              </span>
+            ) : (
+              "no backend"
+            )}
+          </Line>
           <Line label="Files">{fileAccess(env?.fileAccess ?? "off")}</Line>
           <Line label="Commands">{bashAccess(env?.bashAccess ?? "off")}</Line>
           <Line label="Network">{network(env?.networkAccess)}</Line>
