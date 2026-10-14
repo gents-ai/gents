@@ -42,6 +42,7 @@ pub(crate) use history::{
     retry_has_published_input,
 };
 pub use observations::apply_title_in_txn;
+pub(crate) use observations::load_latest_requests_in_txn;
 pub(crate) use observations::{
     advance_refused_request_observation_in_txn, advance_session_request_observation_in_txn,
     derive_session_preview, load_recent_titles_for_agent, load_scoped_request_facts_in_txn,
