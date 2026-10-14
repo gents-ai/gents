@@ -647,7 +647,7 @@ mod tests {
         ] {
             node.add_schema(sdl).await.unwrap();
         }
-        ConfigAccess::Local(node)
+        ConfigAccess::local(node)
     }
 
     fn origin(split: EvalSplit) -> RunOrigin {

@@ -208,7 +208,7 @@ async fn generated_session_recovery_cases_drive_desktop_retry_request() -> Resul
         Ok::<(), anyhow::Error>(())
     }
     .await;
-    let shutdown = core.shutdown().await;
+    let shutdown = Arc::new(core).shutdown().await;
     result?;
     shutdown?;
     Ok(())
@@ -1115,7 +1115,7 @@ async fn desktop_chat_seed_rows_are_scoped_to_the_requester_principal() -> Resul
             .and_then(serde_json::Value::as_str),
         Some("manual")
     );
-    core.shutdown().await?;
+    Arc::new(core).shutdown().await?;
     Ok(())
 }
 
@@ -1133,7 +1133,7 @@ async fn goal_backed_desktop_submission_commits_goal_claim_and_signed_request_to
 
     let session_id = Uuid::new_v4().to_string();
     let snapshot = core.store().snapshot();
-    let access = ConfigAccess::Local(core.node_arc());
+    let access = ConfigAccess::local(core.node_arc());
     let submitted = super::submit_goal_backed_request(
         core.node(),
         snapshot.as_ref(),
@@ -1291,7 +1291,7 @@ async fn retry_request_with_injected_id_rejects_duplicate_new_request_id() -> Re
         "failed duplicate retry must not add another row with the colliding request_id"
     );
 
-    core.shutdown().await?;
+    Arc::new(core).shutdown().await?;
     Ok(())
 }
 
@@ -1389,7 +1389,7 @@ async fn retry_request_preserves_exact_parent_lineage_without_claim_backend() ->
         "next claim selects its backend"
     );
 
-    core.shutdown().await?;
+    Arc::new(core).shutdown().await?;
     Ok(())
 }
 
@@ -1441,7 +1441,7 @@ async fn concurrent_retry_claims_return_one_durable_successor() -> Result<()> {
         left.request_id
     );
 
-    core.shutdown().await?;
+    Arc::new(core).shutdown().await?;
     Ok(())
 }
 
@@ -1559,6 +1559,6 @@ async fn interactive_retry_ignores_newer_foreign_requester_row() -> Result<()> {
         )
     );
     assert!(row.backend_id.is_none());
-    core.shutdown().await?;
+    Arc::new(core).shutdown().await?;
     Ok(())
 }

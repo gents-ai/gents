@@ -163,7 +163,7 @@ async fn apply_control_update_reconciles_tool_selection_via_doc_id() {
             ..Default::default()
         });
     crate::config_client::write_tools_document(
-        &crate::config_client::ConfigAccess::Local(node.clone()),
+        &crate::config_client::ConfigAccess::local(node.clone()),
         &tools_doc,
     )
     .await
@@ -1671,7 +1671,7 @@ async fn disabling_or_removing_an_account_stops_only_its_behaviors() {
     let did = identity.did().to_string();
     let default_agent_id = crate::default_agent_id_for_node(&did);
     bind_default_agent_claude_backend(&node, &did, &default_agent_id).await;
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let sign_in = |who: &str| {
         crate::claude_oauth::credential_from_login_tokens(
             did.clone(),
@@ -1755,7 +1755,7 @@ async fn an_unavailable_account_is_a_behavior_unavailable_rejection() {
     let did = identity.did().to_string();
     let x = crate::default_agent_id_for_node(&did);
     bind_default_agent_claude_backend(&node, &did, &x).await;
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let sign_in = |who: &str| {
         crate::claude_oauth::credential_from_login_tokens(
             did.clone(),

@@ -73,7 +73,7 @@ async fn tools_id(access: &ConfigAccess, owner: &str, id: &str) -> Result<Option
 async fn imports_complete_candidate_and_recreates_only_the_scoped_tombstone() -> Result<()> {
     let node = Arc::new(gents::defra_node::EmbeddedNode::builder().build().await?);
     gents::ensure_runtime_schemas(&node).await?;
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let first = config("owner-a", "tools");
     let foreign = config("owner-b", "tools");
     let counts = apply_config(&access, &first, None, false).await?;
@@ -120,7 +120,7 @@ async fn imports_complete_candidate_and_recreates_only_the_scoped_tombstone() ->
 async fn invalid_candidate_rolls_back_other_selected_writes() -> Result<()> {
     let node = Arc::new(gents::defra_node::EmbeddedNode::builder().build().await?);
     gents::ensure_runtime_schemas(&node).await?;
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let valid = config("owner", "tools");
     apply_config(&access, &valid, None, false).await?;
     let mut invalid = valid.clone();

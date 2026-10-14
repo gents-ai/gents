@@ -92,7 +92,7 @@ mod tests {
             json!({"node_did":"did:test:owner","backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}),
         )?;
         gents::config_client::write_inference_backend_document(
-            &ConfigAccess::Local(node.clone()),
+            &ConfigAccess::local(node.clone()),
             &backend,
         )
         .await?;

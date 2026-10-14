@@ -10,7 +10,7 @@ async fn pending_edit_request_patch_reads_only_selected_and_replacement_document
     ensure_runtime_schemas(node.as_ref())
         .await
         .expect("schemas");
-    let access = gents::ConfigAccess::Local(node.clone());
+    let access = gents::ConfigAccess::local(node.clone());
     let response = access
         .write(
             "test.pending_edit_request_patch",
@@ -386,7 +386,7 @@ async fn title_request_patch_preserves_existence_without_public_projection() {
     ensure_runtime_schemas(node.as_ref())
         .await
         .expect("schemas");
-    let access = gents::ConfigAccess::Local(node.clone());
+    let access = gents::ConfigAccess::local(node.clone());
     access
         .write(
             "test.title_request_patch",

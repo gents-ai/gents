@@ -223,7 +223,7 @@ async fn retained(path: &Path) -> Result<TestDb> {
 }
 
 async fn rows(db: &TestDb, collection: &str, fields: &str) -> Result<Vec<Value>> {
-    let value = ConfigAccess::Local(db.node.clone())
+    let value = ConfigAccess::local(db.node.clone())
         .execute(&format!("{{{collection}(limit: 100) {{{fields}}}}}"))
         .await?;
     ensure!(
@@ -257,7 +257,7 @@ async fn engineer_p2p_live_comparison() -> Result<()> {
         let did = local.node_identity.did().to_owned();
         let remote_did = remote.node_identity.did().to_owned();
         for db in [&local, &remote] {
-            ConfigAccess::Local(db.node.clone())
+            ConfigAccess::local(db.node.clone())
                 .add_schema("type DeploymentNote @branchable { text: String }")
                 .await?;
         }
@@ -272,12 +272,12 @@ async fn engineer_p2p_live_comparison() -> Result<()> {
             &address,
         )
         .await;
-        ConfigAccess::Local(remote.node.clone()).write("eval.p2p.note", "mutation {create_DeploymentNote(input: {text: \"Keep the previous rollout image pinned until the owner approves replacement.\"}) {_docID}}").await?;
+        ConfigAccess::local(remote.node.clone()).write("eval.p2p.note", "mutation {create_DeploymentNote(input: {text: \"Keep the previous rollout image pinned until the owner approves replacement.\"}) {_docID}}").await?;
         let doc_id = rows(&remote, "DeploymentNote", "_docID").await?[0]["_docID"]
             .as_str()
             .unwrap()
             .to_owned();
-        ConfigAccess::Local(local.node.clone()).write("eval.p2p.registry", &format!("mutation {{create_PeerRegistry(input: {{peer_id: \"{}\", node_did: \"{}\", display_name: \"Cedar\", network_id: \"engineer-eval\", addresses: [\"{}\"], status: \"discovered\"}}) {{_docID}}}}", escape_graphql_string(&peer), escape_graphql_string(&remote_did), escape_graphql_string(&address))).await?;
+        ConfigAccess::local(local.node.clone()).write("eval.p2p.registry", &format!("mutation {{create_PeerRegistry(input: {{peer_id: \"{}\", node_did: \"{}\", display_name: \"Cedar\", network_id: \"engineer-eval\", addresses: [\"{}\"], status: \"discovered\"}}) {{_docID}}}}", escape_graphql_string(&peer), escape_graphql_string(&remote_did), escape_graphql_string(&address))).await?;
         let target_ids = bind_target(&local.node, local.node_identity.as_ref(), &target).await;
         let subject = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/configurator_evals/ladder/engineer_subject");
@@ -508,7 +508,7 @@ async fn engineer_p2p_live_comparison() -> Result<()> {
             "_docID tool_call_id tool_name request_id session_id requester_did lifecycle_state started_at completed_at",
         )
         .await?;
-        let access = ConfigAccess::Local(local.node.clone());
+        let access = ConfigAccess::local(local.node.clone());
         let mut trace = Vec::new();
         let mut output_bytes = 0;
         let mut failed_calls = 0;

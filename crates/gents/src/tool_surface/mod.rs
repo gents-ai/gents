@@ -409,7 +409,7 @@ impl ToolSurface {
         }
         if !self.application_write_collections.is_empty() {
             tools.push(Box::new(crate::application_write::WriteTool::new(
-                crate::config_client::ConfigAccess::Local(runtime.node.clone()),
+                crate::config_client::ConfigAccess::local(runtime.node.clone()),
                 self.application_write_collections.iter().cloned().collect(),
                 datastore_actor.clone(),
             )));

@@ -2108,7 +2108,7 @@ impl NativeCanonicalExecution {
             Err(error) => return Err(error.context("native CloseAuxiliary owner failed")),
         }
         let request = crate::graphql::escape_graphql_string(&self.request_doc_id);
-        let response = crate::config_client::ConfigAccess::Local(self.node.clone())
+        let response = crate::config_client::ConfigAccess::local(self.node.clone())
             .execute(&format!(
                 r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request}" }} }}) {{ {} }} }}"#,
                 crate::session::canonical_rows::AGENT_OUTPUT_SEGMENT_FIELDS,

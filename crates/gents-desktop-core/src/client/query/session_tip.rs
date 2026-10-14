@@ -684,7 +684,7 @@ mod tests {
     #[ignore = "measures repeated-owner index planning against a large disposable session"]
     async fn folded_prompt_ownership_index_benchmark() {
         let node = std::sync::Arc::new(defra_node::NodeBuilder::default().build().await.unwrap());
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         access
             .add_schema(gents_protocol::schemas::AGENT_MESSAGE)
             .await

@@ -1291,7 +1291,7 @@ async fn saved_config_audit_reports_broken_references_without_mutation_and_accep
     crate::ConfigAccess::write_local(&node, "test.audit.corrupt", &format!(
         r#"mutation {{ update_AgentContext(filter: {{node_did: {{_eq: "{owner}"}}, context_id: {{_eq: "beh-test:context"}}}}, input: {{tools_id: "absent-tools"}}) {{context_id}} }}"#
     )).await.unwrap();
-    let access = crate::ConfigAccess::Local(node.clone());
+    let access = crate::ConfigAccess::local(node.clone());
     let query = format!(
         r#"{{ AgentContext(filter: {{node_did: {{_eq: "{owner}"}}}}) {{context_id tools_id}} }}"#
     );

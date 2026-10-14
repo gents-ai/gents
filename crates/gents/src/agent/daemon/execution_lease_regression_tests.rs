@@ -184,7 +184,7 @@ async fn graceful_shutdown_reasoning_case(fail_drain: bool, prior_ownership_loss
             }
             _ => panic!("unsupported ownership-loss fixture"),
         };
-        let access = crate::config_client::ConfigAccess::Local(node.clone());
+        let access = crate::config_client::ConfigAccess::local(node.clone());
         access
             .write(
                 "test.shutdown_prior_ownership_loss",
@@ -922,7 +922,7 @@ async fn eight_silent_provider_streams_renew_until_explicitly_interrupted_withou
 async fn daemon_interrupt_completion_preserves_wake_published_after_latch() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let access = crate::config_client::ConfigAccess::local(node.clone());
     let agent_config = test_agent();
     let node_did = agent_config.node_did().to_owned();
     let identity = agent_config.node_identity().clone();

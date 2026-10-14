@@ -1272,7 +1272,7 @@ async fn retry_frontier_matches_lean_admission() {
         mutation: &str,
         field: &str,
     ) -> String {
-        let response = crate::config_client::ConfigAccess::Local(node.clone())
+        let response = crate::config_client::ConfigAccess::local(node.clone())
             .write("test.retry_frontier", mutation)
             .await
             .unwrap();

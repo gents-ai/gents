@@ -58,7 +58,7 @@ fn real_web_research_registry_mutation(node_did: &str) -> String {
 async fn live_research_registry_matches_measured_loopback_endpoint() -> Result<()> {
     let node = Arc::new(gents::defra_node::EmbeddedNode::builder().build().await?);
     gents::ensure_runtime_schemas(node.as_ref()).await?;
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let node_did = "did:key:web-research-registry-test";
     access
         .write(

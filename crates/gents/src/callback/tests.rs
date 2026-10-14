@@ -1284,7 +1284,7 @@ impl Backlog {
         let home = tempfile::tempdir().unwrap();
         let identity = crate::lifecycle::test_support::pin_fixed_signing_identity(home.path());
         let node = test_node().await;
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         access
             .add_schema("type BacklogWork { label: String }")
             .await

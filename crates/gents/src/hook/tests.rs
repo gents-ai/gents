@@ -627,7 +627,7 @@ async fn dispatch_receipt_scripts_bind_call_hook_under_both_persistence_policies
             let request_query = format!(
                 "{{ AgentRequest(filter: {{ _docID: {{ _eq: \"{document}\" }} }}) {{ _docID lifecycle_state execution_generation terminal_output }} }}"
             );
-            let access = crate::ConfigAccess::Local(node.clone());
+            let access = crate::ConfigAccess::local(node.clone());
             let before_probe = access.execute(&request_query).await.unwrap();
             let before_request = before_probe["data"]["AgentRequest"].as_array().unwrap();
             assert_eq!(before_request.len(), 1);
@@ -664,7 +664,7 @@ async fn dispatch_receipt_scripts_bind_call_hook_under_both_persistence_policies
             assert_eq!(terminalized, crate::lifecycle::TerminalizeResult::Won);
             let document =
                 crate::graphql::escape_graphql_string(&fixture.lifecycle.request().doc_id);
-            let observed = crate::ConfigAccess::Local(node.clone()).execute(&format!(
+            let observed = crate::ConfigAccess::local(node.clone()).execute(&format!(
                 "{{ AgentToolCall(filter: {{ request_doc_id: {{ _eq: \"{document}\" }} }}) {{ _docID lifecycle_state stuck_since }} AgentMessage(filter: {{ request_doc_id: {{ _eq: \"{document}\" }} }}) {{ _docID }} }}"
             )).await.unwrap();
             let data = &observed["data"];
@@ -1480,7 +1480,7 @@ async fn list_processes_skip_publishes_canonical_tool_result() {
     ));
 
     let timeline = crate::run_timeline_fetch::load_run_timeline_rows(
-        &crate::config_client::ConfigAccess::Local(node.clone()),
+        &crate::config_client::ConfigAccess::local(node.clone()),
         "request-control-result",
     )
     .await
@@ -1564,7 +1564,7 @@ async fn wait_and_cancel_process_skip_publish_canonical_tool_results() {
     }
 
     let timeline = crate::run_timeline_fetch::load_run_timeline_rows(
-        &crate::config_client::ConfigAccess::Local(node.clone()),
+        &crate::config_client::ConfigAccess::local(node.clone()),
         "request-control-results",
     )
     .await
@@ -1720,7 +1720,7 @@ async fn control_tool_lost_terminal_compare_replays_the_durable_winner() {
         "a different same-state closure is a modeled conflict, not a lost CAS"
     );
     let durable = crate::tool_call_lifecycle::query::load_tool_call_result(
-        &crate::config_client::ConfigAccess::Local(node.clone()),
+        &crate::config_client::ConfigAccess::local(node.clone()),
         &conflict_doc_id,
         "did:test:control-race",
         &session_id,
@@ -1733,7 +1733,7 @@ async fn control_tool_lost_terminal_compare_replays_the_durable_winner() {
         "durable winner"
     );
     let presentation = crate::tool_call_lifecycle::load_tool_call_presentation(
-        &crate::config_client::ConfigAccess::Local(node.clone()),
+        &crate::config_client::ConfigAccess::local(node.clone()),
         &conflict_doc_id,
         "did:test:control-race",
         &session_id,

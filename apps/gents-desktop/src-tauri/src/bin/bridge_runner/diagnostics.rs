@@ -247,7 +247,7 @@ pub(crate) async fn build_request_diagnostics_bundle(
         fixture.requester_scope(Some(fixture.node_did()), session_id, Some(request_id)),
     )
     .await;
-    let access = ConfigAccess::Local(fixture.remote_core().node_arc());
+    let access = ConfigAccess::local(fixture.remote_core().node_arc());
     match load_run_timeline_rows(&access, request_id).await {
         Ok(rows)
             if rows.request.request_id == request_id

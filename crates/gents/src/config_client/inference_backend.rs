@@ -147,7 +147,7 @@ mod tests {
         let did = "did:key:z6MkTestServing";
         let node = Arc::new(defra_node::EmbeddedNode::builder().build().await?);
         crate::ensure_runtime_schemas(&node).await?;
-        let access = ConfigAccess::Local(node);
+        let access = ConfigAccess::local(node);
         let oauth = |account_ref: Option<&str>| BackendAuth::NodeOAuth {
             account_ref: account_ref.map(str::to_owned),
         };

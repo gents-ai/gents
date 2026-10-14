@@ -201,7 +201,7 @@ async fn event_args_rejection_rolls_back_the_whole_configuration_plan() {
     };
     let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    let access = ConfigAccess::Local(node);
+    let access = ConfigAccess::local(node);
     let mut config = json!({
         "node":{"node_did":"owner"},
         "agents":[{"node_did":"owner","agent_id":"behavior","inference_profile_id":"profile"}],

@@ -413,7 +413,7 @@ mod tests {
             .await
             .unwrap();
         crate::test_support::install_test_agent(&node, owner, "only").await;
-        let access = ConfigAccess::Local(node);
+        let access = ConfigAccess::local(node);
         let one = manifest(json!([
             {"name":"worker","description":"works","agents":["work"]}
         ]));
@@ -443,7 +443,7 @@ mod tests {
             .await
             .unwrap();
         crate::test_support::install_test_agent(&node, foreign_owner, "foreign").await;
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         for requested in [
             BTreeMap::from([
                 ("coordinator".into(), "claude:inference".into()),

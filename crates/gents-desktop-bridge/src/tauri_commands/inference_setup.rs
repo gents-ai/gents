@@ -1345,6 +1345,8 @@ pub(crate) async fn desktop_grok_login<R: Runtime>(
 
 #[cfg(test)]
 mod provider_account_tests {
+    use std::sync::Arc;
+
     use super::*;
 
     #[test]
@@ -1450,7 +1452,7 @@ mod provider_account_tests {
     }
 
     async fn serving_operator() -> gents::ConfigAccess {
-        gents::ConfigAccess::Local(serving_node().await)
+        gents::ConfigAccess::local(serving_node().await)
     }
 
     fn assert_user_facing(error: &BridgeError) {
@@ -1529,7 +1531,7 @@ mod provider_account_tests {
             ..issued_credential(node_did)
         };
         gents::oauth_credential::upsert_oauth_credential_on(
-            &gents::ConfigAccess::Local(node.clone()),
+            &gents::ConfigAccess::local(node.clone()),
             &keyed,
         )
         .await
@@ -1549,13 +1551,13 @@ mod provider_account_tests {
         let pending = PendingOAuthCredentials::default();
         save_issued_credential(
             &pending,
-            Ok(gents::ConfigAccess::Local(node.clone())),
+            Ok(gents::ConfigAccess::local(node.clone())),
             pending.issue(keyless),
         )
         .await
         .expect("save the sign-in");
 
-        let stored = list_oauth_credentials_on(&gents::ConfigAccess::Local(node), node_did)
+        let stored = list_oauth_credentials_on(&gents::ConfigAccess::local(node), node_did)
             .await
             .expect("list stored credentials");
         assert_eq!(stored.len(), 1);
@@ -1602,7 +1604,7 @@ mod provider_account_tests {
         let node = serving_node().await;
         let saved = retry_pending_credential(
             &pending,
-            Ok(gents::ConfigAccess::Local(node.clone())),
+            Ok(gents::ConfigAccess::local(node.clone())),
             node_did,
             provider,
         )
@@ -1610,7 +1612,7 @@ mod provider_account_tests {
         .expect("retry stores the held credential");
         assert_eq!(saved.access_token, "issued-access");
         assert!(held_tokens(&pending, node_did).is_empty());
-        let stored = list_oauth_credentials_on(&gents::ConfigAccess::Local(node), node_did)
+        let stored = list_oauth_credentials_on(&gents::ConfigAccess::local(node), node_did)
             .await
             .expect("list stored credentials");
         assert_eq!(stored.len(), 1);
@@ -1654,7 +1656,7 @@ mod provider_account_tests {
         let node = serving_node().await;
         let with_store = observe_provider_accounts(
             &pending,
-            Ok(gents::ConfigAccess::Local(node.clone())),
+            Ok(gents::ConfigAccess::local(node.clone())),
             node_did,
         )
         .await
@@ -1664,14 +1666,14 @@ mod provider_account_tests {
 
         retry_pending_credential(
             &pending,
-            Ok(gents::ConfigAccess::Local(node.clone())),
+            Ok(gents::ConfigAccess::local(node.clone())),
             node_did,
             provider,
         )
         .await
         .expect("retry stores the held credential");
         let saved =
-            observe_provider_accounts(&pending, Ok(gents::ConfigAccess::Local(node)), node_did)
+            observe_provider_accounts(&pending, Ok(gents::ConfigAccess::local(node)), node_did)
                 .await
                 .expect("serving store");
         assert_eq!(saved.len(), 1);
@@ -1972,20 +1974,20 @@ mod provider_account_tests {
     #[tokio::test]
     async fn a_second_accounts_desktop_sign_in_is_added_beside_the_first() {
         let node = serving_node().await;
-        let access = || Ok(gents::ConfigAccess::Local(node.clone()));
+        let access = || Ok(gents::ConfigAccess::local(node.clone()));
         let node_did = "did:key:zAgent";
         let pending = PendingOAuthCredentials::default();
         let (a, b) = two_accounts(node_did, true);
         save_issued_credential(&pending, access(), pending.issue(a))
             .await
             .expect("save the first account");
-        let first = list_oauth_credentials_on(&gents::ConfigAccess::Local(node.clone()), node_did)
+        let first = list_oauth_credentials_on(&gents::ConfigAccess::local(node.clone()), node_did)
             .await
             .unwrap();
         let signed = save_issued_credential(&pending, access(), pending.issue(b))
             .await
             .expect("save the second account");
-        let stored = list_oauth_credentials_on(&gents::ConfigAccess::Local(node.clone()), node_did)
+        let stored = list_oauth_credentials_on(&gents::ConfigAccess::local(node.clone()), node_did)
             .await
             .unwrap();
         assert_eq!(stored.len(), 2);
@@ -2091,13 +2093,13 @@ mod provider_account_tests {
                 .any(|id| id.starts_with("claude-subscription-")),
             "the added account's backend is in the client snapshot: {backends:?}"
         );
-        core.shutdown().await.expect("shutdown");
+        Arc::new(core).shutdown().await.expect("shutdown");
     }
 
     #[tokio::test]
     async fn accounts_list_in_resolver_order() {
         let node = serving_node().await;
-        let access = gents::ConfigAccess::Local(node.clone());
+        let access = gents::ConfigAccess::local(node.clone());
         let node_did = "did:key:zOrder";
         let at = |secs| chrono::DateTime::from_timestamp(secs, 0);
         // Stored so that insertion order is not resolver order.
@@ -2120,7 +2122,7 @@ mod provider_account_tests {
 
         let accounts = observe_provider_accounts(
             &PendingOAuthCredentials::default(),
-            Ok(gents::ConfigAccess::Local(node)),
+            Ok(gents::ConfigAccess::local(node)),
             node_did,
         )
         .await
@@ -2186,7 +2188,7 @@ mod provider_account_tests {
     #[tokio::test]
     async fn a_labelled_sign_in_reports_its_result_and_keeps_its_label_on_retry() {
         let node = serving_node().await;
-        let access = || Ok(gents::ConfigAccess::Local(node.clone()));
+        let access = || Ok(gents::ConfigAccess::local(node.clone()));
         let node_did = "did:key:zAgent";
         let pending = PendingOAuthCredentials::default();
         let labelled = |label: &str, account: &str, token: &str| OAuthCredential {
@@ -2257,7 +2259,7 @@ mod provider_account_tests {
         )
         .await
         .expect("retry stores the held sign-in");
-        let stored = list_oauth_credentials_on(&gents::ConfigAccess::Local(node.clone()), node_did)
+        let stored = list_oauth_credentials_on(&gents::ConfigAccess::local(node.clone()), node_did)
             .await
             .unwrap();
         let spare = stored
@@ -2273,7 +2275,7 @@ mod provider_account_tests {
     #[tokio::test]
     async fn a_label_names_only_an_added_account_never_a_refreshed_one() {
         let node = serving_node().await;
-        let access = || Ok(gents::ConfigAccess::Local(node.clone()));
+        let access = || Ok(gents::ConfigAccess::local(node.clone()));
         let node_did = "did:key:zAgent";
         let pending = PendingOAuthCredentials::default();
         let labelled = |label: Option<&str>, account: &str, token: &str| OAuthCredential {
@@ -2303,7 +2305,7 @@ mod provider_account_tests {
             assert_eq!(refreshed.result, "refreshed");
             assert_eq!(refreshed.label, kept);
         }
-        let stored = list_oauth_credentials_on(&gents::ConfigAccess::Local(node.clone()), node_did)
+        let stored = list_oauth_credentials_on(&gents::ConfigAccess::local(node.clone()), node_did)
             .await
             .unwrap();
         let labels: Vec<String> = stored
@@ -2316,7 +2318,7 @@ mod provider_account_tests {
     #[tokio::test]
     async fn an_added_account_whose_label_is_taken_is_saved_under_its_default_label() {
         let node = serving_node().await;
-        let access = || Ok(gents::ConfigAccess::Local(node.clone()));
+        let access = || Ok(gents::ConfigAccess::local(node.clone()));
         let node_did = "did:key:zAgent";
         let pending = PendingOAuthCredentials::default();
         let labelled = |label: Option<&str>, account: &str| OAuthCredential {
@@ -2391,7 +2393,7 @@ mod provider_account_tests {
         };
 
         let node = serving_node().await;
-        let access = gents::ConfigAccess::Local(node.clone());
+        let access = gents::ConfigAccess::local(node.clone());
         let node_did = "did:key:zAgent";
         let now = chrono::DateTime::from_timestamp(chrono::Utc::now().timestamp(), 0).unwrap();
         let minutes = chrono::Duration::minutes;

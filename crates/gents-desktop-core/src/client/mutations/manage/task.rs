@@ -841,7 +841,7 @@ mod tests {
         stale.prompt_template = "Stale {{ args.item }}".into();
         upsert_task(&desktop, &stale).await?;
 
-        let operator_access = ConfigAccess::Local(Arc::clone(&operator));
+        let operator_access = ConfigAccess::local(Arc::clone(&operator));
         let invocation =
             resolve_task_now_on(&operator_access, owner, "task", json!({"item":"truth"})).await?;
         assert_eq!(invocation.content, "Canonical truth");

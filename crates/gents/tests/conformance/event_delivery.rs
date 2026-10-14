@@ -514,7 +514,7 @@ async fn spawn_event_source_runner(
     mpsc::Receiver<String>,
     watch::Sender<Arc<ActiveRuntimeSnapshot>>,
 ) {
-    let access = gents::config_client::ConfigAccess::Local(node.clone());
+    let access = gents::config_client::ConfigAccess::local(node.clone());
     let trigger_doc_id = install_event_delivery_config(&access).await;
     let mut snapshot = active_snapshot_with_event_trigger();
     Arc::make_mut(&mut snapshot)

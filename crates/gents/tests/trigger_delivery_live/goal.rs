@@ -91,7 +91,7 @@ async fn goal_task_waits_for_claim_and_emits_only_after_model_completion() -> Re
     let db = support::test_db_from_home(home);
     let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
     let owner = identity.did().to_owned();
-    let access = ConfigAccess::Local(db.node.clone());
+    let access = ConfigAccess::local(db.node.clone());
     access.add_schema(SCHEMA).await?;
     access
         .add_schema(

@@ -1102,7 +1102,7 @@ mod tests {
                     .is_ok()
             } else {
                 load_tool_call_presentation(
-                    &ConfigAccess::Local(node.clone()),
+                    &ConfigAccess::local(node.clone()),
                     child.doc_id().unwrap(),
                     parent.node_did(),
                     parent.session_id(),
@@ -1150,7 +1150,7 @@ mod tests {
         let child_doc = child.doc_id().unwrap().to_owned();
         let node_did = parent.node_did().to_owned();
         let session_id = parent.session_id().to_owned();
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         assert_eq!(
             load_tool_call_arguments(&access, &child_doc, &node_did, &session_id, None)
                 .await
@@ -1331,7 +1331,7 @@ mod tests {
         let request_doc = escape_graphql_string(parent.request_doc_id().unwrap());
         let session_id = parent.session_id().to_owned();
         let node_did = parent.node_did().to_owned();
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         let created = access.write("test.forged_plugin_child", &format!(
             r#"mutation {{ create_AgentToolCall(input: {{
                 tool_call_key: "forged-effect", tool_call_id: "forged-effect", tool_name: "fixture_effect",

@@ -201,7 +201,8 @@ impl WriteTool {
             "preview returns a digest; omit digest while previewing"
         );
         match &self.access {
-            ConfigAccess::Local(node) => {
+            ConfigAccess::Local(local) => {
+                let node = local.node();
                 if preview {
                     ConfigAccess::transact_local_readonly(
                         node,

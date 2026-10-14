@@ -164,7 +164,7 @@ pub(super) async fn available_model_backends(state: &ShimState) -> Result<Vec<Av
         .collect::<Vec<_>>();
 
     let readiness_row = crate::commands::status::load_node_readiness(
-        &ConfigAccess::Local(state.node.clone()),
+        &ConfigAccess::local(state.node.clone()),
         node_did,
     )
     .await
@@ -796,7 +796,7 @@ mod tests {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         gents::ensure_runtime_schemas(&node).await.unwrap();
         let node_did = "did:test:codex-shim";
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         // Publication admits a profile only against its backend's catalog, so
         // the unadvertised profile is published while its model is listed and
         // then left behind by a later discovery that drops it.
@@ -844,7 +844,7 @@ mod tests {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         gents::ensure_runtime_schemas(&node).await.unwrap();
         let node_did = "did:test:codex-shim";
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         seed_backend_with_catalog(
             &access,
             &node,
@@ -933,7 +933,7 @@ mod tests {
     async fn model_change_copies_controls_and_preserves_shared_profiles_and_noop() {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         gents::ensure_runtime_schemas(&node).await.unwrap();
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         let owner = "did:test:codex-shim";
         seed_backend_with_catalog(&access, &node, vec![advertised("x"), advertised("y")]).await;
         let plan = DesiredStateApplyPlan::new(
@@ -1089,7 +1089,7 @@ mod tests {
     async fn model_list_scope_excludes_foreign_malformed_backend_before_decode() {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         gents::ensure_runtime_schemas(&node).await.unwrap();
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         write_inference_backend_document(&access, &backend("same"))
             .await
             .unwrap();

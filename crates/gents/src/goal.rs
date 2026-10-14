@@ -3049,7 +3049,7 @@ mod tests {
     async fn auto_resume_access() -> crate::ConfigAccess {
         let node = std::sync::Arc::new(EmbeddedNode::builder().build().await.unwrap());
         crate::schema::ensure_runtime_schemas(&node).await.unwrap();
-        crate::ConfigAccess::Local(node)
+        crate::ConfigAccess::local(node)
     }
 
     #[tokio::test]
@@ -3070,9 +3070,7 @@ mod tests {
     #[tokio::test]
     async fn auto_resume_none_and_set_goal_keep_the_stored_value() {
         let access = auto_resume_access().await;
-        let crate::ConfigAccess::Local(node) = &access else {
-            unreachable!()
-        };
+        let node = access.local_node().expect("local test access");
         let owner = "did:key:z6MkTestOwner";
         set_goal_from_access(&access, owner, "s", Some("ship"), None, None, Some(true))
             .await

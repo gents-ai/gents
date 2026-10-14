@@ -557,7 +557,7 @@ async fn tools_document_round_trips_defra_query_fields() {
         }),
         ..Default::default()
     };
-    let access = crate::config_client::ConfigAccess::Local(node);
+    let access = crate::config_client::ConfigAccess::local(node);
     write_tools_document(&access, &doc)
         .await
         .expect("write should persist the defra_query fields");
@@ -608,7 +608,7 @@ async fn tools_update_can_clear_lsp_config() {
     let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
     crate::ensure_runtime_schemas(&node).await.unwrap();
 
-    let access = crate::config_client::ConfigAccess::Local(std::sync::Arc::new(node));
+    let access = crate::config_client::ConfigAccess::local(std::sync::Arc::new(node));
     let lsp = |config: Option<String>| Tools {
         tools_id: "lsp-config-clear".to_string(),
         node_did: "did:key:z-lsp-config-clear".to_string(),
@@ -689,7 +689,7 @@ async fn tools_document_round_trips_read_only_commands() {
         }),
         ..Default::default()
     };
-    let access = crate::config_client::ConfigAccess::Local(std::sync::Arc::new(node));
+    let access = crate::config_client::ConfigAccess::local(std::sync::Arc::new(node));
     write_tools_document(&access, &doc)
         .await
         .expect("write should persist the read_only_commands field");
@@ -837,7 +837,7 @@ async fn tools_document_round_trips_write_tools() {
         "entries": decls,
     }))
     .unwrap();
-    let access = crate::config_client::ConfigAccess::Local(std::sync::Arc::new(node));
+    let access = crate::config_client::ConfigAccess::local(std::sync::Arc::new(node));
     let plan = crate::config_client::DesiredStateApplyPlan::new(vec![
         crate::config_client::DesiredStateApplyDocument {
             collection: crate::Collection::DatastoreToolSurface,
@@ -885,7 +885,7 @@ async fn tools_document_round_trips_session_message_enablement() {
         }),
         ..Default::default()
     };
-    let access = crate::config_client::ConfigAccess::Local(std::sync::Arc::new(node));
+    let access = crate::config_client::ConfigAccess::local(std::sync::Arc::new(node));
     write_tools_document(&access, &doc)
         .await
         .expect("write should persist the session-message enablement");
@@ -996,12 +996,7 @@ async fn agent_description_round_trip_with_explicit_owner_fixture() {
 fn access_node(
     access: &crate::config_client::ConfigAccess,
 ) -> &std::sync::Arc<defra_node::EmbeddedNode> {
-    match access {
-        crate::config_client::ConfigAccess::Local(node) => node,
-        crate::config_client::ConfigAccess::Graphql(_) => {
-            unreachable!("test helpers use Local access")
-        }
-    }
+    access.local_node().expect("test helpers use local access")
 }
 
 #[tokio::test]
@@ -1050,7 +1045,7 @@ async fn inference_retry_policy_fields_round_trip() {
         ..Default::default()
     };
 
-    let access = crate::config_client::ConfigAccess::Local(std::sync::Arc::new(node));
+    let access = crate::config_client::ConfigAccess::local(std::sync::Arc::new(node));
     let plan = crate::config_client::DesiredStateApplyPlan::new(vec![
         crate::config_client::DesiredStateApplyDocument {
             collection: crate::Collection::InferenceBackend,
@@ -1722,7 +1717,7 @@ async fn oauth_account_scope_matches_lean() {
         };
         upsert_oauth_credential(&node, &credential).await.unwrap();
     }
-    let access = crate::config_client::ConfigAccess::Local(node);
+    let access = crate::config_client::ConfigAccess::local(node);
 
     let cases = lean["cases"].as_array().unwrap();
     assert_eq!(cases.len(), 6);

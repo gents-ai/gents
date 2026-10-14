@@ -201,7 +201,7 @@ impl Fixture {
         let home = EmbeddedHome::create_temp("optimization-live")
             .await
             .unwrap();
-        let access = ConfigAccess::Local(home.node.clone());
+        let access = ConfigAccess::local(home.node.clone());
         let owner = home.did().to_string();
         gents::ensure_node(&home.node, &owner).await.unwrap();
         let dirs = tempfile::tempdir().unwrap();

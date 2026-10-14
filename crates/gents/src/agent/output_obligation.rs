@@ -159,7 +159,7 @@ impl OutputObligationGate {
                 .cloned()
                 .context("completed output query omitted AgentToolCall rows")?,
         )?;
-        let access = crate::config_client::ConfigAccess::Local(self.node.clone());
+        let access = crate::config_client::ConfigAccess::local(self.node.clone());
         let mut requests = HashMap::new();
         let mut writes = HashMap::<String, Vec<CompletedWriteRow>>::new();
         let mut scoped_rows = HashMap::<(String, String, Option<String>), Vec<_>>::new();

@@ -32,7 +32,7 @@ fn transaction_id(txn: &ConfigApplyTxn<'_>) -> String {
 #[tokio::test]
 async fn config_access_readonly_does_not_wait_for_the_embedded_mutation_gate() {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-    ConfigAccess::Local(Arc::clone(&node))
+    ConfigAccess::local(Arc::clone(&node))
         .add_schema("type ReadGateProbe { value: String }")
         .await
         .unwrap();
@@ -56,7 +56,7 @@ async fn config_access_readonly_does_not_wait_for_the_embedded_mutation_gate() {
         .unwrap();
     let response = tokio::time::timeout(
         Duration::from_secs(5),
-        ConfigAccess::Local(Arc::clone(&node))
+        ConfigAccess::local(Arc::clone(&node))
             .transact_readonly("test.config_access_readonly", |txn| {
                 Box::pin(async move { txn.execute("{ ReadGateProbe { value } }").await })
             }),
@@ -441,6 +441,7 @@ async fn cancellation_after_embedded_begin_reports_and_completes_rollback() {
                 let native_operations = Arc::new(super::NativeOperationTracker::default());
                 let (rollback_on_drop, handle) = tokio::spawn(super::begin_embedded_owned(
                     node.clone(),
+                    Arc::clone(&gate),
                     false,
                     operation,
                     Some(write_guard),
@@ -611,7 +612,7 @@ async fn abandoned_signed_statement_holds_gate_drains_then_rolls_back_without_re
         .expect("writer task")
         .expect("later write succeeds after detached rollback");
 
-    let result = ConfigAccess::Local(Arc::clone(&node))
+    let result = ConfigAccess::local(Arc::clone(&node))
         .execute("{ NativeCompletionProbe { value } }")
         .await
         .unwrap();
@@ -1526,7 +1527,7 @@ resources:
 #[tokio::test]
 async fn readonly_transaction_preserves_snapshot_and_rejects_native_mutation() {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-    ConfigAccess::Local(Arc::clone(&node))
+    ConfigAccess::local(Arc::clone(&node))
         .add_schema("type ReadSnapshotProbe { value: String }")
         .await
         .unwrap();

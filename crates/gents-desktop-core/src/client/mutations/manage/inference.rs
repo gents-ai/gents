@@ -129,7 +129,7 @@ mod tests {
             "node_did":backend.node_did, "profile_id":"profile", "backend_id":"shared", "model_name":"model"
         }))?;
         gents::config_client::write_inference_profile_document(
-            &ConfigAccess::Local(node.clone()),
+            &ConfigAccess::local(node.clone()),
             &profile,
         )
         .await?;

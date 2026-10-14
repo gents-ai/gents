@@ -51,7 +51,8 @@ async fn resume_goal_request_inner<'a>(
         "goal resume requires the target node's signing identity"
     );
     match access {
-        crate::ConfigAccess::Local(node) => {
+        crate::ConfigAccess::Local(local) => {
+            let node = local.node();
             let did = ::identity::Did::new(identity.did().to_owned())?;
             crate::config_client::ConfigAccess::transact_local_write(
                 node,

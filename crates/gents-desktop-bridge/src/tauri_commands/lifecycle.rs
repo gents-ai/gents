@@ -337,7 +337,7 @@ pub async fn desktop_client_shutdown<R: Runtime>(
 
 /// Stops the live desktop client, if any, and releases its store. The caller
 /// holds the managed-server lifecycle lock.
-pub(super) async fn shutdown_client_under_managed_lifecycle<R: Runtime>(
+pub(crate) async fn shutdown_client_under_managed_lifecycle<R: Runtime>(
     app: &AppHandle<R>,
     state: &DesktopAppState,
 ) -> Result<(), BridgeError> {
@@ -348,6 +348,14 @@ pub(super) async fn shutdown_client_under_managed_lifecycle<R: Runtime>(
         ClientUpdateEvent::coarse("lifecycle"),
     );
     Ok(())
+}
+
+pub(crate) async fn shutdown_client_for_app_exit<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &DesktopAppState,
+) -> Result<(), BridgeError> {
+    let _managed_lifecycle = state.managed_server_lifecycle.lock().await;
+    shutdown_client_under_managed_lifecycle(app, state).await
 }
 
 /// Stops the live desktop client and returns the owned client lifecycle lock
@@ -376,12 +384,36 @@ pub(super) async fn exclude_client(
             task.abort();
         }
         if let Some(core) = core {
-            core.shutdown()
-                .await
-                .map_err(|error| BridgeError::untyped(error.to_string()))?;
+            return shutdown_excluded_core(core, lifecycle_guard, |core| async move {
+                core.shutdown()
+                    .await
+                    .map_err(|error| BridgeError::untyped(error.to_string()))
+            })
+            .await;
         }
         return Ok(lifecycle_guard);
     }
+}
+
+async fn shutdown_excluded_core<F, Fut>(
+    core: Arc<ClientCore>,
+    lifecycle_guard: ClientLifecycleGuard,
+    shutdown: F,
+) -> Result<ClientLifecycleGuard, BridgeError>
+where
+    F: FnOnce(Arc<ClientCore>) -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = Result<(), BridgeError>> + Send + 'static,
+{
+    let (finished_tx, finished_rx) = tokio::sync::oneshot::channel();
+    tokio::spawn(async move {
+        let result = shutdown(core).await;
+        let _ = finished_tx.send((lifecycle_guard, result));
+    });
+    let (lifecycle_guard, result) = finished_rx
+        .await
+        .map_err(|error| BridgeError::untyped(error.to_string()))?;
+    result?;
+    Ok(lifecycle_guard)
 }
 
 /// Quits the desktop application without touching any local state; the
@@ -451,7 +483,7 @@ async fn start_client_core_async(
                 let result =
                     ClientCore::start_with_paths_reporting_stages(paths, options, stage_tx).await;
                 deliver_client_start(tx, result, lifecycle, |core: ClientCore| async move {
-                    core.shutdown().await
+                    Arc::new(core).shutdown().await
                 })
                 .await;
             })
@@ -804,6 +836,138 @@ mod tests {
         (temp, DesktopAppState::new(policy))
     }
 
+    #[tokio::test]
+    async fn cancelled_exclusion_waiter_keeps_lifecycle_guard_until_shutdown_owner_returns() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../gents/tests/fixtures/native_claim_lifetime.json"
+        ))
+        .expect("generated native claim lifetime fixture");
+        let case = fixture
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| case["name"] == "client_shutdown_cancel_retains_claim_until_return")
+            .expect("Lean client shutdown cancellation case");
+        let events = case["events"].as_array().unwrap();
+        let expected_events = [
+            "native_started",
+            "caller_cancelled",
+            "native_returned",
+            "access_released",
+            "lifecycle_guard_released",
+            "gate_release_requested",
+        ]
+        .map(|event| serde_json::Value::String(event.to_owned()));
+        assert_eq!(events, expected_events.as_slice());
+        let observation_for = |event: &str| {
+            let index = events
+                .iter()
+                .position(|candidate| candidate == event)
+                .expect("event in generated trace");
+            &case["observations"][index]
+        };
+        let lifecycle_guard_held_for = |event: &str| {
+            observation_for(event)["lifecycle_guard_held"]
+                .as_bool()
+                .expect("lifecycle guard observation in generated trace")
+        };
+        let claim_held_for = |event: &str| {
+            observation_for(event)["claim_held"]
+                .as_bool()
+                .expect("claim observation in generated trace")
+        };
+
+        let (_temp, state) = test_state();
+        let state = Arc::new(state);
+        let paths = state.policy.desktop_paths.clone();
+        let core = Arc::new(
+            ClientCore::start_with_paths_and_options(
+                paths.clone(),
+                gents_desktop_core::client::ClientCoreOptions::local_only(),
+            )
+            .await
+            .expect("start claimed desktop client"),
+        );
+        let home = paths.root().to_path_buf();
+        let data = paths.node_data_dir().to_path_buf();
+        let lifecycle_guard = Arc::clone(&state.client_lifecycle).lock_owned().await;
+        let started = Arc::new(tokio::sync::Notify::new());
+        let allow_shutdown = Arc::new(tokio::sync::Notify::new());
+        let access_released = Arc::new(tokio::sync::Notify::new());
+        let allow_owner_return = Arc::new(tokio::sync::Notify::new());
+        let shutdown_started = Arc::clone(&started);
+        let shutdown_allowed = Arc::clone(&allow_shutdown);
+        let access_released_signal = Arc::clone(&access_released);
+        let owner_return_allowed = Arc::clone(&allow_owner_return);
+        let waiter = tokio::spawn(async move {
+            shutdown_excluded_core(core, lifecycle_guard, move |core| async move {
+                shutdown_started.notify_one();
+                shutdown_allowed.notified().await;
+                core.shutdown()
+                    .await
+                    .map_err(|error| BridgeError::untyped(error.to_string()))?;
+                access_released_signal.notify_one();
+                owner_return_allowed.notified().await;
+                Ok(())
+            })
+            .await
+        });
+
+        tokio::time::timeout(std::time::Duration::from_secs(10), started.notified())
+            .await
+            .expect("owned exclusion shutdown task started");
+        waiter.abort();
+        assert!(waiter.await.unwrap_err().is_cancelled());
+        assert_eq!(
+            gents::home::lock_store(&home, &data).is_err(),
+            claim_held_for("caller_cancelled")
+        );
+        assert_eq!(
+            Arc::clone(&state.client_lifecycle)
+                .try_lock_owned()
+                .is_err(),
+            lifecycle_guard_held_for("caller_cancelled")
+        );
+
+        allow_shutdown.notify_one();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            access_released.notified(),
+        )
+        .await
+        .expect("client shutdown releases the store claim before exclusion ends");
+        assert_eq!(
+            gents::home::lock_store(&home, &data).is_err(),
+            claim_held_for("access_released")
+        );
+        assert_eq!(
+            Arc::clone(&state.client_lifecycle)
+                .try_lock_owned()
+                .is_err(),
+            lifecycle_guard_held_for("access_released")
+        );
+
+        allow_owner_return.notify_one();
+        let lifecycle_guard = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            Arc::clone(&state.client_lifecycle).lock_owned(),
+        )
+        .await
+        .expect("exclusion guard releases after its shutdown owner returns");
+        drop(lifecycle_guard);
+        assert_eq!(
+            Arc::clone(&state.client_lifecycle)
+                .try_lock_owned()
+                .is_err(),
+            lifecycle_guard_held_for("lifecycle_guard_released")
+        );
+        assert_eq!(
+            gents::home::lock_store(&home, &data).is_err(),
+            claim_held_for("lifecycle_guard_released"),
+            "the native store claim is released before the lifecycle guard"
+        );
+    }
+
     /// A reset holds the client exclusion across shutdown and retirement: an
     /// in-flight start finishes first, and a start claimed meanwhile cannot
     /// reach the client state until the exclusion is released.
@@ -909,6 +1073,7 @@ mod tests {
                 entry.display()
             );
         }
+        let core = Arc::new(core);
         core.shutdown().await.expect("shutdown upgraded client");
         drop(core);
         drop(lifecycle);

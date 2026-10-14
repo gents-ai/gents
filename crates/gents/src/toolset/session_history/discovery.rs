@@ -833,7 +833,7 @@ resources:
             )
             .await
             .unwrap();
-        ConfigAccess::Local(node.clone())
+        ConfigAccess::local(node.clone())
             .add_schema(&crate::schema::AGENT_SESSION_SCHEMA.replace(
                 "type AgentSession ",
                 &format!("type AgentSession @policy(id: \"{policy}\", resource: \"sessions\") "),

@@ -3000,7 +3000,7 @@ async fn outcome_schema_error_returns_an_executable_schema_recovery() {
     let identity = node_identity("schema-recovery");
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
-    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let access = crate::config_client::ConfigAccess::local(node.clone());
     access
         .add_schema("type Delivery { body: String }")
         .await
@@ -4614,7 +4614,7 @@ async fn direct_tools_preview_and_apply_enforce_and_persist_canonical_workspace_
         .expect("apply admits the selected root");
     let tools_id = format!("{agent_id}:tools");
     let persisted: crate::document_config::Tools =
-        crate::config_client::ConfigAccess::Local(node.clone())
+        crate::config_client::ConfigAccess::local(node.clone())
             .transact_write("test.self_config.read_tools", |txn| {
                 let owner = owner.clone();
                 let tools_id = tools_id.clone();
@@ -5029,7 +5029,7 @@ async fn backend_self_config_cannot_set_or_change_an_oauth_account() {
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "acct").await;
     let core = SelfConfigCore::new(node.clone(), owner.clone(), "acct".into()).unwrap();
-    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let access = crate::config_client::ConfigAccess::local(node.clone());
     let store = |kind: &str, auth: Value| {
         let backend: crate::InferenceBackend = serde_json::from_value(json!({
             "node_did": owner, "backend_id": "acct:backend", "name": "Test inference",
@@ -5106,7 +5106,7 @@ async fn account_choice_core(
     let identity = node_identity(agent);
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, agent).await;
-    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let access = crate::config_client::ConfigAccess::local(node.clone());
     for (id, kind, auth) in [
         (
             "chat-original",
@@ -5257,7 +5257,7 @@ async fn agent_profile_pick_cannot_switch_account() {
 async fn grok_accounts_core(agent: &str, original: bool, g2: bool) -> SelfConfigCore {
     let (node, _, core) = account_choice_core(agent).await;
     let owner = core.node_did().to_owned();
-    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let access = crate::config_client::ConfigAccess::local(node.clone());
     let backend: crate::InferenceBackend = serde_json::from_value(json!({
         "node_did": owner, "backend_id": "grok-g2", "name": "grok-g2",
         "provider_kind": "XaiGrokOAuth", "endpoint": "http://127.0.0.1:1/v1",
@@ -6236,7 +6236,7 @@ async fn backend_reads_expose_operator_catalogs_without_credentials_or_provider_
     let identity = node_identity("backend-catalog-read");
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "setup").await;
-    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let access = crate::config_client::ConfigAccess::local(node.clone());
     let backend = |id: &str, kind: &str, auth: Value| -> crate::document_config::InferenceBackend {
         serde_json::from_value(json!({
             "node_did": owner, "backend_id": id, "name": id, "provider_kind": kind,
@@ -6368,7 +6368,7 @@ async fn pack_search_uses_registry_pagination_without_installing() {
             .await
             .is_err());
     }
-    let access = crate::config_client::ConfigAccess::Local(node);
+    let access = crate::config_client::ConfigAccess::local(node);
     assert!(
         crate::pack::read_installed_pack(&access, &did, "fixture/review_graph")
             .await
@@ -6413,7 +6413,7 @@ async fn pack_documents_install_and_release_graph_dependencies() {
     ];
     args.extend(slots);
     config_call(&tools, &args).await.unwrap();
-    let access = crate::config_client::ConfigAccess::Local(node);
+    let access = crate::config_client::ConfigAccess::local(node);
     assert!(
         crate::pack::read_installed_pack(&access, &did, "fixture/review_graph")
             .await
@@ -6478,7 +6478,7 @@ async fn pack_document_installation_uses_existing_lifecycle() {
     .unwrap();
     assert_eq!(preview["ready"], true, "{preview}");
     let digest = preview["artifact_digest"].as_str().unwrap();
-    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let access = crate::config_client::ConfigAccess::local(node.clone());
     assert!(
         crate::pack::read_installed_pack(&access, &did, "fixture/documents_fixture")
             .await
@@ -6618,7 +6618,7 @@ async fn published_review_pack_preserves_installation_when_upgrade_needs_authori
         } else {
             applied.unwrap();
         }
-        let access = crate::config_client::ConfigAccess::Local(node.clone());
+        let access = crate::config_client::ConfigAccess::local(node.clone());
         let installed = crate::pack::read_installed_pack(&access, &did, "gents/code_review")
             .await
             .unwrap()
@@ -6628,7 +6628,7 @@ async fn published_review_pack_preserves_installation_when_upgrade_needs_authori
     config_call(&tools, &["pack", "remove", "gents/code_review"])
         .await
         .unwrap();
-    let access = crate::config_client::ConfigAccess::Local(node);
+    let access = crate::config_client::ConfigAccess::local(node);
     assert!(
         crate::pack::read_installed_pack(&access, &did, "gents/code_review")
             .await
@@ -6689,7 +6689,7 @@ async fn seed_account_view(node: &std::sync::Arc<defra_node::EmbeddedNode>, owne
     upsert_oauth_credential(node, &account(Some("acct-l2"), "Work", false))
         .await
         .unwrap();
-    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let access = crate::config_client::ConfigAccess::local(node.clone());
     for (backend_id, kind, auth, endpoint) in [
         (
             "backend-usage-claude",
@@ -7029,7 +7029,7 @@ async fn public_agent_management_previews_without_publishing_and_checks_signer()
     let identity = node_identity("public-agent-management");
     let owner = identity.did().to_owned();
     crate::test_support::install_test_agent(&node, &owner, "seed").await;
-    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let access = crate::config_client::ConfigAccess::local(node.clone());
     let mut args = ConfigureAgentParams {
         action: "preview".into(),
         operation: Some("create".into()),
@@ -7115,7 +7115,7 @@ async fn public_agent_edit_preserves_disabled_state_and_rejects_clone_options() 
     let mut stored = crate::load_agent(&node, "target").await.unwrap().unwrap();
     stored.enabled = false;
     crate::upsert_agent(&node, &stored).await.unwrap();
-    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let access = crate::config_client::ConfigAccess::local(node.clone());
     let mut args = ConfigureAgentParams {
         action: "preview".into(),
         operation: Some("edit".into()),
@@ -7219,7 +7219,7 @@ async fn public_prompt_edits_require_an_existing_unshared_context_without_partia
     let mut sibling = crate::load_agent(&node, "sibling").await.unwrap().unwrap();
     sibling.context_id = shared.context_id;
     crate::upsert_agent(&node, &sibling).await.unwrap();
-    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let access = crate::config_client::ConfigAccess::local(node.clone());
     let query = "query { Agent(order: {agent_id: ASC}) { agent_id display_name context_id inference_profile_id enabled } AgentContext(order: {context_id: ASC}) { context_id display_name system_prompt tools_id } }";
     let before = access.execute(query).await.unwrap();
     for (target, expected) in [
@@ -7387,7 +7387,7 @@ async fn model_clone_is_atomically_grant_bounded_but_operator_clone_is_not() {
     operator_args.display_name = StringUpdate::Set("Operator clone".into());
     let operator: Value = serde_json::from_str(
         &configure_agent(
-            &crate::config_client::ConfigAccess::Local(node.clone()),
+            &crate::config_client::ConfigAccess::local(node.clone()),
             &owner,
             identity.as_ref(),
             &operator_args,

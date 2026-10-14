@@ -10,7 +10,7 @@ use crate::support::test_db;
 #[tokio::test]
 async fn canonical_config_roundtrips_scoped_references_and_preserves_explicit_default() {
     let db = test_db("document-config-scoped-roundtrip").await;
-    let access = ConfigAccess::Local(db.node.clone());
+    let access = ConfigAccess::local(db.node.clone());
     // Equal logical IDs under different principals must resolve independently.
     for (owner, model) in [
         ("did:test:roundtrip", "model-a"),
@@ -162,7 +162,7 @@ async fn canonical_config_roundtrips_scoped_references_and_preserves_explicit_de
 #[tokio::test]
 async fn session_create_returns_its_physical_receipt() {
     let db = test_db("session-create-receipt").await;
-    ConfigAccess::Local(db.node.clone()).transact_write("test.session.create_receipt", |txn| {
+    ConfigAccess::local(db.node.clone()).transact_write("test.session.create_receipt", |txn| {
         Box::pin(async move {
             let response = txn.execute_with_variables(
                 "mutation($input:AgentSessionMutationInputArg!){create_AgentSession(input:$input){_docID}}",

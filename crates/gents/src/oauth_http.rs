@@ -300,7 +300,7 @@ pub async fn bootstrap_oauth_client(
     pick: AccountPick<'_>,
 ) -> Result<(Arc<DbCredentialBearer>, OAuthCredential)> {
     let credential = resolve_oauth_credential(
-        &crate::config_client::ConfigAccess::Local(node.clone()),
+        &crate::config_client::ConfigAccess::local(node.clone()),
         node_did,
         provider,
         pick,
@@ -546,7 +546,7 @@ mod tests {
             OAuthRefreshKind, SignInResult,
         };
         let node = test_node().await;
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         let did = "did:key:z6MkTestRebuiltClient";
         let sign_in = |who: &str, expires_in| {
             credential_from_login_tokens(

@@ -26,7 +26,7 @@ async fn fixture() -> (Arc<EmbeddedNode>, ConfigAccess, GraphPackageInstallBindi
             ("verifier".into(), "grok:inference".into()),
         ]),
     };
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     (node, access, options)
 }
 

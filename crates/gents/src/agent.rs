@@ -264,7 +264,7 @@ impl Gents {
         migration::ensure_all_runtime_migrations(node.clone()).await?;
         let backend_health = options.backend_health.clone().unwrap_or_default();
         let plugin_models = crate::plugin::model_calls::AccessModels(
-            crate::config_client::ConfigAccess::Local(node.clone()),
+            crate::config_client::ConfigAccess::local(node.clone()),
         );
         let plugins = Arc::new(plugin_executor(options.plugin_home, plugin_models));
         let document_runtime_context = DocumentResolveContext {

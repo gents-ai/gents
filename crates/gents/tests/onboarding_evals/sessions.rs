@@ -133,7 +133,7 @@ async fn retained_session_eval_output_metrics_use_native_canonical_reader() -> a
                 .build()
                 .await?,
         );
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         let rows = access.execute("{ AgentToolCall(filter: {tool_name: {_eq: \"sessions\"}}) { _docID node_did session_id requester_did lifecycle_state } }").await?;
         let calls = rows["data"]["AgentToolCall"]
             .as_array()
@@ -214,7 +214,7 @@ async fn retained_tool_trace_uses_native_canonical_reader() -> anyhow::Result<()
             .build()
             .await?,
     );
-    let access = ConfigAccess::Local(node);
+    let access = ConfigAccess::local(node);
     let response = access.execute(&format!("{{AgentToolCall(filter: {{node_did: {{_eq: \"{}\"}}}}, order: {{started_at: ASC}}) {{_docID node_did session_id requester_did tool_name lifecycle_state started_at}}}}",escape_graphql_string(&did))).await?;
     let rows = response["data"]["AgentToolCall"]
         .as_array()

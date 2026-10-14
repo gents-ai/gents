@@ -18,6 +18,7 @@ use std::time::{Duration, SystemTime};
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use defra_p2p_adapter::P2POperations as P2POps;
+use gents::config_client::ConfigAccess;
 use gents::P2pSyncStatusSnapshot;
 use gents_protocol::peer_schema::ReplicatedSchemaSkew;
 use p2p::iroh::{IrohDiscoveryConfig, IrohRelayModeConfig};
@@ -351,7 +352,7 @@ enum P2PSupervisorCommand {
 }
 
 pub struct ClientCore {
-    store_lock: Mutex<Option<gents::home::StoreLock>>,
+    store_access: Mutex<Option<ConfigAccess>>,
     paths: DesktopPaths,
     options: ClientCoreOptions,
     node_identity: PrincipalIdentity,
@@ -367,10 +368,21 @@ pub struct ClientCore {
     last_loaded_for: tokio::sync::Mutex<HashMap<String, std::time::Instant>>,
     request_patch_signatures: tokio::sync::Mutex<HashMap<String, (usize, usize, u64)>>,
     p2p_control: Mutex<Option<mpsc::Sender<P2PSupervisorCommand>>>,
+    shutdown_completion: Mutex<Option<watch::Receiver<Option<std::result::Result<(), String>>>>>,
+    #[cfg(test)]
+    shutdown_test_pause: Mutex<Option<Arc<ShutdownTestPause>>>,
     last_mutation_error: StdRwLock<Option<String>>,
     local_peer_id: String,
     listen_addresses: Vec<String>,
     bootstrap_errors: Vec<String>,
+}
+
+#[cfg(test)]
+struct ShutdownTestPause {
+    node_shutdown_started: tokio::sync::Notify,
+    allow_node_shutdown: tokio::sync::Notify,
+    node_shutdown_returned: tokio::sync::Notify,
+    allow_access_release: tokio::sync::Notify,
 }
 
 impl ClientCore {
@@ -664,7 +676,38 @@ impl ClientCore {
             .map(|h| h.metrics_snapshot())
     }
 
-    pub async fn shutdown(&self) -> Result<()> {
+    pub async fn shutdown(self: &Arc<Self>) -> Result<()> {
+        let mut completion = self.shutdown_completion.lock().await;
+        if completion.is_none() {
+            let (result_tx, result_rx) = watch::channel(None);
+            *completion = Some(result_rx.clone());
+            let owner = Arc::clone(self);
+            tokio::spawn(async move {
+                let result = owner
+                    .shutdown_inner()
+                    .await
+                    .map_err(|error| error.to_string());
+                result_tx.send_replace(Some(result));
+            });
+        }
+        let mut result_rx = completion
+            .as_ref()
+            .expect("shutdown owner installed")
+            .clone();
+        drop(completion);
+
+        loop {
+            if let Some(result) = result_rx.borrow().clone() {
+                return result.map_err(anyhow::Error::msg);
+            }
+            result_rx
+                .changed()
+                .await
+                .context("client shutdown owner ended without a result")?;
+        }
+    }
+
+    async fn shutdown_inner(&self) -> Result<()> {
         tracing::info!("client core shutdown: begin");
         self.p2p_control.lock().await.take();
         if let Some(task) = self.p2p_supervisor.lock().await.take() {
@@ -677,8 +720,18 @@ impl ClientCore {
             observer.shutdown().await;
         }
         tracing::info!("client core shutdown: stopping embedded node");
+        #[cfg(test)]
+        if let Some(pause) = self.shutdown_test_pause.lock().await.clone() {
+            pause.node_shutdown_started.notify_one();
+            pause.allow_node_shutdown.notified().await;
+        }
         self.node.shutdown().await;
-        self.store_lock.lock().await.take();
+        #[cfg(test)]
+        if let Some(pause) = self.shutdown_test_pause.lock().await.clone() {
+            pause.node_shutdown_returned.notify_one();
+            pause.allow_access_release.notified().await;
+        }
+        self.store_access.lock().await.take();
         tracing::info!("client core shutdown: complete");
         Ok(())
     }

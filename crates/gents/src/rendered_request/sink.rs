@@ -450,7 +450,7 @@ impl DefraRenderedRequestSink {
             .and_then(Value::as_str)
             .context("stored RenderedRequest request_json was not a string")?
             .to_owned();
-        let access = crate::config_client::ConfigAccess::Local(Arc::clone(&self.node));
+        let access = crate::config_client::ConfigAccess::local(Arc::clone(&self.node));
         let decoded_pair = if version == 1 {
             None
         } else {

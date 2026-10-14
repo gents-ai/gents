@@ -1260,7 +1260,7 @@ async fn replay_resolution_reads_shared_request_once_and_keeps_every_physical_ca
     let mut duplicate = fixture.header.clone();
     duplicate.sequence += 1;
     duplicate.message_key.push_str("-physical-duplicate");
-    let access = crate::config_client::ConfigAccess::Local(fixture.node.clone());
+    let access = crate::config_client::ConfigAccess::local(fixture.node.clone());
     access
         .transact_write("test.replay.duplicate_header", |txn| {
             let duplicate = duplicate.clone();

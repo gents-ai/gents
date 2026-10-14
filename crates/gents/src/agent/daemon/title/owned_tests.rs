@@ -112,7 +112,7 @@ impl CompletionModel for TitleProvider {
         if let Some((node, doc_id, node_did)) = &self.fence_generation {
             let doc = crate::graphql::escape_graphql_string(doc_id);
             let owner = crate::graphql::escape_graphql_string(node_did);
-            ConfigAccess::Local(node.clone())
+            ConfigAccess::local(node.clone())
                 .write(
                     "test.title_fence_generation",
                     &format!(r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{doc}" }}, node_did: {{ _eq: "{owner}" }} }}, input: {{ execution_generation: "fenced-title-generation" }}) {{ _docID }} }}"#),
@@ -235,7 +235,7 @@ impl TitleFixture {
         crate::sign_agent_request_create(identity.as_ref(), &mut create)
             .await
             .unwrap();
-        let response = ConfigAccess::Local(node.clone())
+        let response = ConfigAccess::local(node.clone())
             .write("test.title_parent", &create.graphql_mutation().unwrap())
             .await
             .unwrap();
@@ -259,7 +259,7 @@ impl TitleFixture {
         let input =
             gents_protocol::graphql::graphql_input_literal(&serde_json::to_value(session).unwrap())
                 .unwrap();
-        ConfigAccess::Local(node.clone())
+        ConfigAccess::local(node.clone())
             .write(
                 "test.title_session",
                 &format!("mutation {{ create_AgentSession(input: {input}) {{ _docID }} }}"),
@@ -315,7 +315,7 @@ impl TitleFixture {
         .await
         .unwrap();
         let doc = crate::graphql::escape_graphql_string(&self.parent.doc_id);
-        let response = ConfigAccess::Local(self.node.clone())
+        let response = ConfigAccess::local(self.node.clone())
             .execute(&format!("{{ AgentRequest(filter: {{ _docID: {{ _eq: \"{doc}\" }} }}, limit: 1) {{ lifecycle_state }} }}"))
             .await
             .unwrap();
@@ -359,7 +359,7 @@ impl TitleFixture {
             crate::lifecycle::TerminalizeResult::Won
         );
         let doc = crate::graphql::escape_graphql_string(&self.parent.doc_id);
-        let response = ConfigAccess::Local(self.node.clone())
+        let response = ConfigAccess::local(self.node.clone())
             .execute(&format!("{{ AgentRequest(filter: {{ _docID: {{ _eq: \"{doc}\" }} }}, limit: 1) {{ lifecycle_state interrupt_requested_at terminal_output }} }}"))
             .await
             .unwrap();
@@ -377,7 +377,7 @@ impl TitleFixture {
 
     async fn session_message_count(&self) -> usize {
         let session = crate::graphql::escape_graphql_string(&self.parent.session_id);
-        let response = ConfigAccess::Local(self.node.clone())
+        let response = ConfigAccess::local(self.node.clone())
             .execute(&format!("{{ AgentMessage(filter: {{ session_id: {{ _eq: \"{session}\" }} }}) {{ _docID }} }}"))
             .await
             .unwrap();
@@ -387,7 +387,7 @@ impl TitleFixture {
     async fn output_rows(&self) -> (Vec<crate::session::canonical_rows::OutputSegmentRow>, usize) {
         let doc = crate::graphql::escape_graphql_string(&self.title.doc_id);
         let query = format!("{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: \"{doc}\" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} AgentMessage(filter: {{ request_doc_id: {{ _eq: \"{doc}\" }} }}) {{ _docID }} }}");
-        let response = ConfigAccess::Local(self.node.clone())
+        let response = ConfigAccess::local(self.node.clone())
             .execute(&query)
             .await
             .unwrap();
@@ -410,7 +410,7 @@ impl TitleFixture {
     ) {
         let doc = crate::graphql::escape_graphql_string(&self.title.doc_id);
         let query = format!("{{ AgentRequest(filter: {{ _docID: {{ _eq: \"{doc}\" }} }}, limit: 1) {{ lifecycle_state terminal_output }} }}");
-        let response = ConfigAccess::Local(self.node.clone())
+        let response = ConfigAccess::local(self.node.clone())
             .execute(&query)
             .await
             .unwrap();
@@ -856,7 +856,7 @@ async fn crashed_title_recovers_committed_reasoning_without_publication() {
     assert!(aborted.iter().all(|row| row.segment.close.is_none()));
     let physical = crate::graphql::escape_graphql_string(&fixture.title.doc_id);
     let owner = crate::graphql::escape_graphql_string(fixture.identity.did());
-    let response = ConfigAccess::Local(fixture.node.clone())
+    let response = ConfigAccess::local(fixture.node.clone())
         .execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{physical}" }}, node_did: {{ _eq: "{owner}" }} }}, limit: 2) {{ execution_generation lifecycle_state }} }}"#))
         .await
         .expect("read title lease owner");
@@ -873,7 +873,7 @@ async fn crashed_title_recovers_committed_reasoning_without_publication() {
     let past = crate::graphql::escape_graphql_string(
         &(chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339(),
     );
-    let expired = ConfigAccess::Local(fixture.node.clone())
+    let expired = ConfigAccess::local(fixture.node.clone())
         .write("test.title_expire_own_lease", &format!(r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{physical}" }}, node_did: {{ _eq: "{owner}" }}, execution_generation: {{ _eq: "{generation}" }}, lifecycle_state: {{ _eq: "processing" }} }}, input: {{ execution_lease_expires_at: "{past}" }}) {{ _docID }} }}"#))
         .await
         .expect("expire exact title generation");
@@ -1063,7 +1063,7 @@ async fn title_audit_is_dispatched_once_by_watcher_router_and_daemon() {
                 crate::graphql::escape_graphql_string(RequestPurpose::TitleAudit.as_str());
             let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
             loop {
-                let response = ConfigAccess::Local(fixture.node.clone())
+                let response = ConfigAccess::local(fixture.node.clone())
                     .execute(&format!("{{ AgentRequest(filter: {{ session_id: {{ _eq: \"{session}\" }}, purpose: {{ _eq: \"{purpose}\" }} }}) {{ _docID }} }}"))
                     .await
                     .unwrap();
@@ -1432,7 +1432,7 @@ async fn owned_title_shutdown_reports_fenced_partial_without_terminalizing() {
     assert!(before.iter().all(|row| row.segment.close.is_none()));
     let doc = crate::graphql::escape_graphql_string(&fixture.title.doc_id);
     let owner = crate::graphql::escape_graphql_string(&fixture.title.node_did);
-    ConfigAccess::Local(fixture.node.clone())
+    ConfigAccess::local(fixture.node.clone())
         .write(
             "test.title_shutdown_fence_generation",
             &format!(r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{doc}" }}, node_did: {{ _eq: "{owner}" }} }}, input: {{ execution_generation: "fenced-title-generation" }}) {{ _docID }} }}"#),
@@ -1494,7 +1494,7 @@ async fn reasoning_only_title_retains_each_attempt_and_uses_bounded_fallback() {
     assert_title_audit(&fixture, &fields, outcome, 2, false).await;
 
     let doc = crate::graphql::escape_graphql_string(&fixture.title.doc_id);
-    let response = ConfigAccess::Local(fixture.node.clone())
+    let response = ConfigAccess::local(fixture.node.clone())
         .execute(&format!("{{ AgentRequest(filter: {{ _docID: {{ _eq: \"{doc}\" }} }}, limit: 1) {{ execution_generation }} }}"))
         .await
         .unwrap();
@@ -1516,7 +1516,7 @@ async fn reasoning_only_title_retains_each_attempt_and_uses_bounded_fallback() {
         )
     );
     let session = crate::graphql::escape_graphql_string(&fixture.parent.session_id);
-    let response = ConfigAccess::Local(fixture.node.clone())
+    let response = ConfigAccess::local(fixture.node.clone())
         .execute(&format!(
             "{{ AgentSession(filter: {{ session_id: {{ _eq: \"{session}\" }} }}) {{ title }} }}"
         ))
@@ -1571,7 +1571,7 @@ async fn a_usage_limited_title_falls_back_without_failing_the_turn() {
     );
     let parent_state = |node: Arc<EmbeddedNode>, doc: String| async move {
         let doc = crate::graphql::escape_graphql_string(&doc);
-        ConfigAccess::Local(node)
+        ConfigAccess::local(node)
             .execute(&format!("{{ AgentRequest(filter: {{ _docID: {{ _eq: \"{doc}\" }} }}, limit: 1) {{ lifecycle_state }} }}"))
             .await
             .unwrap()["data"]["AgentRequest"][0]["lifecycle_state"]
@@ -1591,7 +1591,7 @@ async fn a_usage_limited_title_falls_back_without_failing_the_turn() {
         usize::try_from(super::TITLE_GENERATION_MAX_ATTEMPTS).unwrap()
     );
     let request_id = crate::graphql::escape_graphql_string(&fixture.title.request_id);
-    let response = ConfigAccess::Local(fixture.node.clone())
+    let response = ConfigAccess::local(fixture.node.clone())
         .execute(&format!("{{ InferenceCall(filter: {{ request_id: {{ _eq: \"{request_id}\" }} }}) {{ call_kind call_state failure_reason }} }}"))
         .await
         .unwrap();
@@ -1624,7 +1624,7 @@ async fn a_usage_limited_title_falls_back_without_failing_the_turn() {
         )
     );
     let session = crate::graphql::escape_graphql_string(&fixture.parent.session_id);
-    let response = ConfigAccess::Local(fixture.node.clone())
+    let response = ConfigAccess::local(fixture.node.clone())
         .execute(&format!(
             "{{ AgentSession(filter: {{ session_id: {{ _eq: \"{session}\" }} }}) {{ title }} }}"
         ))
@@ -1663,7 +1663,7 @@ async fn fenced_title_output_fails_closed_without_retry() {
         "{error:#}"
     );
     let session = crate::graphql::escape_graphql_string(&fixture.parent.session_id);
-    let response = ConfigAccess::Local(fixture.node.clone())
+    let response = ConfigAccess::local(fixture.node.clone())
         .execute(&format!(
             "{{ AgentSession(filter: {{ session_id: {{ _eq: \"{session}\" }} }}) {{ title }} }}"
         ))

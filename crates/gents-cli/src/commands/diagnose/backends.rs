@@ -230,7 +230,7 @@ mod tests {
                 .await;
             assert!(!result.has_errors(), "{:?}", result.errors);
         }
-        let access = ConfigAccess::Local(node);
+        let access = ConfigAccess::local(node);
         let report = backend_check(&access, &backend, &BTreeSet::from(["claude-sonnet-5"]))
             .await
             .unwrap();

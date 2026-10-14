@@ -179,7 +179,7 @@ impl Fixture {
     /// agent's profile on A.
     pub async fn claude_accounts(&self) -> ClaudeAccounts {
         let did = self.identity.did().to_owned();
-        let access = ConfigAccess::Local(self.node.clone());
+        let access = ConfigAccess::local(self.node.clone());
         let preset =
             preset_account_backend(&did, CLAUDE_OAUTH_PROVIDER, None, "Claude".into()).unwrap();
         write_inference_backend_document(&access, &preset)

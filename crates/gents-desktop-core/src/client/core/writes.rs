@@ -350,7 +350,7 @@ impl ClientCore {
     fn session_queue_access(&self, node_did: &str) -> ConfigAccess {
         self.operator_graphql(node_did)
             .map(ConfigAccess::Graphql)
-            .unwrap_or_else(|| ConfigAccess::Local(self.node_arc()))
+            .unwrap_or_else(|| ConfigAccess::local(self.node_arc()))
     }
 
     pub async fn prepare_user_message_input(
@@ -444,7 +444,7 @@ impl ClientCore {
     ) -> Result<gents::run_timeline::RunTimeline> {
         normalize_required("node_did", node_did)?;
         let request_id = normalize_required("request_id", request_id)?;
-        let access = gents::config_client::ConfigAccess::Local(self.node_arc());
+        let access = gents::config_client::ConfigAccess::local(self.node_arc());
         let timeline = tokio::time::timeout(
             std::time::Duration::from_secs(15),
             gents::run_timeline_fetch::load_run_timeline(&access, request_id),
@@ -1292,7 +1292,7 @@ impl ClientCore {
             Some(_) => anyhow::bail!(
                 "managed node {node_did} has no operator GraphQL endpoint; refusing a desktop-replica configuration fallback"
             ),
-            None => Ok(ConfigAccess::Local(self.node_arc())),
+            None => Ok(ConfigAccess::local(self.node_arc())),
         }
     }
 
@@ -2716,7 +2716,7 @@ mod accepted_edit_projection_tests {
         crate::client::schema::ensure_runtime_schemas(node.as_ref())
             .await
             .expect("schemas");
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         let seed = access
             .write(
                 "test.foreign_edit_projection_row",

@@ -5,6 +5,7 @@ use gents_protocol::output::{
     OutputSegment, OutputSource, OutputWriter, SegmentRun, StreamDeclaration, StreamPayload,
 };
 use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
+use std::sync::Arc;
 
 fn rows() -> ClientStoreRows {
     ClientStoreRows {
@@ -364,5 +365,5 @@ async fn operator_delta_uses_fresh_rows_with_a_payload_free_observer_and_snapsho
     .unwrap();
     assert_eq!(terminal.outcome, "snapshotRequired");
     assert!(core.store().snapshot().output_segments.is_empty());
-    core.shutdown().await.unwrap();
+    Arc::new(core).shutdown().await.unwrap();
 }

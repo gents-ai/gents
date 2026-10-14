@@ -77,7 +77,7 @@ impl BoundedQueryTool {
 
     pub(crate) async fn validate_schema(&self) -> Result<()> {
         self.ensure_well_formed()?;
-        let fields = crate::config_client::ConfigAccess::Local(self.node.clone())
+        let fields = crate::config_client::ConfigAccess::local(self.node.clone())
             .collection_fields(&self.decl.collection)
             .await?
             .ok_or_else(|| anyhow!("collection `{}` is not available", self.decl.collection))?;
@@ -117,7 +117,7 @@ impl BoundedQueryTool {
     }
 
     async fn filter_parameters(&self) -> Result<Map<String, Value>> {
-        let version = crate::config_client::ConfigAccess::Local(self.node.clone())
+        let version = crate::config_client::ConfigAccess::local(self.node.clone())
             .collection_version(&self.decl.collection)
             .await?
             .ok_or_else(|| anyhow!("collection `{}` is not available", self.decl.collection))?;
@@ -413,7 +413,7 @@ impl Tool for BoundedQueryTool {
             .await?
         } else {
             super::execute_command(
-                &crate::config_client::ConfigAccess::Local(self.node.clone()),
+                &crate::config_client::ConfigAccess::local(self.node.clone()),
                 &command,
                 &scope,
             )
@@ -601,7 +601,7 @@ mod tests {
                 for page in [json!({"doc_id":doc,"field":"run_id"}),json!({"doc_id":doc,"field":"title","offset_bytes":1}),json!({"doc_id":doc,"field":"title","offset_bytes":2}),json!({"doc_id":doc,"field":"title","expected_hash":"changed"})] {
                     assert!(Tool::call(&tool,BoundedQueryParams(json!({"fields":["title"],"field_page":page}).as_object().unwrap().clone())).await.is_err());
                 }
-                let other = crate::config_client::ConfigAccess::Local(node.clone()).execute("{ CandidateFinding(filter: {finding_id: {_eq: \"f2\"}}) {_docID} }").await.unwrap();
+                let other = crate::config_client::ConfigAccess::local(node.clone()).execute("{ CandidateFinding(filter: {finding_id: {_eq: \"f2\"}}) {_docID} }").await.unwrap();
                 let other_doc=&other["data"]["CandidateFinding"][0]["_docID"];
                 assert!(Tool::call(&tool,BoundedQueryParams(json!({"fields":["title"],"field_page":{"doc_id":other_doc,"field":"title"}}).as_object().unwrap().clone())).await.is_err());
                 crate::config_client::ConfigAccess::write_local(&node,"test.field_recovery.change",&format!("mutation {{update_CandidateFinding(docID: \"{}\", input: {{title: \"changed\"}}) {{_docID}}}}",crate::graphql::escape_graphql_string(&doc))).await.unwrap();

@@ -221,7 +221,7 @@ async fn empty_field_declaration_reports_the_surface_contract_without_writing() 
     ] {
         assert!(error.contains(detail), "{error}");
     }
-    let rows = crate::ConfigAccess::Local(node)
+    let rows = crate::ConfigAccess::local(node)
         .execute("{ ActionRequest { _docID } }")
         .await
         .unwrap();

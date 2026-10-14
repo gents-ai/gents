@@ -1079,7 +1079,7 @@ impl PackInstaller {
             }
             _ => coordinate.to_owned(),
         };
-        let access = crate::config_client::ConfigAccess::Local(self.node.clone());
+        let access = crate::config_client::ConfigAccess::local(self.node.clone());
         let installed = crate::pack::installed_packs(
             self.home.as_deref(),
             Some((&access, self.core.node_did())),
@@ -1117,7 +1117,7 @@ impl PackInstaller {
         &self,
         manifest: &crate::pack::PackManifest,
     ) -> anyhow::Result<Option<crate::graph_pipeline::GraphPlan>> {
-        let access = crate::config_client::ConfigAccess::Local(self.node.clone());
+        let access = crate::config_client::ConfigAccess::local(self.node.clone());
         let coordinate = format!("{}/{}", manifest.metadata.namespace, manifest.name);
         if crate::pack::read_installed_pack(&access, self.core.node_did(), &coordinate)
             .await?
@@ -1144,7 +1144,7 @@ impl PackInstaller {
                 })
             }));
         }
-        let access = crate::config_client::ConfigAccess::Local(self.node.clone());
+        let access = crate::config_client::ConfigAccess::local(self.node.clone());
         let coordinate = format!("{}/{}", manifest.metadata.namespace, manifest.name);
         crate::pack::read_installed_pack(&access, self.core.node_did(), &coordinate)
             .await?
@@ -1160,7 +1160,7 @@ impl PackInstaller {
         distribution: &ConfigPackDistribution,
         commit: bool,
     ) -> anyhow::Result<String> {
-        let access = crate::config_client::ConfigAccess::Local(self.node.clone());
+        let access = crate::config_client::ConfigAccess::local(self.node.clone());
         let owner = self.core.node_did();
         let prior = self.installation_status(distribution.manifest()).await?;
         anyhow::ensure!(
@@ -1441,7 +1441,7 @@ impl PackInstaller {
             expected_digest: None,
         };
         let distribution = self.resolve("get", &args).await?;
-        let access = crate::config_client::ConfigAccess::Local(self.node.clone());
+        let access = crate::config_client::ConfigAccess::local(self.node.clone());
         let inference = crate::pack::inspect_pack_inference_bindings(
             &access,
             distribution.manifest(),
@@ -1499,7 +1499,7 @@ impl PackInstaller {
             spec.name
         );
         let coordinate = format!("{}/{}", spec.namespace, spec.name);
-        let access = crate::config_client::ConfigAccess::Local(self.node.clone());
+        let access = crate::config_client::ConfigAccess::local(self.node.clone());
         let report = crate::pack::remove_pack(
             &access,
             self.core.node_did(),
@@ -1619,7 +1619,7 @@ impl PackInstaller {
             "pack {:?} is not installed; preview install instead",
             distribution.manifest().name
         );
-        let access = crate::config_client::ConfigAccess::Local(self.node.clone());
+        let access = crate::config_client::ConfigAccess::local(self.node.clone());
         let inspected = crate::pack::inspect_pack_inference_bindings(
             &access,
             distribution.manifest(),
@@ -1732,7 +1732,7 @@ impl PackInstaller {
             "pack {:?} is not installed; use pack install",
             distribution.manifest().name
         );
-        let access = crate::config_client::ConfigAccess::Local(self.node.clone());
+        let access = crate::config_client::ConfigAccess::local(self.node.clone());
         let missing_slots = distribution
             .manifest()
             .metadata
@@ -1851,7 +1851,7 @@ impl PackInstaller {
 }
 
 fn graph_access(node: &Arc<EmbeddedNode>) -> crate::config_client::ConfigAccess {
-    crate::config_client::ConfigAccess::Local(node.clone())
+    crate::config_client::ConfigAccess::local(node.clone())
 }
 
 /// The `list_graphs` reply text for `owner_did`, read through `access`:

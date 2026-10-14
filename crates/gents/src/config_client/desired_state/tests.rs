@@ -132,7 +132,7 @@ async fn ignored_wire_api_warns_once_per_changed_backend_through_common_apply_ow
 {
     let node = Arc::new(EmbeddedNode::builder().build().await?);
     register_config_schemas(&node).await?;
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let capture = IgnoredWireWarningCapture::default();
     let warnings = Arc::clone(&capture.0);
     let subscriber = tracing::Dispatch::new(Registry::default().with(capture));
@@ -233,7 +233,7 @@ fn task_projection_excludes_runtime_updated_at_and_normalizes_defaults() {
 async fn replacement_resets_defaults_and_preserves_backend_observations() -> Result<()> {
     let node = Arc::new(EmbeddedNode::builder().build().await?);
     register_config_schemas(&node).await?;
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let mut initial = backend("did:key:owner", "local");
     initial["max_concurrent"] = 7.into();
     initial["enabled"] = false.into();
@@ -281,7 +281,7 @@ async fn replacement_resets_defaults_and_preserves_backend_observations() -> Res
 async fn ambiguous_scope_aborts_transaction_including_prior_staged_writes() -> Result<()> {
     let node = Arc::new(EmbeddedNode::builder().build().await?);
     register_config_schemas_dropping_unique_indexes(&node, &[Collection::InferenceBackend]).await?;
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     apply(
         &access,
         vec![document(backend("did:key:owner", "z_duplicate"))],
@@ -321,7 +321,7 @@ async fn ambiguous_scope_aborts_transaction_including_prior_staged_writes() -> R
 async fn read_records_pages_across_batches_and_omits_missing_ids() -> Result<()> {
     let node = Arc::new(EmbeddedNode::builder().build().await?);
     register_config_schemas(&node).await?;
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let owner = "did:key:owner";
     let ids = ["a", "b", "c", "d", "e"];
     for id in ids {
@@ -357,7 +357,7 @@ async fn read_records_pages_across_batches_and_omits_missing_ids() -> Result<()>
 async fn read_records_rejects_duplicate_live_documents_naming_them() -> Result<()> {
     let node = Arc::new(EmbeddedNode::builder().build().await?);
     register_config_schemas_dropping_unique_indexes(&node, &[Collection::InferenceBackend]).await?;
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let owner = "did:key:owner";
     apply(&access, vec![document(backend(owner, "dup"))]).await?;
     let mut duplicate = backend(owner, "dup");
@@ -431,7 +431,7 @@ async fn generated_default_replacements_preserve_runtime_startup_selection() -> 
     assert_eq!(cases.len(), 6);
     let node = Arc::new(EmbeddedNode::builder().build().await?);
     register_config_schemas(&node).await?;
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     for (index, case) in cases.iter().enumerate() {
         let owner = format!("did:key:default-replacement-{index}");
         let principal = |default: &Value, name: &str| {
@@ -515,7 +515,7 @@ async fn generated_default_replacements_preserve_runtime_startup_selection() -> 
 async fn retained_inbound_references_and_cycles_share_atomic_publication() -> Result<()> {
     let node = Arc::new(EmbeddedNode::builder().build().await?);
     register_config_schemas(&node).await?;
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let owner = "did:key:owner";
     let mut documents = cyclic_configuration(owner);
     documents.extend(cyclic_configuration("did:key:foreign"));
@@ -638,7 +638,7 @@ async fn retained_inbound_references_and_cycles_share_atomic_publication() -> Re
 async fn replacement_checks_actual_update_and_unchanged_duplicate_rows() -> Result<()> {
     let node = Arc::new(EmbeddedNode::builder().build().await?);
     register_config_schemas_dropping_unique_indexes(&node, &[Collection::AgentContext]).await?;
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let owner = "did:key:owner";
     apply(&access, cyclic_configuration(owner)).await?;
     let mut replacement = cyclic_configuration(owner)
@@ -673,7 +673,7 @@ async fn expect_existing_documents_unchanged_rejects_drifted_live_rows() -> Resu
     // re-install against out-of-band mutation of live package documents.
     let node = Arc::new(EmbeddedNode::builder().build().await?);
     register_config_schemas(&node).await?;
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let owner = "did:key:owner";
     apply(&access, vec![document(backend(owner, "packaged"))]).await?;
 
@@ -739,7 +739,7 @@ fn expectation(owner: &str, id: &str, digest: Option<String>) -> DesiredStateExp
 async fn cas_node() -> Result<(ConfigAccess, &'static str)> {
     let node = Arc::new(EmbeddedNode::builder().build().await?);
     register_config_schemas(&node).await?;
-    Ok((ConfigAccess::Local(node), "did:key:owner"))
+    Ok((ConfigAccess::local(node), "did:key:owner"))
 }
 
 async fn live_digest(access: &ConfigAccess, owner: &str, id: &str) -> Result<Option<String>> {
@@ -1032,7 +1032,7 @@ async fn canonical_replacement_preserves_revocation_and_attested_creation() {
             .unwrap(),
     );
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let original: crate::document_config::PackConfig = serde_json::from_value(serde_json::json!({
         "node":{"node_did":"binding-owner"},
         "chain_key_bindings":[{"node_did":"binding-owner","binding_id":"signing","address":"0x1111111111111111111111111111111111111111","key_backend":"keyring","attestation":"signed-owner-binding","created_at":"2026-01-01T00:00:00Z","revoked_at":"2026-01-02T00:00:00Z"}]
@@ -1087,7 +1087,7 @@ async fn canonical_replacement_preserves_revocation_and_attested_creation() {
 async fn preview_rejects_a_context_window_above_the_advertised_maximum() -> Result<()> {
     let node = Arc::new(EmbeddedNode::builder().build().await?);
     register_config_schemas(&node).await?;
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let owner = "did:key:owner";
     let profile = |window: Value| {
         config(
@@ -1186,7 +1186,7 @@ async fn obligation_node() -> Result<Arc<EmbeddedNode>> {
 #[tokio::test]
 async fn output_obligation_count_field_must_hold_a_count_on_the_target_collection() -> Result<()> {
     let node = obligation_node().await?;
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let owner = "did:key:obligation-owner";
 
     for (count_field, reported_type) in [
@@ -1275,7 +1275,7 @@ async fn output_obligation_count_field_must_hold_a_count_on_the_target_collectio
 #[tokio::test]
 async fn output_obligation_accepts_every_count_field_the_runtime_can_parse() -> Result<()> {
     let node = obligation_node().await?;
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let owner = "did:key:obligation-owner";
 
     let mut refused = Vec::new();
@@ -1327,7 +1327,7 @@ async fn output_obligation_accepts_every_count_field_the_runtime_can_parse() -> 
 #[tokio::test]
 async fn string_count_field_from_the_reported_failure_is_still_accepted() -> Result<()> {
     let node = obligation_node().await?;
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let owner = "did:key:obligation-owner";
 
     // A String field's reported type cannot separate a canonical decimal
@@ -1390,7 +1390,7 @@ async fn published_count_field(
 #[tokio::test]
 async fn creation_judges_the_count_field_of_the_add_payload() -> Result<()> {
     let node = obligation_node().await?;
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let owner = "did:key:obligation-owner";
 
     let refused = apply(
@@ -1443,7 +1443,7 @@ async fn creation_judges_the_count_field_of_the_add_payload() -> Result<()> {
 #[tokio::test]
 async fn replacement_judges_the_count_field_of_the_update_payload() -> Result<()> {
     let node = obligation_node().await?;
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let owner = "did:key:obligation-owner";
     apply(
         &access,
@@ -1573,7 +1573,7 @@ async fn published_event_sources(node: &EmbeddedNode) -> Result<Vec<Value>> {
 #[tokio::test]
 async fn event_source_count_field_must_hold_a_count_on_the_source_collection() -> Result<()> {
     let node = event_source_node().await?;
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let owner = "did:key:event-source-owner";
 
     for (count_field, reported_type) in [
@@ -1659,7 +1659,7 @@ async fn event_source_count_field_must_hold_a_count_on_the_source_collection() -
 #[tokio::test]
 async fn event_source_accepts_every_count_field_the_runtime_can_parse() -> Result<()> {
     let node = event_source_node().await?;
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let owner = "did:key:event-source-owner";
 
     let mut refused = Vec::new();
@@ -1732,7 +1732,7 @@ async fn event_source_accepts_every_count_field_the_runtime_can_parse() -> Resul
 #[tokio::test]
 async fn event_source_correlation_field_must_be_a_string() -> Result<()> {
     let node = event_source_node().await?;
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let owner = "did:key:event-source-owner";
 
     let mistyped = apply(
@@ -1810,7 +1810,7 @@ async fn published_count_field_of(node: &EmbeddedNode, event_source_id: &str) ->
 #[tokio::test]
 async fn creation_judges_the_count_field_of_the_event_source_add_payload() -> Result<()> {
     let node = event_source_node().await?;
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let owner = "did:key:event-source-owner";
 
     let refused = apply(
@@ -1870,7 +1870,7 @@ async fn creation_judges_the_count_field_of_the_event_source_add_payload() -> Re
 #[tokio::test]
 async fn replacement_judges_the_count_field_of_the_event_source_update_payload() -> Result<()> {
     let node = event_source_node().await?;
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let owner = "did:key:event-source-owner";
     apply(
         &access,
@@ -1971,7 +1971,7 @@ async fn outcome_delivery_requires_a_string_handoff_id_on_its_source_collection(
         "type PlainPing { message: String } type HandoffPing { handoff_id: String message: String } type NumberedPing { handoff_id: Int }",
     )
     .await?;
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let owner = "did:key:outcome-owner";
     apply(&access, cyclic_configuration(owner)).await?;
     let source = |collection: &str| {
@@ -2273,7 +2273,7 @@ async fn publication_applies_native_route_template_fields_the_schema_does_not_de
     // cursor, and the registered WorkspaceReceipt declares none of the fields
     // the native route injects.
     crate::ensure_runtime_schemas(&node).await?;
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let owner = "did:key:native-route-owner";
     apply(&access, cyclic_configuration(owner)).await?;
     let documents = vec![

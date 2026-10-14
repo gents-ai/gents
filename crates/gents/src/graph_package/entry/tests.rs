@@ -145,7 +145,7 @@ fn fixture_plan(entry: PlannedEntry) -> GraphPlan {
 async fn prepare_entry_run_returns_admitted_input_when_the_entry_has_no_prepare() {
     let plan = fixture_plan(fixture_entry(None));
     let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
-    let access = ConfigAccess::Local(std::sync::Arc::new(node));
+    let access = ConfigAccess::local(std::sync::Arc::new(node));
     let plugins = PluginExecutor::default();
     let prepared = prepare_entry_run(
         &access,
@@ -199,7 +199,7 @@ async fn prepare_entry_run_runs_host_steps_and_persists_the_plugins_documents() 
     node.add_schema("type FixtureEvidence { note: String }")
         .await
         .unwrap();
-    let access = ConfigAccess::Local(std::sync::Arc::new(node));
+    let access = ConfigAccess::local(std::sync::Arc::new(node));
 
     let prepared = prepare_entry_run(
         &access,
@@ -265,7 +265,7 @@ async fn prepare_entry_run_refuses_a_document_outside_declared_writes() {
     }));
     let plan = fixture_plan(entry);
     let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
-    let access = ConfigAccess::Local(std::sync::Arc::new(node));
+    let access = ConfigAccess::local(std::sync::Arc::new(node));
     let error = prepare_entry_run(
         &access,
         "did:key:tester",
@@ -297,7 +297,7 @@ async fn persist_prepared_documents_batches_and_never_drops_a_document() {
     node.add_schema("type FixtureEvidence { note: String }")
         .await
         .unwrap();
-    let access = ConfigAccess::Local(std::sync::Arc::new(node));
+    let access = ConfigAccess::local(std::sync::Arc::new(node));
 
     let mut documents: Vec<PreparePluginDocument> = (0..70)
         .map(|i| PreparePluginDocument {

@@ -193,7 +193,7 @@ pub async fn collect_request_evidence(
         .data
         .context("collect request evidence returned no data")?;
     let timeline = crate::run_timeline_fetch::load_run_timeline_rows(
-        &ConfigAccess::Local(node.clone()),
+        &ConfigAccess::local(node.clone()),
         request_id,
     )
     .await

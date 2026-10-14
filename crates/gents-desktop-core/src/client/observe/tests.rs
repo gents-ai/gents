@@ -314,7 +314,7 @@ async fn tool_call_invalidations_refresh_lineage_without_retaining_transcript() 
     let (_tempdir, node, store, handle) = build_observer_fixture().await;
     let mut changes = store.subscribe_changes();
     let before = store.projection_revision();
-    gents::ConfigAccess::Local(node.clone())
+    gents::ConfigAccess::local(node.clone())
         .write(
             "test.lineage_tool_invalidation",
             r#"mutation {

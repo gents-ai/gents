@@ -709,7 +709,7 @@ mod tests {
         );
 
         let rows = load_run_activity_rows(
-            &ConfigAccess::Local(node.clone()),
+            &ConfigAccess::local(node.clone()),
             &["activity-request".to_owned()],
             &["activity-session".to_owned()],
         )
@@ -804,7 +804,7 @@ mod tests {
             ))
             .await;
         assert!(!response.has_errors(), "seed calls: {:?}", response.errors);
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         let timeline = load_run_timeline(&access, "request-timeline")
             .await
             .expect("load timeline");
@@ -831,7 +831,7 @@ mod tests {
         let did = "did:key:z6MkTestTimelineAccounts";
         let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         let spec = crate::inference_setup::connection_spec(
             crate::inference_setup::InferenceProviderId::Anthropic,
             crate::inference_setup::InferenceAuthMethod::ClaudeOauth,
@@ -1031,7 +1031,7 @@ mod tests {
         .await
         .expect("pause goal");
 
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         let timeline = load_run_timeline(&access, "request-goal-history")
             .await
             .expect("load timeline");

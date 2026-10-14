@@ -296,7 +296,7 @@ async fn task_assignment_root_fences_older_chain_even_when_its_child_is_newer() 
     let identity = KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap();
     let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let mut goal = set_goal(
         &node,
         identity.did(),

@@ -19,7 +19,7 @@ async fn seed_codex_account(
     )
     .await;
     let mut row = crate::oauth_credential::resolve_oauth_credential(
-        &crate::config_client::ConfigAccess::Local(node.clone()),
+        &crate::config_client::ConfigAccess::local(node.clone()),
         node_did,
         CHATGPT_CODEX_PROVIDER,
         crate::oauth_credential::AccountPick::Reference(None),
@@ -38,7 +38,7 @@ async fn seed_codex_account(
 
 /// Usage keys stored for `node_did`, polled until `key` shows or 5 s pass.
 async fn usage_keys_until(node: &Arc<EmbeddedNode>, node_did: &str, key: &str) -> Vec<String> {
-    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let access = crate::config_client::ConfigAccess::local(node.clone());
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
         let response = access
@@ -129,7 +129,7 @@ async fn usage_wiring_codex_key_backfill_lands_under_the_key() {
         }))
         .unwrap();
     let stored = crate::usage_observation::usage_for_backend(
-        &crate::config_client::ConfigAccess::Local(node.clone()),
+        &crate::config_client::ConfigAccess::local(node.clone()),
         did,
         &backend,
     )

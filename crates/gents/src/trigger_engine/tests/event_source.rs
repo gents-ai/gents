@@ -401,7 +401,7 @@ async fn persist_event_bindings(
     node: &Arc<defra_node::EmbeddedNode>,
     snapshot: &ActiveRuntimeSnapshot,
 ) {
-    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let access = crate::config_client::ConfigAccess::local(node.clone());
     for trigger in snapshot.active_event_triggers().values() {
         let behavior = snapshot.agent(&trigger.task.agent_id).unwrap();
         let owner = behavior.node_did();
@@ -457,7 +457,7 @@ async fn admit_observed_event(
     };
     let mutation = format!("mutation {{create_AgentRequest(input: {{request_id: \"{}\", node_did: \"{}\", session_id: \"{}\", agent_id: \"general\", content: \"fixture delivery\", purpose: \"normal\", lifecycle_state: \"pending\", created_at: \"2030-01-01T00:00:00Z\"}}) {{_docID}}}}",
         escape_graphql_string(&fire.request_id), escape_graphql_string(&fire.identity.owner_did), escape_graphql_string(&fire.session_id));
-    crate::config_client::ConfigAccess::Local(node.clone())
+    crate::config_client::ConfigAccess::local(node.clone())
         .transact_write("test.event_admission", |txn| {
             let fire = &fire;
             let mutation = &mutation;

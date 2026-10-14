@@ -577,7 +577,7 @@ async fn install(spec: &TrialSpec, home: &EmbeddedHome, workspace: &Path) -> Res
         .context("binding the pack's inference slots to the frozen profile")?;
     let mut config = root_host_tools(config, workspace)?;
     config.node.default_agent_id = Some(spec.agent_id.clone());
-    let access = ConfigAccess::Local(home.node.clone());
+    let access = ConfigAccess::local(home.node.clone());
     for path in &manifest.schemas {
         let bytes = assets
             .get(path)
@@ -1636,7 +1636,7 @@ async fn seed_and_await_fire(
     if let Some(Err(error)) = reconciled {
         anyhow::bail!("the trial runtime's event sources did not reconcile: {error}");
     }
-    let access = ConfigAccess::Local(home.node.clone());
+    let access = ConfigAccess::local(home.node.clone());
     let since = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let doc_id = create_document(
         &access,
@@ -1734,7 +1734,7 @@ async fn run_captures(
     for capture in captures {
         match capture {
             Capture::Schema { name, collections } => {
-                let access = crate::config_client::ConfigAccess::Local(node.clone());
+                let access = crate::config_client::ConfigAccess::local(node.clone());
                 let mut versions = Vec::new();
                 let mut failed = false;
                 for collection in collections {
@@ -2190,7 +2190,7 @@ mod tests {
     #[tokio::test]
     async fn schema_capture_reads_active_indexes_and_records_absent_collections() {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-        ConfigAccess::Local(node.clone())
+        ConfigAccess::local(node.clone())
             .add_schema("type SearchNote { body: String @fulltext(language: \"english\") }")
             .await
             .unwrap();
@@ -2283,7 +2283,7 @@ mod tests {
     #[tokio::test]
     async fn document_capture_excludes_other_sessions_with_the_same_sequence() {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         access
             .add_schema("type CaptureHeader { session_id: String sequence: Int }")
             .await
@@ -2587,7 +2587,7 @@ mod tests {
             .await
             .unwrap();
 
-        let access = ConfigAccess::Local(home.node.clone());
+        let access = ConfigAccess::local(home.node.clone());
         let response = access
             .execute("query { Node { default_agent_id } }")
             .await
@@ -2695,7 +2695,7 @@ mod tests {
         let home = EmbeddedHome::create_temp("subject-schema").await.unwrap();
         let workspace = dir.path().join("workspace");
         install(&spec, &home, &workspace).await.unwrap();
-        let access = ConfigAccess::Local(home.node.clone());
+        let access = ConfigAccess::local(home.node.clone());
         let response = access
             .execute("query { EvalSubmission { message } }")
             .await
@@ -3197,7 +3197,7 @@ mod tests {
         let workspace = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace).unwrap();
         install_schema(
-            &ConfigAccess::Local(home.node.clone()),
+            &ConfigAccess::local(home.node.clone()),
             "type EvalSeed { payload: JSON }",
         )
         .await
@@ -3462,7 +3462,7 @@ mod tests {
         let home = EmbeddedHome::create_temp("seed-observation-race")
             .await
             .unwrap();
-        let access = ConfigAccess::Local(home.node.clone());
+        let access = ConfigAccess::local(home.node.clone());
         install_schema(&access, "type RaceSeed { label: String }")
             .await
             .unwrap();

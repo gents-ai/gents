@@ -402,7 +402,7 @@ mod tests {
             } else {
                 result.unwrap();
             }
-            let response = ConfigAccess::Local(node.clone()).execute(&format!(
+            let response = ConfigAccess::local(node.clone()).execute(&format!(
                 r#"{{ AgentToolCall(docID: "{}") {{ lifecycle_state started_at stuck_since terminal_output }} }}"#,
                 escape_graphql_string(&child_doc),
             )).await.unwrap();

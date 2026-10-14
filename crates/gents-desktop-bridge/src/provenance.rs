@@ -49,7 +49,7 @@ pub async fn session_provenance(
     core: &Arc<ClientCore>,
     scope: SessionScope,
 ) -> Result<SessionProvenanceView, String> {
-    let access = ConfigAccess::Local(core.node_arc());
+    let access = ConfigAccess::local(core.node_arc());
     let fail = |error: anyhow::Error| format!("session provenance: {error:#}");
     let lineage = lineage(&access, &scope).await.map_err(fail)?;
     let calls = caused_calls(&access, &scope).await.map_err(fail)?;
