@@ -208,6 +208,8 @@ def snapshotJson : String :=
       ++ sessionHydrationDurableCasesJson ++ ","
     ++ "\"session_hydration_start_cases\":"
       ++ sessionHydrationStartCasesJson ++ ","
+    ++ "\"session_hydration_admission_cases\":"
+      ++ sessionHydrationAdmissionCasesJson ++ ","
     ++ "\"enrollment_cases\":"
       ++ enrollmentCasesJson ++ ","
     ++ "\"enrollment_durable_projection_cases\":"

@@ -1677,6 +1677,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "SessionHydrationStartCases".to_string(),
         ));
     }
+    if !snapshot.session_hydration_admission_cases.is_empty() {
+        emitted.insert((
+            "session_hydration_admission_cases".to_string(),
+            "SessionHydrationAdmissionCases".to_string(),
+        ));
+    }
     if !snapshot.enrollment_cases.is_empty() {
         emitted.insert((
             "enrollment_cases".to_string(),

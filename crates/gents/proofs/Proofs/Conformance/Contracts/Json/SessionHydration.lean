@@ -642,4 +642,69 @@ def sessionHydrationStartCaseJson (w : SessionHydrationStartCase) : String :=
 def sessionHydrationStartCasesJson : String :=
   jsonArray (sessionHydrationStartCases.map sessionHydrationStartCaseJson)
 
+structure SessionHydrationAdmissionCase where
+  name : String
+  action : SessionHydration.AdmissionAction
+  request : SessionHydration.DurableRequest
+  phase : SessionHydration.ClientPhase
+  targetMatches : Bool
+  foreignHeader : Bool
+  ownedSession : Bool
+  hasDocuments : Bool
+  nonterminalRequest : Bool
+
+def admissionRequestString : SessionHydration.DurableRequest → String
+  | .missing => "missing"
+  | .pending => "pending"
+  | .served _ => "served"
+  | .rejected _ => "rejected"
+
+def admissionActionString : SessionHydration.AdmissionAction → String
+  | .passiveStart => "passive_start"
+  | .explicitRetry => "explicit_retry"
+
+def admissionRequest (status : String) : SessionHydration.DurableRequest :=
+  match status with
+  | "missing" => .missing
+  | "pending" => .pending
+  | "served" => .served ∅
+  | _ => .rejected none
+
+def admissionPrev (w : SessionHydrationAdmissionCase) : SessionHydration.ClientProgress :=
+  { session := if w.targetMatches then "session" else "other-session"
+  , node := if w.targetMatches then "node" else "other-node"
+  , phase := w.phase }
+
+def sessionHydrationAdmissionCases : List SessionHydrationAdmissionCase :=
+  [SessionHydration.AdmissionAction.passiveStart,
+   SessionHydration.AdmissionAction.explicitRetry].flatMap fun action =>
+  ["missing", "pending", "served", "rejected"].flatMap fun status =>
+  [SessionHydration.ClientPhase.idle, .requested, .serving, .complete, .failed].flatMap fun phase =>
+  [false, true].flatMap fun targetMatches =>
+  [false, true].flatMap fun foreignHeader =>
+  [(false, false, false), (false, true, true), (true, false, true), (true, true, false)].map fun (ownedSession, hasDocuments, nonterminalRequest) =>
+    { name := s!"{admissionActionString action}_{status}_{phaseString phase}_target_{targetMatches}_foreign_{foreignHeader}_owned_{ownedSession}_docs_{hasDocuments}_nonterminal_{nonterminalRequest}"
+    , action, request := admissionRequest status, phase, targetMatches, foreignHeader
+    , ownedSession, hasDocuments, nonterminalRequest }
+
+def sessionHydrationAdmissionCaseJson (w : SessionHydrationAdmissionCase) : String :=
+  let prev := admissionPrev w
+  "{"
+    ++ "\"name\":" ++ jsonString w.name ++ ","
+    ++ "\"action\":" ++ jsonString (admissionActionString w.action) ++ ","
+    ++ "\"request\":" ++ jsonString (admissionRequestString w.request) ++ ","
+    ++ "\"phase\":" ++ jsonString (phaseString w.phase) ++ ","
+    ++ "\"target_matches\":" ++ boolString w.targetMatches ++ ","
+    ++ "\"foreign_header\":" ++ boolString w.foreignHeader ++ ","
+    ++ "\"owned_session\":" ++ boolString w.ownedSession ++ ","
+    ++ "\"has_documents\":" ++ boolString w.hasDocuments ++ ","
+    ++ "\"nonterminal_request\":" ++ boolString w.nonterminalRequest ++ ","
+    ++ "\"expected_admit\":" ++ boolString
+      (SessionHydration.canAdmitRequest w.action w.request prev "session" "node"
+        w.foreignHeader w.ownedSession w.hasDocuments w.nonterminalRequest)
+    ++ "}"
+
+def sessionHydrationAdmissionCasesJson : String :=
+  jsonArray (sessionHydrationAdmissionCases.map sessionHydrationAdmissionCaseJson)
+
 end Conformance.Contracts
