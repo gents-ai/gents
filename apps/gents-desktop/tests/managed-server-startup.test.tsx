@@ -480,7 +480,7 @@ describe("first-run local node startup", () => {
     };
   }
 
-  it("waits for macOS approval and a slow boot, then keeps the step log readable", async () => {
+  it("waits for macOS approval and a slow boot, then says what each step did", async () => {
     const run = firstRun();
     renderIn(
       testApp({ api: run.api, snapshot: run.snapshot }),
@@ -514,13 +514,13 @@ describe("first-run local node startup", () => {
     expect(screen.queryByText("Try again")).not.toBeInTheDocument();
 
     run.finishStart();
-    await screen.findByRole("heading", { name: "Ready" }, { timeout: 3_000 });
-    const log = screen.getByRole("list", { name: "Setup progress" });
-    expect(log).toHaveTextContent("Start local node");
-    expect(log).toHaveTextContent("Forge is running as did:key:z6MkFo");
-    expect(log).toHaveTextContent("Saved the local connection to Forge");
-    expect(log).toHaveTextContent(`Connected securely to ${deployment.label}`);
-    expect(log.querySelectorAll('[data-state="complete"]')).toHaveLength(3);
+    await screen.findByRole("heading", { name: "Gents is ready" }, { timeout: 4_000 });
+    /* the finished card says what each step did */
+    const summary = screen.getByTestId("startup-step");
+    expect(summary).toHaveTextContent("Everything started.");
+    expect(summary).toHaveTextContent("Forge is running as did:key:z6MkFo");
+    expect(summary).toHaveTextContent("Saved the local connection to Forge");
+    expect(summary).toHaveTextContent(`Connected securely to ${deployment.label}`);
     expect(screen.queryByTestId("setup-managed-server-wait")).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByTestId("setup-continue"));
@@ -548,10 +548,10 @@ describe("first-run local node startup", () => {
     await userEvent.click(next);
     run.finishStart();
 
-    await screen.findByRole("heading", { name: "Ready" }, { timeout: 3_000 });
-    const log = screen.getByRole("list", { name: "Setup progress" });
-    expect(log).toHaveTextContent(`Connected securely to ${deployment.label}`);
-    expect(log).not.toHaveTextContent("Remote Node");
+    await screen.findByRole("heading", { name: "Gents is ready" }, { timeout: 4_000 });
+    const summary = screen.getByTestId("startup-step");
+    expect(summary).toHaveTextContent(`Connected securely to ${deployment.label}`);
+    expect(summary).not.toHaveTextContent("Remote Node");
   }, 15_000);
 
   it("keeps observing a runtime its start left migrating, then continues without restarting it", async () => {
@@ -590,7 +590,7 @@ describe("first-run local node startup", () => {
     expect(screen.queryByText("Try again")).not.toBeInTheDocument();
   }, 15_000);
 
-  it("keeps earlier steps and their results visible when a later step fails", async () => {
+  it("shows the step that failed, with its error and a way to try again", async () => {
     const run = firstRun();
     run.api.initLocalStandardRuntime.mockRejectedValueOnce(
       new Error("saved connections could not be written"),
@@ -606,11 +606,10 @@ describe("first-run local node startup", () => {
     run.finishStart();
 
     await screen.findByText("saved connections could not be written");
-    const log = screen.getByRole("list", { name: "Setup progress" });
-    const steps = log.querySelectorAll("li");
-    expect(steps[0]).toHaveAttribute("data-state", "complete");
-    expect(steps[0]).toHaveTextContent("Forge is running as did:key:z6MkFo");
-    expect(log).toHaveTextContent("Load configuration");
+    /* a failure is shown at once, not paced behind the steps before it */
+    const failed = screen.getByTestId("startup-step");
+    expect(failed.querySelector('[data-state="error"]')).not.toBeNull();
+    expect(screen.getByRole("heading", { name: "Startup paused" })).toBeInTheDocument();
     expect(screen.getByText("Try again")).toBeInTheDocument();
     expect(screen.getByTestId("diagnostics-hint")).toHaveTextContent(
       `Logs: ${bootstrap.diagnosticsHint}`,
@@ -618,7 +617,7 @@ describe("first-run local node startup", () => {
     expect(screen.queryByTestId("setup-continue")).not.toBeInTheDocument();
   });
 
-  it("pauses on the completed step log before moving on by itself", async () => {
+  it("pauses on the finished card before moving on by itself", async () => {
     const run = firstRun();
     renderIn(
       testApp({ api: run.api, snapshot: run.snapshot }),
@@ -630,9 +629,9 @@ describe("first-run local node startup", () => {
     await waitFor(() => expect(run.api.startManagedServer).toHaveBeenCalled());
     run.finishStart();
 
-    await screen.findByRole("heading", { name: "Ready" });
+    await screen.findByRole("heading", { name: "Gents is ready" }, { timeout: 4_000 });
     await new Promise((resolve) => setTimeout(resolve, 1_000));
-    expect(screen.getByRole("heading", { name: "Ready" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Gents is ready" })).toBeInTheDocument();
     await screen.findByRole(
       "heading",
       { name: "Choose an inference provider" },

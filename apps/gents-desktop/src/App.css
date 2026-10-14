@@ -74,23 +74,3 @@ body,
   ) {
   pointer-events: auto;
 }
-
-.startup-ellipsis::after {
-  content: "";
-  animation: startup-ellipsis 1.2s steps(4, end) infinite;
-}
-
-@keyframes startup-ellipsis {
-  0% {
-    content: "";
-  }
-  25% {
-    content: ".";
-  }
-  50% {
-    content: "..";
-  }
-  75% {
-    content: "...";
-  }
-}
