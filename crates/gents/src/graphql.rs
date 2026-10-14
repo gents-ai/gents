@@ -267,6 +267,28 @@ pub struct CommitSignature {
     pub signature_type: String,
 }
 
+/// Decode the selected `_commits` rows and retain only DefraDB's composite
+/// document versions. `_commits` filters are evaluated in memory and can
+/// silently degrade to no filter, so every reader applies this selection here.
+pub(crate) fn decode_composite_commits(rows: &[Value]) -> Result<Vec<CompositeCommit>> {
+    let mut commits = rows
+        .iter()
+        .cloned()
+        .map(serde_json::from_value::<CompositeCommit>)
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .context("decode composite commit rows")?
+        .into_iter()
+        .filter(|commit| commit.field_name == "_C")
+        .collect::<Vec<_>>();
+    commits.sort_by(|left, right| {
+        right
+            .height
+            .cmp(&left.height)
+            .then_with(|| left.cid.cmp(&right.cid))
+    });
+    Ok(commits)
+}
+
 /// Read the exact newest composite commit exposed by a mutation's `_version`
 /// selection. DefraDB returns the full version history newest-first today; we
 /// still sort explicitly so the contract does not depend on response order.
@@ -291,14 +313,7 @@ pub fn document_composite_version(
         .get("_version")
         .and_then(Value::as_array)
         .ok_or_else(|| anyhow::anyhow!("{operation} returned no _version array"))?;
-    let commits = versions
-        .iter()
-        .cloned()
-        .map(serde_json::from_value::<CompositeCommit>)
-        .collect::<std::result::Result<Vec<_>, _>>()?
-        .into_iter()
-        .filter(|commit| commit.field_name == "_C")
-        .collect::<Vec<_>>();
+    let commits = decode_composite_commits(versions)?;
     unique_newest_composite_commit(commits, operation)
 }
 
@@ -348,10 +363,8 @@ pub async fn newest_document_composite_commit(
         escape_graphql_string(doc_id),
     );
     let response = graphql_with_transaction_retry(node, &query, operation).await?;
-    let commits = rows::<CompositeCommit>(&response, "_commits")?
-        .into_iter()
-        .filter(|commit| commit.field_name == "_C")
-        .collect();
+    let rows = rows::<Value>(&response, "_commits")?;
+    let commits = decode_composite_commits(&rows)?;
     unique_newest_composite_commit(commits, operation)
 }
 
@@ -380,17 +393,8 @@ pub async fn composite_commits(
     // DefraDB applies this filter in memory and an invalid GraphQL filter can
     // degrade to no filter. Fetch the field name and enforce the composite
     // selection here instead of trusting that behavior.
-    let mut commits = rows::<CompositeCommit>(&response, "_commits")?
-        .into_iter()
-        .filter(|commit| commit.field_name == "_C")
-        .collect::<Vec<_>>();
-    commits.sort_by(|left, right| {
-        right
-            .height
-            .cmp(&left.height)
-            .then_with(|| left.cid.cmp(&right.cid))
-    });
-    Ok(commits)
+    let rows = rows::<Value>(&response, "_commits")?;
+    decode_composite_commits(&rows)
 }
 
 pub fn response_has_documents(value: &serde_json::Value) -> bool {

@@ -1235,18 +1235,15 @@ struct CountingRequests<'a> {
 
 #[async_trait::async_trait]
 impl ReplayRequestReader for CountingRequests<'_> {
-    async fn request_rows(&self, query: &str) -> anyhow::Result<serde_json::Value> {
-        self.rows.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        self.node.request_rows(query).await
-    }
-
-    async fn request_commits(
+    async fn request_facts(
         &self,
-        id: &str,
-    ) -> anyhow::Result<Vec<crate::graphql::CompositeCommit>> {
+        ids: &[String],
+    ) -> anyhow::Result<std::collections::BTreeMap<String, super::output::ReplayRequestFacts>> {
         self.commits
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        self.node.request_commits(id).await
+            .fetch_add(ids.len(), std::sync::atomic::Ordering::Relaxed);
+        self.rows
+            .fetch_add(ids.len(), std::sync::atomic::Ordering::Relaxed);
+        self.node.request_facts(ids).await
     }
 }
 
@@ -1342,29 +1339,26 @@ async fn replay_resolution_reads_shared_request_once_and_keeps_every_physical_ca
 
 #[async_trait::async_trait]
 impl ReplayRequestReader for FaultingRequests<'_> {
-    async fn request_rows(&self, query: &str) -> anyhow::Result<serde_json::Value> {
-        if query.contains(self.request_doc_id) {
+    async fn request_facts(
+        &self,
+        request_doc_ids: &[String],
+    ) -> anyhow::Result<std::collections::BTreeMap<String, super::output::ReplayRequestFacts>> {
+        if request_doc_ids.iter().any(|id| id == self.request_doc_id) {
             match self.fault {
                 Some(RequestFault::RowsReadFails) => anyhow::bail!("injected AgentRequest read"),
-                Some(RequestFault::Missing) => {
-                    return Ok(serde_json::json!({"data": {"AgentRequest": []}}))
+                Some(RequestFault::CommitsReadFails) => {
+                    anyhow::bail!("injected composite commit read")
                 }
                 _ => {}
             }
         }
-        self.node.request_rows(query).await
-    }
-
-    async fn request_commits(
-        &self,
-        request_doc_id: &str,
-    ) -> anyhow::Result<Vec<crate::graphql::CompositeCommit>> {
-        if request_doc_id == self.request_doc_id
-            && matches!(self.fault, Some(RequestFault::CommitsReadFails))
-        {
-            anyhow::bail!("injected composite commit read");
+        let mut facts = self.node.request_facts(request_doc_ids).await?;
+        if matches!(self.fault, Some(RequestFault::Missing)) {
+            if let Some(request) = facts.get_mut(self.request_doc_id) {
+                request.rows.clear();
+            }
         }
-        self.node.request_commits(request_doc_id).await
+        Ok(facts)
     }
 }
 
