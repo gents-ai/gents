@@ -584,6 +584,7 @@ async fn start_managed_server<'a, R: Runtime>(
     state: &'a DesktopAppState,
     lifecycle: LifecycleGuard<'a>,
 ) -> Result<ManagedServerStatus, BridgeError> {
+    ensure_app_not_quitting(state)?;
     let node_name = request.node_name.trim();
     if node_name.is_empty() {
         return Err(BridgeError::new(
@@ -1936,6 +1937,9 @@ pub(crate) async fn restart_outdated_managed_job<R: Runtime>(
         return Ok(());
     };
     let _lifecycle = state.managed_server_lifecycle.lock().await;
+    if state.app_exit.is_quitting() {
+        return Ok(());
+    }
     let PortReadiness::Outdated { version } = observe_port_readiness(&node_home).await? else {
         return Ok(());
     };
@@ -2738,6 +2742,7 @@ pub async fn desktop_managed_server_set_auto_start<R: Runtime>(
 ) -> Result<ManagedServerStatus, BridgeError> {
     ensure_allowed(&state)?;
     let _lifecycle = state.managed_server_lifecycle.lock().await;
+    ensure_app_not_quitting(&state)?;
     ensure_no_start_waiting(&state).await?;
     if let Err(error) = run_native(native_service(&app, &state)?, move |service| {
         service.set_enabled(enabled)
@@ -2784,6 +2789,78 @@ async fn stop_managed_server_locked<R: Runtime>(
     observe_managed_server_status(app, state).await
 }
 
+/// Native login enablement is the operator's background-running choice.
+/// External servers remain outside the desktop's service ownership.
+pub(crate) async fn prepare_app_exit<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &DesktopAppState,
+) -> Result<(), BridgeError> {
+    let _lifecycle = state.managed_server_lifecycle.lock().await;
+    if load_preference(state).await?.is_none()
+        && state.managed_server.lock().await.start_wait.is_none()
+    {
+        return Ok(());
+    }
+    let native = run_native(native_service(app, state)?, |service| service.status()).await?;
+    if native.enabled {
+        return Ok(());
+    }
+    cancel_start_wait(state).await;
+    if native.job_loaded || native.running || native.is_active_or_transitioning() {
+        stop_managed_server_locked(app, false, state).await?;
+    }
+    Ok(())
+}
+
+fn ensure_app_not_quitting(state: &DesktopAppState) -> Result<(), BridgeError> {
+    if state.app_exit.is_quitting() {
+        return Err(BridgeError::new(
+            BridgeErrorCode::InvalidArgument,
+            "The desktop is quitting. Wait for the local node to stop before starting it again.",
+        ));
+    }
+    Ok(())
+}
+
+/// Starts the reviewed local service once when its owning desktop opens.
+/// Native enablement continues to control login startup independently.
+pub(crate) async fn start_configured_managed_server<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &DesktopAppState,
+) -> Result<(), BridgeError> {
+    if state.policy.managed_server != ManagedServerPolicy::Allowed
+        || state.policy.node_home.is_none()
+    {
+        return Ok(());
+    }
+    let lifecycle = state.managed_server_lifecycle.lock().await;
+    if state.app_exit.is_quitting() {
+        return Ok(());
+    }
+    let Some(stored) = load_bound_preference(state).await? else {
+        return Ok(());
+    };
+    if stored.reviewed_for.is_none() || stored.node_name.trim().is_empty() {
+        return Ok(());
+    }
+    let native = run_native(native_service(app, state)?, |service| service.status()).await?;
+    if !native.installed || native.running || native.is_active_or_transitioning() {
+        return Ok(());
+    }
+    start_managed_server(
+        app,
+        ManagedServerStartRequest {
+            node_name: stored.node_name,
+            tool_ceiling: None,
+            tool_root: None,
+        },
+        state,
+        lifecycle,
+    )
+    .await?;
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn desktop_managed_server_restart<R: Runtime>(
     app: AppHandle<R>,
@@ -2805,6 +2882,7 @@ pub async fn desktop_managed_server_restart<R: Runtime>(
     // in-flight start: a refused restart must not cancel it.
     refuse_renaming_home(&node_home, &request.node_name).await?;
     let lifecycle = lock_lifecycle_superseding_start(&state).await;
+    ensure_app_not_quitting(&state)?;
     ensure_launchable_here(&app, &state)?;
     let port = observe_port_readiness(&node_home).await?;
     let previous_did = match &port {
