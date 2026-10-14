@@ -1058,6 +1058,96 @@ mod hop_tests {
         node.shutdown().await;
         std::fs::remove_dir_all(&message.admission.path).unwrap();
     }
+
+    #[tokio::test]
+    async fn stage_planned_write_in_txn_refuses_a_session_that_moved_past_the_planned_hop() {
+        let message = published_session_message(PublishedAdmissionOptions {
+            name: "session-message-stale-hop".to_owned(),
+            real_identity: true,
+            await_mode: AwaitMode::Background,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let node = message.admission.node.clone();
+        let caused = crate::request_binding::load_agent_request_by_doc_id(
+            &node,
+            &message.caused_request_doc_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let target = SessionMessageTarget {
+            node_did: caused.node_did.clone(),
+            agent_id: caused.agent_id.clone(),
+            session_id: caused.session_id.clone(),
+        };
+        let stale_cause = cause(&message, 0);
+        let body = RenderedBody {
+            content: "stale".to_owned(),
+            goal: None,
+        };
+        let planned = plan(&node, &stale_cause, &target, body, None, false)
+            .await
+            .unwrap()
+            .unwrap();
+        let ahead_cause = cause(&message, 10);
+        let ahead = plan(
+            &node,
+            &ahead_cause,
+            &target,
+            RenderedBody {
+                content: "ahead".to_owned(),
+                goal: None,
+            },
+            None,
+            false,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(ahead.hop() > planned.hop());
+        let (ahead_cause, ahead) = (&ahead_cause, &ahead);
+        crate::config_client::ConfigAccess::transact_local(
+            &node,
+            None,
+            "session_message.test_ahead_stage",
+            move |txn| {
+                Box::pin(async move { stage_planned_write_in_txn(txn, ahead_cause, ahead).await })
+            },
+        )
+        .await
+        .unwrap();
+        let (stale_cause, planned) = (&stale_cause, &planned);
+        let error = crate::config_client::ConfigAccess::transact_local(
+            &node,
+            None,
+            "session_message.test_stale_stage",
+            move |txn| {
+                Box::pin(async move { stage_planned_write_in_txn(txn, stale_cause, planned).await })
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("moved to hop"),
+            "unexpected error: {error:#}"
+        );
+        let PlannedWrite::Request { create, .. } = &planned.write else {
+            panic!("a message without a Goal is a request");
+        };
+        let response = node
+            .execute(&format!(
+                r#"query {{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+                escape_graphql_string(&create.request_id)
+            ))
+            .await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+        let data = response.data.unwrap();
+        assert!(data["AgentRequest"].as_array().unwrap().is_empty());
+        node.shutdown().await;
+        std::fs::remove_dir_all(&message.admission.path).unwrap();
+    }
 }
 
 #[cfg(test)]
