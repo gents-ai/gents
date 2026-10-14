@@ -66,6 +66,26 @@ async fn wait_for_node_and_request_absence(
 }
 
 #[tokio::test]
+async fn collection_head_notifications_do_not_schedule_missing_document_reloads() {
+    let (_tempdir, node, store, handle) = build_observer_fixture().await;
+    let metrics = Arc::clone(&handle.metrics);
+    seed_node(node.as_ref(), "did:test:document-with-collection-head").await;
+    wait_for_node_projection(&store, "did:test:document-with-collection-head").await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while metrics.snapshot().events_received < 2 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("branchable write publishes document and collection-head notifications");
+    handle.shutdown().await;
+    let metrics = metrics.snapshot();
+    assert_eq!(metrics.scope_reloads, 0);
+    assert_eq!(metrics.fetch_failures, 0);
+    assert_eq!(metrics.docs_fetched, 1);
+}
+
+#[tokio::test]
 async fn an_uncached_missing_request_does_not_reload_the_projection() {
     let (_tempdir, node, store, handle) = build_observer_fixture().await;
     let before = handle.metrics_snapshot();

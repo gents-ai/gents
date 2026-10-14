@@ -386,6 +386,8 @@ pub fn spawn_observer_with_selection(
     }
 }
 
+/// Branchable collections emit a collection-head update with an empty document
+/// ID alongside the document update. Only the latter identifies a row to read.
 async fn accumulate_dirty(
     dirty: &mut HashMap<&'static str, HashSet<String>>,
     resolver: &CollectionResolver,
@@ -396,6 +398,9 @@ async fn accumulate_dirty(
     metrics: &ObserverMetrics,
     store: &ObservedStore,
 ) {
+    if doc_id.is_empty() {
+        return;
+    }
     match resolver.resolve(node, collection_id).await {
         Ok(Some(name))
             if supports_doc_patch_collection(name) || name == SESSION_HYDRATION_REQUEST =>
