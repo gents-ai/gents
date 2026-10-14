@@ -332,7 +332,7 @@ export function OnboardingWizard({
   if (step === "welcome") {
     return (
       <Frame>
-        <Mark className="mb-6 h-6 text-ink" />
+        <Mark className="mb-6 h-5 text-ink" />
         <Title note="Gents keeps a record of every step an agent takes, so you can see what it did and it can pick up where it left off. Start a node here, or connect to one that already runs.">
           Let’s get set up
         </Title>
