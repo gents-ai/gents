@@ -28,9 +28,10 @@ use tokio::sync::watch;
 const ATOMICITY_SCHEMA: &str = "
 type TxnAtomicityLeft { label: String amount: Int }
 type TxnAtomicityRight { label: String amount: Int }
+type TxnAtomicityUnique { key: String @index(unique: true) label: String }
 ";
 
-/// Disposable node with only the minimal two-collection schema installed.
+/// Disposable node with only the minimal atomicity schema installed.
 async fn disposable_node() -> Result<Arc<EmbeddedNode>> {
     let node = Arc::new(EmbeddedNode::builder().build().await?);
     node.add_schema(ATOMICITY_SCHEMA).await?;
@@ -307,5 +308,136 @@ async fn independent_reader_never_observes_half_of_a_two_document_commit() -> Re
     write?;
     read?;
     assert_eq!(pair_counts(&node).await?, (1, 1));
+    Ok(())
+}
+
+fn write_unique(key: &str) -> String {
+    format!(
+        r#"mutation {{ create_TxnAtomicityUnique(input: {{ key: "{}", label: "{}" }}) {{ _docID }} }}"#,
+        escape_graphql_string(key),
+        escape_graphql_string(key)
+    )
+}
+
+/// Read the key inside the transaction and insert it only when absent.
+async fn read_then_insert_unique(txn: &ConfigApplyTxn<'_>, key: &str) -> Result<bool> {
+    let read = ensure_no_errors(
+        txn.execute(&format!(
+            r#"query {{ TxnAtomicityUnique(filter: {{ key: {{ _eq: "{}" }} }}) {{ key }} }}"#,
+            escape_graphql_string(key)
+        ))
+        .await?,
+    )?;
+    let found = read["data"]["TxnAtomicityUnique"]
+        .as_array()
+        .context("unique read omitted collection")?
+        .len();
+    if found > 0 {
+        return Ok(false);
+    }
+    ensure_no_errors(txn.execute(&write_unique(key)).await?)?;
+    Ok(true)
+}
+
+/// Premise for read-then-insert with a unique index as the backstop, on the
+/// DefraDB rev pinned in the workspace `Cargo.toml`
+/// (`980190cb3d0e8298e038a07c34dff94fd710893a`): a duplicate insert of a
+/// unique-indexed key inside `transact_local` errors, and when the caller
+/// propagates that error neither the duplicate nor an earlier write in the
+/// same transaction persists.
+#[tokio::test]
+async fn unique_index_violation_aborts_the_transaction() -> Result<()> {
+    let node = disposable_node().await?;
+
+    let outcome: Result<()> = ConfigAccess::transact_local(
+        &node,
+        None,
+        "txn_atomicity_unique_violation",
+        |txn: &ConfigApplyTxn<'_>| {
+            Box::pin(async move {
+                ensure_no_errors(txn.execute(&write_left("unique-abort", 1)).await?)?;
+                ensure_no_errors(txn.execute(&write_unique("same")).await?)?;
+                ensure_no_errors(txn.execute(&write_unique("same")).await?)?;
+                Ok(())
+            })
+        },
+    )
+    .await;
+
+    assert!(
+        outcome.is_err(),
+        "a duplicate unique-key insert must fail the transaction: {outcome:?}"
+    );
+    assert_eq!(collection_count(&node, "TxnAtomicityLeft").await?, 0);
+    assert_eq!(collection_count(&node, "TxnAtomicityUnique").await?, 0);
+    Ok(())
+}
+
+/// Two concurrent read-then-insert transactions on one unique key leave one
+/// row; the unique index is the backstop when both reads miss. Same pinned
+/// DefraDB rev as `unique_index_violation_aborts_the_transaction`.
+#[tokio::test]
+async fn concurrent_read_then_insert_leaves_one_row() -> Result<()> {
+    let node = disposable_node().await?;
+    let attempt = || {
+        ConfigAccess::transact_local(
+            &node,
+            None,
+            "txn_atomicity_concurrent_read_then_insert",
+            |txn: &ConfigApplyTxn<'_>| {
+                Box::pin(async move { read_then_insert_unique(txn, "contended").await })
+            },
+        )
+    };
+
+    let (first, second) = tokio::time::timeout(Duration::from_secs(15), async {
+        tokio::join!(attempt(), attempt())
+    })
+    .await
+    .context("concurrent read-then-insert timed out")?;
+
+    assert!(
+        first.is_ok() || second.is_ok(),
+        "at least one transaction must commit: {first:?} / {second:?}"
+    );
+    assert_eq!(collection_count(&node, "TxnAtomicityUnique").await?, 1);
+    Ok(())
+}
+
+/// A read-then-insert of an existing key inserts nothing, so the other write
+/// in the same transaction commits. Same pinned DefraDB rev as above.
+#[tokio::test]
+async fn read_then_insert_of_existing_key_commits_the_other_write() -> Result<()> {
+    let node = disposable_node().await?;
+    ConfigAccess::transact_local(
+        &node,
+        None,
+        "txn_atomicity_seed_existing_key",
+        |txn: &ConfigApplyTxn<'_>| {
+            Box::pin(async move {
+                ensure_no_errors(txn.execute(&write_unique("existing")).await?)?;
+                Ok(())
+            })
+        },
+    )
+    .await?;
+
+    let inserted = ConfigAccess::transact_local(
+        &node,
+        None,
+        "txn_atomicity_existing_key",
+        |txn: &ConfigApplyTxn<'_>| {
+            Box::pin(async move {
+                let inserted = read_then_insert_unique(txn, "existing").await?;
+                ensure_no_errors(txn.execute(&write_left("other-write", 1)).await?)?;
+                Ok(inserted)
+            })
+        },
+    )
+    .await?;
+
+    assert!(!inserted, "the existing key must be found, not inserted");
+    assert_eq!(collection_count(&node, "TxnAtomicityLeft").await?, 1);
+    assert_eq!(collection_count(&node, "TxnAtomicityUnique").await?, 1);
     Ok(())
 }
