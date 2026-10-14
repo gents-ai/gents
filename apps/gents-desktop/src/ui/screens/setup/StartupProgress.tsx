@@ -3,7 +3,14 @@
    finished step gives way to the next rather than staying listed. Each
    stays at least STEP_DWELL_MS, so a fast one does not flash past, and the
    cards share one place, so handing over moves nothing around them. */
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import {
+  Fragment,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { CircleAlert, CircleCheck } from "lucide-react";
 
 import { Button } from "@gents/ui/components/button";
@@ -21,6 +28,16 @@ export const SETUP_COMPLETE_DWELL_MS = 2_000;
 export const STEP_DWELL_MS = 800;
 
 export type StartupProgressStep = StartupStep & { detail?: string | null };
+
+/** What the finished card says: which node is up, and a few facts about it. */
+export type StartupSummary = {
+  title: string;
+  facts: {
+    label: string;
+    value: string;
+    /** shown on hover when shortened */ full?: string;
+  }[];
+};
 
 const ASIDES = [
   "Catalyzing dilithium converters.",
@@ -162,6 +179,7 @@ export function StartupProgress({
   actions,
   footer,
   onFinished,
+  summary,
 }: {
   title: string;
   /** the title once everything has started and that has been shown */
@@ -185,6 +203,9 @@ export function StartupProgress({
   footer?: ReactNode;
   /** told when the finished card has come into view, after the steps had theirs */
   onFinished?: () => void;
+  /** what the finished card says; without it, that everything started and
+      what each step reported */
+  summary?: StartupSummary;
 }) {
   const failed = steps.some((s) => s.state === "error");
   const shownKey = usePaced(targetOf(steps, failed, done), failed);
@@ -226,15 +247,38 @@ export function StartupProgress({
                   cardRef={leaving ? undefined : card}
                   icon={stepIcon("complete")}
                 >
-                  <span>Everything started.</span>
-                  {details.map((detail) => (
-                    <span
-                      key={detail}
-                      className="text-xs break-words text-muted-foreground"
-                    >
-                      {detail}
-                    </span>
-                  ))}
+                  {summary ? (
+                    <>
+                      <span>{summary.title}</span>
+                      {summary.facts.length > 0 ? (
+                        <dl className="mt-1 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-0.5 text-xs">
+                          {summary.facts.map((fact) => (
+                            <Fragment key={fact.label}>
+                              <dt className="text-muted-foreground">{fact.label}</dt>
+                              <dd
+                                className="truncate font-mono"
+                                title={fact.full ?? fact.value}
+                              >
+                                {fact.value}
+                              </dd>
+                            </Fragment>
+                          ))}
+                        </dl>
+                      ) : null}
+                    </>
+                  ) : (
+                    <>
+                      <span>Everything started.</span>
+                      {details.map((detail) => (
+                        <span
+                          key={detail}
+                          className="text-xs break-words text-muted-foreground"
+                        >
+                          {detail}
+                        </span>
+                      ))}
+                    </>
+                  )}
                 </Card>
               );
             }
