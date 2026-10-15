@@ -189,6 +189,44 @@ async fn compaction_entries_track_files_cumulatively() {
     assert_eq!(entries[1].files_read, vec!["/tmp/a.rs", "/tmp/c.rs"]);
     assert_eq!(entries[1].files_modified, vec!["/tmp/b.rs", "/tmp/d.rs"]);
     assert_eq!(entries[2].compacted_through_sequence, Some(40));
+    let stored = node
+        .execute(
+            r#"{ CompactionEntry(filter: { session_id: { _eq: "session-1" }, node_did: { _eq: "did:test:test" } }, order: { sequence: ASC }) { files_read files_modified } }"#,
+        )
+        .await;
+    assert!(
+        !stored.has_errors(),
+        "stored rows query failed: {:?}",
+        stored.errors
+    );
+    let stored_rows = stored.data.unwrap()["CompactionEntry"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| {
+            (
+                row["files_read"].as_str().unwrap().to_owned(),
+                row["files_modified"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        stored_rows,
+        vec![
+            (
+                r#"{"version":1,"paths":["/tmp/a.rs"]}"#.to_owned(),
+                r#"{"version":1,"paths":["/tmp/b.rs"]}"#.to_owned(),
+            ),
+            (
+                r#"{"version":1,"paths":["/tmp/c.rs"]}"#.to_owned(),
+                r#"{"version":1,"paths":["/tmp/d.rs"]}"#.to_owned(),
+            ),
+            (
+                r#"{"version":1,"paths":[]}"#.to_owned(),
+                r#"{"version":1,"paths":[]}"#.to_owned(),
+            ),
+        ]
+    );
     let prompt_state =
         load_prompt_compaction_state(&node, "session-1", "did:test:test", None, None)
             .await
@@ -212,6 +250,97 @@ async fn compaction_entries_track_files_cumulatively() {
     assert_eq!(at_cursor.compacted_through_sequence, Some(40));
 
     let _ = std::fs::remove_dir_all(&data_path);
+}
+
+#[tokio::test]
+async fn legacy_cumulative_compaction_paths_extend_and_redeliver_as_deltas() {
+    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(&node).await.unwrap();
+    let session_id = "session-legacy-file-activity";
+    let key = escape_graphql_string(&compaction_key("did:test:test", session_id, None, 1));
+    let mutation = format!(
+        r#"mutation {{ create_CompactionEntry(input: {{
+            compaction_key: "{key}"
+            session_id: "{session_id}"
+            node_did: "did:test:test"
+            requester_did: null
+            request_id: "old-request"
+            request_doc_id: "old-request-doc"
+            sequence: 1
+            summary: "legacy"
+            files_read: "[\"/legacy/read.rs\"]"
+            files_modified: "[\"/legacy/write.rs\"]"
+            messages_compacted: 1
+            compacted_through_sequence: 10
+            original_tokens: 100
+            compacted_tokens: 20
+            created_at: "2026-10-15T00:00:00Z"
+        }}) {{ _docID }} }}"#
+    );
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "legacy seed failed: {:?}",
+        response.errors
+    );
+
+    let prior = load_prompt_compaction_state(&node, session_id, "did:test:test", None, None)
+        .await
+        .unwrap();
+    let files_read = ["/legacy/read.rs".to_string(), "/new/read.rs".to_string()];
+    let files_modified = ["/new/write.rs".to_string()];
+    let save = || {
+        save_compaction_entry_with_requester_did(
+            &node,
+            session_id,
+            "did:test:test",
+            None,
+            "new-request",
+            "new-request-doc",
+            "new summary",
+            &files_read,
+            &files_modified,
+            1,
+            20,
+            100,
+            20,
+            &prior.generation,
+        )
+    };
+    let first = save().await.unwrap();
+    assert_eq!(first.files_read, vec!["/legacy/read.rs", "/new/read.rs"]);
+    assert_eq!(
+        first.files_modified,
+        vec!["/legacy/write.rs", "/new/write.rs"]
+    );
+    assert_eq!(save().await.unwrap(), first);
+    let entries = load_compaction_entries(&node, session_id, "did:test:test", None)
+        .await
+        .unwrap();
+    assert_eq!(entries[0].files_read, vec!["/legacy/read.rs"]);
+    assert_eq!(entries[1].files_read, first.files_read);
+    assert_eq!(entries[1].files_modified, first.files_modified);
+    let stored = node
+        .execute(
+            r#"{ CompactionEntry(filter: { session_id: { _eq: "session-legacy-file-activity" }, sequence: { _eq: 2 } }) { files_read files_modified } }"#,
+        )
+        .await;
+    assert!(
+        !stored.has_errors(),
+        "stored row query failed: {:?}",
+        stored.errors
+    );
+    let stored_data = stored.data.unwrap();
+    let stored_row = &stored_data["CompactionEntry"][0];
+    assert_eq!(
+        stored_row["files_read"].as_str(),
+        Some(r#"{"version":1,"paths":["/new/read.rs"]}"#)
+    );
+    assert_eq!(
+        stored_row["files_modified"].as_str(),
+        Some(r#"{"version":1,"paths":["/new/write.rs"]}"#)
+    );
+    node.shutdown().await;
 }
 
 #[tokio::test]
@@ -664,10 +793,26 @@ async fn fork_rolls_back_at_every_mutation_position() {
         "fork-rollback-compaction",
         "fork-rollback-compaction-doc",
         "early turns",
-        &[],
+        &["/tmp/a.rs".to_string()],
         &[],
         2,
         2,
+        100,
+        10,
+    )
+    .await
+    .unwrap();
+    save_compaction_entry(
+        &node,
+        SOURCE,
+        AGENT,
+        "fork-rollback-compaction-2",
+        "fork-rollback-compaction-doc-2",
+        "later turns",
+        &["/tmp/b.rs".to_string()],
+        &[],
+        1,
+        3,
         100,
         10,
     )
@@ -687,11 +832,17 @@ async fn fork_rolls_back_at_every_mutation_position() {
     )
     .await;
     assert_eq!(outcome.copied_messages, 3);
-    assert_eq!(outcome.copied_compaction_entries, 1);
+    assert_eq!(outcome.copied_compaction_entries, 2);
     assert!(
         writes > 4,
         "headers, compaction, and session header are separate writes: {writes}"
     );
+    let child_entries = load_compaction_entries(&node, &outcome.session_id, AGENT, None)
+        .await
+        .unwrap();
+    assert_eq!(child_entries.len(), 2);
+    assert_eq!(child_entries[0].files_read, vec!["/tmp/a.rs"]);
+    assert_eq!(child_entries[1].files_read, vec!["/tmp/a.rs", "/tmp/b.rs"]);
     node.shutdown().await;
 }
 

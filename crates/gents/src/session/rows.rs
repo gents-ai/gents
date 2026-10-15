@@ -25,25 +25,6 @@ pub struct SessionOwnerRow {
     pub session: gents_protocol::session::AgentSession,
 }
 
-impl TryFrom<CompactionEntryRow> for CompactionEntry {
-    type Error = anyhow::Error;
-
-    fn try_from(row: CompactionEntryRow) -> Result<Self> {
-        Ok(Self {
-            session_id: row.session_id,
-            sequence: row.sequence,
-            summary: row.summary,
-            files_read: serde_json::from_str(&row.files_read)?,
-            files_modified: serde_json::from_str(&row.files_modified)?,
-            messages_compacted: row.messages_compacted,
-            compacted_through_sequence: row.compacted_through_sequence,
-            original_tokens: row.original_tokens,
-            compacted_tokens: row.compacted_tokens,
-            created_at: row.created_at,
-        })
-    }
-}
-
 pub(crate) fn dedupe_paths(paths: &mut Vec<String>) {
     paths.sort();
     paths.dedup();
