@@ -985,7 +985,11 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         ));
     }
     assert!(snapshot.client_data_publication_cases["notice_delivery"].is_object());
-    assert!(!snapshot.client_request_patch_publication_cases.is_empty());
+    for field in ["publications", "reuse"] {
+        assert!(snapshot.client_request_patch_publication_cases[field]
+            .as_array()
+            .is_some_and(|cases| !cases.is_empty()));
+    }
     emitted.insert((
         "client_request_patch_publication_cases".into(),
         "ClientRequestPatchPublicationCases".into(),
