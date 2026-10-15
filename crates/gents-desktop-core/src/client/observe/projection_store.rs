@@ -685,6 +685,20 @@ mod reload_tests {
                     })
                     .collect::<Vec<gents_protocol::session::AgentSession>>()
             };
+            let tool_calls = |rows: &[serde_json::Value]| {
+                rows.iter()
+                    .map(|row| {
+                        let owner = row["owner"].as_u64().expect("tool-call owner");
+                        serde_json::from_value(serde_json::json!({
+                            "tool_call_key": row["key"],
+                            "node_did": did(owner),
+                            "session_id": row["key"],
+                            "tool_name": row["value"]
+                        }))
+                        .expect("modeled tool-call row")
+                    })
+                    .collect::<Vec<gents_protocol::row::AgentToolCallRow>>()
+            };
             let observations = |rows: &[serde_json::Value]| {
                 rows.iter()
                     .map(|row| {
@@ -712,6 +726,13 @@ mod reload_tests {
                         .expect("modeled current configs"),
                 ),
                 session_source_node_dids: case["current_configs"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|row| row["source"].as_u64().map(did))
+                    .collect(),
+                tool_calls: tool_calls(case["current_configs"].as_array().unwrap()),
+                tool_call_source_node_dids: case["current_configs"]
                     .as_array()
                     .unwrap()
                     .iter()
@@ -755,6 +776,13 @@ mod reload_tests {
                         .expect("modeled incoming configs"),
                 ),
                 session_source_node_dids: case["incoming_configs"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|row| row["source"].as_u64().map(did))
+                    .collect(),
+                tool_calls: tool_calls(case["incoming_configs"].as_array().unwrap()),
+                tool_call_source_node_dids: case["incoming_configs"]
                     .as_array()
                     .unwrap()
                     .iter()
@@ -818,6 +846,15 @@ mod reload_tests {
                 }));
             }
             assert_eq!(merged.sessions.len(), expected_configs.len());
+            for expected in expected_configs {
+                let owner_did = did(expected["owner"].as_u64().unwrap());
+                assert!(merged.tool_calls.iter().any(|row| {
+                    row.node_did.as_deref() == Some(owner_did.as_str())
+                        && row.tool_call_key == expected["key"].as_str().unwrap()
+                        && row.tool_name.as_deref() == expected["value"].as_str()
+                }));
+            }
+            assert_eq!(merged.tool_calls.len(), expected_configs.len());
 
             for expected in case["expected_observations"].as_array().unwrap() {
                 let source = expected["source"].as_u64().map(did);
