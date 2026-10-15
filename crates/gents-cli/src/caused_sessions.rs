@@ -7,7 +7,7 @@ use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
 use gents::session::{load_latest_request_in_txn, public_request_filter, session_scope_filter};
 pub(crate) use gents::session_origin::SessionScope;
-use gents::session_origin::{caused_requests, lineage, load_session, started_by, SessionLink};
+use gents::session_origin::{lineage, load_session, started_by, SessionLink};
 use gents_protocol::row::AgentRequestRow;
 use serde_json::Value;
 
@@ -129,55 +129,55 @@ pub(crate) async fn load_caused_session(
     view(node, started, parent.scope, root, depth).await
 }
 
+/// The public request that started a linked session: the earliest request of
+/// `link.scope` that names the link's cause and a tool call, ordered by
+/// `(created_at, _docID)`. It is never found by tool name, so a call of any
+/// kind may open it, and a later message from the same cause into the same
+/// session does not displace it.
 pub(crate) async fn starting_request(
     access: &ConfigAccess,
     link: &SessionLink,
 ) -> Result<Option<AgentRequestRow>> {
-    let calls = access
-        .execute(&format!(
-            r#"{{AgentToolCall(filter: {{ request_doc_id: {{ _eq: "{}" }}, tool_name: {{ _eq: "{}" }} }}) {{ _docID }}}}"#,
-            escape_graphql_string(&link.cause_request_doc_id),
-            escape_graphql_string(gents::toolset::AGENT_NEW_TOOL_NAME),
-        ))
-        .await?;
-    let call_doc_ids = calls
-        .pointer("/data/AgentToolCall")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|row| row.get("_docID")?.as_str())
-        .collect::<Vec<_>>();
-    let caused = caused_requests(access, call_doc_ids.iter().copied()).await?;
-    if caused.is_empty() {
-        return Ok(None);
-    }
     let filter = public_request_filter(&format!(
-        "{}, request_id: {{ _in: [{}] }}",
+        r#"{}, caused_by_parent_request_doc_id: {{ _eq: "{}" }}"#,
         session_scope_filter(
             &link.scope.node_did,
             &link.scope.session_id,
             link.scope.requester_did.as_deref(),
         ),
-        caused
-            .values()
-            .map(|id| format!("\"{}\"", escape_graphql_string(id)))
-            .collect::<Vec<_>>()
-            .join(",")
+        escape_graphql_string(&link.cause_request_doc_id)
     ));
-    let mut rows = request_rows(
-        access,
-        &format!("{{AgentRequest(filter: {{{filter}}}) {{{REQUEST_FIELDS}}}}}"),
-    )
-    .await?;
-    rows.retain(|row| {
-        row.caused_by_parent_request_doc_id.as_deref() == Some(&link.cause_request_doc_id)
-    });
-    anyhow::ensure!(
-        rows.len() <= 1,
-        "session {} has more than one opening request",
-        link.scope.session_id
-    );
-    Ok(rows.pop())
+    let rows = access
+        .execute(&format!(
+            "{{AgentRequest(filter: {{{filter}}}) {{{REQUEST_FIELDS}}}}}"
+        ))
+        .await?
+        .pointer("/data/AgentRequest")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    opening_request(&rows, link)
+        .map(|row| serde_json::from_value(row).context("decoding AgentRequest row"))
+        .transpose()
+}
+
+/// The opening request among request rows (`_docID`, `created_at`, the
+/// session scope and both causal edges): the earliest in `link.scope`, by
+/// `(created_at, _docID)`, whose `caused_by_parent_request_doc_id` is the
+/// link's cause and whose `caused_by_parent_tool_call_doc_id` is non-null.
+pub(crate) fn opening_request(rows: &[Value], link: &SessionLink) -> Option<Value> {
+    let text = |row: &Value, field: &str| row.get(field).and_then(Value::as_str).map(str::to_owned);
+    rows.iter()
+        .filter(|row| {
+            text(row, "caused_by_parent_request_doc_id").as_deref()
+                == Some(&link.cause_request_doc_id)
+                && text(row, "caused_by_parent_tool_call_doc_id").is_some()
+                && text(row, "node_did").as_deref() == Some(&link.scope.node_did)
+                && text(row, "session_id").as_deref() == Some(&link.scope.session_id)
+                && text(row, "requester_did") == link.scope.requester_did
+        })
+        .min_by_key(|row| (text(row, "created_at"), text(row, "_docID")))
+        .cloned()
 }
 
 pub(crate) async fn started_by_request(
@@ -288,4 +288,132 @@ fn row_scope(row: &AgentRequestRow) -> Result<SessionScope> {
             .context("AgentRequest row omitted session_id")?,
         requester_did: row.requester_did.clone(),
     })
+}
+
+#[cfg(test)]
+pub(crate) mod fixtures {
+    /// A parent request in `parent_session` and two child sessions it started,
+    /// each opened by a request naming the same tool call (of no session-message
+    /// kind). Returns the parent request's `_docID`.
+    pub(crate) async fn seed_one_call_two_sessions(
+        node: &gents::defra_node::EmbeddedNode,
+        did: &str,
+        parent_session: &str,
+    ) -> String {
+        async fn run(
+            node: &gents::defra_node::EmbeddedNode,
+            mutation: String,
+            collection: &str,
+        ) -> String {
+            let response = node.execute(&mutation).await;
+            assert!(!response.has_errors(), "{:?}", response.errors);
+            gents::graphql::single_mutation_document(&response, &format!("create_{collection}"))
+                .unwrap()
+                .and_then(|document| document["_docID"].as_str().map(str::to_owned))
+                .expect("created doc id")
+        }
+        let request = |request_id: &str, session_id: &str, cause: &str| {
+            format!(
+                r#"mutation {{ create_AgentRequest(input: {{ purpose: "normal", request_id: "{request_id}", node_did: "{did}", requester_did: "{did}", agent_id: "worker", session_id: "{session_id}", {cause} content: "work", lifecycle_state: "completed", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "2026-09-26T00:00:01Z", retry_count: 0, max_retries: 3 }}) {{ _docID }} }}"#
+            )
+        };
+        let parent = run(
+            node,
+            request("parent-request", parent_session, ""),
+            "AgentRequest",
+        )
+        .await;
+        for child in ["child-a", "child-b"] {
+            let cause = format!(
+                r#"caused_by_parent_request_id: "parent-request", caused_by_parent_request_doc_id: "{parent}", caused_by_parent_tool_call_id: "call-1", caused_by_parent_tool_call_doc_id: "call-doc","#
+            );
+            run(
+                node,
+                request(&format!("{child}-request"), child, &cause),
+                "AgentRequest",
+            )
+            .await;
+            run(
+                node,
+                format!(
+                    r#"mutation {{ create_AgentSession(input: {{ session_id: "{child}", node_did: "{did}", requester_did: "{did}", agent_id: "worker", created_at: "2026-09-26T00:00:00Z", provenance: {{ parent_request_doc_id: "{parent}" }} }}) {{ _docID }} }}"#
+                ),
+                "AgentSession",
+            )
+            .await;
+        }
+        parent
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn link() -> SessionLink {
+        SessionLink {
+            scope: SessionScope {
+                node_did: "did:test:node".into(),
+                session_id: "child".into(),
+                requester_did: Some("did:test:node".into()),
+            },
+            cause_request_doc_id: "bae-parent".into(),
+        }
+    }
+
+    fn row(doc_id: &str, created_at: &str, call: Option<&str>) -> Value {
+        json!({
+            "_docID": doc_id,
+            "node_did": "did:test:node",
+            "session_id": "child",
+            "requester_did": "did:test:node",
+            "created_at": created_at,
+            "caused_by_parent_request_doc_id": "bae-parent",
+            "caused_by_parent_tool_call_doc_id": call,
+        })
+    }
+
+    fn doc_id(row: Option<Value>) -> Option<String> {
+        row.map(|row| row["_docID"].as_str().unwrap().to_owned())
+    }
+
+    #[test]
+    fn opening_request_prefers_agent_new_over_a_later_message() {
+        let rows = [
+            row("bae-message", "2026-09-26T00:00:02Z", Some("call-message")),
+            row("bae-new", "2026-09-26T00:00:01Z", Some("call-new")),
+        ];
+        assert_eq!(
+            doc_id(opening_request(&rows, &link())).as_deref(),
+            Some("bae-new")
+        );
+    }
+
+    #[test]
+    fn opening_request_is_the_earliest_of_one_call() {
+        let rows = [
+            row("bae-b", "2026-09-26T00:00:01Z", Some("call-1")),
+            row("bae-c", "2026-09-26T00:00:02Z", Some("call-1")),
+            row("bae-a", "2026-09-26T00:00:01Z", Some("call-1")),
+        ];
+        assert_eq!(
+            doc_id(opening_request(&rows, &link())).as_deref(),
+            Some("bae-a")
+        );
+    }
+
+    #[test]
+    fn opening_request_needs_the_cause_the_call_edge_and_the_session() {
+        let mut other_cause = row("bae-cause", "2026-09-26T00:00:00Z", Some("call-1"));
+        other_cause["caused_by_parent_request_doc_id"] = json!("bae-other");
+        let mut other_session = row("bae-session", "2026-09-26T00:00:00Z", Some("call-1"));
+        other_session["session_id"] = json!("elsewhere");
+        let rows = [
+            other_cause,
+            other_session,
+            row("bae-no-call", "2026-09-26T00:00:00Z", None),
+        ];
+        assert_eq!(opening_request(&rows, &link()), None);
+    }
 }

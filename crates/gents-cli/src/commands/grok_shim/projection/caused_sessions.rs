@@ -689,3 +689,44 @@ fn elapsed_millis(started_at: Option<&str>, ended_at: Option<&str>) -> u64 {
         .try_into()
         .unwrap_or(0)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn request(value: Value) -> AgentRequestRow {
+        serde_json::from_value(value).unwrap()
+    }
+
+    #[tokio::test]
+    async fn one_call_that_started_two_sessions_spawns_one_subagent_each() {
+        let dir = tempfile::tempdir().unwrap();
+        let node = Arc::new(
+            EmbeddedNode::builder()
+                .data_path(dir.path().join("node"))
+                .build()
+                .await
+                .unwrap(),
+        );
+        gents::schema::ensure_runtime_schemas(node.as_ref())
+            .await
+            .unwrap();
+        let did = "did:test:node";
+        let doc_id =
+            crate::caused_sessions::fixtures::seed_one_call_two_sessions(&node, did, "parent")
+                .await;
+        let parent = request(json!({
+            "_docID": doc_id, "request_id": "parent-request", "session_id": "parent",
+            "node_did": did, "requester_did": did,
+        }));
+        let mut started = caused_by_request(&node, &parent)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|session| session.scope.session_id)
+            .collect::<Vec<_>>();
+        started.sort();
+        assert_eq!(started, ["child-a", "child-b"]);
+        node.shutdown().await;
+    }
+}
