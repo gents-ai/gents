@@ -328,18 +328,39 @@ async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) 
     } else {
         "pending"
     };
-    let doc_id = create_request_with_signed_fields(
-        &db.node,
-        &request_id,
-        &session_id,
-        initial_state,
-        &created_at,
-        valid_until.as_deref(),
-        request_input.as_deref(),
-        None,
-        None,
-    )
-    .await;
+    let doc_id = if action == "dedupLose" && case.from == "workspaceBindingPending" {
+        let response = db
+            .node
+            .execute(&format!(
+                r#"mutation {{ create_AgentRequest(input: {{
+                request_id: "{}", purpose: "normal", node_did: "{}", agent_id: "{}",
+                session_id: "{}", lifecycle_state: "workspaceBindingPending",
+                content: "hello", created_at: "{}", request_hop: 0,
+                retry_count: 0, max_retries: 0, caused_by_trigger_id: "conformance-trigger"
+            }}) {{ _docID }} }}"#,
+                gents::graphql::escape_graphql_string(&request_id),
+                gents::graphql::escape_graphql_string(NODE_DID),
+                gents::graphql::escape_graphql_string(AGENT_NAME),
+                gents::graphql::escape_graphql_string(&session_id),
+                gents::graphql::escape_graphql_string(&created_at),
+            ))
+            .await;
+        assert!(!response.has_errors(), "{response:?}");
+        crate::support::exact_request_doc_id(&db.node, &request_id).await
+    } else {
+        create_request_with_signed_fields(
+            &db.node,
+            &request_id,
+            &session_id,
+            initial_state,
+            &created_at,
+            valid_until.as_deref(),
+            request_input.as_deref(),
+            None,
+            None,
+        )
+        .await
+    };
     let mut lifecycle = request_lifecycle_for_case(
         &db,
         doc_id.clone(),
@@ -360,20 +381,24 @@ async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) 
         "dedupLose" => {
             if case.from == "workspaceBindingPending" {
                 gents::config_client::ConfigAccess::transact_local_write(
-                    &db.node, None, "test.supersede_before_workspace_binding", |txn| {
-                        let doc_id = &doc_id;
+                    &db.node,
+                    None,
+                    "test.supersede_before_workspace_binding",
+                    |txn| {
                         Box::pin(async move {
-                            txn.execute(&format!(
-                                "mutation {{ update_AgentRequest(docID: \"{}\", input: {{caused_by_trigger_id: \"conformance-trigger\"}}) {{_docID}} }}",
-                                gents::graphql::escape_graphql_string(doc_id),
-                            )).await?;
                             gents::__test_internals::supersede_trigger_requests_in_txn(
-                                txn, NODE_DID, "conformance-trigger", None,
-                            ).await?;
+                                txn,
+                                NODE_DID,
+                                "conformance-trigger",
+                                None,
+                            )
+                            .await?;
                             Ok(())
                         })
                     },
-                ).await.unwrap();
+                )
+                .await
+                .unwrap();
             } else {
                 // Drive the PRODUCTION supersede writer. This arm used to issue its
                 // own raw mutation, which asserted only that DefraDB accepts a
