@@ -281,6 +281,12 @@ pub(crate) async fn preflight(args: &EvalInitArgs) -> Result<()> {
         served,
         "start `gents server` for this home and retry: the author runs on a served home"
     );
+    write::recover_output(&args.out, &home_dir)?;
+    anyhow::ensure!(
+        args.force || args.out.symlink_metadata().is_err(),
+        "{} already exists; pass --force to replace it",
+        args.out.display()
+    );
     Ok(())
 }
 
