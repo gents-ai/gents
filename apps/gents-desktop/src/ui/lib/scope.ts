@@ -13,10 +13,11 @@ export type Scope = { nodes: NodeScope; agents: readonly string[] };
 export type ScopedView = "sessions" | "mailbox" | "recents";
 
 /* the defaults the design settles on: the mailbox is what waits on the
-   person, wherever it came from; sessions and recents are the node this
-   machine runs, or the selection when it runs none. */
+   person, wherever it came from, and the sessions list is every session
+   the person can see; the sidebar's recents are the node this machine
+   runs, or the selection when it runs none. */
 export const defaultScope = (view: ScopedView): Scope => ({
-  nodes: view === "mailbox" ? "all" : "working",
+  nodes: view === "recents" ? "working" : "all",
   agents: [],
 });
 

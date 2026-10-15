@@ -3,7 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionSummary } from "@source-inc/gents-desktop-client";
 import { SessionsScreen } from "../src/ui/screens/SessionsScreen";
 import { emptyFilter } from "../src/ui/lib/session-filter";
-import { filterSessions } from "../src/ui/screens/SessionFilters";
+import { matchesView } from "../src/ui/screens/SessionFilters";
+import { listViews, resetListViews } from "../src/ui/app/listViews";
 import { node, publish, testApp, withApp } from "./app-fixture";
 
 const session = (overrides: Partial<SessionSummary>): SessionSummary => ({
@@ -59,13 +60,14 @@ const deploymentWith = (sessions: SessionSummary[]) =>
     behaviorEnvironments: [],
   });
 
-beforeEach(() =>
+beforeEach(() => {
   vi.stubGlobal("localStorage", {
     getItem: () => null,
     setItem: vi.fn(),
     removeItem: vi.fn(),
-  }),
-);
+  });
+  resetListViews();
+});
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
@@ -78,7 +80,7 @@ describe("sessions started by another session", () => {
       wrapper: withApp(app),
     });
     expect(screen.queryByTestId("session-child")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: /1 more started session/ }));
+    fireEvent.click(screen.getByRole("button", { name: /1 started session/ }));
     expect(screen.getByTestId("session-child")).toHaveClass("pl-9");
     const advanced = [
       child,
@@ -104,17 +106,94 @@ describe("sessions started by another session", () => {
     expect(screen.getByTestId("session-child")).not.toHaveClass("pl-9");
   });
 
+  it("keeps the toggle once the started work has finished, closed until opened, and remembers it", () => {
+    const finished = { ...child, turnState: "completed" };
+    const show = () =>
+      render(<SessionsScreen />, {
+        wrapper: withApp(
+          testApp({ deployments: [deploymentWith([finished, parent])] }),
+        ),
+      });
+    show();
+    const toggle = screen.getByRole("button", { name: /1 started session/ });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByTestId("session-child")).toBeNull();
+    fireEvent.click(toggle);
+    expect(screen.getByTestId("session-child")).toBeInTheDocument();
+    cleanup();
+    show();
+    expect(screen.getByTestId("session-child")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /1 started session/ })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+  });
+
+  it("says how far a filter narrows the list, keeps the parent as context, and clears", () => {
+    const failed = { ...child, turnState: "failed" };
+    act(() => listViews.setSessionFilter({ ...emptyFilter, states: ["failed"] }));
+    render(<SessionsScreen />, {
+      wrapper: withApp(testApp({ deployments: [deploymentWith([failed, parent])] })),
+    });
+    expect(screen.getByTestId("sessions-narrowed")).toHaveTextContent(
+      "1 of 2 sessions",
+    );
+    expect(screen.getByTestId("session-parent")).toHaveClass("opacity-60");
+    expect(screen.getByRole("button", { name: /1 started session/ })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+    expect(screen.queryByTestId("sessions-narrowed")).toBeNull();
+    expect(screen.getByTestId("session-parent")).not.toHaveClass("opacity-60");
+  });
+
+  it("nests a session under its line's top through a starter on a node the list leaves out", () => {
+    const on = (nodeDid: string, sessionId: string, by?: SessionSummary) =>
+      session({
+        sessionId,
+        title: sessionId,
+        nodeDid,
+        latestRequestDocId: `doc-${sessionId}`,
+        latestRequestId: `req-${sessionId}`,
+        startedBy: by
+          ? {
+              sessionId: by.sessionId,
+              nodeDid: by.nodeDid,
+              requesterDid: null,
+              causeRequestDocId: `doc-${by.sessionId}`,
+            }
+          : null,
+      });
+    const lead = on("did:key:a", "lead");
+    const worker = on("did:key:b", "worker", lead);
+    const helper = on("did:key:a", "helper", worker);
+    act(() => listViews.setSessionNodes(["did:key:a"]));
+    render(<SessionsScreen />, {
+      wrapper: withApp(
+        testApp({
+          deployments: [
+            node({ nodeDid: "did:key:a", sessions: [lead, helper] }),
+            node({ nodeDid: "did:key:b", sessions: [worker] }),
+          ],
+        }),
+      ),
+    });
+    expect(screen.queryByTestId("session-helper")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /1 started session/ }));
+    expect(screen.getByTestId("session-helper")).toHaveClass("pl-9");
+    expect(screen.queryByTestId("session-worker")).toBeNull();
+  });
+
   it("filters by the resolved starting session", () => {
     const unresolved = session({
       sessionId: "unresolved",
       provenance: child.provenance,
     });
     const sessions = [parent, child, unresolved];
-    expect(
-      filterSessions(sessions, { ...emptyFilter, sources: ["session"] }, null),
-    ).toEqual([child]);
-    expect(
-      filterSessions(sessions, { ...emptyFilter, sources: ["person"] }, null),
-    ).toEqual([parent, unresolved]);
+    const matching = (sources: ("session" | "person")[]) =>
+      sessions.filter((c) => matchesView(c, { ...emptyFilter, sources }, null));
+    expect(matching(["session"])).toEqual([child]);
+    expect(matching(["person"])).toEqual([parent, unresolved]);
   });
 });

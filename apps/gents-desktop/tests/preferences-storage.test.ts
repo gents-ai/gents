@@ -28,8 +28,9 @@ describe("list views read back from storage", () => {
         agents: [],
       },
     });
+    /* "live" is every unsettled session: working or waiting */
     expect(restored.sessionFilter).toEqual({
-      states: ["live"],
+      states: ["working", "waiting"],
       sources: ["task"],
       agents: [],
     });
@@ -41,6 +42,7 @@ describe("list views read back from storage", () => {
       sessionNodes: null,
       mailboxNodes: ["a"],
       mailboxKinds: [],
+      openSessions: [],
     });
     expect(restoreListViews({ sessionNodes: [] }).sessionNodes).toEqual([]);
   });

@@ -1,16 +1,23 @@
 /* The session filters as one quiet row at the right of the heading: an icon
-   per axis, each opening its own short menu. The state glyphs are the ones
-   the rows carry, so the strip reads as the list's legend as well as its
-   filter. Every option stays listed whether or not it has anything right
+   per axis, each opening its own short menu. Every option stays listed whether or not it has anything right
    now, with the count it would leave behind faceted against the other two
    axes, so narrowing never hides the way back. */
 import { useExclusivePopover } from "@/hooks/useExclusivePopover";
-import { Activity, CircleX, CornerDownRight, Play, User, X } from "lucide-react";
+import {
+  Activity,
+  Circle,
+  CircleMinus,
+  CircleX,
+  Clock,
+  CornerDownRight,
+  Play,
+  User,
+} from "lucide-react";
 import type { ComponentType, ReactNode } from "react";
 import type { SessionSummary } from "@source-inc/gents-desktop-client";
 import {
-  emptyFilter,
   hasFilter,
+  stateOf,
   type SessionFilter,
   type SessionSource,
   type SessionState,
@@ -36,11 +43,10 @@ import {
   ComboboxTrigger,
 } from "@gents/ui/components/combobox";
 import { cn } from "@gents/ui/lib/utils";
-import { isLive } from "@/lib/live";
 import { AgentInitials } from "./parts";
 
 const matchesState = (c: SessionSummary, state: SessionState) =>
-  state === "live" ? isLive(c.turnState) : c.turnState === "failed";
+  stateOf(c.turnState) === state;
 
 /* One option for automation, not two. Every run a trigger fires also names
    the task it fired, so a task and a trigger were the same sessions under
@@ -63,16 +69,13 @@ const passes = (c: SessionSummary, f: SessionFilter) =>
   (f.sources.length === 0 || f.sources.some((s) => matchesSource(c, s))) &&
   (f.agents.length === 0 || f.agents.includes(c.agentId ?? ""));
 
-export const filterSessions = (
-  sessions: SessionSummary[],
+export const matchesView = (
+  c: SessionSummary,
   f: SessionFilter,
   query: string | null,
 ) =>
-  sessions.filter(
-    (c) =>
-      passes(c, f) &&
-      (!query || (c.title ?? "").toLowerCase().includes(query.toLowerCase())),
-  );
+  passes(c, f) &&
+  (!query || (c.title ?? "").toLowerCase().includes(query.toLowerCase()));
 
 export type Option<V extends string> = {
   value: V;
@@ -82,8 +85,11 @@ export type Option<V extends string> = {
 };
 
 const STATES: Option<SessionState>[] = [
-  { value: "live", label: "Live", icon: Activity },
+  { value: "working", label: "Working", icon: Activity },
+  { value: "waiting", label: "Waiting for node", icon: Clock },
   { value: "failed", label: "Failed", icon: CircleX, tint: "text-destructive" },
+  { value: "stopped", label: "Stopped", icon: CircleMinus },
+  { value: "finished", label: "Finished", icon: Circle },
 ];
 
 const SOURCES: Option<SessionSource>[] = [
@@ -288,15 +294,12 @@ export function SessionFilters({
   nodeDids,
   value,
   onChange,
-  nodes,
 }: {
   sessions: SessionSummary[];
   /** the nodes the list spans: their agents are the axis's options */
   nodeDids: readonly string[];
   value: SessionFilter;
   onChange: (next: SessionFilter) => void;
-  /** the node pick beside this row, so one clear empties the whole bar */
-  nodes?: { picked: boolean; clear: () => void };
 }): ReactNode {
   /* a count says what its option would leave: its own axis is dropped from
      the filter, so the numbers answer "and how many of those" as you narrow */
@@ -331,8 +334,9 @@ export function SessionFilters({
     count: countFor("agents", (c) => c.agentId === id),
   }));
 
-  /* a node pick that empties the list still needs its clear */
-  if (sessions.length === 0 && !nodes?.picked) return null;
+  /* a filter that empties the list still shows, so it can be changed;
+     clearing is the list's own line, under the heading */
+  if (sessions.length === 0 && !hasFilter(value)) return null;
 
   return (
     <div
@@ -364,21 +368,6 @@ export function SessionFilters({
         value={value.sources}
         onChange={(sources) => onChange({ ...value, sources })}
       />
-      {(hasFilter(value) || nodes?.picked) && (
-        <Button
-          variant="quiet"
-          size="icon-sm"
-          aria-label="Clear filters"
-          title="Clear filters"
-          className="shrink-0"
-          onClick={() => {
-            onChange(emptyFilter);
-            nodes?.clear();
-          }}
-        >
-          <X />
-        </Button>
-      )}
     </div>
   );
 }
