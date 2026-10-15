@@ -12,44 +12,12 @@ use gents::graph_pipeline::{
 };
 use serde_json::{json, Value};
 
+use super::observation_cursor::{
+    send, without_clock, Backoff, Delivered, ObservationError, ABANDONED_REVISION, LOADS_PER_TICK,
+};
 use super::projection::tools::session_tool_results;
-use super::projection::{ProjectionEngine, UpdateTimestamps};
-use super::turn::{PromptSender, PromptSenderLine};
-
-const VIEW_LOADS_PER_TICK: usize = 4;
-
-const ABANDONED_REVISION: u64 = (1 << 53) - 1;
-
-const MAX_RETRY_DELAY_SECS: i64 = 30;
-
-#[derive(Default)]
-struct Backoff {
-    failures: u32,
-    retry_at: Option<DateTime<Utc>>,
-}
-
-impl Backoff {
-    fn ready(&self, now: DateTime<Utc>) -> bool {
-        self.retry_at.is_none_or(|at| now >= at)
-    }
-
-    fn fail(
-        &mut self,
-        now: DateTime<Utc>,
-        error: anyhow::Error,
-        subject: &str,
-    ) -> Option<anyhow::Error> {
-        self.failures += 1;
-        let delay = (1_i64 << (self.failures - 1).min(5)).min(MAX_RETRY_DELAY_SECS);
-        self.retry_at = Some(now + Duration::seconds(delay));
-        (self.failures == 1).then(|| error.context(format!("{subject}: retrying")))
-    }
-}
-
-struct Delivered {
-    update: Value,
-    at: DateTime<Utc>,
-}
+use super::projection::ProjectionEngine;
+use super::turn::PromptSender;
 
 struct RunObservation {
     graph_id: String,
@@ -78,11 +46,6 @@ pub(super) struct GraphRunCursor {
     discovery_failures: u32,
     runs: BTreeMap<String, RunObservation>,
     loaded_through: Option<String>,
-}
-
-enum ObservationError {
-    Permanent(anyhow::Error),
-    Transient(anyhow::Error),
 }
 
 impl GraphRunCursor {
@@ -240,7 +203,7 @@ impl GraphRunCursor {
         let due = later
             .into_iter()
             .chain(earlier)
-            .take(VIEW_LOADS_PER_TICK)
+            .take(LOADS_PER_TICK)
             .cloned()
             .collect::<Vec<_>>();
         if let Some(last) = due.last() {
@@ -267,45 +230,6 @@ fn durable_revision(view: &GraphRunView) -> u64 {
         .map(|calls| calls.len() + calls.iter().filter(|call| call.terminal).count())
         .sum();
     1 + (stages + calls + usize::from(view.is_terminal())) as u64
-}
-
-async fn send(
-    session: &str,
-    update: Value,
-    sender: &PromptSender,
-    projections: &ProjectionEngine,
-) -> Result<()> {
-    projections
-        .session_updates()
-        .send(
-            session,
-            |event_id, total_tokens| {
-                Ok(super::projection::session_notification_for_method(
-                    "x.ai/session_notification",
-                    session,
-                    update,
-                    super::projection::stamp_update_meta(
-                        event_id,
-                        total_tokens,
-                        None,
-                        None,
-                        UpdateTimestamps::default(),
-                    ),
-                ))
-            },
-            PromptSenderLine(sender),
-        )
-        .await
-        .map(drop)
-}
-
-fn without_clock(update: &Value) -> Value {
-    let mut shape = update.clone();
-    if let Some(object) = shape.as_object_mut() {
-        object.remove("revision");
-        object.remove("elapsed_ms");
-    }
-    shape
 }
 
 fn elapsed_ms(view: &GraphRunView, now: DateTime<Utc>) -> u64 {
@@ -441,6 +365,7 @@ fn abandoned(
 
 #[cfg(test)]
 mod tests {
+    use super::super::observation_cursor::MAX_RETRY_DELAY_SECS;
     use super::super::projection::BoundModelContext;
     use super::super::test_fixtures::seed_canonical_tool_call;
     use super::*;
