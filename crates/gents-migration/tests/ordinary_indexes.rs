@@ -1,6 +1,7 @@
 use defra_node::EmbeddedNode;
 use gents_migration::{
-    ensure_migrations_with_registry, Registry, DEFAULT_BASELINE, DEFAULT_ORDINARY_INDEXES,
+    ensure_migrations_with_registry, OrdinaryIndex, Registry, DEFAULT_BASELINE,
+    DEFAULT_ORDINARY_INDEXES,
 };
 use gents_protocol::schemas::{AGENT_REQUEST, AGENT_REQUEST_NAME, MAILBOX_ITEM, MAILBOX_ITEM_NAME};
 use serde_json::Value;
@@ -60,7 +61,7 @@ async fn assert_indexed_query(node: &EmbeddedNode, query: &str, index: &str, max
     }
 }
 
-fn registry_with_request_index() -> Registry<'static> {
+fn registry_with_request_index<'a>(indexes: &'a [OrdinaryIndex<'static>]) -> Registry<'a> {
     let request = DEFAULT_BASELINE
         .iter()
         .find(|entry| entry.name == AGENT_REQUEST_NAME)
@@ -68,7 +69,7 @@ fn registry_with_request_index() -> Registry<'static> {
     Registry {
         baseline: std::slice::from_ref(request),
         steps: &[],
-        ordinary_indexes: DEFAULT_ORDINARY_INDEXES,
+        ordinary_indexes: indexes,
     }
 }
 
@@ -217,7 +218,12 @@ fn index_inventory(collection: &defra_node::CollectionVersion) -> Vec<Value> {
 
 #[tokio::test]
 async fn existing_and_fresh_stores_reconcile_the_same_index_without_changing_documents() {
-    let registry = registry_with_request_index();
+    let indexes = DEFAULT_ORDINARY_INDEXES
+        .iter()
+        .copied()
+        .filter(|index| index.collection == AGENT_REQUEST_NAME)
+        .collect::<Vec<_>>();
+    let registry = registry_with_request_index(&indexes);
     let existing = fresh_node().await;
     existing
         .add_schema(AGENT_REQUEST)
