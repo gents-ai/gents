@@ -9,6 +9,7 @@ mod inference;
 mod installation;
 pub mod interpolate;
 mod loader;
+pub mod materialize;
 mod provenance;
 pub use home_install::{
     forget_home_install, list_home_installs, read_home_install, write_home_install, HomePackInstall,
