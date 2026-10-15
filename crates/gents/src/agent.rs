@@ -264,7 +264,7 @@ impl Gents {
         migration::ensure_all_runtime_migrations(node.clone()).await?;
         let backend_health = options.backend_health.clone().unwrap_or_default();
         let plugin_models = crate::plugin::model_calls::AccessModels(
-            crate::config_client::ConfigAccess::Local(node.clone()),
+            crate::config_client::ConfigAccess::local(node.clone()),
         );
         let plugins = Arc::new(plugin_executor(options.plugin_home, plugin_models));
         let document_runtime_context = DocumentResolveContext {
@@ -274,7 +274,7 @@ impl Gents {
             plugins: plugins.clone(),
         };
         let resolved_snapshot =
-            resolve_document_runtime_snapshot(node.as_ref(), &document_runtime_context).await?;
+            resolve_document_runtime_snapshot(&node, &document_runtime_context).await?;
         let runtime_node = resolved_snapshot
             .node
             .clone()
@@ -415,11 +415,9 @@ impl Gents {
             .document_runtime_context
             .as_ref()
             .context("runtime was not constructed from documents")?;
-        Ok(
-            resolve_document_runtime_snapshot(self.node.as_ref(), context)
-                .await?
-                .configuration_fingerprint(),
-        )
+        Ok(resolve_document_runtime_snapshot(&self.node, context)
+            .await?
+            .configuration_fingerprint())
     }
 
     pub(crate) fn document_runtime_context(&self) -> Option<&DocumentResolveContext> {
@@ -445,7 +443,7 @@ impl Gents {
 }
 
 pub(crate) async fn resolve_document_runtime_snapshot(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     context: &DocumentResolveContext,
 ) -> anyhow::Result<ResolvedRuntimeSnapshot> {
     let view = document_view::load_document_runtime_view(node, context.identity.did()).await?;

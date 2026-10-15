@@ -144,6 +144,7 @@ fn prompt_ownership_batch_query(requests: &[AgentRequestRow]) -> Option<String> 
         .as_deref()
         .map(|did| format!("\"{}\"", escape_graphql_string(did)))
         .unwrap_or_else(|| "null".into());
+    let mut seen_owners = std::collections::HashSet::new();
     let ids = requests
         .iter()
         .map(|request| {
@@ -154,9 +155,13 @@ fn prompt_ownership_batch_query(requests: &[AgentRequestRow]) -> Option<String> 
                 return None;
             }
             let (owner, _, _) = input_owner(request).ok()?;
-            Some(format!("\"{}\"", escape_graphql_string(&owner)))
+            Some(owner)
         })
         .collect::<Option<Vec<_>>>()?
+        .into_iter()
+        .filter(|owner| seen_owners.insert(owner.clone()))
+        .map(|owner| format!("\"{}\"", escape_graphql_string(&owner)))
+        .collect::<Vec<_>>()
         .join(",");
     let limit = MAX_TIP_REQUEST_ROWS + 1;
     Some(format!(
@@ -459,7 +464,7 @@ mod tests {
     #[tokio::test]
     async fn reopening_completed_request_reads_only_its_prompt_and_active_reads_stay_request_scoped(
     ) {
-        let node = defra_node::NodeBuilder::default().build().await.unwrap();
+        let node = std::sync::Arc::new(defra_node::NodeBuilder::default().build().await.unwrap());
         crate::client::schema::ensure_runtime_schemas(&node)
             .await
             .unwrap();
@@ -642,7 +647,10 @@ mod tests {
         };
         let requests = [request("head"), folded];
         let query = prompt_ownership_batch_query(&requests).expect("one scope");
-        assert!(query.contains(r#"request_doc_id: {_in: ["head","head"]}"#));
+        assert!(query.contains(r#"request_doc_id: {_in: ["head"]}"#));
+        let mut other_scope = requests.clone();
+        other_scope[1].requester_did = Some("other-requester".into());
+        assert!(prompt_ownership_batch_query(&other_scope).is_none());
         let row = |key: &str, sequence: i64| {
             serde_json::json!({
                 "request_doc_id": "head", "node_did": "agent", "session_id": "session",
@@ -672,6 +680,146 @@ mod tests {
         assert_eq!(facts.by_request_doc_id["folded"].first_sequence, None);
     }
 
+    #[tokio::test]
+    #[ignore = "measures repeated-owner index planning against a large disposable session"]
+    async fn folded_prompt_ownership_index_benchmark() {
+        let node = std::sync::Arc::new(defra_node::NodeBuilder::default().build().await.unwrap());
+        let access = ConfigAccess::local(node.clone());
+        access
+            .add_schema(gents_protocol::schemas::AGENT_MESSAGE)
+            .await
+            .unwrap();
+        for start in (0..2_112).step_by(128) {
+            let mutations = (start..(start + 128).min(2_112))
+                .map(|sequence| {
+                    let (owner, key, role) = if sequence < 2_048 {
+                        (format!("noise-{sequence}"), format!("noise-{sequence}"), "assistant")
+                    } else {
+                        let key = match sequence - 2_048 {
+                            0 => "authored:head:context".into(),
+                            1 => "authored:head:prompt".into(),
+                            offset @ 2..=32 => format!("authored:head:folded:folded-{}", offset - 2),
+                            offset => format!("head-{offset}"),
+                        };
+                        ("head".into(), key, "user")
+                    };
+                    let owner = escape_graphql_string(&owner);
+                    let key = escape_graphql_string(&key);
+                    let role = escape_graphql_string(role);
+                    format!(r#"m{sequence}: create_AgentMessage(input: {{
+                        message_key: "{key}", session_id: "session", node_did: "agent",
+                        request_doc_id: "{owner}", requester_did: null,
+                        publication: {{kind: "request_execution", execution_generation: "generation"}},
+                        outcome: "complete", sequence: {sequence}, role: "{role}", blocks: null,
+                        created_at: "2026-09-30T00:00:00Z"
+                    }}) {{ _docID }}"#)
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            ConfigAccess::write_local(
+                &node,
+                "test.prompt_benchmark.seed",
+                &format!("mutation {{ {mutations} }}"),
+            )
+            .await
+            .unwrap();
+        }
+        let head = AgentRequestRow {
+            doc_id: Some("head".into()),
+            request_id: "req-head".into(),
+            node_did: Some("agent".into()),
+            session_id: Some("session".into()),
+            ..Default::default()
+        };
+        let mut requests = vec![head.clone()];
+        requests.extend((0..31).map(|index| AgentRequestRow {
+            doc_id: Some(format!("folded-{index}")),
+            request_id: format!("req-folded-{index}"),
+            lifecycle_state: Some(RequestLifecycleState::Superseded),
+            superseded_by_request: Some(head.request_id.clone()),
+            superseded_by_request_doc_id: head.doc_id.clone(),
+            failure_reason: Some(gents::lifecycle::FOLDED_REASON.into()),
+            ..head.clone()
+        }));
+        let unique = prompt_ownership_batch_query(&requests).unwrap();
+        let owners = std::iter::repeat_n(r#""head""#, 32)
+            .collect::<Vec<_>>()
+            .join(",");
+        let repeated = unique.replace(r#"_in: ["head"]"#, &format!("_in: [{owners}]"));
+        assert_ne!(repeated, unique);
+        let exact = prompt_ownership_query(&requests).unwrap();
+        let report = ConfigAccess::transact_local_readonly(
+            &node,
+            None,
+            "test.prompt_benchmark.read",
+            |txn| {
+                let unique = unique.clone();
+                let repeated = repeated.clone();
+                let exact = exact.clone();
+                let requests = requests.clone();
+                Box::pin(async move {
+                    let unique_rows = txn.execute(&unique).await?;
+                    let repeated_rows = txn.execute(&repeated).await?;
+                    assert_eq!(unique_rows, repeated_rows);
+                    assert_eq!(unique_rows["data"][AGENT_MESSAGE_NAME].as_array().unwrap().len(), 64);
+                    let mut batch_facts = RequestPromptOwnership::default();
+                    assert!(decode_prompt_ownership_batch(&unique_rows["data"], &requests, &mut batch_facts)?);
+                    let exact_rows = txn.execute(&exact).await?;
+                    let mut exact_facts = RequestPromptOwnership::default();
+                    decode_prompt_ownership(&exact_rows["data"], &requests, &mut exact_facts)?;
+                    assert_eq!(batch_facts.by_request_doc_id.len(), requests.len());
+                    assert_eq!(exact_facts.by_request_doc_id.len(), requests.len());
+                    for (doc, fact) in &batch_facts.by_request_doc_id {
+                        let expected = &exact_facts.by_request_doc_id[doc];
+                        assert_eq!(fact.materialized, expected.materialized);
+                        assert_eq!(fact.first_sequence, expected.first_sequence);
+                        assert_eq!(fact.node_did, expected.node_did);
+                        assert_eq!(fact.session_id, expected.session_id);
+                        assert_eq!(fact.requester_did, expected.requester_did);
+                    }
+                    let mut decoder_timings = Vec::new();
+                    for _ in 0..5 {
+                        let started = std::time::Instant::now();
+                        for _ in 0..1_000 {
+                            let mut facts = RequestPromptOwnership::default();
+                            assert!(decode_prompt_ownership_batch(&unique_rows["data"], &requests, &mut facts)?);
+                            assert_eq!(facts.by_request_doc_id.len(), requests.len());
+                            std::hint::black_box(facts);
+                        }
+                        decoder_timings.push(started.elapsed().as_secs_f64() * 1_000.0);
+                    }
+                    let mut timings = Vec::new();
+                    for round in 0..5 {
+                        for (label, query) in if round % 2 == 0 {
+                            [("repeated", &repeated), ("unique", &unique)]
+                        } else {
+                            [("unique", &unique), ("repeated", &repeated)]
+                        } {
+                            let started = std::time::Instant::now();
+                            let response = txn.execute(query).await?;
+                            assert_eq!(response, unique_rows);
+                            timings.push(serde_json::json!({"query": label, "wall_ms": started.elapsed().as_secs_f64() * 1000.0}));
+                        }
+                    }
+                    let explain = |query: &str| query.replacen("query DesktopRequestPromptOwnership", "query DesktopRequestPromptOwnership @explain(type: execute)", 1);
+                    Ok(serde_json::json!({
+                        "session_headers": 2_112, "owner_headers": 64, "requests": 32,
+                        "timings": timings, "decoder_ms_per_1000": decoder_timings,
+                        "unique_plan": txn.execute(&explain(&unique)).await?,
+                        "repeated_plan": txn.execute(&explain(&repeated)).await?,
+                    }))
+                })
+            },
+        )
+        .await
+        .unwrap();
+        if let Ok(path) = std::env::var("GENTS_PROMPT_BENCHMARK_OUTPUT") {
+            std::fs::write(path, serde_json::to_vec_pretty(&report).unwrap()).unwrap();
+        }
+        tracing::info!(report = %report, "folded prompt ownership benchmark");
+        node.shutdown().await;
+    }
+
     /// H streams while Q waits behind it, or F was folded into it. The read
     /// targets the submitted Q or F, but the tip it loads is H's, so H's open
     /// output reaches the live tail.
@@ -680,7 +828,7 @@ mod tests {
         use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestInput, RequestQueue};
         use gents_protocol::request_lifecycle::RequestLifecycleState;
 
-        let node = defra_node::NodeBuilder::default().build().await.unwrap();
+        let node = std::sync::Arc::new(defra_node::NodeBuilder::default().build().await.unwrap());
         crate::client::schema::ensure_runtime_schemas(&node)
             .await
             .unwrap();

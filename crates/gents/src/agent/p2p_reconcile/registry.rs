@@ -238,7 +238,7 @@ async fn registry_heartbeat(
 }
 
 async fn tick_registry(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     p2p: &Arc<dyn defra_p2p_adapter::P2POperations>,
     node_did: &str,
     network_id: &str,

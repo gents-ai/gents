@@ -86,8 +86,8 @@ async fn boot_background_turn_with_bounds(
             DesiredStateApplyPlan,
         };
         let node_did = db.node_identity.did();
-        gents::ConfigAccess::transact_local(
-            db.node.as_ref(),
+        gents::ConfigAccess::transact_local_write(
+            &db.node,
             None,
             "test.configure_r6_execution_deadline",
             |txn| {
@@ -134,7 +134,7 @@ async fn boot_background_turn_with_bounds(
     }
     prepared.backend.enable_dynamic_followups(&prompt);
     configure_agent_tools(
-        db.node.as_ref(),
+        &db.node,
         db.node_identity.did(),
         R6_AGENT_ID,
         None,
@@ -851,7 +851,7 @@ async fn background_tool_execution_survives_parent_request_deadline() {
     let row = load_tool_call(turn.db.node.as_ref(), &turn.session_id, &tool_call_id).await;
     assert_eq!(row.lifecycle_state.as_deref(), Some("completed"));
     let timeline = gents::run_timeline_fetch::load_run_timeline_rows(
-        &gents::config_client::ConfigAccess::Local(turn.db.node.clone()),
+        &gents::config_client::ConfigAccess::local(turn.db.node.clone()),
         "r6-background-outlives-deadline-request-2",
     )
     .await
@@ -1171,7 +1171,7 @@ async fn wait_envelope_bounds_oversized_background_tool_result() {
     let row = load_tool_call(turn.db.node.as_ref(), &turn.session_id, &tool_call_id).await;
     assert_eq!(row.lifecycle_state.as_deref(), Some("completed"));
     let timeline = gents::run_timeline_fetch::load_run_timeline_rows(
-        &gents::config_client::ConfigAccess::Local(turn.db.node.clone()),
+        &gents::config_client::ConfigAccess::local(turn.db.node.clone()),
         &turn.request_id,
     )
     .await
@@ -1422,7 +1422,7 @@ async fn wait_tool_caller_interrupt_returns_without_cancelling_background_row() 
     assert_eq!(wait_row.await_mode.as_deref(), Some("foreground"));
     let wait_tool_call_id = wait_row.tool_call_id.expect("accepted wait handle");
     wait_for_running_tool_call(turn.db.node.as_ref(), &turn.session_id, &wait_tool_call_id).await;
-    interrupt_request(turn.db.node.as_ref(), request_id)
+    interrupt_request(&turn.db.node, request_id)
         .await
         .expect("interrupt caller request");
 
@@ -1633,7 +1633,7 @@ async fn second_signed_principal_runtime_is_denied_foreign_process_handle() {
     )
     .await;
     configure_agent_tools(
-        turn.db.node.as_ref(),
+        &turn.db.node,
         foreign.did(),
         foreign_behavior,
         None,
@@ -1891,7 +1891,7 @@ async fn same_tool_background_calls_execute_concurrently_without_registry_mutex(
         wait_for_tool_completion_message(turn.db.node.as_ref(), &turn.session_id, &handle).await;
     }
     let timeline = gents::run_timeline_fetch::load_run_timeline_rows(
-        &gents::config_client::ConfigAccess::Local(turn.db.node.clone()),
+        &gents::config_client::ConfigAccess::local(turn.db.node.clone()),
         &turn.request_id,
     )
     .await

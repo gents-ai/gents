@@ -78,7 +78,7 @@ pub async fn run_callback_engine(
     ));
     engine.reconcile_bindings().await;
     if let Err(error) = recover_local_invocations(
-        engine.node.as_ref(),
+        &engine.node,
         &node_did,
         ceiling.as_deref(),
         &engine.plugins,
@@ -105,7 +105,7 @@ pub async fn run_callback_engine(
                     engine.reconcile_bindings().await;
                     engine.rescan_created_docs().await;
                     if let Err(error) = recover_local_invocations(
-                        engine.node.as_ref(),
+                        &engine.node,
                         &engine.node_did,
                         engine.ceiling.as_deref(),
                         &engine.plugins,
@@ -140,7 +140,7 @@ pub async fn run_callback_engine(
             engine.reconcile_bindings().await;
             engine.rescan_created_docs().await;
             if let Err(error) = recover_local_invocations(
-                engine.node.as_ref(),
+                &engine.node,
                 &engine.node_did,
                 engine.ceiling.as_deref(),
                 &engine.plugins,

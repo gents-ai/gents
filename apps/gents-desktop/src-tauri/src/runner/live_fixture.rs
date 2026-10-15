@@ -21,7 +21,7 @@ use tokio::runtime::Runtime;
 use tokio::sync::Mutex;
 use tracing_subscriber::prelude::*;
 
-use gents_desktop_bridge::types::{DesktopBootstrapSummary, SavedPeerView};
+use gents_desktop_bridge::types::{DesktopBootstrapSummary, InitConfigStatus, SavedPeerView};
 
 use self::agent::{spawn_live_node, RunningNode};
 use self::backend::LiveBackendConfig;
@@ -425,6 +425,11 @@ impl LiveBridgeFixture {
     pub(crate) async fn build_bootstrap_summary(&self) -> DesktopBootstrapSummary {
         DesktopBootstrapSummary {
             default_node_home: self.node_home.display().to_string(),
+            init_config_status: Some(if self.node_did.is_empty() {
+                InitConfigStatus::Absent
+            } else {
+                InitConfigStatus::Configured
+            }),
             init_node_name: non_empty_clone(&self.init_summary.node_name),
             init_node_did: non_empty_clone(&self.init_summary.node_did),
             init_tool_ceiling: Some("Readwrite".to_string()),
@@ -737,6 +742,7 @@ mod tests {
             Some(&transcript_page.canonical_dependencies),
             Some(&context_store),
             None,
+            None,
             true,
             true,
         )
@@ -844,7 +850,7 @@ mod tests {
         fixture
             .desktop_core()
             .operator_access(node_did)?
-            .transact("desktop.fixture.skill", |txn| {
+            .transact_write("desktop.fixture.skill", |txn| {
                 Box::pin(async move {
                     let (_, agent) = read_desired_state_record_in_txn(
                         txn,

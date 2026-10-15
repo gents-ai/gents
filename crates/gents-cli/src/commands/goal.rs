@@ -141,48 +141,45 @@ async fn goal_clear(args: GoalShowArgs) -> Result<()> {
     let goal = load_goal(&access, &node_did, &args.scope.session)
         .await?
         .with_context(|| format!("no durable goal for session {}", args.scope.session))?;
-    let deleted = match &*access {
-        ConfigAccess::Local(node) => {
-            delete_goals_for_session(node, &node_did, &args.scope.session).await? > 0
-        }
-        ConfigAccess::Graphql(_) => {
-            let node_did = escape_graphql_string(&node_did);
-            let session_id = escape_graphql_string(&args.scope.session);
-            let node_did_ref = &node_did;
-            let session_id_ref = &session_id;
-            access
-                .transact("cli.goal.clear", move |txn| {
-                    Box::pin(async move {
-                        let response = txn
-                            .execute(&format!(
-                                r#"mutation {{
-                        delete_Goal(filter: {{
-                            node_did: {{ _eq: "{node_did_ref}" }},
-                            session_id: {{ _eq: "{session_id_ref}" }}
-                        }}) {{ _docID }}
-                    }}"#
-                            ))
-                            .await?;
-                        txn.execute(&format!(
+    let deleted = if let Some(node) = access.local_node() {
+        delete_goals_for_session(node, &node_did, &args.scope.session).await? > 0
+    } else {
+        let node_did = escape_graphql_string(&node_did);
+        let session_id = escape_graphql_string(&args.scope.session);
+        let node_did_ref = &node_did;
+        let session_id_ref = &session_id;
+        access
+            .transact_write("cli.goal.clear", move |txn| {
+                Box::pin(async move {
+                    let response = txn
+                        .execute(&format!(
                             r#"mutation {{
-                        delete_GoalCreationClaim(filter: {{
+                        delete_Goal(filter: {{
                             node_did: {{ _eq: "{node_did_ref}" }},
                             session_id: {{ _eq: "{session_id_ref}" }}
                         }}) {{ _docID }}
                     }}"#
                         ))
                         .await?;
-                        Ok::<_, anyhow::Error>(response.pointer("/data/delete_Goal").is_some_and(
-                            |value| {
-                                value
-                                    .as_array()
-                                    .map_or_else(|| value.is_object(), |rows| !rows.is_empty())
-                            },
-                        ))
-                    })
+                    txn.execute(&format!(
+                        r#"mutation {{
+                        delete_GoalCreationClaim(filter: {{
+                            node_did: {{ _eq: "{node_did_ref}" }},
+                            session_id: {{ _eq: "{session_id_ref}" }}
+                        }}) {{ _docID }}
+                    }}"#
+                    ))
+                    .await?;
+                    Ok::<_, anyhow::Error>(response.pointer("/data/delete_Goal").is_some_and(
+                        |value| {
+                            value
+                                .as_array()
+                                .map_or_else(|| value.is_object(), |rows| !rows.is_empty())
+                        },
+                    ))
                 })
-                .await?
-        }
+            })
+            .await?
     };
     print_json(&serde_json::json!({
         "goal_id": goal.goal_id,
@@ -191,7 +188,9 @@ async fn goal_clear(args: GoalShowArgs) -> Result<()> {
     }))
 }
 
-async fn access_and_did(scope: &GoalScopeArgs) -> Result<(crate::CommandAccess, String)> {
+async fn access_and_did(
+    scope: &GoalScopeArgs,
+) -> Result<(gents::config_client::ConfigAccess, String)> {
     let node_did = resolve_node_did(scope.home.as_deref(), scope.node_did.as_deref())
         .context("resolving goal owner node_did")?;
     let (access, _) = resolve_config_access(scope.home.as_deref(), scope.graphql.as_deref())
@@ -205,7 +204,7 @@ async fn load_goal(
     node_did: &str,
     session_id: &str,
 ) -> Result<Option<GoalDocument>> {
-    if let ConfigAccess::Local(node) = access {
+    if let Some(node) = access.local_node() {
         return load_canonical_goal(node, node_did, session_id).await;
     }
     let node_did = escape_graphql_string(node_did);
@@ -266,8 +265,8 @@ mod tests {
                 .unwrap(),
         );
         gents::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-        gents::ensure_node(node.as_ref(), DID).await.unwrap();
-        let access = ConfigAccess::Local(node);
+        gents::ensure_node(&node, DID).await.unwrap();
+        let access = ConfigAccess::local(node);
         let backend = serde_json::from_value(serde_json::json!({
             "node_did": DID, "backend_id": "claude", "name": "Claude",
             "provider_kind": "ClaudeCliSubscription", "endpoint": "claude-cli://subscription",
@@ -409,8 +408,8 @@ mod tests {
                 .unwrap(),
         );
         gents::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-        gents::ensure_node(node.as_ref(), DID).await.unwrap();
-        let access = ConfigAccess::Local(node);
+        gents::ensure_node(&node, DID).await.unwrap();
+        let access = ConfigAccess::local(node);
         let backend = serde_json::from_value(serde_json::json!({
             "node_did": DID, "backend_id": "claude", "name": "Claude",
             "provider_kind": "ClaudeCliSubscription", "endpoint": "claude-cli://subscription",

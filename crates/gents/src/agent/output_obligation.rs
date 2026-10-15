@@ -159,10 +159,10 @@ impl OutputObligationGate {
                 .cloned()
                 .context("completed output query omitted AgentToolCall rows")?,
         )?;
-        let access = crate::config_client::ConfigAccess::Local(self.node.clone());
-        let mut sessions = HashMap::new();
+        let access = crate::config_client::ConfigAccess::local(self.node.clone());
         let mut requests = HashMap::new();
         let mut writes = HashMap::<String, Vec<CompletedWriteRow>>::new();
+        let mut scoped_rows = HashMap::<(String, String, Option<String>), Vec<_>>::new();
         for row in rows {
             if !self
                 .obligations
@@ -191,42 +191,62 @@ impl OutputObligationGate {
                     && request.requester_did == row.requester_did,
                 "completed output write crossed its physical request ownership scope"
             );
-            let scope = (
-                row.node_did.clone(),
-                row.session_id.clone(),
-                row.requester_did.clone(),
-            );
-            if !sessions.contains_key(&scope) {
-                let calls = crate::run_timeline_fetch::load_session_tool_calls(
-                    &access,
-                    &row.node_did,
-                    &row.session_id,
-                    row.requester_did.as_deref(),
-                )
-                .await?;
-                sessions.insert(scope.clone(), calls);
-            }
-            let matches = sessions[&scope]
-                .iter()
-                .filter(|call| call.doc_id.as_deref() == Some(row.doc_id.as_str()))
-                .collect::<Vec<_>>();
-            anyhow::ensure!(
-                matches.len() == 1,
-                "completed output write has no unique physical tool binding"
-            );
-            let call = matches[0];
-            anyhow::ensure!(
-                call.request_doc_id.as_deref() == Some(row.request_doc_id.as_str())
-                    && call.tool_name == row.tool_name
-                    && call.lifecycle_state.as_deref() == Some("completed"),
-                "completed output write changed its accepted identity or terminal state"
-            );
-            writes
-                .entry(row.tool_name.clone())
+            scoped_rows
+                .entry((
+                    row.node_did.clone(),
+                    row.session_id.clone(),
+                    row.requester_did.clone(),
+                ))
                 .or_default()
-                .push(CompletedWriteRow {
-                    args: call.args.clone(),
-                });
+                .push(row);
+        }
+        for ((node_did, session_id, requester_did), rows) in scoped_rows {
+            let tool_doc_ids = rows
+                .iter()
+                .map(|row| row.doc_id.clone())
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .collect::<Vec<_>>();
+            let calls = crate::run_timeline_fetch::load_accepted_tool_calls(
+                &access,
+                &node_did,
+                &session_id,
+                requester_did.as_deref(),
+                &tool_doc_ids,
+            )
+            .await?;
+            let mut calls_by_doc = HashMap::<String, Vec<_>>::new();
+            for call in calls {
+                let doc_id = call
+                    .doc_id
+                    .clone()
+                    .context("accepted output write has no physical tool ID")?;
+                calls_by_doc.entry(doc_id).or_default().push(call);
+            }
+            for row in rows {
+                let matches = calls_by_doc
+                    .get(&row.doc_id)
+                    .map(Vec::as_slice)
+                    .unwrap_or_default();
+                anyhow::ensure!(
+                    matches.len() == 1,
+                    "completed output write has no unique physical tool binding"
+                );
+                let call = &matches[0];
+                anyhow::ensure!(
+                    call.session_id == row.session_id
+                        && call.request_doc_id.as_deref() == Some(row.request_doc_id.as_str())
+                        && call.tool_name == row.tool_name
+                        && call.lifecycle_state.as_deref() == Some("completed"),
+                    "completed output write changed its accepted identity or terminal state"
+                );
+                writes
+                    .entry(row.tool_name.clone())
+                    .or_default()
+                    .push(CompletedWriteRow {
+                        args: call.args.clone(),
+                    });
+            }
         }
 
         let mut unmet = Vec::new();

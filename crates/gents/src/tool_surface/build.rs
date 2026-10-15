@@ -481,7 +481,7 @@ pub(super) async fn enabled_mcp_service_ids(
 /// `Unreachable` and missing/unrecognized measurements do not satisfy a
 /// required-service dependency.
 pub(crate) async fn measured_available_mcp_service_ids(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
 ) -> Result<Vec<String>> {
     let services = crate::registry::configured_mcp_services(node, node_did).await?;
@@ -489,7 +489,7 @@ pub(crate) async fn measured_available_mcp_service_ids(
         return Ok(Vec::new());
     }
     let query = mcp_health_query(node_did);
-    let response = crate::config_client::ConfigAccess::transact_local(
+    let response = crate::config_client::ConfigAccess::transact_local_readonly(
         node,
         None,
         "tools.measured_availability",

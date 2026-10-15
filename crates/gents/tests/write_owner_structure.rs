@@ -261,7 +261,7 @@ fn production_defradb_writes_have_one_owner() {
     }
     assert!(
         violations.is_empty(),
-        "production DefraDB writes bypass ConfigAccess::write/transact:\n{}",
+        "production DefraDB writes bypass ConfigAccess::write/transact_write:\n{}",
         violations.join("\n")
     );
 }

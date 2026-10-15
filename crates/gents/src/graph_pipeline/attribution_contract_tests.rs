@@ -488,7 +488,7 @@ async fn competing_failure_observers_reload_single_committed_cause() {
     capture_failure_txn(first_txn, &first).await.unwrap();
     let second_txn = ConfigApplyTxn::begin_local(&node, None).await.unwrap();
     capture_failure_txn(second_txn, &second).await.unwrap();
-    let access = ConfigAccess::Local(Arc::clone(&node));
+    let access = ConfigAccess::local(Arc::clone(&node));
     let fresh = reconcile_graph_run_with_access(&access, graph_test_owner(), &run.run_id)
         .await
         .unwrap();

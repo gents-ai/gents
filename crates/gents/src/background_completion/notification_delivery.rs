@@ -12,7 +12,7 @@ pub(super) struct SideEffects {
 /// notification, and refused at admission.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn append_background_tool_completion(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     parent_session_id: &str,
     parent_request_id: &str,
     tool_call_doc_id: &str,
@@ -169,7 +169,7 @@ async fn load_tool_call_id(node: &EmbeddedNode, tool_call_doc_id: &str) -> Resul
 /// Marker discovery supplies only an ID; the atomic owner reloads receipt and
 /// Goal together before deciding whether any wake can be published.
 pub(super) async fn ensure_notification_delivery(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     parent: &crate::AgentRequest,
     existing: Option<side_effects::ExistingNotification>,
     content: &str,
@@ -206,7 +206,7 @@ pub(super) async fn ensure_notification_delivery(
 }
 
 async fn mark_background_tool_notification_delivered(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
     parent_request_id: &str,
     tool_call_doc_id: &str,
@@ -240,7 +240,7 @@ async fn mark_background_tool_notification_delivered(
 }
 
 async fn mark_background_tool_completion_side_effects_done(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     tool_call_doc_id: &str,
 ) -> Result<()> {
     let tool_call_doc_id = escape_graphql_string(tool_call_doc_id);

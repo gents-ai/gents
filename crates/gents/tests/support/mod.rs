@@ -986,7 +986,7 @@ pub async fn complete_pending_request_with_canonical_output(
         )],
     )?;
     fixtures::bind_agent_backend(
-        db.node.as_ref(),
+        &db.node,
         db.node_identity.did(),
         &agent_id,
         &backend_id,

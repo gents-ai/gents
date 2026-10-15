@@ -166,7 +166,7 @@ pub(crate) async fn init(mut args: InitArgs) -> Result<()> {
         .data_dir
         .clone()
         .unwrap_or_else(|| default_data_dir(&home_dir));
-    let _store_lock = lock_init_store(&home_dir, &data_dir, args.dangerously_overwrite)?;
+    let store_lock = lock_init_store(&home_dir, &data_dir, args.dangerously_overwrite)?;
 
     if args.identity_only {
         if args.identity_backend != IdentityBackendArg::File && args.key_path.is_some() {
@@ -265,13 +265,13 @@ pub(crate) async fn init(mut args: InitArgs) -> Result<()> {
             .await
             .context("building embedded DefraDB node for init")?,
     );
-    gents::migration::ensure_all_runtime_migrations(node_arc.clone()).await?;
+    let access = ConfigAccess::claimed_local(node_arc, store_lock)?;
+    let migration_node = access
+        .local_node()
+        .context("init requires claimed local DefraDB access")?
+        .clone();
+    gents::migration::ensure_all_runtime_migrations(migration_node).await?;
     gents::store_key::upgrade::finish(&data_dir)?;
-    let node = std::sync::Arc::try_unwrap(node_arc).unwrap_or_else(|_| {
-        unreachable!("node_arc had exactly one strong reference at this point")
-    });
-
-    let access = ConfigAccess::Local(std::sync::Arc::new(node));
     let summary = initialize_runtime_home(
         &access,
         &args,
@@ -821,7 +821,7 @@ async fn initialize_runtime_home(
     node_did: &str,
     tool_package: ToolPackageArg,
 ) -> Result<InitSummary> {
-    let ConfigAccess::Local(node) = access else {
+    let Some(node) = access.local_node() else {
         anyhow::bail!("init requires local DefraDB access");
     };
     let explicit_backend_id = args
@@ -1084,7 +1084,7 @@ async fn publish_home_config(
     documents: Vec<DesiredStateApplyDocument>,
 ) -> Result<()> {
     access
-        .transact("init.initialize_runtime_home", |txn| {
+        .transact_write("init.initialize_runtime_home", |txn| {
             let mut documents = documents.clone();
             Box::pin(async move {
                 let mut node_document =
@@ -1796,7 +1796,7 @@ mod tests {
                 .unwrap(),
         );
         gents::ensure_runtime_schemas(&node).await.unwrap();
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
 
         let agent_id = default_agent_id_for_node(&owner);
         let profile_id = default_inference_profile_id_for_agent(&agent_id);
@@ -1879,7 +1879,7 @@ mod tests {
                 .unwrap(),
         );
         gents::ensure_runtime_schemas(&node).await.unwrap();
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
 
         let args = init_args();
         let tool_package = resolve_initial_tool_package(&args).unwrap();
@@ -1943,7 +1943,7 @@ mod tests {
                 .unwrap(),
         );
         gents::ensure_runtime_schemas(&node).await.unwrap();
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         let owner = "did:key:z-init-atomic";
         let backend = json!({"node_did":owner,"backend_id":"backend","name":"Local",
             "provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1",

@@ -300,7 +300,7 @@ pub async fn bootstrap_oauth_client(
     pick: AccountPick<'_>,
 ) -> Result<(Arc<DbCredentialBearer>, OAuthCredential)> {
     let credential = resolve_oauth_credential(
-        &crate::config_client::ConfigAccess::Local(node.clone()),
+        &crate::config_client::ConfigAccess::local(node.clone()),
         node_did,
         provider,
         pick,
@@ -545,8 +545,8 @@ mod tests {
             remove_account_in_txn, store_sign_in, test_support::test_node, AccountPick,
             OAuthRefreshKind, SignInResult,
         };
-        let node = Arc::new(test_node().await);
-        let access = ConfigAccess::Local(node.clone());
+        let node = test_node().await;
+        let access = ConfigAccess::local(node.clone());
         let did = "did:key:z6MkTestRebuiltClient";
         let sign_in = |who: &str, expires_in| {
             credential_from_login_tokens(
@@ -596,7 +596,7 @@ mod tests {
 
         let credential_id = a.credential.credential_id.as_str();
         access
-            .transact("test.remove_account", |txn| {
+            .transact_write("test.remove_account", |txn| {
                 Box::pin(async move { remove_account_in_txn(txn, did, credential_id).await })
             })
             .await

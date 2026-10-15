@@ -49,7 +49,7 @@ impl BackgroundCompletionClaimSnapshot {
 }
 
 async fn claim_request_with_projection<F>(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     session_id: &str,
     capture_background_snapshot: bool,
     request: &AgentRequest,
@@ -85,7 +85,7 @@ where
     );
     let snapshot_query = &snapshot_query;
     let build_mutation = &build_mutation;
-    crate::config_client::ConfigAccess::transact_local(
+    crate::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "lifecycle.claim_request",
@@ -764,7 +764,7 @@ impl RequestLifecycle {
             == gents_protocol::request_admission::RequestPurpose::Normal
             && crate::lifecycle::is_background_completion_request(&self.request.input);
         let Some((resp, snapshot, folded_selection)) = claim_request_with_projection(
-            self.node.as_ref(),
+            &self.node,
             &self.request.session_id,
             is_background_completion,
             &self.request,
@@ -931,7 +931,7 @@ mod tests {
     }
 
     async fn insert_pending_request(
-        node: &EmbeddedNode,
+        node: &std::sync::Arc<EmbeddedNode>,
         request_id: &str,
         session_id: &str,
         created_at: &str,
@@ -951,7 +951,7 @@ mod tests {
     }
 
     async fn insert_pending_request_for_owner(
-        node: &EmbeddedNode,
+        node: &std::sync::Arc<EmbeddedNode>,
         owner: &str,
         request_id: &str,
         session_id: &str,
@@ -1137,8 +1137,19 @@ mod tests {
             "interactive",
         )
         .await;
+        for index in 0..63 {
+            insert_pending_request(
+                &node,
+                &format!("session-later-{index}"),
+                "shared-session-id",
+                "2026-01-01T00:00:02Z",
+                None,
+                "interactive",
+            )
+            .await;
+        }
         for (request, expected) in [(&first, true), (&second, false)] {
-            let allowed = crate::config_client::ConfigAccess::transact_local(
+            let allowed = crate::config_client::ConfigAccess::transact_local_write(
                 &node,
                 None,
                 "test.claim_queue_arrival_order",
@@ -1151,6 +1162,128 @@ mod tests {
             .await
             .unwrap();
             assert_eq!(allowed, expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn serial_claim_considers_active_owner_requests_across_pages() {
+        let node = test_node().await;
+        let contract = gents_lean_contract::load_contract_snapshot::<serde_json::Value>().unwrap();
+        let queue_cases = contract["trigger_delivery"]["queues"].as_array().unwrap();
+        let identity = |source_doc_id: &str| gents_protocol::trigger_delivery::FireIdentity {
+            owner_did: TEST_NODE_DID.into(),
+            trigger_id: "serial-trigger".into(),
+            source_collection: "Work".into(),
+            source_doc_id: source_doc_id.into(),
+        };
+        let first_identity = identity("serial-first-source");
+        let next_identity = identity("serial-next-source");
+        let mut cohort = vec![
+            (first_identity.clone(), "serial-first-session".to_owned()),
+            (next_identity.clone(), "serial-next-session".to_owned()),
+        ];
+        cohort.extend((0..63).map(|index| {
+            (
+                identity(&format!("serial-later-source-{index}")),
+                format!("serial-later-session-{index}"),
+            )
+        }));
+        let first_request_id = first_identity.request_id();
+        let next_request_id = next_identity.request_id();
+        let first = insert_pending_request(
+            &node,
+            &first_request_id,
+            "serial-first-session",
+            "2026-01-01T00:00:00Z",
+            None,
+            "scheduled",
+        )
+        .await;
+        let next = insert_pending_request(
+            &node,
+            &next_request_id,
+            "serial-next-session",
+            "2026-01-01T00:00:01Z",
+            None,
+            "scheduled",
+        )
+        .await;
+        for (identity, session_id) in cohort.iter().skip(2) {
+            let request_id = identity.request_id();
+            insert_pending_request(
+                &node,
+                &request_id,
+                session_id,
+                "2026-01-01T00:00:02Z",
+                None,
+                "scheduled",
+            )
+            .await;
+        }
+        let receipts = cohort
+            .iter()
+            .map(|(identity, session_id)| {
+                let fire_key = identity.fire_key();
+                let request_id = identity.request_id();
+                serde_json::json!({
+                    "fire_key": fire_key,
+                    "owner_did": identity.owner_did.as_str(),
+                    "trigger_id": identity.trigger_id.as_str(),
+                    "source_collection": identity.source_collection.as_str(),
+                    "source_doc_id": identity.source_doc_id.as_str(),
+                    "request_id": request_id,
+                    "session_id": session_id,
+                    "task_id": "serial-task",
+                    "queued_serial": true,
+                    "emit_outcome": false,
+                    "created_at": "2026-01-01T00:00:00Z"
+                })
+            })
+            .collect::<Vec<_>>();
+        crate::config_client::ConfigAccess::transact_local_write(
+            &node,
+            None,
+            "test.seed_serial_claim_receipts",
+            |txn| {
+                let receipts = receipts.clone();
+                Box::pin(async move {
+                    for receipt in receipts {
+                        txn.execute_with_variables(
+                            "mutation($input: TriggerFireMutationInputArg!) { create_TriggerFire(input: $input) { _docID } }",
+                            &serde_json::json!({"input": receipt}),
+                        )
+                        .await?;
+                    }
+                    Ok(())
+                })
+            },
+        )
+        .await
+        .unwrap();
+
+        for (name, request) in [
+            ("serial_first_claims", &first),
+            ("serial_second_waits", &next),
+        ] {
+            let expected = queue_cases
+                .iter()
+                .find(|case| case["name"] == name)
+                .unwrap()["can_claim"]
+                .as_bool()
+                .unwrap();
+            let allowed = crate::config_client::ConfigAccess::transact_local_write(
+                &node,
+                None,
+                "test.serial_claim_trigger_cohort",
+                |txn| {
+                    Box::pin(
+                        async move { super::super::query::claim_queue_allows(txn, request).await },
+                    )
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(allowed, expected, "{name}");
         }
     }
 
@@ -1199,7 +1332,7 @@ mod tests {
                     "goal_id": original.goal_id, "goal_objective": "perform next assignment",
                     "goal_token_budget": task_budget, "goal_assignment_applied": false,
                 });
-                crate::config_client::ConfigAccess::transact_local(&node, None, "test.task_assignment", |txn| {
+                crate::config_client::ConfigAccess::transact_local_write(&node, None, "test.task_assignment", |txn| {
             let receipt = receipt.clone();
             Box::pin(async move {
                 txn.execute_with_variables("mutation($input: TriggerFireMutationInputArg!) { create_TriggerFire(input: $input) { _docID } }",
@@ -1254,7 +1387,7 @@ mod tests {
         }}"#,
                     escape_graphql_string(&first_doc_id)
                 );
-                crate::config_client::ConfigAccess::transact_local(
+                crate::config_client::ConfigAccess::transact_local_write(
                     &node,
                     None,
                     "test.finish_prior_assignment",
@@ -1359,7 +1492,7 @@ mod tests {
                 "queued_serial": true,
                 "goal_assignment_applied": false,
             });
-            crate::config_client::ConfigAccess::transact_local(
+            crate::config_client::ConfigAccess::transact_local_write(
                 &node, None, "test.serial_claim_receipt", |txn| {
                     let input = input.clone();
                     Box::pin(async move {
@@ -1429,7 +1562,7 @@ mod tests {
     async fn claim_preserves_same_session_ordering() {
         let node = test_node().await;
         let first = insert_pending_request(
-            node.as_ref(),
+            &node,
             "same-session-request-1",
             "same-session",
             "2026-01-01T00:00:00Z",
@@ -1452,7 +1585,7 @@ mod tests {
             "immutable request content changed"
         );
         let second = insert_pending_request(
-            node.as_ref(),
+            &node,
             "same-session-request-2",
             "same-session",
             "2026-01-01T00:00:01Z",
@@ -1535,7 +1668,7 @@ mod tests {
             ..Default::default()
         };
         let request = insert_pending_request(
-            node.as_ref(),
+            &node,
             "background-wake-1",
             session_id,
             "2026-08-12T22:00:00Z",

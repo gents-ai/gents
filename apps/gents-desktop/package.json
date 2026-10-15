@@ -57,6 +57,7 @@
     "@source-inc/gents-desktop-fleet": "0.20.0",
     "@source-inc/gents-desktop-tokens": "0.20.0",
     "@source-inc/gents-desktop-ui": "0.20.0",
+    "@tanstack/react-virtual": "^3.14.13",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-dialog": "^2.7.3",
     "@tauri-apps/plugin-opener": "^2",

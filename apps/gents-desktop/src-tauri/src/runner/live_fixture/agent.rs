@@ -162,7 +162,7 @@ async fn seed_live_agent_documents(
         "compactions":[{"node_did":node_did,"compaction_id":compaction_id,"strategy":"StripThenSummarize","threshold":0.95}]
     });
     inference.apply(&mut config);
-    ConfigAccess::transact_local(core.node(), None, "desktop.fixture.config", |txn| {
+    ConfigAccess::transact_local_write(&core.node_arc(), None, "desktop.fixture.config", |txn| {
         let mut config = config.clone();
         let backend_id = &backend_id;
         let target_backend_id = &target_backend_id;

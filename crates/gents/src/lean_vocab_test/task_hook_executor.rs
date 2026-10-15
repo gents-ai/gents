@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::document_config::TaskHookPhase;
@@ -126,7 +127,7 @@ fn assert_attempts(case: &str, phase: &str, actual: &[HookAttempt], expected: &[
 
 struct RevokingExec<'a> {
     managed: ManagedTaskHookExec,
-    node: &'a defra_node::EmbeddedNode,
+    node: &'a Arc<defra_node::EmbeddedNode>,
     request_doc_id: &'a str,
     revoked: &'a [String],
 }
@@ -201,7 +202,7 @@ async fn generated_task_hook_run_cases_drive_real_host_commands() {
                         lifecycle.execution_generation().unwrap().to_owned(),
                     ),
                 ),
-            node: fixture.node.as_ref(),
+            node: &fixture.node,
             request_doc_id: &lifecycle.request().doc_id,
             revoked: &case.revoked,
         };

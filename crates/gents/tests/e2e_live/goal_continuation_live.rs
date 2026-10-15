@@ -71,13 +71,13 @@ async fn durable_goal_continues_with_real_inference_until_model_completes() {
 
     let db = test_db("durable-goal-real-inference").await;
     let identity: Arc<dyn NodeIdentity> = Arc::new(test_identity("durable-goal-real-inference"));
-    let (node_did, agent_id) = bind_target(db.node.as_ref(), identity.as_ref(), &target).await;
+    let (node_did, agent_id) = bind_target(&db.node, identity.as_ref(), &target).await;
     let agent = boot_live_agent(&db, identity)
         .await
         .expect("boot real-inference goal agent");
     let session_id = "session-durable-goal-real";
     let goal = set_goal(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         session_id,
         Some(
@@ -91,7 +91,7 @@ async fn durable_goal_continues_with_real_inference_until_model_completes() {
 
     let initial_request_id = "request-durable-goal-initial";
     create_runtime_request(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         &agent_id,
         initial_request_id,
@@ -100,43 +100,30 @@ async fn durable_goal_continues_with_real_inference_until_model_completes() {
     )
     .await;
     assert_eq!(
-        wait_for_request_terminal(
-            db.node.as_ref(),
-            initial_request_id,
-            Duration::from_secs(120)
-        )
-        .await,
+        wait_for_request_terminal(&db.node, initial_request_id, Duration::from_secs(120)).await,
         "completed"
     );
-    assert!(!wait_for_assistant_answer(
-        db.node.as_ref(),
-        initial_request_id,
-        Duration::from_secs(30)
-    )
-    .await
-    .trim()
-    .is_empty());
+    assert!(
+        !wait_for_assistant_answer(&db.node, initial_request_id, Duration::from_secs(30))
+            .await
+            .trim()
+            .is_empty()
+    );
 
-    let child = wait_for_goal_child(db.node.as_ref(), &goal.goal_id, Duration::from_secs(30)).await;
+    let child = wait_for_goal_child(&db.node, &goal.goal_id, Duration::from_secs(30)).await;
     assert_eq!(child.session_id, session_id);
     assert_eq!(
-        wait_for_request_terminal(
-            db.node.as_ref(),
-            &child.request_id,
-            Duration::from_secs(120)
-        )
-        .await,
+        wait_for_request_terminal(&db.node, &child.request_id, Duration::from_secs(120)).await,
         "completed"
     );
     let answer =
-        wait_for_assistant_answer(db.node.as_ref(), &child.request_id, Duration::from_secs(30))
-            .await;
+        wait_for_assistant_answer(&db.node, &child.request_id, Duration::from_secs(30)).await;
     assert!(
         answer.contains("DURABLE_GOAL_COMPLETE"),
         "real continuation response omitted completion marker: {answer:?}"
     );
 
-    let persisted = load_canonical_goal(db.node.as_ref(), &node_did, session_id)
+    let persisted = load_canonical_goal(&db.node, &node_did, session_id)
         .await
         .expect("load durable goal")
         .expect("durable goal exists");

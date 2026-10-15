@@ -115,6 +115,7 @@ export type DesktopUiHarnessScenario =
 
 export type DesktopUiHarnessOptions = {
   scenario?: string | null;
+  sessionIndexCount?: number;
 };
 
 export type MobilePerformanceBridgeCall = {
@@ -140,7 +141,10 @@ export type MobilePerformanceHarnessSnapshot = {
 };
 
 export type MobilePerformanceHarnessController = {
-  fixture: typeof MOBILE_PERFORMANCE_FIXTURE;
+  fixture: Omit<typeof MOBILE_PERFORMANCE_FIXTURE, "id" | "sessionIndexCount"> & {
+    id: string;
+    sessionIndexCount: number;
+  };
   reset(): void;
   snapshot(): MobilePerformanceHarnessSnapshot;
   recordCommit(commit: MobilePerformanceCommit): void;
@@ -225,6 +229,22 @@ export function createDesktopUiHarness(
   options: DesktopUiHarnessOptions = {},
 ): DesktopUiHarness {
   const scenario = normalizeScenario(options.scenario);
+  const sessionIndexCount =
+    options.sessionIndexCount ?? MOBILE_PERFORMANCE_FIXTURE.sessionIndexCount;
+  if (
+    !Number.isSafeInteger(sessionIndexCount) ||
+    sessionIndexCount < 2 ||
+    sessionIndexCount > 100_000
+  )
+    throw new Error("sessionIndexCount must be an integer from 2 to 100000");
+  const performanceFixture = {
+    ...MOBILE_PERFORMANCE_FIXTURE,
+    sessionIndexCount,
+    id:
+      sessionIndexCount === MOBILE_PERFORMANCE_FIXTURE.sessionIndexCount
+        ? MOBILE_PERFORMANCE_FIXTURE.id
+        : `${MOBILE_PERFORMANCE_FIXTURE.id}-sessions-${sessionIndexCount}`,
+  };
   const listeners = new Set<DesktopClientUpdatedHandler>();
   const sessions = new Map<string, DesktopSessionSnapshot>();
   let sendsHeld = false;
@@ -565,11 +585,7 @@ export function createDesktopUiHarness(
   }
   if (scenario === "mobile-performance") {
     sessions.set("session-large", createLargePerformanceSession());
-    for (
-      let index = 2;
-      index < MOBILE_PERFORMANCE_FIXTURE.sessionIndexCount;
-      index += 1
-    ) {
+    for (let index = 2; index < performanceFixture.sessionIndexCount; index += 1) {
       const sessionId = `session-index-${String(index).padStart(3, "0")}`;
       sessions.set(sessionId, {
         sessionId,
@@ -591,7 +607,7 @@ export function createDesktopUiHarness(
       });
     }
     rowCount =
-      MOBILE_PERFORMANCE_FIXTURE.sessionIndexCount * 2 +
+      performanceFixture.sessionIndexCount * 2 +
       MOBILE_PERFORMANCE_FIXTURE.largeSessionTimelineItems +
       MOBILE_PERFORMANCE_FIXTURE.shortSessionTimelineItems;
   }
@@ -681,6 +697,7 @@ export function createDesktopUiHarness(
         defaultNodeHome: "/tmp/gents-bombadil/agent",
         initNodeName: freshHome ? null : deployment.label,
         initNodeDid: freshHome ? null : NODE_DID,
+        initConfigStatus: freshHome ? "absent" : "configured",
         initToolCeiling: freshHome ? null : "ReadWrite",
         initToolRoot: freshHome ? null : "/tmp/gents-bombadil/workspace",
         desktopHome: "/tmp/gents-bombadil/desktop",
@@ -718,6 +735,7 @@ export function createDesktopUiHarness(
         peerIssueCount: 0,
         rowCount,
         approxSerializedBytes: rowCount * 512,
+        operatorConfigAuthoritativeNodeDids: freshHome ? [] : [NODE_DID],
         deployments,
       },
     };
@@ -2526,7 +2544,7 @@ export function createDesktopUiHarness(
   const performance: MobilePerformanceHarnessController | null =
     scenario === "mobile-performance"
       ? {
-          fixture: MOBILE_PERFORMANCE_FIXTURE,
+          fixture: performanceFixture,
           reset() {
             bridgeCalls = [];
             commits = [];

@@ -89,7 +89,7 @@ async fn validate_owner(access: &ConfigAccess, owner: &str) -> Result<()> {
         "package owner DID must not be blank"
     );
     access
-        .transact("graph_package.owner", |txn| {
+        .transact_readonly("graph_package.owner", |txn| {
             Box::pin(async move {
                 let principal = crate::config_client::read_desired_state_document_in_txn(
                     txn,
@@ -140,7 +140,7 @@ pub async fn load_installed_package_plan(
     owner_did: &str,
 ) -> Result<Option<GraphPlan>> {
     access
-        .transact("graph_package.select_installed", move |txn| {
+        .transact_readonly("graph_package.select_installed", move |txn| {
             Box::pin(async move {
                 let response = txn
                     .execute(&format!(
@@ -491,7 +491,7 @@ async fn prepare_package(
     );
     let desired = &desired_state;
     access
-        .transact("graph_package.install_preflight", |txn| {
+        .transact_readonly("graph_package.install_preflight", |txn| {
             Box::pin(async move {
                 let effective =
                     crate::pack::prepare_pack_plan_in_txn(txn, desired.documents(), true).await?;
@@ -578,7 +578,7 @@ async fn commit_prepared_graph_package_install(
     // than the owned identity itself.
     let identity = &identity;
     access
-        .transact("graph_package.install", |txn| {
+        .transact_write("graph_package.install", |txn| {
             Box::pin(async move {
                 let live_active_revision_digest = active_revision_digest(
                     &txn.execute(&active_revision_digest_query(owner, graph_id))

@@ -10,7 +10,7 @@ use super::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
 pub async fn write_tools_document(access: &ConfigAccess, tools: &Tools) -> Result<String> {
     tools.validate()?;
     access
-        .transact("config.tools.write", |txn| {
+        .transact_write("config.tools.write", |txn| {
             Box::pin(async move {
                 let value = serde_json::to_value(tools)?;
                 let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
@@ -44,7 +44,7 @@ mod tests {
     async fn replacement_revokes_omitted_groups_without_changing_other_owner() -> Result<()> {
         let node = Arc::new(EmbeddedNode::builder().build().await?);
         crate::ensure_runtime_schemas(&node).await?;
-        let access = ConfigAccess::Local(node);
+        let access = ConfigAccess::local(node);
         let mut tools: Tools = serde_json::from_value(json!({
             "node_did":"did:key:owner", "tools_id":"same",
             "host":{"files":{"mode":"ReadOnly"}},
@@ -59,7 +59,7 @@ mod tests {
         tools.tags.clear();
         assert_eq!(write_tools_document(&access, &tools).await?, first_id);
         access
-            .transact("test.tools.read", |txn| {
+            .transact_write("test.tools.read", |txn| {
                 let tools = &tools;
                 let foreign = &foreign;
                 Box::pin(async move {

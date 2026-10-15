@@ -8,7 +8,7 @@ impl ConfigCommandTool {
         self.ensure_agent_catalog("validate", None)?;
         anyhow::ensure!(argv.is_empty(), "validate takes no parameters; it checks saved configuration for your authenticated node");
         let identity = self.core.identity()?;
-        let (counts, mut errors, selected_surfaces) = ConfigAccess::transact_local(
+        let (counts, mut errors, selected_surfaces) = ConfigAccess::transact_local_readonly(
             &self.node,
             Some(identity),
             "self_config.validate",

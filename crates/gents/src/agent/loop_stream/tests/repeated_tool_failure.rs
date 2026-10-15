@@ -55,7 +55,7 @@ impl ToolDyn for RepeatProbe {
 }
 
 async fn tool_call_rows(node: &Arc<defra_node::EmbeddedNode>) -> Vec<serde_json::Value> {
-    let response = crate::config_client::ConfigAccess::Local(node.clone())
+    let response = crate::config_client::ConfigAccess::local(node.clone())
         .execute("query { AgentToolCall { _docID tool_call_id lifecycle_state tool_failure_class } }")
         .await
         .unwrap();

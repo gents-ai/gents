@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import type { DesktopClientSnapshot } from "@source-inc/gents-desktop-client";
+import type {
+  DesktopClientSnapshot,
+  SessionSummary,
+} from "@source-inc/gents-desktop-client";
 import {
   applyFleetSnapshot,
   createFleetStore,
+  listedSession,
   sessionKeyOf,
 } from "../src/hooks/fleetStore";
 
@@ -90,8 +94,58 @@ describe("the fleet store", () => {
     expect(after.sessions[parentKey]?.title).toBe("renamed");
     expect(after.nodes).toBe(before.nodes);
     expect(after.sessionsOf.b).toBe(before.sessionsOf.b);
+    expect(after.byNodeSessionId.b).toBe(before.byNodeSessionId.b);
     expect(after.mailboxOf).toBe(before.mailboxOf);
     /* the workers list holds the same worker objects, so it is kept */
     expect(after.workersOf[parentKey]).toBe(before.workersOf[parentKey]);
+  });
+
+  it("selects the first listed requester on the requested node and retires removed routes", () => {
+    const store = createFleetStore();
+    const snapshot = read();
+    const deployments = snapshot.client!.deployments;
+    const first = session("a", "shared");
+    const second = { ...first, requesterDid: "other", title: "other requester" };
+    deployments[0]!.sessions = [first, second] as unknown as SessionSummary[];
+    deployments[1]!.sessions = [session("b", "shared")] as unknown as SessionSummary[];
+    applyFleetSnapshot(store, snapshot);
+    expect(listedSession(store.getState(), "a", "shared")?.requesterDid).toBe("me");
+    expect(listedSession(store.getState(), "b", "shared")?.nodeDid).toBe("b");
+    expect(listedSession(store.getState(), "missing", "shared")).toBeNull();
+    deployments[0]!.sessions = [second] as unknown as SessionSummary[];
+    applyFleetSnapshot(store, snapshot);
+    expect(listedSession(store.getState(), "a", "shared")?.requesterDid).toBe("other");
+    deployments[0]!.sessions = [];
+    applyFleetSnapshot(store, snapshot);
+    expect(listedSession(store.getState(), "a", "shared")).toBeNull();
+    expect(listedSession(store.getState(), "b", "shared")?.nodeDid).toBe("b");
+  });
+
+  it("looks up a route in a 10,000-session fleet without walking its session list", () => {
+    const store = createFleetStore();
+    const snapshot = read();
+    snapshot.client!.deployments[0]!.sessions = Array.from({ length: 10_000 }, (_, i) =>
+      session("a", `session-${i}`),
+    ) as unknown as SessionSummary[];
+    applyFleetSnapshot(store, snapshot);
+    const state = store.getState();
+    const expected = state.sessionsOf.a![9_999];
+    let listReads = 0;
+    const observed = {
+      ...state,
+      sessionsOf: {
+        ...state.sessionsOf,
+        a: new Proxy(state.sessionsOf.a!, {
+          get(target, property, receiver) {
+            listReads += 1;
+            return Reflect.get(target, property, receiver);
+          },
+        }),
+      },
+    };
+    for (let i = 0; i < 1_000; i += 1)
+      expect(listedSession(observed, "a", "session-9999")).toBe(expected);
+    expect(listedSession(observed, "a", "absent")).toBeNull();
+    expect(listReads).toBe(0);
   });
 });

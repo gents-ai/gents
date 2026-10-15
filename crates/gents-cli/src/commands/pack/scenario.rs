@@ -4159,7 +4159,7 @@ mod tests {
                 .unwrap(),
         );
         gents::ensure_runtime_schemas(&node).await.unwrap();
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         let phase = crate::commands::schema::apply_pack_schemas_if_present(&access, staged.path())
             .await
             .unwrap()

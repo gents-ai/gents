@@ -27,7 +27,7 @@ pub(crate) async fn dispatch(command: ToolsCommand) -> Result<()> {
 async fn explain(args: ToolExplainArgs) -> Result<()> {
     let (access, home_dir) =
         resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
-    let host = match &*access {
+    let host = match &access {
         ConfigAccess::Graphql(endpoint) => HostCeiling::live(endpoint).await?,
         ConfigAccess::Local(_) => HostCeiling::configured(&home_dir)?,
     };

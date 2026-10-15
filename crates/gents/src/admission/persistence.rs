@@ -57,7 +57,7 @@ pub(super) async fn persist_call_queued(
     let now = chrono::Utc::now().to_rfc3339();
     let mutation = add_call_mutation(call, "queued", None, Some(&now), None, None, None);
     let resp = crate::config_client::ConfigAccess::write_local_response(
-        node.as_ref(),
+        &node,
         "admission.persist_call_queued",
         &mutation,
     )
@@ -72,7 +72,7 @@ pub(super) async fn persist_call_started(
     let now = chrono::Utc::now().to_rfc3339();
     let mutation = add_call_mutation(call, "running", None, Some(&now), Some(&now), None, None);
     let resp = crate::config_client::ConfigAccess::write_local_response(
-        node.as_ref(),
+        &node,
         "admission.persist_call_started",
         &mutation,
     )
@@ -95,7 +95,7 @@ pub(super) async fn persist_existing_call_running(
         ) {{ _docID }} }}"#
     );
     let response = crate::config_client::ConfigAccess::write_local_response(
-        node.as_ref(),
+        &node,
         "admission.persist_existing_call_running",
         &mutation,
     )
@@ -126,7 +126,7 @@ pub(super) async fn persist_terminal_call(
         usage,
     );
     crate::config_client::ConfigAccess::write_local_response(
-        node.as_ref(),
+        &node,
         "admission.persist_terminal_call",
         &mutation,
     )
@@ -162,7 +162,7 @@ pub(super) async fn persist_existing_call_terminal(
         ) {{ _docID }} }}"#
     );
     let response = crate::config_client::ConfigAccess::write_local_response(
-        node.as_ref(),
+        &node,
         "admission.persist_existing_call_terminal",
         &mutation,
     )
@@ -184,7 +184,7 @@ pub(super) async fn persist_existing_call_terminal(
             ) {{ _docID }} }}"#
         );
         let response = crate::config_client::ConfigAccess::write_local_response(
-            node.as_ref(),
+            &node,
             "admission.persist_late_call_usage",
             &mutation,
         )

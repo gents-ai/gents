@@ -137,7 +137,7 @@ pub fn test_agent_for_node(
 /// Targets are standalone documents, `Tools` selects them, `AgentContext`
 /// selects the tools, and the behavior selects the context.
 pub async fn configure_child_agent(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     node_did: &str,
     agent_id: &str,
     tools_id: &str,
@@ -150,7 +150,7 @@ pub async fn configure_child_agent(
     use gents::document_config::{AgentContext, AgentTools, Tools};
     use gents::Collection;
 
-    gents::ConfigAccess::transact_local(node, None, "test.configure_child_agent", |txn| {
+    gents::ConfigAccess::transact_local_write(node, None, "test.configure_child_agent", |txn| {
         let targets = targets.clone();
         Box::pin(async move {
             let mut documents = Vec::new();
@@ -289,7 +289,7 @@ pub async fn configure_child_agent(
 /// Publish one canonical `Tools -> AgentContext -> Agent` chain and
 /// any standalone documents referenced by the tools document.
 pub async fn configure_agent_tools(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     node_did: &str,
     agent_id: &str,
     system_prompt: Option<String>,
@@ -303,7 +303,7 @@ pub async fn configure_agent_tools(
     use gents::Collection;
 
     assert_eq!(tools.node_did, node_did);
-    gents::ConfigAccess::transact_local(node, None, "test.configure_agent_tools", |txn| {
+    gents::ConfigAccess::transact_local_write(node, None, "test.configure_agent_tools", |txn| {
         let tools = tools.clone();
         let referenced_documents = referenced_documents.clone();
         let system_prompt = system_prompt.clone();
@@ -381,7 +381,7 @@ pub fn agent_target(
 }
 
 pub async fn bind_default_agent_backend(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     node_did: &str,
     backend_id: &str,
     endpoint: &str,
@@ -392,7 +392,7 @@ pub async fn bind_default_agent_backend(
 /// Publish the canonical principal → behavior → inference profile → backend
 /// chain used by daemon integration fixtures with an explicit behavior id.
 pub async fn bind_agent_backend(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     node_did: &str,
     agent_id: &str,
     backend_id: &str,
@@ -411,7 +411,7 @@ pub async fn bind_agent_backend(
 }
 
 async fn bind_agent_backend_chain(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     node_did: &str,
     agent_id: Option<&str>,
     backend_id: &str,
@@ -419,7 +419,7 @@ async fn bind_agent_backend_chain(
     model_name: &str,
 ) {
     ensure_node(node, node_did).await.unwrap();
-    gents::config_client::ConfigAccess::transact_local(
+    gents::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "test.bind_behavior_inference",

@@ -478,7 +478,7 @@ async fn admitted_arrival(
                 source_collection,
                 source_doc_id,
             )
-            .await
+            .await;
         }
     };
     let identity = gents_protocol::trigger_delivery::FireIdentity {

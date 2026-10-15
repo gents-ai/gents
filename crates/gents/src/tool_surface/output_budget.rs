@@ -28,7 +28,7 @@ pub(crate) fn budget_for_tool(limits: &CommandOutputLimits, tool_name: &str) -> 
 /// `node_did`. A behavior, context or Tools document that no longer resolves
 /// falls back to the default: presentation must never fail on configuration.
 pub(crate) async fn configured_output_budget(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
     agent_id: &str,
     tool_name: &str,
@@ -49,13 +49,13 @@ pub(crate) async fn configured_output_budget(
 }
 
 async fn load_command_output_limits(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
     agent_id: &str,
 ) -> anyhow::Result<CommandOutputLimits> {
     let owner = node_did.to_owned();
     let agent_id = agent_id.to_owned();
-    crate::config_client::ConfigAccess::transact_local(
+    crate::config_client::ConfigAccess::transact_local_readonly(
         node,
         None,
         "tool_surface.output_budget",
@@ -106,7 +106,7 @@ mod tests {
 
     #[tokio::test]
     async fn unresolvable_configuration_uses_the_default() {
-        let node = EmbeddedNode::builder().build().await.unwrap();
+        let node = std::sync::Arc::new(EmbeddedNode::builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
         assert_eq!(
             configured_output_budget(&node, "did:key:absent", "missing", "bash").await,

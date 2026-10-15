@@ -556,7 +556,7 @@ pub async fn lookup_oauth_credential_by_doc_id(
 }
 
 pub async fn upsert_oauth_credential(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     credential: &OAuthCredential,
 ) -> Result<String> {
     let mutation = oauth_credential_upsert_mutation(credential);
@@ -831,7 +831,7 @@ pub async fn store_sign_in(
         credential.provider
     );
     access
-        .transact("oauth_credential.sign_in", |txn| {
+        .transact_write("oauth_credential.sign_in", |txn| {
             let credential = credential.clone();
             let label = label.clone();
             Box::pin(async move { store_sign_in_in_txn(txn, credential, label).await })
@@ -1258,7 +1258,7 @@ pub async fn set_account_label(
 ) -> Result<()> {
     let label = validate_account_label(label)?;
     access
-        .transact("oauth_credential.label", |txn| {
+        .transact_write("oauth_credential.label", |txn| {
             let label = label.clone();
             Box::pin(async move {
                 let response = txn
@@ -1862,7 +1862,7 @@ impl DbCredentialBearer {
         let mut delay_ms = 200u64;
         for attempt in 0..3u32 {
             match crate::config_client::ConfigAccess::write_local(
-                self.node.as_ref(),
+                &self.node,
                 "oauth_credential.refresh",
                 &mutation,
             )
@@ -2644,14 +2644,14 @@ mod resolver_tests {
 
     #[tokio::test]
     async fn resolver_reads_through_config_access() {
-        let node = std::sync::Arc::new(test_node().await);
+        let node = test_node().await;
         for credential in [
             row(DID, PROVIDER, "xai-oauth:b", Some("b"), Some(1_000), true),
             row(DID, PROVIDER, "xai-oauth:original", None, None, true),
         ] {
             upsert_oauth_credential(&node, &credential).await.unwrap();
         }
-        let access = crate::config_client::ConfigAccess::Local(node);
+        let access = crate::config_client::ConfigAccess::local(node);
         for (pick, expected) in [
             (AccountPick::Reference(Some("b")), "xai-oauth:b"),
             (AccountPick::Reference(None), "xai-oauth:original"),
@@ -2667,7 +2667,7 @@ mod resolver_tests {
 
     #[tokio::test]
     async fn resolver_missing_account_keeps_the_missing_guidance() {
-        let node = std::sync::Arc::new(test_node().await);
+        let node = test_node().await;
         let missing = classify_oauth_auth_error(
             &XAI_OAUTH_PRODUCT,
             DID,
@@ -2714,7 +2714,7 @@ mod sign_in_tests {
     const DID: &str = "did:key:zSignIn";
 
     async fn sign_in(node: &Arc<EmbeddedNode>, credential: &OAuthCredential) -> OAuthCredential {
-        let doc_id = upsert_oauth_credential_on(&ConfigAccess::Local(node.clone()), credential)
+        let doc_id = upsert_oauth_credential_on(&ConfigAccess::local(node.clone()), credential)
             .await
             .unwrap();
         let stored = lookup_oauth_credential_by_id(node, &credential.credential_id)
@@ -2775,7 +2775,7 @@ mod sign_in_tests {
 
     #[tokio::test]
     async fn a_matching_sign_in_fills_an_empty_key() {
-        let node = Arc::new(test_node().await);
+        let node = test_node().await;
         let before = sign_in(&node, &chatgpt(None, "refresh-1")).await;
         assert_eq!(before.provider_account_key, None);
 
@@ -2787,7 +2787,7 @@ mod sign_in_tests {
 
     #[tokio::test]
     async fn the_raw_upsert_of_another_account_replaces_tokens_and_key() {
-        let node = Arc::new(test_node().await);
+        let node = test_node().await;
         sign_in(&node, &chatgpt(Some("member-a"), "refresh-1")).await;
         let stored = sign_in(&node, &chatgpt(Some("member-b"), "refresh-2")).await;
         assert_eq!(stored.provider_account_key.as_deref(), Some("member-b"));
@@ -2809,7 +2809,7 @@ mod sign_in_tests {
 
     #[tokio::test]
     async fn a_keyless_sign_in_clears_the_stored_key() {
-        let node = Arc::new(test_node().await);
+        let node = test_node().await;
         let claims = json!({ "principal_type": "user", "principal_id": "principal-1" });
         let first = sign_in(&node, &grok(claims, "refresh-1")).await;
         assert_eq!(
@@ -2907,7 +2907,7 @@ mod lifecycle_tests {
     }
 
     async fn access() -> ConfigAccess {
-        ConfigAccess::Local(Arc::new(test_node().await))
+        ConfigAccess::local(test_node().await)
     }
 
     async fn store(access: &ConfigAccess, credential: OAuthCredential) -> SignIn {
@@ -3103,7 +3103,7 @@ mod lifecycle_tests {
     /// input goes through a variable, so no value is trimmed on the way in.
     async fn seed_raw(access: &ConfigAccess, input: Value) {
         access
-            .transact("test.seed_raw", |txn| {
+            .transact_write("test.seed_raw", |txn| {
                 let input = input.clone();
                 Box::pin(async move {
                     txn.execute_with_variables(
@@ -3534,11 +3534,8 @@ mod lifecycle_tests {
         .await;
     }
 
-    fn node(access: &ConfigAccess) -> &EmbeddedNode {
-        match access {
-            ConfigAccess::Local(node) => node,
-            ConfigAccess::Graphql(_) => unreachable!("tests run on a local node"),
-        }
+    fn node(access: &ConfigAccess) -> &Arc<EmbeddedNode> {
+        access.local_node().expect("tests run on a local node")
     }
 
     async fn backends(access: &ConfigAccess, did: &str) -> Vec<crate::InferenceBackend> {
@@ -3748,7 +3745,7 @@ mod lifecycle_tests {
 
     async fn remove(access: &ConfigAccess, did: &str, credential_id: &str) -> Result<()> {
         access
-            .transact("test.remove_account", |txn| {
+            .transact_write("test.remove_account", |txn| {
                 Box::pin(async move { remove_account_in_txn(txn, did, credential_id).await })
             })
             .await
@@ -4039,7 +4036,7 @@ mod backfill_tests {
         Box::leak(body.to_string().into_boxed_str())
     }
 
-    async fn seed_expired_grok(node: &EmbeddedNode, did: &str, key: Option<&str>) {
+    async fn seed_expired_grok(node: &Arc<EmbeddedNode>, did: &str, key: Option<&str>) {
         let credential = OAuthCredential {
             doc_id: None,
             credential_id: oauth_credential_id(did, XAI_OAUTH_PROVIDER),
@@ -4100,7 +4097,7 @@ mod backfill_tests {
 
     #[tokio::test]
     async fn refresh_fills_an_empty_key_from_the_refreshed_claims() {
-        let node = Arc::new(test_node().await);
+        let node = test_node().await;
         let did = "did:key:zBackfillFill";
         seed_expired_grok(&node, did, None).await;
         let body =
@@ -4116,7 +4113,7 @@ mod backfill_tests {
 
     #[tokio::test]
     async fn refresh_never_changes_a_present_key() {
-        let node = Arc::new(test_node().await);
+        let node = test_node().await;
         let did = "did:key:zBackfillPresent";
         seed_expired_grok(&node, did, Some("user:principal-old")).await;
         let body =
@@ -4132,7 +4129,7 @@ mod backfill_tests {
 
     #[tokio::test]
     async fn refresh_leaves_the_key_empty_without_the_claim() {
-        let node = Arc::new(test_node().await);
+        let node = test_node().await;
         let did = "did:key:zBackfillNoClaim";
         seed_expired_grok(&node, did, None).await;
         let body = token_response(json!({ "sub": "user-a" }));
@@ -4180,7 +4177,7 @@ mod backfill_tests {
 
     #[tokio::test]
     async fn a_refresh_racing_a_remove_does_not_revive_the_row() {
-        let node = Arc::new(test_node().await);
+        let node = test_node().await;
         let did = "did:key:z6MkTestRaceRemove";
         seed_expired_grok(&node, did, None).await;
         let credential_id = oauth_credential_id(did, XAI_OAUTH_PROVIDER);
@@ -4206,7 +4203,7 @@ mod backfill_tests {
 
     #[tokio::test]
     async fn a_refresh_racing_a_disable_keeps_it_disabled() {
-        let node = Arc::new(test_node().await);
+        let node = test_node().await;
         let did = "did:key:z6MkTestRaceDisable";
         seed_expired_grok(&node, did, None).await;
         let credential_id = oauth_credential_id(did, XAI_OAUTH_PROVIDER);
@@ -4236,7 +4233,7 @@ mod backfill_tests {
 
     #[tokio::test]
     async fn a_refresh_racing_a_sign_in_keeps_the_sign_in() {
-        let node = Arc::new(test_node().await);
+        let node = test_node().await;
         let did = "did:key:z6MkTestRaceSignIn";
         seed_expired_grok(&node, did, None).await;
         let credential_id = oauth_credential_id(did, XAI_OAUTH_PROVIDER);
@@ -4253,7 +4250,7 @@ mod backfill_tests {
             },
             Utc::now(),
         );
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         let bearer = refresh_racing(&node, did, async {
             let signed = store_sign_in(&access, sign_in.clone(), None).await.unwrap();
             assert_eq!(signed.result, SignInResult::Refreshed);
@@ -4288,7 +4285,7 @@ mod backfill_tests {
     /// `credential_id` while a refresh of the removed row is in flight.
     #[tokio::test]
     async fn a_refresh_racing_a_replaced_sign_in_keeps_the_new_row() {
-        let node = Arc::new(test_node().await);
+        let node = test_node().await;
         let did = "did:key:z6MkTestRaceReplaced";
         seed_expired_grok(&node, did, None).await;
         let credential_id = oauth_credential_id(did, XAI_OAUTH_PROVIDER);
@@ -4305,7 +4302,7 @@ mod backfill_tests {
             },
             Utc::now(),
         );
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         refresh_racing(&node, did, async {
             ConfigAccess::write_local(
                 &node,
@@ -4337,7 +4334,7 @@ mod backfill_tests {
     /// another document, even when the cached expiry is the later one.
     #[tokio::test]
     async fn a_refresh_adopts_a_replaced_document() {
-        let node = Arc::new(test_node().await);
+        let node = test_node().await;
         let did = "did:key:z6MkTestRefreshReplaced";
         seed_expired_grok(&node, did, None).await;
         let credential_id = oauth_credential_id(did, XAI_OAUTH_PROVIDER);
@@ -4399,9 +4396,9 @@ mod backfill_tests {
 
     #[tokio::test]
     async fn upgraded_rows_keep_their_identity_and_fill_the_key_on_first_refresh() {
-        let node = Arc::new(test_node().await);
+        let node = test_node().await;
         let did = "did:key:zUpgradedRows";
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         seed_upgraded_row(
             &node,
             did,
@@ -4493,7 +4490,7 @@ mod cooldown_tests {
     /// revoked" text.
     #[tokio::test]
     async fn failed_refresh_is_not_retried_during_the_cooldown() {
-        let node = Arc::new(test_node().await);
+        let node = test_node().await;
         let did = "did:key:z6MkRevoked";
         let provider = crate::xai_grok_oauth::XAI_OAUTH_PROVIDER;
         seed_credential(&node, did, provider, Utc::now() - Duration::minutes(1)).await;
@@ -4532,7 +4529,7 @@ mod cooldown_tests {
     /// the unexpired but rejected access token.
     #[tokio::test]
     async fn failed_refresh_keeps_the_bearer_forced_and_never_reserves_the_bad_token() {
-        let node = Arc::new(test_node().await);
+        let node = test_node().await;
         let did = "did:key:z6MkRejected";
         let provider = crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER;
         seed_credential(&node, did, provider, Utc::now() + Duration::hours(1)).await;
@@ -4580,7 +4577,7 @@ mod cooldown_tests {
         )
     }
 
-    async fn set_label(node: &EmbeddedNode, did: &str, label: Option<&str>) {
+    async fn set_label(node: &std::sync::Arc<EmbeddedNode>, did: &str, label: Option<&str>) {
         let credential_id = oauth_credential_id(did, crate::xai_grok_oauth::XAI_OAUTH_PROVIDER);
         let mutation = format!(
             r#"mutation {{ update_OAuthCredential(filter: {{ credential_id: {{ _eq: "{credential_id}" }} }}, input: {{ {} }}) {{ _docID }} }}"#,
@@ -4610,7 +4607,7 @@ mod cooldown_tests {
     #[tokio::test]
     async fn a_revoked_refresh_names_the_account() {
         for (label, named) in [(Some("label-a"), "label-a"), (None, "Grok")] {
-            let node = Arc::new(test_node().await);
+            let node = test_node().await;
             let did = "did:key:z6MkTestRevokedNamed";
             let provider = crate::xai_grok_oauth::XAI_OAUTH_PROVIDER;
             seed_credential(&node, did, provider, Utc::now() - Duration::minutes(1)).await;
@@ -4638,7 +4635,7 @@ mod cooldown_tests {
 
     #[tokio::test]
     async fn a_revoked_refresh_never_uses_another_account() {
-        let node = Arc::new(test_node().await);
+        let node = test_node().await;
         let did = "did:key:z6MkTestRevokedOther";
         let provider = crate::xai_grok_oauth::XAI_OAUTH_PROVIDER;
         seed_credential(&node, did, provider, Utc::now() - Duration::minutes(1)).await;
@@ -4659,7 +4656,7 @@ mod cooldown_tests {
 
     #[tokio::test]
     async fn a_reused_slot_names_the_new_account() {
-        let node = Arc::new(test_node().await);
+        let node = test_node().await;
         let did = "did:key:z6MkTestReusedSlot";
         let provider = crate::xai_grok_oauth::XAI_OAUTH_PROVIDER;
         let credential_id = oauth_credential_id(did, provider);
@@ -4679,9 +4676,9 @@ mod cooldown_tests {
             OAuthRefreshKind::Xai,
             XAI_OAUTH_PRODUCT,
         );
-        let access = crate::config_client::ConfigAccess::Local(node.clone());
+        let access = crate::config_client::ConfigAccess::local(node.clone());
         access
-            .transact("test.remove", |txn| {
+            .transact_write("test.remove", |txn| {
                 let credential_id = credential_id.clone();
                 Box::pin(async move { remove_account_in_txn(txn, did, &credential_id).await })
             })
@@ -4707,7 +4704,7 @@ mod cooldown_tests {
 
     #[tokio::test]
     async fn a_disabled_or_removed_row_names_the_account() {
-        let node = Arc::new(test_node().await);
+        let node = test_node().await;
         let did = "did:key:z6MkTestDisabledNamed";
         let provider = crate::xai_grok_oauth::XAI_OAUTH_PROVIDER;
         let credential_id = oauth_credential_id(did, provider);
@@ -4727,7 +4724,7 @@ mod cooldown_tests {
             OAuthRefreshKind::Xai,
             XAI_OAUTH_PRODUCT,
         );
-        let access = crate::config_client::ConfigAccess::Local(node.clone());
+        let access = crate::config_client::ConfigAccess::local(node.clone());
         set_account_enabled(&access, did, &credential_id, false)
             .await
             .unwrap();
@@ -4743,7 +4740,7 @@ mod cooldown_tests {
         assert!(disabled.contains("set-account"), "{disabled}");
 
         access
-            .transact("test.remove", |txn| {
+            .transact_write("test.remove", |txn| {
                 let credential_id = credential_id.clone();
                 Box::pin(async move { remove_account_in_txn(txn, did, &credential_id).await })
             })
@@ -4769,7 +4766,7 @@ mod cooldown_tests {
     #[tokio::test]
     async fn a_limit_like_label_is_not_a_limit() {
         for label in ["usage limit", "maximum context length"] {
-            let node = Arc::new(test_node().await);
+            let node = test_node().await;
             let did = "did:key:z6MkTestLimitLabel";
             let provider = crate::xai_grok_oauth::XAI_OAUTH_PROVIDER;
             seed_credential(&node, did, provider, Utc::now() - Duration::minutes(1)).await;
@@ -4787,6 +4784,8 @@ mod cooldown_tests {
 
 #[cfg(test)]
 pub(crate) mod test_support {
+    use std::sync::Arc;
+
     use chrono::{DateTime, Utc};
     use defra_node::EmbeddedNode;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -4795,11 +4794,13 @@ pub(crate) mod test_support {
     pub(crate) static TOKEN_URL_ENV: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
     /// In-memory node with the gents schemas loaded.
-    pub(crate) async fn test_node() -> EmbeddedNode {
-        let node = EmbeddedNode::builder()
-            .build()
-            .await
-            .expect("embedded node");
+    pub(crate) async fn test_node() -> Arc<EmbeddedNode> {
+        let node = Arc::new(
+            EmbeddedNode::builder()
+                .build()
+                .await
+                .expect("embedded node"),
+        );
         crate::schema::ensure_runtime_schemas(&node)
             .await
             .expect("schemas");
@@ -4818,7 +4819,7 @@ pub(crate) mod test_support {
     }
 
     pub(crate) async fn seed_credential(
-        node: &EmbeddedNode,
+        node: &Arc<EmbeddedNode>,
         node_did: &str,
         provider: &str,
         expires_at: DateTime<Utc>,
@@ -4828,7 +4829,7 @@ pub(crate) mod test_support {
     }
 
     pub(crate) async fn seed_credential_with_refresh_token(
-        node: &EmbeddedNode,
+        node: &Arc<EmbeddedNode>,
         node_did: &str,
         provider: &str,
         expires_at: DateTime<Utc>,

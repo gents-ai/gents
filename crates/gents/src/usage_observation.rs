@@ -385,9 +385,9 @@ async fn write(
     if report.is_empty() && read.is_none() {
         return Ok(());
     }
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     access
-        .transact("usage_observation.record", |txn| {
+        .transact_write("usage_observation.record", |txn| {
             let (report, read, access) = (report.clone(), read.clone(), &access);
             Box::pin(async move {
                 let target = match account {
@@ -573,7 +573,7 @@ pub async fn read_account_usage(
         },
         _ => None,
     };
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let mut account = UsageAccount::for_backend(node_did, backend);
     let Some(target) = target(&access, &account).await? else {
         return Ok(unavailable("no enabled account"));
@@ -696,7 +696,7 @@ pub async fn read_node_usage(
     endpoints: &UsageEndpoints,
     now: DateTime<Utc>,
 ) -> Result<Vec<AccountUsageRead>> {
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let accounts = crate::oauth_credential::list_accounts(&access, node_did).await?;
     let backends = access
         .transact_readonly("usage_observation.read_node", |txn| {

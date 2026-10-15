@@ -150,7 +150,7 @@ impl DefraWatcher {
         let failure_reason =
             format!("request rejected at ingest: incoherent durable lineage ({error})");
         if let Err(persist_error) = crate::request_admission::terminalize_pending_request_rejection(
-            self.node.as_ref(),
+            &self.node,
             row.doc_id.as_deref().unwrap_or_default(),
             &self.node_did,
             &failure_reason,
@@ -180,7 +180,7 @@ impl DefraWatcher {
         }
         let reason = "request rejected at ingest: malformed durable AgentRequest row";
         if let Err(error) = crate::request_admission::terminalize_pending_request_rejection(
-            self.node.as_ref(),
+            &self.node,
             &row.doc_id,
             &self.node_did,
             reason,
@@ -202,7 +202,7 @@ impl DefraWatcher {
             .filter_map(|row| row.doc_id.clone())
             .collect::<Vec<_>>();
         let order = crate::config_client::ConfigAccess::transact_local_readonly(
-            self.node.as_ref(),
+            &self.node,
             None,
             "watcher.request_arrival_order",
             |txn| {

@@ -1590,7 +1590,7 @@ async fn ensure_session_document(config: &AcpServiceConfig, session_id: &str) ->
                 }}) {{ _docID }}
             }}"#
         );
-        ConfigAccess::Local(config.node.clone())
+        ConfigAccess::local(config.node.clone())
             .write("grok.session.create", &create)
             .await?;
     } else {
@@ -1605,7 +1605,7 @@ async fn ensure_session_document(config: &AcpServiceConfig, session_id: &str) ->
                 ) {{ _docID }}
             }}"#
         );
-        ConfigAccess::Local(config.node.clone())
+        ConfigAccess::local(config.node.clone())
             .write("grok.session.reactivate", &update)
             .await?;
     }
@@ -2562,7 +2562,7 @@ mod tests {
         let backend =
             MockStreamingBackend::start_with_plans("grok-control-model", plans(&agent_id)).unwrap();
         configure_runtime_agent(
-            node.as_ref(),
+            &node,
             &node_did,
             &agent_id,
             &format!("grok-control-{name}"),
@@ -2726,7 +2726,7 @@ mod tests {
                         .and_then(|rows| rows.first());
                     if let Some(scope) = scope {
                         gents::tool_call_lifecycle::load_tool_call_presentation(
-                            &gents::ConfigAccess::Local(node.clone()),
+                            &gents::ConfigAccess::local(node.clone()),
                             tool_doc_id,
                             scope["node_did"].as_str().unwrap_or_default(),
                             scope["session_id"].as_str().unwrap_or_default(),
@@ -2784,7 +2784,7 @@ mod tests {
             .await
             .expect("runtime schemas");
         super::super::seed_test_agent_configuration(
-            config.node.as_ref(),
+            &config.node,
             &node_did,
             &agent_id,
             &agent_id,

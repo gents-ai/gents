@@ -205,7 +205,9 @@ pub(crate) async fn dispatch(command: AccountsCommand) -> Result<()> {
     }
 }
 
-async fn target_access(target: &AccountsTargetArgs) -> Result<(crate::CommandAccess, String)> {
+async fn target_access(
+    target: &AccountsTargetArgs,
+) -> Result<(gents::config_client::ConfigAccess, String)> {
     let (access, home_dir) =
         resolve_config_access(target.home.as_deref(), target.graphql.as_deref()).await?;
     let did = resolve_node_did(Some(&home_dir), target.node_did.as_deref())?;
@@ -222,7 +224,7 @@ pub(crate) struct Snapshot {
 pub(crate) async fn snapshot(access: &ConfigAccess, node_did: &str) -> Result<Snapshot> {
     let accounts = gents::oauth_credential::list_accounts(access, node_did).await?;
     let (backends, profiles) = access
-        .transact("accounts.config", |txn| {
+        .transact_write("accounts.config", |txn| {
             Box::pin(async move {
                 Ok((
                     gents::config_client::list_inference_backends_in_txn(txn, node_did).await?,
@@ -728,7 +730,7 @@ pub async fn remove_account(
         "removing an account asks for confirmation; pass --yes when not running in a terminal"
     );
     let (deleted, kept) = access
-        .transact("accounts.remove", |txn| {
+        .transact_write("accounts.remove", |txn| {
             let account = account.clone();
             Box::pin(async move {
                 gents::oauth_credential::remove_account_in_txn(
@@ -925,7 +927,7 @@ mod tests {
     async fn seeded() -> ConfigAccess {
         let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
         gents::ensure_runtime_schemas(&node).await.unwrap();
-        let access = ConfigAccess::Local(node);
+        let access = ConfigAccess::local(node);
         seed_account(&access, CHATGPT, None, None).await;
         seed_account(&access, CHATGPT, Some("acct-c2"), Some("ChatGPT 2")).await;
         seed_account(&access, CLAUDE, None, Some("Personal")).await;
@@ -1000,9 +1002,7 @@ mod tests {
     }
 
     async fn backend_ids(access: &ConfigAccess) -> Vec<String> {
-        let ConfigAccess::Local(node) = access else {
-            unreachable!()
-        };
+        let node = access.local_node().expect("test access is local");
         gents::backend_registry::list_all_backends(node)
             .await
             .unwrap()
@@ -1165,9 +1165,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(row(&rows, "Office").profiles, ["work-profile"]);
-        let ConfigAccess::Local(node) = &access else {
-            unreachable!()
-        };
+        let node = access.local_node().expect("test access is local");
         let renamed = gents::backend_registry::lookup_backend(node, DID, "claude-acct-l2")
             .await
             .unwrap()
@@ -1332,9 +1330,7 @@ mod tests {
         account_ref: Option<&str>,
         windows: Vec<gents::usage_observation::account_usage::UsageWindow>,
     ) {
-        let ConfigAccess::Local(node) = access else {
-            unreachable!()
-        };
+        let node = access.local_node().expect("test access is local");
         gents::usage_observation::record_usage(
             node,
             &gents::usage_observation::UsageAccount::Credential {

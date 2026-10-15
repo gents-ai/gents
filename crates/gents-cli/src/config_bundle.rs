@@ -30,7 +30,7 @@ async fn read_owned_config_bundle(
     let owner = node_did.to_owned();
     let access_mode = access.mode().to_owned();
     access
-        .transact("export_owned_configuration", |txn| {
+        .transact_write("export_owned_configuration", |txn| {
             let owner = owner.clone();
             let access_mode = access_mode.clone();
             Box::pin(async move {
@@ -217,12 +217,12 @@ mod tests {
                 .unwrap(),
         );
         gents::ensure_runtime_schemas(&node).await.unwrap();
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         for owner in ["owner-a", "owner-b"] {
             let source = bundle(owner);
             let plan = DesiredStateApplyPlan::from_pack_config(&source.config).unwrap();
             access
-                .transact("seed_export_scope", |txn| {
+                .transact_write("seed_export_scope", |txn| {
                     let plan = plan.clone();
                     Box::pin(async move { apply_desired_state_plan(txn, &plan).await.map(|_| ()) })
                 })
@@ -267,7 +267,7 @@ mod tests {
             .allowed_argv_prefixes = Some(vec![vec!["printf".into(), "".into()]]);
         let plan = DesiredStateApplyPlan::from_pack_config(&changed).unwrap();
         access
-            .transact("update_export_json", |txn| {
+            .transact_write("update_export_json", |txn| {
                 let plan = plan.clone();
                 Box::pin(async move { apply_desired_state_plan(txn, &plan).await.map(|_| ()) })
             })

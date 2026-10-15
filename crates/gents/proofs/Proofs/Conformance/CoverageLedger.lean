@@ -701,6 +701,11 @@ def caseCoverage : List CoverageEntry :=
       "conformance::session_hydration::generated_session_hydration_start_cases_match_receiver_start")
       "session-hydration" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "session_hydration_admission_cases"
+      "SessionHydrationAdmissionCases"
+      "conformance::session_hydration::generated_session_hydration_admission_cases_match_receiver_owner")
+      "session-hydration" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "enrollment_cases"
       "EnrollmentCases"
       "conformance::enrollment::generated_enrollment_cases_match_production_transition_core")
@@ -726,6 +731,11 @@ def caseCoverage : List CoverageEntry :=
       "EnrollmentDurableProjectionCases"
       "conformance::enrollment::generated_enrollment_durable_cases_drive_current_projection")
       "authenticated-enrollment" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "enrollment_pending_request_cases"
+      "EnrollmentPendingRequests"
+      "client::core::enrollment::tests::generated_pending_request_satisfaction_matches_lean")
+      "authenticated-enrollment" [Surface.operatorUi]
   , tagged (consumerCoverage
       "pending_user_turn_cases"
       "PendingUserTurnCases"
@@ -1163,6 +1173,11 @@ def caseCoverage : List CoverageEntry :=
       "session_input_edit_cases"
       "SessionInputEditRemoteCases"
       "e2e_runtime::session_input_edit::generated_remote_edits_replicate_signed_effect_and_receipt")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "session_input_edit_client_observation_cases"
+      "SessionInputEditClientObservationCases"
+      "client::core::writes::accepted_edit_projection_tests::generated_accepted_receipt_survives_projection_refresh_failure")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "queue_management_cases"

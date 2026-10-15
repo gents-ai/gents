@@ -74,7 +74,7 @@ async fn encrypted_local_budget_accepts_and_reopens_a_megabyte_document() {
             .await
             .unwrap(),
     );
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     access
         .add_schema("type BudgetDocument { payload: String }")
         .await
@@ -101,7 +101,7 @@ async fn encrypted_local_budget_accepts_and_reopens_a_megabyte_document() {
             .await
             .unwrap(),
     );
-    let result = ConfigAccess::Local(reopened.clone())
+    let result = ConfigAccess::local(reopened.clone())
         .execute("{ BudgetDocument { payload } }")
         .await
         .unwrap();

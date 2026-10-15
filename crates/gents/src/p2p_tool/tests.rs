@@ -17,7 +17,7 @@ async fn native_pairing_sync_and_revoke_preserve_enrollment_and_scope() {
     let remote = crate::support::test_p2p_db("engineer-p2p-remote").await;
     let identity = local.node_identity.clone();
     for node in [&local.node, &remote.node] {
-        ConfigAccess::Local(node.clone())
+        ConfigAccess::local(node.clone())
             .add_schema("type DeploymentNote @branchable { text: String }")
             .await
             .unwrap();
@@ -173,8 +173,8 @@ async fn native_pairing_sync_and_revoke_preserve_enrollment_and_scope() {
         .state
         .collections
         .contains("DeploymentNote"));
-    ConfigAccess::Local(remote.node.clone()).write("test.p2p.note", "mutation {create_DeploymentNote(input: {text: \"Previous image remains pinned until review\"}) {_docID}}").await.unwrap();
-    let document = ConfigAccess::Local(remote.node.clone())
+    ConfigAccess::local(remote.node.clone()).write("test.p2p.note", "mutation {create_DeploymentNote(input: {text: \"Previous image remains pinned until review\"}) {_docID}}").await.unwrap();
+    let document = ConfigAccess::local(remote.node.clone())
         .execute("{DeploymentNote(limit: 1) {_docID}}")
         .await
         .unwrap();
@@ -187,7 +187,7 @@ async fn native_pairing_sync_and_revoke_preserve_enrollment_and_scope() {
         json!([]),
         "{synced}"
     );
-    let read = ConfigAccess::Local(local.node.clone())
+    let read = ConfigAccess::local(local.node.clone())
         .execute(&format!(
             "{{DeploymentNote(filter: {{_docID: {{_eq: {}}}}}) {{text}}}}",
             quoted(doc_id)
@@ -236,7 +236,7 @@ async fn native_pairing_sync_and_revoke_preserve_enrollment_and_scope() {
 #[tokio::test]
 async fn p2p_rejects_foreign_actor_and_preserves_another_overlays_owner() {
     let db = crate::support::test_p2p_db("engineer-p2p-owned").await;
-    let access = ConfigAccess::Local(db.node.clone());
+    let access = ConfigAccess::local(db.node.clone());
     access.write("test.p2p.overlay", "mutation {create_DataPlanePairingDesired(input: {peer_id: \"foreign-route\", node_did: \"did:key:another\", source: \"another-owner\", collections: [\"DeploymentNote\"], replicator_addresses: null, template: \"app-collections\"}) {_docID}}").await.unwrap();
     let tool = P2pTool::new(
         db.node.clone(),

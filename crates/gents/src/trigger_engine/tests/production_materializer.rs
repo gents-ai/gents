@@ -190,7 +190,7 @@ async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire
     );
 
     assert_eq!(
-        crate::goal::delete_goals_for_session(node.as_ref(), &node_did, &identity.session_id)
+        crate::goal::delete_goals_for_session(&node, &node_did, &identity.session_id)
             .await
             .expect("clear Goal and creation claim before source checkpoint"),
         1
@@ -1166,7 +1166,7 @@ async fn admitted_event_replay_precedes_render_and_latest_only_supersession() {
         attempt: None,
         created_at: "2030-01-01T00:00:00Z".into(),
     };
-    crate::config_client::ConfigAccess::transact_local(node.as_ref(), None, "test.seed_committed_replay", |txn| {
+    crate::config_client::ConfigAccess::transact_local_write(&node, None, "test.seed_committed_replay", |txn| {
         let fire = fire.clone();
         Box::pin(async move {
             assert!(crate::trigger_engine::durable::stage_fire_receipt(txn, &fire).await?);

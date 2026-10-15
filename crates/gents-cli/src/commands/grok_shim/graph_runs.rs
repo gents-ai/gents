@@ -123,7 +123,7 @@ impl GraphRunCursor {
     ) -> Vec<anyhow::Error> {
         let now = Utc::now();
         let mut reports = self.discover(node, principal, session, now).await;
-        let access = &ConfigAccess::Local(node.clone());
+        let access = &ConfigAccess::local(node.clone());
         reports.extend(
             self.observe(session, sender, projections, now, |run_id| async move {
                 load_graph_run_view_with_access(access, principal, &run_id).await
@@ -1257,7 +1257,7 @@ mod tests {
             .collect(),
         )
         .unwrap();
-        ConfigAccess::transact_local(node, None, "grok.graph.fixture", |txn| {
+        ConfigAccess::transact_local_write(node, None, "grok.graph.fixture", |txn| {
             let plan = &plan;
             Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(drop) })
         })
@@ -1429,7 +1429,7 @@ mod tests {
         let (_directory, node, projections, buffer, sender) = harness().await;
         let owner = gents::NodeIdentity::did(&key_identity()).to_owned();
         let receipt = start_real_run(&node, &owner).await;
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         let observed = load_graph_run_view_with_access(&access, &owner, &receipt.run_id)
             .await
             .unwrap();
@@ -1552,7 +1552,7 @@ mod tests {
         let identity = key_identity();
         let owner = gents::NodeIdentity::did(&identity).to_owned();
         let receipt = start_real_run(&node, &owner).await;
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         let mut cursor = GraphRunCursor::default();
         cursor
             .runs

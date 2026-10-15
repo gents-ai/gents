@@ -256,7 +256,7 @@ pub(super) async fn steer_gents_turn(
     let request_input =
         codex_queued_user_input(&cwd, &queued_after_request_id, &selected_skill_ids);
     let submitted = match gents::enqueue_local_steering_request(
-        state.node.as_ref(),
+        &state.node,
         &active_turn.current_request_id,
         &active_turn.current_request_doc_id,
         &user_text,

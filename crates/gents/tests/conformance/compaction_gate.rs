@@ -156,7 +156,7 @@ async fn seed_bulky_history(node: &EmbeddedNode, node_did: &str, session_id: &st
 async fn boot_agent(db: &support::TestDb, endpoint: &str) -> BootedAgent {
     let identity: Arc<dyn gents::NodeIdentity> = Arc::new(test_identity("compaction-gate"));
     support::fixtures::bind_agent_backend(
-        db.node.as_ref(),
+        &db.node,
         identity.did(),
         AGENT_NAME,
         BACKEND_ID,

@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
@@ -50,8 +51,8 @@ async fn submit_request_does_not_create_runtime_projections() -> Result<()> {
             "client submission must not create {collection}"
         );
     }
-    core.shutdown().await?;
-    runtime.shutdown().await?;
+    Arc::new(core).shutdown().await?;
+    Arc::new(runtime).shutdown().await?;
     Ok(())
 }
 
@@ -127,8 +128,8 @@ async fn submit_request_writes_request_as_the_only_durable_input() -> Result<()>
         Some(submitted.request_id.clone())
     );
     assert_eq!(core.store().snapshot().requests.len(), 1);
-    core.shutdown().await?;
-    runtime.shutdown().await?;
+    Arc::new(core).shutdown().await?;
+    Arc::new(runtime).shutdown().await?;
     Ok(())
 }
 
@@ -203,8 +204,8 @@ async fn resend_preserves_request_lineage_without_caller_inference_overrides() -
         Some(original.request_id.as_str())
     );
 
-    core.shutdown().await?;
-    runtime.shutdown().await?;
+    Arc::new(core).shutdown().await?;
+    Arc::new(runtime).shutdown().await?;
     Ok(())
 }
 

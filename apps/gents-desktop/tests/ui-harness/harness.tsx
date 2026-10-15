@@ -22,7 +22,12 @@ const backend = params.get("backend") === "live" ? "live" : "deterministic";
 const harness =
   backend === "live"
     ? createLiveDesktopUiHarness({ bridgeUrl: params.get("bridgeUrl") })
-    : createDesktopUiHarness({ scenario: params.get("scenario") });
+    : createDesktopUiHarness({
+        scenario: params.get("scenario"),
+        sessionIndexCount: params.has("sessions")
+          ? Number(params.get("sessions"))
+          : undefined,
+      });
 
 // Exercise retry/error UX through the same adapter boundary as native IPC.
 if (backend === "deterministic" && params.get("configApplyFailure") === "once") {

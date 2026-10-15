@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
@@ -78,7 +79,7 @@ async fn live_core_persists_managed_server_peer_through_watched_owner() -> Resul
     assert_eq!(snapshot.peers.len(), 1);
     assert_eq!(snapshot.peers[0].peer_id, record.peer_id);
     assert!(!snapshot.peers[0].dial_succeeded);
-    core.shutdown().await?;
+    Arc::new(core).shutdown().await?;
     Ok(())
 }
 
@@ -126,7 +127,7 @@ async fn message_preparation_uses_the_hosted_head_when_the_replica_lags() -> Res
         queue.delivery,
         gents_protocol::request_input::QueueDelivery::Steer
     );
-    core.shutdown().await?;
+    Arc::new(core).shutdown().await?;
     Ok(())
 }
 
@@ -183,7 +184,7 @@ async fn managed_config_write_never_falls_back_to_the_desktop_replica() -> Resul
         "failed managed writes must not appear in the desktop replica"
     );
 
-    core.shutdown().await?;
+    Arc::new(core).shutdown().await?;
     Ok(())
 }
 
@@ -199,7 +200,7 @@ async fn client_core_starts_and_registers_schemas() -> Result<()> {
         .execute("query { AgentRequest { _docID } }")
         .await;
     assert!(!response.has_errors(), "schema registration should succeed");
-    core.shutdown().await?;
+    Arc::new(core).shutdown().await?;
     Ok(())
 }
 
@@ -236,8 +237,18 @@ async fn initial_session_hydration_starts_when_local_transcript_rows_already_exi
         response.errors
     );
 
-    core.ensure_session_hydration_started(session_id, node_did)
-        .await?;
+    let (first_start, second_start) = tokio::join!(
+        core.ensure_session_hydration_started(session_id, node_did),
+        core.ensure_session_hydration_started(session_id, node_did),
+    );
+    let (started_progress, _) = first_start?;
+    let (concurrent_progress, _) = second_start?;
+    assert_eq!(
+        started_progress.phase.as_str(),
+        "serving",
+        "the returned observation reflects the durable request created by this call"
+    );
+    assert_eq!(concurrent_progress.phase.as_str(), "serving");
 
     let progress = core
         .session_hydration_progress(session_id, node_did)
@@ -278,7 +289,7 @@ async fn initial_session_hydration_starts_when_local_transcript_rows_already_exi
         Some("pending")
     );
 
-    core.shutdown().await?;
+    Arc::new(core).shutdown().await?;
     Ok(())
 }
 
@@ -338,7 +349,7 @@ async fn initial_session_hydration_waits_for_existing_or_terminal_session_eviden
         "hydration must wait while the runtime is creating the session"
     );
 
-    core.shutdown().await?;
+    Arc::new(core).shutdown().await?;
     Ok(())
 }
 
@@ -398,7 +409,7 @@ async fn durable_served_hydration_row_drives_exact_session_progress() -> Result<
     assert_eq!(progress.merged_count, 0);
     assert_eq!(progress.served_count, Some(0));
 
-    core.shutdown().await?;
+    Arc::new(core).shutdown().await?;
     Ok(())
 }
 
@@ -460,7 +471,7 @@ async fn forged_terminal_hydration_receipt_fails_closed() -> Result<()> {
         "unexpected fail-closed reason: {error:#}"
     );
 
-    core.shutdown().await?;
+    Arc::new(core).shutdown().await?;
     Ok(())
 }
 
@@ -530,10 +541,12 @@ async fn passive_hydration_observation_preserves_rejection_until_explicit_retry(
         response.errors
     );
 
-    core.ensure_session_hydration_started(session_id, &node_did)
-        .await?;
-    core.ensure_session_hydration_started(session_id, &node_did)
-        .await?;
+    let (first_observation, second_observation) = tokio::join!(
+        core.ensure_session_hydration_started(session_id, &node_did),
+        core.ensure_session_hydration_started(session_id, &node_did),
+    );
+    assert_eq!(first_observation?.0.phase.as_str(), "failed");
+    assert_eq!(second_observation?.0.phase.as_str(), "failed");
     assert_eq!(
         core.session_hydration_progress(session_id, &node_did)
             .await?
@@ -548,8 +561,7 @@ async fn passive_hydration_observation_preserves_rejection_until_explicit_retry(
     );
 
     let peer_id_before_restart = core.local_peer_id().to_string();
-    core.shutdown().await?;
-    drop(core);
+    Arc::new(core).shutdown().await?;
     let core =
         ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_simulated_route())
             .await?;
@@ -607,7 +619,15 @@ async fn passive_hydration_observation_preserves_rejection_until_explicit_retry(
         "observing and rejecting another target must not overwrite this session"
     );
 
-    core.retry_session_hydration(session_id, &node_did).await?;
+    let (first_retry, second_retry) = tokio::join!(
+        core.retry_session_hydration(session_id, &node_did),
+        core.retry_session_hydration(session_id, &node_did),
+    );
+    assert_ne!(
+        first_retry.is_ok(),
+        second_retry.is_ok(),
+        "only one concurrent explicit retry may consume the rejected observation"
+    );
     assert_eq!(
         core.session_hydration_progress(session_id, &node_did)
             .await?
@@ -626,7 +646,7 @@ async fn passive_hydration_observation_preserves_rejection_until_explicit_retry(
         "retrying one target must not rewrite another request row"
     );
 
-    core.shutdown().await?;
+    Arc::new(core).shutdown().await?;
     Ok(())
 }
 
@@ -685,8 +705,8 @@ async fn two_client_cores_connect_over_iroh() -> Result<()> {
         .context("connecting core_b to core_a")?;
 
     wait_for_connected_peer(&core_b, &peer_a).await?;
-    core_b.shutdown().await?;
-    core_a.shutdown().await?;
+    Arc::new(core_b).shutdown().await?;
+    Arc::new(core_a).shutdown().await?;
     Ok(())
 }
 

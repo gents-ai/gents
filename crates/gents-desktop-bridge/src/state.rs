@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -256,6 +257,9 @@ pub struct ManagedServerState {
 
 pub struct DesktopBridge {
     pub core: Option<Arc<ClientCore>>,
+    /// Hidden views and prevented closes still own their selections. Only
+    /// native destruction retires a view; late IPC cannot register it again.
+    selected_nodes_by_window: BTreeMap<String, Option<String>>,
     pub updates_task: Option<JoinHandle<()>>,
     /// Cancel handle for an in-flight ChatGPT/Codex login server, so a closed
     /// browser can be aborted instead of hanging the callback wait.
@@ -273,11 +277,52 @@ pub struct DesktopBridge {
     pub incompatible_client_store: Option<gents::storage_backend::IncompatibleStore>,
 }
 
+impl DesktopBridge {
+    fn selected_node_did(&self) -> Option<String> {
+        if self.selected_nodes_by_window.len() == 1 {
+            self.selected_nodes_by_window
+                .values()
+                .next()
+                .cloned()
+                .flatten()
+        } else {
+            None
+        }
+    }
+
+    fn apply_window_selection(&self) {
+        if let Some(core) = &self.core {
+            let selected = self.selected_node_did();
+            if core.selected_node_did() != selected {
+                core.set_selected_node_did(selected);
+            }
+        }
+    }
+
+    pub(crate) fn install_core(&mut self, core: Arc<ClientCore>) {
+        core.set_selected_node_did(self.selected_node_did());
+        self.core = Some(core);
+    }
+
+    pub(crate) fn has_window(&self, label: &str) -> bool {
+        self.selected_nodes_by_window.contains_key(label)
+    }
+
+    pub(crate) fn set_window_selected_node(&mut self, label: &str, node_did: Option<String>) {
+        let Some(selected) = self.selected_nodes_by_window.get_mut(label) else {
+            return;
+        };
+        *selected = node_did;
+        self.apply_window_selection();
+    }
+}
+
 impl DesktopAppState {
     pub fn new(policy: ResolvedBridgePolicy) -> Self {
         Self {
             bridge: Mutex::new(DesktopBridge {
                 core: None,
+                selected_nodes_by_window: BTreeMap::new(),
                 updates_task: None,
                 codex_login_cancel: None,
                 claude_login_cancel: None,
@@ -292,7 +337,30 @@ impl DesktopAppState {
             pending_oauth_credentials: PendingOAuthCredentials::default(),
         }
     }
+
+    pub(crate) fn register_window(&self, label: &str) {
+        let mut bridge = self.bridge.lock().expect("desktop bridge lock poisoned");
+        bridge
+            .selected_nodes_by_window
+            .entry(label.to_owned())
+            .or_default();
+        bridge.apply_window_selection();
+    }
+
+    pub(crate) fn window_event(&self, label: &str, event: &tauri::WindowEvent) {
+        if !matches!(event, tauri::WindowEvent::Destroyed) {
+            return;
+        }
+        let mut bridge = self.bridge.lock().expect("desktop bridge lock poisoned");
+        if bridge.selected_nodes_by_window.remove(label).is_some() {
+            bridge.apply_window_selection();
+        }
+    }
 }
+
+#[cfg(test)]
+#[path = "state/window_selection_tests.rs"]
+mod window_selection_tests;
 
 pub fn spawn_client_update_task<R: Runtime>(
     app: AppHandle<R>,

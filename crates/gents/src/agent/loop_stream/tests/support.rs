@@ -809,13 +809,13 @@ async fn owned_test_hook_with_identity_policy(
             )
             .await
             .unwrap();
-            let result = crate::config_client::ConfigAccess::Local(node.clone())
+            let result = crate::config_client::ConfigAccess::local(node.clone())
                 .write("test.folded_request", &create.graphql_mutation().unwrap())
                 .await
                 .unwrap();
             let doc =
                 gents_protocol::graphql::extract_mutation_doc_id(&result, "AgentRequest").unwrap();
-            let loaded = crate::config_client::ConfigAccess::Local(node.clone())
+            let loaded = crate::config_client::ConfigAccess::local(node.clone())
                 .execute(&format!(
                     r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
                     crate::graphql::escape_graphql_string(&doc),

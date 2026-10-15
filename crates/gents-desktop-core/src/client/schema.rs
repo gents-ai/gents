@@ -3,11 +3,7 @@ use defra_node::EmbeddedNode;
 use gents_protocol::schemas::ALL_COLLECTION_NAMES;
 
 pub async fn ensure_runtime_schemas(node: &EmbeddedNode) -> Result<()> {
-    gents_migration::ensure_migrations(node)
-        .await
-        .map(|_| ())
-        .map_err(|e| anyhow::anyhow!(e))
-        .context("ensure_migrations")
+    gents::schema::ensure_runtime_schemas(node).await
 }
 
 #[allow(dead_code)]

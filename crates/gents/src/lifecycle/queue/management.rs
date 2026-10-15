@@ -515,7 +515,7 @@ pub(super) async fn replace_pending_user_messages(
     )
     .await?;
     access
-        .transact("queue.replace_pending_messages", |txn| {
+        .transact_write("queue.replace_pending_messages", |txn| {
             let edit = &edit;
             let creates = &creates;
             Box::pin(async move {
