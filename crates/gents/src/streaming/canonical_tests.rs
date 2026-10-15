@@ -486,17 +486,21 @@ async fn publication_and_replay_read_only_the_selected_source() {
             .unwrap();
     }
     let message = gents_protocol::message::Message::assistant("selected source");
-    let (published, scans) = crate::session::count_request_output_scans(
-        publish_tool_turn_for_rollback_test(&node, &lifecycle, &message),
-    )
-    .await;
+    let ((published, scans), source_queries) =
+        crate::session::count_source_output_queries(crate::session::count_request_output_scans(
+            publish_tool_turn_for_rollback_test(&node, &lifecycle, &message),
+        ))
+        .await;
     let published = published.unwrap();
     assert_eq!(scans, 0);
-    let (replayed, scans) = crate::session::count_request_output_scans(
-        publish_tool_turn_for_rollback_test(&node, &lifecycle, &message),
-    )
-    .await;
+    assert_eq!(source_queries, 1);
+    let ((replayed, scans), source_queries) =
+        crate::session::count_source_output_queries(crate::session::count_request_output_scans(
+            publish_tool_turn_for_rollback_test(&node, &lifecycle, &message),
+        ))
+        .await;
     assert_eq!(scans, 0);
+    assert_eq!(source_queries, 1);
     assert_eq!(published.message_doc_id, replayed.unwrap().message_doc_id);
     let query = crate::session::canonical_rows::source_output_segments_query(
         &lifecycle.request().doc_id,
