@@ -170,6 +170,7 @@ enum ReadAccess<'a, 'txn> {
 struct ReadCache {
     headers: BTreeMap<String, super::canonical_rows::TranscriptMessageRow>,
     requests: BTreeMap<String, Arc<RequestOutputRows>>,
+    source_reads: bool,
     /// Rows the caller read by an exact scoped query in the same transaction;
     /// each still passes coordinate validation before it enters `headers`.
     observed: BTreeMap<String, super::canonical_rows::TranscriptMessageRow>,
@@ -347,7 +348,10 @@ pub(crate) async fn load_canonical_message_in_txn(
         header_doc_id,
         node_did,
         requester_did,
-        &mut ReadCache::default(),
+        &mut ReadCache {
+            source_reads: true,
+            ..ReadCache::default()
+        },
     )
     .await
 }
@@ -379,7 +383,10 @@ impl<'a, 'txn> TxnCanonicalReader<'a, 'txn> {
             txn,
             node_did,
             requester_did,
-            cache: ReadCache::default(),
+            cache: ReadCache {
+                source_reads: true,
+                ..ReadCache::default()
+            },
         }
     }
 
@@ -423,22 +430,17 @@ impl<'a, 'txn> TxnCanonicalReader<'a, 'txn> {
         session_id: &str,
         source: &OutputSource,
     ) -> Result<Vec<super::canonical_rows::OutputSegmentRow>> {
-        let rows = request_rows(
+        let rows = source_rows(
             ReadAccess::Txn(self.txn),
             request_doc_id,
+            source,
             self.node_did,
             self.requester_did,
-            &self.cache,
-            &mut BTreeMap::new(),
         )
         .await?;
-        self.cache
-            .requests
-            .insert(request_doc_id.to_owned(), Arc::clone(&rows));
         Ok(rows
-            .for_source(source)
+            .into_iter()
             .filter(|row| row.segment.session_id == session_id)
-            .cloned()
             .collect())
     }
 
@@ -543,7 +545,10 @@ pub async fn load_canonical_message(
         header_doc_id,
         node_did,
         requester_did,
-        &mut ReadCache::default(),
+        &mut ReadCache {
+            source_reads: true,
+            ..ReadCache::default()
+        },
     )
     .await
 }
@@ -563,7 +568,10 @@ pub async fn load_canonical_message_from_node(
         header_doc_id,
         node_did,
         requester_did,
-        &mut ReadCache::default(),
+        &mut ReadCache {
+            source_reads: true,
+            ..ReadCache::default()
+        },
     )
     .await
 }
@@ -943,6 +951,26 @@ async fn request_rows(
     Ok(rows)
 }
 
+async fn source_rows(
+    access: ReadAccess<'_, '_>,
+    request_doc_id: &str,
+    source: &OutputSource,
+    node_did: &str,
+    requester_did: Option<&str>,
+) -> Result<Vec<super::canonical_rows::OutputSegmentRow>> {
+    let query = super::canonical_rows::source_output_segments_query(request_doc_id, source)?;
+    let response = access.query(&query, "load_output_source").await?;
+    Ok(decode_scoped_request_output_segments(
+        rows_value(&response, "AgentOutputSegment")?,
+        node_did,
+        None,
+        requester_did,
+    )?
+    .into_iter()
+    .filter(|row| row.segment.source == *source)
+    .collect())
+}
+
 /// Load output segments for all request documents in the bounded replay view
 /// through the indexed request field, in chunks. The per-pass cache still
 /// owns freshness: if reconstruction detects an incomplete reused scan, its
@@ -1085,9 +1113,8 @@ async fn load_replay_request_facts_batch(
     Ok(facts)
 }
 
-/// `request_hint` is the physical request whose output the header's payloads
-/// are expected to close; closes found there need no `_docID` lookup, which
-/// DefraDB serves by reading the node's whole output.
+/// Bulk readers reuse request snapshots; single transaction readers resolve
+/// physical closures and enumerate every observation of each selected source.
 async fn load_referenced_segments(
     access: ReadAccess<'_, '_>,
     header: &super::canonical_rows::TranscriptMessageRow,
@@ -1107,7 +1134,7 @@ async fn load_referenced_segments(
         .collect::<BTreeSet<_>>();
     let mut local = BTreeMap::new();
     let hinted = match request_hint {
-        Some(request) if !close_ids.is_empty() => {
+        Some(request) if !cache.source_reads && !close_ids.is_empty() => {
             Some(request_rows(access, request, node_did, requester_did, cache, &mut local).await?)
         }
         _ => None,
@@ -1160,6 +1187,12 @@ async fn load_referenced_segments(
     // last-writer-wins here. Exact duplicates are harmless to reconstruction.
     let mut records = Vec::new();
     for (request_doc_id, source) in sources {
+        if cache.source_reads {
+            records.extend(
+                source_rows(access, &request_doc_id, &source, node_did, requester_did).await?,
+            );
+            continue;
+        }
         let rows = request_rows(
             access,
             &request_doc_id,
