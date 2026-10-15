@@ -2,8 +2,10 @@ import Proofs.Mailbox.Transition
 
 namespace Mailbox.Sweep
 
-/-- The read owner sees a finite ordered page of open physical rows. `docId`
-orders the keyset; node ownership scopes the reader. -/
+/-- The read owner sees a finite ordered page of open physical rows. `docId` is
+the model's stable row-order key; the native adapter maps it to the indexed
+`item_key` cursor while retaining the physical document ID in the opaque token.
+Node ownership scopes the reader. -/
 structure Row where
   docId : Nat
   nodeDid : String

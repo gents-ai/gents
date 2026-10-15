@@ -56,6 +56,7 @@ repository = "https://github.com/gents-ai/gents"
 anyhow = "1"
 base64 = "0.22"
 bytes = "1"
+cursor = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "9b4e647d1cbb0b37c94e0b4423953bea2708fae6" }
 chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = "0.10"
 clap = { version = "4", features = ["derive", "env"] }

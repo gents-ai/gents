@@ -3,6 +3,7 @@
 //! Mailbox rows are stamped envelopes. They do not advance graph work: only
 //! the correlated `AgentRequest` or domain-document create carries semantics.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -959,75 +960,119 @@ pub(crate) async fn sweep_open_mailbox_items(
     .await
 }
 
-fn open_mailbox_page_query(local_did: &str, after_doc_id: Option<&str>) -> String {
-    let after_filter = after_doc_id
-        .map(|doc_id| {
-            format!(
-                ", {{ _docID: {{ _gt: \"{}\" }} }}",
-                escape_graphql_string(doc_id)
-            )
-        })
+// Keep this complete order aligned with the ordinary index: Defra only seeks
+// cursor pages when the declared order is fully covered by one index.
+fn open_mailbox_page_query(local_did: &str, after_cursor: Option<&str>) -> String {
+    let after_arg = after_cursor
+        .map(|cursor| format!(", after: \"{}\"", escape_graphql_string(cursor)))
         .unwrap_or_default();
     format!(
-        r#"{{ MailboxItem(
-            filter: {{ _and: [
-                {{ node_did: {{ _eq: "{}" }} }},
-                {{ status: {{ _eq: "open" }} }}
-                {after_filter}
-            ] }},
-            order: {{ _docID: ASC }},
-            limit: {}
-        ) {{ {MAILBOX_FIELDS} }} }}"#,
+        r#"{{ _cursor {{ MailboxItem(
+            first: {MAILBOX_SWEEP_PAGE_SIZE}{after_arg},
+            filter: {{ node_did: {{ _eq: "{}" }}, status: {{ _eq: "open" }} }},
+            order: [{{ node_did: ASC }}, {{ status: ASC }}, {{ item_key: ASC }}]
+        ) {{ {MAILBOX_FIELDS} }}
+        _pageInfo {{ hasNext }} }} }}"#,
         escape_graphql_string(local_did),
-        MAILBOX_SWEEP_PAGE_SIZE + 1,
     )
+}
+
+fn mailbox_item_cursor(raw_item: &Value) -> Result<String> {
+    let doc_id = raw_item
+        .get("_docID")
+        .and_then(Value::as_str)
+        .context("mailbox sweep row lacks physical _docID")?;
+    let keys = BTreeMap::from([
+        (
+            "item_key".to_owned(),
+            raw_item
+                .get("item_key")
+                .cloned()
+                .context("mailbox cursor row omitted ordered item_key")?,
+        ),
+        (
+            "node_did".to_owned(),
+            raw_item
+                .get("node_did")
+                .cloned()
+                .context("mailbox cursor row omitted ordered node_did")?,
+        ),
+        (
+            "status".to_owned(),
+            raw_item
+                .get("status")
+                .cloned()
+                .context("mailbox cursor row omitted ordered status")?,
+        ),
+    ]);
+    Ok(cursor::Cursor {
+        doc_id: doc_id.to_owned(),
+        keys,
+        direction: String::new(),
+    }
+    .encode())
 }
 
 async fn sweep_open_mailbox_items_with_close_collections(
     node: &Arc<EmbeddedNode>,
     local_did: &str,
-    after_doc_id: Option<&str>,
+    after_cursor: Option<&str>,
     close_collections: &[MailboxCloseCollection],
 ) -> Result<MailboxSweepPage> {
     validate_close_collections(close_collections)?;
     let response = graphql_with_transaction_retry(
         node,
-        &open_mailbox_page_query(local_did, after_doc_id),
+        &open_mailbox_page_query(local_did, after_cursor),
         "load open mailbox items",
     )
     .await?;
-    let raw_items = response
+    let cursor_page = response
         .data
-        .and_then(|mut data| data.as_object_mut()?.remove(MAILBOX_COLLECTION));
-    let raw_items: Vec<Value> = match raw_items {
-        Some(Value::Array(rows)) => rows,
-        Some(rows) => serde_json::from_value(rows).context("decode MailboxItem rows")?,
-        None => Vec::new(),
-    };
-    let has_more = raw_items.len() > MAILBOX_SWEEP_PAGE_SIZE;
-    let mut raw_items = raw_items;
-    raw_items.truncate(MAILBOX_SWEEP_PAGE_SIZE);
+        .context("mailbox cursor query omitted data")?
+        .get("_cursor")
+        .context("mailbox cursor query omitted _cursor")?
+        .clone();
+    let raw_items: Vec<Value> = serde_json::from_value(
+        cursor_page
+            .get(MAILBOX_COLLECTION)
+            .context("mailbox cursor query omitted collection rows")?
+            .clone(),
+    )
+    .context("decode MailboxItem cursor rows")?;
+    anyhow::ensure!(
+        raw_items.len() <= MAILBOX_SWEEP_PAGE_SIZE,
+        "mailbox cursor query exceeded requested page size"
+    );
+    let has_more = cursor_page
+        .get("_pageInfo")
+        .and_then(|page_info| page_info.get("hasNext"))
+        .and_then(Value::as_bool)
+        .context("mailbox cursor query omitted _pageInfo.hasNext")?;
+    anyhow::ensure!(
+        !has_more || !raw_items.is_empty(),
+        "mailbox cursor query hasNext without returning rows"
+    );
     let mut report = MailboxSweepReport {
         scanned: 0,
         ..Default::default()
     };
     let now = Utc::now();
     let turn_started = Instant::now();
-    let mut last_processed_id = None;
+    let mut last_processed_cursor = None;
     let mut stopped_early = false;
     for raw_item in raw_items {
         if report.scanned > 0 && turn_started.elapsed() >= MAILBOX_SWEEP_TIME_BUDGET {
             stopped_early = true;
             break;
         }
-        let doc_id = raw_item
+        let item_cursor = mailbox_item_cursor(&raw_item)?;
+        let item_id = raw_item
             .get("_docID")
             .and_then(Value::as_str)
             .context("mailbox sweep row lacks physical _docID")?
-            .to_string();
-        let item_id = doc_id.clone();
+            .to_owned();
         report.scanned += 1;
-        last_processed_id = Some(doc_id);
+        last_processed_cursor = Some(item_cursor);
         let item = match serde_json::from_value::<MailboxItem>(raw_item) {
             Ok(item) => item,
             Err(error) => {
@@ -1098,7 +1143,7 @@ async fn sweep_open_mailbox_items_with_close_collections(
         }
     }
     let next_cursor = if stopped_early || has_more {
-        last_processed_id
+        last_processed_cursor
     } else {
         None
     };
@@ -1594,7 +1639,7 @@ mod tests {
             }
             let mut row_args = args(
                 MailboxAction::WriteDocument,
-                &format!("model-row-{model_id}"),
+                &format!("model-row-{model_id:04}"),
             );
             row_args.deadline_at = Some(future.clone());
             let created =
@@ -1607,12 +1652,51 @@ mod tests {
                 foreign_doc_id = Some(created.doc_id);
             }
         }
+
+        // Older closed rows and foreign open rows must not widen the indexed
+        // page scan for this node's open mailbox.
+        for index in 0..64 {
+            let mut closed_context = context("did:test:owner");
+            let mut closed_args = args(
+                MailboxAction::WriteDocument,
+                &format!("000-closed-{index:04}"),
+            );
+            closed_args.deadline_at = Some(future.clone());
+            let closed = stamp_create_with_close_collections(
+                &node,
+                &closed_context,
+                closed_args,
+                FIXTURE_CLOSE,
+            )
+            .await
+            .unwrap();
+            assert!(
+                transition_open_item(&node, &closed, MailboxStatus::Acted, None)
+                    .await
+                    .unwrap()
+            );
+
+            closed_context.node_did = "did:test:foreign".into();
+            let mut foreign_args = args(
+                MailboxAction::WriteDocument,
+                &format!("000-foreign-{index:04}"),
+            );
+            foreign_args.deadline_at = Some(future.clone());
+            stamp_create_with_close_collections(
+                &node,
+                &closed_context,
+                foreign_args,
+                FIXTURE_CLOSE,
+            )
+            .await
+            .unwrap();
+        }
         let response = node
             .execute(&format!(
                 r#"{{ MailboxItem(filter: {{ _and: [
                     {{ node_did: {{ _eq: "{}" }} }},
                     {{ status: {{ _eq: "open" }} }}
-                ] }}, order: {{ _docID: ASC }}) {{ _docID }} }}"#,
+                ] }}, order: {{ item_key: ASC }}) {{ _docID item_key }} }}"#,
                 escape_graphql_string("did:test:agent")
             ))
             .await;
@@ -1621,15 +1705,24 @@ mod tests {
             "mailbox fixture order: {:?}",
             response.errors
         );
-        let ordered_ids = response.data.unwrap()[MAILBOX_COLLECTION]
+        let ordered_rows = response.data.unwrap()[MAILBOX_COLLECTION]
             .as_array()
             .unwrap()
             .iter()
-            .map(|row| row["_docID"].as_str().unwrap().to_string())
+            .map(|row| {
+                (
+                    row["_docID"].as_str().unwrap().to_owned(),
+                    row["item_key"].as_str().unwrap().to_owned(),
+                )
+            })
             .collect::<Vec<_>>();
-        assert_eq!(ordered_ids.len(), created_local_ids.len());
-        for (index, doc_id) in ordered_ids.into_iter().enumerate() {
-            let model_id = index as u64 + 1;
+        assert_eq!(ordered_rows.len(), created_local_ids.len());
+        for (doc_id, item_key) in ordered_rows {
+            let model_id = item_key
+                .strip_prefix("model-row-")
+                .unwrap()
+                .parse::<u64>()
+                .unwrap();
             modeled_doc_ids.insert(model_id, doc_id.clone());
             if modeled_due[&model_id] {
                 let item = load_mailbox_item(&node, &doc_id).await.unwrap().unwrap();
@@ -1655,14 +1748,38 @@ mod tests {
                 _ => None,
             }
         }
+        fn cursor_model_id(token: &str) -> u64 {
+            let decoded = cursor::Cursor::decode(token).expect("native cursor token");
+            decoded.keys["item_key"]
+                .as_str()
+                .unwrap()
+                .strip_prefix("model-row-")
+                .unwrap()
+                .parse()
+                .unwrap()
+        }
+        fn cursor_doc_id(token: &str) -> String {
+            cursor::Cursor::decode(token)
+                .expect("native cursor token")
+                .doc_id
+        }
         for (index, action) in actions.iter().enumerate() {
-            let input_cursor = action["cursor"]
-                .as_u64()
-                .map(|model_id| modeled_doc_ids[&model_id].clone());
-            assert_eq!(cursor, input_cursor, "native cursor follows Lean state");
+            let input_cursor = action["cursor"].as_u64();
+            assert_eq!(
+                cursor.as_deref().map(cursor_model_id),
+                input_cursor,
+                "native indexed cursor follows Lean row ordering"
+            );
+            if let (Some(token), Some(model_id)) = (cursor.as_deref(), input_cursor) {
+                assert_eq!(
+                    cursor_doc_id(token),
+                    modeled_doc_ids[&model_id],
+                    "opaque cursor retains the physical identity of the modeled row"
+                );
+            }
             if index == 1 {
-                let cursor = cursor.as_deref().expect("second page keyset cursor");
-                let cursor_model_id = action["cursor"].as_u64().unwrap();
+                let current_cursor = cursor.as_deref().expect("second page keyset cursor");
+                let cursor_model_id = cursor_model_id(current_cursor);
                 for model_id in [4, cursor_model_id + 4] {
                     assert!(!modeled_due[&model_id]);
                     assert_eq!(
@@ -1682,6 +1799,11 @@ mod tests {
                 assert!(!explain.has_errors(), "mailbox keyset explain: {explain:?}");
                 let plan = explain.data.as_ref().unwrap().get("explain").unwrap();
                 assert_eq!(plan["executionSuccess"], true, "{plan}");
+                assert!(
+                    plan.to_string()
+                        .contains("MailboxItem_node_status_item_key"),
+                    "mailbox page must use its registered compound index: {plan}"
+                );
                 let roots = plan["operationNode"].as_array().unwrap();
                 assert_eq!(roots.len(), 1);
                 let doc_fetches = metric(&roots[0], "docFetches").expect("docFetches metric");
@@ -1712,11 +1834,18 @@ mod tests {
                 .count();
             assert_eq!(page.report.acted, due_selected);
             assert_eq!(page.report.expired, 0);
-            let expected_next = action["next_cursor"]
-                .as_u64()
-                .map(|model_id| modeled_doc_ids[&model_id].clone());
+            let expected_next = action["next_cursor"].as_u64();
             if let Some(next) = expected_next {
-                assert_eq!(page.next_cursor.as_deref(), Some(next.as_str()));
+                assert_eq!(
+                    page.next_cursor.as_deref().map(cursor_model_id),
+                    Some(next),
+                    "returned cursor is the last processed indexed row"
+                );
+                assert_eq!(
+                    page.next_cursor.as_deref().map(cursor_doc_id),
+                    Some(modeled_doc_ids[&next].clone()),
+                    "returned cursor retains the corresponding physical document ID"
+                );
             } else {
                 assert!(page.next_cursor.is_none());
             }

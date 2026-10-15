@@ -729,6 +729,21 @@ static AGENT_REQUEST_RETRY_CHILD_FIELDS: &[OrdinaryIndexField<'static>] = &[
     },
 ];
 
+static MAILBOX_NODE_STATUS_ITEM_KEY_FIELDS: &[OrdinaryIndexField<'static>] = &[
+    OrdinaryIndexField {
+        name: "node_did",
+        descending: false,
+    },
+    OrdinaryIndexField {
+        name: "status",
+        descending: false,
+    },
+    OrdinaryIndexField {
+        name: "item_key",
+        descending: false,
+    },
+];
+
 /// Ordinary indexes whose query plans have been measured on existing stores.
 pub static DEFAULT_ORDINARY_INDEXES: &[OrdinaryIndex<'static>] = &[
     OrdinaryIndex {
@@ -750,6 +765,11 @@ pub static DEFAULT_ORDINARY_INDEXES: &[OrdinaryIndex<'static>] = &[
         collection: gents_protocol::schemas::AGENT_REQUEST_NAME,
         name: "AgentRequest_retry_parent_node_session_requester",
         fields: AGENT_REQUEST_RETRY_CHILD_FIELDS,
+    },
+    OrdinaryIndex {
+        collection: gents_protocol::schemas::MAILBOX_ITEM_NAME,
+        name: "MailboxItem_node_status_item_key",
+        fields: MAILBOX_NODE_STATUS_ITEM_KEY_FIELDS,
     },
 ];
 

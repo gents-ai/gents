@@ -4623,6 +4623,7 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "crypto",
+ "cursor",
  "db",
  "defra-core",
  "defra-node",

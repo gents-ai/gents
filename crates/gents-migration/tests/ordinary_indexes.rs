@@ -2,7 +2,7 @@ use defra_node::EmbeddedNode;
 use gents_migration::{
     ensure_migrations_with_registry, Registry, DEFAULT_BASELINE, DEFAULT_ORDINARY_INDEXES,
 };
-use gents_protocol::schemas::{AGENT_REQUEST, AGENT_REQUEST_NAME};
+use gents_protocol::schemas::{AGENT_REQUEST, AGENT_REQUEST_NAME, MAILBOX_ITEM, MAILBOX_ITEM_NAME};
 use serde_json::Value;
 
 mod common;
@@ -69,6 +69,22 @@ fn registry_with_request_index() -> Registry<'static> {
         baseline: std::slice::from_ref(request),
         steps: &[],
         ordinary_indexes: DEFAULT_ORDINARY_INDEXES,
+    }
+}
+
+fn registry_with_mailbox_cursor_index() -> Registry<'static> {
+    let mailbox = DEFAULT_BASELINE
+        .iter()
+        .find(|entry| entry.name == MAILBOX_ITEM_NAME)
+        .expect("MailboxItem baseline");
+    let index = DEFAULT_ORDINARY_INDEXES
+        .iter()
+        .find(|index| index.name == "MailboxItem_node_status_item_key")
+        .expect("MailboxItem cursor index");
+    Registry {
+        baseline: std::slice::from_ref(mailbox),
+        steps: &[],
+        ordinary_indexes: std::slice::from_ref(index),
     }
 }
 
@@ -437,6 +453,51 @@ async fn existing_and_fresh_stores_reconcile_the_same_index_without_changing_doc
 
     existing.shutdown().await;
     fresh.shutdown().await;
+}
+
+#[tokio::test]
+async fn mailbox_cursor_index_reconciles_on_an_existing_collection() {
+    let node = fresh_node().await;
+    node.add_schema(MAILBOX_ITEM)
+        .await
+        .expect("register pre-index MailboxItem schema");
+    let before = node
+        .get_collection(MAILBOX_ITEM_NAME)
+        .expect("load pre-index MailboxItem collection")
+        .expect("MailboxItem collection exists");
+    assert!(!before
+        .indexes
+        .iter()
+        .any(|index| index.name == "MailboxItem_node_status_item_key"));
+
+    let registry = registry_with_mailbox_cursor_index();
+    ensure_migrations_with_registry(node.as_ref(), &registry)
+        .await
+        .expect("reconcile cursor index on existing MailboxItem");
+    let after = node
+        .get_collection(MAILBOX_ITEM_NAME)
+        .expect("load indexed MailboxItem collection")
+        .expect("MailboxItem collection exists");
+    assert_eq!(before.version_id, after.version_id);
+    assert_eq!(before.collection_id, after.collection_id);
+    let index = after
+        .indexes
+        .iter()
+        .find(|index| index.name == "MailboxItem_node_status_item_key")
+        .expect("reconciled MailboxItem cursor index");
+    assert_eq!(
+        index
+            .fields
+            .iter()
+            .map(|field| (field.name.as_str(), field.descending))
+            .collect::<Vec<_>>(),
+        vec![("node_did", false), ("status", false), ("item_key", false)]
+    );
+
+    ensure_migrations_with_registry(node.as_ref(), &registry)
+        .await
+        .expect("reconcile MailboxItem cursor index idempotently");
+    node.shutdown().await;
 }
 
 #[test]
