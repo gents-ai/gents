@@ -59,6 +59,7 @@ pub fn project_backgrounded_tools(
                 request_id: r.request_id.clone(),
                 tool_call_id: r.tool_call_id.clone(),
                 tool_name: r.tool_name.clone(),
+                starts_session: gents::toolset::is_session_message_tool(&r.tool_name),
                 lifecycle_state: r.lifecycle_state.clone(),
                 status: r.status.clone(),
                 started_at: r.started_at.clone(),
