@@ -21,6 +21,12 @@ use crate::pack::{PackManifest, PackPlugin};
 /// pack runs by name (`gents plugin run <name>`) just like one installed on
 /// its own.
 ///
+/// Takes the store's shared lock around bytes+record publication itself and
+/// delegates to [`install_from_pack_locked`], which takes `&store::StoreGuard`
+/// so a caller already holding the store lock (e.g. the pack lifecycle, which
+/// holds it exclusively across snapshot/mutation/notification/rollback)
+/// composes without re-locking and deadlocking on itself.
+///
 /// A plugin declared inline in a pack manifest carries neither a namespace
 /// nor a version of its own, so it takes its pack's: two packs from
 /// different namespaces may each carry a `format_check`, and recording both
@@ -42,6 +48,43 @@ pub fn install_from_pack(
     instructions: Option<String>,
     consent: bool,
 ) -> Result<InstalledPlugin> {
+    let lock = store::lock_store(home, false)?;
+    install_from_pack_locked(
+        &lock,
+        home,
+        pack_namespace,
+        pack_coordinate,
+        pack_version,
+        pack_digest,
+        plugin,
+        artifact_bytes,
+        instructions,
+        consent,
+    )
+}
+
+/// Same as [`install_from_pack`] but assumes the caller already holds the
+/// plugin store lock for `home`, as `pack::plugin_lifecycle::install` does
+/// exclusively for its whole snapshot/mutation/notification/rollback window.
+/// flock does not re-enter across open file descriptions, so re-locking
+/// inside would deadlock against that outer exclusive holder; this path
+/// therefore takes no lock of its own and refuses a [`store::StoreGuard`]
+/// tied to a different home, so a caller cannot hand it the wrong store's
+/// guard and run unlocked.
+#[allow(clippy::too_many_arguments)]
+pub fn install_from_pack_locked(
+    lock: &store::StoreGuard,
+    home: &Path,
+    pack_namespace: &str,
+    pack_coordinate: &str,
+    pack_version: &str,
+    pack_digest: &str,
+    plugin: &PackPlugin,
+    artifact_bytes: &[u8],
+    instructions: Option<String>,
+    consent: bool,
+) -> Result<InstalledPlugin> {
+    lock.for_home(home)?;
     store::check_plugin_ownership(home, pack_namespace, &plugin.name, pack_coordinate)?;
     let granted = store::grant_on_install(home, pack_namespace, plugin, consent)?;
     // A reinstall or upgrade keeps the operator's binding while the plugin
@@ -72,11 +115,6 @@ pub fn install_from_pack(
         );
     }
     let digest_hex = store::content_digest_hex(artifact_bytes);
-    // Shared against `release_unreferenced_bytes`'s exclusive lock: bytes and
-    // the record that points at them are written before a concurrent
-    // `gents pack remove` can decide those bytes are unreferenced (store.rs's
-    // own doc).
-    let _lock = store::lock_store(home, false)?;
     store::store_bytes(home, &digest_hex, artifact_bytes)?;
     let record = InstalledPlugin {
         namespace: pack_namespace.to_owned(),
@@ -106,6 +144,32 @@ pub fn install_pack_plugins<'a>(
     asset: impl Fn(&str) -> Result<&'a [u8]>,
     consent: bool,
 ) -> Result<Vec<InstalledPlugin>> {
+    let lock = store::lock_store(home, false)?;
+    install_pack_plugins_locked(
+        &lock,
+        home,
+        manifest,
+        pack_digest,
+        asset,
+        consent,
+    )
+}
+
+/// [`install_pack_plugins`] under a store lock the caller already holds:
+/// `pack::plugin_lifecycle::install` calls this under its exclusive lock so
+/// the pack's plugins are admitted, bound, published and — on failure —
+/// rolled back without ever dropping that lock, and without the re-lock that
+/// would deadlock against it. The guard is checked against `home` so a
+/// caller cannot hand it another store's guard and run unlocked.
+pub fn install_pack_plugins_locked<'a>(
+    lock: &store::StoreGuard,
+    home: &Path,
+    manifest: &PackManifest,
+    pack_digest: &str,
+    asset: impl Fn(&str) -> Result<&'a [u8]>,
+    consent: bool,
+) -> Result<Vec<InstalledPlugin>> {
+    lock.for_home(home)?;
     let pack_coordinate = format!("{}/{}", manifest.metadata.namespace, manifest.name);
     manifest
         .metadata
@@ -117,7 +181,8 @@ pub fn install_pack_plugins<'a>(
                 .as_deref()
                 .map(|path| crate::pack::tool_instructions(&plugin.name, asset(path)?))
                 .transpose()?;
-            install_from_pack(
+            install_from_pack_locked(
+                lock,
                 home,
                 &manifest.metadata.namespace,
                 &pack_coordinate,

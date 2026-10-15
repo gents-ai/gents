@@ -87,7 +87,8 @@ pub async fn install<F: Future<Output = Result<()>>>(
         plugins: install::snapshot_pack_plugin_records(home, manifest),
         committed: false,
     };
-    let installed = install::install_pack_plugins(
+    let installed = install::install_pack_plugins_locked(
+        &lock,
         home,
         manifest,
         archive.digest(),

@@ -225,13 +225,35 @@ pub fn read_bytes(home: &Path, digest_hex: &str) -> Result<Vec<u8>> {
         .with_context(|| format!("reading the installed plugin bytes at {}", path.display()))
 }
 
+/// A held plugin store lock, tied to the `home` it was taken for. A
+/// lock-aware mutation path takes `&StoreGuard` rather than a bare lock so
+/// a caller holding a guard for one home cannot hand it to a mutation of
+/// another home and run unlocked.
+pub struct StoreGuard {
+    home: PathBuf,
+    lock: crate::file_lock::FileLock,
+}
+
+impl StoreGuard {
+    /// Refuses a guard that does not belong to `home`'s store.
+    pub fn for_home(&self, home: &Path) -> Result<()> {
+        anyhow::ensure!(
+            self.home.as_path() == home,
+            "the plugin store lock in use belongs to {}, not {}",
+            self.home.display(),
+            home.display()
+        );
+        Ok(())
+    }
+}
+
 /// Takes the plugin byte store's lock: shared while an install writes bytes
 /// and its record, exclusive while [`release_unreferenced_bytes`] scans and
 /// deletes. Without this, a concurrent install's `store_bytes` (bytes
 /// written) racing `release_unreferenced_bytes`'s scan (bytes still
 /// unreferenced) then `write_record` (record now pointing at them) could end
 /// with a record pointing at bytes release just deleted.
-pub fn lock_store(home: &Path, exclusive: bool) -> Result<crate::file_lock::FileLock> {
+pub fn lock_store(home: &Path, exclusive: bool) -> Result<StoreGuard> {
     let path = plugins_root(home).join(".store.lock");
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
@@ -244,12 +266,16 @@ pub fn lock_store(home: &Path, exclusive: bool) -> Result<crate::file_lock::File
         .truncate(false)
         .open(&path)
         .with_context(|| format!("opening {}", path.display()))?;
-    if exclusive {
+    let lock = if exclusive {
         crate::file_lock::FileLock::exclusive(file)
     } else {
         crate::file_lock::FileLock::shared(file)
     }
-    .with_context(|| format!("locking {}", path.display()))
+    .with_context(|| format!("locking {}", path.display()))?;
+    Ok(StoreGuard {
+        home: home.to_owned(),
+        lock,
+    })
 }
 
 /// Removes every store byte named in `digests` that no installed-plugin

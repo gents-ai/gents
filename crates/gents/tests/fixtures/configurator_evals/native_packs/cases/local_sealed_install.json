@@ -276,7 +276,11 @@
             "expect": [
               {
                 "field": "integrations.plugins",
-                "contains": "fixture/native_echo"
+                "matches": "\"plugin\"\\s*:\\s*\"fixture/native_echo\""
+              },
+              {
+                "field": "integrations.plugins",
+                "matches": "\"digest\"\\s*:\\s*\"sha256:[0-9a-f]{64}\""
               }
             ],
             "min_rows": 1,
