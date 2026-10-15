@@ -132,6 +132,51 @@ describe("inference setup persistence", () => {
     },
   );
 
+  it("names the signed-in account on the saved backend, apart from the original's", () => {
+    const deployment = structuredClone(fixtureDeployment);
+    const original = {
+      ...deployment.inferenceBackends[0]!,
+      backendId: "claude",
+      providerKind: "ClaudeCliSubscription",
+      endpoint: "https://api.anthropic.com",
+      enabled: true,
+      authKind: "node_oauth",
+      accountRef: null,
+    };
+    deployment.inferenceBackends = [original];
+    const planFor = (accountRef: string | null) =>
+      buildInferenceSetupPlan({
+        deployment,
+        provider: "anthropic",
+        apiKey: "",
+        oauth: true,
+        accountRef,
+        discovery: {
+          ...discovery,
+          providerKind: "ClaudeCliSubscription",
+          effectiveEndpoint: "https://api.anthropic.com",
+        },
+        model: "claude-sonnet-5-5",
+        recommendation,
+        settings: {
+          contextWindow: "",
+          maxOutputTokens: "",
+          temperature: "",
+          topP: "",
+          reasoningEffort: "",
+          maxConcurrent: "1",
+        },
+      }).document.inference_backends![0]!;
+    /* another account: its own backend, naming it */
+    const other = planFor("acct-2");
+    expect(other.auth).toEqual({ kind: "node_oauth", account_ref: "acct-2" });
+    expect(other.backend_id).not.toBe("claude");
+    /* the original account keeps its backend */
+    const same = planFor(null);
+    expect(same.auth).toEqual({ kind: "node_oauth" });
+    expect(same.backend_id).toBe("claude");
+  });
+
   it("preserves a configured compatible backend when adding another endpoint", () => {
     const deployment = structuredClone(fixtureDeployment);
     deployment.inferenceBackends = [

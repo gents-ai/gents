@@ -108,6 +108,13 @@ export function InferenceSetup({
     () => edited ?? (providerOption ? connectionDefaults(providerOption) : undefined),
     [edited, providerOption],
   );
+  /* the account a sign-in provider is connected through: discovery and the
+     saved backend name it, so an account signed in after another was set
+     aside is the one configured, not the original */
+  const oauthAccountRef =
+    connection && oauthProviderFor(connection.authMethod)
+      ? (signedIn[provider]?.accountRef ?? null)
+      : null;
   /* reads that answer for another Node, or before a sign-in that changed
      what they would say, are dropped */
   const [accountReads] = useState(newestWins);
@@ -216,7 +223,11 @@ export function InferenceSetup({
         else dispatch({ type: "hint", hint: outcome.hint ?? notAdded(outcome.label) });
         return;
       }
-      dispatch({ type: "connected", provider, credentialId: result.credentialId });
+      dispatch({
+        type: "connected",
+        provider,
+        account: { credentialId: result.credentialId, accountRef: outcome.accountRef },
+      });
       invalidateDiscovery();
     } catch (cause) {
       if (nodeDid && bridgeErrorCode(cause) === CREDENTIAL_NOT_SAVED) {
@@ -261,7 +272,7 @@ export function InferenceSetup({
       dispatch({
         type: "connected",
         provider: pendingProvider,
-        credentialId: account.credentialId,
+        account: { credentialId: account.credentialId, accountRef: account.accountRef },
       });
       invalidateDiscovery();
     } catch (cause) {
@@ -270,6 +281,13 @@ export function InferenceSetup({
     } finally {
       dispatch({ type: "opEnded" });
     }
+  };
+
+  /* set the connected account aside to sign in with another; nothing is
+     removed, and signing in replaces or adds an account as it always does */
+  const useAnotherAccount = () => {
+    dispatch({ type: "signedOut", provider });
+    invalidateDiscovery();
   };
 
   const cancelSignIn = () => {
@@ -321,6 +339,7 @@ export function InferenceSetup({
         authMethod: connection.authMethod,
         endpoint: connection.endpoint,
         apiKey: connection.apiKey.trim() || null,
+        accountRef: oauthAccountRef,
       });
       const current = currentInferenceDiscovery(currentDiscoveryKey.current, result);
       if (!current) return;
@@ -371,6 +390,7 @@ export function InferenceSetup({
       provider,
       apiKey: connection.apiKey,
       oauth: oauthProviderFor(connection.authMethod) !== null,
+      accountRef: oauthAccountRef,
       discovery,
       model,
       recommendation: selectedRecommendation,
@@ -390,6 +410,7 @@ export function InferenceSetup({
           authMethod: connection.authMethod,
           endpoint: connection.endpoint,
           apiKey: connection.apiKey.trim() || null,
+          accountRef: oauthAccountRef,
         }),
       )
       .catch(() => {});
@@ -542,6 +563,7 @@ export function InferenceSetup({
           updateConnection,
           signIn: () => void signIn(),
           cancelSignIn,
+          useAnotherAccount,
           retrySave: () => void retrySaveSignIn(),
           discover: () => void discoverModels(),
         }}
