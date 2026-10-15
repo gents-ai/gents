@@ -1057,8 +1057,8 @@ async fn read_manifest_blocks<R: CaptureBaseReader + Sync>(
             .get("payload")
             .and_then(Value::as_str)
             .context("capture manifest block row lacks payload")?;
-        // Blocks written since content-addressed block documents carry no
-        // `byte_len`; resolution still checks the manifest's pinned length.
+        // `byte_len` is optional on block documents; resolution checks the
+        // manifest's pinned length either way.
         if let Some(byte_len) = row.get("byte_len").and_then(Value::as_u64) {
             anyhow::ensure!(
                 byte_len == entry.byte_len,

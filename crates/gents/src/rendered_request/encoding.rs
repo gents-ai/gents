@@ -5,7 +5,7 @@
 //! manifest of content-defined byte blocks (#2333). Deltas operate
 //! independently on top-level object fields; changed arrays/objects use a byte
 //! splice, so an unrelated scalar change does not force a growing message list
-//! to be repeated. Manifests split the canonical body bytes once at
+//! to be repeated. Manifests split a lossless JSON encoding of the body once at
 //! content-defined boundaries and store each block as its own document, so a
 //! later capture repeats only references.
 
@@ -381,7 +381,7 @@ pub(crate) fn capture_block_layout(value: &Value) -> Result<String> {
     Ok(layout)
 }
 
-/// The write-side v3 policy: split canonical capture bytes into content-defined
+/// The write-side v3 policy: split encoded capture bytes into content-defined
 /// blocks (#2333). Every cut lands on a UTF-8 character boundary.
 ///
 /// The chunker decides boundaries, never content: reconstruction is pure
@@ -393,8 +393,8 @@ pub(crate) fn capture_block_layout(value: &Value) -> Result<String> {
 /// reuse O(edit) instead of O(body). Determinism is load-bearing: the fixed
 /// multiplier and mask make identical bytes chunk identically on every
 /// platform and build.
-pub(crate) fn chunk_capture_body(canonical: &str) -> Vec<ChunkedBlock> {
-    let bytes = canonical.as_bytes();
+pub(crate) fn chunk_capture_body(encoded: &str) -> Vec<ChunkedBlock> {
+    let bytes = encoded.as_bytes();
     let mut blocks = Vec::new();
     let mut start = 0;
     while start < bytes.len() {

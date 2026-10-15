@@ -1,6 +1,6 @@
 # One content-defined block of a rendered-request capture body (#2333).
 # Captures stopped re-signing the whole conversation: a v3 RenderedRequest
-# stores its canonical bytes as an ordered manifest of these blocks, and a
+# stores a lossless JSON encoding of its body as an ordered manifest of these blocks, and a
 # later capture re-references every block it shares with an earlier one. This
 # collection and RenderedRequest are one sync unit — a manifest without its
 # blocks is undecodable and a block without a referencing manifest is inert, so
@@ -28,16 +28,18 @@
 #
 # Indexes are deliberately few: every index adds per-commit keys, and blocks
 # are the highest-volume collection in the capture stack (one row per ~4 KiB of
-# canonical body). The writer dedupes through `content_key` and readers reach
+# encoded body). The writer dedupes through `content_key` and readers reach
 # blocks by the exact `_docID` their manifest pins, which needs no index.
 type RenderedRequestBlock @branchable {
     content_key: String @index(unique: true) @immutable
-    # Canonical body bytes for this block, exactly as chunked from one capture
+    # Encoded body bytes for this block, exactly as chunked from one capture
     # payload. Raw UTF-8 stored as a GraphQL String; not parsed, never rewritten.
     payload: String @immutable
-    # Unset on blocks written by content-only creates: DefraDB derives the
-    # document id from the fields written, so writing only `content_key` and
-    # `payload` gives every writer and peer the same id for the same bytes.
+    # Left unset: DefraDB derives the document id from the fields written, so
+    # writing only `content_key` and `payload` gives every writer and peer the
+    # same id for the same bytes. Consequently a deleted block document can
+    # never be recreated with the same bytes, so blocks are not deleted
+    # individually, and per-DID ACP on blocks needs a scope in `content_key`.
     byte_len: Int @immutable
     created_at: String @immutable
 }

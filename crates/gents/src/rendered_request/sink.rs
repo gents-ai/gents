@@ -869,7 +869,7 @@ mod tests {
 
     async fn block_rows(node: &EmbeddedNode) -> Vec<Value> {
         let response = node
-            .execute(r#"{ RenderedRequestBlock { _docID content_key byte_len } }"#)
+            .execute(r#"{ RenderedRequestBlock { _docID content_key } }"#)
             .await;
         assert!(!response.has_errors(), "{:?}", response.errors);
         response.data.unwrap()["RenderedRequestBlock"]
