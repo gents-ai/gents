@@ -56,7 +56,7 @@ pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
                 ) {
                     tracing::warn!(
                         error = %error.message,
-                        "could not restart the agent service that predates this app"
+                        "could not restart the node service that predates this app"
                     );
                 }
                 if let Err(error) = tauri::async_runtime::block_on(

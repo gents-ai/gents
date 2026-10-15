@@ -56,11 +56,11 @@ export function AgentPanel({ deployment }: { deployment: NodeView }) {
   return (
     <div>
       <AgentCard deployment={deployment} />
-      <Group title="Agent details">
+      <Group title="Node details">
         <TextRow
           id="agent-name"
           label="Display name"
-          description="How this agent is named across the desktop."
+          description="How this node is named across the desktop."
           value={d.draft.displayName}
           onChange={(v) => d.set("displayName", v)}
           error={d.problems.displayName}
@@ -84,7 +84,7 @@ export function AgentPanel({ deployment }: { deployment: NodeView }) {
         <SwitchRow
           id="agent-enabled"
           label="Enabled"
-          description="A disabled agent accepts no requests."
+          description="A disabled node accepts no requests."
           checked={d.draft.enabled}
           onChange={(v) => d.set("enabled", v)}
         />

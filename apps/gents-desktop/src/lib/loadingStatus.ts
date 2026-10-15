@@ -289,8 +289,8 @@ export function projectSessionLoadingStatus({
       phase: "failed",
       title: "Session sync failed",
       detail: hydration.detail
-        ? `The agent refused the session history: ${hydration.detail}.`
-        : "The agent could not finish sending the requested session history.",
+        ? `The node refused the session history: ${hydration.detail}.`
+        : "The node could not finish sending the requested session history.",
       action: "retryHydration",
     };
   }
@@ -311,7 +311,7 @@ export function projectSessionLoadingStatus({
       layer: "sessionSync",
       phase: "loading",
       title: "Requesting session history",
-      detail: "Waiting for the enrolled agent to begin the secure transfer.",
+      detail: "Waiting for the enrolled node to begin the secure transfer.",
       action: null,
     };
   }
@@ -325,7 +325,7 @@ export function projectSessionLoadingStatus({
       phase: "blocked",
       title: "Waiting for session history",
       detail:
-        "No local messages were found yet. Waiting for the enrolled agent’s session projection.",
+        "No local messages were found yet. Waiting for the enrolled node’s session projection.",
       action: operationalState ? null : "retryLocal",
     };
   }
