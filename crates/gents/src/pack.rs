@@ -27,7 +27,7 @@ pub use installation::{
     list_installed_packs, prepare_document_pack_install, read_installed_pack,
     record_plugin_store_change, record_plugin_store_change_as, referenced_pack_digests,
     remove_pack, DriftPolicy, InstallReport, InstalledPack, InstalledPackPlugin, PackIdentity,
-    PreparedDocumentPackInstall, RemoveReport, Retained,
+    PreparedDependency, PreparedDocumentPackInstall, RemoveReport, Retained,
 };
 pub(crate) use installation::{observe_graph_install_in_txn, record_graph_install_in_txn};
 pub use loader::{
