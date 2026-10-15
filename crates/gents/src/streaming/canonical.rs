@@ -1311,13 +1311,12 @@ async fn load_source_in_txn(
     txn: &ConfigApplyTxn<'_>,
     prepared: &OutputSegment,
 ) -> Result<Vec<OutputSegmentRow>> {
-    #[cfg(test)]
-    crate::session::record_request_output_scan();
     let response = txn
         .execute_local_response(
-            &crate::session::canonical_rows::request_output_segments_query(
+            &crate::session::canonical_rows::source_output_segments_query(
                 &prepared.request_doc_id,
-            ),
+                &prepared.source,
+            )?,
         )
         .await?;
     let rows = response

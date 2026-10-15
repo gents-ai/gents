@@ -744,8 +744,24 @@ static MAILBOX_NODE_STATUS_ITEM_KEY_FIELDS: &[OrdinaryIndexField<'static>] = &[
     },
 ];
 
-/// Ordinary indexes whose query plans have been measured on existing stores.
+static AGENT_OUTPUT_SOURCE_FIELDS: &[OrdinaryIndexField<'static>] = &[
+    OrdinaryIndexField {
+        name: "request_doc_id",
+        descending: false,
+    },
+    OrdinaryIndexField {
+        name: "source",
+        descending: false,
+    },
+];
+
+/// Ordinary indexes reconciled on fresh and existing stores.
 pub static DEFAULT_ORDINARY_INDEXES: &[OrdinaryIndex<'static>] = &[
+    OrdinaryIndex {
+        collection: gents_protocol::schemas::AGENT_OUTPUT_SEGMENT_NAME,
+        name: "AgentOutputSegment_request_doc_id_source",
+        fields: AGENT_OUTPUT_SOURCE_FIELDS,
+    },
     OrdinaryIndex {
         collection: gents_protocol::schemas::AGENT_REQUEST_NAME,
         name: "AgentRequest_node_did_session_id",

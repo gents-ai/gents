@@ -256,6 +256,7 @@ impl MutationWriteGate {
 
     async fn acquire(self: &Arc<Self>, operation: WriteOperation) -> Result<MutationWriteGuard> {
         ensure_not_reentrant_embedded_write(operation)?;
+        let wait_started = Instant::now();
         let lock = Arc::clone(&self.lock).lock_owned();
         tokio::pin!(lock);
         let mut registration = None;
@@ -370,6 +371,11 @@ impl MutationWriteGate {
                 )));
             }
         };
+        record_slow_native_phase(
+            Some(operation.as_str()),
+            "gate_wait",
+            wait_started.elapsed(),
+        );
         let lease_id = self.next_lease_id.fetch_add(1, Ordering::Relaxed);
         *self
             .owner

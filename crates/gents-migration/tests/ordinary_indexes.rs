@@ -506,6 +506,83 @@ async fn mailbox_cursor_index_reconciles_on_an_existing_collection() {
     node.shutdown().await;
 }
 
+#[tokio::test]
+async fn output_source_index_backfills_existing_rows_and_retains_conflicts() {
+    use gents_protocol::schemas::{AGENT_OUTPUT_SEGMENT, AGENT_OUTPUT_SEGMENT_NAME};
+
+    let node = fresh_node().await;
+    node.add_schema(AGENT_OUTPUT_SEGMENT).await.unwrap();
+    let before = node
+        .get_collection(AGENT_OUTPUT_SEGMENT_NAME)
+        .unwrap()
+        .unwrap();
+    let mut inputs = (0..32)
+        .map(|turn| serde_json::json!({
+            "request_doc_id": "request-a",
+            "source": {"kind": "provider_turn", "scope": "inference.1", "turn_index": turn, "attempt": 0},
+            "payload": format!("turn-{turn}"),
+        }))
+        .collect::<Vec<_>>();
+    for (request, payload) in [
+        ("request-a", "conflict-1"),
+        ("request-a", "conflict-2"),
+        ("request-b", "foreign"),
+    ] {
+        inputs.push(serde_json::json!({
+            "request_doc_id": request,
+            "source": {"kind": "provider_turn", "scope": "inference.1", "turn_index": 17, "attempt": 0},
+            "payload": payload,
+        }));
+    }
+    let input = gents_protocol::graphql::graphql_input_literal(&Value::Array(inputs)).unwrap();
+    let created = node
+        .execute(&format!(
+            "mutation {{ create_AgentOutputSegment(input: {input}) {{ _docID }} }}"
+        ))
+        .await;
+    assert!(!created.has_errors(), "{:?}", created.errors);
+
+    let baseline = DEFAULT_BASELINE
+        .iter()
+        .find(|entry| entry.name == AGENT_OUTPUT_SEGMENT_NAME)
+        .unwrap();
+    let index = DEFAULT_ORDINARY_INDEXES
+        .iter()
+        .find(|index| index.collection == AGENT_OUTPUT_SEGMENT_NAME)
+        .unwrap();
+    let registry = Registry {
+        baseline: std::slice::from_ref(baseline),
+        steps: &[],
+        ordinary_indexes: std::slice::from_ref(index),
+    };
+    for _ in 0..2 {
+        ensure_migrations_with_registry(node.as_ref(), &registry)
+            .await
+            .unwrap();
+        let after = node
+            .get_collection(AGENT_OUTPUT_SEGMENT_NAME)
+            .unwrap()
+            .unwrap();
+        assert_eq!(before.version_id, after.version_id);
+        assert_eq!(before.collection_id, after.collection_id);
+        let query = r#"query { AgentOutputSegment(filter: {
+            request_doc_id: {_eq: "request-a"}, source: {turn_index: {_eq: 17}}
+        }) { payload } }"#;
+        let rows = node.execute(query).await;
+        assert!(!rows.has_errors(), "{:?}", rows.errors);
+        let mut payloads = rows.data.unwrap()["AgentOutputSegment"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["payload"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>();
+        payloads.sort();
+        assert_eq!(payloads, ["conflict-1", "conflict-2", "turn-17"]);
+        assert_indexed_query(node.as_ref(), query, index.name, 3).await;
+    }
+    node.shutdown().await;
+}
+
 #[test]
 fn request_index_registry_matches_the_measured_compound_definition() {
     let index = DEFAULT_ORDINARY_INDEXES

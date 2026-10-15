@@ -473,7 +473,7 @@ async fn publish_tool_turn_for_rollback_test(
 }
 
 #[tokio::test]
-async fn publication_and_replay_read_a_multi_source_request_once() {
+async fn publication_and_replay_read_only_the_selected_source() {
     let (node, path, lifecycle, writer) = fixture("publication-single-scan").await;
     for index in 0..3 {
         writer
@@ -491,13 +491,43 @@ async fn publication_and_replay_read_a_multi_source_request_once() {
     )
     .await;
     let published = published.unwrap();
-    assert_eq!(scans, 1);
+    assert_eq!(scans, 0);
     let (replayed, scans) = crate::session::count_request_output_scans(
         publish_tool_turn_for_rollback_test(&node, &lifecycle, &message),
     )
     .await;
-    assert_eq!(scans, 1);
+    assert_eq!(scans, 0);
     assert_eq!(published.message_doc_id, replayed.unwrap().message_doc_id);
+    let query = crate::session::canonical_rows::source_output_segments_query(
+        &lifecycle.request().doc_id,
+        &gents_protocol::output::OutputSource::ProviderTurn {
+            scope: "inference.1".parse().unwrap(),
+            turn_index: 0,
+            attempt: 0,
+        },
+    )
+    .unwrap();
+    let explained = crate::config_client::ConfigAccess::local(node.clone())
+        .execute(&format!("query @explain(type: execute) {query}"))
+        .await
+        .unwrap();
+    fn document_fetches(value: &serde_json::Value) -> u64 {
+        match value {
+            serde_json::Value::Object(fields) => fields
+                .iter()
+                .map(|(key, value)| {
+                    if key == "docFetches" {
+                        value.as_u64().unwrap()
+                    } else {
+                        document_fetches(value)
+                    }
+                })
+                .sum(),
+            serde_json::Value::Array(values) => values.iter().map(document_fetches).sum(),
+            _ => 0,
+        }
+    }
+    assert_eq!(document_fetches(&explained["data"]["explain"]), 1);
     let history = crate::session::load_history(
         &node,
         &lifecycle.request().session_id,
