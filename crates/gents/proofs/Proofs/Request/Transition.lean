@@ -15,7 +15,7 @@ inductive Transition : RequestContext → RequestContext → Prop where
       post = { pre with state := .claimed, admission := .waiting, claimTime := pre.currentTime, deadline := pre.claimDeadline } →
       Transition pre post
   | dedup_lose {pre post : RequestContext} :
-      pre.state = .pending →
+      (pre.state = .pending ∨ pre.state = .workspaceBindingPending) →
       pre.admission = .released →
       post = { pre with state := .superseded } →
       Transition pre post

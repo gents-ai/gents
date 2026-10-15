@@ -76,8 +76,11 @@ theorem terminal_irreversibility
     rw [h_pre] at h_terminal
     exact (pending_not_terminal h_terminal).elim
   | dedup_lose h_pre _ _ =>
-    rw [h_pre] at h_terminal
-    exact (pending_not_terminal h_terminal).elim
+    rcases h_pre with h_pending | h_workspace
+    · rw [h_pending] at h_terminal
+      exact (pending_not_terminal h_terminal).elim
+    · rw [h_workspace] at h_terminal
+      exact (workspaceBindingPending_not_terminal h_terminal).elim
   | admission_reject h_pre _ _ =>
     rw [h_pre] at h_terminal
     exact (pending_not_terminal h_terminal).elim

@@ -11,6 +11,7 @@ pub(crate) use recovery::recover_outcomes_in_txn;
 pub(crate) struct PreparedFire {
     pub receipt: TriggerFire,
     pub target_existing: bool,
+    pub replace_prior: bool,
 }
 
 pub(crate) fn fire_key(identity: &FireIdentity) -> String {

@@ -2588,7 +2588,7 @@ pub(super) fn help_patch_contracts(resource: Option<&str>) -> Value {
             patch_contract(
                 SelfConfigTarget::Trigger,
                 json!({
-                    "display_name":"string|null","description":"string|null","task_id":"existing task ID owned by selected agent","source":"{kind:schedule,schedule_id:string}|{kind:event,event_source_id:string}","enabled":"boolean; default true","concurrency":"parallel|queued_serial|serial|latest_only|null; default parallel; controls overlap, not session destination; queued_serial needs an event source","session_id_template":"string|null; template rendering an existing session ID; event sources only. Null creates a session per fire. Independent of concurrency","tags":"array<string>; default []"
+                    "display_name":"string|null","description":"string|null","task_id":"existing task ID owned by selected agent","source":"{kind:schedule,schedule_id:string}|{kind:event,event_source_id:string}","enabled":"boolean; default true","concurrency":"parallel|queued_serial|serial|latest_only|null; default parallel; controls overlap, not session destination; queued_serial needs an event source or an explicit scheduled session destination","session_id_template":"string|null; template rendering an existing session ID; event or schedule sources; target must be open and use the Task agent. Null creates a session per fire. Independent of concurrency","tags":"array<string>; default []"
                 }),
             ),
             patch_contract(
