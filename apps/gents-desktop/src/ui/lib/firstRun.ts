@@ -71,6 +71,18 @@ export function nodeSetUp(snapshot: DesktopClientSnapshot) {
   );
 }
 
+/** Whether the bridge has read this node's configuration from the node
+    itself. Until it has, the desktop's copy lacks the node's backends and
+    Node configuration, so what it is missing is unread, not unset. */
+export function configIsRead(
+  snapshot: Pick<DesktopClientSnapshot, "client">,
+  nodeDid: string | null | undefined,
+): boolean {
+  return Boolean(
+    nodeDid && snapshot.client?.operatorConfigAuthoritativeNodeDids?.includes(nodeDid),
+  );
+}
+
 export function needsFirstRunSetup(snapshot: DesktopClientSnapshot): boolean {
   const deployments = snapshot.client?.deployments ?? [];
   if (deployments.length === 0) return true;

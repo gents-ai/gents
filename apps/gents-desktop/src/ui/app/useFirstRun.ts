@@ -3,6 +3,7 @@ import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 
 import {
+  configIsRead,
   needsFirstRunSetup,
   projectFirstRunPhase,
   type FirstRunPhase,
@@ -27,11 +28,10 @@ export function useFirstRun(generation: number, startupReady: boolean) {
         hasSnapshot: snapshot !== null,
         initConfigStatus,
         needsSetup: snapshot !== null && needsFirstRunSetup(snapshot),
-        authoritative: Boolean(
+        authoritative:
           initConfigStatus === "configured" &&
-          initNodeDid &&
-          snapshot?.client?.operatorConfigAuthoritativeNodeDids?.includes(initNodeDid),
-        ),
+          snapshot !== null &&
+          configIsRead(snapshot, initNodeDid),
       };
     }),
   );

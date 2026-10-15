@@ -5,6 +5,7 @@
    the desktop's status enrolment: a server address, a request the
    server's admin approves, then the peer joins. */
 import { memo, useState } from "react";
+import { useStore } from "zustand";
 import { EllipsisVertical, Inbox, Plus, SlidersHorizontal } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@gents/ui/components/button";
@@ -38,7 +39,7 @@ import { Input } from "@gents/ui/components/input";
 import { Spinner } from "@gents/ui/components/spinner";
 import { cn } from "@gents/ui/lib/utils";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
-import { inferenceIsConfigured, isLocalNode } from "@/lib/firstRun";
+import { configIsRead, inferenceIsConfigured, isLocalNode } from "@/lib/firstRun";
 import { href } from "@/lib/router";
 import { isLive } from "@/lib/live";
 import { NodeAvatar } from "./AgentAvatar";
@@ -361,8 +362,12 @@ const AgentRow = memo(function AgentRow({
   onRemove: (peer: { nodeDid: string; peerId: string; label: string }) => void;
 }) {
   const {
+    stores,
     actions: { selectNode, fetchPeerStatus },
   } = useApp();
+  const configRead = useStore(stores.client, (state) =>
+    state.snapshot ? configIsRead(state.snapshot, d.nodeDid) : false,
+  );
   const live = useFleet(
     (s) =>
       (s.sessionsOf[nodeKeyOf(d)] ?? NO_SESSIONS).filter((c) => isLive(c.turnState))
@@ -437,7 +442,9 @@ const AgentRow = memo(function AgentRow({
           )}
         </span>
       </a>
-      {isLocalNode(d, homeDid) && !inferenceIsConfigured(d) && (
+      {/* until its configuration is read, what the node seems to lack is
+          unread, not missing: a stopped or starting node is set up */}
+      {isLocalNode(d, homeDid) && configRead && !inferenceIsConfigured(d) && (
         <Button
           size="sm"
           variant="outline"
