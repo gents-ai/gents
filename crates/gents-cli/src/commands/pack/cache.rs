@@ -88,6 +88,36 @@ pub(super) fn release_recorded_cache(
     coordinate: &str,
     record: &HomePackInstall,
 ) -> Result<CacheRelease> {
+    prepare_recorded_cache(home, coordinate, record)?.finish()
+}
+
+pub(super) struct PreparedCacheRelease {
+    root: std::path::PathBuf,
+    disposition: CacheRelease,
+    _lock: Option<FileLock>,
+}
+
+impl PreparedCacheRelease {
+    pub(super) fn finish(self) -> Result<CacheRelease> {
+        match self.disposition {
+            CacheRelease::Removed => {
+                std::fs::remove_dir_all(&self.root)
+                    .with_context(|| format!("removing {}", self.root.display()))?;
+                Ok(CacheRelease::Removed)
+            }
+            CacheRelease::Retained(reason) => Ok(CacheRelease::Retained(reason)),
+        }
+    }
+}
+
+/// Acquires and retains the cache lock, and validates ownership and retention
+/// rules before local pack records are removed. `finish` performs the delete
+/// later while the caller still holds the home's plugin-store guard.
+pub(super) fn prepare_recorded_cache(
+    home: &Path,
+    coordinate: &str,
+    record: &HomePackInstall,
+) -> Result<PreparedCacheRelease> {
     anyhow::ensure!(
         record.coordinate == coordinate,
         "pack receipt coordinate mismatch"
@@ -106,10 +136,14 @@ pub(super) fn release_recorded_cache(
     );
     let root = home.join(recorded);
     let Some(parent) = root.parent().filter(|parent| parent.is_dir()) else {
-        return Ok(CacheRelease::Retained("already absent"));
+        return Ok(PreparedCacheRelease {
+            root,
+            disposition: CacheRelease::Retained("already absent"),
+            _lock: None,
+        });
     };
-    let _lock = lock_exclusive(parent)?;
-    release_cache_root(&root, || {
+    let lock = lock_exclusive(parent)?;
+    let disposition = cache_root_disposition(&root, || {
         if recorded == unscoped {
             let archive = gents::pack_store::PackStore::new(home).open(&record.digest)?;
             anyhow::ensure!(
@@ -126,6 +160,11 @@ pub(super) fn release_recorded_cache(
             }
         }
         Ok(())
+    })?;
+    Ok(PreparedCacheRelease {
+        root,
+        disposition,
+        _lock: Some(lock),
     })
 }
 
@@ -158,6 +197,20 @@ fn release_cache_root(
     root: &Path,
     check_owner: impl FnOnce() -> Result<()>,
 ) -> Result<CacheRelease> {
+    match cache_root_disposition(root, check_owner)? {
+        CacheRelease::Removed => {
+            std::fs::remove_dir_all(root)
+                .with_context(|| format!("removing {}", root.display()))?;
+            Ok(CacheRelease::Removed)
+        }
+        retained => Ok(retained),
+    }
+}
+
+fn cache_root_disposition(
+    root: &Path,
+    check_owner: impl FnOnce() -> Result<()>,
+) -> Result<CacheRelease> {
     if !root.is_dir() {
         return Ok(CacheRelease::Retained("already absent"));
     }
@@ -168,7 +221,6 @@ fn release_cache_root(
         return Ok(CacheRelease::Retained("holds run history"));
     }
     check_owner()?;
-    std::fs::remove_dir_all(root).with_context(|| format!("removing {}", root.display()))?;
     Ok(CacheRelease::Removed)
 }
 

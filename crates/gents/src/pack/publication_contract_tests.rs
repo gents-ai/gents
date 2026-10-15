@@ -116,8 +116,10 @@ async fn home_removal_excludes_reinstall_until_pin_and_records_are_removed() {
     })
     .await
     .unwrap();
-    let result =
-        super::plugin_lifecycle::remove_local(home.path(), "fixture/native_echo_pack", |_| {
+    let prepare_error = super::plugin_lifecycle::remove_local(
+        home.path(),
+        "fixture/native_echo_pack",
+        |_| -> anyhow::Result<()> {
             assert!(crate::plugin::install::install_pack_plugins(
                 home.path(),
                 archive.manifest(),
@@ -126,9 +128,41 @@ async fn home_removal_excludes_reinstall_until_pin_and_records_are_removed() {
                 false,
             )
             .is_err());
-            anyhow::bail!("cache cleanup refused")
-        });
-    assert!(result.unwrap().cache_error.is_some());
+            anyhow::bail!("cache is in use")
+        },
+        |()| Ok(()),
+    );
+    assert!(prepare_error.is_err());
+    assert!(
+        super::read_home_install(home.path(), "fixture/native_echo_pack")
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(
+        crate::plugin::store::list_records(home.path())
+            .unwrap()
+            .len(),
+        1
+    );
+
+    let removal = super::plugin_lifecycle::remove_local(
+        home.path(),
+        "fixture/native_echo_pack",
+        |_| Ok(()),
+        |_| {
+            assert!(crate::plugin::install::install_pack_plugins(
+                home.path(),
+                archive.manifest(),
+                archive.digest(),
+                |path| archive.asset(path),
+                false,
+            )
+            .is_err());
+            anyhow::bail!("cache cleanup failed")
+        },
+    )
+    .unwrap();
+    assert!(removal.cache_error.is_some());
     assert!(
         super::read_home_install(home.path(), "fixture/native_echo_pack")
             .unwrap()

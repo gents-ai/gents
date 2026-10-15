@@ -191,16 +191,27 @@ async fn release_archives(
 async fn remove_home_install(home: &Path, coordinate: &str) -> Result<Value> {
     let mut retained = Vec::new();
     let mut assets_removed = Vec::new();
-    let removal = gents::pack::plugin_lifecycle::remove_local(home, coordinate, |record| {
-        match super::cache::release_recorded_cache(home, coordinate, record)? {
-            super::CacheRelease::Removed => assets_removed.push(record.assets.clone()),
-            super::CacheRelease::Retained(reason) => retained.push(json!({
-                "item": record.assets,
-                "reason": reason,
-            })),
-        }
-        Ok(())
-    })?;
+    let removal = gents::pack::plugin_lifecycle::remove_local(
+        home,
+        coordinate,
+        |record| {
+            Ok((
+                super::cache::prepare_recorded_cache(home, coordinate, record)?,
+                record.assets.clone(),
+            ))
+        },
+        |(prepared, recorded_assets)| {
+            let release = prepared.finish()?;
+            match release {
+                super::CacheRelease::Removed => assets_removed.push(recorded_assets.clone()),
+                super::CacheRelease::Retained(reason) => retained.push(json!({
+                    "item": recorded_assets,
+                    "reason": reason,
+                })),
+            }
+            Ok(())
+        },
+    )?;
     let record = removal.record;
     let plugin_records = removal.plugins;
     if let Some(reason) = removal.cache_error {

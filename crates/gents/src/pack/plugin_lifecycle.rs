@@ -103,14 +103,16 @@ pub struct LocalPackRemoval {
 /// Removes a home pin and its owned plugin records under the same exclusion
 /// used by publication. Cache cleanup runs under that exclusion so a concurrent
 /// reinstall cannot publish into the cache while it is being retired.
-pub fn remove_local(
+pub fn remove_local<P>(
     home: &Path,
     coordinate: &str,
-    cleanup_cache: impl FnOnce(&HomePackInstall) -> Result<()>,
+    prepare_cache: impl FnOnce(&HomePackInstall) -> Result<P>,
+    cleanup_cache: impl FnOnce(P) -> Result<()>,
 ) -> Result<LocalPackRemoval> {
     let guard = store::try_lock_store(home)?;
     let record = super::read_home_install(home, coordinate)?
         .with_context(|| format!("{coordinate} is not installed"))?;
+    let prepared_cache = prepare_cache(&record)?;
     let (namespace, _) = crate::pack_registry::split_pack_coordinate(coordinate);
     let mut previous = Vec::new();
     for plugin in &record.plugins {
@@ -139,7 +141,7 @@ pub fn remove_local(
     })();
     match result {
         Ok(plugins) => {
-            let cache_error = cleanup_cache(&record)
+            let cache_error = cleanup_cache(prepared_cache)
                 .err()
                 .map(|error| format!("{error:#}"));
             Ok(LocalPackRemoval {
