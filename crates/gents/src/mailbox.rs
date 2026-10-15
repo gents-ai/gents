@@ -1793,28 +1793,33 @@ mod tests {
                     );
                 }
                 let page_query = open_mailbox_page_query("did:test:agent", Some(current_cursor));
+                let planned = node
+                    .execute(&format!("query @explain(type: simple) {page_query}"))
+                    .await;
+                assert!(!planned.has_errors(), "mailbox simple explain: {planned:?}");
+                let plan = planned.data.as_ref().unwrap().get("explain").unwrap();
+                assert!(
+                    plan.to_string()
+                        .contains("MailboxItem_node_status_item_key"),
+                    "mailbox page must select its registered compound index: {plan}"
+                );
                 let explain = node
                     .execute(&format!("query @explain(type: execute) {page_query}"))
                     .await;
                 assert!(!explain.has_errors(), "mailbox keyset explain: {explain:?}");
-                let plan = explain.data.as_ref().unwrap().get("explain").unwrap();
-                assert_eq!(plan["executionSuccess"], true, "{plan}");
-                assert!(
-                    plan.to_string()
-                        .contains("MailboxItem_node_status_item_key"),
-                    "mailbox page must use its registered compound index: {plan}"
-                );
-                let roots = plan["operationNode"].as_array().unwrap();
+                let execution = explain.data.as_ref().unwrap().get("explain").unwrap();
+                assert_eq!(execution["executionSuccess"], true, "{execution}");
+                let roots = execution["operationNode"].as_array().unwrap();
                 assert_eq!(roots.len(), 1);
                 let doc_fetches = metric(&roots[0], "docFetches").expect("docFetches metric");
                 let index_fetches = metric(&roots[0], "indexFetches").expect("indexFetches metric");
                 assert!(
                     doc_fetches <= (MAILBOX_SWEEP_PAGE_SIZE + 1) as u64,
-                    "keyset page must bound document reads, got {doc_fetches}: {plan}"
+                    "keyset page must bound document reads, got {doc_fetches}: {execution}"
                 );
                 assert!(
                     index_fetches <= (MAILBOX_SWEEP_PAGE_SIZE + 1) as u64,
-                    "keyset page should seek past earlier open rows, got {index_fetches}: {plan}"
+                    "keyset page should seek past earlier open rows, got {index_fetches}: {execution}"
                 );
             }
             let page = sweep_open_mailbox_items_with_close_collections(
