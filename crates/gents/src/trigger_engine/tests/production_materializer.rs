@@ -1334,7 +1334,8 @@ async fn scheduled_target_admission_is_atomic_and_recovers_same_occurrence() {
             assert!(matches!(first, FireResult::Fired { ref request_id } if request_id == &identity.request_id()), "{first:?}");
             // Simulate losing the cursor acknowledgement and removing config.
             tx.send(snapshot_with_agent_and_schedules(behavior.clone(), HashMap::new())).unwrap();
-            assert!(matches!(engine.dispatch(intent()).await, FireResult::Duplicate { request_id } if request_id == identity.request_id()));
+            let replay = engine.dispatch(intent()).await;
+            assert!(matches!(&replay, FireResult::Duplicate { request_id } if request_id == &identity.request_id()), "{replay:?}");
         } else {
             assert!(matches!(first, FireResult::Errored { .. } | FireResult::Rejected { .. }), "{first:?}");
         }

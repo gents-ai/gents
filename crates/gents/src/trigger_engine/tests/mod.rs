@@ -630,6 +630,7 @@ fn snapshot_with_agent_and_schedules(
     schedules: HashMap<String, ResolvedSchedule>,
 ) -> Arc<ActiveRuntimeSnapshot> {
     let principal = behavior.node.clone();
+    let local_did = behavior.node_did().to_string();
     let resolved = ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
         behavior.agent_id.clone(),
         vec![behavior],
@@ -641,7 +642,8 @@ fn snapshot_with_agent_and_schedules(
         schedules,
         ..Default::default()
     })
-    .with_node(principal);
+    .with_node(principal)
+    .with_local_did(local_did);
     Arc::new(resolved.activate(1, HashMap::new()))
 }
 
