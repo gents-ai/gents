@@ -12,6 +12,12 @@ const TRANSIENT = new Set<ChatBlockedReason>([
 ]);
 
 export function placeholderFor(status: SendStatus, fallback: string): string {
-  if (status.kind !== "disabled" || TRANSIENT.has(status.reason)) return fallback;
+  /* an empty box is what a placeholder sits in; it is not a reason */
+  if (
+    status.kind !== "disabled" ||
+    TRANSIENT.has(status.reason) ||
+    status.reason === "composerEmpty"
+  )
+    return fallback;
   return status.hint;
 }
