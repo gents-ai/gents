@@ -348,10 +348,27 @@ fn collect_plan_observations(plan: &Value, out: &mut Vec<String>) {
                     .get("collectionName")
                     .and_then(Value::as_str)
                     .unwrap_or("collection");
-                let fact = if let Some(index) = scan.get("indexName").and_then(Value::as_str) {
-                    format!("{collection}: native scan uses index {index}.")
+                let counters = [
+                    ("docFetches", "document fetches"),
+                    ("fieldFetches", "field fetches"),
+                    ("indexFetches", "index fetches"),
+                ]
+                .into_iter()
+                .filter_map(|(key, label)| {
+                    scan.get(key)
+                        .and_then(Value::as_u64)
+                        .map(|count| format!("{count} {label}"))
+                })
+                .collect::<Vec<_>>();
+                let fact = if !counters.is_empty() {
+                    format!(
+                        "{collection}: native execution recorded {}.",
+                        counters.join(", ")
+                    )
+                } else if let Some(index) = scan.get("indexName").and_then(Value::as_str) {
+                    format!("{collection}: native plan selects index {index}.")
                 } else {
-                    format!("{collection}: native scan has no indexName; inspect filter/prefixes for its scan bounds.")
+                    format!("{collection}: native plan has no indexName; inspect its scan bounds, including direct document lookups.")
                 };
                 if !out.contains(&fact) {
                     out.push(fact);
@@ -397,6 +414,31 @@ pub fn render_result(value: Value) -> Result<String> {
 #[cfg(test)]
 mod output_tests {
     use super::*;
+
+    #[test]
+    fn execution_counters_do_not_require_static_index_names() {
+        let plan = json!({"scanNode": {
+            "collectionName": "AgentOutputSegment",
+            "docFetches": 19, "fieldFetches": 194, "indexFetches": 19
+        }});
+        let mut observations = Vec::new();
+        collect_plan_observations(&plan, &mut observations);
+        assert_eq!(observations, [
+            "AgentOutputSegment: native execution recorded 19 document fetches, 194 field fetches, 19 index fetches."
+        ]);
+    }
+
+    #[test]
+    fn zero_index_fetches_are_reported_without_claiming_a_full_scan() {
+        let plan = json!({"scanNode": {
+            "docFetches": 1, "fieldFetches": 34, "indexFetches": 0
+        }});
+        let mut observations = Vec::new();
+        collect_plan_observations(&plan, &mut observations);
+        assert_eq!(observations, [
+            "collection: native execution recorded 1 document fetches, 34 field fetches, 0 index fetches."
+        ]);
+    }
 
     #[test]
     fn query_results_precede_continuation_and_metadata() {
