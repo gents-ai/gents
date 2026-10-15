@@ -103,7 +103,7 @@ pub fn default_inference_profile_id_for_node(node_did: &str) -> String {
 }
 
 pub async fn load_inference_profile(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
     profile_id: &str,
 ) -> Result<Option<InferenceProfile>> {
@@ -113,11 +113,11 @@ pub async fn load_inference_profile(
 }
 
 pub(crate) async fn load_inference_profile_record(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
     profile_id: &str,
 ) -> Result<Option<(String, InferenceProfile)>> {
-    crate::config_client::ConfigAccess::transact_local(
+    crate::config_client::ConfigAccess::transact_local_readonly(
         node,
         None,
         "document_config.inference_profile.read",
@@ -194,7 +194,7 @@ pub async fn list_inference_profile_records(
 
 /// Complete replacement through the existing transactional configuration owner.
 pub async fn upsert_inference_profile(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     profile: &InferenceProfile,
 ) -> Result<()> {
     profile.validate()?;
@@ -206,7 +206,7 @@ pub async fn upsert_inference_profile(
             update: value,
         },
     ])?;
-    crate::config_client::ConfigAccess::transact_local(
+    crate::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "document_config.inference_profile.upsert",

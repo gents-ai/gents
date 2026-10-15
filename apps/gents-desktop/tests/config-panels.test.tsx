@@ -693,6 +693,32 @@ describe("configuration panels", () => {
         ).not.toBeInTheDocument();
       });
 
+      it("can cancel a sign-in started from the row", async () => {
+        const { api, app } = harness();
+        api.listProviderAccounts.mockResolvedValue(accounts);
+        let endLogin!: (error: Error) => void;
+        const login = {
+          grokLogin: vi.fn(() => new Promise((_, fail) => (endLogin = fail))),
+          /* the bridge ends the waiting login when it is cancelled */
+          cancelGrokLogin: vi.fn(async () => endLogin(new Error("login cancelled"))),
+        };
+        Object.assign(api, login);
+        renderIn(app, <InferencePanel deployment={rowsDeployment} item="grok-side" />);
+        const user = userEvent.setup();
+        await user.click(await screen.findByRole("button", { name: "Reconnect" }));
+        const signingIn = await screen.findByRole("button", { name: "Signing in…" });
+        expect(signingIn).toBeDisabled();
+        /* the row's own Cancel, beside the sign-in it stops */
+        const row = within(signingIn.parentElement!);
+        await user.click(row.getByRole("button", { name: "Cancel" }));
+        expect(login.cancelGrokLogin).toHaveBeenCalledTimes(1);
+        const reconnect = await screen.findByRole("button", { name: "Reconnect" });
+        expect(reconnect).toBeEnabled();
+        expect(
+          within(reconnect.parentElement!).queryByRole("button", { name: "Cancel" }),
+        ).not.toBeInTheDocument();
+      });
+
       describe("rename, disconnect and remove an account from its row", () => {
         /* Work runs two backends: one a profile uses, one nothing uses */
         const usedDeployment = {
@@ -1462,6 +1488,26 @@ describe("configuration panels", () => {
       }),
     );
     expect(api.saveNodeConfig).not.toHaveBeenCalled();
+  });
+
+  it("says what an agent and a context each control, and links between them", () => {
+    const { app } = harness();
+    const agents = renderIn(app, <AgentsPanel deployment={deployment} />);
+    const agentsIntro = screen.getByTestId("agents-intro");
+    expect(agentsIntro).toHaveTextContent("An agent chooses the model and a context");
+    expect(within(agentsIntro).getByRole("link", { name: "Contexts" })).toHaveAttribute(
+      "href",
+      href({ name: "agent", nodeDid: deployment.nodeDid, section: "contexts" }),
+    );
+    agents.unmount();
+    renderIn(app, <ContextsPanel deployment={deployment} />);
+    expect(screen.getByTestId("contexts-intro")).toHaveTextContent(
+      "its system prompt is sent with every request",
+    );
+    expect(screen.getByRole("link", { name: "Agents" })).toHaveAttribute(
+      "href",
+      href({ name: "agent", nodeDid: deployment.nodeDid, section: "agents" }),
+    );
   });
 
   describe("a default agent is enabled", () => {

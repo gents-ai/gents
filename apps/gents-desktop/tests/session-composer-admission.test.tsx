@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -387,7 +387,7 @@ describe("SessionScreen messages queued behind a running turn", () => {
     );
   });
 
-  it("shows queued messages after the running turn, in queue order, as queued", () => {
+  it("stacks queued messages on the composer, after the running turn, in queue order", () => {
     const { app } = screenApp({
       session: heldSession({
         turnState: "running",
@@ -402,12 +402,15 @@ describe("SessionScreen messages queued behind a running turn", () => {
     });
     renderScreen(app);
     expect(screen.getAllByTestId("queued-input").map((row) => row.textContent)).toEqual(
-      ["we should move fasterPending", "and check the testsPending"],
+      ["we should move faster", "and check the tests"],
     );
-    const text = screen.getByTestId("transcript-panel").textContent ?? "";
-    expect(text.indexOf("how are we looking")).toBeLessThan(
-      text.indexOf("we should move faster"),
-    );
+    /* waiting input is the composer's, not the transcript's */
+    const transcript = screen.getByTestId("transcript-panel");
+    const tray = screen.getByTestId("queued-inputs");
+    expect(transcript.contains(tray)).toBe(false);
+    expect(
+      transcript.compareDocumentPosition(tray) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 
   it("renders folded messages once, as the claimed turn's own input", () => {
@@ -529,11 +532,7 @@ describe("SessionScreen automated inputs", () => {
     const text = screen.getByTestId("transcript-panel").textContent ?? "";
     expect(text.indexOf("started")).toBeLessThan(text.indexOf("Message from"));
     expect(screen.queryByTestId("automated-input-content")).not.toBeInTheDocument();
-    await user.click(
-      screen.getByRole("button", {
-        name: "Message from another session: show its published input",
-      }),
-    );
+    await user.click(within(items[0]!).getByRole("button", { name: "Show detail" }));
     expect(screen.getByTestId("automated-input-content").textContent).toBe(
       "please review the diff\nit is in src/",
     );
@@ -559,7 +558,9 @@ describe("SessionScreen automated inputs", () => {
     });
     renderScreen(app);
     await user.click(
-      screen.getByRole("button", { name: "Event · nightly: show its published input" }),
+      within(screen.getByTestId("automated-input")).getByRole("button", {
+        name: "Show detail",
+      }),
     );
     expect(screen.getByTestId("automated-input-unavailable")).toHaveTextContent(
       "This input is not shared with this device.",

@@ -197,7 +197,7 @@ async fn resolve_request_workspace_overlay_on_host(
 
 /// Admission uses the same workspace owner without creating a binding or grant.
 pub(crate) async fn validate_request_workspace_input(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     request: &AgentRequest,
     artifact_requested: bool,
 ) -> Result<()> {
@@ -275,9 +275,7 @@ async fn load_request_workspace_overlay(
         bail!("artifact_write requires a sealed ReadOnly workspace binding");
     }
     let live_tree_hash = if sealed {
-        Some(super::adapter::working_tree_hash(Path::new(
-            &placement.host_path,
-        ))?)
+        Some(super::adapter::working_tree_hash(Path::new(&placement.host_path)).await?)
     } else {
         None
     };
@@ -463,7 +461,7 @@ pub(crate) fn request_workspace_cwd(request: &AgentRequest) -> Option<PathBuf> {
 }
 
 async fn ensure_request_binding(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     request: &AgentRequest,
     workspace: &IsolatedWorkspaceRecord,
     node_did: &str,
@@ -631,14 +629,14 @@ pub(super) async fn load_workspace_bindings_for(
 }
 
 pub(super) async fn persist_workspace_binding_doc(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     doc: &WorkspaceBindingDoc,
 ) -> Result<()> {
     persist_workspace_binding_docs(node, std::slice::from_ref(doc)).await
 }
 
 pub(super) async fn persist_workspace_binding_docs(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     docs: &[WorkspaceBindingDoc],
 ) -> Result<()> {
     if docs.is_empty() {

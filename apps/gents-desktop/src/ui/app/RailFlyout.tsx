@@ -306,12 +306,14 @@ export function RailFlyout({
         <FlyoutOpenContext.Provider value={hover && open}>
           {hover && children}
         </FlyoutOpenContext.Provider>
-        {/* the rail's first row is the avatar, and the panel's first row
-            (8px in) lands on it from 4px down */}
+        {/* the rail's first row is the avatar, and the flyout's first row
+            (8px in) lands on it from 4px down. Expanded, there is no rail
+            to line up with, and the first row takes a top edge's room */}
         <div
           aria-hidden={!shown}
           className={cn(
-            "absolute top-1 bottom-2 left-2 flex w-72 flex-col gap-2 overflow-hidden bg-raised pt-2 pb-2",
+            "absolute top-1 bottom-2 left-2 flex w-72 flex-col gap-2 overflow-hidden bg-raised pb-2",
+            hover ? "pt-2" : "pt-3.5",
             /* the flyout sits exactly where the expanded panel sits, so
                switching modes moves nothing but whether it stays */
             "rounded-2xl border border-border/60",

@@ -16,6 +16,8 @@
 
 use std::path::{Path, PathBuf};
 
+mod commands;
+
 use gents_desktop_core::local_runtime::DesktopInitSummary;
 use ts_rs::TS;
 
@@ -67,6 +69,10 @@ fn replace_typescript_identifier(source: &str, from: &str, to: &str) -> String {
 fn normalize_generated_types(dir: &Path) -> Result<(), String> {
     for entry in std::fs::read_dir(dir).map_err(|e| e.to_string())? {
         let path = entry.map_err(|e| e.to_string())?.path();
+        if path.is_dir() {
+            normalize_generated_types(&path)?;
+            continue;
+        }
         if path.extension().and_then(|s| s.to_str()) != Some("ts") {
             continue;
         }
@@ -75,7 +81,10 @@ fn normalize_generated_types(dir: &Path) -> Result<(), String> {
             .lines()
             .map(|line| {
                 let trimmed = line.trim_end();
-                if trimmed.starts_with("import type ") && trimmed.ends_with("\";") {
+                if trimmed.starts_with("import type ")
+                    && trimmed.ends_with("\";")
+                    && !trimmed.ends_with(".js\";")
+                {
                     format!("{}.js\";", trimmed.trim_end_matches("\";"))
                 } else {
                     trimmed.to_string()
@@ -157,11 +166,15 @@ fn contract_source_paths() -> Vec<PathBuf> {
     let source_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut paths = vec![
         source_root.join("contract.rs"),
-        source_root.join("error.rs"),
+        source_root.join("../../gents-desktop-core/src/error.rs"),
+        source_root.join("../../gents-desktop-core/src/home_reset.rs"),
         source_root.join("tauri_commands/chat.rs"),
         source_root.join("tauri_commands/inference_setup.rs"),
         source_root.join("tauri_commands/lifecycle.rs"),
         source_root.join("tauri_commands/workspace.rs"),
+        source_root.join("tauri_commands/packs.rs"),
+        source_root.join("tauri_commands/allowed_dirs.rs"),
+        source_root.join("tauri_commands/e2e.rs"),
     ];
     collect_rust_files(&source_root.join("types"), &mut paths);
     paths.sort();
@@ -296,11 +309,33 @@ fn export_all(dir: &Path) -> Result<(), String> {
         ClaudeLoginResult,
         ClaudeLoginUrl,
         ProviderAccountView,
+        crate::tauri_commands::e2e::NativeE2eConfig,
+        crate::tauri_commands::e2e::NativeE2eStatus,
+        crate::tauri_commands::packs::PackInstallRequest,
+        crate::tauri_commands::packs::PluginBindRequest,
+        gents_server::packs::EditedDocuments,
+        RequestTimelineView,
+        ToolSurfaceExplanationView,
+        BackendDisplayState,
+        InstalledPacksView,
+        PackSearchView,
+        PackInfoView,
+        PackInstallView,
+        PackUpdateView,
+        PackRemoveView,
+        PackLoginView,
+        PackLogoutView,
+        PackAccountView,
+        PackPluginSlotsView,
+        PackPluginBindingView,
+        crate::tauri_commands::allowed_dirs::AllowedFoldersView,
+        crate::tauri_commands::allowed_dirs::PluginApprovalsView,
         SignInView,
         BackendUsageView,
         UsageWindowView,
     );
 
+    commands::export(dir)?;
     normalize_generated_types(dir)?;
     Ok(())
 }
@@ -313,7 +348,14 @@ fn list_ts_files(dir: &Path) -> Result<Vec<String>, String> {
     for entry in std::fs::read_dir(dir).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
         let path = entry.path();
-        if path.extension().and_then(|s| s.to_str()) == Some("ts") {
+        if path.is_dir() {
+            for nested in list_ts_files(&path)? {
+                names.push(format!(
+                    "{}/{nested}",
+                    path.file_name().unwrap().to_string_lossy()
+                ));
+            }
+        } else if path.extension().and_then(|s| s.to_str()) == Some("ts") {
             names.push(path.file_name().unwrap().to_string_lossy().into_owned());
         }
     }
@@ -342,6 +384,16 @@ fn ts_rs_exports_tagged_enum_and_camel_case_structs() {
     assert!(
         bootstrap.contains("defaultNodeHome") && bootstrap.contains("clientStateExists"),
         "serde rename_all camelCase should be reflected; got:\n{bootstrap}"
+    );
+    assert!(
+        bootstrap.contains("initConfigStatus?: InitConfigStatus | null"),
+        "optional nullable bootstrap status should match the wire shape; got:\n{bootstrap}"
+    );
+    let runtime = std::fs::read_to_string(tmp.path().join("DesktopRuntimeSnapshot.ts"))
+        .expect("DesktopRuntimeSnapshot.ts");
+    assert!(
+        runtime.contains("operatorConfigAuthoritativeNodeDids?: Array<string>"),
+        "operator-config authority is optional and absent when unavailable; got:\n{runtime}"
     );
     let error = std::fs::read_to_string(tmp.path().join("BridgeError.ts")).expect("BridgeError.ts");
     assert!(
@@ -447,17 +499,23 @@ fn committed_bindings_match_regeneration() {
 #[test]
 #[ignore = "run explicitly to regenerate packages/gents-desktop-client/src/generated/"]
 fn write_bindings() {
+    let temporary = tempfile::tempdir().expect("temporary bindings");
+    export_all(temporary.path()).expect("export bindings");
+    let expected = list_ts_files(temporary.path()).expect("generated bindings");
     let dir = bindings_dir();
-    if dir.exists() {
-        for entry in std::fs::read_dir(&dir).expect("read bindings") {
-            let entry = entry.expect("entry");
-            let path = entry.path();
-            if path.extension().and_then(|s| s.to_str()) == Some("ts") {
-                let _ = std::fs::remove_file(path);
-            }
+    for obsolete in list_ts_files(&dir).expect("committed bindings") {
+        if !expected.contains(&obsolete) {
+            std::fs::remove_file(dir.join(obsolete)).expect("remove obsolete binding");
         }
     }
-    export_all(&dir).expect("export bindings");
+    for name in expected {
+        let path = dir.join(&name);
+        std::fs::create_dir_all(path.parent().unwrap()).expect("binding directory");
+        let source = std::fs::read(temporary.path().join(name)).expect("generated binding");
+        if std::fs::read(&path).ok().as_deref() != Some(source.as_slice()) {
+            std::fs::write(path, source).expect("write binding");
+        }
+    }
     eprintln!("wrote bindings to {}", dir.display());
 }
 

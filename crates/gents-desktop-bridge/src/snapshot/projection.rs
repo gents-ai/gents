@@ -110,6 +110,9 @@ pub fn project_runtime_snapshot(
     mut runtime: DesktopRuntimeSnapshot,
     grants: SnapshotGrants,
 ) -> DesktopRuntimeSnapshot {
+    if !grants.config_read {
+        runtime.operator_config_authoritative_node_dids = None;
+    }
     if !grants.fleet_read {
         runtime.listen_addresses.clear();
         runtime.enrollment_requests = None;
@@ -247,6 +250,7 @@ mod tests {
                 default_node_home: "/secret/agent".into(),
                 init_node_name: Some("Agent".into()),
                 init_node_did: Some("did:test:local".into()),
+                init_config_status: Some(crate::types::InitConfigStatus::Configured),
                 init_tool_ceiling: Some("readonly".into()),
                 init_tool_root: Some("/secret/tools".into()),
                 desktop_home: "/secret/desktop".into(),
@@ -306,6 +310,7 @@ mod tests {
                 peer_issue_count: 0,
                 row_count: 10,
                 approx_serialized_bytes: 100,
+                operator_config_authoritative_node_dids: Some(vec!["did:test:local".into()]),
                 deployments: vec![DeploymentView {
                     peer_id: "local".into(),
                     label: "Local".into(),
@@ -469,6 +474,13 @@ mod tests {
         let full = project_client_snapshot(sample_snapshot(), SnapshotGrants::all());
         let deployment = &full.client.as_ref().unwrap().deployments[0];
         assert_eq!(
+            full.client
+                .as_ref()
+                .unwrap()
+                .operator_config_authoritative_node_dids,
+            Some(vec!["did:test:local".to_owned()])
+        );
+        assert_eq!(
             deployment.node_config.as_ref().unwrap().tags,
             ["private-node"]
         );
@@ -484,6 +496,7 @@ mod tests {
             assert!(!serialized.contains("private-agent"));
             assert!(!serialized.contains("SECRET PROMPT"));
             assert!(!serialized.contains("/secret/tools"));
+            assert!(!serialized.contains("operatorConfigAuthoritativeNodeDids"));
         }
     }
 

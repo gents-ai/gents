@@ -5,6 +5,7 @@
    the desktop's status enrolment: a server address, a request the
    server's admin approves, then the peer joins. */
 import { memo, useState } from "react";
+import { useStore } from "zustand";
 import { EllipsisVertical, Inbox, Plus, SlidersHorizontal } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@gents/ui/components/button";
@@ -38,7 +39,7 @@ import { Input } from "@gents/ui/components/input";
 import { Spinner } from "@gents/ui/components/spinner";
 import { cn } from "@gents/ui/lib/utils";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
-import { inferenceIsConfigured, isLocalNode } from "@/lib/firstRun";
+import { configIsRead, inferenceIsConfigured, isLocalNode } from "@/lib/firstRun";
 import { href } from "@/lib/router";
 import { isLive } from "@/lib/live";
 import { NodeAvatar } from "./AgentAvatar";
@@ -51,6 +52,7 @@ import { NO_SESSIONS, useFleet } from "@/hooks/useFleet";
 import { fleetNodes } from "@/lib/scope";
 import { nodeKeyOf, type NodeView } from "../../hooks/fleetStore";
 import { useShallow } from "zustand/react/shallow";
+import { errorText } from "../../lib/errorText";
 
 export function AgentsScreen() {
   const {
@@ -229,7 +231,7 @@ function AddAgentDialog({ open, onClose }: { open: boolean; onClose: () => void 
       setAddress("");
       close();
     } catch (e) {
-      const reason = e instanceof Error ? e.message : String(e);
+      const reason = errorText(e);
       setError(`Couldn't request enrolment: ${reason}`);
     } finally {
       setBusy(false);
@@ -311,7 +313,7 @@ export function RenameDialog({
       if (next && next !== value) await onSave(next);
       onClose();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errorText(e));
     }
   };
   return (
@@ -361,8 +363,12 @@ const AgentRow = memo(function AgentRow({
   onRemove: (peer: { nodeDid: string; peerId: string; label: string }) => void;
 }) {
   const {
+    stores,
     actions: { selectNode, fetchPeerStatus },
   } = useApp();
+  const configRead = useStore(stores.client, (state) =>
+    state.snapshot ? configIsRead(state.snapshot, d.nodeDid) : false,
+  );
   const live = useFleet(
     (s) =>
       (s.sessionsOf[nodeKeyOf(d)] ?? NO_SESSIONS).filter((c) => isLive(c.turnState))
@@ -385,7 +391,7 @@ const AgentRow = memo(function AgentRow({
       };
       toast(r?.reachable ? `${d.label} is reachable` : `${d.label} is not reachable`);
     } catch (e) {
-      toast(`Status check failed: ${e instanceof Error ? e.message : String(e)}`);
+      toast(`Status check failed: ${errorText(e)}`);
     }
   };
   return (
@@ -437,7 +443,9 @@ const AgentRow = memo(function AgentRow({
           )}
         </span>
       </a>
-      {isLocalNode(d, homeDid) && !inferenceIsConfigured(d) && (
+      {/* until its configuration is read, what the node seems to lack is
+          unread, not missing: a stopped or starting node is set up */}
+      {isLocalNode(d, homeDid) && configRead && !inferenceIsConfigured(d) && (
         <Button
           size="sm"
           variant="outline"

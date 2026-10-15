@@ -63,12 +63,15 @@ pub(crate) use materialize::{
 };
 pub use queue::enqueue_local_steering_request;
 pub use queue::validate_position as validate_queue_position;
-pub use queue::{pending_user_queue, PendingQueueEntry, PendingQueueSnapshot};
+pub use queue::{
+    pending_user_queue, pending_user_queue_projection, PendingQueueEntry, PendingQueueProjection,
+    PendingQueueSnapshot,
+};
 pub use queue::{prepare_pending_user_edit, prepare_user_message_input};
 pub use queue::{
     submit_pending_user_edit, PendingMessageEdit, PendingQueueEdit, PendingQueueReceipt,
 };
-pub use queue::{FOLDED_REASON, REPLACED_REASON};
+pub use queue::{FOLDED_REASON, REMOVED_REASON, REPLACED_REASON};
 pub(crate) use task_title::task_goal_session_title;
 pub use task_title::task_session_title;
 
@@ -157,6 +160,20 @@ pub fn replaced_by(row: &gents_protocol::row::AgentRequestRow) -> Option<&str> {
     .then_some(row.superseded_by_request.as_deref())
     .flatten()
     .filter(|replacement| !replacement.trim().is_empty())
+}
+
+/// Whether its author removed this request from the queue before it ran.
+pub fn removed_by_author(row: &gents_protocol::row::AgentRequestRow) -> bool {
+    row.lifecycle_state
+        == Some(gents_protocol::request_lifecycle::RequestLifecycleState::Interrupted)
+        && row.failure_reason.as_deref() == Some(queue::REMOVED_REASON)
+}
+
+/// Whether its author retired this request from the queue, by removing it or
+/// replacing it with an edit or a move (Lean `projectPendingUserTurn`): it was
+/// never delivered and is not shown as the author's input.
+pub fn retired_by_author(row: &gents_protocol::row::AgentRequestRow) -> bool {
+    replaced_by(row).is_some() || removed_by_author(row)
 }
 
 /// The transcript key under which the claimed request publishes a message
@@ -941,7 +958,7 @@ mod tests {
                 .unwrap(),
         );
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-        crate::test_support::install_test_agent(node.as_ref(), "did:test:test", "default").await;
+        crate::test_support::install_test_agent(&node, "did:test:test", "default").await;
         let mut lifecycle = RequestLifecycle::materialize_claimed_with_execution_binding(
             node.clone(),
             "default",

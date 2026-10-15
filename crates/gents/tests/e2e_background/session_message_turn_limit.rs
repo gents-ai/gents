@@ -42,7 +42,7 @@ struct ChildRequestRow {
 async fn configure_session_chain(db: &TestDb) {
     let node_did = db.node_identity.did().to_string();
     configure_child_agent(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         CHILD_AGENT_ID,
         "e2e-session-limit-child-tools",
@@ -51,7 +51,7 @@ async fn configure_session_chain(db: &TestDb) {
     )
     .await;
     configure_child_agent(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         PARENT_AGENT_ID,
         "e2e-session-limit-parent-tools",
@@ -66,13 +66,17 @@ async fn configure_session_chain(db: &TestDb) {
     .await;
 }
 
-async fn bind_child_execution_max_turns(node: &EmbeddedNode, node_did: &str, max_turns: i64) {
+async fn bind_child_execution_max_turns(
+    node: &std::sync::Arc<EmbeddedNode>,
+    node_did: &str,
+    max_turns: i64,
+) {
     use gents::config_client::{
         read_desired_state_record_in_txn as read, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
     use gents::Collection;
 
-    gents::config_client::ConfigAccess::transact_local(
+    gents::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "test.bind_child_execution_max_turns",
@@ -289,7 +293,7 @@ async fn started_session_loop_enforces_its_execution_documents_turn_limit() {
     let db = test_db("e2e-session-limit-explicit").await;
     configure_session_chain(&db).await;
     bind_child_execution_max_turns(
-        db.node.as_ref(),
+        &db.node,
         &db.node_identity.did().to_string(),
         EXPLICIT_CHILD_MAX_TURNS,
     )

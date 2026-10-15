@@ -384,13 +384,18 @@ mod tests {
             (Collection::InferenceProfile,json!({"node_did":owner,"profile_id":"profile-1","backend_id":"backend","model_name":"test"})),
         ].into_iter().map(|(collection,value)| DesiredStateApplyDocument{collection,add:value.clone(),update:value}).collect();
         let plan = DesiredStateApplyPlan::new(documents)?;
-        ConfigAccess::transact_local(&node, Some(actor.clone()), "test.agent.profile", |txn| {
-            let plan = &plan;
-            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
-        })
+        ConfigAccess::transact_local_write(
+            &node,
+            Some(actor.clone()),
+            "test.agent.profile",
+            |txn| {
+                let plan = &plan;
+                Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+            },
+        )
         .await?;
 
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         let doc = ConfigureAgentParams {
             action: "create".into(),
             display_name: StringUpdate::Set("Canonical".into()),
@@ -481,7 +486,7 @@ mod tests {
             cloned_tools_id, tools_id,
             "clone must not mutate the shared source tools"
         );
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         assert!(load_document(
             &access,
             Collection::Agent,

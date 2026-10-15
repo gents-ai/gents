@@ -21,7 +21,7 @@ async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts
     crate::document_config::ensure_node(&node, identity.did())
         .await
         .unwrap();
-    let access = crate::ConfigAccess::Local(node.clone());
+    let access = crate::ConfigAccess::local(node.clone());
     let before_head = git(&fx.repo, &["rev-parse", "HEAD"]);
     let before_index = git(&fx.repo, &["write-tree"]);
     let base_tree = git(
@@ -46,7 +46,9 @@ async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts
     let placed = Path::new(&outcome.placement.host_path);
     assert_eq!(git(placed, &["rev-parse", "HEAD"]), fx.base_sha);
     assert_eq!(
-        super::super::adapter::working_tree_hash(placed).unwrap(),
+        super::super::adapter::working_tree_hash(placed)
+            .await
+            .unwrap(),
         base_tree
     );
 

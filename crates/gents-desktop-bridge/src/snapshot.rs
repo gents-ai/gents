@@ -21,22 +21,11 @@ use gents_desktop_core::remote_admin::PairingErrorClass;
 
 use super::state::ResolvedBridgePolicy;
 use super::types::{
-    normalize_optional, DesktopBootstrapSummary, DesktopClientSnapshot, P2PHealthView,
-    PairingCollectionStatusView, SavedPeerView, SessionHydrationView, SyncHealthView,
+    normalize_optional, DesktopBootstrapSummary, DesktopClientSnapshot, InitConfigStatus,
+    P2PHealthView, PairingCollectionStatusView, SavedPeerView, SessionHydrationView,
+    SyncHealthView,
 };
 use projection::{project_bootstrap_summary, project_client_snapshot, SnapshotGrants};
-
-#[derive(Debug, serde::Deserialize)]
-struct StoredInitConfigView {
-    #[serde(default)]
-    node_name: Option<String>,
-    #[serde(default)]
-    node_did: Option<String>,
-    #[serde(default)]
-    tool_ceiling: Option<String>,
-    #[serde(default)]
-    tool_root: Option<String>,
-}
 
 fn to_health_view(health: &P2PHealth) -> P2PHealthView {
     P2PHealthView {
@@ -75,6 +64,16 @@ pub(crate) fn to_hydration_view(
             rejection_detail.filter(|_| progress.phase == ClientHydrationPhase::Failed)
         },
     }
+}
+
+pub(crate) fn scoped_hydration_observation_view(
+    observation: Option<(ClientHydrationProgress, Option<String>)>,
+    session_id: &str,
+    node_did: &str,
+) -> Option<SessionHydrationView> {
+    let (progress, detail) = observation?;
+    (progress.session_id == session_id && progress.node_did == node_did)
+        .then(|| to_hydration_view(&progress, detail))
 }
 
 const UNREADABLE_OWNERSHIP_REASON: &str =
@@ -158,7 +157,9 @@ async fn build_bootstrap_summary_raw(
     let peer_records = load_peer_records(&desktop_paths.peer_directory_path())
         .await
         .map_err(|error| error.to_string())?;
-    let init = node_home.and_then(read_stored_init_config);
+    let (init, init_config_status) = node_home
+        .map(read_stored_init_config)
+        .unwrap_or((None, InitConfigStatus::Absent));
     let node_home_display = node_home
         .map(|p| p.display().to_string())
         .unwrap_or_default();
@@ -168,13 +169,14 @@ async fn build_bootstrap_summary_raw(
         default_node_home: node_home_display,
         init_node_name: init
             .as_ref()
-            .and_then(|config| normalize_optional(config.node_name.as_deref())),
+            .and_then(|config| normalize_optional(Some(config.node_name.as_str()))),
         init_node_did: init
             .as_ref()
-            .and_then(|config| normalize_optional(config.node_did.as_deref())),
+            .and_then(|config| normalize_optional(Some(config.node_did.as_str()))),
+        init_config_status: Some(init_config_status),
         init_tool_ceiling: init
             .as_ref()
-            .and_then(|config| normalize_optional(config.tool_ceiling.as_deref())),
+            .and_then(|config| normalize_optional(Some(config.tool_ceiling.as_str()))),
         init_tool_root: init
             .as_ref()
             .and_then(|config| normalize_optional(config.tool_root.as_deref())),
@@ -200,9 +202,26 @@ async fn build_bootstrap_summary_raw(
     })
 }
 
-fn read_stored_init_config(node_home: &std::path::Path) -> Option<StoredInitConfigView> {
-    let bytes = std::fs::read(node_home.join("init.json")).ok()?;
-    serde_json::from_slice(&bytes).ok()
+fn read_stored_init_config(
+    node_home: &std::path::Path,
+) -> (
+    Option<gents::home::StoredInitConfig<String, String>>,
+    InitConfigStatus,
+) {
+    let path = gents::home::init_config_path(node_home);
+    let file = match std::fs::File::open(&path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return (None, InitConfigStatus::Absent);
+        }
+        Err(_) => return (None, InitConfigStatus::Unreadable),
+    };
+    let config =
+        match serde_json::from_reader::<_, gents::home::StoredInitConfig<String, String>>(file) {
+            Ok(config) if !config.node_did.trim().is_empty() => config,
+            _ => return (None, InitConfigStatus::Unreadable),
+        };
+    (Some(config), InitConfigStatus::Configured)
 }
 
 /// The tool ceiling a managed node home records in `init.json`, with the
@@ -268,7 +287,7 @@ fn read_init_ceiling(node_home: &std::path::Path) -> Option<InitCeilingView> {
 #[path = "snapshot/runtime_tasks.rs"]
 mod runtime_tasks;
 #[cfg(test)]
-use runtime_tasks::{recent_runs_for_task_views, session_summaries, task_run_history};
+use runtime_tasks::{recent_runs_for_task_views, session_summaries, task_run_histories};
 use runtime_tasks::{request_matches_node, source_matches_node};
 
 #[path = "snapshot/runtime.rs"]

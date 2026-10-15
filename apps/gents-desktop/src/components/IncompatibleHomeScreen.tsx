@@ -54,12 +54,12 @@ export function IncompatibleHomeScreen({ home, error }: IncompatibleHomeScreenPr
       data-testid="incompatible-home"
     >
       <div className="grid w-full max-w-lg gap-6">
-        <Mark className="h-4 text-ink" />
+        <Mark className="h-5 w-7 text-ink" />
         {report.completed ? (
           <div className="grid gap-3" data-testid="incompatible-home-done">
             <h2
               id="incompatible-home-title"
-              className="font-heading text-2xl font-medium text-heading"
+              className="font-heading text-xl font-medium text-heading"
             >
               {report.disposition === "delete"
                 ? "Old home deleted"
@@ -76,29 +76,38 @@ export function IncompatibleHomeScreen({ home, error }: IncompatibleHomeScreenPr
             ) : (
               <p className="text-sm">The old home was permanently deleted.</p>
             )}
+            {home.fullReset ? (
+              <p className="text-sm">Quit and reopen Gents to set it up again.</p>
+            ) : null}
             <button
               className="inline-flex h-8 w-fit items-center rounded-lg bg-brand px-3 text-sm font-medium text-brand-foreground"
               data-testid="incompatible-home-continue"
               disabled={home.busy}
-              onClick={() => void home.continueFresh()}
+              onClick={() => void (home.fullReset ? home.keep() : home.continueFresh())}
               type="button"
             >
-              Set up Gents
+              {home.fullReset ? "Quit Gents" : "Set up Gents"}
             </button>
           </div>
         ) : (
           <div className="grid gap-4">
             <div className="grid gap-2">
-              <p className="font-mono text-[10px] tracking-wide text-muted-foreground uppercase">
-                Upgrade
-              </p>
               <h2
                 id="incompatible-home-title"
-                className="font-heading text-2xl font-medium text-heading"
+                className="font-heading text-xl font-medium text-heading"
               >
-                This home needs a fresh start
+                {home.fullReset
+                  ? "Reset Gents on this Mac"
+                  : "This home needs a fresh start"}
               </h2>
-              {unsafeKey ? (
+              {home.fullReset ? (
+                <p className="text-sm">
+                  Back up or delete this node’s data, the desktop app’s identity and
+                  pairings, and its local service. Browser storage and caches are
+                  cleared in both modes. Gents will close to finish the reset; reopen it
+                  after the completion message.
+                </p>
+              ) : unsafeKey ? (
                 <p className="text-sm" data-testid="incompatible-home-unsafe-key">
                   This home&apos;s keys were created by an older Gents version with
                   unsafe file permissions, so other users on this computer could read
@@ -148,10 +157,28 @@ export function IncompatibleHomeScreen({ home, error }: IncompatibleHomeScreenPr
                 ))}
               </p>
             ) : null}
-            <div className="grid gap-1 text-sm">
-              <p>Starting fresh moves or deletes exactly these:</p>
-              {pathList(report.plannedPaths, "incompatible-home-planned")}
-            </div>
+            {/* one list for the choice in hand: confirming a delete shows
+                what it deletes, not this beside it */}
+            {confirmingDelete ? null : (
+              <div className="grid gap-1 text-sm">
+                <p>Starting fresh moves or deletes exactly these:</p>
+                {pathList(report.plannedPaths, "incompatible-home-planned")}
+              </div>
+            )}
+            {report.browserPaths.length > 0 ? (
+              <div className="grid gap-1 text-sm" data-testid="reset-browser-clear">
+                <p>
+                  Browser storage and caches are cleared permanently, including when you
+                  choose Back up:
+                </p>
+                {pathList(report.browserPaths, "reset-browser-paths")}
+              </div>
+            ) : null}
+            {home.fullReset && home.busy ? (
+              <p role="status" className="text-sm">
+                Closing Gents to finish the reset…
+              </p>
+            ) : null}
             {error ? <p className="text-sm text-destructive">{error}</p> : null}
             {confirmingDelete ? (
               <div
@@ -232,10 +259,10 @@ export function IncompatibleHomeScreen({ home, error }: IncompatibleHomeScreenPr
                     className="inline-flex h-8 w-fit items-center rounded-lg border border-border px-3 text-sm font-medium disabled:opacity-50"
                     data-testid="incompatible-home-keep"
                     disabled={home.busy}
-                    onClick={() => void home.keep()}
+                    onClick={() => (home.fullReset ? home.cancel() : void home.keep())}
                     type="button"
                   >
-                    Keep it and quit
+                    {home.fullReset ? "Cancel" : "Keep it and quit"}
                   </button>
                 </div>
               </div>

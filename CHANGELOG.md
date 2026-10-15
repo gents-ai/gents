@@ -6,6 +6,10 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- `agent_list` now returns startup targets only. `agent_session_list` discovers
+  messageable sessions, including trigger-started work, with filters and paging
+  while preserving message and interrupt authority (#2038).
+
 - A request's first turn no longer resolves canonical replay evidence twice.
   The admission estimate's resolution is served to the immediately following
   dispatch and taken once, and every later assembly re-reads the store exactly
@@ -48,6 +52,10 @@ source consistency checks, not a separate runtime compatibility version.
   leaves the session untouched and warns instead of rolling the refusal back
   to pending, and a version-skewed refused row that does not decode keeps its
   refusal and warns that its session projection was skipped.
+- The desktop watches plugin approval queue changes in Rust and announces them
+  to the access prompt (#2395), removing its one-second bridge poll. A separate
+  native heartbeat keeps the listener fresh when the webview is hidden or
+  suspended.
 - Installing or removing a plugin an Agent's Tools document names now
   re-admits an Agent that was demoted for failing to build on the missing
   tool (#2338). The resolved plugin identity (version and digest) joins the

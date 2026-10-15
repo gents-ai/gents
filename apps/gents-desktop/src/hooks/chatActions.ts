@@ -34,6 +34,29 @@ type ChatActionParams = {
   reportFailure: (message: string) => void;
 };
 
+/* Why a change to waiting messages was refused, in the person's terms: the
+   agent took them first, or something else changed the queue first. */
+function queueEditFailure(
+  after: DesktopSessionSnapshot | null,
+  requestIds: string[],
+  error: unknown,
+): string {
+  if (!after || requestIds.length === 0)
+    return actionFailure("change pending messages", error);
+  const waiting = new Set((after.pendingQueue ?? []).map((entry) => entry.requestId));
+  const taken = new Set([
+    ...after.foldedInputs.map((input) => input.requestId),
+    ...(after.latestRequestId ? [after.latestRequestId] : []),
+  ]);
+  if (requestIds.every((id) => taken.has(id) && !waiting.has(id)))
+    return requestIds.length > 1
+      ? "These messages already reached the agent"
+      : "This message already reached the agent";
+  if (requestIds.every((id) => waiting.has(id)))
+    return "The queue changed before it was saved";
+  return actionFailure("change pending messages", error);
+}
+
 /**
  * Sending, retrying and renaming in the selected chat. Each reads the
  * selection, the node and the shell projection when it runs.
@@ -165,18 +188,27 @@ export function createChatActions({
   }
 
   async function editPendingQueue(request: PendingQueueEditRequest) {
+    const selected = new Set(request.selectedRequestDocIds);
+    const requestIdsIn = (session: DesktopSessionSnapshot | null) =>
+      (session?.pendingQueue ?? [])
+        .filter((entry) => selected.has(entry.requestDocId))
+        .map((entry) => entry.requestId);
+    const before = heldFor(
+      readSession(stores.session),
+      request.sessionId,
+      request.nodeDid,
+    );
+    const showing = () =>
+      store.getState().nodeDid === request.nodeDid &&
+      store.getState().sessionId === request.sessionId;
     try {
       await api.editPendingQueue(request);
+      if (showing()) await refreshSession(request.sessionId);
     } catch (error) {
-      reportFailure(actionFailure("change pending messages", error));
-      throw shownFailure(error);
-    } finally {
       /* a rejected edit usually means the queue moved; show the queue it met */
-      if (
-        store.getState().nodeDid === request.nodeDid &&
-        store.getState().sessionId === request.sessionId
-      )
-        await refreshSession(request.sessionId);
+      const after = showing() ? await refreshSession(request.sessionId) : null;
+      reportFailure(queueEditFailure(after, requestIdsIn(before), error));
+      throw shownFailure(error);
     }
   }
 

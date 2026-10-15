@@ -423,6 +423,7 @@ async fn async_main() -> Result<()> {
         }
         Command::Init(args) => commands::init::init(args).await,
         Command::Provision(args) => commands::provision::provision(args).await,
+        Command::Desktop { command } => commands::desktop::run(command).await,
         Command::Reset(args) => commands::reset::reset(args).await,
         Command::Server(args) => commands::serve::serve(args).await,
         Command::Service { command } => service_command(command),
@@ -550,61 +551,25 @@ async fn http_send_bytes(request: reqwest::RequestBuilder) -> Result<(reqwest::U
     Ok((url, body.to_vec()))
 }
 
-/// The control plane a command reads and writes, holding the claim on the
-/// home's store for exactly as long as it holds that store open.
-///
-/// The claim is the store lock `gents init` and `gents server` take, so
-/// `gents init --overwrite` cannot wipe a store a command still has open.
-/// Fields drop in declaration order: the access, and with it this command's
-/// handle on the embedded node, is released before the claim.
-pub(crate) struct CommandAccess {
-    access: ConfigAccess,
-    _claim: Option<gents::home::StoreLock>,
-}
-
-impl std::ops::Deref for CommandAccess {
-    type Target = ConfigAccess;
-
-    fn deref(&self) -> &ConfigAccess {
-        &self.access
-    }
-}
-
-impl std::borrow::Borrow<ConfigAccess> for CommandAccess {
-    fn borrow(&self) -> &ConfigAccess {
-        &self.access
-    }
-}
-
-impl From<ConfigAccess> for CommandAccess {
-    /// Access whose store, if any, its caller already holds.
-    fn from(access: ConfigAccess) -> Self {
-        Self {
-            access,
-            _claim: None,
-        }
-    }
-}
-
 /// Opens the control plane a command reads and writes: the running server's
 /// GraphQL endpoint, or the home's own store as an embedded node claimed for
 /// as long as the returned access lives.
 pub(crate) async fn resolve_config_access(
     home: Option<&Path>,
     explicit_graphql: Option<&str>,
-) -> Result<(CommandAccess, PathBuf)> {
+) -> Result<(ConfigAccess, PathBuf)> {
     let home_dir = resolve_home_dir(home);
     if let Some(graphql) = explicit_graphql
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
         let endpoint = resolve_graphql_endpoint(Some(graphql), home)?;
-        return Ok((ConfigAccess::Graphql(endpoint).into(), home_dir));
+        return Ok((ConfigAccess::Graphql(endpoint), home_dir));
     }
     if let Some(runtime_state) = read_runtime_state(&home_dir)? {
         if graphql_endpoint_available(&runtime_state.graphql).await {
             let endpoint = home_graphql_endpoint(&home_dir, runtime_state.graphql);
-            return Ok((ConfigAccess::Graphql(endpoint).into(), home_dir));
+            return Ok((ConfigAccess::Graphql(endpoint), home_dir));
         }
     }
 
@@ -612,32 +577,22 @@ pub(crate) async fn resolve_config_access(
     fs::create_dir_all(&data_dir)
         .with_context(|| format!("creating data directory {}", data_dir.display()))?;
     let claim = gents::home::lock_store(&home_dir, &data_dir)?;
-    let node = {
-        use std::sync::Arc;
-        let node_arc = Arc::new(
-            persistent_node_builder_with_stored_identity(&home_dir, &data_dir)
-                .await?
-                .build()
-                .await
-                .with_context(|| {
-                    format!("building embedded DefraDB node from {}", data_dir.display())
-                })?,
-        );
-        gents::migration::ensure_all_runtime_migrations(node_arc.clone())
+    let node = std::sync::Arc::new(
+        persistent_node_builder_with_stored_identity(&home_dir, &data_dir)
+            .await?
+            .build()
             .await
-            .map_err(|error| gents::storage_backend::classify_store_error(error, &data_dir))?;
-        gents::store_key::upgrade::finish(&data_dir)?;
-        Arc::try_unwrap(node_arc).unwrap_or_else(|_| {
-            unreachable!("node_arc had exactly one strong reference at this point")
-        })
-    };
-    Ok((
-        CommandAccess {
-            access: ConfigAccess::Local(std::sync::Arc::new(node)),
-            _claim: Some(claim),
-        },
-        home_dir,
-    ))
+            .with_context(|| {
+                format!("building embedded DefraDB node from {}", data_dir.display())
+            })?,
+    );
+    let migration_node = node.clone();
+    let access = ConfigAccess::claimed_local(node, claim)?;
+    gents::migration::ensure_all_runtime_migrations(migration_node)
+        .await
+        .map_err(|error| gents::storage_backend::classify_store_error(error, &data_dir))?;
+    gents::store_key::upgrade::finish(&data_dir)?;
+    Ok((access, home_dir))
 }
 
 /// The builder for an initialized home's store at `data_dir`, encrypted with
@@ -887,9 +842,9 @@ mod tests {
         let home = initialized_home(temp.path());
 
         let (access, _) = resolve_config_access(Some(&home), None).await.unwrap();
-        let ConfigAccess::Local(node) = &*access else {
-            panic!("an offline home opens its store");
-        };
+        let node = access
+            .local_node()
+            .expect("an offline home opens its store");
         let node = std::sync::Arc::downgrade(node);
 
         let error = gents::home::lock_store(&home, &default_data_dir(&home))

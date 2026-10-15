@@ -100,9 +100,12 @@ export function useScroller(): [
 
 /* the position this module last set or read a reader's place at, per scroller */
 const settled = new WeakMap<Element, number>();
-/* every write this module makes to a transcript's position */
+/* Every write this module makes to a transcript's position. WebKit keeps
+   the position in whole CSS pixels and drops a write's fraction, which
+   leaves a held row up to a pixel below where it was (rows measure in
+   fractions at a scale factor of 2); rounded, it lands within half a pixel. */
 function setScroll(el: HTMLElement, top: number) {
-  el.scrollTop = top;
+  el.scrollTop = Math.round(top);
   settled.set(el, el.scrollTop);
 }
 

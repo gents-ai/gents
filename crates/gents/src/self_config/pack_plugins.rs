@@ -63,7 +63,7 @@ impl PackInstaller {
             args.variables.is_empty(),
             "plugins-only packs do not consume document variables"
         );
-        let access = crate::config_client::ConfigAccess::Local(self.node.clone());
+        let access = crate::config_client::ConfigAccess::local(self.node.clone());
         let inference = crate::pack::inspect_pack_inference_bindings(
             &access,
             manifest,

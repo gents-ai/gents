@@ -5,7 +5,7 @@ use gents_desktop_core::local_runtime::{
     dangerously_overwrite_desktop_home, init_standard_local_runtime, reset_desktop_runtime_state,
     DesktopInitOptions, DesktopInitSummary,
 };
-use tauri::{AppHandle, Emitter, Manager, Runtime, State};
+use tauri::{AppHandle, Emitter, Manager, Runtime, State, WebviewWindow};
 use tokio::sync::watch;
 
 use crate::config::BootstrapPolicy;
@@ -106,6 +106,12 @@ pub async fn desktop_client_start<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, DesktopAppState>,
 ) -> Result<DesktopClientSnapshot, BridgeError> {
+    if state.app_exit.is_quitting() {
+        return Err(BridgeError::new(
+            BridgeErrorCode::ClientStartFailed,
+            "desktop client cannot start while the desktop is shutting down",
+        ));
+    }
     let grants = snapshot_grants(&state);
 
     // Single-flight: return the live core, wait on an in-flight start, or become
@@ -148,36 +154,80 @@ pub async fn desktop_client_start<R: Runtime>(
 
 /// Register as the single-flight starter or subscribe to the in-flight one.
 /// Synchronous so the bridge mutex is never held across an await.
-fn claim_or_join_client_start<R: Runtime>(
-    app: &AppHandle<R>,
-    state: &State<'_, DesktopAppState>,
-) -> watch::Receiver<ClientStartProgress> {
+pub(crate) enum ClientStartRegistration {
+    Joined(watch::Receiver<ClientStartProgress>),
+    Ready(watch::Receiver<ClientStartProgress>),
+    Claimed {
+        progress_tx: watch::Sender<ClientStartProgress>,
+        progress_rx: watch::Receiver<ClientStartProgress>,
+    },
+}
+
+/// The bridge mutex is the linearization point for a new client-start claim.
+/// Exit checks happen under the same mutex before the slot can be installed.
+pub(crate) fn register_client_start(
+    state: &DesktopAppState,
+) -> Result<ClientStartRegistration, BridgeError> {
     let mut bridge = state.bridge.lock().expect("desktop bridge lock poisoned");
+
+    if state.app_exit.is_quitting() {
+        return Err(BridgeError::new(
+            BridgeErrorCode::ClientStartFailed,
+            "desktop client cannot start while the desktop is shutting down",
+        ));
+    }
 
     // Another caller may have installed the core between our check and this lock.
     // Waiters still use the progress channel; Ready is sent after install.
     if let Some(sender) = bridge.start_inflight.as_ref() {
         tracing::debug!("desktop client start: joining in-flight single-flight start");
-        return sender.subscribe();
+        return Ok(ClientStartRegistration::Joined(sender.subscribe()));
     }
 
     let (tx, rx) = watch::channel(ClientStartProgress::Pending);
     // If a core is already live, mark ready immediately so waiters short-circuit.
     if bridge.core.is_some() {
         let _ = tx.send(ClientStartProgress::Ready);
-        return rx;
+        return Ok(ClientStartRegistration::Ready(rx));
     }
 
     bridge.start_inflight = Some(tx.clone());
-    let paths = state.policy.desktop_paths.clone();
-    let app_for_start = app.clone();
-    drop(bridge);
+    Ok(ClientStartRegistration::Claimed {
+        progress_tx: tx,
+        progress_rx: rx,
+    })
+}
 
-    tracing::info!("desktop client start: single-flight starter claimed");
-    tauri::async_runtime::spawn(async move {
-        run_detached_client_start(app_for_start, paths, tx).await;
-    });
-    rx
+fn claim_or_join_client_start<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &State<'_, DesktopAppState>,
+) -> watch::Receiver<ClientStartProgress> {
+    let registration = match register_client_start(state.inner()) {
+        Ok(registration) => registration,
+        Err(error) => {
+            let (sender, receiver) = watch::channel(ClientStartProgress::Failed(error));
+            drop(sender);
+            return receiver;
+        }
+    };
+    match registration {
+        ClientStartRegistration::Joined(receiver) | ClientStartRegistration::Ready(receiver) => {
+            receiver
+        }
+        ClientStartRegistration::Claimed {
+            progress_tx,
+            progress_rx,
+        } => {
+            let paths = state.policy.desktop_paths.clone();
+            let app_for_start = app.clone();
+
+            tracing::info!("desktop client start: single-flight starter claimed");
+            tauri::async_runtime::spawn(async move {
+                run_detached_client_start(app_for_start, paths, progress_tx).await;
+            });
+            progress_rx
+        }
+    }
 }
 
 async fn run_detached_client_start<R: Runtime>(
@@ -217,7 +267,7 @@ async fn run_detached_client_start<R: Runtime>(
                 let mut bridge = state.bridge.lock().expect("desktop bridge lock poisoned");
                 let orphan = if bridge.core.is_none() {
                     let updates_task = spawn_client_update_task(app.clone(), Arc::clone(&core));
-                    bridge.core = Some(Arc::clone(&core));
+                    bridge.install_core(Arc::clone(&core));
                     bridge.updates_task = Some(updates_task);
                     None
                 } else {
@@ -337,7 +387,7 @@ pub async fn desktop_client_shutdown<R: Runtime>(
 
 /// Stops the live desktop client, if any, and releases its store. The caller
 /// holds the managed-server lifecycle lock.
-pub(super) async fn shutdown_client_under_managed_lifecycle<R: Runtime>(
+pub(crate) async fn shutdown_client_under_managed_lifecycle<R: Runtime>(
     app: &AppHandle<R>,
     state: &DesktopAppState,
 ) -> Result<(), BridgeError> {
@@ -348,6 +398,14 @@ pub(super) async fn shutdown_client_under_managed_lifecycle<R: Runtime>(
         ClientUpdateEvent::coarse("lifecycle"),
     );
     Ok(())
+}
+
+pub(crate) async fn shutdown_client_for_app_exit<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &DesktopAppState,
+) -> Result<(), BridgeError> {
+    let _managed_lifecycle = state.managed_server_lifecycle.lock().await;
+    shutdown_client_under_managed_lifecycle(app, state).await
 }
 
 /// Stops the live desktop client and returns the owned client lifecycle lock
@@ -376,12 +434,36 @@ pub(super) async fn exclude_client(
             task.abort();
         }
         if let Some(core) = core {
-            core.shutdown()
-                .await
-                .map_err(|error| BridgeError::untyped(error.to_string()))?;
+            return shutdown_excluded_core(core, lifecycle_guard, |core| async move {
+                core.shutdown()
+                    .await
+                    .map_err(|error| BridgeError::untyped(error.to_string()))
+            })
+            .await;
         }
         return Ok(lifecycle_guard);
     }
+}
+
+async fn shutdown_excluded_core<F, Fut>(
+    core: Arc<ClientCore>,
+    lifecycle_guard: ClientLifecycleGuard,
+    shutdown: F,
+) -> Result<ClientLifecycleGuard, BridgeError>
+where
+    F: FnOnce(Arc<ClientCore>) -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = Result<(), BridgeError>> + Send + 'static,
+{
+    let (finished_tx, finished_rx) = tokio::sync::oneshot::channel();
+    tokio::spawn(async move {
+        let result = shutdown(core).await;
+        let _ = finished_tx.send((lifecycle_guard, result));
+    });
+    let (lifecycle_guard, result) = finished_rx
+        .await
+        .map_err(|error| BridgeError::untyped(error.to_string()))?;
+    result?;
+    Ok(lifecycle_guard)
 }
 
 /// Quits the desktop application without touching any local state; the
@@ -451,7 +533,7 @@ async fn start_client_core_async(
                 let result =
                     ClientCore::start_with_paths_reporting_stages(paths, options, stage_tx).await;
                 deliver_client_start(tx, result, lifecycle, |core: ClientCore| async move {
-                    core.shutdown().await
+                    Arc::new(core).shutdown().await
                 })
                 .await;
             })
@@ -554,55 +636,37 @@ fn classify_client_start_error(
 
 #[tauri::command]
 pub fn desktop_set_selected_node<R: Runtime>(
-    app: AppHandle<R>,
+    window: WebviewWindow<R>,
     state: State<'_, DesktopAppState>,
     node_did: Option<String>,
 ) -> Result<(), BridgeError> {
-    let Some(core) = current_core(&state) else {
-        return Err(BridgeError::new(
-            BridgeErrorCode::ClientNotRunning,
-            "desktop client not initialized",
-        ));
-    };
     let did = node_did
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
-    // The backend is shared by all native views; only a single-view host may
-    // narrow its observation/request lookup scope to the selected node.
-    core.set_selected_node_did(if app.webview_windows().len() > 1 {
-        None
-    } else {
-        did.clone()
-    });
+    let core = {
+        let mut bridge = state.bridge.lock().expect("desktop bridge lock poisoned");
+        if !bridge.has_window(window.label()) {
+            return Ok(());
+        }
+        let core = bridge.core.clone().ok_or_else(|| {
+            BridgeError::new(
+                BridgeErrorCode::ClientNotRunning,
+                "desktop client not initialized",
+            )
+        })?;
+        bridge.set_window_selected_node(window.label(), did.clone());
+        core
+    };
 
     if let Some(did_str) = did {
         let core_arc = Arc::clone(&core);
         tauri::async_runtime::spawn(async move {
-            match core_arc.refresh_node(&did_str).await {
-                Ok(Some(_version)) => {}
-                Ok(None) => {
-                    if let Err(err) = core_arc.ensure_node_loaded(&did_str).await {
-                        tracing::warn!(
-                            error = %err,
-                            node_did = %did_str,
-                            "ensure_node_loaded failed"
-                        );
-                    }
-                }
-                Err(err) => {
-                    tracing::warn!(
-                        error = %err,
-                        node_did = %did_str,
-                        "remote selection refresh failed"
-                    );
-                    if let Err(err) = core_arc.ensure_node_loaded(&did_str).await {
-                        tracing::warn!(
-                            error = %err,
-                            node_did = %did_str,
-                            "ensure_node_loaded failed after remote refresh failure"
-                        );
-                    }
-                }
+            if let Err(err) = core_arc.refresh_node(&did_str).await {
+                tracing::warn!(
+                    error = %err,
+                    node_did = %did_str,
+                    "selected node refresh failed; observer recovery was scheduled"
+                );
             }
         });
     }
@@ -803,6 +867,138 @@ mod tests {
         (temp, DesktopAppState::new(policy))
     }
 
+    #[tokio::test]
+    async fn cancelled_exclusion_waiter_keeps_lifecycle_guard_until_shutdown_owner_returns() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../gents/tests/fixtures/native_claim_lifetime.json"
+        ))
+        .expect("generated native claim lifetime fixture");
+        let case = fixture
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| case["name"] == "client_shutdown_cancel_retains_claim_until_return")
+            .expect("Lean client shutdown cancellation case");
+        let events = case["events"].as_array().unwrap();
+        let expected_events = [
+            "native_started",
+            "caller_cancelled",
+            "native_returned",
+            "access_released",
+            "lifecycle_guard_released",
+            "gate_release_requested",
+        ]
+        .map(|event| serde_json::Value::String(event.to_owned()));
+        assert_eq!(events, expected_events.as_slice());
+        let observation_for = |event: &str| {
+            let index = events
+                .iter()
+                .position(|candidate| candidate == event)
+                .expect("event in generated trace");
+            &case["observations"][index]
+        };
+        let lifecycle_guard_held_for = |event: &str| {
+            observation_for(event)["lifecycle_guard_held"]
+                .as_bool()
+                .expect("lifecycle guard observation in generated trace")
+        };
+        let claim_held_for = |event: &str| {
+            observation_for(event)["claim_held"]
+                .as_bool()
+                .expect("claim observation in generated trace")
+        };
+
+        let (_temp, state) = test_state();
+        let state = Arc::new(state);
+        let paths = state.policy.desktop_paths.clone();
+        let core = Arc::new(
+            ClientCore::start_with_paths_and_options(
+                paths.clone(),
+                gents_desktop_core::client::ClientCoreOptions::local_only(),
+            )
+            .await
+            .expect("start claimed desktop client"),
+        );
+        let home = paths.root().to_path_buf();
+        let data = paths.node_data_dir().to_path_buf();
+        let lifecycle_guard = Arc::clone(&state.client_lifecycle).lock_owned().await;
+        let started = Arc::new(tokio::sync::Notify::new());
+        let allow_shutdown = Arc::new(tokio::sync::Notify::new());
+        let access_released = Arc::new(tokio::sync::Notify::new());
+        let allow_owner_return = Arc::new(tokio::sync::Notify::new());
+        let shutdown_started = Arc::clone(&started);
+        let shutdown_allowed = Arc::clone(&allow_shutdown);
+        let access_released_signal = Arc::clone(&access_released);
+        let owner_return_allowed = Arc::clone(&allow_owner_return);
+        let waiter = tokio::spawn(async move {
+            shutdown_excluded_core(core, lifecycle_guard, move |core| async move {
+                shutdown_started.notify_one();
+                shutdown_allowed.notified().await;
+                core.shutdown()
+                    .await
+                    .map_err(|error| BridgeError::untyped(error.to_string()))?;
+                access_released_signal.notify_one();
+                owner_return_allowed.notified().await;
+                Ok(())
+            })
+            .await
+        });
+
+        tokio::time::timeout(std::time::Duration::from_secs(10), started.notified())
+            .await
+            .expect("owned exclusion shutdown task started");
+        waiter.abort();
+        assert!(waiter.await.unwrap_err().is_cancelled());
+        assert_eq!(
+            gents::home::lock_store(&home, &data).is_err(),
+            claim_held_for("caller_cancelled")
+        );
+        assert_eq!(
+            Arc::clone(&state.client_lifecycle)
+                .try_lock_owned()
+                .is_err(),
+            lifecycle_guard_held_for("caller_cancelled")
+        );
+
+        allow_shutdown.notify_one();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            access_released.notified(),
+        )
+        .await
+        .expect("client shutdown releases the store claim before exclusion ends");
+        assert_eq!(
+            gents::home::lock_store(&home, &data).is_err(),
+            claim_held_for("access_released")
+        );
+        assert_eq!(
+            Arc::clone(&state.client_lifecycle)
+                .try_lock_owned()
+                .is_err(),
+            lifecycle_guard_held_for("access_released")
+        );
+
+        allow_owner_return.notify_one();
+        let lifecycle_guard = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            Arc::clone(&state.client_lifecycle).lock_owned(),
+        )
+        .await
+        .expect("exclusion guard releases after its shutdown owner returns");
+        drop(lifecycle_guard);
+        assert_eq!(
+            Arc::clone(&state.client_lifecycle)
+                .try_lock_owned()
+                .is_err(),
+            lifecycle_guard_held_for("lifecycle_guard_released")
+        );
+        assert_eq!(
+            gents::home::lock_store(&home, &data).is_err(),
+            claim_held_for("lifecycle_guard_released"),
+            "the native store claim is released before the lifecycle guard"
+        );
+    }
+
     /// A reset holds the client exclusion across shutdown and retirement: an
     /// in-flight start finishes first, and a start claimed meanwhile cannot
     /// reach the client state until the exclusion is released.
@@ -908,6 +1104,7 @@ mod tests {
                 entry.display()
             );
         }
+        let core = Arc::new(core);
         core.shutdown().await.expect("shutdown upgraded client");
         drop(core);
         drop(lifecycle);

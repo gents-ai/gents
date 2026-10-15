@@ -206,8 +206,10 @@ pub(crate) async fn build_desktop_session_snapshot(
         Some(&page.canonical_dependencies),
         context_store.as_ref(),
         None,
+        None,
         context_store.is_some(),
         timeline_before_item_key.is_none(),
+        None,
     )
     .await?;
     if let Err(error) = apply_session_timeline_page_with_query(
@@ -247,7 +249,7 @@ pub(crate) async fn build_request_diagnostics_bundle(
         fixture.requester_scope(Some(fixture.node_did()), session_id, Some(request_id)),
     )
     .await;
-    let access = ConfigAccess::Local(fixture.remote_core().node_arc());
+    let access = ConfigAccess::local(fixture.remote_core().node_arc());
     match load_run_timeline_rows(&access, request_id).await {
         Ok(rows)
             if rows.request.request_id == request_id
@@ -360,8 +362,10 @@ async fn build_request_diagnostics(
         None,
         None,
         None,
+        None,
         false,
         true,
+        None,
     )
     .await;
     let matching_responses = session_snapshot

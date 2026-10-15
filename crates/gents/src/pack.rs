@@ -202,6 +202,7 @@ pub struct PackPlugin {
 
 /// How much of a bound directory a plugin uses. Ordered: `ReadWrite`
 /// includes `Read`, so a folder allowed `ReadWrite` also serves a reader.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BindAccess {

@@ -12,12 +12,13 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use base64::Engine;
+use gents_login_ui::CallbackPage;
 use gents_protocol::chatgpt_oauth::{token_endpoint, CLIENT_ID, DEFAULT_ISSUER};
 use rand::RngCore;
 use reqwest::StatusCode;
 use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
-use tiny_http::{Response, Server};
+use tiny_http::Server;
 use tokio::sync::{mpsc, Notify};
 use url::Url;
 
@@ -149,8 +150,8 @@ pub fn run_login_server(options: LoginOptions) -> io::Result<LoginServer> {
                         &pkce,
                         &state,
                     ).await;
-                    let (status, body, completed) = outcome.into_parts();
-                    let response = callback_response(status, body);
+                    let (page, completed) = outcome.into_parts();
+                    let response = gents_login_ui::response(page);
                     let _ = tokio::task::spawn_blocking(move || request.respond(response)).await;
                     if let Some(result) = completed {
                         break result;
@@ -171,26 +172,18 @@ pub fn run_login_server(options: LoginOptions) -> io::Result<LoginServer> {
 }
 
 enum CallbackOutcome {
-    Continue {
-        status: u16,
-        body: String,
-    },
+    Continue(CallbackPage),
     Complete {
-        status: u16,
-        body: String,
+        page: CallbackPage,
         result: io::Result<LoginTokens>,
     },
 }
 
 impl CallbackOutcome {
-    fn into_parts(self) -> (u16, String, Option<io::Result<LoginTokens>>) {
+    fn into_parts(self) -> (CallbackPage, Option<io::Result<LoginTokens>>) {
         match self {
-            Self::Continue { status, body } => (status, body, None),
-            Self::Complete {
-                status,
-                body,
-                result,
-            } => (status, body, Some(result)),
+            Self::Continue(page) => (page, None),
+            Self::Complete { page, result } => (page, Some(result)),
         }
     }
 }
@@ -204,8 +197,7 @@ async fn handle_callback_request(
 ) -> CallbackOutcome {
     if request_target == "/cancel" {
         return CallbackOutcome::Complete {
-            status: 200,
-            body: "ChatGPT login cancelled. You may close this window.".to_string(),
+            page: CallbackPage::Cancelled,
             result: Err(io::Error::other("ChatGPT login was cancelled")),
         };
     }
@@ -213,26 +205,17 @@ async fn handle_callback_request(
     let parsed = match Url::parse(&format!("http://localhost{request_target}")) {
         Ok(parsed) => parsed,
         Err(_) => {
-            return CallbackOutcome::Continue {
-                status: 400,
-                body: "Invalid callback request.".to_string(),
-            };
+            return CallbackOutcome::Continue(CallbackPage::Incomplete);
         }
     };
     if parsed.path() != "/auth/callback" {
-        return CallbackOutcome::Continue {
-            status: 404,
-            body: "Not found.".to_string(),
-        };
+        return CallbackOutcome::Continue(CallbackPage::NotFound);
     }
 
     let params: HashMap<String, String> = parsed.query_pairs().into_owned().collect();
     if params.get("state").map(String::as_str) != Some(expected_state) {
         tracing::warn!("rejected ChatGPT OAuth callback with mismatched state");
-        return CallbackOutcome::Continue {
-            status: 400,
-            body: "OAuth state mismatch. Return to Gents and retry sign-in.".to_string(),
-        };
+        return CallbackOutcome::Continue(CallbackPage::StaleLink);
     }
     if let Some(error) = params.get("error") {
         let description = params
@@ -241,8 +224,7 @@ async fn handle_callback_request(
             .filter(|value| !value.trim().is_empty());
         let message = description.unwrap_or(error);
         return CallbackOutcome::Complete {
-            status: 400,
-            body: "ChatGPT sign-in was not completed. Return to Gents for details.".to_string(),
+            page: CallbackPage::NotCompleted,
             result: Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 format!("ChatGPT authorization failed: {message}"),
@@ -254,28 +236,19 @@ async fn handle_callback_request(
         .map(String::as_str)
         .filter(|value| !value.is_empty())
     else {
-        return CallbackOutcome::Continue {
-            status: 400,
-            body: "The callback omitted its authorization code.".to_string(),
-        };
+        return CallbackOutcome::Continue(CallbackPage::Incomplete);
     };
 
     match exchange_code_for_tokens(options, redirect_uri, pkce, code).await {
         Ok(tokens) => CallbackOutcome::Complete {
-            status: 200,
-            body: "ChatGPT sign-in complete. You may close this window.".to_string(),
+            page: CallbackPage::SignedIn,
             result: Ok(tokens),
         },
         Err(error) => CallbackOutcome::Complete {
-            status: 502,
-            body: "ChatGPT token exchange failed. Return to Gents for details.".to_string(),
+            page: CallbackPage::ExchangeFailed,
             result: Err(error),
         },
     }
-}
-
-fn callback_response(status: u16, body: String) -> Response<std::io::Cursor<Vec<u8>>> {
-    gents_login_ui::response(status, body)
 }
 
 fn bind_server(port: u16) -> io::Result<Server> {
@@ -710,9 +683,8 @@ mod tests {
             "expected",
         )
         .await;
-        let (status, body, completed) = outcome.into_parts();
-        assert_eq!(status, 400);
-        assert!(body.contains("state mismatch"));
+        let (page, completed) = outcome.into_parts();
+        assert_eq!(page, CallbackPage::StaleLink);
         assert!(completed.is_none(), "a legitimate callback may still retry");
     }
 

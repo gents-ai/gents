@@ -577,7 +577,7 @@ async fn install(spec: &TrialSpec, home: &EmbeddedHome, workspace: &Path) -> Res
         .context("binding the pack's inference slots to the frozen profile")?;
     let mut config = root_host_tools(config, workspace)?;
     config.node.default_agent_id = Some(spec.agent_id.clone());
-    let access = ConfigAccess::Local(home.node.clone());
+    let access = ConfigAccess::local(home.node.clone());
     for path in &manifest.schemas {
         let bytes = assets
             .get(path)
@@ -659,7 +659,7 @@ async fn apply(
     plan: &DesiredStateApplyPlan,
 ) -> Result<()> {
     access
-        .transact(operation, |txn| {
+        .transact_write(operation, |txn| {
             let plan = &plan;
             Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
         })
@@ -756,7 +756,10 @@ fn object<'a>(value: &'a mut Value, named: &str) -> Result<&'a mut serde_json::M
 
 /// The trial's workspace, published the way the configurator evals publish
 /// theirs: an operator-owned root the trial's host tools may reach.
-async fn install_workspace_root(node: &EmbeddedNode, workspace: &Path) -> Result<()> {
+async fn install_workspace_root(
+    node: &std::sync::Arc<EmbeddedNode>,
+    workspace: &Path,
+) -> Result<()> {
     let root = escape_graphql_string(
         workspace
             .to_str()
@@ -819,7 +822,7 @@ async fn install_schema(access: &ConfigAccess, sdl: &str) -> Result<()> {
     Ok(())
 }
 
-fn bind_fixture_owner(value: &Value, trial_did: &str) -> Value {
+pub(crate) fn bind_fixture_owner(value: &Value, trial_did: &str) -> Value {
     match value {
         Value::String(text) if text == "$trial" => Value::String(trial_did.into()),
         Value::Array(values) => Value::Array(
@@ -853,7 +856,7 @@ async fn create_document(
     );
     let variables = json!({ "input": document });
     access
-        .transact(label, |txn| {
+        .transact_write(label, |txn| {
             let (mutation, variables) = (&mutation, &variables);
             Box::pin(async move {
                 let response = txn.execute_with_variables(mutation, variables).await?;
@@ -1019,6 +1022,48 @@ enum StageSubmission {
     Failed(OutcomeKind),
 }
 
+async fn observe_stage_terminal(
+    node: &std::sync::Arc<EmbeddedNode>,
+    cancel: &CancellationToken,
+    runtime: &RunningRuntime,
+    request_id: &str,
+    remaining: Duration,
+) -> (Result<TerminalObservation>, bool) {
+    let watch_started = std::time::Instant::now();
+    let stopped;
+    let observed = tokio::select! {
+        observed = await_terminal(node, request_id, remaining, GRACE, POLL) => {
+            stopped = false;
+            observed
+        }
+        () = cancel.cancelled() => {
+            stopped = true;
+            interrupt_and_settle(node, request_id).await
+        }
+        // Nothing is left to settle the request, so its row would only be
+        // watched until the stage deadline and read as a deadline. One last
+        // read first, unbounded: the request may have settled within the same
+        // poll, and a slow read must not turn that into a dead runtime.
+        () = runtime_exited(runtime) => {
+            let row = poll_request(node, request_id).await.ok().flatten();
+            let settled = row.and_then(|row| {
+                let terminal_state = RequestLifecycleState::parse(row.lifecycle_state.as_deref()?)
+                    .ok()
+                    .filter(|state| state.is_terminal())?;
+                Some(TerminalObservation {
+                    terminal_state,
+                    session_id: row.session_id,
+                    interrupted_on_deadline: false,
+                    elapsed: watch_started.elapsed(),
+                })
+            });
+            stopped = settled.is_none();
+            settled.ok_or_else(|| anyhow!("the trial runtime exited before the request settled"))
+        }
+    };
+    (observed, stopped)
+}
+
 async fn submit_and_observe(
     spec: &TrialSpec,
     cancel: &CancellationToken,
@@ -1080,38 +1125,8 @@ async fn submit_and_observe(
         }
     };
 
-    let watch_started = std::time::Instant::now();
-    let stopped;
-    let observed = tokio::select! {
-        observed = await_terminal(&home.node, &request_id, remaining, GRACE, POLL) => {
-            stopped = false;
-            observed
-        }
-        () = cancel.cancelled() => {
-            stopped = true;
-            interrupt_and_settle(&home.node, &request_id).await
-        }
-        // Nothing is left to settle the request, so its row would only be
-        // watched until the stage deadline and read as a deadline. One last
-        // read first, unbounded: the request may have settled within the same
-        // poll, and a slow read must not turn that into a dead runtime.
-        () = runtime_exited(runtime) => {
-            let row = poll_request(&home.node, &request_id).await.ok().flatten();
-            let settled = row.and_then(|row| {
-                let terminal_state = RequestLifecycleState::parse(row.lifecycle_state.as_deref()?)
-                    .ok()
-                    .filter(|state| state.is_terminal())?;
-                Some(TerminalObservation {
-                    terminal_state,
-                    session_id: row.session_id,
-                    interrupted_on_deadline: false,
-                    elapsed: watch_started.elapsed(),
-                })
-            });
-            stopped = settled.is_none();
-            settled.ok_or_else(|| anyhow!("the trial runtime exited before the request settled"))
-        }
-    };
+    let (observed, stopped) =
+        observe_stage_terminal(&home.node, cancel, runtime, &request_id, remaining).await;
     let observed = match observed {
         Ok(observed) => Some(observed),
         Err(error) => {
@@ -1431,6 +1446,7 @@ fn outcome_kind(classification: &str) -> OutcomeKind {
         "tool" => OutcomeKind::Tool,
         "provider" => OutcomeKind::Provider,
         "runtime" => OutcomeKind::Runtime,
+        "infrastructure" => OutcomeKind::Infrastructure,
         _ => OutcomeKind::Unknown,
     }
 }
@@ -1548,7 +1564,7 @@ async fn runtime_exited(runtime: &RunningRuntime) {
 /// uses: the request is interrupted, then watched until it settles, so the
 /// evidence names a state the home actually reached.
 async fn interrupt_and_settle(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     request_id: &str,
 ) -> Result<TerminalObservation> {
     crate::interrupt::interrupt_request(node, request_id)
@@ -1564,7 +1580,7 @@ async fn interrupt_and_settle(
 /// `valid_until` and `retry` are unset for a request that is nobody's retry,
 /// which is exactly what `RequestSpec::new` already carries.
 async fn submit_stage(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     locator: &TrialLocator,
     agent_id: &str,
     stage: &StageSpec,
@@ -1621,7 +1637,7 @@ async fn seed_and_await_fire(
     if let Some(Err(error)) = reconciled {
         anyhow::bail!("the trial runtime's event sources did not reconcile: {error}");
     }
-    let access = ConfigAccess::Local(home.node.clone());
+    let access = ConfigAccess::local(home.node.clone());
     let since = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let doc_id = create_document(
         &access,
@@ -1719,7 +1735,7 @@ async fn run_captures(
     for capture in captures {
         match capture {
             Capture::Schema { name, collections } => {
-                let access = crate::config_client::ConfigAccess::Local(node.clone());
+                let access = crate::config_client::ConfigAccess::local(node.clone());
                 let mut versions = Vec::new();
                 let mut failed = false;
                 for collection in collections {
@@ -1826,7 +1842,25 @@ pub(super) fn documents_capture_query(
     trial_did: &str,
 ) -> Result<String> {
     validate_collection_identifier(collection)?;
+    anyhow::ensure!(
+        !gents_protocol::schemas::is_credential_collection(collection),
+        "credential collection {collection:?} cannot be retained as eval capture evidence"
+    );
     validate_filter_names(filter)?;
+    for field in fields {
+        anyhow::ensure!(
+            !crate::defra_query::is_restricted_field(collection, field),
+            "field {field:?} on {collection:?} is restricted and cannot be captured"
+        );
+    }
+    let mut filter_fields = Vec::new();
+    crate::defra_query::query::collect_filter_field_keys(filter, &mut filter_fields);
+    for field in &filter_fields {
+        anyhow::ensure!(
+            !crate::defra_query::is_restricted_field(collection, field),
+            "field {field:?} on {collection:?} is restricted and cannot be used in a capture filter"
+        );
+    }
     let mut selected = vec!["_docID".to_string()];
     let filter_fields = filter
         .as_object()
@@ -2175,7 +2209,7 @@ mod tests {
     #[tokio::test]
     async fn schema_capture_reads_active_indexes_and_records_absent_collections() {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-        ConfigAccess::Local(node.clone())
+        ConfigAccess::local(node.clone())
             .add_schema("type SearchNote { body: String @fulltext(language: \"english\") }")
             .await
             .unwrap();
@@ -2268,7 +2302,7 @@ mod tests {
     #[tokio::test]
     async fn document_capture_excludes_other_sessions_with_the_same_sequence() {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         access
             .add_schema("type CaptureHeader { session_id: String sequence: Int }")
             .await
@@ -2325,6 +2359,46 @@ mod tests {
             query.contains("{ _docID content requester_did }"),
             "{query}"
         );
+    }
+
+    #[test]
+    fn document_captures_reject_credential_bearing_collections() {
+        let error = documents_capture_query(
+            "InferenceBackend",
+            &json!({"node_did": {"_eq": "did:test"}}),
+            &["backend_id".into(), "auth".into()],
+            "did:test",
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("InferenceBackend"));
+        assert!(error.to_string().contains("credential collection"));
+
+        let error = documents_capture_query(
+            "InferenceBackend",
+            &json!({"_or": [{"auth": {"_eq": {"kind": "api_key"}}}]}),
+            &["backend_id".into()],
+            "did:test",
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("credential collection"));
+
+        let error = documents_capture_query(
+            "OAuthCredential",
+            &json!({}),
+            &["credential_id".into()],
+            "did:test",
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("credential collection"));
+
+        let safe = documents_capture_query(
+            "Task",
+            &json!({"node_did": {"_eq": "did:test"}}),
+            &["task_id".into(), "display_name".into()],
+            "did:test",
+        )
+        .unwrap();
+        assert!(safe.contains("task_id display_name"));
     }
 
     /// The matched files and the matches that were refused, for a glob that ran.
@@ -2457,6 +2531,41 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_lease_failure_uses_the_existing_infrastructure_outcome() {
+        let cases: Vec<Value> = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/eval_request_outcome.json"
+        )))
+        .unwrap();
+        let case = cases
+            .iter()
+            .find(|case| {
+                case["state"] == "failed"
+                    && case["deadline"] == false
+                    && case["request_reason"] == "execution lease expired"
+                    && case["inference_reason"].is_null()
+                    && case["inference_failed"] == false
+                    && case["tool_failed"] == false
+            })
+            .unwrap();
+        let expected = OutcomeKind::parse(case["outcome"].as_str().unwrap()).unwrap();
+        let evidence = RequestEvidence {
+            failure_reason: Some(case["request_reason"].as_str().unwrap().into()),
+            ..Default::default()
+        };
+        let terminal = TerminalObservation {
+            terminal_state: RequestLifecycleState::Failed,
+            session_id: Some("session".into()),
+            interrupted_on_deadline: false,
+            elapsed: Duration::ZERO,
+        };
+        let outcome = stage_failure_kind(Some(&terminal), true, false, &evidence);
+        assert_eq!(outcome, Some(expected));
+        assert_eq!(provider_reason(outcome, &evidence), None);
+        assert_failure_class(outcome, expected, crate::eval::EvidenceClass::NotEvidence);
+    }
+
     /// Cancellation reaches a seed stage before it has a request: while it
     /// waits for the event sources, writes the seed, or polls for the fire.
     /// It ends the way a cancelled running stage does, as the request not
@@ -2572,7 +2681,7 @@ mod tests {
             .await
             .unwrap();
 
-        let access = ConfigAccess::Local(home.node.clone());
+        let access = ConfigAccess::local(home.node.clone());
         let response = access
             .execute("query { Node { default_agent_id } }")
             .await
@@ -2680,7 +2789,7 @@ mod tests {
         let home = EmbeddedHome::create_temp("subject-schema").await.unwrap();
         let workspace = dir.path().join("workspace");
         install(&spec, &home, &workspace).await.unwrap();
-        let access = ConfigAccess::Local(home.node.clone());
+        let access = ConfigAccess::local(home.node.clone());
         let response = access
             .execute("query { EvalSubmission { message } }")
             .await
@@ -2788,6 +2897,152 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
+    }
+
+    #[tokio::test]
+    async fn trial_teardown_settles_scheduled_inference_without_expiring_its_lease() {
+        use crate::support::streaming_backend::{
+            MockStreamingBackend, StreamPlan, StreamResponse, StreamScript,
+        };
+
+        for cancel_stage in [false, true] {
+            let marker = "scheduled-trial-teardown";
+            let backend = MockStreamingBackend::start_with_plans(
+                "frozen-model",
+                vec![StreamPlan::new(
+                    marker,
+                    vec![StreamResponse::Stream(StreamScript::paused(
+                        marker,
+                        ["received before shutdown"],
+                    ))],
+                )],
+            )
+            .unwrap();
+            let dir = tempfile::tempdir().unwrap();
+            let pack_dir = dir.path().join("pack");
+            write_slot_pack(&pack_dir, "gents:inference-slot:primary");
+            let mut inference = frozen_binding(json!("frozen-profile"));
+            inference.backend["endpoint"] = json!(backend.endpoint());
+            let spec = TrialSpec {
+                pack_digest: materialized_digest(&pack_dir),
+                pack_dir,
+                agent_id: "subject".into(),
+                inference,
+                ..TrialSpec::empty_for_tests("scheduled-teardown")
+            };
+            let home = EmbeddedHome::create_temp("scheduled-teardown")
+                .await
+                .unwrap();
+            install(&spec, &home, &dir.path().join("workspace"))
+                .await
+                .unwrap();
+            let (runtime, _agent) = boot_runtime(
+                &home,
+                home.identity.clone(),
+                DocumentRuntimeOptions::default(),
+            )
+            .await
+            .unwrap();
+            let request_id = uuid::Uuid::new_v4().to_string();
+            let request = build_signed_request(
+                RequestSpec::new(
+                    gents_protocol::request_admission::RequestPurpose::Normal,
+                    RequestIdentity {
+                        request_id: request_id.clone(),
+                        node_did: home.did().into(),
+                        requester_did: None,
+                        agent_id: "subject".into(),
+                        session_id: uuid::Uuid::new_v4().to_string(),
+                        content: marker.into(),
+                        execution_origin: ExecutionOrigin::Scheduled,
+                        created_at: chrono::Utc::now()
+                            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                    },
+                    gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
+                        home.did(),
+                    ),
+                ),
+                RequestSigner::RegisteredTarget,
+            )
+            .await
+            .unwrap();
+            ConfigAccess::write_local(
+                &home.node,
+                "test.eval_scheduled_shutdown",
+                &request.graphql_mutation().unwrap(),
+            )
+            .await
+            .unwrap();
+            tokio::time::timeout(Duration::from_secs(30), async {
+                while backend.observed_chunks(marker) == 0 {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await
+            .expect("scheduled inference must reach its paused provider stream");
+            let before = graphql_with_transaction_retry(
+                &home.node,
+                &super::super::observe::evidence_query(&request_id),
+                "test.eval_scheduled_inference",
+            )
+            .await
+            .unwrap();
+            let before = request_evidence_from_query_data(before.data.as_ref().unwrap());
+            assert!(before
+                .inference_calls
+                .iter()
+                .any(|call| call.call_state.as_deref() == Some("running")));
+
+            if cancel_stage {
+                let cancel = CancellationToken::new();
+                cancel.cancel();
+                let (terminal, stopped) = tokio::time::timeout(
+                    Duration::from_secs(30),
+                    observe_stage_terminal(
+                        &home.node,
+                        &cancel,
+                        &runtime,
+                        &request_id,
+                        Duration::from_secs(120),
+                    ),
+                )
+                .await
+                .expect("stage cancellation must settle active inference");
+                assert!(stopped);
+                assert_eq!(
+                    terminal.unwrap().terminal_state,
+                    RequestLifecycleState::Interrupted
+                );
+            }
+
+            tokio::time::timeout(Duration::from_secs(30), runtime.shutdown())
+                .await
+                .expect("trial shutdown must settle active inference")
+                .unwrap();
+            let state = poll_request(&home.node, &request_id)
+                .await
+                .unwrap()
+                .unwrap();
+            let terminal_state =
+                RequestLifecycleState::parse(state.lifecycle_state.as_deref().unwrap()).unwrap();
+            assert!(terminal_state.is_terminal());
+            let evidence = collect_request_evidence(&home.node, &request_id)
+                .await
+                .unwrap();
+            assert!(!evidence.inference_calls.is_empty());
+            assert!(evidence.inference_calls.iter().all(|call| {
+                matches!(
+                    call.call_state.as_deref(),
+                    Some("completed" | "failed" | "cancelled")
+                ) && call.ended_at.is_some()
+            }));
+            assert_ne!(
+                classify_request_outcome(terminal_state, false, &evidence),
+                Some("infrastructure"),
+                "{evidence:?}"
+            );
+            close(home).await;
+        }
     }
 
     /// The materialized pack is real and readable; only the digest the run
@@ -3182,7 +3437,7 @@ mod tests {
         let workspace = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace).unwrap();
         install_schema(
-            &ConfigAccess::Local(home.node.clone()),
+            &ConfigAccess::local(home.node.clone()),
             "type EvalSeed { payload: JSON }",
         )
         .await
@@ -3447,7 +3702,7 @@ mod tests {
         let home = EmbeddedHome::create_temp("seed-observation-race")
             .await
             .unwrap();
-        let access = ConfigAccess::Local(home.node.clone());
+        let access = ConfigAccess::local(home.node.clone());
         install_schema(&access, "type RaceSeed { label: String }")
             .await
             .unwrap();
@@ -3593,83 +3848,44 @@ mod tests {
         assert!(response.errors.is_empty(), "{:?}", response.errors);
     }
 
-    /// The request settled and then the runtime exited, both inside one poll
-    /// of the stage's watch: the stage is what the request did, not a dead
-    /// runtime. The runtime pauses the clock as it exits, so any bound on the
-    /// last read of the request expires while that read waits on the node, as
-    /// it would on a loaded host.
+    /// A terminal read after runtime exit remains unbounded even when virtual
+    /// time is paused. Resume virtual time before gathering unrelated stage
+    /// evidence so native transaction timers keep their ordinary behavior.
     #[tokio::test]
     async fn a_request_that_settled_before_its_runtime_exited_keeps_its_outcome() {
-        let dir = tempfile::tempdir().unwrap();
-        let workspace = dir.path().join("workspace");
-        std::fs::create_dir_all(&workspace).unwrap();
         let home = EmbeddedHome::create_temp("settled-then-exit")
             .await
             .unwrap();
-        let locator = TrialLocator {
-            trial_node_did: home.did().to_string(),
-            session_id: "s-1".to_string(),
-            home_hint: None,
-        };
-        let stage = StageSpec {
-            stage_id: "only".to_string(),
-            prompt: "hello".to_string(),
-            seed: None,
-            deadline_secs: 600,
-            settle: false,
-            continuation: None,
-            review_previous: false,
-            captures: Vec::new(),
-        };
-        // Completes the request once it is written, pauses the clock, exits.
-        let node = home.node.clone();
-        let runtime = RunningRuntime {
-            shutdown: tokio::sync::watch::channel(false).0,
-            handle: tokio::spawn(async move {
-                loop {
-                    let response = crate::ConfigAccess::write_local_response(
-                            &node,
-                            "eval.test.complete",
-                            r#"mutation { update_AgentRequest(filter: {lifecycle_state: {_ne: "completed"}}, input: {lifecycle_state: "completed"}) { _docID } }"#,
-                        )
-                        .await.unwrap();
-                    let updated = response
-                        .data
-                        .as_ref()
-                        .and_then(|data| data["update_AgentRequest"].as_array().map(Vec::len));
-                    assert!(response.errors.is_empty(), "{:?}", response.errors);
-                    if updated.unwrap_or(0) > 0 {
-                        tokio::time::pause();
-                        return Ok(());
-                    }
-                    tokio::time::sleep(Duration::from_millis(10)).await;
-                }
-            }),
-            node_did: String::new(),
-        };
+        let request_id = "settled-request";
+        seed_request(&home, request_id).await;
+        let runtime = exited_runtime();
+        while !runtime.handle.is_finished() {
+            tokio::task::yield_now().await;
+        }
+        assert!(runtime.handle.is_finished());
 
-        // No outer timeout: on the paused clock it would expire during the
-        // first node read after the runtime exits.
-        let evidence = run_stage(
-            &TrialSpec {
-                agent_id: "subject".to_string(),
-                ..TrialSpec::empty_for_tests("t1")
-            },
+        tokio::time::pause();
+        let (observed, stopped) = observe_stage_terminal(
+            &home.node,
             &CancellationToken::new(),
-            &home,
             &runtime,
-            &locator,
-            &workspace,
-            &stage,
-            &watch::channel(None).1,
+            request_id,
+            Duration::from_secs(600),
         )
         .await;
+        tokio::time::resume();
 
+        let observed = observed.expect("settled request should remain observable after exit");
+        assert_eq!(observed.terminal_state, RequestLifecycleState::Completed);
+        assert!(!stopped);
+
+        let evidence = collect_request_evidence(&home.node, request_id)
+            .await
+            .expect("evidence should be gathered after virtual time resumes");
         assert_eq!(
-            evidence.terminal_state,
-            Some(RequestLifecycleState::Completed)
+            stage_failure_kind(Some(&observed), true, stopped, &evidence),
+            None
         );
-        assert_eq!(evidence.failure_kind, None);
         home.node.shutdown().await;
     }
 
@@ -3685,7 +3901,7 @@ mod tests {
         let node_did = escape_graphql_string(home.did());
         let request_id = escape_graphql_string(request_id);
         let mutation = format!(
-            r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", node_did: "{node_did}", requester_did: "{node_did}", agent_id: "seeded-agent", session_id: "s-1", content: "x", execution_origin: "interactive", lifecycle_state: "completed", created_at: "2026-01-01T00:00:00Z" }}) {{ _docID }} }}"#
+            r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", purpose: "normal", node_did: "{node_did}", requester_did: "{node_did}", agent_id: "seeded-agent", session_id: "s-1", content: "x", execution_origin: "interactive", lifecycle_state: "completed", created_at: "2026-01-01T00:00:00Z" }}) {{ _docID }} }}"#
         );
         let response = home.node.execute(&mutation).await;
         assert!(response.errors.is_empty(), "{:?}", response.errors);

@@ -6,8 +6,11 @@ namespace Conformance.ClientShellContracts.SessionTurnCases
 open ClientShell.SessionTurn Conformance.Contracts
 
 def row (doc request : Nat) (state : RowState) (requester : Nat := 1)
-    (foldedInto : Option Nat := none) (queuedAfter retryParent : Option Nat := none) : Row :=
-  { doc, request, requester, state, foldedInto, queuedAfter, retryParent }
+    (foldedInto : Option Nat := none) (queuedAfter retryParent : Option Nat := none)
+    (retryParentDoc : Option Nat := none) (completed : Bool := false)
+    (publicInput : Bool := true) (authoredInputMaterialized : Bool := false) : Row :=
+  { doc, request, requester, state, foldedInto, queuedAfter, retryParent,
+    retryParentDoc, completed, publicInput, authoredInputMaterialized }
 
 /-- Each scenario lists rows in arrival order; the last row is the newest. -/
 def scenarios : List (String × List Row) :=
@@ -64,6 +67,32 @@ def scenarios : List (String × List Row) :=
   , ("other_requester_fold_owner_is_not_followed",
       [ row 1 100 .active (requester := 2)
       , row 2 101 .terminal (foldedInto := some 1) ]) ]
+  ++ [("bounded_read_discards_unrelated_terminal_history",
+      (List.range 96).map (fun index =>
+        row (100 + index) (1_000 + index) .terminal (completed := true)
+          (authoredInputMaterialized := true)) ++
+      [ row 1 100 .active
+      , row 2 101 .unclaimed (queuedAfter := some 100) ])]
+  ++ [ ("cycle_resolution_stops_at_first_repeated_physical_row",
+        [row 1 100 .unclaimed (queuedAfter := some 101),
+         row 2 101 .unclaimed (queuedAfter := some 100)])
+     , ("cycle_resolution_ignores_unrelated_terminal_history",
+        (List.range 96).map (fun index =>
+          row (100 + index) (1_000 + index) .terminal (completed := true)
+            (authoredInputMaterialized := true)) ++
+        [row 1 100 .unclaimed (queuedAfter := some 101),
+         row 2 101 .unclaimed (queuedAfter := some 100)])
+     , ("physical_retry_parent_is_retained_for_prompt_ownership",
+        [ row 1 100 .terminal (completed := true)
+        , row 2 101 .active (retryParent := some 100) (retryParentDoc := some 1) ])
+     , ("completed_without_authored_input_is_retained",
+        [ row 1 100 .terminal (completed := true)
+            (authoredInputMaterialized := false)
+        , row 2 101 .active ])
+     , ("logical_twins_are_all_retained_in_source_order",
+        [ row 1 100 .terminal
+        , row 2 100 .active
+        , row 3 200 .unclaimed (queuedAfter := some 100) ])]
 
 def newest (rows : List Row) : Option Row := rows.getLast?
 
@@ -86,26 +115,40 @@ def rowJson (r : Row) : String :=
   ",\"state\":" ++ jsonString (stateName r.state) ++
   ",\"folded_into\":" ++ optNat r.foldedInto ++
   ",\"queued_after\":" ++ optNat r.queuedAfter ++
-  ",\"retry_parent\":" ++ optNat r.retryParent ++ "}"
+  ",\"retry_parent\":" ++ optNat r.retryParent ++
+  ",\"retry_parent_doc\":" ++ optNat r.retryParentDoc ++
+  ",\"completed\":" ++ (if r.completed then "true" else "false") ++
+  ",\"public_input\":" ++ (if r.publicInput then "true" else "false") ++
+  ",\"authored_input_materialized\":" ++
+    (if r.authoredInputMaterialized then "true" else "false") ++ "}"
 
 def rowsJson (rows : List Row) : String :=
   "[" ++ String.intercalate "," (rows.map rowJson) ++ "]"
 
-def caseJson (entry : String × List Row) : String :=
-  match newest entry.2 with
+def caseJsonWithPage (name : String) (rows : List Row) (pageRequestDocs : List Nat) : String :=
+  match newest rows with
   | none => "null"
   | some last =>
-    let turn := turnOf entry.2 last
-    "{\"name\":" ++ jsonString entry.1 ++
-    ",\"rows\":" ++ rowsJson entry.2 ++
+    let turn := turnOf rows last
+    let readRows := requestReadRows rows last.requester last.doc last.doc pageRequestDocs
+    "{\"name\":" ++ jsonString name ++
+    ",\"rows\":" ++ rowsJson rows ++
+    ",\"expected_read_docs\":" ++ natList (readRows.map (·.doc)) ++
     ",\"expected_turn_doc\":" ++ toString turn.doc ++
-    ",\"expected_queued_docs\":" ++ natList ((queuedBehind entry.2 turn).map (·.doc)) ++
+    ",\"expected_queued_docs\":" ++ natList ((queuedBehind rows turn).map (·.doc)) ++
     ",\"expected_folded_requests\":" ++
-      natList ((foldedIn entry.2 last.requester).map (·.request)) ++ "}"
+      natList ((foldedIn rows last.requester).map (·.request)) ++ "}"
+
+def caseJson (entry : String × List Row) : String :=
+  caseJsonWithPage entry.1 entry.2 []
 
 def casesJson : String :=
-  "[" ++ String.intercalate "," (scenarios.map caseJson) ++ "]"
+  let pageRows :=
+    [ row 1 100 .terminal (completed := true) (authoredInputMaterialized := true)
+    , row 2 101 .active ]
+  "[" ++ String.intercalate "," (scenarios.map caseJson ++
+    [caseJsonWithPage "page_request_is_retained" pageRows [1]]) ++ "]"
 
-def caseCount : Nat := scenarios.length
+def caseCount : Nat := scenarios.length + 1
 
 end Conformance.ClientShellContracts.SessionTurnCases

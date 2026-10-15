@@ -22,6 +22,7 @@ import {
 import { Textarea } from "@gents/ui/components/textarea";
 import { newId } from "./draft";
 import { useApp } from "@/app/AppContext";
+import { errorText } from "../../../lib/errorText";
 
 const slug = (s: string) =>
   s
@@ -79,7 +80,7 @@ export function NewSkillSheet({
       reset();
       onClose(skillId);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errorText(e));
     } finally {
       setBusy(false);
     }

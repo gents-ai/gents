@@ -5,14 +5,7 @@ import {
   createProjectionController,
   desktopUpdateRefreshScope,
 } from "../src/hooks/projectionController";
-
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((next) => {
-    resolve = next;
-  });
-  return { promise, resolve };
-}
+import { deferred } from "./deferred";
 
 function controller(
   overrides: Partial<Parameters<typeof createProjectionController>[0]> = {},

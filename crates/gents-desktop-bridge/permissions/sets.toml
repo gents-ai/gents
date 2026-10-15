@@ -112,7 +112,7 @@ permissions = ["allow-desktop-allowed-dirs-list", "allow-desktop-plugin-approval
 [[set]]
 identifier = "allowed-dirs-admin"
 description = "Allow, change and remove plugin folders, and answer a plugin question"
-permissions = ["allow-desktop-allowed-dirs-add", "allow-desktop-allowed-dirs-remove", "allow-desktop-plugin-approval-decide"]
+permissions = ["allow-desktop-allowed-dirs-add", "allow-desktop-allowed-dirs-remove", "allow-desktop-plugin-approval-decide", "allow-desktop-plugin-approval-subscribe", "allow-desktop-plugin-approval-unsubscribe"]
 
 [[set]]
 identifier = "fleet-admin"

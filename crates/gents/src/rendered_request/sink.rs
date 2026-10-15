@@ -301,8 +301,8 @@ impl DefraRenderedRequestSink {
         request_json: &str,
     ) -> Result<()> {
         let provenance_json = canonical_json_string(&rendered.provenance_json)?;
-        crate::config_client::ConfigAccess::transact_local(
-            self.node.as_ref(),
+        crate::config_client::ConfigAccess::transact_local_write(
+            &self.node,
             None,
             "rendered_request.create_stored_for_test",
             |txn| {
@@ -324,24 +324,23 @@ impl DefraRenderedRequestSink {
             rendered.capture_version,
             gents_protocol::rendered_request::CAPTURE_VERSION
         );
-        // Canonicalize once. The stored bytes and the complete-fact comparison
-        // have to use the same representation or "identical" means nothing.
-        let request_canonical = canonical_json_string(&rendered.request_json)
+        let request_layout = super::encoding::capture_block_layout(&rendered.request_json)
             .context("encoding rendered-request request_json")?;
-        let provenance_payload_canonical = canonical_json_string(&rendered.provenance_payload_json)
-            .context("encoding rendered-request provenance payload")?;
+        let provenance_payload_layout =
+            super::encoding::capture_block_layout(&rendered.provenance_payload_json)
+                .context("encoding rendered-request provenance payload")?;
         let provenance_json = canonical_json_string(&rendered.provenance_json)
             .context("encoding rendered-request provenance_json")?;
-        let request_chunks = super::encoding::chunk_capture_body(&request_canonical);
-        let provenance_chunks = super::encoding::chunk_capture_body(&provenance_payload_canonical);
+        let request_chunks = super::encoding::chunk_capture_body(&request_layout);
+        let provenance_chunks = super::encoding::chunk_capture_body(&provenance_payload_layout);
         let blocks = unique_blocks(&[&request_chunks, &provenance_chunks]);
 
         // Blocks and the manifest row commit together. The existence read runs
         // inside the same transaction as the creates it gates, and the
         // transaction owner replays this whole closure on conflict, where a
         // fresh snapshot re-decides what is missing.
-        let capture_container = crate::config_client::ConfigAccess::transact_local(
-            self.node.as_ref(),
+        let capture_container = crate::config_client::ConfigAccess::transact_local_write(
+            &self.node,
             None,
             "rendered_request.capture",
             |txn| {
@@ -450,7 +449,7 @@ impl DefraRenderedRequestSink {
             .and_then(Value::as_str)
             .context("stored RenderedRequest request_json was not a string")?
             .to_owned();
-        let access = crate::config_client::ConfigAccess::Local(Arc::clone(&self.node));
+        let access = crate::config_client::ConfigAccess::local(Arc::clone(&self.node));
         let decoded_pair = if version == 1 {
             None
         } else {
@@ -675,11 +674,12 @@ async fn create_block_in_txn(
     let payload = std::str::from_utf8(&block.bytes).context(
         "capture block bytes must be valid UTF-8; chunk boundaries land on character boundaries",
     )?;
+    // Only content fields are written, so DefraDB's content-derived document
+    // id is the same for the same bytes on every writer and peer, and the
+    // document carries two field commits instead of four.
     let variables = serde_json::json!({ "input": {
         "content_key": block.content_key,
         "payload": payload,
-        "byte_len": block.bytes.len(),
-        "created_at": chrono::Utc::now().to_rfc3339(),
     } });
     let response = txn
         .execute_with_variables(CREATE_RENDERED_REQUEST_BLOCK_MUTATION, &variables)
@@ -869,7 +869,7 @@ mod tests {
 
     async fn block_rows(node: &EmbeddedNode) -> Vec<Value> {
         let response = node
-            .execute(r#"{ RenderedRequestBlock { _docID content_key byte_len } }"#)
+            .execute(r#"{ RenderedRequestBlock { _docID content_key } }"#)
             .await;
         assert!(!response.has_errors(), "{:?}", response.errors);
         response.data.unwrap()["RenderedRequestBlock"]
@@ -1170,8 +1170,8 @@ mod tests {
             .map(|row| row["content_key"].as_str().unwrap().to_owned())
             .collect::<std::collections::BTreeSet<_>>();
         assert_eq!(rows.len(), keys.len(), "one document per content key");
-        let canonical = canonical_json_string(&request_json).unwrap();
-        for chunk in super::super::encoding::chunk_capture_body(&canonical) {
+        let layout = super::super::encoding::capture_block_layout(&request_json).unwrap();
+        for chunk in super::super::encoding::chunk_capture_body(&layout) {
             assert!(keys.contains(&chunk.content_key));
         }
         for rendered in &turns {

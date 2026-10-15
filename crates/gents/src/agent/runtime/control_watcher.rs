@@ -74,8 +74,7 @@ pub(super) async fn run_control_watcher_with_timing(
     mut shutdown: watch::Receiver<bool>,
     timing: ControlWatcherTiming,
 ) -> Result<()> {
-    let mut document_view =
-        document_view::load_document_runtime_view(node.as_ref(), &node_did).await?;
+    let mut document_view = document_view::load_document_runtime_view(&node, &node_did).await?;
     let sleep = tokio::time::sleep(timing.idle_sleep);
     tokio::pin!(sleep);
     let mut dirty = false;
@@ -87,7 +86,7 @@ pub(super) async fn run_control_watcher_with_timing(
     let mut replicated_pending = false;
     let mut collection_id_to_name = HashMap::<String, String>::new();
     let mut measured_mcp_availability =
-        crate::tool_surface::measured_available_mcp_service_ids(node.as_ref(), &node_did)
+        crate::tool_surface::measured_available_mcp_service_ids(&node, &node_did)
             .await?
             .into_iter()
             .collect::<BTreeSet<_>>();
@@ -98,7 +97,7 @@ pub(super) async fn run_control_watcher_with_timing(
             _ = &mut sleep, if dirty => {
                 replicated_pending = false;
                 if resync_required || pending_visibility || settle_deadline.is_some() {
-                    match document_view::load_document_runtime_view(node.as_ref(), &node_did).await {
+                    match document_view::load_document_runtime_view(&node, &node_did).await {
                         Ok(reloaded) => {
                             document_view = reloaded;
                             pending_visibility = document_view.has_unresolved_agent_references();
@@ -155,7 +154,7 @@ pub(super) async fn run_control_watcher_with_timing(
                 let mut proposed_update = false;
                 let mut resolve_failed = false;
                 match document_view::resolve_document_runtime_snapshot_from_view(
-                    node.as_ref(),
+                    &node,
                     &resolve_context,
                     &document_view,
                 )
@@ -263,7 +262,7 @@ pub(super) async fn run_control_watcher_with_timing(
                     );
                     if collection_name.as_deref() == Some("ToolServiceHealthState") {
                         let current = match crate::tool_surface::measured_available_mcp_service_ids(
-                            node.as_ref(),
+                            &node,
                             &node_did,
                         )
                         .await
@@ -294,7 +293,7 @@ pub(super) async fn run_control_watcher_with_timing(
                     {
                         Ok(document_view::ControlUpdateOutcome::Irrelevant) => continue,
                         Ok(document_view::ControlUpdateOutcome::FullReload) => {
-                            match document_view::load_document_runtime_view(node.as_ref(), &node_did).await {
+                            match document_view::load_document_runtime_view(&node, &node_did).await {
                                 Ok(reloaded) => {
                                     document_view = reloaded;
                                     pending_visibility = document_view.has_unresolved_agent_references();
@@ -323,7 +322,7 @@ pub(super) async fn run_control_watcher_with_timing(
                                 error = %error,
                                 "runtime control update apply failed; forcing full resync"
                             );
-                            match document_view::load_document_runtime_view(node.as_ref(), &node_did).await {
+                            match document_view::load_document_runtime_view(&node, &node_did).await {
                                 Ok(reloaded) => {
                                     document_view = reloaded;
                                     pending_visibility = document_view.has_unresolved_agent_references();

@@ -1,7 +1,6 @@
 import type { DesktopClientUpdatedListenerFactory } from "@source-inc/gents-desktop-client";
 import { listenToDesktopClientUpdates } from "@source-inc/gents-desktop-client";
 
-import { isMacTauriShell } from "../lib/shellPlatform";
 import { clientRunning } from "./clientStore";
 import { readSession } from "./sessionStore";
 import type { DesktopApp } from "./desktopApp";
@@ -9,6 +8,7 @@ import { createProjectionController } from "./projectionController";
 import { logShellEvent } from "./clientLifecycle";
 import { desktopUpdateRefreshScope } from "./projectionController";
 import { timingConfig } from "./timing";
+import { errorText } from "../lib/errorText";
 
 /**
  * How the desktop follows the client while it runs, as reactions to the
@@ -35,8 +35,7 @@ export function startClientObservation(
     let unlisten: (() => void) | undefined;
     const reportListenerError = (listenerError: unknown) => {
       if (stopped) return;
-      const message =
-        listenerError instanceof Error ? listenerError.message : String(listenerError);
+      const message = errorText(listenerError);
       logShellEvent(`desktop update listener failed: ${message}`);
       lifecycle.setError(message);
     };
@@ -125,10 +124,6 @@ export function startClientObservation(
     };
     document.addEventListener("visibilitychange", onVisibilityChange);
     window.addEventListener("focus", refreshForegroundState);
-    /* closing sibling windows returns focus to the surviving view: the host
-       can narrow its observation again once it is the only one */
-    const mac = isMacTauriShell();
-    if (mac) window.addEventListener("focus", publishSelection);
 
     return () => {
       stopped = true;
@@ -139,7 +134,6 @@ export function startClientObservation(
       unsubscribeTracked();
       document.removeEventListener("visibilitychange", onVisibilityChange);
       window.removeEventListener("focus", refreshForegroundState);
-      if (mac) window.removeEventListener("focus", publishSelection);
       unlisten?.();
     };
   }

@@ -257,7 +257,7 @@ impl ArtifactGrant {
         // take hundreds of milliseconds. Keep the generation/expiry observation
         // as close to launch as possible. Fresh hashing deliberately avoids a
         // cache whose invalidation would become another source-integrity premise.
-        if super::adapter::working_tree_hash(&owner.source_root)? != owner.seal_hash {
+        if super::adapter::working_tree_hash(&owner.source_root).await? != owner.seal_hash {
             bail!("artifact source no longer matches its seal");
         }
         let doc = escape_graphql_string(&owner.request_doc_id);

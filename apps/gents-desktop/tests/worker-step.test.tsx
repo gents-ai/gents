@@ -11,7 +11,13 @@ import type {
 
 vi.mock("@/lib/router", () => ({ href: () => "#", navigate: vi.fn() }));
 
-import { WorkerList, WorkerStep, workerNow } from "../src/ui/screens/WorkerStep";
+import {
+  isWorkerStep,
+  WorkerList,
+  WorkerStep,
+  failureLine,
+  workerNow,
+} from "../src/ui/screens/WorkerStep";
 import {
   NO_WORKERS,
   type Reached,
@@ -45,6 +51,24 @@ const call = (
       output: null,
     },
   }) as unknown as RenderedToolCallView;
+
+it("keeps session discovery and inspection in ordinary tool steps", () => {
+  for (const [toolName, action] of [
+    ["agent_list", "list"],
+    ["agent_session_list", "sessions"],
+    ["agent_session_read", "read"],
+  ]) {
+    const tool = call("success");
+    tool.toolName = toolName;
+    tool.awaitMode = "foreground";
+    if (tool.presentation.kind !== "agent")
+      throw new Error("expected agent presentation");
+    tool.presentation.action = action;
+    expect(isWorkerStep(tool)).toBe(false);
+  }
+  expect(isWorkerStep(call("running", "start"))).toBe(true);
+  expect(isWorkerStep(call("success", "message"))).toBe(true);
+});
 
 /* what the bridge sends in production: message_count is always None */
 const summary = (turnState: string | null): SessionSummary =>
@@ -293,5 +317,21 @@ describe("agent list", () => {
   it("renders nothing for a session that started no other session", () => {
     const view = render(<WorkerList workers={NO_WORKERS} />);
     expect(view.container).toBeEmptyDOMElement();
+  });
+});
+
+describe("a failed call's reason", () => {
+  it("reads a JSON error's message rather than its opening brace", () => {
+    expect(
+      failureLine(
+        '{\n  "error": "session is neither this agent\'s own nor one it started"\n}',
+      ),
+    ).toBe("session is neither this agent's own nor one it started");
+    expect(failureLine('{"error": {"message": "allowed_agents: [worker]"}}')).toBe(
+      "allowed_agents: [worker]",
+    );
+    expect(failureLine('{\n  "code": 7\n}')).toBeNull();
+    expect(failureLine("plain reason\nmore")).toBe("plain reason");
+    expect(failureLine("")).toBeNull();
   });
 });

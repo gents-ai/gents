@@ -32,7 +32,7 @@ use crate::lifecycle::queue::drain_automated_wakeups_in_txn;
 /// may each stamp, and CRDT merge will pick whichever timestamp sorts
 /// higher by DefraDB's LWW rules. Same conclusion: audit meaning is
 /// preserved; microsecond-exact ordering is not.
-pub async fn interrupt_request(node: &EmbeddedNode, request_id: &str) -> Result<()> {
+pub async fn interrupt_request(node: &Arc<EmbeddedNode>, request_id: &str) -> Result<()> {
     let logical = escape_graphql_string(request_id);
     interrupt_request_matching(node, format!("request_id:{{_eq:\"{logical}\"}}"))
         .await
@@ -42,7 +42,7 @@ pub async fn interrupt_request(node: &EmbeddedNode, request_id: &str) -> Result<
 /// Interrupt the exact request already selected within a node/requester scope.
 /// DefraDB ACP and the existing interruption owner retain all authorization and lifecycle work.
 pub async fn interrupt_request_by_doc_id(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     request_doc_id: &str,
     node_did: &str,
     requester_did: Option<&str>,
@@ -58,7 +58,7 @@ pub async fn interrupt_request_by_doc_id(
 }
 
 pub(crate) async fn interrupt_request_by_doc_id_returning_drained_wake_ids(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     request_doc_id: &str,
     node_did: &str,
     requester_did: Option<&str>,
@@ -118,7 +118,7 @@ pub async fn interrupt_request_by_doc_id_with_access(
 ) -> Result<()> {
     let filter = exact_request_filter(request_doc_id, node_did, requester_did)?;
     access
-        .transact("interrupt.latch_request", |txn| {
+        .transact_write("interrupt.latch_request", |txn| {
             let filter = &filter;
             Box::pin(async move { interrupt_request_matching_in_txn(txn, filter).await })
         })
@@ -126,8 +126,11 @@ pub async fn interrupt_request_by_doc_id_with_access(
         .map(|_| ())
 }
 
-async fn interrupt_request_matching(node: &EmbeddedNode, filter: String) -> Result<Vec<String>> {
-    crate::config_client::ConfigAccess::transact_local(
+async fn interrupt_request_matching(
+    node: &std::sync::Arc<EmbeddedNode>,
+    filter: String,
+) -> Result<Vec<String>> {
+    crate::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "interrupt.latch_request",
@@ -202,7 +205,7 @@ pub(crate) async fn active_session_request(
     let scope = crate::session::session_scope_filter(node_did, session_id, requester_did);
     let response = graphql_with_transaction_retry(
         node,
-        &format!(r#"{{AgentRequest(filter:{{{scope},purpose:{{_eq:"normal"}},lifecycle_state:{{_in:["claimed","processing"]}}}},limit:2){{_docID request_id node_did requester_did session_id}}}}"#),
+        &format!(r#"{{AgentRequest(filter:{{{scope},purpose:{{_eq:"normal"}},lifecycle_state:{{_in:["claimed","processing"]}}}},limit:2){{_docID request_id node_did requester_did session_id lifecycle_state}}}}"#),
         "active request lookup",
     )
     .await?;

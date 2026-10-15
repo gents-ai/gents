@@ -204,7 +204,9 @@ pub(crate) async fn install_with_access(
     }
 }
 
-async fn access_and_actor(scope: &GraphScopeArgs) -> Result<(crate::CommandAccess, String)> {
+async fn access_and_actor(
+    scope: &GraphScopeArgs,
+) -> Result<(gents::config_client::ConfigAccess, String)> {
     let actor = resolve_node_did(scope.home.as_deref(), scope.node_did.as_deref())?;
     let (access, _) =
         resolve_config_access(scope.home.as_deref(), scope.graphql.as_deref()).await?;
@@ -249,7 +251,7 @@ fn apply_input_fields(mut input: Value, fields: &[String]) -> Result<Value> {
 
 async fn run(args: GraphRunArgs) -> Result<()> {
     let (access, actor) = access_and_actor(&args.scope).await?;
-    let ConfigAccess::Graphql(_) = &*access else {
+    let ConfigAccess::Graphql(_) = &access else {
         anyhow::bail!(
             "graph run requires the local Gents server to be running so workspace and request recovery remain active"
         );

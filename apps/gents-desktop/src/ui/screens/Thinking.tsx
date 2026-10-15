@@ -28,7 +28,7 @@ export function ActivityLine({ status }: { status: string | null }) {
           /* the spinner's box, still, so an idle line is exactly as tall */
           <span
             data-slot="ascii-loader"
-            className="inline-block w-[1ch] shrink-0 font-mono text-[1.15em] leading-none"
+            className="inline-block h-[1em] w-[1ch] shrink-0 overflow-hidden font-mono text-[1.15em] leading-none [contain:strict]"
           >
             ⣾
           </span>

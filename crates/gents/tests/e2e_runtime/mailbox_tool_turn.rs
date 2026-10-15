@@ -53,7 +53,7 @@ async fn filing_a_mailbox_item_returns_a_receipt_and_the_turn_continues() {
     )
     .await;
     configure_agent_tools(
-        db.node.as_ref(),
+        &db.node,
         &did,
         AGENT,
         None,
@@ -153,7 +153,7 @@ async fn filing_a_mailbox_item_returns_a_receipt_and_the_turn_continues() {
 
 pub(super) async fn configure_engineer_mailbox(db: &crate::support::TestDb, did: &str) {
     configure_agent_tools(
-        db.node.as_ref(),
+        &db.node,
         did,
         AGENT,
         None,

@@ -111,7 +111,7 @@ async fn runtime_status_surfaces_startup_reconcile_and_shutdown() {
     let db = test_db("runtime-observability").await;
     let identity = Arc::new(test_identity("runtime-observability"));
     bind_default_agent_backend(
-        db.node.as_ref(),
+        &db.node,
         identity.did(),
         "backend-runtime-observability",
         UNUSED_BACKEND_ENDPOINT,
@@ -175,8 +175,8 @@ async fn runtime_status_surfaces_startup_reconcile_and_shutdown() {
     )
     .await;
 
-    gents::config_client::ConfigAccess::transact_local(
-        db.node.as_ref(),
+    gents::config_client::ConfigAccess::transact_local_write(
+        &db.node,
         None,
         "test.update_context",
         |txn| {

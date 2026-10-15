@@ -537,7 +537,7 @@ fn write_tools_deserialize_trims_whitespace() {
 
 #[tokio::test]
 async fn tools_document_round_trips_defra_query_fields() {
-    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
 
     let doc = Tools {
@@ -557,13 +557,13 @@ async fn tools_document_round_trips_defra_query_fields() {
         }),
         ..Default::default()
     };
-    let access = crate::config_client::ConfigAccess::Local(std::sync::Arc::new(node));
+    let access = crate::config_client::ConfigAccess::local(node);
     write_tools_document(&access, &doc)
         .await
         .expect("write should persist the defra_query fields");
 
     let loaded: Tools = access
-        .transact("test.tools.read", |txn| {
+        .transact_write("test.tools.read", |txn| {
             let doc = &doc;
             Box::pin(async move {
                 crate::config_client::read_desired_state_record_in_txn(
@@ -608,7 +608,7 @@ async fn tools_update_can_clear_lsp_config() {
     let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
     crate::ensure_runtime_schemas(&node).await.unwrap();
 
-    let access = crate::config_client::ConfigAccess::Local(std::sync::Arc::new(node));
+    let access = crate::config_client::ConfigAccess::local(std::sync::Arc::new(node));
     let lsp = |config: Option<String>| Tools {
         tools_id: "lsp-config-clear".to_string(),
         node_did: "did:key:z-lsp-config-clear".to_string(),
@@ -626,7 +626,7 @@ async fn tools_update_can_clear_lsp_config() {
     write_tools_document(&access, &doc).await.unwrap();
     async fn read(access: &crate::config_client::ConfigAccess) -> anyhow::Result<Option<Tools>> {
         access
-            .transact("test.tools.read", |txn| {
+            .transact_write("test.tools.read", |txn| {
                 Box::pin(async move {
                     crate::config_client::read_desired_state_record_in_txn(
                         txn,
@@ -689,13 +689,13 @@ async fn tools_document_round_trips_read_only_commands() {
         }),
         ..Default::default()
     };
-    let access = crate::config_client::ConfigAccess::Local(std::sync::Arc::new(node));
+    let access = crate::config_client::ConfigAccess::local(std::sync::Arc::new(node));
     write_tools_document(&access, &doc)
         .await
         .expect("write should persist the read_only_commands field");
 
     let loaded: Tools = access
-        .transact("test.tools.read", |txn| {
+        .transact_write("test.tools.read", |txn| {
             let doc = &doc;
             Box::pin(async move {
                 crate::config_client::read_desired_state_record_in_txn(
@@ -837,7 +837,7 @@ async fn tools_document_round_trips_write_tools() {
         "entries": decls,
     }))
     .unwrap();
-    let access = crate::config_client::ConfigAccess::Local(std::sync::Arc::new(node));
+    let access = crate::config_client::ConfigAccess::local(std::sync::Arc::new(node));
     let plan = crate::config_client::DesiredStateApplyPlan::new(vec![
         crate::config_client::DesiredStateApplyDocument {
             collection: crate::Collection::DatastoreToolSurface,
@@ -852,7 +852,7 @@ async fn tools_document_round_trips_write_tools() {
     ])
     .unwrap();
     access
-        .transact("test.tools.write", |txn| {
+        .transact_write("test.tools.write", |txn| {
             let plan = &plan;
             let tools = &tools;
             let surface = &surface;
@@ -885,13 +885,13 @@ async fn tools_document_round_trips_session_message_enablement() {
         }),
         ..Default::default()
     };
-    let access = crate::config_client::ConfigAccess::Local(std::sync::Arc::new(node));
+    let access = crate::config_client::ConfigAccess::local(std::sync::Arc::new(node));
     write_tools_document(&access, &doc)
         .await
         .expect("write should persist the session-message enablement");
 
     let loaded: Tools = access
-        .transact("test.tools.read", |txn| {
+        .transact_write("test.tools.read", |txn| {
             let doc = &doc;
             Box::pin(async move {
                 crate::config_client::read_desired_state_record_in_txn(
@@ -915,7 +915,7 @@ async fn tools_document_round_trips_session_message_enablement() {
 
 #[tokio::test]
 async fn agent_description_round_trip_with_explicit_owner_fixture() {
-    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
 
     // Canonical Agent(context_id, inference_profile_id, tags) carries
@@ -993,13 +993,10 @@ async fn agent_description_round_trip_with_explicit_owner_fixture() {
 
 /// Borrow the embedded node back out of a Local `ConfigAccess` for the
 /// document-level readers that still take `&EmbeddedNode`.
-fn access_node(access: &crate::config_client::ConfigAccess) -> &defra_node::EmbeddedNode {
-    match access {
-        crate::config_client::ConfigAccess::Local(node) => node,
-        crate::config_client::ConfigAccess::Graphql(_) => {
-            unreachable!("test helpers use Local access")
-        }
-    }
+fn access_node(
+    access: &crate::config_client::ConfigAccess,
+) -> &std::sync::Arc<defra_node::EmbeddedNode> {
+    access.local_node().expect("test helpers use local access")
 }
 
 #[tokio::test]
@@ -1048,7 +1045,7 @@ async fn inference_retry_policy_fields_round_trip() {
         ..Default::default()
     };
 
-    let access = crate::config_client::ConfigAccess::Local(std::sync::Arc::new(node));
+    let access = crate::config_client::ConfigAccess::local(std::sync::Arc::new(node));
     let plan = crate::config_client::DesiredStateApplyPlan::new(vec![
         crate::config_client::DesiredStateApplyDocument {
             collection: crate::Collection::InferenceBackend,
@@ -1073,7 +1070,7 @@ async fn inference_retry_policy_fields_round_trip() {
     ])
     .expect("retry chain plan must be valid");
     access
-        .transact("test.retry_chain.write", |txn| {
+        .transact_write("test.retry_chain.write", |txn| {
             let plan = &plan;
             Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, plan).await })
         })
@@ -1081,7 +1078,7 @@ async fn inference_retry_policy_fields_round_trip() {
         .expect("apply should persist the retry chain");
 
     let loaded = load_inference_profile(
-        &access_node(&access),
+        access_node(&access),
         "did:key:z-test-retry",
         "retry-profile",
     )
@@ -1694,7 +1691,7 @@ async fn oauth_account_scope_matches_lean() {
         serde_json::from_value(value.clone()).unwrap()
     };
 
-    let node = std::sync::Arc::new(crate::oauth_credential::test_support::test_node().await);
+    let node = crate::oauth_credential::test_support::test_node().await;
     for row in lean["rows"].as_array().unwrap() {
         let provider = kind_of(&row["provider_kind"]).oauth_provider().unwrap();
         let owner = row["owner"].as_str().unwrap();
@@ -1720,7 +1717,7 @@ async fn oauth_account_scope_matches_lean() {
         };
         upsert_oauth_credential(&node, &credential).await.unwrap();
     }
-    let access = crate::config_client::ConfigAccess::Local(node);
+    let access = crate::config_client::ConfigAccess::local(node);
 
     let cases = lean["cases"].as_array().unwrap();
     assert_eq!(cases.len(), 6);
@@ -1832,7 +1829,7 @@ fn same_owner_delegation_requires_an_agent_but_foreign_admission_is_separate() {
 
 #[tokio::test]
 async fn reference_loader_isolates_foreign_malformed_backends_and_rejects_owned_corruption() {
-    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     // Use raw storage only to seed deliberately malformed rows. The common
     // desired-state writer correctly rejects these before publication.
@@ -1846,7 +1843,7 @@ async fn reference_loader_isolates_foreign_malformed_backends_and_rejects_owned_
         let result = node.execute(&format!(r#"mutation {{ create_InferenceBackend(input: {{node_did: "{owner}", backend_id: "{id}", name: "fixture", provider_kind: "OpenAiCompatible", endpoint: "http://localhost:8000/v1", auth: {{kind: "{auth}"}}, enabled: true}}) {{_docID}} }}"#)).await;
         assert!(!result.has_errors(), "{:?}", result.errors);
     }
-    crate::config_client::ConfigAccess::transact_local(
+    crate::config_client::ConfigAccess::transact_local_write(
         &node,
         None,
         "test.reference_owner_isolation",
@@ -1866,7 +1863,7 @@ async fn reference_loader_isolates_foreign_malformed_backends_and_rejects_owned_
     .unwrap();
     let result = node.execute(r#"mutation { update_InferenceBackend(filter: {node_did: {_eq: "owner"}, backend_id: {_eq: "good"}}, input: {auth: {kind: "invalid-auth"}}) {_docID} }"#).await;
     assert!(!result.has_errors(), "{:?}", result.errors);
-    let result = crate::config_client::ConfigAccess::transact_local(
+    let result = crate::config_client::ConfigAccess::transact_local_write(
         &node,
         None,
         "test.reference_owned_corruption",

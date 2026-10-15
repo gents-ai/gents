@@ -4,4 +4,4 @@
  * Local-runtime init request. Filesystem paths are **not** accepted from the
  * webview — they come from `BridgeConfig` resolved at plugin init.
  */
-export type DesktopInitRequest = { label: string | null, dangerouslyOverwrite: boolean, reset: boolean, };
+export type DesktopInitRequest = { label?: string | null, dangerouslyOverwrite: boolean, reset: boolean, };

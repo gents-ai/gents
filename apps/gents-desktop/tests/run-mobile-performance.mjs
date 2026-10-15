@@ -17,14 +17,17 @@ const TRANSCRIPT_ROWS = '[data-testid="transcript-panel"] [data-window-row]';
 const VIEWPORT = { width: 390, height: 844 };
 const TYPING_NEXT_PAINT_BUDGET_MS = 50;
 const TYPING_REACT_BUDGET_MS_PER_CHARACTER = 12;
-/* The bridge announces no plugin approval request, so the access prompt polls
-   the approval queue on a timer; those reads are not caused by what a scenario
-   does and are reported apart from its budgets. */
-const POLLED_COMMANDS = new Set(["listPendingPluginApprovals"]);
 
 const args = process.argv.slice(2);
 const runs = integerArgument("--runs", DEFAULT_RUNS);
 const port = integerArgument("--port", DEFAULT_PORT);
+const sessionIndexCount =
+  valueArgument("--sessions") == null ? null : integerArgument("--sessions", 0);
+if (
+  sessionIndexCount !== null &&
+  (sessionIndexCount < 2 || sessionIndexCount > 100_000)
+)
+  throw new Error("--sessions must be an integer from 2 to 100000");
 const enforceResponsiveBudgets = args.includes("--enforce-responsive-budgets");
 const outputArgument = valueArgument("--output");
 const outputRoot = resolve(
@@ -168,7 +171,7 @@ async function runSample(browserInstance, sampleIndex) {
 
   const navigationStartedAt = process.hrtime.bigint();
   await page.goto(
-    `${baseUrl}/tests/ui-harness/harness.html?scenario=mobile-performance`,
+    `${baseUrl}/tests/ui-harness/harness.html?scenario=mobile-performance${sessionIndexCount === null ? "" : `&sessions=${sessionIndexCount}`}`,
     { waitUntil: "domcontentloaded" },
   );
   await page.locator('[data-testid="app-shell"]').waitFor({ state: "visible" });
@@ -241,16 +244,9 @@ async function runSample(browserInstance, sampleIndex) {
       cdp,
       "page_older_transcript_rows",
       async () => {
-        await page.getByTestId("transcript-panel").evaluate((panel) => {
-          const viewport = panel.closest('[data-slot="scroll-area-viewport"]') ?? panel;
-          viewport.scrollTop = 0;
-          viewport.dispatchEvent(
-            new WheelEvent("wheel", { deltaY: -100, bubbles: true }),
-          );
-        });
-        await page.waitForFunction(
-          ([selector, count]) => document.querySelectorAll(selector).length >= count,
-          [TRANSCRIPT_ROWS, rowsBeforeOlderPage + 40],
+        await loadOlderTranscriptPage(
+          page,
+          rowsBeforeOlderPage + fixture.transcriptPageSize,
         );
       },
       async () => ({
@@ -283,18 +279,7 @@ async function runSample(browserInstance, sampleIndex) {
         for (let index = 0; index < additionalPages; index += 1) {
           const expectedRows =
             typingStartingRows + (index + 1) * fixture.transcriptPageSize;
-          await page.getByTestId("transcript-panel").evaluate((panel) => {
-            const viewport =
-              panel.closest('[data-slot="scroll-area-viewport"]') ?? panel;
-            viewport.scrollTop = 0;
-            viewport.dispatchEvent(
-              new WheelEvent("wheel", { deltaY: -100, bubbles: true }),
-            );
-          });
-          await page.waitForFunction(
-            ([selector, count]) => document.querySelectorAll(selector).length === count,
-            [TRANSCRIPT_ROWS, expectedRows],
-          );
+          await loadOlderTranscriptPage(page, expectedRows);
         }
       },
       async () => ({
@@ -613,9 +598,8 @@ async function domSnapshot(page) {
 }
 
 function bridgeSummary(allCalls) {
-  const calls = allCalls.filter((call) => !POLLED_COMMANDS.has(call.command));
   const byCommand = {};
-  for (const call of calls) {
+  for (const call of allCalls) {
     const entry = (byCommand[call.command] ??= {
       count: 0,
       requestBytes: 0,
@@ -630,11 +614,10 @@ function bridgeSummary(allCalls) {
     entry.maxResponseBytes = Math.max(entry.maxResponseBytes, call.responseBytes);
   }
   return {
-    callCount: calls.length,
-    requestBytes: sum(calls.map((call) => call.requestBytes)),
-    responseBytes: sum(calls.map((call) => call.responseBytes)),
+    callCount: allCalls.length,
+    requestBytes: sum(allCalls.map((call) => call.requestBytes)),
+    responseBytes: sum(allCalls.map((call) => call.responseBytes)),
     byCommand,
-    polledCallCount: allCalls.length - calls.length,
   };
 }
 
@@ -699,6 +682,11 @@ function evaluateStructuralAssertions(samples) {
   const all = (id) =>
     samples.map((sample) => sample.scenarios.find((scenario) => scenario.id === id));
   const tip = all("open_large_local_transcript_tip");
+  const index = all("paired_launch_to_session_index");
+  const indexLimit =
+    samples[0].fixture.sessionIndexCount > 200
+      ? 80
+      : samples[0].fixture.sessionIndexCount;
   const pageOlder = all("page_older_transcript_rows");
   const sustained = all("sustained_streamed_response");
   const burst = all("update_coalescing_burst");
@@ -710,6 +698,16 @@ function evaluateStructuralAssertions(samples) {
   const typingWithoutLiveDeltas = [...typingActiveTurn, ...typingIdle];
   const typing = [...typingWithoutLiveDeltas, ...typingConcurrent];
   return [
+    {
+      id: "session_index_mounts_a_bounded_window",
+      policy: "hard",
+      limit: indexLimit,
+      observedMax: Math.max(...index.map((scenario) => scenario.dom.sessionRows)),
+      passed: index.every(
+        (scenario) =>
+          scenario.dom.sessionRows > 0 && scenario.dom.sessionRows <= indexLimit,
+      ),
+    },
     {
       id: "large_tip_mounts_one_page",
       policy: "hard",
@@ -960,6 +958,28 @@ async function settleRender(page) {
         requestAnimationFrame(() => requestAnimationFrame(resolve)),
       ),
   );
+}
+
+async function loadOlderTranscriptPage(page, expectedRows) {
+  const panel = page.getByTestId("transcript-panel");
+  await panel.evaluate((panel) => {
+    const viewport = panel.closest('[data-slot="scroll-area-viewport"]') ?? panel;
+    viewport.dispatchEvent(new WheelEvent("wheel", { deltaY: -100, bubbles: true }));
+    viewport.scrollTop = 0;
+  });
+  await page.waitForFunction(
+    ([selector, count]) => document.querySelectorAll(selector).length === count,
+    [TRANSCRIPT_ROWS, expectedRows],
+  );
+  /* Rows commit before their momentum offset settles. Wait for its removal
+     so the next synthetic jump reaches the older-page threshold. */
+  await page.waitForFunction(() => {
+    const viewport = document
+      .querySelector('[data-testid="transcript-panel"]')
+      ?.closest('[data-slot="scroll-area-viewport"]');
+    const content = viewport?.firstElementChild;
+    return content != null && getComputedStyle(content).marginTop === "0px";
+  });
 }
 
 async function waitForHttp(url) {

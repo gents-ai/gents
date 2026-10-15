@@ -2,12 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 import {
   adoptNewChatFolder,
   loadChatFolders,
+  recentFolders,
   withFolder,
 } from "../src/hooks/chatFolders";
 import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
 import { createChatActions } from "../src/hooks/chatActions";
 import { admittingProjection, shellStores } from "./shell-fixture";
-import { folderLabel } from "../src/ui/screens/ChatFolderPicker";
 
 describe("chat folders", () => {
   it("keeps a pick per chat and clears it with null", () => {
@@ -26,6 +26,15 @@ describe("chat folders", () => {
     expect(adoptNewChatFolder(none, "s2")).toBe(none);
   });
 
+  it("lists distinct folders, the last picked first", () => {
+    let folders = withFolder({}, "s1", "/work/a");
+    folders = withFolder(folders, "s2", "/work/b");
+    folders = withFolder(folders, "s3", "/work/a");
+    folders = adoptNewChatFolder(withFolder(folders, null, "/work/c"), "s4");
+    expect(recentFolders(folders)).toEqual(["/work/c", "/work/a", "/work/b"]);
+    expect(recentFolders(folders, 1)).toEqual(["/work/c"]);
+  });
+
   it("reads nothing from corrupt or missing storage", () => {
     const store = new Map<string, string>();
     vi.stubGlobal("localStorage", {
@@ -42,11 +51,6 @@ describe("chat folders", () => {
       vi.unstubAllGlobals();
     }
     expect(loadChatFolders()).toEqual({});
-  });
-
-  it("labels a folder by its last segment", () => {
-    expect(folderLabel("/home/u/notes/")).toBe("notes");
-    expect(folderLabel("C:\\Users\\u\\docs")).toBe("docs");
   });
 });
 

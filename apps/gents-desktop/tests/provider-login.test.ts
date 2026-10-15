@@ -69,6 +69,6 @@ it("replaces stale provider sign-ins from the latest account snapshot", () => {
       account("chatgpt-codex", "codex-current"),
       account("claude-subscription", "claude-disabled", false),
     ]),
-  ).toEqual({ openai: "codex-current" });
+  ).toEqual({ openai: { credentialId: "codex-current", accountRef: null } });
   expect(providerSignInState([])).toEqual({});
 });

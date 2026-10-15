@@ -2,7 +2,7 @@
 
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
-use defra_node::{EmbeddedNode, QueryResponse};
+use defra_node::EmbeddedNode;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::{Deserialize, Serialize};
 
@@ -1173,7 +1173,7 @@ async fn stage_goal_and_claim(
 /// producing physical twins, while canonical scope checks retain safe behavior
 /// for twins received through P2P replication.
 pub async fn create_goal_for_session(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
     session_id: &str,
     objective: &str,
@@ -1201,7 +1201,7 @@ pub async fn create_goal_for_session(
     let requested_fingerprint = goal_creation_fingerprint(&create_request);
     let objective = requested_fingerprint.objective.as_str();
 
-    let result = crate::config_client::ConfigAccess::transact_local(
+    let result = crate::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "goal.create_for_session",
@@ -1590,7 +1590,7 @@ pub async fn submit_goal_backed_request(
     request: &gents_protocol::request_admission::AgentRequestCreate,
 ) -> Result<GoalBackedRequestDisposition> {
     let result = access
-        .transact("goal.submit_backed_request", move |txn| {
+        .transact_write("goal.submit_backed_request", move |txn| {
             Box::pin(async move {
                 stage_goal_backed_request(
                     txn,
@@ -1942,7 +1942,7 @@ pub(crate) async fn stage_goal_backed_request_in_txn(
 /// exact request binding by its unique retry key if commit acknowledgement is
 /// ambiguous.
 pub async fn submit_goal_backed_request_local(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     actor: ::identity::Did,
     node_did: &str,
     session_id: &str,
@@ -1950,7 +1950,7 @@ pub async fn submit_goal_backed_request_local(
     token_budget: Option<i64>,
     request: &gents_protocol::request_admission::AgentRequestCreate,
 ) -> Result<crate::lifecycle::EnqueuedAgentRequest> {
-    let staged = crate::config_client::ConfigAccess::transact_local(
+    let staged = crate::config_client::ConfigAccess::transact_local_write(
         node,
         Some(actor),
         "goal.submit_backed_request_local",
@@ -2069,14 +2069,14 @@ async fn decode_goal_rows(node: &EmbeddedNode, query: &str) -> Result<Vec<GoalDo
 }
 
 pub async fn set_goal(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
     session_id: &str,
     objective: Option<&str>,
     status: Option<GoalStatus>,
     token_budget: Option<Option<i64>>,
 ) -> Result<GoalDocument> {
-    crate::config_client::ConfigAccess::transact_local(node, None, "goal.set", move |txn| {
+    crate::config_client::ConfigAccess::transact_local_write(node, None, "goal.set", move |txn| {
         Box::pin(async move {
             set_goal_in_txn(
                 txn,
@@ -2106,7 +2106,7 @@ pub async fn set_goal_from_access(
     auto_resume: Option<bool>,
 ) -> Result<GoalDocument> {
     access
-        .transact("goal.set_from_access", move |txn| {
+        .transact_write("goal.set_from_access", move |txn| {
             Box::pin(async move {
                 set_goal_in_txn(
                     txn,
@@ -2471,7 +2471,7 @@ async fn set_goal_in_txn(
     Ok(created)
 }
 
-pub async fn delete_goal(node: &EmbeddedNode, goal: &GoalDocument) -> Result<bool> {
+pub async fn delete_goal(node: &std::sync::Arc<EmbeddedNode>, goal: &GoalDocument) -> Result<bool> {
     let doc_id = escape_graphql_string(&goal.doc_id);
     let node_did = escape_graphql_string(&goal.node_did);
     let mutation = format!(
@@ -2479,7 +2479,9 @@ pub async fn delete_goal(node: &EmbeddedNode, goal: &GoalDocument) -> Result<boo
             delete_Goal(filter: {{ _docID: {{ _eq: "{doc_id}" }}, node_did: {{ _eq: "{node_did}" }} }}) {{ _docID }}
         }}"#
     );
-    let response = execute_goal_mutation_response(node, &mutation, "goal.delete").await?;
+    let response =
+        crate::config_client::ConfigAccess::write_local_response(node, "goal.delete", &mutation)
+            .await?;
     Ok(response
         .data
         .as_ref()
@@ -2492,7 +2494,7 @@ pub async fn delete_goal(node: &EmbeddedNode, goal: &GoalDocument) -> Result<boo
 /// do not provide a distributed P2P uniqueness guarantee; clear must therefore
 /// sweep the complete ownership scope rather than delete only the canonical row.
 pub async fn delete_goals_for_session(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
     session_id: &str,
 ) -> Result<usize> {
@@ -2500,7 +2502,7 @@ pub async fn delete_goals_for_session(
     let session_id = escape_graphql_string(session_id);
     let node_did = &node_did;
     let session_id = &session_id;
-    crate::config_client::ConfigAccess::transact_local(
+    crate::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "goal.delete_for_session",
@@ -2541,7 +2543,7 @@ pub async fn delete_goals_for_session(
 /// continuation sequence remain current. A resumed goal may have the same
 /// status as an older snapshot, but belongs to a newer continuation.
 pub async fn update_goal_fields_if_status(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     goal: &GoalDocument,
     expected_status: GoalStatus,
     fields: &str,
@@ -2563,7 +2565,7 @@ pub async fn update_goal_fields_if_status(
             ) {{ _docID }}
         }}"#
     );
-    crate::config_client::ConfigAccess::transact_local(
+    crate::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "goal.update_controller_fields",
@@ -2597,7 +2599,7 @@ pub async fn update_goal_fields_if_status(
 }
 
 pub async fn claim_continuation(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     goal: &GoalDocument,
     parent_request_id: &str,
 ) -> Result<bool> {
@@ -2627,8 +2629,12 @@ pub async fn claim_continuation(
             ) {{ _docID }}
         }}"#
     );
-    let response =
-        execute_goal_mutation_response(node, &mutation, "goal.claim_continuation").await?;
+    let response = crate::config_client::ConfigAccess::write_local_response(
+        node,
+        "goal.claim_continuation",
+        &mutation,
+    )
+    .await?;
     Ok(response
         .data
         .as_ref()
@@ -2640,7 +2646,7 @@ pub async fn claim_continuation(
 /// There is intentionally no durable phase in which a parent is charged but
 /// remains unclaimed, because recovery would otherwise charge it again.
 pub async fn claim_retry_continuation(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     goal: &GoalDocument,
     parent_request_id: &str,
     retry_count: i64,
@@ -2675,8 +2681,12 @@ pub async fn claim_retry_continuation(
             ) {{ _docID }}
         }}"#
     );
-    let response =
-        execute_goal_mutation_response(node, &mutation, "goal.claim_retry_continuation").await?;
+    let response = crate::config_client::ConfigAccess::write_local_response(
+        node,
+        "goal.claim_retry_continuation",
+        &mutation,
+    )
+    .await?;
     Ok(response
         .data
         .as_ref()
@@ -2687,13 +2697,16 @@ pub async fn claim_retry_continuation(
 /// Sum of tokens charged against the session's budget: the charged total,
 /// same as the request ledger (`crate::provider_usage::sum_charged_from_persisted_parts`).
 pub async fn session_token_usage(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
     session_id: &str,
 ) -> Result<i64> {
-    crate::config_client::ConfigAccess::transact_local(node, None, "goal.session_usage", |txn| {
-        Box::pin(async move { session_token_usage_in_txn(txn, node_did, session_id).await })
-    })
+    crate::config_client::ConfigAccess::transact_local_readonly(
+        node,
+        None,
+        "goal.session_usage",
+        |txn| Box::pin(async move { session_token_usage_in_txn(txn, node_did, session_id).await }),
+    )
     .await
 }
 
@@ -2754,7 +2767,10 @@ async fn session_token_usage_in_txn(
     Ok(i64::try_from(charged).unwrap_or(i64::MAX))
 }
 
-pub async fn refresh_goal_usage(node: &EmbeddedNode, goal: &GoalDocument) -> Result<i64> {
+pub async fn refresh_goal_usage(
+    node: &std::sync::Arc<EmbeddedNode>,
+    goal: &GoalDocument,
+) -> Result<i64> {
     let tokens = session_token_usage(node, &goal.node_did, &goal.session_id)
         .await?
         .saturating_sub(goal.token_usage_baseline.unwrap_or_default().max(0))
@@ -2782,16 +2798,6 @@ pub async fn refresh_goal_usage(node: &EmbeddedNode, goal: &GoalDocument) -> Res
     )
     .await?;
     Ok(tokens)
-}
-
-async fn execute_goal_mutation_response(
-    node: &EmbeddedNode,
-    mutation: &str,
-    operation: &'static str,
-) -> Result<QueryResponse> {
-    let response =
-        crate::config_client::ConfigAccess::write_local(node, operation, mutation).await?;
-    serde_json::from_value(response).context("decoding committed goal mutation response")
 }
 
 fn mutation_returned_rows(value: &serde_json::Value) -> bool {
@@ -3018,7 +3024,7 @@ mod tests {
 
     #[tokio::test]
     async fn auto_resume_field_round_trips_through_the_live_schema() {
-        let node = EmbeddedNode::builder().build().await.unwrap();
+        let node = std::sync::Arc::new(EmbeddedNode::builder().build().await.unwrap());
         crate::schema::ensure_runtime_schemas(&node).await.unwrap();
         let owner = "did:key:z6MkTestOwner";
         let goal = set_goal(&node, owner, "session", Some("ship"), None, None)
@@ -3043,7 +3049,7 @@ mod tests {
     async fn auto_resume_access() -> crate::ConfigAccess {
         let node = std::sync::Arc::new(EmbeddedNode::builder().build().await.unwrap());
         crate::schema::ensure_runtime_schemas(&node).await.unwrap();
-        crate::ConfigAccess::Local(node)
+        crate::ConfigAccess::local(node)
     }
 
     #[tokio::test]
@@ -3064,9 +3070,7 @@ mod tests {
     #[tokio::test]
     async fn auto_resume_none_and_set_goal_keep_the_stored_value() {
         let access = auto_resume_access().await;
-        let crate::ConfigAccess::Local(node) = &access else {
-            unreachable!()
-        };
+        let node = access.local_node().expect("local test access");
         let owner = "did:key:z6MkTestOwner";
         set_goal_from_access(&access, owner, "s", Some("ship"), None, None, Some(true))
             .await

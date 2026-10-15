@@ -7,9 +7,11 @@ use gents::config_client::read_desired_state_record_in_txn;
 use gents::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents::document_config::ToolServiceRegistry;
 use gents::Tools;
+#[cfg(test)]
+use std::sync::Arc;
 
 #[cfg(test)]
-pub async fn upsert_tools(node: &EmbeddedNode, document: &Tools) -> Result<()> {
+pub async fn upsert_tools(node: &Arc<EmbeddedNode>, document: &Tools) -> Result<()> {
     let value = serde_json::to_value(document)?;
     let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
         collection: Collection::Tools,
@@ -31,7 +33,7 @@ pub async fn upsert_tools_on(access: &ConfigAccess, document: &Tools) -> Result<
 
 #[cfg(test)]
 pub async fn upsert_tool_service_registry(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     document: &ToolServiceRegistry,
 ) -> Result<()> {
     let value = serde_json::to_value(document)?;
@@ -57,7 +59,7 @@ pub async fn upsert_tool_service_registry_on(
 }
 
 #[cfg(test)]
-pub async fn delete_tools(node: &EmbeddedNode, node_did: &str, id: &str) -> Result<usize> {
+pub async fn delete_tools(node: &Arc<EmbeddedNode>, node_did: &str, id: &str) -> Result<usize> {
     super::delete_scoped_document_local(
         node,
         "desktop.tools.delete",
@@ -81,7 +83,7 @@ pub async fn delete_tools_on(access: &ConfigAccess, node_did: &str, id: &str) ->
 
 #[cfg(test)]
 pub async fn delete_tool_service_registry(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     node_did: &str,
     id: &str,
 ) -> Result<usize> {
@@ -118,7 +120,7 @@ mod tests {
     #[tokio::test]
     async fn tools_replacement_revokes_groups_and_service_delete_checks_retained_refs() -> Result<()>
     {
-        let node = EmbeddedNode::builder().build().await?;
+        let node = Arc::new(EmbeddedNode::builder().build().await?);
         gents::ensure_runtime_schemas(&node).await?;
         for owner in ["did:test:owner", "did:test:other"] {
             gents::ensure_node(&node, owner).await?;
@@ -152,7 +154,7 @@ mod tests {
         replaced.host = None;
         replaced.remote = None;
         upsert_tools(&node, &replaced).await?;
-        ConfigAccess::transact_local(&node, None, "test.read", |txn| {
+        ConfigAccess::transact_local_write(&node, None, "test.read", |txn| {
             let replaced = &replaced;
             let other = &other;
             Box::pin(async move {

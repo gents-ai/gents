@@ -83,7 +83,7 @@ impl AgentToolConfig {
     }
 
     /// The agents group follows `AgentTools.enabled` alone (Lean
-    /// `ToolPolicy.Surface.sessionMessages`): `agent_message`, `agent_list` and
+    /// `ToolPolicy.Surface.sessionMessages`): `agent_message`, `agent_list`, `agent_session_list`, `agent_session_read` and
     /// `agent_interrupt` address sessions on this node and need no target.
     pub(crate) fn tools_enabled(&self) -> bool {
         self.enabled

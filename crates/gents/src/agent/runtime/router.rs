@@ -446,7 +446,7 @@ pub(super) async fn fail_routed_request(
             Err(error) => {
                 let reason = format!("request admission denied: {error:#}");
                 return crate::request_admission::terminalize_pending_request_rejection(
-                    node.as_ref(),
+                    &node,
                     &request.doc_id,
                     node_did,
                     &reason,

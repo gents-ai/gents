@@ -66,13 +66,14 @@ function status(overrides: Partial<ManagedServerStatus> = {}): ManagedServerStat
   };
 }
 
-function fleet(listed: DeploymentView[]) {
+/* `read`: nodes whose configuration the bridge has read from the node */
+function fleet(listed: DeploymentView[], read: string[] = []) {
   const api = {
     managedServerStatus: vi.fn(async () => status()),
     startManagedServer: vi.fn(async () => status()),
     fetchDesktopSnapshot: vi.fn(async () => ({
       bootstrap: forgeBootstrap,
-      client: { deployments: listed },
+      client: { deployments: listed, operatorConfigAuthoritativeNodeDids: read },
     })),
     requestStatusEnrollment: vi.fn(async (_address: string) => ({
       requestId: "request-1",
@@ -85,7 +86,10 @@ function fleet(listed: DeploymentView[]) {
   };
   const app = testApp({
     api,
-    snapshot: { bootstrap: forgeBootstrap, client: { deployments: listed } },
+    snapshot: {
+      bootstrap: forgeBootstrap,
+      client: { deployments: listed, operatorConfigAuthoritativeNodeDids: read },
+    },
     reportFailure: toast,
   });
   return { api, app };
@@ -177,6 +181,24 @@ describe("Add node enrollment", () => {
       expect(api.requestStatusEnrollment).toHaveBeenCalledWith("server.example:9191"),
     );
     expect(api.fetchDesktopSnapshot).toHaveBeenCalled();
+  });
+});
+
+describe("the local node's Setup needed", () => {
+  /* the fixture's backend is init's placeholder: not configured */
+  it("shows once the node's configuration is read and it has no inference", async () => {
+    const { app } = fleet([forge], [forge.nodeDid]);
+    renderIn(app, <AgentsScreen />);
+    expect(await screen.findByRole("button", { name: "Setup needed" })).toBeVisible();
+  });
+
+  it("does not show before the configuration is read: what it lacks is unread", async () => {
+    const { app } = fleet([{ ...forge, inferenceBackends: [] }]);
+    renderIn(app, <AgentsScreen />);
+    expect(await screen.findByText("Forge")).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: "Setup needed" }),
+    ).not.toBeInTheDocument();
   });
 });
 
@@ -283,7 +305,7 @@ describe("first-run local agent name", () => {
       ),
     );
     expect(api.startManagedServer).toHaveBeenCalledWith("Scout", expect.anything());
-    expect(await screen.findByText(/Scout is running as/)).toBeInTheDocument();
+    expect(await screen.findByText(/Scout is running/)).toBeInTheDocument();
   });
 
   it("fails clearly instead of continuing under another agent's name", async () => {
@@ -302,7 +324,7 @@ describe("first-run local agent name", () => {
     ).toBeInTheDocument();
     expect(api.initLocalStandardRuntime).not.toHaveBeenCalled();
     expect(api.fetchDesktopSnapshot).toHaveBeenCalled();
-    expect(screen.queryByText(/Saved the local connection/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Saved the connection/)).not.toBeInTheDocument();
     expect(screen.getByText("Try again")).toBeInTheDocument();
   });
 });

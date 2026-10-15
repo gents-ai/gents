@@ -67,7 +67,7 @@ async fn authored_publication_replays_and_reconstructs_exact_message() {
         .unwrap();
     assert_eq!(first, replay);
     let (_, reconstructed) = crate::session::load_canonical_message(
-        &crate::config_client::ConfigAccess::Local(node.clone()),
+        &crate::config_client::ConfigAccess::local(node.clone()),
         &first,
         "did:test:test",
         None,
@@ -315,6 +315,101 @@ fn provider_segment_for_message(
 }
 
 #[tokio::test]
+#[ignore = "manual persistent provider publication benchmark"]
+async fn provider_publication_request_size_benchmark() {
+    use crate::config_client::ConfigAccess;
+    use crate::session::canonical_rows::{
+        output_segment_create_variables, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+    };
+    use gents_protocol::output::{OutputSource, SourceClose};
+    let mut measurements = Vec::new();
+    for sources in [1_usize, 32, 128] {
+        let (node, path, lifecycle, _) = fixture(&format!("publication-benchmark-{sources}")).await;
+        let message = gents_protocol::message::Message::assistant("x".repeat(64 * 1024));
+        let (mut noise, _) =
+            provider_segment_for_message(&lifecycle, &message, chrono::Utc::now().to_rfc3339());
+        noise.close = Some(SourceClose::Closed {
+            outcome: gents_protocol::output::OutputOutcome::Complete,
+            segments: 1,
+            stream_bytes: vec![noise.payload.len().try_into().unwrap()],
+        });
+        ConfigAccess::transact_local_write(&node, None, "test.publication_benchmark_seed", |txn| {
+            let mut noise = noise.clone();
+            Box::pin(async move {
+                for index in 0..sources {
+                    noise.source = OutputSource::Authored {
+                        key: format!("noise-{index}"),
+                    };
+                    txn.execute_with_variables(
+                        CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+                        &output_segment_create_variables(&noise)?,
+                    )
+                    .await?;
+                }
+                Ok(())
+            })
+        })
+        .await
+        .unwrap();
+        let mut fresh = Vec::new();
+        let mut replay = Vec::new();
+        let mut fresh_scans = Vec::new();
+        let mut replay_scans = Vec::new();
+        for iteration in 0..6_u32 {
+            let (mut segment, encoded) =
+                provider_segment_for_message(&lifecycle, &message, chrono::Utc::now().to_rfc3339());
+            if let OutputSource::ProviderTurn { turn_index, .. } = &mut segment.source {
+                *turn_index = iteration;
+            }
+            let publish = || {
+                super::canonical::publish_provider_turn(
+                    &node,
+                    lifecycle.execution_generation().unwrap(),
+                    super::canonical::ProviderPublicationPlan {
+                        final_flush: Some(segment.clone()),
+                        message_key: format!("benchmark-turn-{iteration}"),
+                        encoded: encoded.clone(),
+                        expected: Arc::new(message.clone()),
+                        tool_deadline_at: lifecycle.claimed_deadline_at().unwrap().to_rfc3339(),
+                        background_calls: Vec::new(),
+                        consumes_folded: None,
+                    },
+                )
+            };
+            let start = std::time::Instant::now();
+            let (published, scans) = crate::session::count_request_output_scans(publish()).await;
+            let published = published.unwrap();
+            fresh_scans.push(scans);
+            let fresh_ms = start.elapsed().as_secs_f64() * 1000.0;
+            let start = std::time::Instant::now();
+            let (replayed, scans) = crate::session::count_request_output_scans(publish()).await;
+            let replayed = replayed.unwrap();
+            replay_scans.push(scans);
+            let replay_ms = start.elapsed().as_secs_f64() * 1000.0;
+            assert_eq!(published.message_doc_id, replayed.message_doc_id);
+            if iteration > 0 {
+                fresh.push(fresh_ms);
+                replay.push(replay_ms);
+            }
+        }
+        fresh.sort_by(f64::total_cmp);
+        replay.sort_by(f64::total_cmp);
+        measurements.push(serde_json::json!({
+            "prior_sources": sources, "bytes_per_source": 64 * 1024,
+            "fresh_publication_median_ms": fresh[2], "replay_median_ms": replay[2],
+            "fresh_request_scans": fresh_scans, "replay_request_scans": replay_scans,
+        }));
+        node.shutdown().await;
+        std::fs::remove_dir_all(path).unwrap();
+    }
+    let result = serde_json::json!({"measurements": measurements, "persistent_node": true});
+    if let Some(path) = std::env::var_os("GENTS_PUBLICATION_BENCHMARK_OUTPUT") {
+        std::fs::write(path, serde_json::to_vec_pretty(&result).unwrap()).unwrap();
+    }
+    tracing::info!(%result, "provider publication benchmark");
+}
+
+#[tokio::test]
 async fn first_publication_rejects_native_message_that_differs_from_reconstruction() {
     let (node, path, lifecycle, _writer) = fixture("first-native-mismatch").await;
     let actual = gents_protocol::message::Message::assistant("persisted bytes");
@@ -357,7 +452,7 @@ async fn first_publication_rejects_native_message_that_differs_from_reconstructi
 }
 
 async fn publish_tool_turn_for_rollback_test(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     lifecycle: &RequestLifecycle,
     message: &gents_protocol::message::Message,
 ) -> anyhow::Result<super::canonical::PublishedProviderTurn> {
@@ -375,6 +470,46 @@ async fn publish_tool_turn_for_rollback_test(
     // Exercise the canonical publication owner, not a test-side write script.
     super::canonical::publish_provider_turn(node, lifecycle.execution_generation().unwrap(), plan)
         .await
+}
+
+#[tokio::test]
+async fn publication_and_replay_read_a_multi_source_request_once() {
+    let (node, path, lifecycle, writer) = fixture("publication-single-scan").await;
+    for index in 0..3 {
+        writer
+            .publish_authored_message(
+                &lifecycle,
+                &format!("authored-{index}"),
+                &gents_protocol::message::Message::user(format!("earlier-{index}")),
+            )
+            .await
+            .unwrap();
+    }
+    let message = gents_protocol::message::Message::assistant("selected source");
+    let (published, scans) = crate::session::count_request_output_scans(
+        publish_tool_turn_for_rollback_test(&node, &lifecycle, &message),
+    )
+    .await;
+    let published = published.unwrap();
+    assert_eq!(scans, 1);
+    let (replayed, scans) = crate::session::count_request_output_scans(
+        publish_tool_turn_for_rollback_test(&node, &lifecycle, &message),
+    )
+    .await;
+    assert_eq!(scans, 1);
+    assert_eq!(published.message_doc_id, replayed.unwrap().message_doc_id);
+    let history = crate::session::load_history(
+        &node,
+        &lifecycle.request().session_id,
+        "did:test:test",
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(history.len(), 4);
+    assert_eq!(history.last(), Some(&message));
+    node.shutdown().await;
+    std::fs::remove_dir_all(path).unwrap();
 }
 
 #[tokio::test]
@@ -433,7 +568,7 @@ async fn recovery_receipt_fixture(
 ) {
     let (node, path, lifecycle, writer) = fixture(name).await;
     let request = lifecycle.request();
-    crate::config_client::ConfigAccess::transact_local(
+    crate::config_client::ConfigAccess::transact_local_write(
         &node,
         None,
         "test.recovery_session_observation",
@@ -822,7 +957,7 @@ async fn multiple_flushes_close_and_reconstruct_exact_final_message() {
         .await
         .unwrap();
     let (_, reconstructed) = crate::session::load_canonical_message(
-        &crate::config_client::ConfigAccess::Local(node.clone()),
+        &crate::config_client::ConfigAccess::local(node.clone()),
         &published.message_doc_id,
         "did:test:test",
         None,
@@ -864,7 +999,7 @@ async fn published_turn_stays_nonterminal_until_request_selection_commits() {
         crate::graphql::escape_graphql_string(&lifecycle.request().doc_id),
         crate::watcher::AGENT_REQUEST_FIELDS,
     );
-    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let access = crate::config_client::ConfigAccess::local(node.clone());
     writer
         .flush_native_partial(&lifecycle, &expected)
         .await
@@ -995,7 +1130,7 @@ async fn final_delta_shares_its_closing_record_and_replay_adds_nothing() {
             })
         );
         let (_, reconstructed) = crate::session::load_canonical_message(
-            &crate::config_client::ConfigAccess::Local(node.clone()),
+            &crate::config_client::ConfigAccess::local(node.clone()),
             &published.message_doc_id,
             "did:test:test",
             None,
@@ -1073,7 +1208,7 @@ async fn publication_timestamp_follows_a_flush_that_already_owns_the_tail() {
         .await
         .expect("publication must timestamp after the earlier flusher");
     let (_, observed) = crate::session::load_canonical_message(
-        &crate::config_client::ConfigAccess::Local(node.clone()),
+        &crate::config_client::ConfigAccess::local(node.clone()),
         &published.message_doc_id,
         &request.node_did,
         request.requester_did.as_deref(),
@@ -1156,7 +1291,7 @@ async fn failed_attempt_closes_the_acknowledged_prefix_as_partial() {
         panic!("a retained text prefix must publish a selectable partial header")
     };
     let (header, reconstructed) = crate::session::load_canonical_message(
-        &crate::config_client::ConfigAccess::Local(node.clone()),
+        &crate::config_client::ConfigAccess::local(node.clone()),
         &message_doc_id,
         "did:test:test",
         None,
@@ -1306,13 +1441,25 @@ async fn accepted_tool_publication_replay_returns_exact_physical_bindings() {
         .await;
     let message = Message::Assistant {
         id: Some("provider-message".into()),
-        content: vec![AssistantContent::ToolCall(ToolCall {
-            id: "native-tool".into(),
-            call_id: Some("provider-call".into()),
-            function: ToolFunction::new("read".into(), serde_json::json!({"path":"文.txt"})),
-            signature: Some("sig".into()),
-            additional_params: None,
-        })],
+        content: vec![
+            AssistantContent::ToolCall(ToolCall {
+                id: "native-tool".into(),
+                call_id: Some("provider-call".into()),
+                function: ToolFunction::new("read".into(), serde_json::json!({"path":"文.txt"})),
+                signature: Some("sig".into()),
+                additional_params: None,
+            }),
+            AssistantContent::ToolCall(ToolCall {
+                id: "native-tool-2".into(),
+                call_id: Some("provider-call-2".into()),
+                function: ToolFunction::new(
+                    "write".into(),
+                    serde_json::json!({"path":"other.txt"}),
+                ),
+                signature: None,
+                additional_params: None,
+            }),
+        ],
     };
     let first = writer
         .publish_native_turn(&lifecycle, 0, 0, &message)
@@ -1324,15 +1471,43 @@ async fn accepted_tool_publication_replay_returns_exact_physical_bindings() {
         .unwrap();
     assert_eq!(first.message_doc_id, replay.message_doc_id);
     assert_eq!(first.sequence, replay.sequence);
-    assert_eq!(first.accepted_tools.len(), 1);
-    assert_eq!(replay.accepted_tools.len(), 1);
-    let a = &first.accepted_tools[0];
-    let b = &replay.accepted_tools[0];
-    assert_eq!(a.tool_call_doc_id, b.tool_call_doc_id);
-    assert_eq!(a.accepted_header_doc_id, b.accepted_header_doc_id);
-    assert_eq!(a.arguments, b.arguments);
-    assert_eq!(a.id, "native-tool");
-    assert_eq!(a.call_id.as_deref(), Some("provider-call"));
+    assert_eq!(first.accepted_tools.len(), 2);
+    assert_eq!(replay.accepted_tools.len(), 2);
+    let tool_rows = node
+        .execute(&format!(
+            r#"{{ AgentToolCall(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ _docID tool_call_id }} }}"#,
+            crate::graphql::escape_graphql_string(&lifecycle.request().doc_id),
+        ))
+        .await;
+    assert!(!tool_rows.has_errors(), "{:?}", tool_rows.errors);
+    let rows = tool_rows.data.unwrap()["AgentToolCall"]
+        .as_array()
+        .unwrap()
+        .clone();
+    let doc_id_for = |tool_call_id: &str| {
+        rows.iter()
+            .find(|row| row["tool_call_id"] == tool_call_id)
+            .unwrap()["_docID"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    for (index, (tool_id, call_id)) in [
+        ("native-tool", Some("provider-call")),
+        ("native-tool-2", Some("provider-call-2")),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let a = &first.accepted_tools[index];
+        let b = &replay.accepted_tools[index];
+        assert_eq!(a.id, tool_id);
+        assert_eq!(a.call_id.as_deref(), call_id);
+        assert_eq!(a.tool_call_doc_id, doc_id_for(tool_id));
+        assert_eq!(a.tool_call_doc_id, b.tool_call_doc_id);
+        assert_eq!(a.accepted_header_doc_id, b.accepted_header_doc_id);
+        assert_eq!(a.arguments, b.arguments);
+    }
     node.shutdown().await;
     let _ = std::fs::remove_dir_all(path);
 }

@@ -505,7 +505,7 @@ async fn typed_resume_obeys_cancelled_or_failed_graph_fence() {
         }
         let before = publication_state(&node).await;
         let result = crate::goal::resume_goal_request(
-            &crate::ConfigAccess::Local(node.clone()),
+            &crate::ConfigAccess::local(node.clone()),
             &identity,
             identity.did(),
             "logical-session",
@@ -545,7 +545,7 @@ async fn typed_resume_advances_graph_generation_with_signed_child() {
         .await
         .unwrap();
     let receipt = crate::goal::resume_goal_request(
-        &crate::ConfigAccess::Local(node.clone()),
+        &crate::ConfigAccess::local(node.clone()),
         &identity,
         identity.did(),
         "logical-session",
@@ -586,7 +586,7 @@ async fn typed_resume_advances_graph_generation_with_signed_child() {
     assert_eq!(resumed.continuation_sequence(), 1);
     // Acknowledgment retry must not acquire another graph generation.
     let repeated = crate::goal::resume_goal_request(
-        &crate::ConfigAccess::Local(node.clone()),
+        &crate::ConfigAccess::local(node.clone()),
         &identity,
         identity.did(),
         "logical-session",
@@ -1069,7 +1069,7 @@ async fn graph_fixture_root_binding_survives_task_metadata_changes() {
             ("verifier".into(), "package:inference".into()),
         ]),
     };
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let installed = install_test_graph_package(&access, identity.did(), "review_graph", &bindings)
         .await
         .unwrap();

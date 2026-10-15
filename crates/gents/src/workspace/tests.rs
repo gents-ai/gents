@@ -299,7 +299,6 @@ fn isolated_workspace_mutation_has_no_host_path() {
         head_sha: None,
         changed_files: None,
         diff_artifact: None,
-        checks_run: None,
         unresolved_conflicts: None,
         integration_instructions: None,
     };
@@ -969,8 +968,8 @@ fn concurrent_read_only_after_seal_with_matching_hash() {
     assert!(b.is_active());
 }
 
-#[test]
-fn seal_drift_fails_closed() {
+#[tokio::test]
+async fn seal_drift_fails_closed() {
     let fx = Fixture::new();
     let mut docs = MemoryWorkspaceDocuments::default();
     let action = fx.action("ws-drift", "unit-1", "topic-drift");
@@ -986,7 +985,7 @@ fn seal_drift_fails_closed() {
     let sealed = seal_writer(&fx, &mut docs, "ws-drift", "req-writer");
     let hash = sealed.workspace.seal_hash.clone().unwrap();
     fs::write(dest.join("after-seal.txt"), "mutated after review\n").unwrap();
-    let live = super::adapter::working_tree_hash(&dest).unwrap();
+    let live = super::adapter::working_tree_hash(&dest).await.unwrap();
     assert_ne!(live, hash);
 
     let mut workspace = super::IsolatedWorkspaceRecord {

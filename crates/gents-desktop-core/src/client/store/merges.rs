@@ -1,3 +1,4 @@
+use super::indexing::normalize_rows;
 use super::*;
 
 fn replace_node_rows<T>(
@@ -29,6 +30,218 @@ fn replace_node_rows_with_sources<T>(
     dest.extend(incoming);
 }
 
+// Both the incoming store and retained rows use this policy in place, avoiding
+// a full snapshot clone just to share the scope filter.
+macro_rules! retain_node_scope {
+    ($store:expr, $node_did:expr, $keep_target:expr) => {{
+        let rows = $store;
+        let node_did = $node_did;
+        let keep_target = $keep_target;
+        let node_session_ids = if keep_target {
+            HashSet::new()
+        } else {
+            let mut session_ids = rows
+                .sessions
+                .iter()
+                .filter(|row| row.node_did == node_did)
+                .map(|row| row.session_id.clone())
+                .collect::<HashSet<_>>();
+            session_ids.extend(
+                rows.requests
+                    .iter()
+                    .filter(|row| row.node_did.as_deref() == Some(node_did))
+                    .filter_map(|row| row.session_id.clone()),
+            );
+            session_ids
+        };
+
+        rows.operator_config_authoritative_node_dids
+            .retain(|owner| (owner == node_did) == keep_target);
+        rows.nodes
+            .retain(|row| (row.node_did == node_did) == keep_target);
+        rows.agents
+            .retain(|row| (row.node_did == node_did) == keep_target);
+        rows.runtimes
+            .retain(|row| (row.node_did == node_did) == keep_target);
+        rows.node_readiness
+            .retain(|row| (row.node_did == node_did) == keep_target);
+        rows.requests
+            .retain(|row| (row.node_did.as_deref() == Some(node_did)) == keep_target);
+        rows.mailbox_items
+            .retain(|row| (row.node_did == node_did) == keep_target);
+        rows.goals
+            .retain(|row| (row.node_did == node_did) == keep_target);
+        rows.transcript_messages
+            .retain(|row| (row.message.node_did == node_did) == keep_target);
+        rows.output_segments
+            .retain(|row| (row.segment.node_did == node_did) == keep_target);
+        retain_rows_and_sources(
+            &mut rows.sessions,
+            &mut rows.session_source_node_dids,
+            |row, source| {
+                row_is_in_node_scope(Some(&row.node_did), source, node_did) == keep_target
+            },
+        );
+        retain_rows_and_sources(
+            &mut rows.tool_calls,
+            &mut rows.tool_call_source_node_dids,
+            |row, source| {
+                let ownerless_target_session = !keep_target
+                    && row.node_did.is_none()
+                    && source.is_none()
+                    && row
+                        .session_id
+                        .as_deref()
+                        .is_some_and(|session_id| node_session_ids.contains(session_id));
+                (row_is_in_node_scope(row.node_did.as_deref(), source, node_did)
+                    || ownerless_target_session)
+                    == keep_target
+            },
+        );
+        retain_rows_and_sources(
+            &mut rows.compaction_entries,
+            &mut rows.compaction_entry_source_node_dids,
+            |row, source| {
+                let ownerless_target_session = !keep_target
+                    && source.is_none()
+                    && row
+                        .session_id
+                        .as_deref()
+                        .is_some_and(|session_id| node_session_ids.contains(session_id));
+                (row_is_in_node_scope(None, source, node_did) || ownerless_target_session)
+                    == keep_target
+            },
+        );
+        retain_rows_and_sources(
+            &mut rows.tasks,
+            &mut rows.task_source_node_dids,
+            |row, source| {
+                row_is_in_node_scope(Some(&row.node_did), source, node_did) == keep_target
+            },
+        );
+        retain_rows_and_sources(
+            &mut rows.schedules,
+            &mut rows.schedule_source_node_dids,
+            |row, source| {
+                row_is_in_node_scope(Some(&row.node_did), source, node_did) == keep_target
+            },
+        );
+        retain_rows_and_sources(
+            &mut rows.schedule_observations,
+            &mut rows.schedule_observation_source_node_dids,
+            |_row, source| row_is_in_node_scope(None, source, node_did) == keep_target,
+        );
+        retain_rows_and_sources(
+            &mut rows.triggers,
+            &mut rows.trigger_source_node_dids,
+            |row, source| {
+                row_is_in_node_scope(Some(&row.node_did), source, node_did) == keep_target
+            },
+        );
+        retain_rows_and_sources(
+            &mut rows.trigger_observations,
+            &mut rows.trigger_observation_source_node_dids,
+            |_row, source| row_is_in_node_scope(None, source, node_did) == keep_target,
+        );
+        retain_rows_and_sources(
+            &mut rows.skills,
+            &mut rows.skill_source_node_dids,
+            |row, source| {
+                row_is_in_node_scope(Some(&row.node_did), source, node_did) == keep_target
+            },
+        );
+        retain_rows_and_sources(
+            &mut rows.tools,
+            &mut rows.tools_source_node_dids,
+            |row, source| {
+                row_is_in_node_scope(Some(&row.node_did), source, node_did) == keep_target
+            },
+        );
+        retain_rows_and_sources(
+            &mut rows.contexts,
+            &mut rows.context_source_node_dids,
+            |row, source| {
+                row_is_in_node_scope(Some(&row.node_did), source, node_did) == keep_target
+            },
+        );
+        retain_rows_and_sources(
+            &mut rows.compactions,
+            &mut rows.compaction_source_node_dids,
+            |row, source| {
+                row_is_in_node_scope(Some(&row.node_did), source, node_did) == keep_target
+            },
+        );
+        retain_rows_and_sources(
+            &mut rows.inference_backends,
+            &mut rows.inference_backend_source_node_dids,
+            |row, source| {
+                row_is_in_node_scope(Some(&row.node_did), source, node_did) == keep_target
+            },
+        );
+        retain_rows_and_sources(
+            &mut rows.backend_observations,
+            &mut rows.backend_observation_source_node_dids,
+            |_row, source| row_is_in_node_scope(None, source, node_did) == keep_target,
+        );
+        retain_rows_and_sources(
+            &mut rows.inference_profiles,
+            &mut rows.inference_profile_source_node_dids,
+            |row, source| {
+                row_is_in_node_scope(Some(&row.node_did), source, node_did) == keep_target
+            },
+        );
+        retain_rows_and_sources(
+            &mut rows.inference_sampling,
+            &mut rows.inference_sampling_source_node_dids,
+            |row, source| {
+                row_is_in_node_scope(Some(&row.node_did), source, node_did) == keep_target
+            },
+        );
+        retain_rows_and_sources(
+            &mut rows.inference_execution,
+            &mut rows.inference_execution_source_node_dids,
+            |row, source| {
+                row_is_in_node_scope(Some(&row.node_did), source, node_did) == keep_target
+            },
+        );
+        retain_rows_and_sources(
+            &mut rows.tool_service_registries,
+            &mut rows.tool_service_registry_source_node_dids,
+            |row, source| {
+                row_is_in_node_scope(Some(&row.node_did), source, node_did) == keep_target
+            },
+        );
+        retain_rows_and_sources(
+            &mut rows.event_sources,
+            &mut rows.event_source_source_node_dids,
+            |row, source| {
+                row_is_in_node_scope(Some(&row.node_did), source, node_did) == keep_target
+            },
+        );
+        retain_rows_and_sources(
+            &mut rows.agent_targets,
+            &mut rows.agent_target_source_node_dids,
+            |row, source| {
+                row_is_in_node_scope(Some(&row.node_did), source, node_did) == keep_target
+            },
+        );
+        retain_rows_and_sources(
+            &mut rows.datastore_tool_surfaces,
+            &mut rows.datastore_tool_surface_source_node_dids,
+            |row, source| {
+                row_is_in_node_scope(Some(&row.node_did), source, node_did) == keep_target
+            },
+        );
+        retain_rows_and_sources(
+            &mut rows.chain_key_bindings,
+            &mut rows.chain_key_binding_source_node_dids,
+            |row, source| {
+                row_is_in_node_scope(Some(&row.node_did), source, node_did) == keep_target
+            },
+        );
+    }};
+}
+
 impl ClientStore {
     /// Replace this agent's operator-owned config and runtime readiness with
     /// rows loaded from the runtime GraphQL endpoint. Local-only leftovers
@@ -36,6 +249,16 @@ impl ClientStore {
     /// matches the process that will actually run inference.
     pub fn overlay_node_operator_config(&self, node_did: &str, incoming: &ClientStore) -> Self {
         let mut rows = self.to_rows();
+        if incoming
+            .operator_config_authoritative_node_dids
+            .contains(node_did)
+        {
+            rows.operator_config_authoritative_node_dids
+                .insert(node_did.to_owned());
+        } else {
+            rows.operator_config_authoritative_node_dids
+                .remove(node_did);
+        }
         let remote = incoming.to_rows();
         replace_node_rows(&mut rows.nodes, remote.nodes, node_did, |row| {
             row.node_did.as_str()
@@ -263,9 +486,10 @@ impl ClientStore {
     }
 
     pub fn merge_snapshot(&self, snapshot: ClientStore) -> Self {
-        let mut rows = self.to_rows();
-        let incoming = snapshot.to_rows();
+        Self::merge_snapshot_rows(self.to_rows(), snapshot.to_rows())
+    }
 
+    fn merge_snapshot_rows(mut rows: ClientStoreRows, incoming: ClientStoreRows) -> Self {
         upsert_rows_by_key(&mut rows.nodes, incoming.nodes, |row| row.node_did.clone());
         upsert_rows_by_key(&mut rows.agents, incoming.agents, agent_merge_key);
         upsert_rows_by_key(&mut rows.runtimes, incoming.runtimes, |row| {
@@ -274,6 +498,7 @@ impl ClientStore {
         upsert_rows_by_key(&mut rows.node_readiness, incoming.node_readiness, |row| {
             row.node_did.clone()
         });
+        retire_request_placeholders(&mut rows.requests, &incoming.requests);
         upsert_rows_by_key(&mut rows.requests, incoming.requests, request_merge_key);
         upsert_rows_by_key(&mut rows.mailbox_items, incoming.mailbox_items, |row| {
             row.doc_id.clone()
@@ -449,168 +674,20 @@ impl ClientStore {
     /// merging it. This is used for scoped reloads and delete recovery so rows
     /// absent from the database snapshot cannot survive indefinitely in memory.
     pub fn replace_node_scope(&self, node_did: &str, snapshot: ClientStore) -> Self {
+        let mut snapshot = snapshot;
+        retain_node_scope!(&mut snapshot, node_did, true);
+
         let mut rows = self.to_rows();
-        let mut node_session_ids = rows
-            .sessions
-            .iter()
-            .filter(|row| row.node_did == node_did)
-            .map(|row| row.session_id.clone())
-            .collect::<HashSet<_>>();
-        node_session_ids.extend(
-            rows.requests
+        retain_node_scope!(&mut rows, node_did, false);
+        rows.operator_config_authoritative_node_dids.extend(
+            snapshot
+                .operator_config_authoritative_node_dids
                 .iter()
-                .filter(|row| row.node_did.as_deref() == Some(node_did))
-                .filter_map(|row| row.session_id.clone()),
+                .cloned(),
         );
 
-        rows.nodes.retain(|row| row.node_did != node_did);
-        rows.agents.retain(|row| row.node_did != node_did);
-        rows.runtimes.retain(|row| row.node_did != node_did);
-        rows.node_readiness.retain(|row| row.node_did != node_did);
-        rows.requests
-            .retain(|row| row.node_did.as_deref() != Some(node_did));
-        rows.mailbox_items.retain(|row| row.node_did != node_did);
-        rows.goals.retain(|row| row.node_did != node_did);
-        rows.transcript_messages.retain(|row| {
-            row.message.node_did != node_did && !node_session_ids.contains(&row.message.session_id)
-        });
-        rows.output_segments.retain(|row| {
-            row.segment.node_did != node_did && !node_session_ids.contains(&row.segment.session_id)
-        });
-        retain_rows_and_sources(
-            &mut rows.sessions,
-            &mut rows.session_source_node_dids,
-            |row, source| {
-                row.node_did != node_did
-                    && source != Some(node_did)
-                    && !(source.is_none() && node_session_ids.contains(&row.session_id))
-            },
-        );
-        retain_rows_and_sources(
-            &mut rows.tool_calls,
-            &mut rows.tool_call_source_node_dids,
-            |row, source| {
-                source != Some(node_did)
-                    && !(source.is_none()
-                        && row
-                            .session_id
-                            .as_deref()
-                            .is_some_and(|session_id| node_session_ids.contains(session_id)))
-            },
-        );
-        retain_rows_and_sources(
-            &mut rows.compaction_entries,
-            &mut rows.compaction_entry_source_node_dids,
-            |row, source| {
-                source != Some(node_did)
-                    && !(source.is_none()
-                        && row
-                            .session_id
-                            .as_deref()
-                            .is_some_and(|session_id| node_session_ids.contains(session_id)))
-            },
-        );
-
-        // Scoped snapshots reload the complete local control plane. Replace
-        // local rows (source=None) and this remote agent's rows, while retaining
-        // rows explicitly stamped as belonging to other remote agents.
-        retain_rows_and_sources(
-            &mut rows.tasks,
-            &mut rows.task_source_node_dids,
-            |row, source| row.node_did != node_did && source != Some(node_did) && source.is_some(),
-        );
-        retain_rows_and_sources(
-            &mut rows.schedules,
-            &mut rows.schedule_source_node_dids,
-            |row, source| row.node_did != node_did && source != Some(node_did) && source.is_some(),
-        );
-        retain_rows_and_sources(
-            &mut rows.schedule_observations,
-            &mut rows.schedule_observation_source_node_dids,
-            |_row, source| source != Some(node_did) && source.is_some(),
-        );
-        retain_rows_and_sources(
-            &mut rows.triggers,
-            &mut rows.trigger_source_node_dids,
-            |row, source| row.node_did != node_did && source != Some(node_did) && source.is_some(),
-        );
-        retain_rows_and_sources(
-            &mut rows.trigger_observations,
-            &mut rows.trigger_observation_source_node_dids,
-            |_row, source| source != Some(node_did) && source.is_some(),
-        );
-        retain_rows_and_sources(
-            &mut rows.skills,
-            &mut rows.skill_source_node_dids,
-            |row, source| row.node_did != node_did && source != Some(node_did) && source.is_some(),
-        );
-        retain_rows_and_sources(
-            &mut rows.tools,
-            &mut rows.tools_source_node_dids,
-            |row, source| row.node_did != node_did && source != Some(node_did) && source.is_some(),
-        );
-        retain_rows_and_sources(
-            &mut rows.contexts,
-            &mut rows.context_source_node_dids,
-            |row, source| row.node_did != node_did && source != Some(node_did) && source.is_some(),
-        );
-        retain_rows_and_sources(
-            &mut rows.compactions,
-            &mut rows.compaction_source_node_dids,
-            |row, source| row.node_did != node_did && source != Some(node_did) && source.is_some(),
-        );
-        retain_rows_and_sources(
-            &mut rows.inference_backends,
-            &mut rows.inference_backend_source_node_dids,
-            |row, source| row.node_did != node_did && source != Some(node_did) && source.is_some(),
-        );
-        retain_rows_and_sources(
-            &mut rows.backend_observations,
-            &mut rows.backend_observation_source_node_dids,
-            |_row, source| source != Some(node_did) && source.is_some(),
-        );
-        retain_rows_and_sources(
-            &mut rows.inference_profiles,
-            &mut rows.inference_profile_source_node_dids,
-            |row, source| row.node_did != node_did && source != Some(node_did) && source.is_some(),
-        );
-        retain_rows_and_sources(
-            &mut rows.inference_sampling,
-            &mut rows.inference_sampling_source_node_dids,
-            |row, source| row.node_did != node_did && source != Some(node_did) && source.is_some(),
-        );
-        retain_rows_and_sources(
-            &mut rows.inference_execution,
-            &mut rows.inference_execution_source_node_dids,
-            |row, source| row.node_did != node_did && source != Some(node_did) && source.is_some(),
-        );
-        retain_rows_and_sources(
-            &mut rows.tool_service_registries,
-            &mut rows.tool_service_registry_source_node_dids,
-            |row, source| row.node_did != node_did && source != Some(node_did) && source.is_some(),
-        );
-        retain_rows_and_sources(
-            &mut rows.event_sources,
-            &mut rows.event_source_source_node_dids,
-            |row, source| row.node_did != node_did && source != Some(node_did) && source.is_some(),
-        );
-        retain_rows_and_sources(
-            &mut rows.agent_targets,
-            &mut rows.agent_target_source_node_dids,
-            |row, source| row.node_did != node_did && source != Some(node_did) && source.is_some(),
-        );
-        retain_rows_and_sources(
-            &mut rows.datastore_tool_surfaces,
-            &mut rows.datastore_tool_surface_source_node_dids,
-            |row, source| row.node_did != node_did && source != Some(node_did) && source.is_some(),
-        );
-        retain_rows_and_sources(
-            &mut rows.chain_key_bindings,
-            &mut rows.chain_key_binding_source_node_dids,
-            |row, source| row.node_did != node_did && source != Some(node_did) && source.is_some(),
-        );
-
-        ClientStore::from_rows(rows).merge_snapshot(snapshot)
+        normalize_rows(&mut rows);
+        Self::merge_snapshot_rows(rows, snapshot.to_rows())
     }
 
     pub fn merge_chat_patch(&self, patch: ClientStore) -> Self {
@@ -621,15 +698,7 @@ impl ClientStore {
         // submit may already have installed an unscoped optimistic row. Let
         // the scoped document replace that placeholder; keeping both makes
         // agent-aware turn lookup select the older processing row first.
-        let scoped_request_ids = patch_rows
-            .requests
-            .iter()
-            .filter(|row| row.node_did.is_some())
-            .map(|row| row.request_id.clone())
-            .collect::<HashSet<_>>();
-        rows.requests.retain(|row| {
-            row.node_did.is_some() || !scoped_request_ids.contains(row.request_id.as_str())
-        });
+        retire_request_placeholders(&mut rows.requests, &patch_rows.requests);
         upsert_rows_by_key(&mut rows.requests, patch_rows.requests, request_merge_key);
         union_immutable_rows(
             &mut rows.transcript_messages,
@@ -728,6 +797,9 @@ impl ClientStore {
                 .datastore_tool_surface_source_node_dids
                 .clone(),
             chain_key_binding_source_node_dids: self.chain_key_binding_source_node_dids.clone(),
+            operator_config_authoritative_node_dids: self
+                .operator_config_authoritative_node_dids
+                .clone(),
         }
     }
 }
@@ -738,7 +810,337 @@ mod overlay_tests {
     use gents::document_config::{
         Agent, InferenceBackend, InferenceBackendObservation, Node, Task,
     };
+    use gents_protocol::output::{
+        MessagePublication, MessageRole, OutputOutcome, TranscriptMessage,
+    };
+    use gents_protocol::request_lifecycle::RequestLifecycleState;
     use gents_protocol::row::{NodeReadinessRow, NodeRuntimeRow};
+    use gents_protocol::session::{AgentSession, SessionTitle};
+
+    fn session(node_did: &str, title: &str) -> AgentSession {
+        serde_json::from_value(serde_json::json!({
+            "session_id": "shared-session",
+            "node_did": node_did,
+            "agent_id": "agent",
+            "created_at": "2026-10-14T00:00:00Z",
+            "title": {"text": title, "source": "user"}
+        }))
+        .expect("session")
+    }
+
+    fn message(node_did: &str, doc_id: &str) -> TranscriptMessageRow {
+        TranscriptMessageRow {
+            doc_id: doc_id.to_owned(),
+            message: TranscriptMessage {
+                message_key: doc_id.to_owned(),
+                session_id: "shared-session".to_owned(),
+                node_did: node_did.to_owned(),
+                requester_did: None,
+                request_doc_id: None,
+                publication: MessagePublication::RequestExecution {
+                    execution_generation: "generation".to_owned(),
+                },
+                outcome: OutputOutcome::Complete,
+                sequence: 1,
+                role: MessageRole::Assistant,
+                native_id: None,
+                blocks: Vec::new(),
+                created_at: "2026-10-14T00:00:00Z".to_owned(),
+            },
+        }
+    }
+
+    fn tool_call(
+        node_did: Option<&str>,
+        tool_call_key: &str,
+        session_id: &str,
+    ) -> AgentToolCallRow {
+        serde_json::from_value(serde_json::json!({
+            "node_did": node_did,
+            "tool_call_key": tool_call_key,
+            "session_id": session_id
+        }))
+        .expect("tool call")
+    }
+
+    fn compaction_entry(compaction_key: &str, session_id: &str) -> CompactionEntryRow {
+        serde_json::from_value(serde_json::json!({
+            "compaction_key": compaction_key,
+            "session_id": session_id
+        }))
+        .expect("compaction entry")
+    }
+
+    #[test]
+    fn scoped_replacement_preserves_foreign_rows_with_same_session_id() {
+        let current = ClientStore::from_rows(ClientStoreRows {
+            sessions: vec![
+                session("did:alpha", "stale alpha"),
+                session("did:beta", "beta"),
+            ],
+            session_source_node_dids: vec![None, None],
+            transcript_messages: vec![
+                message("did:alpha", "alpha-message"),
+                message("did:beta", "beta-message"),
+            ],
+            ..ClientStoreRows::default()
+        });
+        let incoming = ClientStore::from_rows(ClientStoreRows {
+            sessions: vec![session("did:alpha", "fresh alpha")],
+            session_source_node_dids: vec![Some("did:alpha".to_owned())],
+            ..ClientStoreRows::default()
+        });
+
+        let merged = current.replace_node_scope("did:alpha", incoming);
+        assert_eq!(merged.sessions.len(), 2);
+        assert_eq!(
+            merged
+                .sessions
+                .iter()
+                .find(|row| row.node_did == "did:alpha")
+                .and_then(|row| row.title.as_ref())
+                .map(|title: &SessionTitle| title.text.as_str()),
+            Some("fresh alpha")
+        );
+        assert!(merged
+            .sessions
+            .iter()
+            .any(|row| row.node_did == "did:beta" && row.session_id == "shared-session"));
+        assert_eq!(merged.transcript_messages.len(), 1);
+        assert_eq!(merged.transcript_messages[0].doc_id, "beta-message");
+    }
+
+    #[test]
+    fn scoped_replacement_uses_explicit_tool_owner_before_observation_source() {
+        let current = ClientStore::from_rows(ClientStoreRows {
+            sessions: vec![session("did:alpha", "alpha"), session("did:beta", "beta")],
+            tool_calls: vec![
+                tool_call(Some("did:alpha"), "stale-alpha", "shared-session"),
+                tool_call(Some("did:beta"), "beta", "shared-session"),
+                tool_call(None, "unknown-alpha-session", "shared-session"),
+                tool_call(None, "source-alpha", "another-session"),
+                tool_call(None, "source-beta", "shared-session"),
+                tool_call(None, "unknown-other-session", "other-session"),
+            ],
+            tool_call_source_node_dids: vec![
+                None,
+                None,
+                None,
+                Some("did:alpha".to_owned()),
+                Some("did:beta".to_owned()),
+                None,
+            ],
+            compaction_entries: vec![
+                compaction_entry("selected-session", "shared-session"),
+                compaction_entry("unrelated-session", "other-session"),
+            ],
+            compaction_entry_source_node_dids: vec![None, None],
+            ..ClientStoreRows::default()
+        });
+        let incoming = ClientStore::from_rows(ClientStoreRows {
+            tool_calls: vec![tool_call(
+                Some("did:alpha"),
+                "fresh-alpha",
+                "shared-session",
+            )],
+            tool_call_source_node_dids: vec![None],
+            ..ClientStoreRows::default()
+        });
+
+        let merged = current.replace_node_scope("did:alpha", incoming);
+        let keys = merged
+            .tool_calls
+            .iter()
+            .map(|row| row.tool_call_key.as_str())
+            .collect::<HashSet<_>>();
+        assert_eq!(
+            keys,
+            [
+                "beta",
+                "source-beta",
+                "unknown-other-session",
+                "fresh-alpha"
+            ]
+            .into_iter()
+            .collect()
+        );
+        assert_eq!(merged.compaction_entries.len(), 1);
+        assert_eq!(
+            merged.compaction_entries[0].compaction_key,
+            "unrelated-session"
+        );
+        let scoped_keys = |node_did| {
+            merged
+                .transcript_for_node("shared-session", node_did)
+                .tool_calls
+                .iter()
+                .map(|row| row.tool_call_key.as_str())
+                .collect::<HashSet<_>>()
+        };
+        assert_eq!(
+            scoped_keys("did:alpha"),
+            ["fresh-alpha"].into_iter().collect()
+        );
+        assert_eq!(
+            scoped_keys("did:beta"),
+            ["beta", "source-beta"].into_iter().collect()
+        );
+    }
+
+    #[test]
+    fn scoped_replacement_removes_ownerless_calls_from_request_only_sessions() {
+        let current = ClientStore::from_rows(ClientStoreRows {
+            requests: vec![request(Some("did:alpha"), "processing")],
+            tool_calls: vec![tool_call(None, "stale-alpha", "session")],
+            ..ClientStoreRows::default()
+        });
+
+        let merged = current.replace_node_scope(
+            "did:alpha",
+            ClientStore::from_rows(ClientStoreRows::default()),
+        );
+
+        assert!(merged.requests.is_empty());
+        assert!(merged.tool_calls.is_empty());
+    }
+
+    #[test]
+    fn generated_request_identity_cases_preserve_physical_twins_and_fold_owners() {
+        let contract = gents_lean_contract::load_contract_snapshot::<serde_json::Value>()
+            .expect("executed Lean request cache identity contract");
+        let fixture = &contract["client_request_cache_identity_cases"];
+        for case in fixture.as_array().expect("identity cases") {
+            let all_input_rows = case["current"]
+                .as_array()
+                .expect("current rows")
+                .iter()
+                .chain(case["incoming"].as_array().expect("incoming rows").iter())
+                .cloned()
+                .collect::<Vec<_>>();
+            let convert_rows = |values: &[serde_json::Value]| {
+                values
+                    .iter()
+                    .map(|row| {
+                        let doc = row["doc"].as_u64();
+                        let request = row["request"].as_u64().expect("logical request ID");
+                        let folded_into = row["folded_into"].as_u64();
+                        let folded_request = folded_into.and_then(|owner_doc| {
+                            all_input_rows
+                                .iter()
+                                .find(|candidate| candidate["doc"].as_u64() == Some(owner_doc))
+                                .and_then(|candidate| candidate["request"].as_u64())
+                        });
+                        let lifecycle_state = match row["state"].as_str().expect("row state") {
+                            "unclaimed" => "pending",
+                            "active" => "processing",
+                            "terminal" if folded_into.is_some() => "superseded",
+                            "terminal" => "completed",
+                            other => panic!("unexpected modeled request state {other}"),
+                        };
+                        serde_json::from_value::<AgentRequestRow>(serde_json::json!({
+                            "_docID": doc.map(|id| format!("doc-{id}")),
+                            "request_id": format!("request-{request}"),
+                            "purpose": "normal",
+                            "node_did": row["node"].as_u64().map(|id| format!("did:model:{id}")),
+                            "requester_did": row["requester"].as_u64().map(|id| format!("did:model:{id}")),
+                            "session_id": "session-model",
+                            "lifecycle_state": lifecycle_state,
+                            "superseded_by_request": folded_request.map(|id| format!("request-{id}")),
+                            "superseded_by_request_doc_id": folded_into.map(|id| format!("doc-{id}")),
+                            "failure_reason": folded_into.map(|_| "folded into claimed request"),
+                            "retry_parent_request": row["retry_parent"].as_u64().map(|id| format!("request-{id}")),
+                        }))
+                        .expect("modeled request maps to desktop row")
+                    })
+                    .collect::<Vec<_>>()
+            };
+            let current = convert_rows(case["current"].as_array().unwrap());
+            let incoming = convert_rows(case["incoming"].as_array().unwrap());
+            let base = ClientStore::from_rows(ClientStoreRows {
+                requests: current,
+                ..Default::default()
+            });
+            let incoming = ClientStore::from_rows(ClientStoreRows {
+                requests: incoming,
+                ..Default::default()
+            });
+            let stores = [
+                base.clone().merge_snapshot(incoming.clone()),
+                base.merge_chat_patch(incoming),
+            ];
+            for store in stores {
+                let mut actual_rows = store
+                    .requests
+                    .iter()
+                    .map(|row| {
+                    let parse_num = |value: Option<&str>, prefix: &str| {
+                        value.and_then(|value| value.strip_prefix(prefix))
+                            .and_then(|value| value.parse::<u64>().ok())
+                    };
+                    let state = if row.lifecycle_state == Some(RequestLifecycleState::Pending) {
+                        "unclaimed"
+                    } else if row.lifecycle_state == Some(RequestLifecycleState::Superseded)
+                        || row.lifecycle_state.is_some_and(|state| state.is_terminal())
+                    {
+                        "terminal"
+                    } else {
+                        "active"
+                    };
+                    serde_json::json!({
+                        "doc": parse_num(row.doc_id.as_deref(), "doc-"),
+                        "node": row.node_did.as_deref().and_then(|did| did.strip_prefix("did:model:")).and_then(|id| id.parse::<u64>().ok()),
+                        "requester": row.requester_did.as_deref().and_then(|did| did.strip_prefix("did:model:")).and_then(|id| id.parse::<u64>().ok()),
+                        "request": parse_num(Some(&row.request_id), "request-"),
+                        "state": state,
+                        "folded_into": parse_num(row.superseded_by_request_doc_id.as_deref(), "doc-"),
+                        "queued_after": null,
+                        "retry_parent": row.retry_parent_request.as_deref().and_then(|id| parse_num(Some(id), "request-"))
+                    })
+                    })
+                    .collect::<Vec<_>>();
+                let mut expected_rows = case["expected_rows"]
+                    .as_array()
+                    .expect("modeled rows")
+                    .clone();
+                // The model describes retained facts; ClientStore applies its
+                // canonical presentation order independently of merge order.
+                let by_physical_identity = |left: &serde_json::Value, right: &serde_json::Value| {
+                    left["doc"].as_u64().cmp(&right["doc"].as_u64())
+                };
+                actual_rows.sort_by(by_physical_identity);
+                expected_rows.sort_by(by_physical_identity);
+                assert_eq!(
+                    serde_json::Value::Array(actual_rows),
+                    serde_json::Value::Array(expected_rows),
+                    "{}",
+                    case["name"]
+                );
+
+                if let Some(selected_doc) = case["selected_doc"].as_u64() {
+                    let expected_turn_doc = case["expected_turn_doc"]
+                        .as_u64()
+                        .expect("modeled turn doc");
+                    let selected_doc = format!("doc-{selected_doc}");
+                    let selected = store
+                        .requests
+                        .iter()
+                        .find(|row| row.doc_id.as_deref() == Some(selected_doc.as_str()))
+                        .expect("selected physical request row");
+                    let scoped = store
+                        .requests
+                        .iter()
+                        .filter(|row| {
+                            row.node_did == selected.node_did
+                                && row.session_id == selected.session_id
+                        })
+                        .collect::<Vec<_>>();
+                    let tip = super::super::turns::session_turn_request(&scoped, selected);
+                    let expected_turn_doc = format!("doc-{expected_turn_doc}");
+                    assert_eq!(tip.doc_id.as_deref(), Some(expected_turn_doc.as_str()));
+                }
+            }
+        }
+    }
 
     #[test]
     fn overlay_replaces_this_agent_and_keeps_others() {
@@ -777,9 +1179,15 @@ mod overlay_tests {
             inference_backends: vec![backend("did:test:local", "Agent backend")],
             backend_observations: vec![backend_observation("healthy")],
             tasks: vec![task("did:test:local", "canonical-task", true)],
+            operator_config_authoritative_node_dids: ["did:test:local".to_owned()]
+                .into_iter()
+                .collect(),
             ..ClientStoreRows::default()
         });
         let overlayed = local.overlay_node_operator_config("did:test:local", &remote);
+        assert!(overlayed
+            .operator_config_authoritative_node_dids
+            .contains("did:test:local"));
         assert_eq!(overlayed.nodes.len(), 2);
         assert_eq!(
             overlayed

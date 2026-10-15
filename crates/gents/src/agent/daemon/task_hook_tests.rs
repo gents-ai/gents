@@ -8,6 +8,7 @@ use rig::completion::{CompletionError, CompletionModel, CompletionRequest, Compl
 use rig::streaming::{RawStreamingChoice, StreamingCompletionResponse};
 use serde_json::json;
 
+use super::inference::tests::InterruptionCapture;
 use super::AgentDaemon;
 use crate::agent::runtime::StartupBarrier;
 use crate::config::ResolvedAgent;
@@ -17,6 +18,7 @@ use crate::llm::tool::ToolDyn;
 use crate::prompt::LayeredPromptBuilder;
 use crate::watcher::AgentRequest;
 use crate::Collection;
+use tracing::instrument::WithSubscriber;
 
 const TASK_ID: &str = "hook-task";
 const TRIGGER_ID: &str = "hook-trigger";
@@ -103,7 +105,7 @@ impl Harness {
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
         let agent_config = super::inference::tests::test_agent_with_deadline(deadline);
         crate::test_support::install_test_agent(
-            node.as_ref(),
+            &node,
             agent_config.node_did(),
             &agent_config.agent_id,
         )
@@ -141,7 +143,7 @@ impl Harness {
                 .collect(),
         )
         .unwrap();
-        ConfigAccess::transact_local(self.node.as_ref(), None, "test.task_hooks", |txn| {
+        ConfigAccess::transact_local_write(&self.node, None, "test.task_hooks", |txn| {
             let plan = &plan;
             Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, plan).await })
         })
@@ -279,7 +281,7 @@ impl Harness {
             .unwrap();
         let doc_id = match &fire {
             Some(fire) => {
-                let access = ConfigAccess::Local(self.node.clone());
+                let access = ConfigAccess::local(self.node.clone());
                 crate::lifecycle::write_task_delivery(&access, fire, false, &create)
                     .await
                     .expect("admit the manual Task fire and its request")
@@ -288,7 +290,7 @@ impl Harness {
             }
             None => {
                 let response = ConfigAccess::write_local(
-                    self.node.as_ref(),
+                    &self.node,
                     "test.create_task_hook_request",
                     &create.graphql_mutation().unwrap(),
                 )
@@ -400,7 +402,7 @@ impl Harness {
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
             crate::interrupt::interrupt_request_by_doc_id(
-                self.node.as_ref(),
+                &self.node,
                 &doc_id,
                 self.owner(),
                 Some(self.owner()),
@@ -510,9 +512,12 @@ async fn interrupting_a_held_after_success_hook_cancels_it_and_interrupts_the_re
         ]))
         .await;
     let request = harness.create_request(Lineage::ManualFire, false).await;
+    let capture = InterruptionCapture::default();
     let row = harness
         .run_interrupting_at(request, &harness.mark("verify-started"))
+        .with_subscriber(capture.subscriber())
         .await;
+    capture.assert_source("task_hook");
     assert_eq!(harness.calls(), 1, "{row}");
     assert_eq!(row["lifecycle_state"], "interrupted", "{row}");
     assert!(!harness.mark("verify-finished").exists());
@@ -539,9 +544,12 @@ async fn interrupting_a_before_hook_skips_the_agent_and_still_cleans_up() {
         ]))
         .await;
     let request = harness.create_request(Lineage::Trigger, false).await;
+    let capture = InterruptionCapture::default();
     let row = harness
         .run_interrupting_at(request, &harness.mark("prepare-started"))
+        .with_subscriber(capture.subscriber())
         .await;
+    capture.assert_source("task_hook");
     assert_eq!(harness.calls(), 0, "{row}");
     assert_eq!(row["lifecycle_state"], "interrupted", "{row}");
     assert!(!harness.mark("prepare-finished").exists());
@@ -604,7 +612,7 @@ async fn install_workspace(harness: &Harness, host_path: &Path) {
         crate::workspace::isolated_workspace_upsert_mutation(&workspace),
         crate::workspace::workspace_placement_upsert_mutation(&placement, &updated_at),
     ] {
-        ConfigAccess::write_local(harness.node.as_ref(), "test.task_hook_workspace", &mutation)
+        ConfigAccess::write_local(&harness.node, "test.task_hook_workspace", &mutation)
             .await
             .expect("install isolated workspace and placement");
     }
@@ -612,7 +620,7 @@ async fn install_workspace(harness: &Harness, host_path: &Path) {
 
 async fn workspace_bindings(harness: &Harness) -> Vec<crate::workspace::WorkspaceBindingDoc> {
     let response = crate::graphql::graphql_with_transaction_retry(
-        harness.node.as_ref(),
+        &harness.node,
         &format!(
             r#"{{ WorkspaceBinding(filter: {{ workspace_id: {{ _eq: "{}" }}, owner_node_did: {{ _eq: "{}" }} }}) {{ binding_id workspace_id request_id request_doc_id authority owner_node_did seal_hash lifecycle_state }} }}"#,
             crate::graphql::escape_graphql_string(WORKSPACE_ID),
@@ -627,7 +635,7 @@ async fn workspace_bindings(harness: &Harness) -> Vec<crate::workspace::Workspac
 
 async fn materialize_writer_binding(harness: &Harness, request: &AgentRequest) {
     crate::workspace::materialize_workspace_binding(
-        harness.node.as_ref(),
+        &harness.node,
         &request.request_id,
         &request.doc_id,
         harness.owner(),
@@ -655,7 +663,7 @@ async fn claim_admission_rejection_releases_the_bound_workspace() {
         .iter()
         .any(|binding| binding.is_active_read_write()));
     ConfigAccess::write_local(
-        harness.node.as_ref(),
+        &harness.node,
         "test.remove_workspace_placement",
         &format!(
             r#"mutation {{ delete_WorkspacePlacement(filter: {{ workspace_id: {{ _eq: "{}" }}, owner_node_did: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
@@ -883,7 +891,7 @@ async fn losing_the_lease_mid_work_skips_after_failure_and_still_cleans_up() {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
         ConfigAccess::write_local(
-            harness.node.as_ref(),
+            &harness.node,
             "test.replace_task_hook_generation",
             &format!(
                 r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ execution_generation: "replacement-generation" }}) {{ _docID }} }}"#,
@@ -1008,7 +1016,7 @@ async fn workspace_seal_completes_before_the_after_phase_is_selected() {
         .await;
     let request = harness.create_request(Lineage::Trigger, true).await;
     crate::workspace::materialize_workspace_binding(
-        harness.node.as_ref(),
+        &harness.node,
         &request.request_id,
         &request.doc_id,
         harness.owner(),
@@ -1047,7 +1055,7 @@ impl Harness {
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
             ConfigAccess::write_local(
-                self.node.as_ref(),
+                &self.node,
                 "test.supersede_task_hook_execution",
                 &format!(
                     r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ execution_generation: "replacement-generation" }}) {{ _docID }} }}"#,
@@ -1156,7 +1164,7 @@ async fn revocation_between_hooks_is_checked_before_the_next_renewal_poll() {
         while !harness.mark("ready").exists() {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-        ConfigAccess::write_local(harness.node.as_ref(), "test.revoke_between_task_hooks", &format!(
+        ConfigAccess::write_local(&harness.node, "test.revoke_between_task_hooks", &format!(
             r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ execution_generation: "replacement-generation" }}) {{ _docID }} }}"#,
             crate::graphql::escape_graphql_string(&doc_id)
         )).await.unwrap();

@@ -12,6 +12,7 @@ import { dockView } from "./dock-scope";
 import { useSurfaces, type Placement, type Surface } from "./surfaces";
 import { dockScopeOf, useDockFor } from "./workspace";
 import { useFleet } from "../hooks/useFleet";
+import { useDragReorder } from "../hooks/useDragReorder";
 
 /* the window bar's tabs and the dock's card are drawn apart, and joined by these */
 const DOCK_PANEL_ID = "dock-panel";
@@ -101,69 +102,26 @@ export function DockTabs({
   );
   const paneTitle =
     useFleet((s) => (sessionId ? s.bySessionId[sessionId]?.title : null)) ?? "Session";
-  /* reordering, the way a browser does it: a press shows the tab; moved past
-     a few pixels it follows the pointer while the others slide aside, and the
-     order is written when it is let go. The strip's tabs share one width, so
-     a neighbour steps by that width plus the gap. */
-  const strip = useRef<HTMLDivElement>(null);
   const tabEls = useRef(new Map<string, HTMLButtonElement>());
-  /* geometry is taken at the press, before any tab has moved */
-  const press = useRef<{
-    id: string;
-    startX: number;
-    lefts: number[];
-    step: number;
-  } | null>(null);
-  const [drag, setDrag] = useState<{
-    id: string;
-    from: number;
-    to: number;
-    dx: number;
-  } | null>(null);
-  const onPress = (e: React.PointerEvent<HTMLElement>, id: string) => {
+  const view = dockView(dock, routeName, useSurfaces(), "dock");
+  /* reordering, the way a browser does it: a press shows the tab, and the
+     order is written when it is let go */
+  const reorder = useDragReorder<HTMLDivElement>({
+    axis: "x",
+    keys: view.tabs.map((tab) => tab.id),
+    canMove: () => true,
+    commit: (from, to) => {
+      const tab = view.tabs[from];
+      if (tab) moveTab(tab.id, to);
+    },
+  });
+  const onPress = (e: React.PointerEvent<HTMLElement>, id: string, index: number) => {
+    reorder.handle(index).onPointerDown(e);
     if (e.button !== 0) return;
-    /* no text selection rides along with a tab drag (WebKit); that also
-       withholds the press's focus, so the tab takes it here */
-    e.preventDefault();
+    /* the drag withholds the press's focus, so the tab takes it here */
     tabEls.current.get(id)?.focus({ preventScroll: true });
-    getSelection()?.removeAllRanges();
-    document.documentElement.dataset.dragging = "tab";
-    const lefts = [
-      ...(strip.current?.querySelectorAll<HTMLElement>("[data-tab]") ?? []),
-    ].map((el) => el.getBoundingClientRect().left);
-    const step = lefts.length > 1 ? lefts[1]! - lefts[0]! : 0;
-    press.current = { id, startX: e.clientX, lefts, step };
-    e.currentTarget.setPointerCapture(e.pointerId);
     activate(id);
   };
-  const onMove = (e: React.PointerEvent<HTMLElement>) => {
-    const p = press.current;
-    if (!p || !p.step) return;
-    const dx = e.clientX - p.startX;
-    if (!drag && Math.abs(dx) < 4) return;
-    const from = view.tabs.findIndex((t) => t.id === p.id);
-    if (from < 0) return;
-    const first = p.lefts[0]!;
-    const last = p.lefts[p.lefts.length - 1]!;
-    /* the tab stays inside the strip; its slot is where its left edge lands */
-    const x = Math.max(first, Math.min(last, p.lefts[from]! + dx));
-    const to = Math.round((x - first) / p.step);
-    setDrag({ id: p.id, from, to, dx: x - p.lefts[from]! });
-  };
-  const onRelease = () => {
-    delete document.documentElement.dataset.dragging;
-    if (drag && drag.to !== drag.from) moveTab(drag.id, drag.to);
-    press.current = null;
-    setDrag(null);
-  };
-  const shift = (index: number) => {
-    const step = press.current?.step ?? 0;
-    if (!drag || index === drag.from) return 0;
-    if (drag.from < index && index <= drag.to) return -step;
-    if (drag.to <= index && index < drag.from) return step;
-    return 0;
-  };
-  const view = dockView(dock, routeName, useSurfaces(), "dock");
   /* the tablist's keys (APG tabs, automatic activation): arrows, Home and
      End move between tabs and show the one reached; Delete closes the tab,
      and focus follows to the one showing next */
@@ -241,7 +199,7 @@ export function DockTabs({
         aria-label="Panels"
         /* like a browser's tab strip: tabs share the width, up to a comfortable
              size each, shrink as more open, and scroll once they hit their floor */
-        ref={strip}
+        ref={reorder.container}
         className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
       >
         {view.tabs.map((s, index) => {
@@ -250,29 +208,18 @@ export function DockTabs({
             <div
               key={s.id}
               role="presentation"
-              data-tab={s.id}
-              onPointerDown={(e) => onPress(e, s.id)}
-              onPointerMove={onMove}
-              onPointerUp={onRelease}
-              onPointerCancel={onRelease}
-              onLostPointerCapture={onRelease}
-              style={
-                drag
-                  ? {
-                      transform: `translateX(${drag.id === s.id ? drag.dx : shift(index)}px)`,
-                      transition:
-                        drag.id === s.id ? "none" : "transform 160ms ease-out",
-                    }
-                  : { transition: "transform 160ms ease-out" }
-              }
+              data-reorder-key={s.id}
+              {...reorder.handle(index)}
+              onPointerDown={(e) => onPress(e, s.id, index)}
+              style={reorder.style(index)}
               className={cn(
                 "group/tab flex h-8 min-w-18 max-w-56 flex-1 basis-0 items-center rounded-lg pr-1 pl-2.5 text-xs transition-colors select-none",
                 active
                   ? "bg-accent text-foreground"
                   : "text-muted-foreground hover:text-foreground",
-                drag?.id === s.id &&
-                  "relative z-10 bg-accent shadow-md ring-1 ring-border",
-                drag && drag.id !== s.id && "pointer-events-none",
+                reorder.moving === index && "relative z-10 bg-accent",
+                reorder.lifted === index && "shadow-md ring-1 ring-border",
+                reorder.active && reorder.moving !== index && "pointer-events-none",
               )}
             >
               <button

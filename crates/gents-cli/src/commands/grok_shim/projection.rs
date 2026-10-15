@@ -1876,7 +1876,7 @@ fn hash_value<H: Hasher>(hasher: &mut H, value: &Value) {
 /// Project the exact node's agent → profile → backend selection.
 /// Model identity is the provider model name; backend identity stays internal.
 pub(crate) async fn resolve_bound_model_context(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     node_did: &str,
     agent_id: &str,
 ) -> Result<BoundModelContext> {
@@ -2465,7 +2465,7 @@ mod tests {
         assert_eq!(bound.total_context_tokens, 262_144);
     }
 
-    async fn seed_bound_inference(node: &EmbeddedNode, window: Option<i64>) {
+    async fn seed_bound_inference(node: &Arc<EmbeddedNode>, window: Option<i64>) {
         use gents::config_client::{
             apply_desired_state_plan, ConfigAccess, DesiredStateApplyDocument,
             DesiredStateApplyPlan,
@@ -2478,7 +2478,7 @@ mod tests {
             (Collection::InferenceProfile, json!({"node_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"GLM-5.3-NVFP4","context_window":window})),
             (Collection::InferenceBackend, json!({"node_did":owner,"backend_id":"backend","name":"Workstation","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:8000/v1","auth":{"kind":"unauthenticated"}})),
         ].into_iter().map(|(collection,value)| DesiredStateApplyDocument {collection,add:value.clone(),update:value}).collect()).unwrap();
-        ConfigAccess::transact_local(node, None, "grok.binding.fixture", |txn| {
+        ConfigAccess::transact_local_write(node, None, "grok.binding.fixture", |txn| {
             let plan = &plan;
             Box::pin(async move { apply_desired_state_plan(txn, plan).await })
         })
@@ -2489,11 +2489,13 @@ mod tests {
     #[tokio::test]
     async fn resolve_bound_model_context_projects_the_production_style_catalog() {
         let dir = tempfile::tempdir().unwrap();
-        let node = EmbeddedNode::builder()
-            .data_path(dir.path().join("node"))
-            .build()
-            .await
-            .unwrap();
+        let node = Arc::new(
+            EmbeddedNode::builder()
+                .data_path(dir.path().join("node"))
+                .build()
+                .await
+                .unwrap(),
+        );
         gents::ensure_runtime_schemas(&node).await.unwrap();
         seed_bound_inference(&node, Some(262_144)).await;
         let bound = resolve_bound_model_context(&node, "did:grok-binding-test", "port-live")
@@ -2514,11 +2516,13 @@ mod tests {
     #[tokio::test]
     async fn resolve_bound_model_context_uses_default_only_for_missing_window() {
         let dir = tempfile::tempdir().unwrap();
-        let node = EmbeddedNode::builder()
-            .data_path(dir.path().join("node"))
-            .build()
-            .await
-            .unwrap();
+        let node = Arc::new(
+            EmbeddedNode::builder()
+                .data_path(dir.path().join("node"))
+                .build()
+                .await
+                .unwrap(),
+        );
         gents::ensure_runtime_schemas(&node).await.unwrap();
         seed_bound_inference(&node, None).await;
         let bound = resolve_bound_model_context(&node, "did:grok-binding-test", "port-live")

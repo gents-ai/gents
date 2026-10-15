@@ -14,6 +14,10 @@ import {
   type InferenceSettingsDraft,
 } from "../inference/InferenceModelControls";
 
+/** An account a provider is connected through: discovery and the saved
+    backend name it by `accountRef`, or run on the original when it is null. */
+export type SignedIn = { credentialId: string; accountRef: string | null };
+
 export type ProviderId = InferenceProviderId;
 
 export type ConnectionDraft = {
@@ -53,8 +57,13 @@ export type SetupForm = {
   runtimeGate: RuntimeGate;
   accounts: {
     stored: readonly ProviderAccountView[];
-    signedIn: Partial<Record<ProviderId, string>>;
+    /** the account each provider is connected through: its credential, and
+        which of the provider's accounts it is (null, the original) */
+    signedIn: Partial<Record<ProviderId, SignedIn>>;
     pendingSave: Partial<Record<ProviderId, true>>;
+    /** providers the person set aside an account for, to sign in with
+        another: a read does not connect the stored one again */
+    switching: Partial<Record<ProviderId, true>>;
     /** a read has landed, so whether an account is connected is known */
     observed: boolean;
   };
@@ -89,7 +98,9 @@ export type SetupEvent =
       seedSignedIn: boolean;
     }
   | { type: "pendingSaveCleared"; provider: ProviderId }
-  | { type: "connected"; provider: ProviderId; credentialId: string }
+  | { type: "connected"; provider: ProviderId; account: SignedIn }
+  /** the person set the connected account aside, to sign in with another */
+  | { type: "signedOut"; provider: ProviderId }
   | { type: "autoSignInTaken" }
   | { type: "authUrl"; url: string | null }
   | { type: "hint"; hint: string | null }
@@ -110,7 +121,13 @@ export function initialSetupForm(fixedProvider?: ProviderId): SetupForm {
     provider: fixedProvider ?? null,
     connections: {},
     runtimeGate: "idle",
-    accounts: { stored: [], signedIn: {}, pendingSave: {}, observed: false },
+    accounts: {
+      stored: [],
+      signedIn: {},
+      pendingSave: {},
+      switching: {},
+      observed: false,
+    },
     accountLabel: "",
     signInHint: null,
     authUrl: null,
@@ -148,6 +165,15 @@ const asked = (form: SetupForm, provider: ProviderId) => ({
 function without<T>(state: Partial<Record<ProviderId, T>>, id: ProviderId) {
   const next = { ...state };
   delete next[id];
+  return next;
+}
+
+function withoutAll<T>(
+  state: Partial<Record<ProviderId, T>>,
+  ids: Partial<Record<ProviderId, unknown>>,
+) {
+  const next = { ...state };
+  for (const id of Object.keys(ids) as ProviderId[]) delete next[id];
   return next;
 }
 
@@ -195,7 +221,13 @@ export function setupFormReducer(form: SetupForm, event: SetupEvent): SetupForm 
     case "accountsCleared":
       return {
         ...form,
-        accounts: { ...form.accounts, signedIn: {}, pendingSave: {}, observed: false },
+        accounts: {
+          ...form.accounts,
+          signedIn: {},
+          pendingSave: {},
+          switching: {},
+          observed: false,
+        },
       };
     case "accountsRead":
       return {
@@ -203,9 +235,10 @@ export function setupFormReducer(form: SetupForm, event: SetupEvent): SetupForm 
         accounts: {
           stored: event.accounts,
           signedIn: event.seedSignedIn
-            ? providerSignInState(event.accounts)
+            ? withoutAll(providerSignInState(event.accounts), form.accounts.switching)
             : form.accounts.signedIn,
           pendingSave: providerPendingSaveState(event.accounts),
+          switching: form.accounts.switching,
           observed: true,
         },
       };
@@ -222,7 +255,18 @@ export function setupFormReducer(form: SetupForm, event: SetupEvent): SetupForm 
         ...form,
         accounts: {
           ...form.accounts,
-          signedIn: { ...form.accounts.signedIn, [event.provider]: event.credentialId },
+          signedIn: { ...form.accounts.signedIn, [event.provider]: event.account },
+          switching: without(form.accounts.switching, event.provider),
+        },
+        model: modelCleared(form.model),
+      };
+    case "signedOut":
+      return {
+        ...form,
+        accounts: {
+          ...form.accounts,
+          signedIn: without(form.accounts.signedIn, event.provider),
+          switching: { ...form.accounts.switching, [event.provider]: true },
         },
         model: modelCleared(form.model),
       };
@@ -301,13 +345,17 @@ export const connectionDefaults = (
 });
 
 export function providerSignInState(accounts: readonly ProviderAccountView[]) {
-  const next: Partial<Record<ProviderId, string>> = {};
+  const next: Partial<Record<ProviderId, SignedIn>> = {};
   for (const [providerId, credentialKind] of Object.entries(PROVIDER_CREDENTIAL_KIND)) {
     const account = accounts.find(
       (entry) =>
         entry.enabled && !entry.pendingSave && entry.provider === credentialKind,
     );
-    if (account) next[providerId as OauthProvider] = account.credentialId;
+    if (account)
+      next[providerId as OauthProvider] = {
+        credentialId: account.credentialId,
+        accountRef: account.accountRef,
+      };
   }
   return next;
 }

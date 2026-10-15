@@ -17,10 +17,11 @@ import {
   describeManagedServerWait,
   managedServerWaitKind,
 } from "../../../lib/managedServerStartup";
-import { Fact, Group, Row } from "./rows";
+import { Fact, Group, PathFact, Row, StackedRow } from "./rows";
 import { useApp } from "@/app/AppContext";
 import { ManagedRuntimeUnavailableError } from "../../../lib/managedRuntimeReadiness";
 import { useStartup } from "@/hooks/useClient";
+import { errorText } from "../../../lib/errorText";
 
 export function LocalServer() {
   const { stores, actions } = useApp();
@@ -105,7 +106,7 @@ export function LocalServer() {
       await refreshSnapshot();
       toast("Managed runtime restarted with the reviewed access");
     } catch (cause) {
-      setAuthorityError(cause instanceof Error ? cause.message : String(cause));
+      setAuthorityError(errorText(cause));
       await incompatibleHome?.adopt(cause);
     } finally {
       setBusy(false);
@@ -174,16 +175,16 @@ export function LocalServer() {
       </Row>
       <Row
         label="Desktop app"
-        description="Closing the window keeps controls in the menu bar. Quit Desktop closes only this frontend; the node keeps running."
+        description="Closing the window keeps controls in the menu bar. Quitting stops the local node unless background running is enabled."
       >
-        <Fact>Independent</Fact>
+        <Fact>{status?.autoStart ? "Runs in background" : "Stops on quit"}</Fact>
       </Row>
       <Row
-        label="Start at login"
-        description="Let your operating system—not the desktop app—start the node when you sign in. Stop node keeps this preference, so it may start again at your next login."
+        label="Keep running after quit"
+        description="Keep triggers, schedules and sync running after quitting, and start the node when you sign in. Stop node keeps this setting."
       >
         <Switch
-          aria-label="Start at login"
+          aria-label="Keep running after quit"
           checked={status?.autoStart ?? false}
           disabled={busy || !status}
           onCheckedChange={(on) =>
@@ -203,9 +204,15 @@ export function LocalServer() {
         label="Host access"
         description="Reviewed host access, confirmed by the runtime while running. Changing access stops the OS service, saves your choices, and starts it again."
       >
-        <div className="grid justify-items-end gap-1 text-right">
+        {/* not narrower than its facts (up to half the row), which truncate
+            within it rather than spill over the description */}
+        <div className="grid justify-items-end gap-1 text-right *:max-w-full max-md:justify-items-start max-md:text-left md:max-w-1/2 md:shrink-0">
           <Fact>{status?.effectiveToolCeiling ?? "—"}</Fact>
-          <Fact mono>{status?.effectiveToolRoot ?? "No host path"}</Fact>
+          {status?.effectiveToolRoot ? (
+            <PathFact path={status.effectiveToolRoot} local />
+          ) : (
+            <Fact mono>No host path</Fact>
+          )}
           {running && status?.state !== "external" ? (
             <Button size="sm" variant="outline" onClick={beginAuthorityEdit}>
               Change access…
@@ -214,15 +221,10 @@ export function LocalServer() {
         </div>
       </Row>
       {editingAuthority && home ? (
-        <div className="grid gap-4 border-t border-border/60 pt-4">
-          <div>
-            <p className="text-sm font-medium">Restart-required access change</p>
-            <p className="text-xs text-muted-foreground">
-              The node keeps its current access unless the native service stops
-              successfully. It restarts only after the reviewed root and ceiling are
-              saved.
-            </p>
-          </div>
+        <StackedRow
+          label="Restart-required access change"
+          description="The node keeps its current access unless the native service stops successfully. It restarts only after the reviewed root and ceiling are saved."
+        >
           <ManagedRuntimeAuthorityPicker
             home={home}
             toolCeiling={toolCeiling}
@@ -250,7 +252,7 @@ export function LocalServer() {
               {busy ? <Spinner /> : null} Review complete — restart
             </Button>
           </div>
-        </div>
+        </StackedRow>
       ) : null}
       <Row label="GraphQL">
         <Fact mono>{status?.graphql ?? "—"}</Fact>

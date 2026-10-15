@@ -15,6 +15,9 @@ mod mutations;
 mod storage;
 mod usage;
 
+#[cfg(test)]
+mod conformance;
+
 pub(super) use goal::{clear_codex_thread_goal, get_codex_thread_goal, set_codex_thread_goal};
 pub(super) use json::{
     codex_thread_json, codex_thread_json_with_turns, projected_thread_status, thread_response_json,
@@ -343,7 +346,7 @@ async fn assemble_caused_record_parts(
     cwd: PathBuf,
     git_info: Option<Value>,
 ) -> Result<CodexThreadRecord> {
-    let session = gents::config_client::ConfigAccess::transact_local(
+    let session = gents::config_client::ConfigAccess::transact_local_write(
         &state.node,
         None,
         "codex.caused.session",

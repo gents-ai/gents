@@ -570,34 +570,21 @@ pub async fn record_plugin_store_change_as(
         && crate::plugin::store::list_records(home)?
             .iter()
             .any(|plugin| plugin.owner_pack_coordinate.as_deref() == Some(coordinate));
-    match (access, identity) {
-        (ConfigAccess::Local(node), Some(identity)) => {
-            ConfigAccess::transact_local_idempotent(
-                node,
-                Some(identity),
-                crate::config_client::IdempotentTransactionRetry::Standard,
+    match access {
+        ConfigAccess::Local(local) => {
+            ConfigAccess::transact_local_write(
+                local.node(),
+                identity,
                 "pack.record_plugin_store",
                 |txn| Box::pin(async move { write_plugin_record(txn, owner, home, coordinate, installed, retained).await }),
             )
             .await
         }
-        (ConfigAccess::Local(node), None) => {
-            ConfigAccess::transact_local_idempotent(
-                node,
-                None,
-                crate::config_client::IdempotentTransactionRetry::Standard,
-                "pack.record_plugin_store",
-                |txn| Box::pin(async move { write_plugin_record(txn, owner, home, coordinate, installed, retained).await }),
-            )
-            .await
-        }
-        (access @ ConfigAccess::Graphql(_), _) => {
+        ConfigAccess::Graphql(_) => {
             access
-                .transact_idempotent(
-                    crate::config_client::IdempotentTransactionRetry::Standard,
-                    "pack.record_plugin_store",
-                    |txn| Box::pin(async move { write_plugin_record(txn, owner, home, coordinate, installed, retained).await }),
-                )
+                .transact_write("pack.record_plugin_store", |txn| {
+                    Box::pin(async move { write_plugin_record(txn, owner, home, coordinate, installed, retained).await })
+                })
                 .await
         }
     }
@@ -791,7 +778,7 @@ pub async fn remove_pack(
     policy: DriftPolicy,
 ) -> Result<RemoveReport> {
     access
-        .transact("pack.remove", |txn| {
+        .transact_write("pack.remove", |txn| {
             Box::pin(async move {
                 let record = read_record(txn, owner, coordinate).await?;
                 anyhow::ensure!(

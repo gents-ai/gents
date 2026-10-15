@@ -2,7 +2,7 @@
    backend references, what is wrong with it, and the rows and dialogs that
    manage it. */
 import type { NodeView } from "../../../hooks/fleetStore";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { toast } from "sonner";
 import type {
   InferenceBackendView,
@@ -25,6 +25,7 @@ import {
 import { RenameDialog } from "../AgentsScreen";
 import { useApp } from "@/app/AppContext";
 import { SUBSCRIPTION } from "./inferenceKinds";
+import { errorText } from "../../../lib/errorText";
 
 /* the stored account a subscription backend runs on: the one with the
    backend's reference; no reference is the provider's original account */
@@ -222,17 +223,29 @@ export function AccountRows({
   const elsewhere = accountRef !== null && !stored;
   const unsaved = accounts.some((a) => a.provider === sub.provider && a.pendingSave);
   const [busy, setBusy] = useState(false);
+  const [signingIn, setSigningIn] = useState(false);
   const [confirmingDisconnect, setConfirmingDisconnect] = useState(false);
+  /* a sign-in the person stopped ends as a failed login; it is not an error */
+  const cancelled = useRef(false);
   const signIn = async () => {
+    cancelled.current = false;
     setBusy(true);
+    setSigningIn(true);
     try {
       await actions.signInToProvider(deployment.nodeDid, sub.login);
       toast("Signed in");
     } catch (error) {
-      toast(`Sign in failed: ${setupErrorMessage(error)}`);
+      if (!cancelled.current) toast(`Sign in failed: ${setupErrorMessage(error)}`);
     } finally {
       setBusy(false);
+      setSigningIn(false);
     }
+  };
+  /* the browser tab may be closed or lost; the sign-in would otherwise wait
+     until it times out */
+  const cancelSignIn = () => {
+    cancelled.current = true;
+    void actions.cancelProviderSignIn(sub.login);
   };
   const retrySave = async () => {
     setBusy(true);
@@ -253,9 +266,7 @@ export function AccountRows({
       toast("Disconnected");
       setConfirmingDisconnect(false);
     } catch (error) {
-      toast(
-        `Disconnect failed: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      toast(`Disconnect failed: ${errorText(error)}`);
     } finally {
       setBusy(false);
     }
@@ -311,13 +322,18 @@ export function AccountRows({
               Retry save
             </Button>
           ) : null}
+          {signingIn && (
+            <Button size="sm" variant="quiet" onClick={cancelSignIn}>
+              Cancel
+            </Button>
+          )}
           <Button
             size="sm"
             variant={stored || unsaved ? "outline" : "brand"}
             disabled={busy}
             onClick={signIn}
           >
-            {busy ? "Signing in…" : stored ? "Reconnect" : "Connect"}
+            {signingIn ? "Signing in…" : stored ? "Reconnect" : "Connect"}
           </Button>
         </span>
       </Row>

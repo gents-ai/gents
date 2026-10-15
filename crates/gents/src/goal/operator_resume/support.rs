@@ -51,8 +51,7 @@ impl Fixture {
             Arc::new(KeyIdentity::load_or_create(temp.path().join("target.key"), None).unwrap());
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         crate::schema::ensure_runtime_schemas(&node).await.unwrap();
-        crate::test_support::install_test_agent(node.as_ref(), identity.did(), "contract-behavior")
-            .await;
+        crate::test_support::install_test_agent(&node, identity.did(), "contract-behavior").await;
         let goal = set_goal(
             &node,
             identity.did(),
@@ -180,7 +179,7 @@ impl Fixture {
     /// agent's profile on A.
     pub async fn claude_accounts(&self) -> ClaudeAccounts {
         let did = self.identity.did().to_owned();
-        let access = ConfigAccess::Local(self.node.clone());
+        let access = ConfigAccess::local(self.node.clone());
         let preset =
             preset_account_backend(&did, CLAUDE_OAUTH_PROVIDER, None, "Claude".into()).unwrap();
         write_inference_backend_document(&access, &preset)
@@ -222,7 +221,7 @@ impl Fixture {
         }])
         .unwrap();
         access
-            .transact("test.claude_accounts.profile", |txn| {
+            .transact_write("test.claude_accounts.profile", |txn| {
                 let plan = &plan;
                 Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
             })
@@ -266,7 +265,7 @@ impl Fixture {
         )
         .unwrap();
         access
-            .transact("test.compacts_on", |txn| {
+            .transact_write("test.compacts_on", |txn| {
                 let plan = &plan;
                 Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
             })

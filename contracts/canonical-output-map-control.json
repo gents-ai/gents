@@ -253,12 +253,14 @@
       { "file": "crates/gents/proofs/Proofs/StorageWriteGate.lean", "symbol": "StorageWriteGate.elapsed_is_not_timeout_observation" },
       { "file": "crates/gents/proofs/Proofs/StorageWriteGate.lean", "symbol": "StorageWriteGate.observed_cleanup_return_releases" },
       { "file": "crates/gents/proofs/Proofs/StorageWriteGate.lean", "symbol": "StorageWriteGate.observed_drop_return_releases" },
+      { "file": "crates/gents/proofs/Proofs/StorageWriteGate.lean", "symbol": "StorageWriteGate.scheduled_rollback_timeout_releases_gate" },
       { "file": "crates/gents/proofs/Proofs/StorageWriteGate.lean", "symbol": "StorageWriteGate.suspended_forever_is_valid" },
       { "file": "crates/gents/proofs/Proofs/Conformance/StorageWriteGate.lean", "symbol": "Conformance.StorageWriteGateContracts.cases" }
     ],
     "constructors": [
       "StorageWriteGate.Event.siblingWait",
       "StorageWriteGate.Event.elapsed",
+      "StorageWriteGate.Event.rollbackOwnerScheduled",
       "StorageWriteGate.Event.storageReturned",
       "StorageWriteGate.Event.deadlineObserved",
       "StorageWriteGate.Event.cleanupReturned",
@@ -270,15 +272,17 @@
     "fixture_status": "not_exported",
     "native_owner_paths": [
       "crates/gents/src/streaming.rs",
-      "crates/gents/src/graphql.rs"
+      "crates/gents/src/graphql.rs",
+      "crates/gents/src/config_client/txn.rs"
     ],
-    "consumer_paths": ["crates/gents/tests/conformance/structure.rs"],
+    "consumer_paths": ["crates/gents/tests/conformance/structure.rs", "crates/gents/src/config_client/txn_owner_tests.rs"],
     "native_status": "pending",
     "required_cases": [
       "schedule the storage finalizer independently from a sibling waiting on the same mutation gate",
       "treat elapsed as passage of time only; deadlineObserved is the explicit timeout observation",
       "hold the gate throughout cleanup and dropping until cleanupReturned or dropReturned makes release possible",
       "exercise storage return, cleanup return and drop return paths before release",
+      "bind detached rollback handoff and cleanup timeout to the actual transaction and mutation gate without asserting spawned native work completed",
       "retain the suspended-forever counterexample: executor service and storage or cleanup return are external premises, not proved liveness",
       "The sibling-wait boundary is exercised at operation level by suspended_same_task_holder_append_rejected in canonical_execution_gate_cases, and rejected commits release through storageReturned. The event vocabulary itself is still not exported as inputs, so this entry stays not_exported."
     ],

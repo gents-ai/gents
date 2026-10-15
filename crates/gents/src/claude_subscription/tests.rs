@@ -160,7 +160,7 @@ async fn fixture_queue_serves_one_body_per_call_then_asks_the_bearer() {
 #[tokio::test]
 async fn build_without_a_credential_fails_closed_with_the_login_hint() {
     let node = test_node().await;
-    let err = ClaudeSubscriptionClient::build(Arc::new(node), "did:key:z6MkNobody", None)
+    let err = ClaudeSubscriptionClient::build(node, "did:key:z6MkNobody", None)
         .await
         .expect_err("missing");
     assert!(
@@ -172,7 +172,7 @@ async fn build_without_a_credential_fails_closed_with_the_login_hint() {
 
 #[tokio::test]
 async fn build_with_a_seeded_credential_yields_a_shared_bearer() {
-    let node = Arc::new(test_node().await);
+    let node = test_node().await;
     seed_credential(
         &node,
         "did:key:z6MkSeeded",
@@ -203,7 +203,7 @@ async fn build_with_a_seeded_credential_yields_a_shared_bearer() {
 /// refresh would fail to connect).
 #[tokio::test]
 async fn stale_credential_refreshes_once_through_the_claude_token_endpoint() {
-    let node = Arc::new(test_node().await);
+    let node = test_node().await;
     seed_credential(
         &node,
         "did:key:z6MkStaleRefresh",
@@ -292,7 +292,7 @@ fn anthropic_api_key_is_a_shared_key_kind_on_the_messages_wire() {
 #[tokio::test]
 async fn usage_wiring_claude_built_client_holds_its_account_reporter() {
     let did = "did:key:z6MkUsageWireClaude";
-    let node = Arc::new(crate::oauth_credential::test_support::test_node().await);
+    let node = crate::oauth_credential::test_support::test_node().await;
     let credential = crate::oauth_credential::OAuthCredential {
         doc_id: None,
         credential_id: format!(

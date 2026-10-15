@@ -31,7 +31,7 @@ async fn outdated_packs(
     let installed = gents::pack::installed_packs(
         scope.graphql.is_none().then_some(home.as_path()),
         node.as_ref()
-            .map(|(access, owner)| (&**access, owner.as_str())),
+            .map(|(access, owner)| (access, owner.as_str())),
     )
     .await?;
     let client = RegistryClient::new(resolve_registry_url(registry));

@@ -166,12 +166,6 @@ pub fn create_window(app: &AppHandle, tab: bool) -> tauri::Result<WebviewWindow>
     config.visible = false;
     config.tabbing_identifier = Some(TABBING_IDENTIFIER.into());
     let window = WebviewWindowBuilder::from_config(app, &config)?.build()?;
-    // Selection is local to each view. A single shared observation scope must
-    // not suppress updates or request actions for the other views' nodes.
-    let state = app.state::<gents_desktop_bridge::state::DesktopAppState>();
-    if let Some(core) = gents_desktop_bridge::state::current_core(&state) {
-        core.set_selected_node_did(None);
-    }
     with_native_window(&window, |native| {
         native.setTabbingMode(if tab {
             NSWindowTabbingMode::Preferred

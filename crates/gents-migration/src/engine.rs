@@ -57,6 +57,8 @@ pub async fn ensure_migrations_with_registry(
         report.materialization = materialize::materialize_all(node, registry).await?;
     }
     let materialization_ready = Instant::now();
+    reconcile_ordinary_indexes(node, registry).await?;
+    let indexes_ready = Instant::now();
     report.warnings.extend(
         report
             .materialization
@@ -78,7 +80,10 @@ pub async fn ensure_migrations_with_registry(
         materialization_ms = materialization_ready
             .duration_since(lineages_ready)
             .as_millis(),
-        elapsed_ms = materialization_ready.duration_since(started).as_millis(),
+        index_reconciliation_ms = indexes_ready
+            .duration_since(materialization_ready)
+            .as_millis(),
+        elapsed_ms = indexes_ready.duration_since(started).as_millis(),
         "ensure_migrations complete"
     );
 
@@ -99,6 +104,7 @@ pub async fn ensure_migrations_dynamic(
     let view = Registry {
         baseline: &baseline,
         steps: &steps,
+        ordinary_indexes: &[],
     };
     ensure_migrations_with_registry(node, &view).await
 }
@@ -149,6 +155,23 @@ async fn register_baseline(
         collections = missing.len(),
         "baseline schemas registered in one batch"
     );
+    Ok(())
+}
+
+async fn reconcile_ordinary_indexes(node: &EmbeddedNode, registry: &Registry<'_>) -> Result<()> {
+    for index in registry.ordinary_indexes {
+        let fields = index
+            .fields
+            .iter()
+            .map(|field| schema::IndexedFieldDescription {
+                name: field.name.to_owned(),
+                descending: field.descending,
+            })
+            .collect();
+        node.ensure_ordinary_index(index.collection, index.name, fields)
+            .await
+            .map_err(Error::Node)?;
+    }
     Ok(())
 }
 

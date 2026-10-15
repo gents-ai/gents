@@ -96,14 +96,14 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
             Arc::new(KeyIdentity::load_or_create(data_path.join("node.key"), None).unwrap());
         let agent_config = test_agent_with_identity(identity);
         crate::test_support::install_test_agent(
-            node.as_ref(),
+            &node,
             agent_config.node_did(),
             &agent_config.agent_id,
         )
         .await;
         let session_id = uuid::Uuid::new_v4().to_string();
         crate::session::ensure_session_with_agent_id_and_requester_did(
-            node.as_ref(),
+            &node,
             &session_id,
             agent_config.node_did(),
             &agent_config.agent_id,
@@ -184,7 +184,7 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
                 block_indices: Vec::new(),
             };
             crate::provider_context_reduction::persist(
-                node.as_ref(),
+                &node,
                 crate::provider_context_reduction::NewProviderContextReduction {
                     node_did: agent_config.node_did(),
                     requester_did: Some(agent_config.node_did()),
@@ -255,6 +255,7 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
                 provider_inputs: provider_inputs.clone(),
                 title_calls: Arc::new(AtomicUsize::new(0)),
                 title_shape_mismatches: Arc::new(AtomicUsize::new(0)),
+                successor: None,
             }),
             preamble,
             Arc::new(Vec::<Box<dyn ToolDyn>>::new()),
@@ -394,6 +395,7 @@ async fn scripted_daemon(
             provider_inputs: provider_inputs.clone(),
             title_calls: Arc::new(AtomicUsize::new(0)),
             title_shape_mismatches: Arc::new(AtomicUsize::new(0)),
+            successor: None,
         }),
         preamble,
         Arc::new(Vec::<Box<dyn ToolDyn>>::new()),
@@ -444,14 +446,14 @@ async fn generated_retry_selection_cases_bind_to_the_daemon() {
             Arc::new(KeyIdentity::load_or_create(data_path.join("node.key"), None).unwrap());
         let agent_config = test_agent_with_identity(identity);
         crate::test_support::install_test_agent(
-            node.as_ref(),
+            &node,
             agent_config.node_did(),
             &agent_config.agent_id,
         )
         .await;
         let session_id = uuid::Uuid::new_v4().to_string();
         crate::session::ensure_session_with_agent_id_and_requester_did(
-            node.as_ref(),
+            &node,
             &session_id,
             agent_config.node_did(),
             &agent_config.agent_id,

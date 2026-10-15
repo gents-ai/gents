@@ -1743,3 +1743,25 @@ fn pending_reorder_keeps_observed_snapshot_distinct_from_requested_order() {
     ])
     .is_err());
 }
+
+#[test]
+fn desktop_reset_defaults_to_preview_and_handoff_requires_confirmation() {
+    let cli = Cli::try_parse_from(["gents", "desktop", "reset"]).unwrap();
+    let Command::Desktop {
+        command:
+            DesktopCommand::Reset {
+                confirm,
+                delete,
+                wait_for_desktop,
+                ..
+            },
+    } = cli.command
+    else {
+        panic!("expected desktop reset");
+    };
+    assert!(confirm.is_none());
+    assert!(!delete);
+    assert!(!wait_for_desktop);
+    assert!(Cli::try_parse_from(["gents", "desktop", "reset", "--wait-for-desktop"]).is_err());
+    assert!(Cli::try_parse_from(["gents", "desktop", "reset", "--desktop-pid", "1234"]).is_err());
+}

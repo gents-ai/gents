@@ -1,5 +1,11 @@
+import Proofs.Conformance.RequestPatchPublicationCases
+import Proofs.Conformance.ClientDataPublicationCases
+import Proofs.Conformance.ClientRequestClosureCases
+import Proofs.Conformance.ClientRequestCacheIdentityCases
+import Proofs.Conformance.SessionQueueOrderCases
 import Proofs.Conformance.CountCarrier
 import Proofs.Conformance.ConfigurationScope
+import Proofs.Conformance.EnrollmentPendingRequests
 import Proofs.Conformance.GraphWorkspaceLineage
 import Proofs.Conformance.OperatorBaseFreeze
 import Proofs.Conformance.LogicalOutputObligation
@@ -11,6 +17,7 @@ import Proofs.Conformance.PluginResources
 import Proofs.Conformance.MailboxNotification
 import Proofs.Conformance.MailboxReply
 import Proofs.Conformance.MailboxHandoff
+import Proofs.Conformance.MailboxSweep
 import Proofs.Conformance.ArtifactAuthority
 import Proofs.Conformance.WorkspacePathCapability
 import Proofs.Conformance.TaskHooks
@@ -143,6 +150,8 @@ def snapshotJson : String :=
     ++ "\"interrupt_queue_cases\":"
       ++ Conformance.InterruptQueueContracts.casesJson ++ ","
     ++ "\"session_input_edit_cases\":" ++ FoldQueueContracts.inputEditCasesJson ++ ","
+    ++ "\"session_input_edit_client_observation_cases\":"
+      ++ FoldQueueContracts.inputEditClientObservationCasesJson ++ ","
     ++ "\"queue_management_cases\":" ++ FoldQueueContracts.managementCasesJson ++ ","
     ++ "\"steering_publication_cases\":" ++ FoldQueueContracts.steeringPublicationCasesJson ++ ","
     ++ "\"fold_queue_cases\":"
@@ -205,10 +214,14 @@ def snapshotJson : String :=
       ++ sessionHydrationDurableCasesJson ++ ","
     ++ "\"session_hydration_start_cases\":"
       ++ sessionHydrationStartCasesJson ++ ","
+    ++ "\"session_hydration_admission_cases\":"
+      ++ sessionHydrationAdmissionCasesJson ++ ","
     ++ "\"enrollment_cases\":"
       ++ enrollmentCasesJson ++ ","
     ++ "\"enrollment_durable_projection_cases\":"
       ++ enrollmentDurableProjectionCasesJson ++ ","
+    ++ "\"enrollment_pending_request_cases\":"
+      ++ Conformance.EnrollmentPendingRequests.casesJson ++ ","
     ++ "\"enrollment_encoding_cases\":"
       ++ enrollmentEncodingCasesJson ++ ","
     ++ "\"enrollment_digest_cases\":"
@@ -237,6 +250,16 @@ def snapshotJson : String :=
       ++ toString Conformance.ClientShellContracts.desktopClientShellCaseCount ++ ","
     ++ "\"desktop_client_shell_cases\":"
       ++ Conformance.ClientShellContracts.desktopClientShellCasesJson ++ ","
+    ++ "\"client_data_publication_cases\":"
+      ++ Conformance.ClientDataPublication.casesJson ++ ","
+    ++ "\"client_request_patch_publication_cases\":"
+      ++ Conformance.RequestPatchPublicationCases.casesJson ++ ","
+    ++ "\"client_request_closure_cases\":"
+      ++ Conformance.ClientRequestClosure.casesJson ++ ","
+    ++ "\"client_request_cache_identity_cases\":"
+      ++ Conformance.ClientRequestCacheIdentity.casesJson ++ ","
+    ++ "\"client_session_queue_order_cases\":"
+      ++ Conformance.SessionQueueOrder.casesJson ++ ","
     ++ "\"client_session_turn_cases\":"
       ++ Conformance.ClientShellContracts.sessionTurnCasesJson ++ ","
     ++ "\"request_lifecycle_operator_ui_cases\":"
@@ -406,6 +429,8 @@ def snapshotJson : String :=
       ++ Conformance.MailboxReplyContracts.casesJson ++ ","
     ++ "\"mailbox_handoff_cases\":"
       ++ Conformance.MailboxHandoffContracts.casesJson ++ ","
+    ++ "\"mailbox_sweep_cases\":"
+      ++ Conformance.MailboxSweepContracts.casesJson ++ ","
     ++ "\"schema_argument_repair_cases\":"
       ++ Conformance.SchemaArgumentRepair.casesJson ++ ","
     ++ "\"invalid_tool_progress_cases\":"
@@ -463,6 +488,7 @@ def snapshotJson : String :=
     ++ "\"retry_frontier_cases\":" ++ retryFrontierCasesJson ++ ","
     ++ "\"retry_entry_cases\":" ++ retryEntryCasesJson ++ ","
     ++ "\"current_input_cases\":" ++ currentInputCasesJson ++ ","
+    ++ "\"wake_input_cases\":" ++ wakeInputCasesJson ++ ","
     ++ "\"prompt_assembly_sanitize_cases\":"
       ++ promptAssemblySanitizeCasesJson ++ ","
     ++ "\"prompt_assembly_assistant_order_cases\":"

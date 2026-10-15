@@ -53,7 +53,7 @@ pub(in crate::commands::codex_shim) async fn set_codex_thread_name(
     }
 
     let now = chrono::Utc::now().to_rfc3339();
-    ConfigAccess::transact_local(&state.node, None, "codex.thread.set_name", |txn| {
+    ConfigAccess::transact_local_write(&state.node, None, "codex.thread.set_name", |txn| {
         let now = now.clone();
         Box::pin(async move {
             let row = gents::session::load_agent_session_row_in_txn(

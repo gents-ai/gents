@@ -812,7 +812,7 @@ mod dependency_identity_tests {
 
     #[tokio::test]
     async fn context_compactions_keep_the_exact_requester_scope() -> Result<()> {
-        let node = EmbeddedNode::builder().build().await?;
+        let node = std::sync::Arc::new(EmbeddedNode::builder().build().await?);
         gents::ensure_runtime_schemas(&node).await?;
         for (key, owner, requester) in [
             ("mine", "did:owner", Some("did:requester")),

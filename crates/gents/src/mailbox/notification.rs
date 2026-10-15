@@ -176,7 +176,7 @@ fn validate_existing_notification(
 }
 
 pub(super) async fn reuse_or_update(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     context: &MailboxStampContext,
     args: &FileMailboxItemArgs,
     identity: &NotificationIdentity,
@@ -189,7 +189,7 @@ pub(super) async fn reuse_or_update(
             item: existing.clone(),
         });
     }
-    crate::config_client::ConfigAccess::transact_local(node, None, "mailbox.update_condition", |txn| {
+    crate::config_client::ConfigAccess::transact_local_write(node, None, "mailbox.update_condition", |txn| {
         Box::pin(async move {
             let response = txn.execute(&format!("{{ MailboxItem(filter: {{_docID: {{_eq: \"{}\"}}}}) {{ {MAILBOX_FIELDS} }} }}", escape_graphql_string(&existing.doc_id))).await?;
             let values = gents_protocol::graphql::graphql_rows_from_response(&response, MAILBOX_COLLECTION);

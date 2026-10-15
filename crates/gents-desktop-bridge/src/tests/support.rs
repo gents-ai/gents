@@ -178,6 +178,32 @@ pub async fn seed_provenance_fixture() -> (Arc<ClientCore>, TempDir, String) {
     (core, tmp, parent)
 }
 
+pub async fn refresh_request_and_assert_fresh_projection(
+    core: &ClientCore,
+    node_did: &str,
+    session_id: &str,
+    requester_did: Option<&str>,
+    request_id: &str,
+) {
+    let projection = core
+        .refresh_local_request(node_did, session_id, Some(request_id), None, &[])
+        .await
+        .expect("refresh request");
+    let projection = projection.unwrap_or_else(|| {
+        panic!("request {request_id} has no fresh projection for node {node_did}")
+    });
+    assert_eq!(projection.requester_did.as_deref(), requester_did);
+    assert!(
+        projection.requests.iter().any(|row| {
+            row.node_did.as_deref() == Some(node_did)
+                && row.session_id.as_deref() == Some(session_id)
+                && row.requester_did.as_deref() == requester_did
+                && row.request_id == request_id
+        }),
+        "fresh request projection omitted {request_id} for node {node_did}"
+    );
+}
+
 /// A fleet-shaped provenance fixture for the snapshot starter join: two parent
 /// requests in their own sessions, two children started by the first parent,
 /// one by the second, one child whose stored parent names no stored request,

@@ -89,7 +89,7 @@ pub(crate) async fn load_node_record(
 /// validates the default behavior with the documents it names.
 #[cfg(test)]
 pub(crate) async fn upsert_node(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
     display_name: Option<&str>,
     default_agent_id: Option<&str>,

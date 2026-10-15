@@ -25,11 +25,11 @@ pub use policy::{
 #[doc(hidden)]
 pub use root_admission::{
     admit_authored_root, canonicalize_tools_root, load_workspace_root_policy,
-    project_workspace_root_policy, WorkspaceRootDocument, WorkspaceRootPolicy,
+    project_workspace_root_policy, resolve_configured_tool_root, WorkspaceRootDocument,
+    WorkspaceRootPolicy,
 };
 pub(crate) use root_admission::{
-    load_workspace_root_policy_in_txn, resolve_admitted_tool_root, resolve_configured_tool_root,
-    RootExecutionGuard,
+    load_workspace_root_policy_in_txn, resolve_admitted_tool_root, RootExecutionGuard,
 };
 pub use runtime_context::ToolRuntimeContext;
 pub use selection::{resolve_goal_capabilities, CustomToolFactory, ResolvedToolSelection};
@@ -409,7 +409,7 @@ impl ToolSurface {
         }
         if !self.application_write_collections.is_empty() {
             tools.push(Box::new(crate::application_write::WriteTool::new(
-                crate::config_client::ConfigAccess::Local(runtime.node.clone()),
+                crate::config_client::ConfigAccess::local(runtime.node.clone()),
                 self.application_write_collections.iter().cloned().collect(),
                 datastore_actor.clone(),
             )));

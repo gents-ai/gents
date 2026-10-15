@@ -460,7 +460,7 @@ async fn assert_interrupted_invocation_not_rerun(node: &EmbeddedNode, invocation
     );
 }
 
-async fn recover(node: &EmbeddedNode, plugins: &crate::plugin::executor::PluginExecutor) {
+async fn recover(node: &Arc<EmbeddedNode>, plugins: &crate::plugin::executor::PluginExecutor) {
     crate::callback::recover_local_invocations(node, graph_test_owner(), None, plugins, None)
         .await
         .unwrap();

@@ -198,13 +198,35 @@ def writeCaseJson (c : WriteCase) : String :=
     ++ ",\"names_caller_tool_call\":" ++ toString write.lineage.hasParentToolCallDocId
     ++ ",\"queued_after_active\":" ++ toString write.queuedAfterActive ++ "}"
 
+structure SessionTargetCase where
+  sameRequester : Bool
+  sameNode : Bool
+  caused : Bool
+  allowedTarget : Bool
+
+def sessionTargetCases : List SessionTargetCase := do
+  let sameRequester ← [false, true]
+  let sameNode ← [false, true]
+  let caused ← [false, true]
+  let allowedTarget ← [false, true]
+  pure ⟨sameRequester, sameNode, caused, allowedTarget⟩
+
+def sessionTargetCaseJson (c : SessionTargetCase) : String :=
+  "{\"same_requester\":" ++ toString c.sameRequester
+    ++ ",\"same_node\":" ++ toString c.sameNode
+    ++ ",\"caused\":" ++ toString c.caused
+    ++ ",\"allowed_target\":" ++ toString c.allowedTarget
+    ++ ",\"expected_allowed\":" ++ toString (DurableLineage.sessionTargetAllowed
+      c.sameRequester c.sameNode c.caused c.allowedTarget) ++ "}"
+
 def contractJson : String :=
   "{\"default_max_request_hop\":" ++ toString CausalHop.defaultMaxRequestHop
     ++ ",\"step_cases\":" ++ jsonArray (stepCases.map stepCaseJson)
     ++ ",\"chain_cases\":" ++ jsonArray (chainCases.map chainCaseJson)
     ++ ",\"call_cases\":" ++ jsonArray (callCases.map callCaseJson)
     ++ ",\"interrupt_cases\":" ++ jsonArray (interruptCases.map interruptCaseJson)
-    ++ ",\"write_cases\":" ++ jsonArray (writeCases.map writeCaseJson) ++ "}"
+    ++ ",\"write_cases\":" ++ jsonArray (writeCases.map writeCaseJson)
+    ++ ",\"session_target_cases\":" ++ jsonArray (sessionTargetCases.map sessionTargetCaseJson) ++ "}"
 
 /-- The fixture exercises every cause and both admission outcomes. -/
 theorem step_cases_cover_causes_and_outcomes :

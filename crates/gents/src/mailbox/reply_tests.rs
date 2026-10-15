@@ -66,8 +66,8 @@ async fn persisted_request(
     AgentRequest::try_from(record).unwrap()
 }
 
-async fn claim(node: &EmbeddedNode, request: &AgentRequest, abort: bool) -> Result<()> {
-    ConfigAccess::transact_local(node, None, "test.mailbox_reply", |txn| Box::pin(async move {
+async fn claim(node: &Arc<EmbeddedNode>, request: &AgentRequest, abort: bool) -> Result<()> {
+    ConfigAccess::transact_local_write(node, None, "test.mailbox_reply", |txn| Box::pin(async move {
         let mutation = format!(r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ lifecycle_state: "claimed" }}) {{ _docID }} }}"#,
             escape_graphql_string(&request.doc_id));
         txn.execute_local_response(&mutation).await?;
@@ -119,7 +119,14 @@ async fn signed_reply_claim_rolls_back_and_rejects_replay_and_dismissal() {
         "open"
     );
     // The sweep cannot consume a valid but still-unclaimed reply either.
-    assert_eq!(sweep_open_mailbox_items(&node).await.unwrap().acted, 0);
+    assert_eq!(
+        sweep_open_mailbox_items(&node, identity.did(), None)
+            .await
+            .unwrap()
+            .report
+            .acted,
+        0
+    );
     claim(&node, &request, false).await.unwrap();
     claim(&node, &request, false).await.unwrap();
     let replay = signed_reply(&node, &identity, &item, "replayed-request").await;

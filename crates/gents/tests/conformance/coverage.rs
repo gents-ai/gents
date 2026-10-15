@@ -282,7 +282,6 @@ fn lean_boundary_metadata_is_typed_and_reviewable() {
         "boundary.session-recovery.client-retry-surface",
         "boundary.coverage-ledger.review-discipline",
         "boundary.event-delivery.fair-substrate",
-        "boundary.event-delivery.rescan-doc-cap",
         "boundary.prompt-assembly.provider-input-sanitization",
         "boundary.model.nat-typed-ids-time",
         "boundary.p2p-backpressure.obligation-model",
@@ -985,6 +984,35 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "ManagedExecLivenessCases".to_string(),
         ));
     }
+    assert!(snapshot.client_data_publication_cases["notice_delivery"].is_object());
+    for field in ["publications", "reuse"] {
+        assert!(snapshot.client_request_patch_publication_cases[field]
+            .as_array()
+            .is_some_and(|cases| !cases.is_empty()));
+    }
+    emitted.insert((
+        "client_request_patch_publication_cases".into(),
+        "ClientRequestPatchPublicationCases".into(),
+    ));
+    assert!(!snapshot.client_request_closure_cases.is_empty());
+    assert!(!snapshot.client_request_cache_identity_cases.is_empty());
+    emitted.insert((
+        "client_data_publication_cases".into(),
+        "ClientDataNoticeDeliveryCases".into(),
+    ));
+    emitted.insert((
+        "client_request_closure_cases".into(),
+        "ClientRequestClosureCases".into(),
+    ));
+    emitted.insert((
+        "client_request_cache_identity_cases".into(),
+        "ClientRequestCacheIdentityCases".into(),
+    ));
+    assert!(!snapshot.client_session_queue_order_cases.is_empty());
+    emitted.insert((
+        "client_session_queue_order_cases".into(),
+        "ClientSessionQueueOrderCases".into(),
+    ));
     assert_eq!(
         snapshot.frontend_client_shell_case_count,
         snapshot.frontend_client_shell_cases.len(),
@@ -1117,6 +1145,15 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         for domain in ["SessionInputEditCases", "SessionInputEditRemoteCases"] {
             emitted.insert(("session_input_edit_cases".to_string(), domain.to_string()));
         }
+    }
+    if !snapshot
+        .session_input_edit_client_observation_cases
+        .is_empty()
+    {
+        emitted.insert((
+            "session_input_edit_client_observation_cases".to_string(),
+            "SessionInputEditClientObservationCases".to_string(),
+        ));
     }
     if !snapshot.queue_management_cases.is_empty() {
         emitted.insert((
@@ -1253,6 +1290,8 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "RoutingAffinityCases".to_string(),
         ));
     }
+    assert!(!snapshot.wake_input_cases.is_empty());
+    emitted.insert(("wake_input_cases".into(), "WakeInputCases".into()));
     if !snapshot.current_input_cases.is_empty() {
         emitted.insert((
             "current_input_cases".to_string(),
@@ -1668,6 +1707,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "SessionHydrationStartCases".to_string(),
         ));
     }
+    if !snapshot.session_hydration_admission_cases.is_empty() {
+        emitted.insert((
+            "session_hydration_admission_cases".to_string(),
+            "SessionHydrationAdmissionCases".to_string(),
+        ));
+    }
     if !snapshot.enrollment_cases.is_empty() {
         emitted.insert((
             "enrollment_cases".to_string(),
@@ -1700,6 +1745,11 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "CausalHopContract".to_string(),
         ));
     }
+    assert!(!snapshot.causal_hop_contract.session_target_cases.is_empty());
+    emitted.insert((
+        "causal_hop_contract".into(),
+        "SessionTargetAuthorityCases".into(),
+    ));
     if !snapshot.title_request_admission_cases.is_empty() {
         emitted.insert((
             "title_request_admission_cases".to_string(),
@@ -1736,6 +1786,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         emitted.insert((
             "enrollment_durable_projection_cases".into(),
             "EnrollmentDurableProjectionCases".into(),
+        ));
+    }
+    if !snapshot.enrollment_pending_request_cases.is_empty() {
+        emitted.insert((
+            "enrollment_pending_request_cases".into(),
+            "EnrollmentPendingRequests".into(),
         ));
     }
     if !snapshot.pending_user_turn_cases.is_empty() {

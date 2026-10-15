@@ -20,7 +20,10 @@ struct ActiveRequestRecoveryReport {
 }
 
 impl RequestLifecycle {
-    pub async fn recover_all(node: &EmbeddedNode, node_did: &str) -> Result<RecoveryReport> {
+    pub async fn recover_all(
+        node: &std::sync::Arc<EmbeddedNode>,
+        node_did: &str,
+    ) -> Result<RecoveryReport> {
         let active = recover_active_requests(node, node_did).await?;
         crate::trigger_engine::durable::recover_outcomes(node, node_did).await?;
         let background_wakes_redriven = Self::redrive_failed_background_wakeups(node, node_did)
@@ -43,11 +46,11 @@ impl RequestLifecycle {
     /// there is no per-doc anti-entropy on a running peer (defradb.rs#1074) to
     /// re-request it. This re-drive is the owner side of the fix — periodically
     /// re-asserting the current terminal value of recently-terminalized routed
-    /// requests. Local-only requests are excluded because no peer consumes
-    /// their request state (#683). A same-value re-write is a genuine
-    /// higher-priority CRDT delta (it does not no-op), so it flows through the
-    /// normal PushLog path and a lagging requester accepts it (LWW, higher
-    /// priority ⇒ applied).
+    /// requests. Local-only requests, whose requester is absent or the owner
+    /// itself, are excluded: no peer acts on their request state (#683). A
+    /// same-value re-write is a genuine higher-priority CRDT delta (it does not
+    /// no-op), so it flows through the normal PushLog path and a lagging
+    /// requester accepts it (LWW, higher priority ⇒ applied).
     ///
     /// BOUNDED, NOT CONVERGENCE-OBSERVING. The owner has no back-channel telling
     /// it whether a peer caught up. Each successful re-assert atomically advances
@@ -66,7 +69,7 @@ impl RequestLifecycle {
     /// and bounded attempt counter are written together in one document update.
     ///
     pub async fn redrive_terminal_convergence(
-        node: &EmbeddedNode,
+        node: &std::sync::Arc<EmbeddedNode>,
         node_did: &str,
     ) -> Result<TerminalRedriveReport> {
         let escaped_node_did = escape_graphql_string(node_did);
@@ -76,7 +79,10 @@ impl RequestLifecycle {
                 AgentRequest(
                     filter: {{
                         node_did: {{ _eq: "{escaped_node_did}" }},
-                        requester_did: {{ _neq: null }},
+                        _and: [
+                            {{ requester_did: {{ _neq: null }} }},
+                            {{ requester_did: {{ _neq: "{escaped_node_did}" }} }}
+                        ],
                         lifecycle_state: {{ _in: {terminal_states} }},
                         terminal_redrive_attempts: {{ _lt: {cap} }}
                     }},
@@ -93,10 +99,12 @@ impl RequestLifecycle {
             cap = TERMINAL_REDRIVE_CAP,
         );
 
-        let resp = node.execute(&query).await;
-        if resp.has_errors() {
-            anyhow::bail!("querying terminal requests to re-drive: {:?}", resp.errors);
-        }
+        let resp = crate::graphql::graphql_with_transaction_retry(
+            node,
+            &query,
+            "querying terminal requests to re-drive",
+        )
+        .await?;
 
         let rows: Vec<AgentRequestRow> = crate::graphql::rows(&resp, "AgentRequest")?;
 
@@ -134,7 +142,10 @@ impl RequestLifecycle {
                         docID: "{escaped_doc_id}", filter: {{
                             _docID: {{ _eq: "{escaped_doc_id}" }},
                             node_did: {{ _eq: "{escaped_node_did}" }},
-                            requester_did: {{ _neq: null }},
+                            _and: [
+                                {{ requester_did: {{ _neq: null }} }},
+                                {{ requester_did: {{ _neq: "{escaped_node_did}" }} }}
+                            ],
                             lifecycle_state: {{ _eq: "{escaped_lifecycle_state}" }},
                             terminal_redrive_attempts: {{ _eq: {attempts} }}
                         }},
@@ -185,7 +196,7 @@ impl RequestLifecycle {
     }
 
     pub async fn repair_terminal_requests(
-        node: &EmbeddedNode,
+        node: &std::sync::Arc<EmbeddedNode>,
         node_did: &str,
     ) -> Result<TerminalRepairReport> {
         Ok(recover_active_requests(node, node_did).await?.requests)
@@ -193,7 +204,7 @@ impl RequestLifecycle {
 }
 
 async fn recover_active_requests(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
 ) -> Result<ActiveRequestRecoveryReport> {
     let active_states = RequestLifecycleState::graphql_list([
@@ -221,13 +232,12 @@ async fn recover_active_requests(
             }}
         }}"#
     );
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "querying active requests for recovery: {:?}",
-            response.errors
-        );
-    }
+    let response = crate::graphql::graphql_with_transaction_retry(
+        node,
+        &query,
+        "querying active requests for recovery",
+    )
+    .await?;
     let rows: Vec<AgentRequestRow> = crate::graphql::rows(&response, "AgentRequest")?;
     let now = chrono::Utc::now();
     let mut report = ActiveRequestRecoveryReport {

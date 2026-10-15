@@ -1,4 +1,5 @@
-use serde::{Deserialize, Serialize};
+use gents_desktop_core::home_reset::*;
+use gents_desktop_core::preference::{ReviewedHome, StoredManagedServer, MANAGED_SERVER_CONFIG};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -19,40 +20,16 @@ use crate::tauri_commands::service_executable::{
     ensure_installable_location, resolve_service_executable,
 };
 use crate::types::{
-    HomeResetDisposition, IncompatibleStoreScope, IncompatibleStoreView, ManagedServerResetRequest,
-    ManagedServerResetResult, ManagedServerRestartRequest, ManagedServerRootValidation,
-    ManagedServerRootValidationRequest, ManagedServerStartRequest, ManagedServerState,
-    ManagedServerStatus, ManagedServerToolCeiling,
+    HomeResetDisposition, ManagedServerResetRequest, ManagedServerResetResult,
+    ManagedServerRestartRequest, ManagedServerRootValidation, ManagedServerRootValidationRequest,
+    ManagedServerStartRequest, ManagedServerState, ManagedServerStatus, ManagedServerToolCeiling,
 };
-
-const MANAGED_SERVER_CONFIG: &str = "managed-server.json";
 
 #[derive(Debug, Clone)]
 struct ManagedPairingTarget {
     node_name: String,
     node_did: String,
     graphql: String,
-}
-
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct StoredManagedServer {
-    node_name: String,
-    #[serde(default)]
-    tool_ceiling: Option<ManagedServerToolCeiling>,
-    #[serde(default)]
-    tool_root: Option<String>,
-    /// The canonical home and init identity the ceiling and root were
-    /// reviewed for. A remembered grant applies only to that home.
-    #[serde(default)]
-    reviewed_for: Option<ReviewedHome>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ReviewedHome {
-    node_home: String,
-    node_did: String,
 }
 
 /// What an initialized home says about itself in `init.json`.
@@ -607,6 +584,7 @@ async fn start_managed_server<'a, R: Runtime>(
     state: &'a DesktopAppState,
     lifecycle: LifecycleGuard<'a>,
 ) -> Result<ManagedServerStatus, BridgeError> {
+    ensure_app_not_quitting(state)?;
     let node_name = request.node_name.trim();
     if node_name.is_empty() {
         return Err(BridgeError::new(
@@ -724,7 +702,7 @@ async fn start_managed_server<'a, R: Runtime>(
             gents_server::server_host::ProvisionOptions {
                 home: node_home.clone(),
                 node_name: node_name.to_string(),
-                tool_ceiling: authority.tool_ceiling.into(),
+                tool_ceiling: runtime_tool_ceiling(authority.tool_ceiling),
                 tool_root: authority.tool_root.clone(),
                 store_key_custody: state.policy.store_key_custody,
             },
@@ -946,17 +924,17 @@ async fn fail_managed_start<R: Runtime>(
     }
 }
 
-const ARCHIVE_CONSEQUENCE: &str = "The old home is moved, not changed, into a timestamped backup next to it. Nothing in it is imported into the new home.";
-const DELETE_CONSEQUENCE: &str =
-    "The old home is permanently deleted. Nothing in it is imported into the new home.";
-
-/// Previews, archives, or deletes a local home this version cannot open.
+/// Previews or retires local state through the shared home reset plan.
+/// Explicit full resets stop the runtime and client, then hand retirement to
+/// a helper that waits for this process and its webviews to exit.
 ///
-/// In scope are the managed runtime home's own entries (a fixed inventory,
+/// For refused stores, scope is the managed runtime home's own entries (a fixed inventory,
 /// [`gents::home::RUNTIME_HOME_ENTRIES`]) when the runtime refused its store,
 /// and the desktop client's state when the client refused its store or when
 /// the runtime home is retired (the client's pairing is bound to that
-/// runtime). Everything else in either root stays in place.
+/// runtime). Full reset also includes the service definition and desktop logs,
+/// and clears browser data through WebKit in either disposition. Other homes
+/// and files outside the inventory stay in place.
 ///
 /// A preview changes nothing and cancels nothing. The confirmation it returns
 /// pins the exact planned set: an action whose plan differs, before or after
@@ -967,20 +945,52 @@ pub async fn desktop_managed_server_reset<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, DesktopAppState>,
 ) -> Result<ManagedServerResetResult, BridgeError> {
+    let full_reset = request.full_reset.unwrap_or(false);
+    if full_reset && !cfg!(target_os = "macos") {
+        return Err(BridgeError::new(
+            BridgeErrorCode::Unsupported,
+            "Full desktop reset is supported on macOS.",
+        ));
+    }
     let disposition = request.disposition.unwrap_or(HomeResetDisposition::Archive);
     let Some(confirmation) = request.confirmation.as_deref() else {
-        return Ok(plan_state_reset(&state).await?.preview());
+        return Ok(plan_state_reset(&state, full_reset).await?.preview());
     };
     let _lifecycle = lock_lifecycle_superseding_start(&state).await;
-    retire_incompatible_home(&app, &state, confirmation, disposition).await
+    retire_incompatible_home(&app, &state, confirmation, disposition, full_reset).await
 }
 
-async fn plan_state_reset(state: &DesktopAppState) -> Result<HomeResetPlan, BridgeError> {
+async fn plan_state_reset(
+    state: &DesktopAppState,
+    full_reset: bool,
+) -> Result<HomeResetPlan, BridgeError> {
     let runtime_home = state
         .policy
         .node_home
         .as_deref()
         .filter(|_| state.policy.managed_server == ManagedServerPolicy::Allowed);
+    if full_reset {
+        let user_home = resolve_user_home(dirs::home_dir())?;
+        let home = runtime_home.ok_or_else(|| {
+            BridgeError::new(
+                BridgeErrorCode::Unsupported,
+                "Full reset requires a locally managed runtime.",
+            )
+        })?;
+        let config = gents_server::native_service::NativeServiceConfig::new(
+            home.to_path_buf(),
+            std::env::current_exe().map_err(|error| BridgeError::untyped(error.to_string()))?,
+        )
+        .map_err(|error| BridgeError::untyped(error.to_string()))?;
+        let platform = gents_server::native_service::NativeServicePlatform::current()
+            .map_err(|error| BridgeError::untyped(error.to_string()))?;
+        return plan_full_reset(
+            Some(home),
+            &state.policy.desktop_paths,
+            &user_home,
+            &config.definition_path(platform),
+        );
+    }
     let runtime_store = state.managed_server.lock().await.incompatible_store.clone();
     let client_store = state
         .bridge
@@ -997,19 +1007,6 @@ async fn plan_state_reset(state: &DesktopAppState) -> Result<HomeResetPlan, Brid
         &user_home,
         client_binding(state).await,
     )
-}
-
-/// How the desktop client state relates to the managed home, as
-/// `managed-server.json`'s `reviewedFor` records it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ClientBinding {
-    /// No reviewed home is remembered, or its home cannot be read.
-    Unbound,
-    /// The client was paired with this exact home and identity.
-    BoundToHome,
-    /// The reviewed home is gone or now carries another identity: the
-    /// pairing names a node that no longer exists here.
-    Orphaned,
 }
 
 /// A path is not identity: only the reviewed home itself being gone, or now
@@ -1116,8 +1113,9 @@ async fn retire_incompatible_home<R: Runtime>(
     state: &DesktopAppState,
     confirmation: &str,
     disposition: HomeResetDisposition,
+    full_reset: bool,
 ) -> Result<ManagedServerResetResult, BridgeError> {
-    let plan = plan_state_reset(state).await?;
+    let plan = plan_state_reset(state, full_reset).await?;
     plan.check_confirmation(confirmation, disposition)?;
     let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%S%.3fZ").to_string();
     // Refuse a rename across filesystems before anything is stopped.
@@ -1135,12 +1133,19 @@ async fn retire_incompatible_home<R: Runtime>(
     // exists and held (never moved) until the entries are retired, so neither
     // can open or create the store meanwhile. Older runtimes do not take it;
     // the service stop and endpoint check above cover them.
+    if full_reset {
+        run_native(native_service(app, state)?, |service| service.stop(true)).await?;
+        let native = run_native(native_service(app, state)?, |service| service.status()).await?;
+        ensure_managed_runtime_stopped(native.is_active_or_transitioning())?;
+    }
     let _store_lock = match plan.runtime.as_ref() {
         Some((home, _)) => {
             // The service definition names this home; a fresh setup installs
             // it again. Removing it keeps login from launching a runtime on an
             // emptied home.
-            run_native(native_service(app, state)?, |service| service.uninstall()).await?;
+            if !full_reset {
+                run_native(native_service(app, state)?, |service| service.uninstall()).await?;
+            }
             let native =
                 run_native(native_service(app, state)?, |service| service.status()).await?;
             ensure_managed_runtime_stopped(native.is_active_or_transitioning())?;
@@ -1159,9 +1164,29 @@ async fn retire_incompatible_home<R: Runtime>(
     };
     // The stopped service and client may have changed the homes: act only on
     // the set the user confirmed.
-    let settled = plan_state_reset(state).await?;
+    let settled = plan_state_reset(state, full_reset).await?;
     settled.check_confirmation(confirmation, disposition)?;
 
+    if full_reset {
+        let executable = resolve_service_executable(app, state.policy.desktop_paths.root())?;
+        executable.install()?;
+        let executable = executable.service_path().to_path_buf();
+        let home = state.policy.node_home.clone().ok_or_else(|| {
+            BridgeError::new(
+                BridgeErrorCode::Unsupported,
+                "No managed runtime home is configured.",
+            )
+        })?;
+        let desktop = state.policy.desktop_paths.root().to_path_buf();
+        let confirmation = confirmation.to_owned();
+        tokio::task::spawn_blocking(move || {
+            launch_reset_helper(&executable, &home, &desktop, &confirmation, disposition)
+        })
+        .await
+        .map_err(|error| BridgeError::untyped(error.to_string()))??;
+        app.exit(0);
+        return Ok(settled.preview());
+    }
     let result = settled.retire(disposition, backup.as_deref())?;
     drop(_client);
     drop(_store_lock);
@@ -1190,6 +1215,72 @@ async fn retire_incompatible_home<R: Runtime>(
     );
     emit_status(app, state).await;
     Ok(result)
+}
+
+/// The helper reserves reset before acknowledging readiness, then waits for
+/// this process (including its webviews) to exit before touching browser data.
+fn launch_reset_helper(
+    executable: &Path,
+    home: &Path,
+    desktop: &Path,
+    confirmation: &str,
+    disposition: HomeResetDisposition,
+) -> Result<(), BridgeError> {
+    launch_reset_helper_with_timeout(
+        executable,
+        home,
+        desktop,
+        confirmation,
+        disposition,
+        Duration::from_secs(15),
+    )
+}
+
+fn launch_reset_helper_with_timeout(
+    executable: &Path,
+    home: &Path,
+    desktop: &Path,
+    confirmation: &str,
+    disposition: HomeResetDisposition,
+    timeout: Duration,
+) -> Result<(), BridgeError> {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    let launch = || -> anyhow::Result<()> {
+        let mut command = Command::new(executable);
+        command
+            .args(["desktop", "reset", "--home"])
+            .arg(home)
+            .arg("--confirm")
+            .arg(confirmation)
+            .arg("--wait-for-desktop")
+            .arg("--desktop-pid")
+            .arg(std::process::id().to_string())
+            .arg("--desktop-executable")
+            .arg(std::env::current_exe()?)
+            .env("GENTS_DESKTOP_HOME", desktop)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        if disposition == HomeResetDisposition::Delete {
+            command.arg("--delete");
+        }
+        let mut child = command.spawn()?;
+        let mut stdout = child.stdout.take().expect("piped reset stdout");
+        let (send, receive) = std::sync::mpsc::sync_channel(1);
+        std::thread::spawn(move || {
+            let mut ready = [0];
+            let read = stdout.read_exact(&mut ready);
+            let _ = send.send(read.is_ok() && ready[0] == b'R');
+        });
+        if receive.recv_timeout(timeout) != Ok(true) {
+            let _ = child.kill();
+            let _ = child.wait();
+            anyhow::bail!("The reset helper could not prepare; your local state has not been retired. Run gents desktop reset to review and retry.");
+        }
+        Ok(())
+    };
+    launch().map_err(|error| BridgeError::new(BridgeErrorCode::Backend, format!("{error:#}")))
 }
 
 /// Fails closed unless nothing serves the managed home: no runtime answers
@@ -1237,732 +1328,14 @@ fn ensure_managed_endpoint_stopped(
     }
 }
 
-/// The canonical user home a reset measures its roots against. Without it a
-/// broad root cannot be recognized, so the reset is refused rather than
-/// guessed at.
-fn resolve_user_home(user_home: Option<PathBuf>) -> Result<PathBuf, BridgeError> {
-    let user_home = user_home
-        .filter(|home| !home.as_os_str().is_empty())
-        .ok_or_else(|| {
-            BridgeError::new(
-                BridgeErrorCode::InvalidArgument,
-                "The user home directory cannot be determined; reset was refused.",
-            )
-        })?;
-    std::fs::canonicalize(&user_home).map_err(|error| {
-        BridgeError::new(
-            BridgeErrorCode::InvalidArgument,
-            format!(
-                "The user home directory {} cannot be resolved ({error}); reset was refused.",
-                user_home.display()
-            ),
-        )
-    })
-}
-
-/// A root whose entries a reset may retire: not the filesystem root, and
-/// neither the user's home directory nor any ancestor of it. `root` and
-/// `user_home` are canonical, so aliases of either compare equal.
-fn ensure_retirable_root(root: &Path, label: &str, user_home: &Path) -> Result<(), BridgeError> {
-    let broad = root.parent().is_none() || user_home.starts_with(root);
-    if broad {
-        return Err(BridgeError::new(
-            BridgeErrorCode::InvalidArgument,
-            format!(
-                "The {label} {} is too broad to reset; reset was refused.",
-                root.display()
-            ),
-        ));
-    }
-    Ok(())
-}
-
-fn canonical_root(path: &Path, label: &str) -> Result<PathBuf, BridgeError> {
-    std::fs::canonicalize(path).map_err(|error| {
-        BridgeError::new(
-            BridgeErrorCode::Backend,
-            format!("Cannot resolve {label} {}: {error}", path.display()),
-        )
-    })
-}
-
-/// What a home reset would retire, derived from the refused stores.
-#[derive(Debug)]
-struct HomeResetPlan {
-    /// The canonical managed home and its refused store. A home without a
-    /// refused store is in scope only because the retired client state was
-    /// paired with it.
-    runtime: Option<(PathBuf, Option<gents::storage_backend::IncompatibleStore>)>,
-    client: Option<gents::storage_backend::IncompatibleStore>,
-    /// The client state is retired because its paired node is gone.
-    orphaned_client: bool,
-    desktop_root: PathBuf,
-    runtime_entries: gents::home::HomeEntries,
-    /// The runtime entries a Delete removes: the owned entries, except that
-    /// `keys/` is narrowed to the managed home's identity and recorded store key (other homes
-    /// may keep keys there). Archive moves all of `keys/`: it is recoverable.
-    delete_home_entries: Vec<PathBuf>,
-    /// `keys/`, removed after a Delete only if nothing else is left in it.
-    delete_prunes_keys: Option<PathBuf>,
-    /// Present client-state entries in scope.
-    client_entries: Vec<PathBuf>,
-    store_keys: Vec<RetiredStoreKey>,
-}
-
-/// Keychain custody outlives filesystem retirement. Its record stays until
-/// deletion succeeds, so a denied Keychain operation can be retried. Archives
-/// retain both the key and its record so the archived store remains readable.
-#[derive(Debug)]
-struct RetiredStoreKey {
-    record: gents::store_key::StoreEncryption,
-    key_file: PathBuf,
-    record_files: Vec<PathBuf>,
-}
-
-fn recorded_store_key(
-    record_file: PathBuf,
-    key_file: PathBuf,
-    home: bool,
-) -> Option<RetiredStoreKey> {
-    let value: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&record_file).ok()?).ok()?;
-    let value = if home {
-        value.get("store_encryption")?.clone()
-    } else {
-        value
-    };
-    Some(RetiredStoreKey {
-        record: serde_json::from_value(value).ok()?,
-        key_file,
-        record_files: vec![record_file],
-    })
-}
-
-fn add_store_key(keys: &mut Vec<RetiredStoreKey>, key: RetiredStoreKey) {
-    if let Some(existing) = keys
-        .iter_mut()
-        .find(|existing| existing.record == key.record && existing.key_file == key.key_file)
-    {
-        existing.record_files.extend(key.record_files);
-    } else {
-        keys.push(key);
-    }
-}
-
-fn upgrade_retirement(
-    data: &Path,
-    key_file: PathBuf,
-) -> Result<(Vec<PathBuf>, Option<RetiredStoreKey>), BridgeError> {
-    let read = || -> anyhow::Result<_> {
-        let entries = gents::store_key::upgrade::retirement_entries(data)?;
-        let key = gents::store_key::upgrade::pending_record(data)?.map(|record| RetiredStoreKey {
-            record,
-            key_file,
-            record_files: vec![gents::store_key::upgrade::journal_path(data)],
-        });
-        Ok((entries, key))
-    };
-    read().map_err(|error| {
-        BridgeError::new(
-            BridgeErrorCode::Backend,
-            format!("Inspecting store upgrade: {error:#}"),
-        )
-    })
-}
-
-/// The managed home's own key file inside its `keys/` directory, as its
-/// `init.json` names it (`key_path`, else the default for `node_name`).
-fn own_home_key(home: &Path, keys: &Path) -> Option<PathBuf> {
-    let record: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(gents::home::init_config_path(home)).ok()?).ok()?;
-    let key = record
-        .get("key_path")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|path| !path.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| {
-            record
-                .get("node_name")
-                .and_then(serde_json::Value::as_str)
-                .map(str::trim)
-                .filter(|name| !name.is_empty())
-                .map(|name| gents::home::default_key_path(home, name))
-        })?;
-    let parent = std::fs::canonicalize(key.parent()?).ok()?;
-    let name = key.file_name()?;
-    (parent == keys).then(|| keys.join(name))
-}
-
-fn lock_home_for_retirement(home: &Path) -> Result<gents::home::StoreLock, BridgeError> {
-    gents::home::lock_home_store(home)
-        .map_err(|error| BridgeError::new(BridgeErrorCode::InvalidArgument, format!("{error:#}")))
-}
-
-fn is_store_lock(path: &Path) -> bool {
-    path.parent().is_some_and(|home| {
-        gents::home::default_data_dir(home)
-            .file_name()
-            .is_some_and(|data| {
-                path.file_name()
-                    .is_some_and(|name| *name == *format!("{}.lock", data.to_string_lossy()))
-            })
-    })
-}
-
-fn present(path: &Path) -> Result<bool, BridgeError> {
-    match std::fs::symlink_metadata(path) {
-        Ok(_) => Ok(true),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(BridgeError::new(
-            BridgeErrorCode::Backend,
-            format!("Inspecting {}: {error}", path.display()),
-        )),
-    }
-}
-
-fn plan_home_reset(
-    runtime_home: Option<&Path>,
-    runtime_store: Option<gents::storage_backend::IncompatibleStore>,
-    client_store: Option<gents::storage_backend::IncompatibleStore>,
-    desktop_paths: &gents_desktop_core::client::DesktopPaths,
-    user_home: &Path,
-    binding: ClientBinding,
-) -> Result<HomeResetPlan, BridgeError> {
-    let inspect = |path: &Path| {
-        gents::storage_backend::incompatible_store_kind(path).map_err(|error| {
-            BridgeError::new(
-                BridgeErrorCode::Backend,
-                format!("Inspecting {}: {error}", path.display()),
-            )
-        })
-    };
-    let runtime_home = match runtime_home {
-        Some(configured_home) if present(configured_home)? => {
-            reject_symlink(configured_home, "managed home")?;
-            let home = canonical_root(configured_home, "managed home")?;
-            let data = gents::home::default_data_dir(&home);
-            reject_symlink_if_present(&data, "managed data")?;
-            reject_symlink_if_present(
-                &gents::home::init_config_path(&home),
-                "managed init marker",
-            )?;
-            let marked = inspect(&data)?.map(|kind| gents::storage_backend::IncompatibleStore {
-                kind,
-                data_path: data.clone(),
-            });
-            marked
-                .or(runtime_store.map(|store| match store.kind {
-                    gents::storage_backend::IncompatibleStoreKind::InsecureKey => store,
-                    _ => gents::storage_backend::IncompatibleStore {
-                        data_path: data.clone(),
-                        ..store
-                    },
-                }))
-                .map_or(Some((home.clone(), None)), |store| {
-                    Some((home, Some(store)))
-                })
-        }
-        _ => None,
-    };
-    reject_symlink_if_present(desktop_paths.root(), "desktop client state")?;
-    reject_symlink_if_present(desktop_paths.node_data_dir(), "desktop client store")?;
-    let client = inspect(desktop_paths.node_data_dir())?
-        .map(|kind| gents::storage_backend::IncompatibleStore {
-            kind,
-            data_path: desktop_paths.node_data_dir().to_path_buf(),
-        })
-        .or(client_store);
-    let orphaned_client = binding == ClientBinding::Orphaned;
-    let runtime = runtime_home.filter(|(home, store)| {
-        // Starting fresh retires the client's pairing with this home; left in
-        // place, first-run setup would provision onto it and relaunch the
-        // runtime on a store that may not open.
-        store.is_some()
-            || (client.is_some()
-                && binding == ClientBinding::BoundToHome
-                && gents_server::server_host::initialized_home(home))
-    });
-    if runtime.is_none() && client.is_none() && !orphaned_client {
-        return Err(BridgeError::new(
-            BridgeErrorCode::InvalidArgument,
-            "No local store is marked as legacy or incompatible; reset was refused.",
-        ));
-    }
-    let desktop_root = if present(desktop_paths.root())? {
-        canonical_root(desktop_paths.root(), "desktop client state")?
-    } else {
-        desktop_paths.root().to_path_buf()
-    };
-    if let Some((home, _)) = runtime.as_ref() {
-        ensure_retirable_root(home, "managed home", user_home)?;
-    }
-    let retires_client_state = runtime.is_some() || client.is_some() || orphaned_client;
-    if retires_client_state {
-        ensure_retirable_root(&desktop_root, "desktop client state", user_home)?;
-    }
-    let mut runtime_entries = match runtime.as_ref() {
-        Some((home, _)) => {
-            gents::home::home_entries(home, &[desktop_root.clone()]).map_err(|error| {
-                BridgeError::new(
-                    BridgeErrorCode::Backend,
-                    format!("Listing {}: {error:#}", home.display()),
-                )
-            })?
-        }
-        None => gents::home::HomeEntries::default(),
-    };
-    let mut client_entries = Vec::new();
-    if retires_client_state {
-        // Entries are derived from the canonical root, never from the raw
-        // configured path.
-        let canonical = gents_desktop_core::client::DesktopPaths::from_root(&desktop_root);
-        for entry in canonical
-            .client_state_entries()
-            .into_iter()
-            .chain(std::iter::once(desktop_root.join(MANAGED_SERVER_CONFIG)))
-        {
-            if present(&entry)? {
-                client_entries.push(entry);
-            }
-        }
-    }
-    let mut delete_home_entries = Vec::new();
-    let mut delete_prunes_keys = None;
-    let mut store_keys = Vec::new();
-    if retires_client_state {
-        let canonical = gents_desktop_core::client::DesktopPaths::from_root(&desktop_root);
-        if let Some(key) = recorded_store_key(
-            canonical.store_encryption_path().to_path_buf(),
-            canonical.store_key_path().to_path_buf(),
-            false,
-        ) {
-            add_store_key(&mut store_keys, key);
-        }
-        let (entries, key) = upgrade_retirement(
-            canonical.node_data_dir(),
-            canonical.store_key_path().to_path_buf(),
-        )?;
-        client_entries.extend(entries);
-        if let Some(key) = key {
-            add_store_key(&mut store_keys, key);
-        }
-    }
-    if let Some((home, _)) = runtime.as_ref() {
-        let (entries, upgrade_key) = upgrade_retirement(
-            &gents::home::default_data_dir(home),
-            gents::store_key::home_key_file(home),
-        )?;
-        runtime_entries
-            .retained
-            .retain(|path| !entries.contains(path));
-        runtime_entries.owned.extend(entries);
-        if let Some(key) = recorded_store_key(
-            gents::home::init_config_path(home),
-            gents::store_key::home_key_file(home),
-            true,
-        ) {
-            add_store_key(&mut store_keys, key);
-        }
-        if let Some(key) = upgrade_key {
-            add_store_key(&mut store_keys, key);
-        }
-        for key in store_keys
-            .iter()
-            .filter(|key| key.key_file == gents::store_key::home_key_file(home))
-        {
-            if matches!(key.record.custody, gents::store_key::StoreKeyCustody::File)
-                && std::fs::canonicalize(home.join("keys"))
-                    .is_ok_and(|keys| keys == home.join("keys"))
-                && present(&key.key_file)?
-            {
-                delete_home_entries.push(key.key_file.clone());
-            }
-        }
-        let keys = home.join("keys");
-        for entry in &runtime_entries.owned {
-            if *entry != keys {
-                delete_home_entries.push(entry.clone());
-                continue;
-            }
-            if let Some(key) = own_home_key(home, &keys) {
-                if present(&key)? {
-                    delete_home_entries.push(key);
-                }
-            }
-            delete_prunes_keys = Some(keys.clone());
-        }
-    }
-    Ok(HomeResetPlan {
-        runtime,
-        client,
-        orphaned_client,
-        desktop_root,
-        runtime_entries,
-        delete_home_entries,
-        delete_prunes_keys,
-        client_entries,
-        store_keys,
-    })
-}
-
-impl HomeResetPlan {
-    /// The desktop client state is retired with its runtime: its pairing
-    /// names the runtime identity being retired.
-    fn retires_client_state(&self) -> bool {
-        self.client.is_some() || self.runtime.is_some() || self.orphaned_client
-    }
-
-    fn refused_stores(&self) -> impl Iterator<Item = &gents::storage_backend::IncompatibleStore> {
-        self.runtime
-            .iter()
-            .filter_map(|(_, store)| store.as_ref())
-            .chain(&self.client)
-    }
-
-    fn anchor(&self) -> &Path {
-        self.runtime
-            .as_ref()
-            .map_or(self.desktop_root.as_path(), |(home, _)| home.as_path())
-    }
-
-    fn home_entries(&self, disposition: HomeResetDisposition) -> &[PathBuf] {
-        match disposition {
-            HomeResetDisposition::Archive => &self.runtime_entries.owned,
-            HomeResetDisposition::Delete => &self.delete_home_entries,
-        }
-    }
-
-    fn planned(&self, disposition: HomeResetDisposition) -> impl Iterator<Item = &PathBuf> {
-        self.home_entries(disposition)
-            .iter()
-            .chain(&self.client_entries)
-    }
-
-    /// Deletion is offered only for stores known to come from an older
-    /// release; a store another, possibly newer, build wrote may still be
-    /// wanted by that build.
-    ///
-    /// A paired runtime retired without a refusal was never opened, so its
-    /// store is unclassified and may belong to a newer build: archive only.
-    fn deletable(&self) -> bool {
-        self.runtime
-            .as_ref()
-            .is_none_or(|(_, store)| store.is_some())
-            && self.refused_stores().next().is_some()
-            && self.refused_stores().all(|store| store.kind.is_older())
-    }
-
-    /// A digest of everything the action would touch or leave, so a
-    /// confirmation authorizes exactly the previewed set.
-    fn digest(&self, disposition: HomeResetDisposition) -> String {
-        let mut hasher = blake3::Hasher::new();
-        let mut line = |label: &str, path: &Path| {
-            hasher.update(label.as_bytes());
-            hasher.update(path.as_os_str().as_encoded_bytes());
-            hasher.update(b"\n");
-        };
-        line("anchor", self.anchor());
-        for path in self.home_entries(disposition) {
-            line("home", path);
-        }
-        for path in &self.client_entries {
-            line("desktop", path);
-        }
-        // The store lock appears once the reset takes it; it is never retired.
-        for path in self
-            .runtime_entries
-            .retained
-            .iter()
-            .filter(|path| !is_store_lock(path))
-        {
-            line("retained", path);
-        }
-        for key in &self.store_keys {
-            hasher.update(&serde_json::to_vec(&key.record).expect("store encryption serializes"));
-        }
-        hasher.finalize().to_hex()[..12].to_string()
-    }
-
-    fn confirmation(&self, disposition: HomeResetDisposition) -> String {
-        let anchor = self.anchor().to_string_lossy();
-        let digest = self.digest(disposition);
-        match disposition {
-            HomeResetDisposition::Archive => {
-                format!("RESET {anchor} AND ARCHIVE LOCAL HISTORY [{digest}]")
-            }
-            HomeResetDisposition::Delete => format!("DELETE {anchor} PERMANENTLY [{digest}]"),
-        }
-    }
-
-    fn check_confirmation(
-        &self,
-        supplied: &str,
-        disposition: HomeResetDisposition,
-    ) -> Result<(), BridgeError> {
-        if disposition == HomeResetDisposition::Delete && !self.deletable() {
-            return Err(BridgeError::new(
-                BridgeErrorCode::InvalidArgument,
-                "A store another Gents version wrote is not deleted from here; back it up or keep it.",
-            ));
-        }
-        if supplied != self.confirmation(disposition) {
-            return Err(BridgeError::new(
-                BridgeErrorCode::InvalidArgument,
-                "The home changed since it was reviewed, or the confirmation does not match this action. Review it again.",
-            ));
-        }
-        Ok(())
-    }
-
-    fn preview(&self) -> ManagedServerResetResult {
-        let view =
-            |scope, store: &gents::storage_backend::IncompatibleStore| IncompatibleStoreView {
-                scope,
-                path: store.data_path.to_string_lossy().into_owned(),
-                detail: store.to_string(),
-                older: store.kind.is_older(),
-                unsafe_key: store.kind
-                    == gents::storage_backend::IncompatibleStoreKind::InsecureKey,
-            };
-        let paths = |paths: &mut dyn Iterator<Item = &PathBuf>| {
-            paths
-                .map(|path| path.to_string_lossy().into_owned())
-                .collect::<Vec<_>>()
-        };
-        ManagedServerResetResult {
-            managed_home: self
-                .runtime
-                .as_ref()
-                .map(|(home, _)| home.to_string_lossy().into_owned()),
-            desktop_home: self
-                .retires_client_state()
-                .then(|| self.desktop_root.to_string_lossy().into_owned()),
-            stores: self
-                .runtime
-                .iter()
-                .filter_map(|(_, store)| store.as_ref())
-                .map(|store| view(IncompatibleStoreScope::Runtime, store))
-                .chain(
-                    self.client
-                        .iter()
-                        .map(|store| view(IncompatibleStoreScope::Client, store)),
-                )
-                .collect(),
-            confirmation: self.confirmation(HomeResetDisposition::Archive),
-            delete_confirmation: self
-                .deletable()
-                .then(|| self.confirmation(HomeResetDisposition::Delete)),
-            consequence: ARCHIVE_CONSEQUENCE.into(),
-            completed: false,
-            disposition: None,
-            backup_path: None,
-            planned_paths: paths(&mut self.planned(HomeResetDisposition::Archive)),
-            delete_paths: if self.deletable() {
-                paths(&mut self.planned(HomeResetDisposition::Delete))
-            } else {
-                Vec::new()
-            },
-            retired_paths: Vec::new(),
-            retained_paths: paths(&mut self.runtime_entries.retained.iter()),
-        }
-    }
-
-    /// A fresh sibling of the anchor: `<anchor>-backup-<stamp>`.
-    fn backup_path(&self, stamp: &str) -> Result<PathBuf, BridgeError> {
-        let anchor = self.anchor();
-        let (Some(parent), Some(name)) = (anchor.parent(), anchor.file_name()) else {
-            return Err(BridgeError::new(
-                BridgeErrorCode::InvalidArgument,
-                "The home has no parent directory to hold a backup.",
-            ));
-        };
-        let base = format!("{}-backup-{stamp}", name.to_string_lossy());
-        let mut backup = parent.join(&base);
-        for suffix in 1..100_u8 {
-            if !present(&backup)? {
-                return Ok(backup);
-            }
-            backup = parent.join(format!("{base}-{suffix}"));
-        }
-        Err(BridgeError::new(
-            BridgeErrorCode::Backend,
-            format!("No free backup name next to {}.", anchor.display()),
-        ))
-    }
-
-    fn groups(&self, disposition: HomeResetDisposition) -> [gents::home::RetireGroup<'_>; 2] {
-        [
-            gents::home::RetireGroup {
-                name: "home",
-                entries: self.home_entries(disposition),
-            },
-            gents::home::RetireGroup {
-                name: "desktop",
-                entries: &self.client_entries,
-            },
-        ]
-    }
-
-    fn preflight(&self, backup: &Path) -> Result<(), BridgeError> {
-        gents::home::archive_preflight(&self.groups(HomeResetDisposition::Archive), backup)
-            .map_err(|error| BridgeError::new(BridgeErrorCode::Backend, format!("{error:#}")))
-    }
-
-    fn retire(
-        &self,
-        disposition: HomeResetDisposition,
-        backup: Option<&Path>,
-    ) -> Result<ManagedServerResetResult, BridgeError> {
-        self.retire_with_key_cleanup(disposition, backup, |record, key_file| {
-            record.delete_key(key_file)
-        })
-    }
-
-    fn retire_with_key_cleanup(
-        &self,
-        disposition: HomeResetDisposition,
-        backup: Option<&Path>,
-        mut delete_key: impl FnMut(&gents::store_key::StoreEncryption, &Path) -> anyhow::Result<()>,
-    ) -> Result<ManagedServerResetResult, BridgeError> {
-        let retire_as = match (disposition, backup) {
-            (HomeResetDisposition::Archive, Some(backup)) => {
-                self.preflight(backup)?;
-                gents::home::RetireDisposition::Archive { backup }
-            }
-            (HomeResetDisposition::Delete, None) => gents::home::RetireDisposition::Delete,
-            _ => {
-                return Err(BridgeError::new(
-                    BridgeErrorCode::InvalidArgument,
-                    "An archive needs a backup location and a deletion has none.",
-                ))
-            }
-        };
-        let keychain_keys: Vec<_> = self
-            .store_keys
-            .iter()
-            .filter(|key| {
-                disposition == HomeResetDisposition::Delete
-                    && matches!(
-                        key.record.custody,
-                        gents::store_key::StoreKeyCustody::MacosKeychain { .. }
-                    )
-            })
-            .collect();
-        let keep_record = |path: &&PathBuf| {
-            !keychain_keys
-                .iter()
-                .any(|key| key.record_files.contains(*path))
-        };
-        let home_entries: Vec<_> = self
-            .home_entries(disposition)
-            .iter()
-            .filter(keep_record)
-            .cloned()
-            .collect();
-        let client_entries: Vec<_> = self
-            .client_entries
-            .iter()
-            .filter(keep_record)
-            .cloned()
-            .collect();
-        let groups = [
-            gents::home::RetireGroup {
-                name: "home",
-                entries: &home_entries,
-            },
-            gents::home::RetireGroup {
-                name: "desktop",
-                entries: &client_entries,
-            },
-        ];
-        let mut retired = gents::home::retire_entries(&groups, retire_as)
-            .map_err(|error| BridgeError::new(BridgeErrorCode::Backend, format!("{error:#}")))?;
-        for key in keychain_keys {
-            delete_key(&key.record, &key.key_file).map_err(|error| {
-                BridgeError::new(
-                    BridgeErrorCode::Backend,
-                    format!("Removing retired store key: {error:#}"),
-                )
-            })?;
-            retired.extend(
-                gents::home::retire_entries(
-                    &[gents::home::RetireGroup {
-                        name: "key_record",
-                        entries: &key.record_files,
-                    }],
-                    gents::home::RetireDisposition::Delete,
-                )
-                .map_err(|error| {
-                    BridgeError::new(BridgeErrorCode::Backend, format!("{error:#}"))
-                })?,
-            );
-        }
-        if disposition == HomeResetDisposition::Delete {
-            if let Some(keys) = self.delete_prunes_keys.as_ref() {
-                // Only an empty directory is removed; another home's key
-                // file keeps it in place.
-                if std::fs::remove_dir(keys).is_ok() {
-                    retired.push(keys.clone());
-                }
-            }
-        }
-        Ok(ManagedServerResetResult {
-            consequence: match disposition {
-                HomeResetDisposition::Archive => ARCHIVE_CONSEQUENCE,
-                HomeResetDisposition::Delete => DELETE_CONSEQUENCE,
-            }
-            .into(),
-            completed: true,
-            disposition: Some(disposition),
-            backup_path: backup.map(|path| path.to_string_lossy().into_owned()),
-            retired_paths: retired
-                .iter()
-                .map(|path| path.to_string_lossy().into_owned())
-                .collect(),
-            ..self.preview()
-        })
-    }
-}
-
-fn reject_symlink(path: &Path, label: &str) -> Result<(), BridgeError> {
-    let metadata = std::fs::symlink_metadata(path).map_err(|error| {
-        BridgeError::new(
-            BridgeErrorCode::Backend,
-            format!("Inspecting {label} {}: {error}", path.display()),
-        )
-    })?;
-    if metadata.file_type().is_symlink() {
-        return Err(BridgeError::new(
-            BridgeErrorCode::PathEscapesRoot,
-            format!("{label} must not be a symbolic link"),
-        ));
-    }
-    Ok(())
-}
-
-fn reject_symlink_if_present(path: &Path, label: &str) -> Result<(), BridgeError> {
-    match std::fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() => Err(BridgeError::new(
-            BridgeErrorCode::PathEscapesRoot,
-            format!("{label} must not be a symbolic link"),
-        )),
-        Ok(_) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(BridgeError::new(
-            BridgeErrorCode::Backend,
-            format!("Inspecting {label} {}: {error}", path.display()),
-        )),
-    }
-}
-
-impl From<ManagedServerToolCeiling> for gents_server::server_host::ManagedToolCeiling {
-    fn from(value: ManagedServerToolCeiling) -> Self {
-        match value {
-            ManagedServerToolCeiling::MetaOnly => Self::MetaOnly,
-            ManagedServerToolCeiling::Readonly => Self::Readonly,
-            ManagedServerToolCeiling::Readwrite => Self::Readwrite,
-        }
+fn runtime_tool_ceiling(
+    value: ManagedServerToolCeiling,
+) -> gents_server::server_host::ManagedToolCeiling {
+    use gents_server::server_host::ManagedToolCeiling;
+    match value {
+        ManagedServerToolCeiling::MetaOnly => ManagedToolCeiling::MetaOnly,
+        ManagedServerToolCeiling::Readonly => ManagedToolCeiling::Readonly,
+        ManagedServerToolCeiling::Readwrite => ManagedToolCeiling::Readwrite,
     }
 }
 
@@ -2564,6 +1937,9 @@ pub(crate) async fn restart_outdated_managed_job<R: Runtime>(
         return Ok(());
     };
     let _lifecycle = state.managed_server_lifecycle.lock().await;
+    if state.app_exit.is_quitting() {
+        return Ok(());
+    }
     let PortReadiness::Outdated { version } = observe_port_readiness(&node_home).await? else {
         return Ok(());
     };
@@ -3366,6 +2742,7 @@ pub async fn desktop_managed_server_set_auto_start<R: Runtime>(
 ) -> Result<ManagedServerStatus, BridgeError> {
     ensure_allowed(&state)?;
     let _lifecycle = state.managed_server_lifecycle.lock().await;
+    ensure_app_not_quitting(&state)?;
     ensure_no_start_waiting(&state).await?;
     if let Err(error) = run_native(native_service(&app, &state)?, move |service| {
         service.set_enabled(enabled)
@@ -3412,6 +2789,86 @@ async fn stop_managed_server_locked<R: Runtime>(
     observe_managed_server_status(app, state).await
 }
 
+/// Native login enablement is the operator's background-running choice.
+/// External servers remain outside the desktop's service ownership.
+pub(crate) async fn prepare_app_exit<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &DesktopAppState,
+) -> Result<(), BridgeError> {
+    let _lifecycle = state.managed_server_lifecycle.lock().await;
+    let service = match native_service(app, state) {
+        Ok(service) => service,
+        // Hosts without a native service manager cannot have a service owned
+        // by this path; quitting remains available on those platforms.
+        Err(error) if error.code == BridgeErrorCode::Unsupported => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    let native = run_native(service, |service| service.status()).await?;
+    if native.enabled {
+        return Ok(());
+    }
+    cancel_start_wait(state).await;
+    if should_stop_managed_service_on_exit(&native) {
+        stop_managed_server_locked(app, false, state).await?;
+    }
+    Ok(())
+}
+
+fn should_stop_managed_service_on_exit(
+    native: &gents_server::native_service::NativeServiceStatus,
+) -> bool {
+    !native.enabled && (native.job_loaded || native.running || native.is_active_or_transitioning())
+}
+
+fn ensure_app_not_quitting(state: &DesktopAppState) -> Result<(), BridgeError> {
+    if state.app_exit.is_quitting() {
+        return Err(BridgeError::new(
+            BridgeErrorCode::InvalidArgument,
+            "The desktop is quitting. Wait for the local node to stop before starting it again.",
+        ));
+    }
+    Ok(())
+}
+
+/// Starts the reviewed local service once when its owning desktop opens.
+/// Native enablement continues to control login startup independently.
+pub(crate) async fn start_configured_managed_server<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &DesktopAppState,
+) -> Result<(), BridgeError> {
+    if state.policy.managed_server != ManagedServerPolicy::Allowed
+        || state.policy.node_home.is_none()
+    {
+        return Ok(());
+    }
+    let lifecycle = state.managed_server_lifecycle.lock().await;
+    if state.app_exit.is_quitting() {
+        return Ok(());
+    }
+    let Some(stored) = load_bound_preference(state).await? else {
+        return Ok(());
+    };
+    if stored.reviewed_for.is_none() || stored.node_name.trim().is_empty() {
+        return Ok(());
+    }
+    let native = run_native(native_service(app, state)?, |service| service.status()).await?;
+    if !native.installed || native.running || native.is_active_or_transitioning() {
+        return Ok(());
+    }
+    start_managed_server(
+        app,
+        ManagedServerStartRequest {
+            node_name: stored.node_name,
+            tool_ceiling: None,
+            tool_root: None,
+        },
+        state,
+        lifecycle,
+    )
+    .await?;
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn desktop_managed_server_restart<R: Runtime>(
     app: AppHandle<R>,
@@ -3433,6 +2890,7 @@ pub async fn desktop_managed_server_restart<R: Runtime>(
     // in-flight start: a refused restart must not cancel it.
     refuse_renaming_home(&node_home, &request.node_name).await?;
     let lifecycle = lock_lifecycle_superseding_start(&state).await;
+    ensure_app_not_quitting(&state)?;
     ensure_launchable_here(&app, &state)?;
     let port = observe_port_readiness(&node_home).await?;
     let previous_did = match &port {
@@ -3459,7 +2917,7 @@ pub async fn desktop_managed_server_restart<R: Runtime>(
     let provision = gents_server::server_host::ProvisionOptions {
         home: node_home.clone(),
         node_name: request.node_name.clone(),
-        tool_ceiling: tool_ceiling.into(),
+        tool_ceiling: runtime_tool_ceiling(tool_ceiling),
         tool_root: authority.tool_root.clone(),
         store_key_custody: state.policy.store_key_custody,
     };
@@ -3983,6 +3441,39 @@ mod tests {
     use super::*;
     use crate::state::ManagedServerState as ManagedServerRuntimeState;
 
+    #[test]
+    fn exit_stops_active_service_without_a_desktop_preference_but_respects_login_enablement() {
+        let active = gents_server::native_service::NativeServiceStatus {
+            installed: true,
+            running: true,
+            job_loaded: true,
+            enabled: false,
+            requires_approval: false,
+            background_item: gents_server::native_service::BackgroundItemStatus::Unavailable,
+            failed: false,
+            detail: None,
+        };
+        assert!(should_stop_managed_service_on_exit(&active));
+
+        let keep_running = gents_server::native_service::NativeServiceStatus {
+            enabled: true,
+            ..active.clone()
+        };
+        assert!(!should_stop_managed_service_on_exit(&keep_running));
+
+        let absent = gents_server::native_service::NativeServiceStatus {
+            installed: false,
+            running: false,
+            job_loaded: false,
+            enabled: false,
+            requires_approval: false,
+            background_item: gents_server::native_service::BackgroundItemStatus::Unavailable,
+            failed: false,
+            detail: None,
+        };
+        assert!(!should_stop_managed_service_on_exit(&absent));
+    }
+
     fn write_home(node_home: &Path, did: &str, ceiling: &str, root: Option<&str>) {
         let init = serde_json::json!({
             "home": node_home.display().to_string(),
@@ -4171,7 +3662,7 @@ mod tests {
             gents_server::server_host::ProvisionOptions {
                 home: node_home.clone(),
                 node_name: "Scout".to_string(),
-                tool_ceiling: ManagedServerToolCeiling::Readwrite.into(),
+                tool_ceiling: runtime_tool_ceiling(ManagedServerToolCeiling::Readwrite),
                 tool_root: None,
                 store_key_custody: gents::store_key::StoreKeyCustodyChoice::File,
             },
@@ -4222,6 +3713,33 @@ mod tests {
         assert!(name_confirmed_by_home("Forge", initialized.as_deref()));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn stalled_reset_helper_is_killed_without_retiring_state() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let script = temp.path().join("helper");
+        std::fs::write(&script, "#!/bin/sh\nexec sleep 60\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let home = temp.path().join("home");
+        write(&home.join("init.json"), "original state");
+        let before = std::time::Instant::now();
+        let result = launch_reset_helper_with_timeout(
+            &script,
+            &home,
+            temp.path(),
+            "confirmation",
+            HomeResetDisposition::Archive,
+            Duration::from_millis(30),
+        );
+        assert!(result.is_err());
+        assert!(before.elapsed() < Duration::from_secs(10));
+        assert_eq!(
+            std::fs::read_to_string(home.join("init.json")).unwrap(),
+            "original state"
+        );
+    }
+
     fn not_the_user_home() -> &'static Path {
         Path::new("/nonexistent-user-home")
     }
@@ -4262,7 +3780,10 @@ mod tests {
             "REGOMAN old client",
         );
         write(desktop.peer_directory_path(), "{}");
-        write(desktop.principal_metadata_path(), "{}");
+        write(
+            desktop.principal_metadata_path(),
+            r#"{"did":"did:key:z6MkClient","public_key_bytes":[1,2,3]}"#,
+        );
         write(desktop.identity_key_path(), "principal");
         write(desktop.iroh_secret_key_path(), "iroh");
         write(&desktop.root().join(MANAGED_SERVER_CONFIG), "{}");

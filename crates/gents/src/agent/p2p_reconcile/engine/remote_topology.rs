@@ -304,10 +304,13 @@ pub(super) async fn replay_replicator_after_reconnect(
                 .cloned()
                 .collect()
         });
-    admin
-        .delete_replicator(id, &old_collections)
-        .await
-        .with_context(|| format!("remove P2P replicator {address} for reconnect replay"))?;
+    match admin.delete_replicator(id, &old_collections).await {
+        Ok(()) | Err(RemoteP2pAdminError::RemoteNotFound(_)) => {}
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("remove P2P replicator {address} for reconnect replay"));
+        }
+    }
 
     let addresses = vec![address.to_string()];
     let collections = desired

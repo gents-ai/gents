@@ -1,158 +1,155 @@
+use gents_protocol::row::AgentRequestRow;
 use std::collections::HashMap;
 
 use super::{ClientStore, ClientStoreRows};
 
-impl ClientStore {
-    pub fn from_rows(mut rows: ClientStoreRows) -> Self {
-        rows.requests.retain(|row| {
-            gents_protocol::request_admission::RequestPurpose::is_public(row.purpose)
-        });
-        sort_rows_with_sources(
-            &mut rows.sessions,
-            &mut rows.session_source_node_dids,
-            |left, right| {
-                cmp_opt_str_desc(
-                    left.observation
-                        .as_ref()
-                        .map(|observation| observation.last_activity_at.as_str()),
-                    right
-                        .observation
-                        .as_ref()
-                        .map(|observation| observation.last_activity_at.as_str()),
-                )
-                .then_with(|| right.created_at.cmp(&left.created_at))
-                .then_with(|| left.node_did.cmp(&right.node_did))
-                .then_with(|| left.session_id.cmp(&right.session_id))
-            },
-        );
-        rows.transcript_messages.sort_by(|left, right| {
-            left.message
-                .session_id
-                .cmp(&right.message.session_id)
-                .then_with(|| left.message.sequence.cmp(&right.message.sequence))
-                .then_with(|| left.doc_id.cmp(&right.doc_id))
-        });
-        rows.output_segments.sort_by(|left, right| {
-            left.segment
-                .request_doc_id
-                .cmp(&right.segment.request_doc_id)
-                .then_with(|| {
-                    serde_json::to_string(&left.segment.source)
-                        .expect("output source serializes")
-                        .cmp(
-                            &serde_json::to_string(&right.segment.source)
-                                .expect("output source serializes"),
-                        )
-                })
-                .then_with(|| left.segment.ordinal.cmp(&right.segment.ordinal))
-                .then_with(|| left.doc_id.cmp(&right.doc_id))
-        });
-        rows.requests.sort_by(|left, right| {
+pub(super) fn normalize_rows(rows: &mut ClientStoreRows) {
+    rows.requests
+        .retain(|row| gents_protocol::request_admission::RequestPurpose::is_public(row.purpose));
+    sort_rows_with_sources(
+        &mut rows.sessions,
+        &mut rows.session_source_node_dids,
+        |left, right| {
+            cmp_opt_str_desc(
+                left.observation
+                    .as_ref()
+                    .map(|observation| observation.last_activity_at.as_str()),
+                right
+                    .observation
+                    .as_ref()
+                    .map(|observation| observation.last_activity_at.as_str()),
+            )
+            .then_with(|| right.created_at.cmp(&left.created_at))
+            .then_with(|| left.node_did.cmp(&right.node_did))
+            .then_with(|| left.session_id.cmp(&right.session_id))
+        },
+    );
+    rows.transcript_messages.sort_by(|left, right| {
+        left.message
+            .session_id
+            .cmp(&right.message.session_id)
+            .then_with(|| left.message.sequence.cmp(&right.message.sequence))
+            .then_with(|| left.doc_id.cmp(&right.doc_id))
+    });
+    rows.output_segments.sort_by(|left, right| {
+        left.segment
+            .request_doc_id
+            .cmp(&right.segment.request_doc_id)
+            .then_with(|| {
+                serde_json::to_string(&left.segment.source)
+                    .expect("output source serializes")
+                    .cmp(
+                        &serde_json::to_string(&right.segment.source)
+                            .expect("output source serializes"),
+                    )
+            })
+            .then_with(|| left.segment.ordinal.cmp(&right.segment.ordinal))
+            .then_with(|| left.doc_id.cmp(&right.doc_id))
+    });
+    sort_request_rows(&mut rows.requests);
+    rows.mailbox_items.sort_by(|left, right| {
+        right
+            .created_at
+            .cmp(&left.created_at)
+            .then_with(|| left.doc_id.cmp(&right.doc_id))
+    });
+    rows.goals.sort_by(|left, right| {
+        left.node_did
+            .cmp(&right.node_did)
+            .then_with(|| left.session_id.cmp(&right.session_id))
+            .then_with(|| cmp_opt_str_asc(left.created_at.as_deref(), right.created_at.as_deref()))
+            .then_with(|| left.goal_id.cmp(&right.goal_id))
+    });
+    rows.goals.dedup_by(|right, left| {
+        right.node_did == left.node_did && right.session_id == left.session_id
+    });
+    sort_rows_with_sources(
+        &mut rows.tool_calls,
+        &mut rows.tool_call_source_node_dids,
+        |left, right| {
             left.session_id
                 .cmp(&right.session_id)
                 .then_with(|| {
-                    cmp_opt_str_asc(left.created_at.as_deref(), right.created_at.as_deref())
+                    left.message_sequence
+                        .unwrap_or_default()
+                        .cmp(&right.message_sequence.unwrap_or_default())
                 })
-                .then_with(|| left.request_id.cmp(&right.request_id))
-        });
-        rows.mailbox_items.sort_by(|left, right| {
-            right
-                .created_at
-                .cmp(&left.created_at)
-                .then_with(|| left.doc_id.cmp(&right.doc_id))
-        });
-        rows.goals.sort_by(|left, right| {
-            left.node_did
-                .cmp(&right.node_did)
-                .then_with(|| left.session_id.cmp(&right.session_id))
                 .then_with(|| {
-                    cmp_opt_str_asc(left.created_at.as_deref(), right.created_at.as_deref())
+                    cmp_opt_str_asc(left.started_at.as_deref(), right.started_at.as_deref())
                 })
-                .then_with(|| left.goal_id.cmp(&right.goal_id))
-        });
-        rows.goals.dedup_by(|right, left| {
-            right.node_did == left.node_did && right.session_id == left.session_id
-        });
-        sort_rows_with_sources(
-            &mut rows.tool_calls,
-            &mut rows.tool_call_source_node_dids,
-            |left, right| {
-                left.session_id
-                    .cmp(&right.session_id)
-                    .then_with(|| {
-                        left.message_sequence
-                            .unwrap_or_default()
-                            .cmp(&right.message_sequence.unwrap_or_default())
-                    })
-                    .then_with(|| {
-                        cmp_opt_str_asc(left.started_at.as_deref(), right.started_at.as_deref())
-                    })
-                    .then_with(|| left.tool_call_key.cmp(&right.tool_call_key))
-            },
-        );
+                .then_with(|| left.tool_call_key.cmp(&right.tool_call_key))
+        },
+    );
 
-        normalize_source_node_dids(
-            &mut rows.compaction_entry_source_node_dids,
-            rows.compaction_entries.len(),
-        );
-        normalize_source_node_dids(&mut rows.task_source_node_dids, rows.tasks.len());
-        normalize_source_node_dids(&mut rows.schedule_source_node_dids, rows.schedules.len());
-        normalize_source_node_dids(
-            &mut rows.schedule_observation_source_node_dids,
-            rows.schedule_observations.len(),
-        );
-        normalize_source_node_dids(&mut rows.trigger_source_node_dids, rows.triggers.len());
-        normalize_source_node_dids(
-            &mut rows.trigger_observation_source_node_dids,
-            rows.trigger_observations.len(),
-        );
-        normalize_source_node_dids(&mut rows.skill_source_node_dids, rows.skills.len());
-        normalize_source_node_dids(&mut rows.tools_source_node_dids, rows.tools.len());
-        normalize_source_node_dids(&mut rows.context_source_node_dids, rows.contexts.len());
-        normalize_source_node_dids(
-            &mut rows.compaction_source_node_dids,
-            rows.compactions.len(),
-        );
-        normalize_source_node_dids(
-            &mut rows.inference_backend_source_node_dids,
-            rows.inference_backends.len(),
-        );
-        normalize_source_node_dids(
-            &mut rows.backend_observation_source_node_dids,
-            rows.backend_observations.len(),
-        );
-        normalize_source_node_dids(
-            &mut rows.inference_profile_source_node_dids,
-            rows.inference_profiles.len(),
-        );
-        normalize_source_node_dids(
-            &mut rows.inference_sampling_source_node_dids,
-            rows.inference_sampling.len(),
-        );
-        normalize_source_node_dids(
-            &mut rows.inference_execution_source_node_dids,
-            rows.inference_execution.len(),
-        );
-        normalize_source_node_dids(
-            &mut rows.tool_service_registry_source_node_dids,
-            rows.tool_service_registries.len(),
-        );
-        normalize_source_node_dids(
-            &mut rows.event_source_source_node_dids,
-            rows.event_sources.len(),
-        );
-        normalize_source_node_dids(
-            &mut rows.agent_target_source_node_dids,
-            rows.agent_targets.len(),
-        );
-        normalize_source_node_dids(
-            &mut rows.datastore_tool_surface_source_node_dids,
-            rows.datastore_tool_surfaces.len(),
-        );
-        normalize_source_node_dids(
-            &mut rows.chain_key_binding_source_node_dids,
-            rows.chain_key_bindings.len(),
-        );
+    normalize_source_node_dids(
+        &mut rows.compaction_entry_source_node_dids,
+        rows.compaction_entries.len(),
+    );
+    normalize_source_node_dids(&mut rows.task_source_node_dids, rows.tasks.len());
+    normalize_source_node_dids(&mut rows.schedule_source_node_dids, rows.schedules.len());
+    normalize_source_node_dids(
+        &mut rows.schedule_observation_source_node_dids,
+        rows.schedule_observations.len(),
+    );
+    normalize_source_node_dids(&mut rows.trigger_source_node_dids, rows.triggers.len());
+    normalize_source_node_dids(
+        &mut rows.trigger_observation_source_node_dids,
+        rows.trigger_observations.len(),
+    );
+    normalize_source_node_dids(&mut rows.skill_source_node_dids, rows.skills.len());
+    normalize_source_node_dids(&mut rows.tools_source_node_dids, rows.tools.len());
+    normalize_source_node_dids(&mut rows.context_source_node_dids, rows.contexts.len());
+    normalize_source_node_dids(
+        &mut rows.compaction_source_node_dids,
+        rows.compactions.len(),
+    );
+    normalize_source_node_dids(
+        &mut rows.inference_backend_source_node_dids,
+        rows.inference_backends.len(),
+    );
+    normalize_source_node_dids(
+        &mut rows.backend_observation_source_node_dids,
+        rows.backend_observations.len(),
+    );
+    normalize_source_node_dids(
+        &mut rows.inference_profile_source_node_dids,
+        rows.inference_profiles.len(),
+    );
+    normalize_source_node_dids(
+        &mut rows.inference_sampling_source_node_dids,
+        rows.inference_sampling.len(),
+    );
+    normalize_source_node_dids(
+        &mut rows.inference_execution_source_node_dids,
+        rows.inference_execution.len(),
+    );
+    normalize_source_node_dids(
+        &mut rows.tool_service_registry_source_node_dids,
+        rows.tool_service_registries.len(),
+    );
+    normalize_source_node_dids(
+        &mut rows.event_source_source_node_dids,
+        rows.event_sources.len(),
+    );
+    normalize_source_node_dids(
+        &mut rows.agent_target_source_node_dids,
+        rows.agent_targets.len(),
+    );
+    normalize_source_node_dids(
+        &mut rows.datastore_tool_surface_source_node_dids,
+        rows.datastore_tool_surfaces.len(),
+    );
+    normalize_source_node_dids(
+        &mut rows.chain_key_binding_source_node_dids,
+        rows.chain_key_bindings.len(),
+    );
+}
+
+impl ClientStore {
+    pub fn from_rows(mut rows: ClientStoreRows) -> Self {
+        normalize_rows(&mut rows);
+        let (request_index_by_doc_id, unscoped_placeholder_request_ids, mailbox_index_by_doc_id) =
+            Self::build_scope_indexes(&rows);
 
         let transcript_messages_by_session_id = build_vec_index(&rows.transcript_messages, |row| {
             Some(row.message.session_id.as_str())
@@ -233,6 +230,7 @@ impl ClientStore {
             agent_target_source_node_dids: rows.agent_target_source_node_dids,
             datastore_tool_surface_source_node_dids: rows.datastore_tool_surface_source_node_dids,
             chain_key_binding_source_node_dids: rows.chain_key_binding_source_node_dids,
+            operator_config_authoritative_node_dids: rows.operator_config_authoritative_node_dids,
             transcript_messages_by_session_id,
             output_segments_by_request_doc_id,
             requests_by_session_id,
@@ -240,6 +238,9 @@ impl ClientStore {
             runtimes_by_node_did,
             node_readiness_by_node_did,
             request_index_by_id,
+            request_index_by_doc_id,
+            unscoped_placeholder_request_ids,
+            mailbox_index_by_doc_id,
         }
     }
 }
@@ -300,4 +301,16 @@ pub(super) fn cmp_opt_str_desc(left: Option<&str>, right: Option<&str>) -> std::
 
 pub(super) fn cmp_opt_str_asc(left: Option<&str>, right: Option<&str>) -> std::cmp::Ordering {
     left.unwrap_or_default().cmp(right.unwrap_or_default())
+}
+
+/// Physical identity resolves equal display-order keys so full and batched
+/// projections give graph adapters the same order regardless of fetch order.
+pub(crate) fn sort_request_rows(requests: &mut [AgentRequestRow]) {
+    requests.sort_by(|left, right| {
+        left.session_id
+            .cmp(&right.session_id)
+            .then_with(|| cmp_opt_str_asc(left.created_at.as_deref(), right.created_at.as_deref()))
+            .then_with(|| left.request_id.cmp(&right.request_id))
+            .then_with(|| left.doc_id.cmp(&right.doc_id))
+    });
 }

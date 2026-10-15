@@ -99,7 +99,7 @@ pub(crate) async fn delete_definition(fixture: &Fixture) {
     fixture
         .ctx
         .access
-        .transact("cli.optimization.test_delete_definition", |txn| {
+        .transact_write("cli.optimization.test_delete_definition", |txn| {
             Box::pin(async move {
                 let (doc_id, _) = read_desired_state_record_in_txn(
                     txn,

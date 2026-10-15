@@ -465,7 +465,7 @@ mod tests {
         tool: &crate::tool_call_lifecycle::ToolCallLifecycle,
     ) -> String {
         crate::tool_call_lifecycle::load_tool_call_presentation(
-            &crate::config_client::ConfigAccess::Local(node.clone()),
+            &crate::config_client::ConfigAccess::local(node.clone()),
             tool.doc_id().unwrap(),
             tool.node_did(),
             tool.session_id(),

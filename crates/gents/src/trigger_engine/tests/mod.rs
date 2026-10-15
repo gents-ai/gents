@@ -14,7 +14,6 @@ use tokio_util::sync::CancellationToken;
 
 use super::*;
 use crate::config::{ResolvedAgent, SamplingConfig};
-use crate::document_config::load_trigger_next_run_at;
 use crate::ensure_runtime_schemas;
 use crate::graphql::escape_graphql_string;
 use crate::identity::{KeyIdentity, RuntimeNode};

@@ -289,6 +289,31 @@ describe("stop", () => {
     ).toBeInTheDocument();
   });
 
+  it.each([undefined, false, true])(
+    "uses only positive runtime evidence for stopped-before-running (%s)",
+    (certificate) => {
+      render(
+        panel(
+          session({
+            turnState: "interrupted",
+            latestRequestOutcome: {
+              failureReason: null,
+              cancelCause: interruptEvidence,
+              stoppedBeforeRunning: certificate,
+            },
+          }),
+          false,
+        ),
+      );
+      const notice = screen.getByTestId("stopped-notice");
+      expect(
+        within(notice).getByText(
+          certificate === true ? "Stopped before running" : "Stopped",
+        ),
+      ).toBeVisible();
+    },
+  );
+
   it("binds Stopping to the request being stopped", () => {
     const base = {
       inFlight: true,

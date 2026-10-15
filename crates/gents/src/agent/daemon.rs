@@ -13,6 +13,7 @@ mod request;
 #[cfg(test)]
 mod task_hook_tests;
 mod title;
+mod wake_input;
 
 #[derive(Debug, thiserror::Error)]
 #[error("graceful shutdown could not confirm received provider output was retained: {reason}")]
@@ -119,7 +120,7 @@ pub(crate) async fn verify_request_at_claim_boundary(
             record_current_request_outcome("admission_denied");
             if let Err(persist_error) =
                 crate::request_admission::terminalize_pending_request_rejection(
-                    node.as_ref(),
+                    &node,
                     &request.doc_id,
                     &request.node_did,
                     &reason,
@@ -178,7 +179,26 @@ pub(super) struct AgentDaemon<M: ProviderModel> {
 enum HandleRequestOutcome {
     Completed,
     FailedAfterResponse(anyhow::Error),
-    Interrupted,
+    Interrupted(RequestInterruptionSource),
+}
+
+#[derive(Clone, Copy)]
+enum RequestInterruptionSource {
+    Claimed,
+    Preparation,
+    Inference,
+    TaskHook,
+}
+
+impl RequestInterruptionSource {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Claimed => "claimed",
+            Self::Preparation => "preparation",
+            Self::Inference => "mid_flight",
+            Self::TaskHook => "task_hook",
+        }
+    }
 }
 
 fn title_task_join_result(joined: std::result::Result<Result<()>, JoinError>) -> Result<()> {
@@ -671,6 +691,17 @@ impl<M: ProviderModel> AgentDaemon<M> {
             }
         }
 
+        let (interrupt_tx, mut interrupt_rx) =
+            tokio::sync::watch::channel::<Option<crate::interrupt::InterruptIntent>>(None);
+        let observer = tokio_util::task::AbortOnDropHandle::new(
+            crate::interrupt::spawn_request_interrupt_observer(
+                self.node.clone(),
+                request.doc_id.clone(),
+                interrupt_tx,
+                shutdown.clone(),
+            ),
+        );
+
         let requested_agent_id = request.agent_id.as_str();
         if requested_agent_id != self.agent_config.agent_id {
             let error = anyhow::anyhow!(
@@ -697,7 +728,17 @@ impl<M: ProviderModel> AgentDaemon<M> {
             return Ok(());
         }
 
-        match crate::workspace::writer_request_already_sealed(self.node.as_ref(), &request).await {
+        let sealed = request::prepare_unless_interrupted(
+            &mut interrupt_rx,
+            crate::workspace::writer_request_already_sealed(&self.node, &request),
+        )
+        .await;
+        let Some(sealed) = sealed else {
+            self.finalize_interrupt_before_work(&mut lifecycle, &stream_writer, &request)
+                .await?;
+            return Ok(());
+        };
+        match sealed {
             // An earlier execution already ran and sealed this work. Its task
             // hooks are not rerun: host commands are never replayed, and that
             // execution's remaining cleanup belongs to task hook recovery.
@@ -718,7 +759,7 @@ impl<M: ProviderModel> AgentDaemon<M> {
                     return Ok(());
                 }
                 if let Err(error) = crate::workspace::seal_on_writer_success(
-                    self.node.as_ref(),
+                    &self.node,
                     &request,
                     self.operator_tool_root.as_deref(),
                 )
@@ -773,40 +814,39 @@ impl<M: ProviderModel> AgentDaemon<M> {
             }
         }
 
-        let (hooks, hook_cwd, hook_record, task_owned) =
-            match self.prepare_task_hooks(&request).await {
-                Ok(prepared) => prepared,
-                Err(error) => {
-                    record_current_failure_class(&error);
-                    tracing::error!(
-                        agent_id = %self.agent_config.agent_id,
-                        request_id = %request.request_id,
-                        error = %format!("{error:#}"),
-                        "refusing to run a request whose task hooks cannot be prepared"
-                    );
-                    self.finalize_failure_before_work(
-                        &mut lifecycle,
-                        &stream_writer,
-                        &format!("{error:#}"),
-                        &request,
-                    )
-                    .await;
-                    return Ok(());
-                }
-            };
+        let prepared_hooks = request::prepare_unless_interrupted(
+            &mut interrupt_rx,
+            self.prepare_task_hooks(&request),
+        )
+        .await;
+        let Some(prepared_hooks) = prepared_hooks else {
+            self.finalize_interrupt_before_work(&mut lifecycle, &stream_writer, &request)
+                .await?;
+            return Ok(());
+        };
+        let (hooks, hook_cwd, hook_record, task_owned) = match prepared_hooks {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                record_current_failure_class(&error);
+                tracing::error!(
+                    agent_id = %self.agent_config.agent_id,
+                    request_id = %request.request_id,
+                    error = %format!("{error:#}"),
+                    "refusing to run a request whose task hooks cannot be prepared"
+                );
+                self.finalize_failure_before_work(
+                    &mut lifecycle,
+                    &stream_writer,
+                    &format!("{error:#}"),
+                    &request,
+                )
+                .await;
+                return Ok(());
+            }
+        };
 
         lifecycle.allow_natural_finish(permits_natural_finish(&request, task_owned));
 
-        // One observer spans the hooks and the owned work, so an interrupt
-        // latched during a hook cancels that hook and reaches the work too.
-        let (interrupt_tx, interrupt_rx) =
-            tokio::sync::watch::channel::<Option<crate::interrupt::InterruptIntent>>(None);
-        let observer = crate::interrupt::spawn_request_interrupt_observer(
-            self.node.clone(),
-            request.doc_id.clone(),
-            interrupt_tx,
-            shutdown.clone(),
-        );
         let ownership_lost = lifecycle.ownership_lost();
         let hook_cancellation = crate::task_hooks::TaskHookCancellation::default();
         let hook_cancellation_follower = (!hooks.is_empty()).then(|| {
@@ -869,17 +909,22 @@ impl<M: ProviderModel> AgentDaemon<M> {
             return Ok(());
         }
 
-        let (work_reason, release_writer_binding) = match owned_work {
+        let (work_reason, release_writer_binding, interruption_source) = match owned_work {
             // No work ran, so nothing else can hold the writer binding the
             // request was materialized with.
-            None => (None, true),
+            None => (None, true, RequestInterruptionSource::TaskHook),
+            Some(OwnedWorkOutcome::Interrupted(source)) => (None, false, source),
             Some(OwnedWorkOutcome::OwnershipLost) => return Ok(()),
             Some(OwnedWorkOutcome::DrainFailed(error)) => return Err(error),
             Some(OwnedWorkOutcome::Observed {
                 reason,
                 release_writer_binding,
                 ..
-            }) => (reason, release_writer_binding),
+            }) => (
+                reason,
+                release_writer_binding,
+                RequestInterruptionSource::TaskHook,
+            ),
         };
 
         let final_outcome = run.final_outcome();
@@ -943,8 +988,9 @@ impl<M: ProviderModel> AgentDaemon<M> {
                         return Ok(());
                     }
                 }
+                self.record_request_interruption(&request, interruption_source);
                 if let Err(error) =
-                    crate::workspace::release_writer_binding(self.node.as_ref(), &request).await
+                    crate::workspace::release_writer_binding(&self.node, &request).await
                 {
                     tracing::warn!(
                         request_id = %request.request_id,
@@ -952,13 +998,6 @@ impl<M: ProviderModel> AgentDaemon<M> {
                         "failed to release writer workspace binding after interrupt"
                     );
                 }
-                tracing::info!(
-                    agent_id = %self.agent_config.agent_id,
-                    request_id = %request.request_id,
-                    session_id = %request.session_id,
-                    cancellation_source = "mid_flight",
-                    "request interrupted mid-flight"
-                );
             }
         }
         Ok(())
@@ -981,15 +1020,48 @@ impl<M: ProviderModel> AgentDaemon<M> {
     }
 
     async fn release_failed_writer_binding(&self, request: &AgentRequest) {
-        if let Err(error) =
-            crate::workspace::release_writer_binding(self.node.as_ref(), request).await
-        {
+        if let Err(error) = crate::workspace::release_writer_binding(&self.node, request).await {
             tracing::warn!(
                 request_id = %request.request_id,
                 error = %error,
                 "failed to release writer workspace binding after failure"
             );
         }
+    }
+
+    async fn finalize_interrupt_before_work(
+        &self,
+        lifecycle: &mut RequestLifecycle,
+        stream_writer: &DefraStreamWriter,
+        request: &AgentRequest,
+    ) -> Result<()> {
+        if terminalize_request(
+            lifecycle,
+            stream_writer,
+            RequestTerminalOutcome::Interrupted,
+            Some("interrupted"),
+        )
+        .await?
+        {
+            record_current_request_outcome("interrupted");
+            self.record_request_interruption(request, RequestInterruptionSource::Claimed);
+            crate::workspace::release_writer_binding(&self.node, request).await?;
+        }
+        Ok(())
+    }
+
+    fn record_request_interruption(
+        &self,
+        request: &AgentRequest,
+        source: RequestInterruptionSource,
+    ) {
+        tracing::info!(
+            agent_id = %self.agent_config.agent_id,
+            request_id = %request.request_id,
+            session_id = %request.session_id,
+            cancellation_source = source.as_str(),
+            "request interrupted"
+        );
     }
 
     /// The request's Task hooks, the admitted cwd they run from and the claim
@@ -1067,7 +1139,7 @@ impl<M: ProviderModel> AgentDaemon<M> {
                     return OwnedWorkOutcome::OwnershipLost;
                 }
                 if let Err(error) = crate::workspace::seal_on_writer_success(
-                    self.node.as_ref(),
+                    &self.node,
                     request,
                     self.operator_tool_root.as_deref(),
                 )
@@ -1090,7 +1162,7 @@ impl<M: ProviderModel> AgentDaemon<M> {
                     return OwnedWorkOutcome::OwnershipLost;
                 }
                 if let Err(error) = crate::workspace::integrate_on_integrator_success(
-                    self.node.as_ref(),
+                    &self.node,
                     request,
                     self.operator_tool_root.as_deref(),
                 )
@@ -1114,9 +1186,7 @@ impl<M: ProviderModel> AgentDaemon<M> {
             }
             // The owned loop returns this only with an interrupt latch
             // present: a cancellation of active work, not an unknown outcome.
-            Ok(HandleRequestOutcome::Interrupted) => {
-                OwnedWorkOutcome::observed(TaskAgentResult::Cancelled, None, false)
-            }
+            Ok(HandleRequestOutcome::Interrupted(source)) => OwnedWorkOutcome::Interrupted(source),
             Ok(HandleRequestOutcome::FailedAfterResponse(error))
                 if lost_execution_ownership(lifecycle, &error).await =>
             {
@@ -1181,6 +1251,7 @@ async fn lost_execution_ownership(lifecycle: &RequestLifecycle, error: &anyhow::
 /// runs, and the request's current owner keeps its terminal. A drain failure
 /// leaves the durable execution to recovery and its error to the runtime.
 enum OwnedWorkOutcome {
+    Interrupted(RequestInterruptionSource),
     Observed {
         observation: crate::task_hooks::TaskAgentResult,
         reason: Option<String>,
@@ -1205,6 +1276,7 @@ impl OwnedWorkOutcome {
 
     fn observation(&self) -> crate::task_hooks::TaskAgentResult {
         match self {
+            Self::Interrupted(_) => crate::task_hooks::TaskAgentResult::Cancelled,
             Self::Observed { observation, .. } => *observation,
             Self::OwnershipLost | Self::DrainFailed(_) => {
                 crate::task_hooks::TaskAgentResult::Interrupted

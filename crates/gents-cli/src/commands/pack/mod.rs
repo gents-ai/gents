@@ -604,7 +604,7 @@ fn bind_plugin_slots(
 /// The node and the owner a pack command acts for.
 pub(crate) async fn resolve_scope_owner(
     scope: &GraphScopeArgs,
-) -> Result<(crate::CommandAccess, String)> {
+) -> Result<(gents::config_client::ConfigAccess, String)> {
     let (access, _) =
         crate::resolve_config_access(scope.home.as_deref(), scope.graphql.as_deref()).await?;
     let owner = super::config::binding::resolve_target_node_did(

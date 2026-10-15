@@ -7,7 +7,7 @@ const E2E_STATUS_FILENAME: &str = "native-e2e-status.json";
 #[cfg(feature = "native-e2e")]
 const E2E_EVENTS_FILENAME: &str = "native-e2e-events.jsonl";
 
-#[derive(Serialize)]
+#[derive(Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 pub struct NativeE2eConfig {
     agent_label: String,
@@ -20,7 +20,7 @@ pub struct NativeE2eConfig {
     local_setup: Option<NativeLocalSetup>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 pub struct NativeLocalSetup {
     endpoint: String,
@@ -29,7 +29,7 @@ pub struct NativeLocalSetup {
     tool_root: String,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
 pub struct NativeE2eStatus {
     stage: String,
@@ -207,7 +207,8 @@ pub fn desktop_native_e2e_config() -> Result<Option<NativeE2eConfig>, BridgeErro
 
 #[tauri::command]
 #[cfg(not(feature = "native-e2e"))]
-pub async fn desktop_native_e2e_status(_status: NativeE2eStatus) -> Result<(), BridgeError> {
+pub async fn desktop_native_e2e_status(status: NativeE2eStatus) -> Result<(), BridgeError> {
+    let _ = status;
     Err(BridgeError::untyped(
         "native E2E commands are not compiled into this build",
     ))

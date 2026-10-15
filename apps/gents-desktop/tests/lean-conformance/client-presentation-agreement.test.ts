@@ -12,7 +12,7 @@ import {
 import { deployment } from "../config-panel-wiring/fixtures";
 
 import type { ChatShellProjection } from "@source-inc/gents-desktop-chat";
-import { presentedComposerSendStatus } from "../../src/ui/screens/SessionScreen";
+import { presentedComposerSendStatus } from "../../src/ui/screens/session/composerParts";
 
 type GeneratedPresentationCase = {
   name: string;

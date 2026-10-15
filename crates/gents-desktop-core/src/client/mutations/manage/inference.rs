@@ -6,6 +6,8 @@ use gents::collection::Collection;
 use gents::config_client::apply_desired_state_plan;
 use gents::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents::InferenceBackend;
+#[cfg(test)]
+use std::sync::Arc;
 
 pub async fn upsert_inference_backend_on(
     access: &ConfigAccess,
@@ -22,7 +24,7 @@ pub async fn upsert_inference_backend_on(
 
 #[cfg(test)]
 pub async fn upsert_inference_backend(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     document: &InferenceBackend,
 ) -> Result<()> {
     let value = serde_json::to_value(document)?;
@@ -31,7 +33,7 @@ pub async fn upsert_inference_backend(
         add: value.clone(),
         update: value,
     }])?;
-    ConfigAccess::transact_local(node, None, "desktop.inference_backend.save", |txn| {
+    ConfigAccess::transact_local_write(node, None, "desktop.inference_backend.save", |txn| {
         let plan = &plan;
         Box::pin(async move {
             apply_desired_state_plan(txn, plan).await?;
@@ -43,7 +45,7 @@ pub async fn upsert_inference_backend(
 
 #[cfg(test)]
 pub async fn delete_inference_backend(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     node_did: &str,
     id: &str,
 ) -> Result<usize> {
@@ -103,7 +105,7 @@ mod tests {
             "observed_at": "2026-09-10T00:00:00Z",
             "models": [{"model_name": "model"}],
         }))?;
-        ConfigAccess::transact_local(&node, None, "test.catalog", |txn| {
+        ConfigAccess::transact_local_write(&node, None, "test.catalog", |txn| {
             let backend = &backend;
             let catalog = catalog.clone();
             Box::pin(async move {
@@ -127,7 +129,7 @@ mod tests {
             "node_did":backend.node_did, "profile_id":"profile", "backend_id":"shared", "model_name":"model"
         }))?;
         gents::config_client::write_inference_profile_document(
-            &ConfigAccess::Local(node.clone()),
+            &ConfigAccess::local(node.clone()),
             &profile,
         )
         .await?;

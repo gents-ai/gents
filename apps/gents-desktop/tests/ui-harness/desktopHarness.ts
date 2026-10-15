@@ -115,6 +115,7 @@ export type DesktopUiHarnessScenario =
 
 export type DesktopUiHarnessOptions = {
   scenario?: string | null;
+  sessionIndexCount?: number;
 };
 
 export type MobilePerformanceBridgeCall = {
@@ -140,13 +141,18 @@ export type MobilePerformanceHarnessSnapshot = {
 };
 
 export type MobilePerformanceHarnessController = {
-  fixture: typeof MOBILE_PERFORMANCE_FIXTURE;
+  fixture: Omit<typeof MOBILE_PERFORMANCE_FIXTURE, "id" | "sessionIndexCount"> & {
+    id: string;
+    sessionIndexCount: number;
+  };
   reset(): void;
   snapshot(): MobilePerformanceHarnessSnapshot;
   recordCommit(commit: MobilePerformanceCommit): void;
   finishStreaming(): void;
   streamUpdate(): number;
   streamBurst(count: number): number;
+  /** a settled group of `count` commands near the long session's foot */
+  toolBatch(count: number): void;
   /** appends `text` to the live reply, as one update */
   streamText(text: string): void;
   /** how long a read of an older timeline page takes, as the bridge's do */
@@ -225,6 +231,22 @@ export function createDesktopUiHarness(
   options: DesktopUiHarnessOptions = {},
 ): DesktopUiHarness {
   const scenario = normalizeScenario(options.scenario);
+  const sessionIndexCount =
+    options.sessionIndexCount ?? MOBILE_PERFORMANCE_FIXTURE.sessionIndexCount;
+  if (
+    !Number.isSafeInteger(sessionIndexCount) ||
+    sessionIndexCount < 2 ||
+    sessionIndexCount > 100_000
+  )
+    throw new Error("sessionIndexCount must be an integer from 2 to 100000");
+  const performanceFixture = {
+    ...MOBILE_PERFORMANCE_FIXTURE,
+    sessionIndexCount,
+    id:
+      sessionIndexCount === MOBILE_PERFORMANCE_FIXTURE.sessionIndexCount
+        ? MOBILE_PERFORMANCE_FIXTURE.id
+        : `${MOBILE_PERFORMANCE_FIXTURE.id}-sessions-${sessionIndexCount}`,
+  };
   const listeners = new Set<DesktopClientUpdatedHandler>();
   const sessions = new Map<string, DesktopSessionSnapshot>();
   let sendsHeld = false;
@@ -565,11 +587,7 @@ export function createDesktopUiHarness(
   }
   if (scenario === "mobile-performance") {
     sessions.set("session-large", createLargePerformanceSession());
-    for (
-      let index = 2;
-      index < MOBILE_PERFORMANCE_FIXTURE.sessionIndexCount;
-      index += 1
-    ) {
+    for (let index = 2; index < performanceFixture.sessionIndexCount; index += 1) {
       const sessionId = `session-index-${String(index).padStart(3, "0")}`;
       sessions.set(sessionId, {
         sessionId,
@@ -591,7 +609,7 @@ export function createDesktopUiHarness(
       });
     }
     rowCount =
-      MOBILE_PERFORMANCE_FIXTURE.sessionIndexCount * 2 +
+      performanceFixture.sessionIndexCount * 2 +
       MOBILE_PERFORMANCE_FIXTURE.largeSessionTimelineItems +
       MOBILE_PERFORMANCE_FIXTURE.shortSessionTimelineItems;
   }
@@ -681,6 +699,7 @@ export function createDesktopUiHarness(
         defaultNodeHome: "/tmp/gents-bombadil/agent",
         initNodeName: freshHome ? null : deployment.label,
         initNodeDid: freshHome ? null : NODE_DID,
+        initConfigStatus: freshHome ? "absent" : "configured",
         initToolCeiling: freshHome ? null : "ReadWrite",
         initToolRoot: freshHome ? null : "/tmp/gents-bombadil/workspace",
         desktopHome: "/tmp/gents-bombadil/desktop",
@@ -718,6 +737,7 @@ export function createDesktopUiHarness(
         peerIssueCount: 0,
         rowCount,
         approxSerializedBytes: rowCount * 512,
+        operatorConfigAuthoritativeNodeDids: freshHome ? [] : [NODE_DID],
         deployments,
       },
     };
@@ -920,6 +940,8 @@ export function createDesktopUiHarness(
     async listPendingPluginApprovals() {
       return { requests: [] };
     },
+    async subscribePluginApprovals() {},
+    async unsubscribePluginApprovals() {},
     async decidePluginApproval() {},
     ...(scenario === "empty-fleet"
       ? ({
@@ -1124,6 +1146,21 @@ export function createDesktopUiHarness(
         mcpServicesOnline: true,
         surface: {
           tool_names: ["read_file", "list_files", "gents_exec"],
+          policy: {
+            requested: {
+              file_tools: ["read_file", "list_files", "write_file"],
+              meta: ["gents_exec"],
+            },
+            ceiling: { file_tools: ["read_file", "list_files"], meta: ["gents_exec"] },
+            runtime: {
+              file_tools: ["read_file", "list_files", "write_file"],
+              meta: ["gents_exec"],
+            },
+            effective: {
+              file_tools: ["read_file", "list_files"],
+              meta: ["gents_exec"],
+            },
+          },
           included: { read_file: ["ceiling allows readonly file tools"] },
           excluded: { write_file: ["ceiling is readonly"] },
           unavailable: {},
@@ -2526,7 +2563,7 @@ export function createDesktopUiHarness(
   const performance: MobilePerformanceHarnessController | null =
     scenario === "mobile-performance"
       ? {
-          fixture: MOBILE_PERFORMANCE_FIXTURE,
+          fixture: performanceFixture,
           reset() {
             bridgeCalls = [];
             commits = [];
@@ -2720,6 +2757,50 @@ export function createDesktopUiHarness(
                 ),
                 group,
               ],
+            });
+            syncSessions();
+            notify("store");
+          },
+          /* a settled group of `count` commands near the long session's
+             foot, where rows are always drawn: enough steps to cap its box */
+          toolBatch(count) {
+            const session = sessions.get("session-large");
+            if (!session) {
+              throw new Error("mobile performance fixture lost session-large");
+            }
+            const at = Math.max(0, session.timelineItems.length - 2);
+            const group = {
+              kind: "toolGroup" as const,
+              itemKey: "batch-tools",
+              messageSequence: at,
+              tools: Array.from({ length: count }, (_, index) => ({
+                itemKey: `batch-exec-${index}`,
+                toolName: "gents_exec",
+                statusKind: "success",
+                reconstruction: HARNESS_READY_RECONSTRUCTION,
+                presentation: {
+                  kind: "command" as const,
+                  command: `cargo test -p gents step_${index}`,
+                  exitCode: 0,
+                  timedOut: false,
+                  failed: false,
+                  durationMs: null,
+                  cwd: null,
+                  executionMode: "read_only",
+                  networkMode: "disabled",
+                  stdout: "",
+                  stderr: "",
+                  fallbackOutput: null,
+                },
+                partialOutputTail: null,
+              })),
+            };
+            const rest = session.timelineItems.filter(
+              (item) => item.itemKey !== group.itemKey,
+            );
+            sessions.set("session-large", {
+              ...session,
+              timelineItems: [...rest.slice(0, at), group, ...rest.slice(at)],
             });
             syncSessions();
             notify("store");

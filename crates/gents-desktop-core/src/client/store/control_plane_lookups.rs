@@ -113,11 +113,11 @@ impl ClientStore {
                     .enumerate()
                     .find(|(index, observation)| {
                         observation.trigger_id == trigger.trigger_id
-                            && source_node_matches(
-                                &self.trigger_observation_source_node_dids,
-                                *index,
-                                &trigger.node_did,
-                            )
+                            && self
+                                .trigger_observation_source_node_dids
+                                .get(*index)
+                                .and_then(|source| source.as_deref())
+                                == Some(trigger.node_did.as_str())
                     })
                     .map(|(_, observation)| observation)
             })

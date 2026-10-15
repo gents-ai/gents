@@ -78,14 +78,9 @@ async fn client_output_snapshot_reads_full_retained_window_without_widening_mode
         DefraSessionHook::with_identity(node.clone(), "did:test:owner", FailurePolicy::default())
             .with_background_execution_registry(registry.clone());
     let session_id = hook.session_id().await.unwrap();
-    crate::session::create_session_with_agent_id(
-        node.as_ref(),
-        &session_id,
-        "did:test:owner",
-        "general",
-    )
-    .await
-    .unwrap();
+    crate::session::create_session_with_agent_id(&node, &session_id, "did:test:owner", "general")
+        .await
+        .unwrap();
     bind_interruptible_request(
         &node,
         &hook,
@@ -632,7 +627,7 @@ async fn dispatch_receipt_scripts_bind_call_hook_under_both_persistence_policies
             let request_query = format!(
                 "{{ AgentRequest(filter: {{ _docID: {{ _eq: \"{document}\" }} }}) {{ _docID lifecycle_state execution_generation terminal_output }} }}"
             );
-            let access = crate::ConfigAccess::Local(node.clone());
+            let access = crate::ConfigAccess::local(node.clone());
             let before_probe = access.execute(&request_query).await.unwrap();
             let before_request = before_probe["data"]["AgentRequest"].as_array().unwrap();
             assert_eq!(before_request.len(), 1);
@@ -669,7 +664,7 @@ async fn dispatch_receipt_scripts_bind_call_hook_under_both_persistence_policies
             assert_eq!(terminalized, crate::lifecycle::TerminalizeResult::Won);
             let document =
                 crate::graphql::escape_graphql_string(&fixture.lifecycle.request().doc_id);
-            let observed = crate::ConfigAccess::Local(node.clone()).execute(&format!(
+            let observed = crate::ConfigAccess::local(node.clone()).execute(&format!(
                 "{{ AgentToolCall(filter: {{ request_doc_id: {{ _eq: \"{document}\" }} }}) {{ _docID lifecycle_state stuck_since }} AgentMessage(filter: {{ request_doc_id: {{ _eq: \"{document}\" }} }}) {{ _docID }} }}"
             )).await.unwrap();
             let data = &observed["data"];
@@ -1485,7 +1480,7 @@ async fn list_processes_skip_publishes_canonical_tool_result() {
     ));
 
     let timeline = crate::run_timeline_fetch::load_run_timeline_rows(
-        &crate::config_client::ConfigAccess::Local(node.clone()),
+        &crate::config_client::ConfigAccess::local(node.clone()),
         "request-control-result",
     )
     .await
@@ -1569,7 +1564,7 @@ async fn wait_and_cancel_process_skip_publish_canonical_tool_results() {
     }
 
     let timeline = crate::run_timeline_fetch::load_run_timeline_rows(
-        &crate::config_client::ConfigAccess::Local(node.clone()),
+        &crate::config_client::ConfigAccess::local(node.clone()),
         "request-control-results",
     )
     .await
@@ -1725,7 +1720,7 @@ async fn control_tool_lost_terminal_compare_replays_the_durable_winner() {
         "a different same-state closure is a modeled conflict, not a lost CAS"
     );
     let durable = crate::tool_call_lifecycle::query::load_tool_call_result(
-        &crate::config_client::ConfigAccess::Local(node.clone()),
+        &crate::config_client::ConfigAccess::local(node.clone()),
         &conflict_doc_id,
         "did:test:control-race",
         &session_id,
@@ -1738,7 +1733,7 @@ async fn control_tool_lost_terminal_compare_replays_the_durable_winner() {
         "durable winner"
     );
     let presentation = crate::tool_call_lifecycle::load_tool_call_presentation(
-        &crate::config_client::ConfigAccess::Local(node.clone()),
+        &crate::config_client::ConfigAccess::local(node.clone()),
         &conflict_doc_id,
         "did:test:control-race",
         &session_id,
@@ -1896,7 +1891,7 @@ async fn update_goal_blocked_cannot_resurrect_budget_limited_goal() {
     ));
     let session_id = hook.session_id().await.expect("session id");
     crate::goal::set_goal(
-        node.as_ref(),
+        &node,
         "did:test:general",
         &session_id,
         Some("Do not resurrect after budget exhaustion"),
@@ -1906,7 +1901,7 @@ async fn update_goal_blocked_cannot_resurrect_budget_limited_goal() {
     .await
     .expect("create active goal");
     crate::goal::set_goal(
-        node.as_ref(),
+        &node,
         "did:test:general",
         &session_id,
         None,
@@ -1973,14 +1968,9 @@ async fn claimed_authored_input_persists_context_once_before_prompt() {
     let hook =
         DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
     let session_id = hook.session_id().await.expect("session id");
-    crate::session::create_session_with_agent_id(
-        node.as_ref(),
-        &session_id,
-        "did:test:general",
-        "general",
-    )
-    .await
-    .unwrap();
+    crate::session::create_session_with_agent_id(&node, &session_id, "did:test:general", "general")
+        .await
+        .unwrap();
     let context = user_text_message("<context>\nnow=2026-06-15T00:00:00Z\n</context>");
     let first_prompt = user_text_message("First request");
     assert!(
@@ -2047,14 +2037,9 @@ async fn context_and_prompt_deduped_across_retry_attempts() {
     let hook1 =
         DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
     let session_id = hook1.session_id().await.expect("session id");
-    crate::session::create_session_with_agent_id(
-        node.as_ref(),
-        &session_id,
-        "did:test:general",
-        "general",
-    )
-    .await
-    .unwrap();
+    crate::session::create_session_with_agent_id(&node, &session_id, "did:test:general", "general")
+        .await
+        .unwrap();
     bind_interruptible_request(
         node.as_ref(),
         &hook1,
@@ -2142,14 +2127,9 @@ async fn steering_input_is_published_once_when_claimed_owner_runs() {
     let hook =
         DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
     let session_id = hook.session_id().await.expect("session id");
-    crate::session::create_session_with_agent_id(
-        node.as_ref(),
-        &session_id,
-        "did:test:general",
-        "general",
-    )
-    .await
-    .unwrap();
+    crate::session::create_session_with_agent_id(&node, &session_id, "did:test:general", "general")
+        .await
+        .unwrap();
     let prompt = user_text_message("also check the staging config");
     assert!(
         crate::session::load_history(&node, &session_id, &hook.node_did, None)
@@ -2892,14 +2872,9 @@ async fn streaming_turn_persists_full_assistant_history_in_sequence() {
         DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
     let user_prompt = user_text_message("Inspect /tmp/main.rs");
     let session_id = hook.session_id().await.expect("session id");
-    crate::session::create_session_with_agent_id(
-        node.as_ref(),
-        &session_id,
-        "did:test:general",
-        "general",
-    )
-    .await
-    .unwrap();
+    crate::session::create_session_with_agent_id(&node, &session_id, "did:test:general", "general")
+        .await
+        .unwrap();
     bind_interruptible_request(
         node.as_ref(),
         &hook,
@@ -3035,14 +3010,9 @@ async fn assistant_turn_materializes_durable_reasoning_into_agent_message() {
         DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
     let user_prompt = user_text_message("Explain the plan");
     let session_id = hook.session_id().await.expect("session id");
-    crate::session::create_session_with_agent_id(
-        node.as_ref(),
-        &session_id,
-        "did:test:general",
-        "general",
-    )
-    .await
-    .unwrap();
+    crate::session::create_session_with_agent_id(&node, &session_id, "did:test:general", "general")
+        .await
+        .unwrap();
     bind_interruptible_request(
         node.as_ref(),
         &hook,
@@ -3110,14 +3080,9 @@ async fn read_file_result_persists_raw_output_but_models_compact_observation() {
     let hook =
         DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
     let session_id = hook.session_id().await.expect("session id");
-    crate::session::create_session_with_agent_id(
-        node.as_ref(),
-        &session_id,
-        "did:test:general",
-        "general",
-    )
-    .await
-    .unwrap();
+    crate::session::create_session_with_agent_id(&node, &session_id, "did:test:general", "general")
+        .await
+        .unwrap();
     bind_interruptible_request(
         node.as_ref(),
         &hook,
@@ -3219,14 +3184,9 @@ async fn owned_tool_result_materializes_one_transcript_row() {
     let hook =
         DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
     let session_id = hook.session_id().await.expect("session id");
-    crate::session::create_session_with_agent_id(
-        node.as_ref(),
-        &session_id,
-        "did:test:general",
-        "general",
-    )
-    .await
-    .unwrap();
+    crate::session::create_session_with_agent_id(&node, &session_id, "did:test:general", "general")
+        .await
+        .unwrap();
     bind_interruptible_request(
         node.as_ref(),
         &hook,
@@ -3385,14 +3345,9 @@ async fn tool_result_message_dedupe_preserves_distinct_result_ids() {
     let hook =
         DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
     let session_id = hook.session_id().await.expect("session id");
-    crate::session::create_session_with_agent_id(
-        node.as_ref(),
-        &session_id,
-        "did:test:general",
-        "general",
-    )
-    .await
-    .unwrap();
+    crate::session::create_session_with_agent_id(&node, &session_id, "did:test:general", "general")
+        .await
+        .unwrap();
     bind_interruptible_request(
         node.as_ref(),
         &hook,
@@ -3464,14 +3419,9 @@ async fn accepted_tool_turns_keep_results_bound_to_their_assistant_headers() {
         DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
     let user_prompt = user_text_message("Inspect mini-1");
     let session_id = hook.session_id().await.expect("session id");
-    crate::session::create_session_with_agent_id(
-        node.as_ref(),
-        &session_id,
-        "did:test:general",
-        "general",
-    )
-    .await
-    .unwrap();
+    crate::session::create_session_with_agent_id(&node, &session_id, "did:test:general", "general")
+        .await
+        .unwrap();
     bind_interruptible_request(
         node.as_ref(),
         &hook,

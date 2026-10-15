@@ -71,6 +71,18 @@ export function nodeSetUp(snapshot: DesktopClientSnapshot) {
   );
 }
 
+/** Whether the bridge has read this node's configuration from the node
+    itself. Until it has, the desktop's copy lacks the node's backends and
+    Node configuration, so what it is missing is unread, not unset. */
+export function configIsRead(
+  snapshot: Pick<DesktopClientSnapshot, "client">,
+  nodeDid: string | null | undefined,
+): boolean {
+  return Boolean(
+    nodeDid && snapshot.client?.operatorConfigAuthoritativeNodeDids?.includes(nodeDid),
+  );
+}
+
 export function needsFirstRunSetup(snapshot: DesktopClientSnapshot): boolean {
   const deployments = snapshot.client?.deployments ?? [];
   if (deployments.length === 0) return true;
@@ -79,4 +91,21 @@ export function needsFirstRunSetup(snapshot: DesktopClientSnapshot): boolean {
       isLocalNode(deployment, snapshot.bootstrap.initNodeDid) &&
       !inferenceIsConfigured(deployment),
   );
+}
+
+export type FirstRunPhase = "unknown" | "active" | "done";
+
+export function projectFirstRunPhase(
+  phase: FirstRunPhase,
+  snapshotReady: boolean,
+  initConfigStatus: DesktopClientSnapshot["bootstrap"]["initConfigStatus"],
+  needsSetup: boolean,
+  authoritative: boolean,
+): FirstRunPhase {
+  if (phase !== "unknown") return phase;
+  if (!snapshotReady) return "unknown";
+  if (initConfigStatus === "absent") return "active";
+  if (initConfigStatus !== "configured") return "unknown";
+  if (!authoritative) return "unknown";
+  return needsSetup ? "active" : "done";
 }

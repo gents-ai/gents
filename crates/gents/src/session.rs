@@ -42,6 +42,7 @@ pub(crate) use history::{
     retry_has_published_input,
 };
 pub use observations::apply_title_in_txn;
+pub(crate) use observations::load_latest_requests_in_txn;
 pub(crate) use observations::{
     advance_refused_request_observation_in_txn, advance_session_request_observation_in_txn,
     derive_session_preview, load_recent_titles_for_agent, load_scoped_request_facts_in_txn,
@@ -58,6 +59,8 @@ pub(crate) use output::count_request_output_scans;
 pub(crate) use output::load_canonical_payload_from_node;
 pub(crate) use output::load_canonical_payload_in_txn;
 pub(crate) use output::load_canonical_payload_with_access;
+#[cfg(test)]
+pub(crate) use output::record_request_output_scan;
 pub use output::{
     load_canonical_message, load_canonical_message_from_node, CanonicalOutputReadError,
 };
@@ -80,7 +83,9 @@ pub(crate) use sessions::{
     create_session_with_agent_id, create_session_with_id,
     ensure_session_with_agent_id_and_requester_did,
 };
-pub(crate) use sessions::{ensure_session_in_txn, max_sequence, reopen_session_in_txn};
+pub(crate) use sessions::{
+    ensure_session_in_txn, max_sequence, reopen_session_in_txn, touch_session_in_txn,
+};
 
 /// Render an immutable requester route key for a document create branch.
 /// Ordinary local lineage leaves the field null by omitting it; remote child

@@ -109,7 +109,7 @@ impl SchemaTool {
 
     async fn execute(&self, command: &SchemaCommand) -> Result<Value> {
         let args = &command.args;
-        let access = ConfigAccess::Local(self.node.clone());
+        let access = ConfigAccess::local(self.node.clone());
         let words: Vec<_> = args.argv.iter().map(String::as_str).collect();
         let target = || {
             args.target_id.as_deref().filter(|s| !s.is_empty()).context("target_id is required; use collection list or version list to discover exact names and IDs")

@@ -78,4 +78,38 @@ describe("settings polish", () => {
       "/agents/did%3Akey%3Az6MkAgent/agents/default",
     );
   });
+
+  it("marks the model with its provider, found through the agent's profile", async () => {
+    const onClaude = {
+      ...deployment,
+      inferenceBackends: deployment.inferenceBackends.map((backend) =>
+        backend.backendId === "backend-a"
+          ? { ...backend, providerKind: "AnthropicApiKey" }
+          : backend,
+      ),
+    };
+    render(
+      <AgentHoverCard deployment={onClaude} agentId="default">
+        <button type="button">Default agent</button>
+      </AgentHoverCard>,
+    );
+    await userEvent
+      .setup()
+      .hover(screen.getByRole("button", { name: "Default agent" }));
+    const card = await screen.findByTestId("agent-hover-card");
+    expect(card.querySelector("img")).toHaveAttribute("src", "/logos/claude.svg");
+  });
+
+  it("names no company for a bare local endpoint", async () => {
+    render(
+      <AgentHoverCard deployment={deployment} agentId="default">
+        <button type="button">Default agent</button>
+      </AgentHoverCard>,
+    );
+    await userEvent
+      .setup()
+      .hover(screen.getByRole("button", { name: "Default agent" }));
+    const card = await screen.findByTestId("agent-hover-card");
+    expect(card.querySelector("img")).toBeNull();
+  });
 });

@@ -34,7 +34,15 @@ impl ClientStore {
             .into_iter()
             .flat_map(|indexes| indexes.iter())
             .copied()
-            .filter(|index| source_node_matches(&self.tool_call_source_node_dids, *index, node_did))
+            .filter(|index| {
+                row_is_in_node_scope(
+                    self.tool_calls[*index].node_did.as_deref(),
+                    self.tool_call_source_node_dids
+                        .get(*index)
+                        .and_then(|source| source.as_deref()),
+                    node_did,
+                )
+            })
             .collect::<Vec<_>>();
         TranscriptView {
             messages: message_indexes
@@ -140,8 +148,29 @@ impl ClientStore {
         let requests = self
             .requests_for_session(session_id)
             .into_iter()
+            .filter(|row| request_row_in_session_scope(row, node_did, requester_did))
+            .collect::<Vec<_>>();
+        Self::session_tip_request_from_rows(
+            requests,
+            session_id,
+            node_did,
+            requester_did,
+            request_id,
+        )
+    }
+
+    pub fn session_tip_request_from_rows<'a>(
+        requests: impl IntoIterator<Item = &'a AgentRequestRow>,
+        session_id: &str,
+        node_did: Option<&str>,
+        requester_did: Option<&str>,
+        request_id: &str,
+    ) -> Option<AgentRequestRow> {
+        let requests = requests
+            .into_iter()
             .filter(|row| {
-                row.node_did.as_deref() == node_did && row.requester_did.as_deref() == requester_did
+                row.session_id.as_deref() == Some(session_id)
+                    && request_row_in_session_scope(row, node_did, requester_did)
             })
             .collect::<Vec<_>>();
         let submitted = requests
@@ -191,6 +220,16 @@ impl ClientStore {
         self.node_readiness_by_node_did
             .get(node_did)
             .map(|index| &self.node_readiness[*index])
+    }
+
+    pub(crate) fn request_row_by_doc_id(&self, doc_id: &str) -> Option<&AgentRequestRow> {
+        let index = self
+            .request_index_by_doc_id
+            .get(doc_id)
+            .copied()
+            .flatten()?;
+        let row = self.requests.get(index)?;
+        (row.doc_id.as_deref() == Some(doc_id)).then_some(row)
     }
 
     pub fn request_row(&self, request_id: &str) -> Option<&AgentRequestRow> {
@@ -268,4 +307,12 @@ impl ClientStore {
     ) -> Option<ClientTurnState> {
         turns::derive_turn_for_request_for_node(self, request_id, node_did)
     }
+}
+
+fn request_row_in_session_scope(
+    row: &AgentRequestRow,
+    node_did: Option<&str>,
+    requester_did: Option<&str>,
+) -> bool {
+    row.node_did.as_deref() == node_did && row.requester_did.as_deref() == requester_did
 }

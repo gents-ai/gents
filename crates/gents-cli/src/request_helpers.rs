@@ -440,7 +440,7 @@ pub(crate) async fn create_goal_backed_agent_request(
 /// delegating the goal/claim/request transaction to the runtime owner.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn create_goal_backed_agent_request_local(
-    node: &defra_node::EmbeddedNode,
+    node: &std::sync::Arc<defra_node::EmbeddedNode>,
     actor: identity::Did,
     graphql: &GraphqlEndpoint,
     node_did: &str,
@@ -1055,11 +1055,12 @@ tokio::task_local! {
     static CAPTURED_REPORT: std::cell::RefCell<Option<Value>>;
 }
 
-pub(crate) fn print_json(value: &Value) -> Result<()> {
-    if CAPTURED_REPORT
-        .try_with(|report| *report.borrow_mut() = Some(value.clone()))
-        .is_ok()
-    {
+/// Prints `value` in its own field order; a typed report keeps the order
+/// its struct declares.
+pub(crate) fn print_json<T: serde::Serialize + ?Sized>(value: &T) -> Result<()> {
+    if CAPTURED_REPORT.try_with(|_| ()).is_ok() {
+        let value = serde_json::to_value(value).context("encoding JSON report")?;
+        CAPTURED_REPORT.with(|report| *report.borrow_mut() = Some(value));
         return Ok(());
     }
     // `println!` panics on a closed stdout; a report that cannot be written is

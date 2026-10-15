@@ -20,6 +20,9 @@ pub struct DesktopBootstrapSummary {
     pub default_node_home: String,
     pub init_node_name: Option<String>,
     pub init_node_did: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub init_config_status: Option<InitConfigStatus>,
     pub init_tool_ceiling: Option<String>,
     pub init_tool_root: Option<String>,
     pub desktop_home: String,
@@ -31,6 +34,15 @@ pub struct DesktopBootstrapSummary {
     pub peer_directory_exists: bool,
     pub client_state_exists: bool,
     pub saved_peers: Vec<SavedPeerView>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(rename_all = "lowercase")]
+pub enum InitConfigStatus {
+    Absent,
+    Configured,
+    Unreadable,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, TS)]
@@ -75,66 +87,35 @@ pub struct ManagedServerRootValidation {
     pub canonical_path: String,
 }
 
-#[derive(Debug, Clone, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct ManagedServerResetResult {
-    /// The managed runtime home whose own entries are in scope, if any.
-    pub managed_home: Option<String>,
-    /// The desktop client state root whose client entries are in scope, if any.
-    pub desktop_home: Option<String>,
-    /// The stores this version refused, and why.
-    pub stores: Vec<IncompatibleStoreView>,
-    /// Confirmation text for archiving.
-    pub confirmation: String,
-    /// Confirmation text for permanent deletion; absent when deletion is not
-    /// offered (a store another, possibly newer, version wrote).
-    pub delete_confirmation: Option<String>,
-    pub consequence: String,
-    pub completed: bool,
-    /// What a completed reset did.
-    pub disposition: Option<HomeResetDisposition>,
-    /// Where an archive moved the retired entries.
-    pub backup_path: Option<String>,
-    /// Entries an archive moves, exactly.
-    pub planned_paths: Vec<String>,
-    /// Entries a deletion removes, exactly. Narrower than the archive: of
-    /// `keys/` only the managed home's own key file is deleted.
-    pub delete_paths: Vec<String>,
-    /// Entries a completed reset archived or deleted.
-    pub retired_paths: Vec<String>,
-    /// Entries of the managed home left untouched: other nodes' homes,
-    /// backups, user files and anything outside the runtime's inventory.
-    pub retained_paths: Vec<String>,
-}
+pub use gents_desktop_core::home_reset::{
+    HomeResetDisposition, IncompatibleStoreScope, IncompatibleStoreView, ManagedServerResetResult,
+};
 
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, TS)]
-#[serde(rename_all = "lowercase")]
-#[ts(rename_all = "lowercase")]
-pub enum HomeResetDisposition {
-    Archive,
-    Delete,
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, TS)]
-#[serde(rename_all = "lowercase")]
-#[ts(rename_all = "lowercase")]
-pub enum IncompatibleStoreScope {
-    /// The managed runtime's store in its home.
-    Runtime,
-    /// The desktop client's own store.
-    Client,
-}
+    #[test]
+    fn missing_init_config_status_is_omitted_from_the_wire() {
+        let summary = DesktopBootstrapSummary {
+            default_node_home: String::new(),
+            init_node_name: None,
+            init_node_did: None,
+            init_config_status: None,
+            init_tool_ceiling: None,
+            init_tool_root: None,
+            desktop_home: String::new(),
+            peer_directory_path: String::new(),
+            node_data_dir: String::new(),
+            diagnostics_hint: String::new(),
+            node_home_exists: false,
+            desktop_home_exists: false,
+            peer_directory_exists: false,
+            client_state_exists: false,
+            saved_peers: Vec::new(),
+        };
 
-#[derive(Debug, Clone, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct IncompatibleStoreView {
-    pub scope: IncompatibleStoreScope,
-    pub path: String,
-    pub detail: String,
-    /// The store is known to come from an earlier release. A store another
-    /// (possibly newer) build wrote is not offered for deletion by default.
-    pub older: bool,
-    /// An identity key an older build wrote with unsafe permissions; `path`
-    /// is the key (or the home's key directory).
-    pub unsafe_key: bool,
+        let wire = serde_json::to_value(summary).expect("serialize bootstrap summary");
+        assert!(wire.get("initConfigStatus").is_none());
+    }
 }

@@ -3,27 +3,37 @@ use super::*;
 pub(super) async fn load_latest_session_request_context(
     node: &gents::defra_node::EmbeddedNode,
     node_did: &str,
-    request_ids: &[String],
+    requester_did: Option<&str>,
+    session_id: &str,
 ) -> anyhow::Result<Option<LoadedRequestContext>> {
-    if request_ids.is_empty() {
+    let request_doc_ids =
+        gents::toolset::load_session_request_doc_ids(node, node_did, requester_did, session_id)
+            .await?;
+    if request_doc_ids.is_empty() {
         return Ok(None);
     }
-    let request_ids = request_ids
+    let request_doc_ids = request_doc_ids
         .iter()
-        .map(|request_id| format!("\"{}\"", gents::graphql::escape_graphql_string(request_id)))
+        .map(|request_doc_id| {
+            format!(
+                "\"{}\"",
+                gents::graphql::escape_graphql_string(request_doc_id)
+            )
+        })
         .collect::<Vec<_>>()
         .join(", ");
     let query = format!(
         r#"query {{
             InferenceCall(
                 filter: {{
-                    request_id: {{ _in: [{request_ids}] }},
+                    request_doc_id: {{ _in: [{request_doc_ids}] }},
                     node_did: {{ _eq: "{node_did}" }},
                     call_kind: {{ _eq: "inference" }}
                 }},
                 order: {{ queued_at: DESC }},
                 limit: 10
             ) {{
+                request_doc_id
                 request_id
                 call_id
                 call_seq

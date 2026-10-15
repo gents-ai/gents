@@ -30,7 +30,7 @@ use crate::eval::{load_run, load_trials, DefinitionRef, RunOrigin, SubjectRef, T
 use crate::optimization::evidence::{
     decision_evidence, decision_seed, train_feedback, BASELINE_CELL, CANDIDATE_CELL,
 };
-use crate::optimization::gate::{structural_gate, text_gate};
+use crate::optimization::gate::{seed_gate, structural_gate, text_gate};
 use crate::optimization::job::{
     append, append_in_txn, checkpoint, create_job, derive_state, load_job, rounds_used, Budgets,
     Checkpoint, DecisionSummary, JobOrigin, JobRecord, JobState, JournalEntry,
@@ -832,7 +832,15 @@ fn rejections(journal: &[JournalEntry]) -> Vec<Rejection> {
     let mut history = Vec::new();
     for entry in journal {
         let (round, reason) = match entry {
-            JournalEntry::StructuralReject { round, diagnostics } => (*round, diagnostics.clone()),
+            JournalEntry::StructuralReject { round, diagnostics } => (
+                *round,
+                if diagnostics.starts_with("template_seed_invalid:") {
+                    "template_seed_invalid: the candidate did not render against the frozen inputs"
+                        .into()
+                } else {
+                    diagnostics.clone()
+                },
+            ),
             JournalEntry::Decided {
                 round: Some(round),
                 decision: Decision::Reject(reason),
@@ -933,7 +941,7 @@ fn proposed_candidate(
 async fn read_closure(access: &ConfigAccess, owner: &str) -> Result<Closure> {
     let owner = owner.to_owned();
     access
-        .transact("optimization.capture_closure", |txn| {
+        .transact_write("optimization.capture_closure", |txn| {
             let owner = &owner;
             Box::pin(async move { capture_closure(txn, owner).await })
         })
@@ -951,7 +959,7 @@ async fn append_all(
     {
         let (current, entries) = (&*job, &entries);
         access
-            .transact("optimization.append_journal", |txn| {
+            .transact_write("optimization.append_journal", |txn| {
                 Box::pin(async move {
                     let mut advanced = current.clone();
                     for entry in entries {
@@ -1314,7 +1322,9 @@ pub async fn run_job(
                     })
                     .await?;
                 // Ruling P-N5: a text the gate refuses is never materialized.
-                let digest = match text_gate(&baseline, &proposal.text, origin.max_text_bytes) {
+                let digest = match text_gate(&baseline, &proposal.text, origin.max_text_bytes)
+                    .and_then(|()| seed_gate(&baseline, &definition, &proposal.text))
+                {
                     Ok(()) => {
                         materialize_candidate(&baseline, owner, &proposal.text, &staging)?.digest
                     }
@@ -1333,7 +1343,9 @@ pub async fn run_job(
 
         // 3. Structural gate, before any validation spend: the text alone,
         // then the materialized candidate against the baseline.
-        let gated = match text_gate(&baseline, &text, origin.max_text_bytes) {
+        let gated = match text_gate(&baseline, &text, origin.max_text_bytes)
+            .and_then(|()| seed_gate(&baseline, &definition, &text))
+        {
             Err(rejection) => Err(rejection),
             Ok(()) => {
                 let candidate = proposed_candidate(&origin, &job_id, round, &digest)?;
@@ -2487,7 +2499,7 @@ mod tests {
                 .unwrap(),
         );
         crate::schema::ensure_runtime_schemas(&node).await.unwrap();
-        ConfigAccess::Local(node)
+        ConfigAccess::local(node)
     }
 
     /// Ruling P-N3: the decision and the exhaustion that ends the rounds are

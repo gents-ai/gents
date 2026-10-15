@@ -100,11 +100,6 @@ async fn maps_the_lineage_owner_and_each_call_to_its_caused_request() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_started_session_names_its_starter_and_the_sender_of_each_turn() {
     let (core, _tmp, _) = seed_provenance_fixture().await;
-    for request_id in ["req_parent", "req_child", "req_child_2"] {
-        core.refresh_local_request(OPERATOR, request_id)
-            .await
-            .expect("refresh request");
-    }
     let view = session_provenance(&core, scope("sess_child"))
         .await
         .expect("provenance");
@@ -152,18 +147,26 @@ async fn a_root_session_has_no_provenance() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_replicated_session_message_keeps_the_call_that_sent_it() {
     let (core, _tmp, parent) = seed_provenance_fixture().await;
-    core.refresh_local_request(OPERATOR, "req_child_2")
+    let view = session_provenance(&core, scope("sess_child"))
         .await
-        .expect("refresh request");
-    let store = core.store().snapshot();
-    let row = store
-        .request_row("req_child_2")
-        .expect("replicated request");
-    assert!(row.caused_by_parent_tool_call_doc_id.is_some());
+        .expect("provenance");
+    let sender = view
+        .senders
+        .iter()
+        .find(|turn| turn.request_id == "req_child_2")
+        .expect("canonical lineage attributes the replicated message");
     assert_eq!(
-        gents::lifecycle::request_origin(row),
-        gents::lifecycle::RequestOrigin::SessionMessage {
-            parent_request_doc_id: Some(parent.as_str())
-        }
+        sender.sender.cause_request_doc_id, parent,
+        "the message remains attached to its exact physical causing request"
     );
+    let parent_view = session_provenance(&core, scope("sess_parent"))
+        .await
+        .expect("parent provenance");
+    let call = parent_view
+        .calls
+        .iter()
+        .find(|call| call.tool_call_id == "tc_message")
+        .expect("the causing agent-message call remains visible");
+    assert_eq!(call.caused.request_id, "req_child_2");
+    assert_eq!(sender.sender.session_id, "sess_parent");
 }

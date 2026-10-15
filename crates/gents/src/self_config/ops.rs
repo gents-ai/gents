@@ -221,10 +221,6 @@ impl SelfConfigCore {
         self.node.clone()
     }
 
-    pub(crate) fn node(&self) -> &EmbeddedNode {
-        &self.node
-    }
-
     pub(crate) fn identity(&self) -> Result<Did> {
         Did::new(self.node_did.clone())
             .map_err(|error| anyhow!("node DID is not ACP-addressable: {error}"))
@@ -310,7 +306,7 @@ impl SelfConfigCore {
         let identity = self.identity()?;
         let this = self;
         let request = &request;
-        let outcome = ConfigAccess::transact_local(
+        let outcome = ConfigAccess::transact_local_write(
             &self.node,
             Some(identity),
             "self_config.apply",
@@ -542,7 +538,7 @@ impl SelfConfigCore {
         let identity = self.identity()?;
         let this = self;
         let request = &request;
-        ConfigAccess::transact_local(
+        ConfigAccess::transact_local_readonly(
             &self.node,
             Some(identity),
             "self_config.preview",

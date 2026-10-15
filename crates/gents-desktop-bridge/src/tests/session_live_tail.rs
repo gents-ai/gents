@@ -3,7 +3,7 @@ use gents_protocol::output::{
 };
 use serde_json::Value;
 
-use super::support::{boot_core, OPERATOR};
+use super::support::{boot_core, refresh_request_and_assert_fresh_projection, OPERATOR};
 use crate::tauri_commands::chat::session_snapshot;
 use crate::types::RenderedTimelineItem;
 
@@ -117,9 +117,8 @@ async fn a_queued_or_folded_submission_keeps_the_running_turns_streaming_text() 
     )
     .await;
     for request_id in ["req_head", "req_queued", "req_folded"] {
-        core.refresh_local_request(OPERATOR, request_id)
-            .await
-            .expect("refresh request");
+        refresh_request_and_assert_fresh_projection(&core, OPERATOR, "sess_live", None, request_id)
+            .await;
     }
 
     for submitted in ["req_queued", "req_folded"] {

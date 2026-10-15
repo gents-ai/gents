@@ -55,6 +55,20 @@ struct CallRow {
     completion_tokens: Option<i64>,
 }
 
+fn decode_calls_for_node(values: &[serde_json::Value], node_did: &str) -> Result<Vec<CallRow>> {
+    values
+        .iter()
+        .filter(|row| row.get("node_did").and_then(serde_json::Value::as_str) == Some(node_did))
+        .map(|row| {
+            let mut row = row.clone();
+            row.as_object_mut()
+                .context("inference call row is not an object")?
+                .remove("node_did");
+            serde_json::from_value(row).context("decoding audit usage InferenceCall row")
+        })
+        .collect()
+}
+
 fn nonempty<'a>(value: Option<&'a str>, field: &str) -> Result<&'a str> {
     value
         .filter(|value| !value.trim().is_empty())
@@ -217,16 +231,21 @@ pub async fn load_parent_inclusive_audit_usage(
         .map(|doc| format!("\"{}\"", escape_graphql_string(doc)))
         .collect::<Vec<_>>()
         .join(", ");
-    let agent_filter = escape_graphql_string(agent);
     let response = graphql_with_transaction_retry(
         node,
         &format!(
-            r#"{{ InferenceCall(filter: {{ node_did: {{ _eq: "{agent_filter}" }}, request_doc_id: {{ _in: [{docs}] }} }}) {{ _docID call_id request_doc_id request_id backend_id call_state ended_at prompt_tokens completion_tokens }} }}"#
+            r#"{{ InferenceCall(filter: {{ request_doc_id: {{ _in: [{docs}] }} }}) {{ _docID node_did call_id request_doc_id request_id backend_id call_state ended_at prompt_tokens completion_tokens }} }}"#
         ),
         "load exact parent and title inference usage",
     )
     .await?;
-    let calls: Vec<CallRow> = required_rows(&response, "InferenceCall")?;
+    let raw_calls = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("InferenceCall"))
+        .and_then(serde_json::Value::as_array)
+        .context("audit usage query omitted InferenceCall rows")?;
+    let calls = decode_calls_for_node(raw_calls, agent)?;
     project_catalog(parent_doc_id, parent_id, &request_ids, calls)
 }
 
@@ -234,6 +253,43 @@ pub async fn load_parent_inclusive_audit_usage(
 mod tests {
     use super::*;
     use crate::lean_vocab_test::{LeanRequestPurpose, LeanTitleUsageCase, LeanTitleUsageResult};
+
+    #[test]
+    fn request_index_rows_preserve_exact_node_usage_and_ignore_malformed_twins() {
+        let request_ids =
+            BTreeMap::from([("request-parent".to_owned(), "logical-parent".to_owned())]);
+        let accepted = serde_json::json!({
+            "_docID": "call-1",
+            "node_did": "agent",
+            "call_id": "call-id",
+            "request_doc_id": "request-parent",
+            "request_id": "logical-parent",
+            "backend_id": "backend",
+            "call_state": "completed",
+            "ended_at": "2026-09-09T22:30:00Z",
+            "prompt_tokens": 11,
+            "completion_tokens": 7
+        });
+        let mut rows = vec![accepted.clone()];
+        let mut foreign = accepted.clone();
+        foreign["node_did"] = serde_json::json!("other-agent");
+        foreign["call_id"] = serde_json::json!(false);
+        rows.push(foreign);
+
+        let calls = decode_calls_for_node(&rows, "agent").unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].call_id, "call-id");
+        let actual =
+            project_catalog("request-parent", "logical-parent", &request_ids, calls).unwrap();
+        let baseline = project_catalog(
+            "request-parent",
+            "logical-parent",
+            &request_ids,
+            decode_calls_for_node(&[accepted], "agent").unwrap(),
+        )
+        .unwrap();
+        assert_eq!(actual, baseline);
+    }
 
     fn native_catalog(
         case: &LeanTitleUsageCase,

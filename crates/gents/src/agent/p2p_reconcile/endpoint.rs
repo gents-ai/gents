@@ -94,7 +94,7 @@ async fn endpoint_heartbeat(
 }
 
 async fn tick_endpoint(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     p2p: &Arc<dyn defra_p2p_adapter::P2POperations>,
     identity: &dyn NodeIdentity,
     published: &mut Option<PublishedEndpoint>,

@@ -15,10 +15,10 @@ use crate::tool_call_lifecycle::CausedRequestTerminal;
 /// The durable terminal of one exact caused request, or `None` while it is
 /// live or its terminal output selection has not replicated yet.
 pub async fn load_caused_request_terminal(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     caused_request_doc_id: &str,
 ) -> Result<Option<CausedRequestTerminal>> {
-    ConfigAccess::transact_local(node, None, "background.caused_request_terminal", |txn| {
+    ConfigAccess::transact_local_readonly(node, None, "background.caused_request_terminal", |txn| {
         Box::pin(async move {
             let id = escape_graphql_string(caused_request_doc_id);
             let response = txn.execute_local_response(&format!(r#"{{

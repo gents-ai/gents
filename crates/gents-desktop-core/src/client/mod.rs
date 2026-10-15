@@ -15,7 +15,7 @@ pub use collection_resolver::CollectionResolver;
 pub use core::{
     ClientCore, ClientCoreOptions, ClientPeerStatus, ClientRouteStatus, ClientSyncStateSnapshot,
     EnrollmentRequestResult, P2PHealth, P2PHealthStatus, PairingCollectionStatus,
-    RuntimeSchemaObservation, STUCK_THRESHOLD_ATTEMPTS,
+    RefreshedRequestProjection, RuntimeSchemaObservation, STUCK_THRESHOLD_ATTEMPTS,
 };
 pub use gents::P2pSyncStatusSnapshot;
 pub use mutations::{PeerMutationResult, SubmitRequestOptions, SubmittedRequest};
@@ -23,12 +23,13 @@ pub use observe::{
     ObservedStore, ObserverHandle, ObserverMetricsSnapshot, StoreProjectionRevision,
     StoreUpdateNotice,
 };
-pub use paths::DesktopPaths;
+pub use paths::{DesktopPaths, DESKTOP_HOME_ENV};
 #[cfg(test)]
 pub(crate) use peer_directory::load_peer_directory_snapshot;
 pub(crate) use peer_directory::PeerDirectory;
 pub use peer_directory::{initialize_local_standard_peer, load_peer_records, PeerRecord};
 pub use principal_identity::PrincipalIdentity;
+pub(crate) use query::load_request_documents_on;
 pub use query::{
     fetch_doc_patch, load_node_scoped_snapshot, load_request_prompt_ownership,
     load_request_prompt_ownership_on, load_session_context_store, load_session_context_store_on,

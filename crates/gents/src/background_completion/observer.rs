@@ -18,6 +18,7 @@ struct BackgroundCompletionObserver {
     cancel: CancellationToken,
     subscription: events::Subscription,
     collection_id_to_name: HashMap<String, String>,
+    mailbox_cursor: Option<String>,
 }
 
 impl BackgroundCompletionObserver {
@@ -39,6 +40,7 @@ impl BackgroundCompletionObserver {
             cancel,
             subscription,
             collection_id_to_name: HashMap::new(),
+            mailbox_cursor: None,
         }
     }
 
@@ -103,16 +105,24 @@ impl BackgroundCompletionObserver {
     }
 
     async fn run_reconcilers(&mut self) -> Result<()> {
-        match crate::mailbox::sweep_open_mailbox_items(self.node.as_ref()).await {
-            Ok(mailbox)
+        match crate::mailbox::sweep_open_mailbox_items(
+            &self.node,
+            &self.local_did,
+            self.mailbox_cursor.as_deref(),
+        )
+        .await
+        {
+            Ok(page) => {
+                self.mailbox_cursor = page.next_cursor;
+                let mailbox = page.report;
                 if mailbox.acted > 0
                     || mailbox.expired > 0
                     || mailbox.skipped_unsupported > 0
-                    || mailbox.skipped_errors > 0 =>
-            {
-                tracing::debug!(?mailbox, "mailbox close sweep applied");
+                    || mailbox.skipped_errors > 0
+                {
+                    tracing::debug!(?mailbox, "mailbox close sweep applied");
+                }
             }
-            Ok(_) => {}
             Err(error) => {
                 // A failed read/transition must leave rows open and retry on
                 // the next ordinary reconciler tick; it must not take down
@@ -136,11 +146,9 @@ impl BackgroundCompletionObserver {
                 );
             }
         }
-        let wake_redrive = crate::RequestLifecycle::redrive_failed_background_wakeups(
-            self.node.as_ref(),
-            &self.local_did,
-        )
-        .await?;
+        let wake_redrive =
+            crate::RequestLifecycle::redrive_failed_background_wakeups(&self.node, &self.local_did)
+                .await?;
         if !wake_redrive.is_noop() {
             tracing::debug!(
                 redriven = wake_redrive.redriven,
@@ -156,11 +164,9 @@ impl BackgroundCompletionObserver {
         // Owner-scoped terminal-convergence re-drive (#664): re-assert the
         // terminal state of recently-terminalized own-requests so the terminal
         // delta reaches replicas that missed the one-shot PushLog.
-        let redrive = crate::RequestLifecycle::redrive_terminal_convergence(
-            self.node.as_ref(),
-            &self.local_did,
-        )
-        .await?;
+        let redrive =
+            crate::RequestLifecycle::redrive_terminal_convergence(&self.node, &self.local_did)
+                .await?;
         if !redrive.is_noop() {
             tracing::debug!(
                 reasserted = redrive.reasserted,

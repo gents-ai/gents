@@ -248,19 +248,13 @@ fn scope_flags(scope: &crate::cli::EvalScopeArgs) -> String {
 }
 
 /// Refused before anything is read or installed: an existing `--out`
-/// without `--force`, a non-terminal stdin (this command is an interview),
-/// and a home no runtime serves (the author's requests need one to claim
-/// them).
+/// without `--force` and a home no runtime serves (the author's requests
+/// need one to claim them).
 pub(crate) async fn preflight(args: &EvalInitArgs) -> Result<()> {
-    use std::io::IsTerminal;
     anyhow::ensure!(
         args.force || args.out.symlink_metadata().is_err(),
         "{} already exists; pass --force to replace it",
         args.out.display()
-    );
-    anyhow::ensure!(
-        std::io::stdin().is_terminal(),
-        "gents eval init is an interview; run it in a terminal"
     );
     let home_dir = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
     let graphql = match args
@@ -281,6 +275,12 @@ pub(crate) async fn preflight(args: &EvalInitArgs) -> Result<()> {
         served,
         "start `gents server` for this home and retry: the author runs on a served home"
     );
+    write::recover_output(&args.out, &home_dir)?;
+    anyhow::ensure!(
+        args.force || args.out.symlink_metadata().is_err(),
+        "{} already exists; pass --force to replace it",
+        args.out.display()
+    );
     Ok(())
 }
 
@@ -291,7 +291,7 @@ pub(crate) async fn run(
     deps: &Deps<'_>,
     out: &mut dyn Write,
 ) -> Result<()> {
-    let gents::ConfigAccess::Graphql(graphql) = &*ctx.access else {
+    let gents::ConfigAccess::Graphql(graphql) = &ctx.access else {
         anyhow::bail!(
             "start `gents server` for this home and retry: the author runs on a served home"
         );
@@ -581,6 +581,65 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn runtime_captures_and_long_piped_answers_survive_pack_round_trip() {
+        let registry = CheckRegistry::builtin();
+        let root = tempfile::tempdir().unwrap();
+        let ctx = context(&registry, root.path().join("out"));
+        let mut cases = good().cases;
+        for case in &mut cases {
+            case["stages"][0]["capture"] = json!([{
+                "kind": "documents", "name": "items", "collection": "AgentRequest",
+                "filter": {"node_did": {"_eq": OWNER}},
+                "fields": ["_docID", "request_id", "lifecycle_state"]
+            }]);
+        }
+        let answer = "x".repeat(8192);
+        let input = format!("{answer}\n");
+        let mut input = input.as_bytes();
+        let mut lines = operator_lines(|line| std::io::BufRead::read_line(&mut input, line));
+        let mut turn =
+            ScriptedTurn::new(["What must it get right?".to_owned(), draft_block(&cases)]);
+        let outcome = interview(&mut turn, &mut lines, &ctx, &mut Vec::new())
+            .await
+            .unwrap();
+        assert_eq!(outcome.summary, answer);
+        assert_eq!(turn.sent[1], answer);
+        assert_eq!(outcome.rounds, 1);
+        let definition = outcome.assembled.unwrap().definition;
+        assert!(definition.cases.iter().all(|case| {
+            matches!(&case.stages[0].capture[0], gents::document_config::EvalCapture::Documents {
+                collection, fields, ..
+            } if collection == "AgentRequest" && fields.iter().any(|field| field == "request_id"))
+        }));
+        assert!(outcome.written.unwrap().out.join("manifest.json").is_file());
+    }
+
+    #[tokio::test]
+    async fn a_served_home_accepts_piped_interview_input() {
+        let root = tempfile::tempdir().unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let graphql = format!("http://{}", listener.local_addr().unwrap());
+        let app = axum::Router::new().route(
+            "/",
+            axum::routing::post(|| async { axum::Json(json!({"data": {"__typename": "Query"}})) }),
+        );
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let out = root.path().join("out").display().to_string();
+        let crate::cli::EvalCommand::Init(args) = crate::commands::eval::testing::eval_command(&[
+            "init",
+            "./subject",
+            "--out",
+            &out,
+            "--graphql",
+            &graphql,
+        ]) else {
+            panic!("not init")
+        };
+        preflight(&args).await.unwrap();
+        server.abort();
+    }
+
+    #[tokio::test]
     async fn a_bad_draft_goes_back_with_the_messages_and_a_good_one_follows() {
         let registry = CheckRegistry::builtin();
         let root = tempfile::tempdir().unwrap();
@@ -656,7 +715,7 @@ mod tests {
             let mut documents = Vec::new();
             for (collection, id) in ids {
                 let found = access
-                    .transact("cli.eval.init.test_read_author", |txn| {
+                    .transact_write("cli.eval.init.test_read_author", |txn| {
                         Box::pin(async move {
                             gents::config_client::read_desired_state_record_in_txn(
                                 txn, collection, owner, id,

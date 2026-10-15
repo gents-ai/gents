@@ -17,7 +17,7 @@ use super::super::types::{
     TriggerView,
 };
 use super::runtime_tasks::{
-    recent_runs_for_task_views, session_summaries, source_matches_node, task_run_history,
+    recent_runs_for_task_views, session_summaries, source_matches_node, task_run_histories,
 };
 use super::to_health_view;
 
@@ -326,13 +326,14 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                 .collect::<Vec<_>>();
             triggers.sort_by(|left, right| left.config.trigger_id.cmp(&right.config.trigger_id));
 
+            let mut run_histories = task_run_histories(store.as_ref(), &peer.node_did, &triggers);
             let mut tasks = scoped_task_rows
                 .into_iter()
                 .map(|(_index, row)| {
                     project_task_view(
                         row,
                         recent_runs_for_task_views(&triggers, &peer.node_did, &row.task_id),
-                        task_run_history(store.as_ref(), &peer.node_did, &row.task_id, &triggers),
+                        run_histories.remove(&row.task_id).unwrap_or_default(),
                     )
                 })
                 .collect::<Vec<_>>();
@@ -473,7 +474,7 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
         })
         .collect::<Vec<_>>();
 
-    let access = gents::config_client::ConfigAccess::Local(core.node_arc());
+    let access = gents::config_client::ConfigAccess::local(core.node_arc());
     super::runtime_tasks::resolve_summary_starters(
         &access,
         deployments
@@ -505,6 +506,15 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
             .count(),
         row_count: store.row_count(),
         approx_serialized_bytes: store.approx_serialized_bytes(),
+        operator_config_authoritative_node_dids: {
+            let mut dids = store
+                .operator_config_authoritative_node_dids
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>();
+            dids.sort();
+            (!dids.is_empty()).then_some(dids)
+        },
         deployments,
     }
 }

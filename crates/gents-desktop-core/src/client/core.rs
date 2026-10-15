@@ -18,6 +18,7 @@ use std::time::{Duration, SystemTime};
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use defra_p2p_adapter::P2POperations as P2POps;
+use gents::config_client::ConfigAccess;
 use gents::P2pSyncStatusSnapshot;
 use gents_protocol::peer_schema::ReplicatedSchemaSkew;
 use p2p::iroh::{IrohDiscoveryConfig, IrohRelayModeConfig};
@@ -35,6 +36,7 @@ use crate::remote_admin::PairingErrorClass;
 
 pub use enrollment::EnrollmentRequestResult;
 pub use sync_state::RuntimeSchemaObservation;
+pub use writes::RefreshedRequestProjection;
 
 const BOOTSTRAP_OPERATION_TIMEOUT: Duration = Duration::from_secs(20);
 const PEER_ADD_OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
@@ -351,7 +353,7 @@ enum P2PSupervisorCommand {
 }
 
 pub struct ClientCore {
-    store_lock: Mutex<Option<gents::home::StoreLock>>,
+    store_access: Mutex<Option<ConfigAccess>>,
     paths: DesktopPaths,
     options: ClientCoreOptions,
     node_identity: PrincipalIdentity,
@@ -362,15 +364,24 @@ pub struct ClientCore {
     observer: Mutex<Option<ObserverHandle>>,
     sync_state: sync_state::ClientSyncStateOwner,
     p2p_supervisor: Mutex<Option<JoinHandle<()>>>,
-    hydration_transition: Mutex<()>,
     selected_node_did: watch::Sender<Option<String>>,
-    last_loaded_for: tokio::sync::Mutex<HashMap<String, std::time::Instant>>,
     request_patch_signatures: tokio::sync::Mutex<HashMap<String, (usize, usize, u64)>>,
     p2p_control: Mutex<Option<mpsc::Sender<P2PSupervisorCommand>>>,
+    shutdown_completion: Mutex<Option<watch::Receiver<Option<std::result::Result<(), String>>>>>,
+    #[cfg(test)]
+    shutdown_test_pause: Mutex<Option<Arc<ShutdownTestPause>>>,
     last_mutation_error: StdRwLock<Option<String>>,
     local_peer_id: String,
     listen_addresses: Vec<String>,
     bootstrap_errors: Vec<String>,
+}
+
+#[cfg(test)]
+struct ShutdownTestPause {
+    node_shutdown_started: tokio::sync::Notify,
+    allow_node_shutdown: tokio::sync::Notify,
+    node_shutdown_returned: tokio::sync::Notify,
+    allow_access_release: tokio::sync::Notify,
 }
 
 impl ClientCore {
@@ -563,6 +574,7 @@ impl ClientCore {
 
     pub async fn refresh_store(&self) -> Result<u64> {
         let scoped = self.selected_node_did();
+        let captured = self.store.capture_read();
         let records = self.sync_state.records();
         let snapshot = match scoped.as_deref() {
             Some(did) => {
@@ -584,14 +596,18 @@ impl ClientCore {
             }
         };
         let rows = snapshot.row_count();
-        let version = match scoped.as_deref() {
-            Some(did) => self.store.replace_node_snapshot(did, snapshot),
-            None => self.store.replace_snapshot(snapshot),
-        };
+        let published =
+            self.store
+                .replace_reloaded_snapshot_at_read(&captured, scoped.as_deref(), snapshot);
+        if !published {
+            self.store.request_resync(scoped.as_deref());
+        }
+        let version = self.store.projection_revision().store_version;
         tracing::debug!(
             target: "gents_desktop_core::replication",
             version,
             rows,
+            published,
             scoped = scoped.is_some(),
             "desktop local replica snapshot refreshed"
         );
@@ -603,55 +619,40 @@ impl ClientCore {
         if node_did.is_empty() {
             return Ok(None);
         }
+        let captured = self.store.capture_read();
         let records = self.sync_state.records();
-        let snapshot = load_node_scoped_snapshot_with_peer_records(
+        let snapshot = match load_node_scoped_snapshot_with_peer_records(
             self.node.as_ref(),
             node_did,
             &records,
             self.node_identity.did(),
         )
-        .await?;
+        .await
+        {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                self.store.request_resync(Some(node_did));
+                return Err(error);
+            }
+        };
         let rows = snapshot.row_count();
-        let version = self.store.replace_node_snapshot(node_did, snapshot);
+        let published =
+            self.store
+                .replace_reloaded_snapshot_at_read(&captured, Some(node_did), snapshot);
+        if !published {
+            self.store.request_resync(Some(node_did));
+            return Ok(None);
+        }
+        let version = self.store.projection_revision().store_version;
         tracing::debug!(
             target: "gents_desktop_core::replication",
             node_did,
             version,
             rows,
+            published,
             "desktop refreshed agent projection from local replica"
         );
         Ok(Some(version))
-    }
-
-    const SELECTION_RELOAD_DEBOUNCE: std::time::Duration = std::time::Duration::from_secs(2);
-
-    pub async fn ensure_node_loaded(&self, node_did: &str) -> Result<bool> {
-        let now = std::time::Instant::now();
-        let mut map = self.last_loaded_for.lock().await;
-        if let Some(last) = map.get(node_did) {
-            if now.duration_since(*last) < Self::SELECTION_RELOAD_DEBOUNCE {
-                return Ok(false);
-            }
-        }
-        let records = self.sync_state.records();
-        let snapshot = load_node_scoped_snapshot_with_peer_records(
-            self.node.as_ref(),
-            node_did,
-            &records,
-            self.node_identity.did(),
-        )
-        .await?;
-        let rows = snapshot.row_count();
-        let version = self.store.replace_node_snapshot(node_did, snapshot);
-        map.insert(node_did.to_string(), now);
-        tracing::info!(
-            target: "gents_desktop_core::replication",
-            node_did,
-            rows,
-            version,
-            "ensure_node_loaded merged scoped snapshot"
-        );
-        Ok(true)
     }
 
     pub async fn observer_metrics(
@@ -664,7 +665,38 @@ impl ClientCore {
             .map(|h| h.metrics_snapshot())
     }
 
-    pub async fn shutdown(&self) -> Result<()> {
+    pub async fn shutdown(self: &Arc<Self>) -> Result<()> {
+        let mut completion = self.shutdown_completion.lock().await;
+        if completion.is_none() {
+            let (result_tx, result_rx) = watch::channel(None);
+            *completion = Some(result_rx.clone());
+            let owner = Arc::clone(self);
+            tokio::spawn(async move {
+                let result = owner
+                    .shutdown_inner()
+                    .await
+                    .map_err(|error| error.to_string());
+                result_tx.send_replace(Some(result));
+            });
+        }
+        let mut result_rx = completion
+            .as_ref()
+            .expect("shutdown owner installed")
+            .clone();
+        drop(completion);
+
+        loop {
+            if let Some(result) = result_rx.borrow().clone() {
+                return result.map_err(anyhow::Error::msg);
+            }
+            result_rx
+                .changed()
+                .await
+                .context("client shutdown owner ended without a result")?;
+        }
+    }
+
+    async fn shutdown_inner(&self) -> Result<()> {
         tracing::info!("client core shutdown: begin");
         self.p2p_control.lock().await.take();
         if let Some(task) = self.p2p_supervisor.lock().await.take() {
@@ -677,8 +709,18 @@ impl ClientCore {
             observer.shutdown().await;
         }
         tracing::info!("client core shutdown: stopping embedded node");
+        #[cfg(test)]
+        if let Some(pause) = self.shutdown_test_pause.lock().await.clone() {
+            pause.node_shutdown_started.notify_one();
+            pause.allow_node_shutdown.notified().await;
+        }
         self.node.shutdown().await;
-        self.store_lock.lock().await.take();
+        #[cfg(test)]
+        if let Some(pause) = self.shutdown_test_pause.lock().await.clone() {
+            pause.node_shutdown_returned.notify_one();
+            pause.allow_access_release.notified().await;
+        }
+        self.store_access.lock().await.take();
         tracing::info!("client core shutdown: complete");
         Ok(())
     }

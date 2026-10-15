@@ -22,6 +22,7 @@ path = "src/main.rs"
 live-e2e = []
 # Debug native desktop acceptance must never address the user's daily service.
 native-e2e = []
+typescript = ["dep:ts-rs"]
 
 # All other test binaries are auto-discovered; this explicit target overrides
 # autodiscovery for cli_live_suite so its link only happens on live runs
@@ -32,6 +33,7 @@ path = "tests/cli_live_suite.rs"
 required-features = ["live-e2e"]
 
 [dependencies]
+ts-rs = { version = "10.1", optional = true, default-features = false, features = ["serde-compat"] }
 anyhow.workspace = true
 async-trait = "0.1"
 axum = { version = "0.8", features = ["ws"] }
@@ -42,6 +44,7 @@ clap.workspace = true
 gents-chatgpt-login.workspace = true
 gents-claude-login.workspace = true
 gents-codex-protocol.workspace = true
+gents-desktop-core.workspace = true
 gents = { path = "../gents" }
 gents-fs-runner = { path = "../gents-fs-runner" }
 gents-protocol.workspace = true
@@ -72,6 +75,7 @@ rmcp = { version = "1.2.0", features = [
 schemars = "1"
 serde.workspace = true
 serde_json.workspace = true
+shlex = "1.3"
 sha2.workspace = true
 serde_yaml.workspace = true
 subtle.workspace = true
@@ -96,7 +100,7 @@ jsonschema = { version = "0.46.5", default-features = false }
 # behind the `bin` feature. Pinned to the same rev as the afterburner-*
 # crates in crates/gents/Cargo.toml so all of them agree on the
 # `.afb`/`Manifold` wire shapes.
-afterburner = { git = "https://github.com/afterburner-sh/afterburner.git", rev = "ea11816488e161a1f561031c9d395f79f3b7e77a", default-features = false, features = [
+afterburner = { git = "https://github.com/afterburner-sh/afterburner.git", rev = "02e34dfea499eb085761d215680295e02b89713a", default-features = false, features = [
     "bin",
 ] }
 # The package loader `dispatch_compile` expects (`pkg::LocalPackage`):
@@ -106,11 +110,12 @@ afterburner = { git = "https://github.com/afterburner-sh/afterburner.git", rev =
 # Pinned to the same rev as `afterburner` above: `dispatch_compile` takes a
 # `pkg::LocalPackage` from this crate, and two instances of it at different
 # revs are different types to the compiler.
-afterburner-cloud = { git = "https://github.com/afterburner-sh/afterburner.git", rev = "ea11816488e161a1f561031c9d395f79f3b7e77a" }
+afterburner-cloud = { git = "https://github.com/afterburner-sh/afterburner.git", rev = "02e34dfea499eb085761d215680295e02b89713a" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSURL"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSWorkspace"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSURL", "NSBundle"] }
 
 # Only the native `gents` binary installs mimalloc. The iOS shell links this
 # crate as a library through the bridge and keeps the system allocator.
@@ -128,7 +133,6 @@ windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Syste
 [dev-dependencies]
 acp.workspace = true
 futures = "0.3"
-gents-desktop-core.workspace = true
 gents-lean-contract.workspace = true
 tokio-tungstenite = "0.26.2"
 

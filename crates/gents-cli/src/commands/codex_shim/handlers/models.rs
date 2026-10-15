@@ -92,7 +92,7 @@ pub(super) struct AvailableBackend {
 async fn load_bound_agent_document(state: &ShimState) -> Result<gents::AgentDocument> {
     let node_did = state.node_did.as_ref();
     let agent_id = state.agent_id.as_ref();
-    let raw = ConfigAccess::transact_local(state.node.as_ref(), None, "codex.bound_agent", |txn| {
+    let raw = ConfigAccess::transact_local_write(&state.node, None, "codex.bound_agent", |txn| {
         Box::pin(async move {
             read_desired_state_record_in_txn(txn, Collection::Agent, node_did, agent_id)
                 .await?
@@ -112,7 +112,7 @@ pub(super) async fn load_bound_agent(state: &ShimState) -> Result<BoundAgent> {
     let agent = load_bound_agent_document(state).await?;
     let node_did = state.node_did.as_ref();
     let inference_profile =
-        load_inference_profile(state.node.as_ref(), node_did, &agent.inference_profile_id)
+        load_inference_profile(&state.node, node_did, &agent.inference_profile_id)
             .await?
             .ok_or_else(|| {
                 anyhow::anyhow!(
@@ -164,7 +164,7 @@ pub(super) async fn available_model_backends(state: &ShimState) -> Result<Vec<Av
         .collect::<Vec<_>>();
 
     let readiness_row = crate::commands::status::load_node_readiness(
-        &ConfigAccess::Local(state.node.clone()),
+        &ConfigAccess::local(state.node.clone()),
         node_did,
     )
     .await
@@ -187,22 +187,21 @@ pub(super) async fn available_model_backends(state: &ShimState) -> Result<Vec<Av
         // advertised list.
         let credential_scope =
             matches!(backend.auth, BackendAuth::NodeOAuth { .. }).then_some(node_did);
-        let catalog =
-            lookup_backend_observation(state.node.as_ref(), node_did, &backend.backend_id)
-                .await
-                .with_context(|| {
-                    format!(
-                        "loading catalog observation for backend {:?}",
-                        backend.backend_id
-                    )
-                })?
-                .map(|observation| {
-                    observation
-                        .catalog_for(credential_scope)
-                        .map(|catalog| catalog.cloned())
-                })
-                .transpose()?
-                .flatten();
+        let catalog = lookup_backend_observation(&state.node, node_did, &backend.backend_id)
+            .await
+            .with_context(|| {
+                format!(
+                    "loading catalog observation for backend {:?}",
+                    backend.backend_id
+                )
+            })?
+            .map(|observation| {
+                observation
+                    .catalog_for(credential_scope)
+                    .map(|catalog| catalog.cloned())
+            })
+            .transpose()?
+            .flatten();
         available.push(AvailableBackend { backend, catalog });
     }
     Ok(available)
@@ -415,7 +414,7 @@ async fn apply_model_selection(
 ) -> Result<()> {
     let new_profile_id = uuid::Uuid::new_v4().to_string();
     access
-        .transact("codex.model_selection", |txn| {
+        .transact_write("codex.model_selection", |txn| {
             let new_profile_id = &new_profile_id;
             Box::pin(async move {
                 let (_, value) =
@@ -759,7 +758,7 @@ mod tests {
 
     async fn seed_backend_with_catalog(
         access: &ConfigAccess,
-        node: &EmbeddedNode,
+        node: &Arc<EmbeddedNode>,
         models: Vec<AdvertisedModel>,
     ) -> InferenceBackend {
         let backend = backend("backend-a");
@@ -767,7 +766,7 @@ mod tests {
             .await
             .expect("seed backend");
         // Shared (unauthenticated) credential scope: the catalog is anonymous.
-        ConfigAccess::transact_local(node, None, "codex.models.test.catalog", |txn| {
+        ConfigAccess::transact_local_write(node, None, "codex.models.test.catalog", |txn| {
             let backend = &backend;
             let models = models.clone();
             Box::pin(async move {
@@ -797,13 +796,13 @@ mod tests {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         gents::ensure_runtime_schemas(&node).await.unwrap();
         let node_did = "did:test:codex-shim";
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         // Publication admits a profile only against its backend's catalog, so
         // the unadvertised profile is published while its model is listed and
         // then left behind by a later discovery that drops it.
         seed_backend_with_catalog(
             &access,
-            node.as_ref(),
+            &node,
             vec![advertised("model-x"), advertised("not-advertised")],
         )
         .await;
@@ -819,7 +818,7 @@ mod tests {
         write_agent_document(&access, &agent("default", "profile-x"))
             .await
             .expect("seed agent");
-        seed_backend_with_catalog(&access, node.as_ref(), vec![advertised("model-x")]).await;
+        seed_backend_with_catalog(&access, &node, vec![advertised("model-x")]).await;
 
         let selection = ModelSelection {
             backend_id: "backend-a".into(),
@@ -845,10 +844,10 @@ mod tests {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         gents::ensure_runtime_schemas(&node).await.unwrap();
         let node_did = "did:test:codex-shim";
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         seed_backend_with_catalog(
             &access,
-            node.as_ref(),
+            &node,
             vec![advertised("model-x"), advertised("model-y")],
         )
         .await;
@@ -878,7 +877,7 @@ mod tests {
         assert_ne!(updated.inference_profile_id, "profile-y");
         assert_ne!(updated.inference_profile_id, "profile-x");
         let selected =
-            gents::load_inference_profile(node.as_ref(), node_did, &updated.inference_profile_id)
+            gents::load_inference_profile(&node, node_did, &updated.inference_profile_id)
                 .await
                 .expect("reload profile")
                 .expect("selected profile remains present");
@@ -934,7 +933,7 @@ mod tests {
     async fn model_change_copies_controls_and_preserves_shared_profiles_and_noop() {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         gents::ensure_runtime_schemas(&node).await.unwrap();
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         let owner = "did:test:codex-shim";
         seed_backend_with_catalog(&access, &node, vec![advertised("x"), advertised("y")]).await;
         let plan = DesiredStateApplyPlan::new(
@@ -958,7 +957,7 @@ mod tests {
         )
         .unwrap();
         access
-            .transact("test.controls", |txn| {
+            .transact_write("test.controls", |txn| {
                 let plan = &plan;
                 Box::pin(async move { apply_desired_state_plan(txn, plan).await })
             })
@@ -1090,7 +1089,7 @@ mod tests {
     async fn model_list_scope_excludes_foreign_malformed_backend_before_decode() {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         gents::ensure_runtime_schemas(&node).await.unwrap();
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         write_inference_backend_document(&access, &backend("same"))
             .await
             .unwrap();

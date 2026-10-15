@@ -24,7 +24,7 @@ structure State where
   deriving DecidableEq, Repr
 
 inductive Event where
-  | siblingWait | elapsed | storageReturned | deadlineObserved
+  | siblingWait | elapsed | rollbackOwnerScheduled | storageReturned | deadlineObserved
   | cleanupReturned | cleanupDeadlineObserved | dropReturned | release
   deriving DecidableEq, Repr
 
@@ -32,9 +32,17 @@ def pollable (s : State) : Bool := s.independent || !s.siblingWaiting
 
 def held (s : State) : Bool := s.phase != .released
 
-/-- Events ending in `Returned` are external observations, not guarantees. -/
+/-- Events ending in `Returned` are external observations, not guarantees.
+    `rollbackOwnerScheduled` records that Drop found an active runtime and
+    scheduled detached cleanup; it is not a cancellation request or intent.
+    An armed transaction may also be dropped during cleanup after an explicit
+    rollback failure, transferring the gate to the detached owner. -/
 def step (s : State) (event : Event) : State :=
   if event == .siblingWait then { s with siblingWaiting := held s }
+  else if event == .rollbackOwnerScheduled then
+    match s.phase with
+    | .storage | .cleanup => { s with phase := .cleanup, independent := true }
+    | _ => s
   else if !pollable s then s
   else match s.phase, event with
     | .storage, .storageReturned => { s with phase := .releasable }
@@ -45,12 +53,22 @@ def step (s : State) (event : Event) : State :=
     | .releasable, .release => { s with phase := .released }
     | _, _ => s
 
+
 def run (s : State) (events : List Event) : State := events.foldl step s
 
 def suspended : State := ⟨.storage, false, true⟩
 
-theorem shared_task_wait_suspends_owner (e : Event) : step suspended e = suspended := by
-  cases e <;> decide
+theorem released_gate_stays_released (e : Event) :
+    (step ⟨.released, false, false⟩ e).phase = .released := by
+  cases e <;> rfl
+
+theorem cleanup_handoff_becomes_pollable (waiting : Bool) :
+    pollable (step ⟨.cleanup, false, waiting⟩ .rollbackOwnerScheduled) = true := by
+  cases waiting <;> rfl
+
+theorem shared_task_wait_suspends_owner (e : Event) (h : e ≠ .rollbackOwnerScheduled) :
+    step suspended e = suspended := by
+  cases e <;> simp_all [step, suspended, pollable, held]
 
 theorem elapsed_is_not_timeout_observation (s : State) : step s .elapsed = s := by
   cases s with
@@ -80,6 +98,16 @@ theorem observed_drop_return_releases (waiting : Bool) :
       [.deadlineObserved, .cleanupDeadlineObserved, .dropReturned, .release]) = false := by
   cases waiting <;> rfl
 
+/-- Once `Drop` observes an active runtime and schedules its detached rollback
+    owner, that owner can be polled independently of the cancelled caller. If
+    its bounded cleanup times out, dropping that cleanup future releases the
+    Gents gate. This does not assert that native DefraDB work spawned by the
+    future has completed or been rolled back. -/
+theorem scheduled_rollback_timeout_releases_gate :
+    held (run ⟨.storage, false, true⟩
+      [.rollbackOwnerScheduled, .cleanupDeadlineObserved, .dropReturned, .release]) = false := by
+  rfl
+
 def ValidTrace (states : Nat → State) (events : Nat → Event) : Prop :=
   ∀ n, states (n + 1) = step (states n) (events n)
 
@@ -89,7 +117,7 @@ theorem suspended_forever_is_valid :
     ValidTrace (fun _ => suspended) (fun _ => .elapsed) ∧
     ∀ n : Nat, held ((fun _ : Nat => suspended) n) = true := by
   constructor
-  · intro n; exact (shared_task_wait_suspends_owner .elapsed).symm
+  · intro n; exact (shared_task_wait_suspends_owner .elapsed (by decide)).symm
   · intro n; rfl
 
 end StorageWriteGate

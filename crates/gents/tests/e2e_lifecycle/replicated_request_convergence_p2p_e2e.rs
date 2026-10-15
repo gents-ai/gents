@@ -330,7 +330,7 @@ async fn p2p_owner_terminal_converges_and_redrive_stays_stable() {
         "peer must match owner terminal exactly"
     );
 
-    let first = RequestLifecycle::redrive_terminal_convergence(owner.node.as_ref(), OWNER_DID)
+    let first = RequestLifecycle::redrive_terminal_convergence(&owner.node, OWNER_DID)
         .await
         .expect("redrive");
     assert!(
@@ -352,7 +352,7 @@ async fn p2p_owner_terminal_converges_and_redrive_stays_stable() {
 
     let mut total_reasserted = first.reasserted;
     for _ in 0..TERMINAL_REDRIVE_CAP {
-        let report = RequestLifecycle::redrive_terminal_convergence(owner.node.as_ref(), OWNER_DID)
+        let report = RequestLifecycle::redrive_terminal_convergence(&owner.node, OWNER_DID)
             .await
             .expect("redrive drain");
         total_reasserted += report.reasserted;
@@ -364,7 +364,7 @@ async fn p2p_owner_terminal_converges_and_redrive_stays_stable() {
         total_reasserted <= TERMINAL_REDRIVE_CAP as usize,
         "redrive must not exceed TERMINAL_REDRIVE_CAP={TERMINAL_REDRIVE_CAP}, got {total_reasserted}"
     );
-    let exhausted = RequestLifecycle::redrive_terminal_convergence(owner.node.as_ref(), OWNER_DID)
+    let exhausted = RequestLifecycle::redrive_terminal_convergence(&owner.node, OWNER_DID)
         .await
         .expect("redrive after cap");
     assert_eq!(
@@ -412,13 +412,13 @@ async fn p2p_full_replay_converges_after_offline_peer_exhausts_redrive_cap() {
 
     let mut reasserted_total = 0usize;
     for _ in 0..TERMINAL_REDRIVE_CAP {
-        let report = RequestLifecycle::redrive_terminal_convergence(owner.node.as_ref(), OWNER_DID)
+        let report = RequestLifecycle::redrive_terminal_convergence(&owner.node, OWNER_DID)
             .await
             .expect("redrive while peer unavailable");
         reasserted_total += report.reasserted;
     }
     assert_eq!(reasserted_total, TERMINAL_REDRIVE_CAP as usize);
-    let exhausted = RequestLifecycle::redrive_terminal_convergence(owner.node.as_ref(), OWNER_DID)
+    let exhausted = RequestLifecycle::redrive_terminal_convergence(&owner.node, OWNER_DID)
         .await
         .expect("redrive after persistent cap");
     assert!(exhausted.is_noop(), "persistent cap must be exhausted");
@@ -434,10 +434,9 @@ async fn p2p_full_replay_converges_after_offline_peer_exhausts_redrive_cap() {
     )
     .await;
     assert_eq!(on_peer.node_did.as_deref(), Some(OWNER_DID));
-    let still_exhausted =
-        RequestLifecycle::redrive_terminal_convergence(owner.node.as_ref(), OWNER_DID)
-            .await
-            .expect("redrive remains exhausted after peer replay");
+    let still_exhausted = RequestLifecycle::redrive_terminal_convergence(&owner.node, OWNER_DID)
+        .await
+        .expect("redrive remains exhausted after peer replay");
     assert!(still_exhausted.is_noop());
 
     owner.node.shutdown().await;
@@ -478,7 +477,7 @@ async fn p2p_terminal_redrive_pushes_once_per_routed_request() {
     let enqueued_before = baseline["push_backlog"]["enqueued_total"]
         .as_u64()
         .expect("enqueued_total counter");
-    let report = RequestLifecycle::redrive_terminal_convergence(owner.node.as_ref(), OWNER_DID)
+    let report = RequestLifecycle::redrive_terminal_convergence(&owner.node, OWNER_DID)
         .await
         .expect("terminal redrive wave");
     assert_eq!(report.reasserted, REQUESTS);

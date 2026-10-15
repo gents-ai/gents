@@ -64,8 +64,9 @@ pub(crate) mod schema;
 
 pub use bounded::BoundedQueryTool;
 pub use query::{
-    build_query, expand_collection_scope_aliases, CollectionScope, DefraQueryParams,
-    AGENT_CONFIG_QUERY_COLLECTIONS, AGENT_CONFIG_SCOPE_ALIAS, DEFAULT_LIMIT, MAX_LIMIT,
+    build_query, expand_collection_scope_aliases, is_restricted_field, CollectionScope,
+    DefraQueryParams, AGENT_CONFIG_QUERY_COLLECTIONS, AGENT_CONFIG_SCOPE_ALIAS, DEFAULT_LIMIT,
+    MAX_LIMIT,
 };
 pub use schema::{
     diagnose_failed_query, discovery_payload, introspection_query, parse_collection_schema,
@@ -126,7 +127,7 @@ impl Tool for DefraQueryTool {
     }
     async fn call(&self, args: Self::Args) -> Result<String, Self::Error> {
         let result = if let Some(actor) = &self.actor {
-            crate::config_client::ConfigAccess::transact_local(
+            crate::config_client::ConfigAccess::transact_local_readonly(
                 &self.node,
                 Some(actor.clone()),
                 "application_query",
@@ -135,7 +136,7 @@ impl Tool for DefraQueryTool {
             .await
         } else {
             execute_command(
-                &crate::config_client::ConfigAccess::Local(self.node.clone()),
+                &crate::config_client::ConfigAccess::local(self.node.clone()),
                 &args,
                 &self.scope,
             )

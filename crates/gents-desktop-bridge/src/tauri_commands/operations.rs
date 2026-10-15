@@ -249,17 +249,17 @@ pub async fn desktop_list_backends_with_health(
 pub async fn list_backends_with_health_for_core(
     core: Arc<ClientCore>,
 ) -> Result<Vec<BackendHealthView>, BridgeError> {
-    let node = core.node();
-    let backends = list_all_backends(node)
+    let node = core.node_arc();
+    let backends = list_all_backends(&node)
         .await
         .map_err(|err| err.to_string())?;
 
     let mut views = Vec::with_capacity(backends.len());
     for backend in backends {
-        let observation = lookup_backend_observation(node, &backend.node_did, &backend.backend_id)
+        let observation = lookup_backend_observation(&node, &backend.node_did, &backend.backend_id)
             .await
             .map_err(|err| err.to_string())?;
-        let recent_calls = fetch_recent_calls(node, &backend.backend_id)
+        let recent_calls = fetch_recent_calls(&node, &backend.backend_id)
             .await
             .map_err(|err| err.to_string())?;
         let probe_status = observation
@@ -277,6 +277,8 @@ pub async fn list_backends_with_health_for_core(
                 }
             })
             .to_string();
+        let display_state = serde_json::from_value(serde_json::Value::String(display_state))
+            .map_err(|error| format!("invalid backend display state: {error}"))?;
         let catalog_scope = matches!(
             backend.auth,
             gents::document_config::BackendAuth::NodeOAuth { .. }

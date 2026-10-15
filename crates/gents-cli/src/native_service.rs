@@ -1074,6 +1074,10 @@ pub(crate) fn atomic_write(path: &Path, contents: &[u8]) -> Result<()> {
     Ok(())
 }
 
+/// The desktop depends on timely responses from this local runtime. Apple's
+/// Adaptive classification follows XPC activity, while the desktop bridge uses
+/// loopback HTTP, so it cannot reflect active requests; keep this service in
+/// the Interactive class intended for jobs whose responsiveness is user-facing.
 fn render_launchd(config: &NativeServiceConfig) -> Result<String> {
     let executable = xml_path(&config.executable, "executable")?;
     let home = xml_path(&config.home, "home")?;
@@ -1124,7 +1128,7 @@ fn render_launchd(config: &NativeServiceConfig) -> Result<String> {
   </array>{environment}{associated_bundle}{stderr}
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
-  <key>ProcessType</key><string>Background</string>
+  <key>ProcessType</key><string>Interactive</string>
 </dict></plist>
 "#
     ))
@@ -1684,6 +1688,8 @@ mod tests {
         assert!(plist.contains("gents &amp; runtime"));
         assert!(plist.contains("<string>--home</string>"));
         assert!(plist.contains("<key>SuccessfulExit</key><false/>"));
+        assert!(plist.contains("<key>ProcessType</key><string>Interactive</string>"));
+        assert!(!plist.contains("<string>Background</string>"));
         assert!(!plist.contains("sh -c"));
         assert!(!plist.contains("AssociatedBundleIdentifiers"));
         assert_eq!(launchd_home(&plist).unwrap(), config.home.to_string_lossy());

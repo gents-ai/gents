@@ -10,6 +10,7 @@ use gents_protocol::request_input::QueuePosition;
 use serde::{Deserialize, Serialize};
 
 pub const REPLACED_REASON: &str = "pending message replaced";
+pub const REMOVED_REASON: &str = "Pending message removed by its author";
 
 pub use gents_protocol::session_input_edit::{
     PendingMessageEdit, PendingQueueEdit, PendingQueueReceipt,
@@ -35,6 +36,28 @@ pub async fn pending_user_queue(
     session_id: &str,
     requester_did: &str,
 ) -> Result<PendingQueueSnapshot> {
+    Ok(
+        pending_user_queue_projection(access, node_did, session_id, requester_did, &[])
+            .await?
+            .pending,
+    )
+}
+
+pub struct PendingQueueProjection {
+    pub pending: PendingQueueSnapshot,
+    pub arrival_order: Vec<String>,
+}
+
+/// Pending controls and receipt-validated arrival order share one read snapshot.
+/// Arrival evidence includes requests a concurrent claim already took out of
+/// the pending listing; their earlier client observations still need ordering.
+pub async fn pending_user_queue_projection(
+    access: &ConfigAccess,
+    node_did: &str,
+    session_id: &str,
+    requester_did: &str,
+    observed_doc_ids: &[String],
+) -> Result<PendingQueueProjection> {
     access
         .transact_readonly("queue.pending_user_snapshot", |txn| {
             Box::pin(async move {
@@ -76,7 +99,13 @@ pub async fn pending_user_queue(
                         })
                     })
                     .collect::<Result<Vec<_>>>()?;
-                Ok(PendingQueueSnapshot { entries })
+                let arrival_order =
+                    crate::trigger_engine::durable::request_arrival_order(txn, observed_doc_ids)
+                        .await?;
+                Ok(PendingQueueProjection {
+                    pending: PendingQueueSnapshot { entries },
+                    arrival_order,
+                })
             })
         })
         .await
@@ -445,12 +474,13 @@ pub(crate) async fn apply_pending_user_edit_in_txn(
                 r#"mutation($terminal_output: JSON) {{ update_AgentRequest(docID: "{}", filter: {{
                         _docID: {{ _eq: "{}" }}, lifecycle_state: {{ _eq: "pending" }}
                     }}, input: {{ lifecycle_state: "interrupted", interrupt_requested_at: "{}",
-                        terminalized_at: "{}", failure_reason: "Pending message removed by its author",
+                        terminalized_at: "{}", failure_reason: "{}",
                         terminal_redrive_attempts: 0, terminal_output: $terminal_output }}) {{ _docID }} }}"#,
                 escape_graphql_string(old_id),
                 escape_graphql_string(old_id),
                 escape_graphql_string(&chrono::Utc::now().to_rfc3339()),
-                escape_graphql_string(&chrono::Utc::now().to_rfc3339())
+                escape_graphql_string(&chrono::Utc::now().to_rfc3339()),
+                escape_graphql_string(REMOVED_REASON)
             )
         };
         let result = if creates.is_empty() {
@@ -483,7 +513,7 @@ pub(crate) async fn apply_pending_user_edit_in_txn(
                 "superseded"
             },
             if creates.is_empty() {
-                "Pending message removed by its author"
+                REMOVED_REASON
             } else {
                 REPLACED_REASON
             },
@@ -515,7 +545,7 @@ pub(super) async fn replace_pending_user_messages(
     )
     .await?;
     access
-        .transact("queue.replace_pending_messages", |txn| {
+        .transact_write("queue.replace_pending_messages", |txn| {
             let edit = &edit;
             let creates = &creates;
             Box::pin(async move {

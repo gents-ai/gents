@@ -239,7 +239,7 @@ async fn check_filters(
     }
     let node = std::sync::Arc::new(gents::defra_node::EmbeddedNode::builder().build().await?);
     gents::ensure_runtime_schemas(node.as_ref()).await?;
-    let access = gents::config_client::ConfigAccess::Local(node.clone());
+    let access = gents::config_client::ConfigAccess::local(node.clone());
     crate::commands::schema::apply_pack_schemas_if_present(&access, dir).await?;
     for source in &config.event_sources {
         let Some(filter) = source.filter.as_deref() else {

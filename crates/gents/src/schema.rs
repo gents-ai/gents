@@ -33,8 +33,12 @@ pub use gents_protocol::schemas::{
 
 /// Register baseline + verify lineage (full engine). Feature-invariant.
 pub async fn ensure_runtime_schemas(node: &EmbeddedNode) -> Result<()> {
-    gents_migration::ensure_migrations(node)
-        .await
-        .map(|_| ())
-        .map_err(|e| anyhow::anyhow!(e))
+    if let Some(access) = crate::config_client::ConfigAccess::claimed_for_node(node) {
+        return access
+            .run_local_owned(|node| async move {
+                crate::migration::ensure_migrations_borrowed(node.as_ref()).await
+            })
+            .await;
+    }
+    crate::migration::ensure_migrations_borrowed(node).await
 }
