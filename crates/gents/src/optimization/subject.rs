@@ -18,7 +18,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde_json::Value;
 
-use crate::document_config::{EvalDefinition, EvalSplit, PackConfig, TriggerSource};
+use crate::document_config::{
+    EvalDefinition, EvalSplit, EventSource, PackConfig, Trigger, TriggerSource,
+};
 use crate::eval::runner::freeze::{load_pack, write_pack_files};
 use crate::eval::runner::CellSource;
 use crate::optimization::target::{JobTarget, TargetField};
@@ -109,41 +111,47 @@ pub(crate) fn missing_task_seed_splits(
     let JobTarget::Task(task_id) = target else {
         return Vec::new();
     };
-    let task_enabled = config
-        .tasks
-        .iter()
-        .any(|task| task.task_id == *task_id && task.enabled);
-    let collections: Vec<&str> = config
-        .triggers
-        .iter()
-        .filter(|trigger| trigger.enabled && trigger.task_id == *task_id)
-        .filter_map(|trigger| match &trigger.source {
-            TriggerSource::Event { event_source_id } => Some(event_source_id),
-            TriggerSource::Schedule { .. } => None,
-        })
-        .flat_map(|id| {
-            config.event_sources.iter().filter_map(move |source| {
-                (source.event_source_id == *id
-                    && source.event_kind.as_deref().unwrap_or("created") == "created")
-                    .then_some(source.source_collection.as_str())
-            })
-        })
+    let collections: Vec<&str> = task_seed_routes(config, task_id)
+        .map(|(_, source)| source.source_collection.as_str())
         .collect();
     [EvalSplit::Train, EvalSplit::Validation]
         .into_iter()
         .filter(|split| {
-            !task_enabled
-                || !definition.cases.iter().any(|case| {
-                    case.split == *split
-                        && case.stages.iter().any(|stage| {
-                            stage
-                                .seed
-                                .as_ref()
-                                .is_some_and(|seed| collections.contains(&seed.collection.as_str()))
-                        })
-                })
+            !definition.cases.iter().any(|case| {
+                case.split == *split
+                    && case.stages.iter().any(|stage| {
+                        stage
+                            .seed
+                            .as_ref()
+                            .is_some_and(|seed| collections.contains(&seed.collection.as_str()))
+                    })
+            })
         })
         .collect()
+}
+
+pub(crate) fn task_seed_routes<'a>(
+    config: &'a PackConfig,
+    task_id: &'a str,
+) -> impl Iterator<Item = (&'a Trigger, &'a EventSource)> {
+    let enabled = config
+        .tasks
+        .iter()
+        .any(|task| task.task_id == task_id && task.enabled);
+    config
+        .triggers
+        .iter()
+        .filter(move |trigger| enabled && trigger.enabled && trigger.task_id == task_id)
+        .flat_map(move |trigger| {
+            config.event_sources.iter().filter_map(move |source| {
+                let TriggerSource::Event { event_source_id } = &trigger.source else {
+                    return None;
+                };
+                (source.event_source_id == *event_source_id
+                    && source.event_kind.as_deref().unwrap_or("created") == "created")
+                    .then_some((trigger, source))
+            })
+        })
 }
 
 /// The raw target field of `target_id`'s document in `pack_config.json`.

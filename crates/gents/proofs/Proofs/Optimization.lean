@@ -90,6 +90,53 @@ theorem held_out_seed_cannot_cover_validation (task : String) (triggers : List S
     splitSeedsTask task .validation triggers sources [⟨.heldOut, collections⟩] = false := by
   simp [splitSeedsTask]
 
+structure SeedRendering where
+  caseId : String
+  stageId : String
+  collection : String
+  rendered : Bool
+  deriving DecidableEq, Repr
+
+/-- Exact seed rendering is structural admission, not a grade. All frozen stage
+seeds with a created-event route to the target task are checked. MiniJinja owns
+rendering against the seed's actual values; schema fields cannot substitute for
+those values. Generated fire metadata uses stable structural probes; it does not
+predict the identifiers or timestamp of a live fire. The native source reader
+always supplies `_docID`; no schema-derived user field is supplied. `$trial`
+bindings are resolved by the evaluation fixture owner. Seed data and case
+diagnostics stay outside proposer feedback.
+Scoring, split selection and the reserved held-out confirmation are unchanged. -/
+def failedTaskSeedRenders (target : Option String) (taskEnabled : Bool)
+    (triggers : List SeedTrigger) (sources : List SeedSource)
+    (seeds : List SeedRendering) : List SeedRendering :=
+  match target with
+  | none => []
+  | some taskId => seeds.filter fun seed =>
+      taskEnabled && seedReachesTask taskId seed.collection triggers sources && !seed.rendered
+
+theorem context_has_no_seed_render_failures (enabled : Bool)
+    (triggers : List SeedTrigger) (sources : List SeedSource) (seeds : List SeedRendering) :
+    failedTaskSeedRenders none enabled triggers sources seeds = [] := rfl
+
+theorem failed_seed_is_exact_relevant_input (task : String) (enabled : Bool)
+    (triggers : List SeedTrigger) (sources : List SeedSource) (seeds : List SeedRendering)
+    (seed : SeedRendering) :
+    seed ∈ failedTaskSeedRenders (some task) enabled triggers sources seeds ↔
+      seed ∈ seeds ∧ enabled = true ∧
+        seedReachesTask task seed.collection triggers sources = true ∧ seed.rendered = false := by
+  simp [failedTaskSeedRenders, Bool.and_eq_true, Bool.not_eq_true, and_assoc]
+
+theorem admitted_seeds_all_render (task : String) (triggers : List SeedTrigger)
+    (sources : List SeedSource) (seeds : List SeedRendering) (seed : SeedRendering)
+    (hadmitted : failedTaskSeedRenders (some task) true triggers sources seeds = [])
+    (hseed : seed ∈ seeds) (hrelevant : seedReachesTask task seed.collection triggers sources = true) :
+    seed.rendered = true := by
+  cases hrendered : seed.rendered
+  · have hfailed := (failed_seed_is_exact_relevant_input task true triggers sources seeds seed).mpr
+      ⟨hseed, rfl, hrelevant, hrendered⟩
+    simp [hadmitted] at hfailed
+  · rfl
+
 inductive Arm where
   | baseline | candidate
   deriving DecidableEq, Repr

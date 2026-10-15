@@ -408,16 +408,23 @@ pub(crate) async fn evaluate_group(
     })
 }
 fn expected_count(delivery: Delivery<'_>, docs: &[Value]) -> Result<Option<usize>> {
-    let Some(expected) = delivery.expected()? else {
+    expected_group_count(delivery.expected()?.as_ref(), docs)
+}
+
+pub(crate) fn expected_group_count(
+    expected: Option<&EventGroupCount>,
+    docs: &[Value],
+) -> Result<Option<usize>> {
+    let Some(expected) = expected else {
         return Ok(None);
     };
     match expected {
-        EventGroupCount::Fixed(count) => Ok(Some(usize::try_from(count)?)),
+        EventGroupCount::Fixed(count) => Ok(Some(usize::try_from(*count)?)),
         EventGroupCount::SourceField { source_field } => {
             let mut resolved = None;
             for doc in docs {
                 let value = doc
-                    .get(&source_field)
+                    .get(source_field)
                     .context("group member missing expected-count field")?;
                 let n =
                     crate::graphql::canonical_positive_count(value, MAX_EVENT_TRIGGER_GROUP_DOCS)

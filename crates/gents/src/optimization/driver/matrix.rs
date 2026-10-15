@@ -824,6 +824,76 @@ async fn an_unexercised_task_target_is_refused_before_any_job_or_trial_is_create
     assert_eq!(rows["data"]["EvalRun"], json!([]));
 }
 
+#[tokio::test]
+async fn exact_seed_failures_reject_candidates_before_validation() {
+    for row in &crate::lean_vocab_test::lean_optimization_cases().seed_rendering {
+        if !matches!(
+            row.name.as_str(),
+            "missing_added_field"
+                | "nested_missing_field"
+                | "one_of_multiple_seeds_fails"
+                | "added_field_present_in_every_seed"
+                | "guarded_absent_field_renders"
+                | "runtime_document_id_is_available"
+                | "trial_owner_binding_reaches_the_guarded_missing_field"
+        ) {
+            continue;
+        }
+        let (harness, pack) = task_harness().await;
+        let mut value = definition(DEFINITION, "captured_rows_count", &VALIDATION_CASES, 1);
+        for case in value["cases"].as_array_mut().unwrap() {
+            let stage = &mut case["stages"][0];
+            stage["prompt"] = json!("");
+            stage["seed"] = json!({"collection":"PlanItem", "document":row.seeds[0].document});
+        }
+        for (index, seed) in row.seeds.iter().enumerate() {
+            value["cases"][1 + index]["stages"][0]["seed"]["document"] = seed.document.clone();
+        }
+        harness
+            .install(vec![(Collection::EvalDefinition, value)])
+            .await;
+        let request = JobRequest {
+            baseline_pack: pack,
+            target: JobTarget::Task("plan".into()),
+            ..harness.request(&row.name, DEFINITION, budgets(1_000))
+        };
+        let executor = base_executor();
+        let proposer = repeating_proposer(&row.text);
+        settle(&harness, &request, &executor, &proposer).await;
+        let entries = journal(&harness, &request.job_id).await;
+        let failed = !row.failed_stages.is_empty();
+        assert_eq!(
+            runs_started(&entries, EvalSplit::Validation).is_empty(),
+            failed,
+            "{}",
+            row.name
+        );
+        let diagnostics: Vec<_> = entries
+            .iter()
+            .filter_map(|entry| match entry {
+                JournalEntry::StructuralReject { diagnostics, .. }
+                    if diagnostics.starts_with("template_seed_invalid:") =>
+                {
+                    Some(diagnostics)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(!diagnostics.is_empty(), failed, "{}", row.name);
+        if failed {
+            assert!(diagnostics
+                .iter()
+                .all(|detail| detail.contains("case") && detail.contains("stage")));
+            for input in proposer.calls.lock().unwrap().iter() {
+                for rejection in &input.rejections {
+                    assert!(!rejection.reason.contains("val-"), "{}", rejection.reason);
+                    assert!(!rejection.reason.contains("check"), "{}", rejection.reason);
+                }
+            }
+        }
+    }
+}
+
 /// [`accepting_harness`] for a task prompt template target: the live task
 /// `plan` of the monitor agent and a pack holding it as a sidecar.
 pub(crate) async fn accepting_task_harness(job_id: &str) -> (Harness, JobRequest) {
