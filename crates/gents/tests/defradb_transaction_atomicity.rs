@@ -336,7 +336,7 @@ async fn read_then_insert_unique(txn: &ConfigApplyTxn<'_>, key: &str) -> Result<
 /// DefraDB rev pinned in the workspace `Cargo.toml`
 /// (`980190cb3d0e8298e038a07c34dff94fd710893a`): a duplicate insert of a
 /// unique-indexed key errors with "violates unique index", and the error,
-/// propagated out of `transact_local`, rolls back the whole transaction, so
+/// propagated out of `transact_local_write`, rolls back the whole transaction, so
 /// neither the duplicate nor an earlier write in it persists. DefraDB rejects
 /// the insert; the rollback comes from propagating the error, not from
 /// DefraDB aborting the transaction itself.
@@ -344,7 +344,7 @@ async fn read_then_insert_unique(txn: &ConfigApplyTxn<'_>, key: &str) -> Result<
 async fn duplicate_unique_key_errors_and_propagated_error_rolls_back() -> Result<()> {
     let node = disposable_node().await?;
 
-    let outcome: Result<()> = ConfigAccess::transact_local(
+    let outcome: Result<()> = ConfigAccess::transact_local_write(
         &node,
         None,
         "txn_atomicity_unique_violation",
@@ -375,14 +375,14 @@ async fn duplicate_unique_key_errors_and_propagated_error_rolls_back() -> Result
 /// The composite form of the premise above, on the same pinned DefraDB rev:
 /// a duplicate insert on the composite `(chain_root_doc_id, note_id)` unique
 /// index errors with "violates unique index", and the error, propagated out
-/// of `transact_local`, rolls back the transaction, so neither its earlier
+/// of `transact_local_write`, rolls back the transaction, so neither its earlier
 /// writes nor the duplicate persists. Rows that share only one of the two
 /// fields are accepted.
 #[tokio::test]
 async fn duplicate_composite_note_key_errors_and_propagated_error_rolls_back() -> Result<()> {
     let node = disposable_node().await?;
 
-    ConfigAccess::transact_local(
+    ConfigAccess::transact_local_write(
         &node,
         None,
         "txn_atomicity_seed_composite_notes",
@@ -398,7 +398,7 @@ async fn duplicate_composite_note_key_errors_and_propagated_error_rolls_back() -
     .await?;
     assert_eq!(collection_count(&node, "TxnAtomicityNote").await?, 3);
 
-    let outcome: Result<()> = ConfigAccess::transact_local(
+    let outcome: Result<()> = ConfigAccess::transact_local_write(
         &node,
         None,
         "txn_atomicity_composite_violation",
@@ -433,7 +433,7 @@ async fn duplicate_composite_note_key_errors_and_propagated_error_rolls_back() -
 }
 
 /// Two concurrent read-then-insert transactions on one unique key leave one
-/// row. `transact_local` serializes writers through the per-node mutation
+/// row. `transact_local_write` serializes writers through the per-node mutation
 /// gate, so the second read always sees the first commit: the read is the
 /// guard on this path and the unique index is not reached. Same pinned
 /// DefraDB rev as `duplicate_unique_key_errors_and_propagated_error_rolls_back`.
@@ -441,7 +441,7 @@ async fn duplicate_composite_note_key_errors_and_propagated_error_rolls_back() -
 async fn concurrent_read_then_insert_leaves_one_row() -> Result<()> {
     let node = disposable_node().await?;
     let attempt = || {
-        ConfigAccess::transact_local(
+        ConfigAccess::transact_local_write(
             &node,
             None,
             "txn_atomicity_concurrent_read_then_insert",
@@ -472,7 +472,7 @@ async fn concurrent_read_then_insert_leaves_one_row() -> Result<()> {
 #[tokio::test]
 async fn read_then_insert_of_existing_key_commits_the_other_write() -> Result<()> {
     let node = disposable_node().await?;
-    ConfigAccess::transact_local(
+    ConfigAccess::transact_local_write(
         &node,
         None,
         "txn_atomicity_seed_existing_key",
@@ -485,7 +485,7 @@ async fn read_then_insert_of_existing_key_commits_the_other_write() -> Result<()
     )
     .await?;
 
-    let inserted = ConfigAccess::transact_local(
+    let inserted = ConfigAccess::transact_local_write(
         &node,
         None,
         "txn_atomicity_existing_key",
