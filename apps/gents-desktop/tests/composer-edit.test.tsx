@@ -202,4 +202,37 @@ describe("editing a waiting message in the composer", () => {
     expect(screen.queryByTestId("editing-message")).toBeNull();
     expect(composerBox()).toHaveValue("message a");
   });
+
+  it("keeps an edit the agent took when sending it as a new message is refused", async () => {
+    const user = userEvent.setup();
+    const sendChatMessage = vi.fn().mockRejectedValue(new Error("Sending is paused."));
+    const { app } = setup([entry("a")], vi.fn(), sendChatMessage);
+    await user.click(within(rowFor("a")).getByRole("button", { name: "Edit" }));
+    await user.type(composerBox(), " and more");
+    act(() => writeSession(app.stores.session, session([])));
+    await waitFor(() =>
+      expect(screen.getByTestId("editing-message").dataset.reached).toBe("true"),
+    );
+    await user.click(screen.getByRole("button", { name: "Send as a new message" }));
+    await waitFor(() => expect(sendChatMessage).toHaveBeenCalled());
+    /* the only copy of the text stays, to send again or keep */
+    await waitFor(() => expect(composerBox()).toHaveValue("message a and more"));
+    expect(screen.getByTestId("editing-message")).toBeInTheDocument();
+  });
+
+  it("holds the text while a save is out, so nothing typed meanwhile is dropped", async () => {
+    const user = userEvent.setup();
+    let resolve!: () => void;
+    const editPendingQueue = vi.fn(() => new Promise<void>((done) => (resolve = done)));
+    setup([entry("a"), entry("b")], editPendingQueue);
+    await user.click(within(rowFor("a")).getByRole("button", { name: "Edit" }));
+    await user.clear(composerBox());
+    await user.type(composerBox(), "corrected{Enter}");
+    await waitFor(() => expect(editPendingQueue).toHaveBeenCalled());
+    /* a correction typed while the save is out does not take */
+    await user.type(composerBox(), " again");
+    expect(composerBox()).toHaveValue("corrected");
+    await act(async () => resolve());
+    await waitFor(() => expect(screen.queryByTestId("editing-message")).toBeNull());
+  });
 });
