@@ -722,7 +722,7 @@ async fn dispatch_scopes_concurrency_by_the_agents_node_did() {
 
 #[tokio::test]
 async fn scheduled_target_uses_stable_receipt_and_actual_session_template_scope() {
-    let task = resolved_task("session={{ session.id }} request={{ request.id }}");
+    let task = resolved_task("session={{ session.session_id }} request={{ request.request_id }}");
     let mut schedule = resolved_schedule("wake", task.clone());
     schedule.session_id_template = Some("captain-session".into());
     schedule.concurrency = ConcurrencyMode::QueuedSerial;

@@ -1299,12 +1299,16 @@ async fn scheduled_target_admission_is_atomic_and_recovers_same_occurrence() {
         ("captain", "general", false),
         ("wrong-agent", "other", false),
         ("closed", "general", true),
+        ("foreign-owner", "general", false),
     ] {
-        let response = node.execute(&format!(r#"mutation {{ create_Session(input: {{session_id: "{target}", node_did: "{owner}", agent_id: "{agent}", purpose: "normal", closed: {closed}, created_at: "2025-01-01T00:00:00Z"}}) {{ _docID }} }}"#)).await;
-        assert!(!response.has_errors(), "{:?}", response.errors);
+        crate::session::ensure_session_with_agent_id_and_requester_did(
+            &node, target, if target == "foreign-owner" { "did:key:foreign" } else { &owner }, agent, None,
+        ).await.unwrap();
+        if closed { crate::session::close_session(&node, &owner, target, None).await.unwrap(); }
+
     }
-    let task = resolved_task("wake {{ session.id }}");
-    for target in ["captain", "wrong-agent", "closed", "missing"] {
+    let task = resolved_task("wake {{ session.session_id }}");
+    for target in ["captain", "wrong-agent", "closed", "missing", "foreign-owner"] {
         let trigger = format!("wake-{target}");
         let mut schedule = resolved_schedule(&trigger, task.clone());
         schedule.session_id_template = Some(target.into());
