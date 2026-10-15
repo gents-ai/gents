@@ -25,7 +25,6 @@ import {
 import { RenameDialog } from "../AgentsScreen";
 import { useApp } from "@/app/AppContext";
 import { SUBSCRIPTION } from "./inferenceKinds";
-import { errorText } from "../../../lib/errorText";
 import { useSetupCatalog } from "@/hooks/useProviders";
 
 /* the stored account a subscription backend runs on: the one with the
@@ -232,7 +231,7 @@ export function AccountRows({
   const unsaved = accounts.some((a) => a.provider === sub.provider && a.pendingSave);
   const [busy, setBusy] = useState(false);
   const [signingIn, setSigningIn] = useState(false);
-  const [confirmingDisconnect, setConfirmingDisconnect] = useState(false);
+  const [acting, setActing] = useState<AccountAction | null>(null);
   /* a sign-in the person stopped ends as a failed login; it is not an error */
   const cancelled = useRef(false);
   const signIn = async () => {
@@ -266,19 +265,6 @@ export function AccountRows({
       setBusy(false);
     }
   };
-  const disconnect = async () => {
-    if (!account) return;
-    setBusy(true);
-    try {
-      await actions.disconnectProviderAccount(deployment.nodeDid, account.credentialId);
-      toast("Disconnected");
-      setConfirmingDisconnect(false);
-    } catch (error) {
-      toast(`Disconnect failed: ${errorText(error)}`);
-    } finally {
-      setBusy(false);
-    }
-  };
   if (elsewhere)
     return (
       <Row label="Account" description={sub.note}>
@@ -292,38 +278,15 @@ export function AccountRows({
           {stored && (
             <Badge variant="secondary">{account ? "Connected" : "Disabled"}</Badge>
           )}
-          {account && !confirmingDisconnect && (
+          {account && (
             <Button
               size="sm"
               variant="quiet"
               disabled={busy}
-              onClick={() => setConfirmingDisconnect(true)}
+              onClick={() => setActing({ action: "disconnect", account })}
             >
               Disconnect
             </Button>
-          )}
-          {account && confirmingDisconnect && (
-            <>
-              <span className="text-xs text-muted-foreground">
-                Disconnect {sub.title}?
-              </span>
-              <Button
-                size="sm"
-                variant="quiet"
-                disabled={busy}
-                onClick={() => setConfirmingDisconnect(false)}
-              >
-                Keep connected
-              </Button>
-              <Button
-                size="sm"
-                variant="destructive"
-                disabled={busy}
-                onClick={disconnect}
-              >
-                {busy ? "Disconnecting…" : "Disconnect now"}
-              </Button>
-            </>
           )}
           {unsaved && actions.canRetryProviderSave ? (
             <Button size="sm" variant="brand" disabled={busy} onClick={retrySave}>
@@ -360,6 +323,12 @@ export function AccountRows({
           <FactRow label="Label">{stored.label}</FactRow>
         </>
       )}
+      <AccountDialogs
+        deployment={deployment}
+        accounts={accounts}
+        acting={acting}
+        onClose={() => setActing(null)}
+      />
     </>
   );
 }
