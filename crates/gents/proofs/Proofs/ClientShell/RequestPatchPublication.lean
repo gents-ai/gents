@@ -25,6 +25,7 @@ theorem accepted_publication_is_memoized :
 theorem cached_patch_requires_current_fence_and_rows (sameSignature fenceAccepted rowsCurrent : Bool) :
     reusable .memoized sameSignature fenceAccepted rowsCurrent = true →
       sameSignature = true ∧ fenceAccepted = true ∧ rowsCurrent = true := by
-  simp [reusable]
+  intro h
+  simpa [reusable, Bool.and_eq_true, and_assoc] using h
 
 end ClientShell.RequestPatchPublication
