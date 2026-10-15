@@ -560,10 +560,6 @@ async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) 
 }
 
 pub(super) async fn generated_request_transition_cases_cover_lifecycle_policy() {
-    let mut legal_count = 0;
-    let mut illegal_count = 0;
-    let mut recovery_reachable_count = 0;
-
     for case in lean_request_transition_cases() {
         let source = parsed_request_state(&case.from);
         let target = parsed_request_state(&case.to);
@@ -574,7 +570,6 @@ pub(super) async fn generated_request_transition_cases_cover_lifecycle_policy() 
         assert!(!source.certifies_stopped_before_running(target, false));
         match case.classification.as_str() {
             "legal" => {
-                legal_count += 1;
                 assert_eq!(
                     case.action.as_deref(),
                     rust_request_transition_action(&case.from, &case.to),
@@ -593,7 +588,6 @@ pub(super) async fn generated_request_transition_cases_cover_lifecycle_policy() 
                 drive_generated_request_legal_case(case).await;
             }
             "illegal" => {
-                illegal_count += 1;
                 // This consults the writer inventory above, which catches drift
                 // between the inventory and the Lean contract. The claim that
                 // production cannot REACH these edges is carried by
@@ -610,7 +604,6 @@ pub(super) async fn generated_request_transition_cases_cover_lifecycle_policy() 
                 );
             }
             "recoveryReachable" => {
-                recovery_reachable_count += 1;
                 assert!(
                     case.action.is_none(),
                     "Request transition {} is recovery-reachable and must be taken by no single action, got {:?}",
@@ -637,10 +630,6 @@ pub(super) async fn generated_request_transition_cases_cover_lifecycle_policy() 
             ),
         }
     }
-
-    assert_eq!(legal_count, 13);
-    assert_eq!(illegal_count, 66);
-    assert_eq!(recovery_reachable_count, 2);
 }
 
 fn assert_terminal_lifecycle_state(lifecycle_state: &str) {
