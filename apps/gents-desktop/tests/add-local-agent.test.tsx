@@ -305,7 +305,7 @@ describe("first-run local agent name", () => {
       ),
     );
     expect(api.startManagedServer).toHaveBeenCalledWith("Scout", expect.anything());
-    expect(await screen.findByText(/Scout is running as/)).toBeInTheDocument();
+    expect(await screen.findByText(/Scout is running/)).toBeInTheDocument();
   });
 
   it("fails clearly instead of continuing under another agent's name", async () => {
@@ -324,7 +324,7 @@ describe("first-run local agent name", () => {
     ).toBeInTheDocument();
     expect(api.initLocalStandardRuntime).not.toHaveBeenCalled();
     expect(api.fetchDesktopSnapshot).toHaveBeenCalled();
-    expect(screen.queryByText(/Saved the local connection/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Saved the connection/)).not.toBeInTheDocument();
     expect(screen.getByText("Try again")).toBeInTheDocument();
   });
 });
