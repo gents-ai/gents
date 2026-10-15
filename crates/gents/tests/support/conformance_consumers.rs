@@ -84,6 +84,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_request_identity_cases_preserve_physical_twins_and_fold_owners",
         },
         ConformanceConsumer::RustTest {
+            id: "client::core::writes::request_patch_publication_tests::generated_publication_cases_drive_request_patch_cache_admission",
+            package: "gents-desktop-core",
+            source_path: "crates/gents-desktop-core/src/client/core/writes.rs",
+            module_path: "client::core::writes::request_patch_publication_tests",
+            function: "generated_publication_cases_drive_request_patch_cache_admission",
+        },
+        ConformanceConsumer::RustTest {
             id: "e2e_runtime::session_input_edit::generated_remote_edits_replicate_signed_effect_and_receipt",
             package: "gents",
             source_path: "crates/gents/tests/e2e_runtime/session_input_edit.rs",
