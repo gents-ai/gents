@@ -28,6 +28,9 @@ structure RequestProgressCase where
 structure PendingUserTurnCase where
   name                : String
   hasDurableUserOwner : Bool
+  /-- Retired from the queue by its author: removed, or replaced by an edit
+  or a move. -/
+  retiredByAuthor     : Bool := false
   unrelatedUserTurns  : Nat
   expectPendingTurn   : Bool
   deriving Repr
@@ -45,6 +48,11 @@ def pendingUserTurnCases : List PendingUserTurnCase :=
     , hasDurableUserOwner := true
     , unrelatedUserTurns := 7
     , expectPendingTurn := projectPendingUserTurn true }
+  , { name := "request_retired_by_its_author_is_never_shown"
+    , hasDurableUserOwner := false
+    , retiredByAuthor := true
+    , unrelatedUserTurns := 0
+    , expectPendingTurn := projectPendingUserTurn false true }
   ]
 
 def requestProgressCase

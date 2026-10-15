@@ -76,7 +76,7 @@ pub(crate) use management::{
 };
 pub use management::{
     pending_user_queue, prepare_pending_user_edit, PendingQueueEntry, PendingQueueSnapshot,
-    REPLACED_REASON,
+    REMOVED_REASON, REPLACED_REASON,
 };
 pub use management::{PendingMessageEdit, PendingQueueEdit, PendingQueueReceipt};
 #[cfg(test)]

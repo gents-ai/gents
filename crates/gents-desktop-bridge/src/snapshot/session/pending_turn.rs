@@ -57,6 +57,9 @@ pub(super) fn build_pending_turn(
             && row.session_id.as_deref() == Some(session_id)
             && node_did.is_none_or(|node_did| request_matches_node(row, node_did))
     })?;
+    if gents::lifecycle::retired_by_author(request) {
+        return None;
+    }
     let request_input = request.input.clone().unwrap_or_default();
     if !gents::lifecycle::request_content_owns_user_projection(&request_input) {
         return None;
@@ -153,5 +156,43 @@ mod retry_tests {
         assert!(build_pending_turn(&store, &store, Some("node"), "session", "parent").is_some());
         store.requests[1].session_id = Some("old-session".into());
         assert!(build_pending_turn(&store, &store, Some("node"), "session", "retry").is_some());
+    }
+
+    #[test]
+    fn a_message_its_author_retired_is_not_shown() {
+        let row =
+            |request_id: &str, state, reason: Option<&str>, by: Option<&str>| AgentRequestRow {
+                request_id: request_id.into(),
+                node_did: Some("node".into()),
+                session_id: Some("session".into()),
+                content: Some(format!("message {request_id}")),
+                lifecycle_state: Some(state),
+                failure_reason: reason.map(str::to_owned),
+                superseded_by_request: by.map(str::to_owned),
+                ..Default::default()
+            };
+        let mut store = ClientStore::default();
+        store.requests.extend([
+            row("waiting", RequestLifecycleState::Pending, None, None),
+            row(
+                "edited",
+                RequestLifecycleState::Superseded,
+                Some(gents::lifecycle::REPLACED_REASON),
+                Some("waiting"),
+            ),
+            row(
+                "removed",
+                RequestLifecycleState::Interrupted,
+                Some(gents::lifecycle::REMOVED_REASON),
+                None,
+            ),
+            row("stopped", RequestLifecycleState::Interrupted, None, None),
+        ]);
+        let shown = |id| build_pending_turn(&store, &store, Some("node"), "session", id).is_some();
+        assert!(shown("waiting"));
+        assert!(!shown("edited"));
+        assert!(!shown("removed"));
+        /* an interruption its author did not ask for still says it was not sent */
+        assert!(shown("stopped"));
     }
 }

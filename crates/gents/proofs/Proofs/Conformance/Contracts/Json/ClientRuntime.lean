@@ -37,6 +37,7 @@ def pendingUserTurnCaseJson (witness : PendingUserTurnCase) : String :=
     ++ "\"name\":" ++ jsonString witness.name ++ ","
     ++ "\"hasDurableUserOwner\":"
       ++ boolString witness.hasDurableUserOwner ++ ","
+    ++ "\"retiredByAuthor\":" ++ boolString witness.retiredByAuthor ++ ","
     ++ "\"unrelatedUserTurns\":" ++ toString witness.unrelatedUserTurns ++ ","
     ++ "\"expectPendingTurn\":" ++ boolString witness.expectPendingTurn
     ++ "}"
