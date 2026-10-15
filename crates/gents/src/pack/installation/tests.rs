@@ -516,11 +516,7 @@ async fn read_installed_pack_fails_loudly_on_more_than_one_record() {
     );
 }
 
-async fn dependency_fixture() -> (
-    Arc<defra_node::EmbeddedNode>,
-    ConfigAccess,
-    crate::graph_package::GraphPackageInstallBindings,
-) {
+async fn dependency_fixture() -> (Arc<defra_node::EmbeddedNode>, ConfigAccess) {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     crate::document_config::ensure_node(&node, OWNER)
@@ -529,16 +525,52 @@ async fn dependency_fixture() -> (
     for profile in ["claude", "glm", "grok"] {
         crate::test_support::install_test_agent(&node, OWNER, profile).await;
     }
-    let options = crate::graph_package::GraphPackageInstallBindings {
-        node_did: OWNER.into(),
-        inference_slots: std::collections::BTreeMap::from([
-            ("coordinator".into(), "claude:inference".into()),
-            ("worker".into(), "glm:inference".into()),
-            ("verifier".into(), "grok:inference".into()),
-        ]),
-    };
     let access = ConfigAccess::local(node.clone());
-    (node, access, options)
+    (node, access)
+}
+
+/// Installs `dependee_fixture` the way a front-end installs a documents pack.
+async fn install_dependee(access: &ConfigAccess, explicit: bool) {
+    let (_guard, dir) = crate::test_support::fixture_pack_copy("dependee_fixture", &json!({}));
+    let (bytes, _) = crate::pack_archive::pack_dir(&dir).unwrap();
+    let archive = crate::pack_archive::PackArchive::from_bytes(&bytes).unwrap();
+    let authored = crate::pack::load_pack_config(
+        archive.manifest(),
+        &crate::pack::PackInstallOptions {
+            node_did: OWNER.into(),
+        },
+        &|path| Ok(archive.asset(path)?.to_vec()),
+        &|_| None,
+    )
+    .unwrap();
+    let requested = BTreeMap::from([("worker".to_owned(), "glm:inference".to_owned())]);
+    let prepared = prepare_document_pack_install(
+        access,
+        OWNER,
+        archive.manifest(),
+        &authored,
+        &requested,
+        &[],
+        &|_| None,
+    )
+    .await
+    .unwrap();
+    super::super::install_pack_documents(
+        access,
+        OWNER,
+        &PackIdentity {
+            coordinate: "fixture/dependee_fixture".into(),
+            version: archive.manifest().version.clone(),
+            digest: archive.digest().to_owned(),
+            plugins: vec![],
+            dependencies: vec![],
+            explicit,
+        },
+        &prepared.config,
+        DriftPolicy::Refuse,
+    )
+    .await
+    .unwrap();
 }
 
 fn demo_identity(dependencies: Vec<String>) -> PackIdentity {
@@ -552,53 +584,41 @@ fn demo_identity(dependencies: Vec<String>) -> PackIdentity {
     }
 }
 
-async fn activate(access: &ConfigAccess, graph_id: &str, digest: &str) {
-    crate::graph_pipeline::activate_graph_revision_with_access(
-        access, OWNER, graph_id, digest, None,
-    )
-    .await
-    .unwrap();
-}
-
 #[tokio::test]
 async fn a_dependency_is_released_with_its_last_non_explicit_dependent() {
-    let (_node, access, options) = dependency_fixture().await;
-    let receipt = crate::test_support::install_test_graph_package_explicit(
-        &access,
-        OWNER,
-        "review_graph",
-        &options,
-        false,
-    )
-    .await
-    .unwrap();
-    activate(&access, &receipt.graph_id, &receipt.revision_digest).await;
+    let (_node, access) = dependency_fixture().await;
+    install_dependee(&access, false).await;
 
     super::super::install_pack_documents(
         &access,
         OWNER,
-        &demo_identity(vec!["fixture/review_graph".into()]),
+        &demo_identity(vec!["fixture/dependee_fixture".into()]),
         &config(&[("alpha", "Alpha")]),
         DriftPolicy::Refuse,
     )
     .await
     .unwrap();
 
-    let error = remove_pack(&access, OWNER, "fixture/review_graph", DriftPolicy::Refuse)
-        .await
-        .unwrap_err();
+    let error = remove_pack(
+        &access,
+        OWNER,
+        "fixture/dependee_fixture",
+        DriftPolicy::Refuse,
+    )
+    .await
+    .unwrap_err();
     assert!(format!("{error:#}").contains("acme/demo"), "{error:#}");
 
     let report = remove_pack(&access, OWNER, "acme/demo", DriftPolicy::Refuse)
         .await
         .unwrap();
     assert_eq!(report.dependencies.len(), 1);
-    assert_eq!(report.dependencies[0].pack, "fixture/review_graph");
+    assert_eq!(report.dependencies[0].pack, "fixture/dependee_fixture");
     assert!(report.dependencies[0]
         .documents
         .removed
         .iter()
-        .any(|name| name.starts_with("GraphDefinition/")));
+        .any(|name| name.starts_with("Agent/")));
 
     let remaining = access
         .execute("{ PackInstallation { coordinate } }")
@@ -609,17 +629,13 @@ async fn a_dependency_is_released_with_its_last_non_explicit_dependent() {
 
 #[tokio::test]
 async fn an_explicit_dependency_survives_its_dependent() {
-    let (_node, access, options) = dependency_fixture().await;
-    let receipt =
-        crate::test_support::install_test_graph_package(&access, OWNER, "review_graph", &options)
-            .await
-            .unwrap();
-    activate(&access, &receipt.graph_id, &receipt.revision_digest).await;
+    let (_node, access) = dependency_fixture().await;
+    install_dependee(&access, true).await;
 
     super::super::install_pack_documents(
         &access,
         OWNER,
-        &demo_identity(vec!["fixture/review_graph".into()]),
+        &demo_identity(vec!["fixture/dependee_fixture".into()]),
         &config(&[("alpha", "Alpha")]),
         DriftPolicy::Refuse,
     )
@@ -640,36 +656,32 @@ async fn an_explicit_dependency_survives_its_dependent() {
         .unwrap();
     let rows = remaining["data"]["PackInstallation"].as_array().unwrap();
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0]["coordinate"], "fixture/review_graph");
+    assert_eq!(rows[0]["coordinate"], "fixture/dependee_fixture");
     assert_eq!(
         rows[0]["required_by"],
         Value::Null,
         "an explicit install is never auto-released"
     );
 
-    remove_pack(&access, OWNER, "fixture/review_graph", DriftPolicy::Refuse)
-        .await
-        .unwrap();
+    remove_pack(
+        &access,
+        OWNER,
+        "fixture/dependee_fixture",
+        DriftPolicy::Refuse,
+    )
+    .await
+    .unwrap();
 }
 
 #[tokio::test]
 async fn an_upgrade_that_drops_a_dependency_releases_its_claim() {
-    let (_node, access, options) = dependency_fixture().await;
-    let receipt = crate::test_support::install_test_graph_package_explicit(
-        &access,
-        OWNER,
-        "review_graph",
-        &options,
-        false,
-    )
-    .await
-    .unwrap();
-    activate(&access, &receipt.graph_id, &receipt.revision_digest).await;
+    let (_node, access) = dependency_fixture().await;
+    install_dependee(&access, false).await;
 
     super::super::install_pack_documents(
         &access,
         OWNER,
-        &demo_identity(vec!["fixture/review_graph".into()]),
+        &demo_identity(vec!["fixture/dependee_fixture".into()]),
         &config(&[("alpha", "Alpha")]),
         DriftPolicy::Refuse,
     )
@@ -680,11 +692,11 @@ async fn an_upgrade_that_drops_a_dependency_releases_its_claim() {
         .await
         .unwrap();
     let rows = after_first["data"]["PackInstallation"].as_array().unwrap();
-    let review_graph = rows
+    let dependee = rows
         .iter()
-        .find(|row| row["coordinate"] == "fixture/review_graph")
+        .find(|row| row["coordinate"] == "fixture/dependee_fixture")
         .unwrap();
-    assert_eq!(review_graph["required_by"], json!(["acme/demo"]));
+    assert_eq!(dependee["required_by"], json!(["acme/demo"]));
 
     super::super::install_pack_documents(
         &access,
@@ -706,24 +718,15 @@ async fn an_upgrade_that_drops_a_dependency_releases_its_claim() {
     assert!(
         !rows
             .iter()
-            .any(|row| row["coordinate"] == "fixture/review_graph"),
+            .any(|row| row["coordinate"] == "fixture/dependee_fixture"),
         "the dropped, non-explicit dependency is released outright: {rows:?}"
     );
 }
 
 #[tokio::test]
 async fn a_legacy_record_without_dependency_fields_reads_as_explicit() {
-    let (_node, access, options) = dependency_fixture().await;
-    let receipt = crate::test_support::install_test_graph_package_explicit(
-        &access,
-        OWNER,
-        "review_graph",
-        &options,
-        false,
-    )
-    .await
-    .unwrap();
-    activate(&access, &receipt.graph_id, &receipt.revision_digest).await;
+    let (_node, access) = dependency_fixture().await;
+    install_dependee(&access, false).await;
 
     let doc_id = installation_doc_id(&access).await;
     corrupt_installation_field(&access, &doc_id, "explicit", Value::Null).await;
@@ -731,7 +734,7 @@ async fn a_legacy_record_without_dependency_fields_reads_as_explicit() {
     super::super::install_pack_documents(
         &access,
         OWNER,
-        &demo_identity(vec!["fixture/review_graph".into()]),
+        &demo_identity(vec!["fixture/dependee_fixture".into()]),
         &config(&[("alpha", "Alpha")]),
         DriftPolicy::Refuse,
     )
@@ -748,8 +751,84 @@ async fn a_legacy_record_without_dependency_fields_reads_as_explicit() {
     let rows = remaining["data"]["PackInstallation"].as_array().unwrap();
     assert!(
         rows.iter()
-            .any(|row| row["coordinate"] == "fixture/review_graph"),
+            .any(|row| row["coordinate"] == "fixture/dependee_fixture"),
         "a legacy record with no explicit field must never be auto-released: {rows:?}"
+    );
+}
+
+#[tokio::test]
+async fn an_explicitly_installed_documents_dependency_survives_its_dependent() {
+    let (_node, access) = dependency_fixture().await;
+    install_dependee(&access, false).await;
+    super::super::install_pack_documents(
+        &access,
+        OWNER,
+        &demo_identity(vec!["fixture/dependee_fixture".into()]),
+        &config(&[("alpha", "Alpha")]),
+        DriftPolicy::Refuse,
+    )
+    .await
+    .unwrap();
+
+    install_dependee(&access, true).await;
+
+    let report = remove_pack(&access, OWNER, "acme/demo", DriftPolicy::Refuse)
+        .await
+        .unwrap();
+    assert!(
+        report.dependencies.is_empty(),
+        "an explicit install is sticky, so it is never auto-released"
+    );
+    let remaining = access
+        .execute("{ PackInstallation { coordinate required_by } }")
+        .await
+        .unwrap();
+    let rows = remaining["data"]["PackInstallation"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0]["coordinate"], "fixture/dependee_fixture");
+    assert_eq!(rows[0]["required_by"], Value::Null);
+}
+
+#[tokio::test]
+async fn an_upgrade_that_drops_a_documents_dependency_releases_it() {
+    let (_node, access) = dependency_fixture().await;
+    let (_guards, dependee, dependent) = documents_dependency_pair(false);
+    install_dependent_with_dependee(&access, &dependee, &dependent, None).await;
+    let agents = access.execute("{ Agent { agent_id } }").await.unwrap();
+    let before = agents["data"]["Agent"].as_array().unwrap().len();
+
+    super::super::install_pack_documents(
+        &access,
+        OWNER,
+        &PackIdentity {
+            coordinate: "fixture/dependent_fixture".into(),
+            version: "2".into(),
+            digest: format!("sha256:{}", "2".repeat(64)),
+            plugins: vec![],
+            dependencies: vec![],
+            explicit: true,
+        },
+        &config(&[("alpha", "Alpha")]),
+        DriftPolicy::Refuse,
+    )
+    .await
+    .unwrap();
+
+    let rows = access
+        .execute("{ PackInstallation { coordinate } }")
+        .await
+        .unwrap();
+    let rows = rows["data"]["PackInstallation"].as_array().unwrap();
+    assert!(
+        !rows
+            .iter()
+            .any(|row| row["coordinate"] == "fixture/dependee_fixture"),
+        "the dropped documents dependency is released outright: {rows:?}"
+    );
+    let agents = access.execute("{ Agent { agent_id } }").await.unwrap();
+    assert!(
+        agents["data"]["Agent"].as_array().unwrap().len() < before,
+        "the released dependency's own documents are removed: {agents}"
     );
 }
 
@@ -972,7 +1051,7 @@ async fn install_dependent_with_dependee(
 
 #[tokio::test]
 async fn a_documents_dependency_installs_non_explicitly_before_its_dependent() {
-    let (_node, access, _) = dependency_fixture().await;
+    let (_node, access) = dependency_fixture().await;
     let (_guards, dependee, dependent) = documents_dependency_pair(false);
     install_dependent_with_dependee(&access, &dependee, &dependent, None).await;
 
@@ -997,7 +1076,7 @@ async fn a_documents_dependency_installs_non_explicitly_before_its_dependent() {
 
 #[tokio::test]
 async fn a_documents_dependency_plugin_installs_before_the_dependent_documents() {
-    let (_node, access, _) = dependency_fixture().await;
+    let (_node, access) = dependency_fixture().await;
     let (_guards, dependee, dependent) = documents_dependency_pair(true);
     let home = tempfile::tempdir().unwrap();
     install_dependent_with_dependee(&access, &dependee, &dependent, Some(home.path())).await;
@@ -1067,7 +1146,7 @@ async fn refused_dependency(dependee_plugin: bool, change: &dyn Fn(&mut Value)) 
         &|_| None,
     )
     .unwrap();
-    let (_node, access, _) = dependency_fixture().await;
+    let (_node, access) = dependency_fixture().await;
     let error = prepare_document_pack_install(
         &access,
         OWNER,
