@@ -1070,7 +1070,7 @@ mod overlay_tests {
                 base.merge_chat_patch(incoming),
             ];
             for store in stores {
-                let actual_rows = store
+                let mut actual_rows = store
                     .requests
                     .iter()
                     .map(|row| {
@@ -1099,9 +1099,20 @@ mod overlay_tests {
                     })
                     })
                     .collect::<Vec<_>>();
+                let mut expected_rows = case["expected_rows"]
+                    .as_array()
+                    .expect("modeled rows")
+                    .clone();
+                // The model describes retained facts; ClientStore applies its
+                // canonical presentation order independently of merge order.
+                let by_physical_identity = |left: &serde_json::Value, right: &serde_json::Value| {
+                    left["doc"].as_u64().cmp(&right["doc"].as_u64())
+                };
+                actual_rows.sort_by(by_physical_identity);
+                expected_rows.sort_by(by_physical_identity);
                 assert_eq!(
                     serde_json::Value::Array(actual_rows),
-                    case["expected_rows"],
+                    serde_json::Value::Array(expected_rows),
                     "{}",
                     case["name"]
                 );

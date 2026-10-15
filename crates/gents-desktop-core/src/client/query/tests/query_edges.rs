@@ -108,7 +108,7 @@ fn snapshot_request_seeds_use_bounded_trigger_and_physical_head_queries() {
     let many_heads = (0..129)
         .map(|index| {
             (
-                format!("doc-{index}"),
+                format!("doc-{index:03}"),
                 "did:alpha".to_owned(),
                 format!("session-{index}"),
                 None,
@@ -119,7 +119,8 @@ fn snapshot_request_seeds_use_bounded_trigger_and_physical_head_queries() {
     let head_queries = session_head_queries(&many_heads);
     assert_eq!(head_queries.len(), 2);
     assert_eq!(head_queries[0].matches("docIDs").count(), 1);
-    assert!(head_queries[0].contains("doc-0"));
+    assert!(head_queries[0].contains("doc-000"));
+    assert!(!head_queries[0].contains("doc-128"));
     assert!(head_queries[1].contains("doc-128"));
 }
 

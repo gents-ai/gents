@@ -488,7 +488,7 @@ fn session_request_seed_query(
             .unwrap_or_else(|| "null".to_string());
         let mut predicates = vec![
             "lifecycle_state: { _neq: \"completed\" }".to_string(),
-            "lifecycle_state: { _is_null: true }".to_string(),
+            "lifecycle_state: { _eq: null }".to_string(),
             "retry_parent_request: { _neq: null }".to_string(),
             "retry_parent_request_doc_id: { _neq: null }".to_string(),
             "superseded_by_request_doc_id: { _neq: null }".to_string(),
