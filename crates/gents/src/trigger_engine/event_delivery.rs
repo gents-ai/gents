@@ -13,6 +13,8 @@ use crate::runtime_snapshot::{ResolvedEventTrigger, MAX_EVENT_TRIGGER_GROUP_DOCS
 
 pub(crate) const GROUP_RECOVERY_PAGE_SIZE: usize = 256;
 
+pub(crate) mod source_scan;
+
 /// Borrow existing resolved/configuration owners; no second writable config.
 #[derive(Clone, Copy)]
 pub(crate) enum Delivery<'a> {

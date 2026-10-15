@@ -20,7 +20,8 @@ use super::documents::{
 };
 use super::{CallbackEngine, LIFECYCLE_PENDING};
 
-const SEEN_DOCS_SEED_LIMIT: usize = 10_000;
+use crate::trigger_engine::event_delivery::source_scan::{load_doc_field, load_doc_ids};
+
 const CALLBACK_RESCAN_INTERVAL: Duration = Duration::from_secs(5);
 
 use crate::trigger_engine::event_delivery::{self, Delivery, GroupOutcome};
@@ -144,10 +145,12 @@ impl CallbackEngine {
         collection: &str,
         consumers: &[(String, Option<String>)],
     ) -> Result<()> {
-        let mut ids: HashSet<String> = load_doc_ids(self.node.as_ref(), collection)
-            .await?
-            .into_iter()
-            .collect();
+        let ids = tokio::select! {
+            biased;
+            _ = self.cancel.cancelled() => return Ok(()),
+            ids = load_doc_ids(self.node.as_ref(), collection) => ids?,
+        };
+        let mut ids: HashSet<String> = ids.into_iter().collect();
         let live = crate::graph_pipeline::live_run_correlations(
             self.node.as_ref(),
             &self.node_did,
@@ -157,9 +160,12 @@ impl CallbackEngine {
         if !live.is_empty() {
             for (consumer, field) in consumers {
                 let Some(field) = field else { continue };
-                for (doc_id, correlation) in
-                    load_doc_field(self.node.as_ref(), collection, field).await?
-                {
+                let fields = tokio::select! {
+                    biased;
+                    _ = self.cancel.cancelled() => return Ok(()),
+                    fields = load_doc_field(self.node.as_ref(), collection, field) => fields?,
+                };
+                for (doc_id, correlation) in fields {
                     if crate::graph_pipeline::is_live_for(&live, consumer, &correlation) {
                         ids.remove(&doc_id);
                     }
@@ -191,7 +197,12 @@ impl CallbackEngine {
         self.deliver_arrivals(None).await;
         let collections: Vec<String> = self.group_collections.iter().cloned().collect();
         for collection in collections {
-            let ids = match load_doc_ids(self.node.as_ref(), &collection).await {
+            let read = tokio::select! {
+                biased;
+                _ = self.cancel.cancelled() => return,
+                ids = load_doc_ids(self.node.as_ref(), &collection) => ids,
+            };
+            let ids = match read {
                 Ok(ids) => ids,
                 Err(error) => {
                     tracing::warn!(
@@ -762,61 +773,6 @@ impl CallbackEngine {
         }
         self.collection_id_to_name.get(collection_id).cloned()
     }
-}
-
-/// Each document's id and string `field`, for the same bounded page
-/// [`load_doc_ids`] reads.
-async fn load_doc_field(
-    node: &EmbeddedNode,
-    collection: &str,
-    field: &str,
-) -> Result<Vec<(String, String)>> {
-    crate::graphql::validate_collection_identifier(collection)?;
-    crate::graphql::validate_graphql_name(field)?;
-    let query = format!(
-        r#"query {{ {collection}(limit: {limit}) {{ _docID {field} }} }}"#,
-        limit = SEEN_DOCS_SEED_LIMIT,
-    );
-    let response =
-        crate::graphql::graphql_with_transaction_retry(node, &query, "callback.seed_correlations")
-            .await?;
-    Ok(crate::graphql::rows::<Value>(&response, collection)?
-        .into_iter()
-        .filter_map(|row| {
-            Some((
-                row.get("_docID")?.as_str()?.to_owned(),
-                row.get(field)?.as_str()?.to_owned(),
-            ))
-        })
-        .collect())
-}
-
-async fn load_doc_ids(node: &EmbeddedNode, collection: &str) -> Result<Vec<String>> {
-    crate::graphql::validate_collection_identifier(collection)?;
-    let query = format!(
-        r#"query {{ {collection}(limit: {limit}) {{ _docID }} }}"#,
-        limit = SEEN_DOCS_SEED_LIMIT,
-    );
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "callback source scan for {collection} failed: {:?}",
-            response.errors
-        );
-    }
-    Ok(response
-        .data
-        .as_ref()
-        .and_then(|data| data.get(collection))
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|row| {
-            row.get("_docID")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        })
-        .collect())
 }
 
 pub(super) async fn probe_filter(
