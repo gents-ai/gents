@@ -207,8 +207,9 @@ async fn load_chat_patch_with<'a>(
         fallback_request_id,
         page_request_doc_ids,
     )?;
-    let selected = if let Some(lookup) = lookup {
-        let data = execute(lookup.query, "selected request refresh").await?;
+    let selected = if let Some(mut lookup) = lookup {
+        let query = std::mem::take(&mut lookup.query);
+        let data = execute(query, "selected request refresh").await?;
         lookup.decode(&data, node_did, session_id, requester_did.as_deref())?
     } else {
         Vec::new()
