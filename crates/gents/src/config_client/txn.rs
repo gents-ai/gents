@@ -780,7 +780,10 @@ enum RollbackOnDrop {
         runtime: tokio::runtime::Handle,
         node: Arc<EmbeddedNode>,
         native_gate: Arc<MutationWriteGate>,
-        handle: Option<TransactionHandle>,
+        // A suspended native scope owns both its Arc node and its borrowed guard.
+        // Dropping the future synchronously abandons the native transaction;
+        // the mutex makes this unpolled owner Sync for shared transaction callbacks.
+        native_owner: StdMutex<Option<BoxFuture<'static, Result<()>>>>,
         write_guard: Option<MutationWriteGuard>,
         #[cfg(test)]
         drop_cleanup_pause: Option<Arc<RollbackDropCleanupPause>>,
@@ -800,13 +803,6 @@ impl RollbackOnDrop {
         match self {
             Self::Http { armed, .. } | Self::Embedded { armed, .. } => *armed = false,
         }
-    }
-
-    fn set_embedded_handle(&mut self, transaction_handle: TransactionHandle) {
-        let Self::Embedded { handle, .. } = self else {
-            unreachable!("only embedded rollback owners receive native handles")
-        };
-        *handle = Some(transaction_handle);
     }
 }
 
@@ -837,19 +833,37 @@ impl Drop for RollbackOnDrop {
                 runtime,
                 node,
                 native_gate,
-                handle,
+                native_owner,
                 write_guard,
                 #[cfg(test)]
                 drop_cleanup_pause,
                 native_operations,
                 armed,
             } => {
+                // Abandon the registry entry before handing off or releasing the
+                // mutation gate. In-flight native contexts retain their storage
+                // references; the existing tracker still fences gate/claim release.
+                drop(
+                    native_owner
+                        .get_mut()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .take(),
+                );
                 if !*armed {
                     return;
                 }
-                let Some(handle) = handle.take() else {
+                #[cfg(test)]
+                let pause_cleanup = drop_cleanup_pause.is_some();
+                #[cfg(not(test))]
+                let pause_cleanup = false;
+                let in_flight = native_operations
+                    .state
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .in_flight;
+                if in_flight == 0 && !pause_cleanup {
                     return;
-                };
+                }
                 let node = Arc::clone(node);
                 let runtime = runtime.clone();
                 let native_gate = Arc::clone(native_gate);
@@ -868,7 +882,11 @@ impl Drop for RollbackOnDrop {
                             pause.started.notify_one();
                             pause.release.notified().await;
                         }
-                        node.rollback_transaction(&handle).await
+                        // Native abandonment already ran synchronously. This task
+                        // retains only the node/store claim and gate until native
+                        // work has returned; it does not finalize a transaction.
+                        drop(node);
+                        Ok::<(), anyhow::Error>(())
                     };
                     match cleanup_while_holding_write_gate(
                         write_guard,
@@ -877,12 +895,12 @@ impl Drop for RollbackOnDrop {
                     .await {
                         Ok(Ok(())) => {}
                         Ok(Err(error)) => {
-                            tracing::debug!(%error, "discarding cancelled embedded transaction");
+                            tracing::debug!(%error, "releasing cancelled embedded transaction ownership");
                         }
                         Err(_) => {
                             tracing::warn!(
                                 timeout_ms = EMBEDDED_TRANSACTION_ROLLBACK_TIMEOUT.as_millis(),
-                                "cancelled embedded transaction rollback timed out; releasing mutation gate"
+                                "cancelled embedded transaction gate-release pause timed out"
                             );
                         }
                     }
@@ -910,35 +928,53 @@ where
     F: FnOnce(TransactionHandle) -> Fut,
     Fut: Future<Output = ()>,
 {
-    // Construct the cleanup owner before begin. The caller deliberately runs
-    // this future in a detached task: if its JoinHandle is cancelled after
-    // DefraDB registers the transaction, dropping the task output still owns
-    // and rolls back the handle before releasing the write gate.
-    let mut rollback = RollbackOnDrop::Embedded {
+    // The native API borrows its node. Keep that borrow inside an owned future
+    // instead of a self-referential struct, a leaked Arc, or an unsafe lifetime.
+    // Once registration completes this future is never polled again: its only
+    // remaining job is to drop the native guard synchronously with this owner.
+    let (registered, registration) = tokio::sync::oneshot::channel();
+    let owner_node = Arc::clone(&node);
+    let mut native_owner: BoxFuture<'static, Result<()>> = Box::pin(async move {
+        let transaction = owner_node
+            .begin_transaction_guard(read_only)
+            .await
+            .map_err(|error| {
+                retry::transaction_storage_failure(anyhow::anyhow!("begin_txn: {error}"))
+            })?;
+        let _ = registered.send(transaction.handle().clone());
+        std::future::pending::<()>().await;
+        drop(transaction);
+        Ok(())
+    });
+    let started = Instant::now();
+    let result = tokio::time::timeout(EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT, async {
+        tokio::select! {
+            result = &mut native_owner => {
+                result?;
+                anyhow::bail!("native transaction owner ended before registration")
+            }
+            result = registration => result.context("native transaction registration"),
+        }
+    })
+    .await;
+    record_slow_native_phase(Some(operation.as_str()), "begin", started.elapsed());
+    let handle = result.map_err(|_| {
+        embedded_phase_timeout("begin", EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT)
+    })??;
+    let rollback = RollbackOnDrop::Embedded {
         runtime: tokio::runtime::Handle::current(),
         node: Arc::clone(&node),
         native_gate,
-        handle: None,
+        native_owner: StdMutex::new(Some(native_owner)),
         write_guard,
         #[cfg(test)]
         drop_cleanup_pause: None,
         native_operations,
         armed: true,
     };
-    let started = Instant::now();
-    let result = tokio::time::timeout(
-        EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
-        node.begin_transaction(read_only),
-    )
-    .await;
-    record_slow_native_phase(Some(operation.as_str()), "begin", started.elapsed());
-    let handle = result
-        .map_err(|_| embedded_phase_timeout("begin", EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT))?
-        .map_err(|error| {
-            retry::transaction_storage_failure(anyhow::anyhow!("begin_txn: {error}"))
-        })?;
-    rollback.set_embedded_handle(handle.clone());
-    cancellation_rollback_scheduled.store(true, Ordering::Release);
+    // There is no await between receiving the handle and installing its owner.
+    // Native abandonment needs no scheduled rollback telemetry.
+    let _ = cancellation_rollback_scheduled;
     after_begin(handle.clone()).await;
     Ok((rollback, handle))
 }
@@ -1069,6 +1105,34 @@ enum EmbeddedTransactionPurpose {
     Mutation,
     ExecutionRenewal(Arc<NativeOperationTracker>),
     ReadOnly,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EmbeddedFinalizationBoundary {
+    BeforeCommit,
+    AfterCommit,
+    BeforeRollback,
+}
+
+#[cfg(test)]
+tokio::task_local! {
+    static EMBEDDED_FINALIZATION_PAUSE: (
+        EmbeddedFinalizationBoundary,
+        Arc<tokio::sync::Notify>,
+    );
+}
+
+#[cfg(test)]
+async fn pause_embedded_finalization_for_test(boundary: EmbeddedFinalizationBoundary) {
+    let reached = EMBEDDED_FINALIZATION_PAUSE
+        .try_with(|(selected, reached)| (*selected == boundary).then(|| Arc::clone(reached)))
+        .ok()
+        .flatten();
+    if let Some(reached) = reached {
+        reached.notify_one();
+        std::future::pending::<()>().await;
+    }
 }
 
 impl<'a> ConfigApplyTxn<'a> {
@@ -1402,7 +1466,7 @@ impl<'a> ConfigApplyTxn<'a> {
                 Arc::new(NativeOperationTracker::default())
             }
         };
-        let (rollback_on_drop, handle) = tokio::spawn(begin_embedded_owned(
+        let (rollback_on_drop, handle) = begin_embedded_owned(
             Arc::clone(node),
             native_gate,
             read_only,
@@ -1411,9 +1475,8 @@ impl<'a> ConfigApplyTxn<'a> {
             Arc::clone(&native_operations),
             cancellation_rollback_scheduled,
             |_| std::future::ready(()),
-        ))
-        .await
-        .context("begin embedded transaction task")??;
+        )
+        .await?;
         Ok(ConfigApplyTxn {
             backend: TxnBackend::Embedded {
                 node: Arc::clone(node),
@@ -1688,11 +1751,24 @@ impl<'a> ConfigApplyTxn<'a> {
                     native_operations.wait_idle().await;
                 }
                 let started = Instant::now();
-                let result = tokio::time::timeout(
-                    EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
-                    node.commit_transaction(handle),
-                )
-                .await;
+                let result =
+                    tokio::time::timeout(EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT, async {
+                        #[cfg(test)]
+                        pause_embedded_finalization_for_test(
+                            EmbeddedFinalizationBoundary::BeforeCommit,
+                        )
+                        .await;
+                        let result = node.commit_transaction(handle).await;
+                        #[cfg(test)]
+                        if result.is_ok() {
+                            pause_embedded_finalization_for_test(
+                                EmbeddedFinalizationBoundary::AfterCommit,
+                            )
+                            .await;
+                        }
+                        result
+                    })
+                    .await;
                 record_slow_native_phase(self.operation, "commit", started.elapsed());
                 match result {
                     Err(_) => Err(CommitFailure {
@@ -1766,10 +1842,14 @@ impl<'a> ConfigApplyTxn<'a> {
                 client,
             } => graphql::txn_discard(endpoint, id, client).await,
             TxnBackend::Embedded { node, handle, .. } => {
-                match tokio::time::timeout(
-                    EMBEDDED_TRANSACTION_ROLLBACK_TIMEOUT,
-                    node.rollback_transaction(handle),
-                )
+                match tokio::time::timeout(EMBEDDED_TRANSACTION_ROLLBACK_TIMEOUT, async {
+                    #[cfg(test)]
+                    pause_embedded_finalization_for_test(
+                        EmbeddedFinalizationBoundary::BeforeRollback,
+                    )
+                    .await;
+                    node.rollback_transaction(handle).await
+                })
                 .await
                 {
                     Ok(result) => result.map_err(|error| anyhow::anyhow!("rollback_txn: {error}")),
@@ -2146,7 +2226,12 @@ where
                     return Err(error);
                 }
             };
-            telemetry.cancelled_rollback = RollbackStatus::Scheduled;
+            // Embedded cancellation abandons the native owner synchronously;
+            // only HTTP cleanup schedules a detached rollback request.
+            telemetry.cancelled_rollback = match backend {
+                WriteBackend::Embedded => RollbackStatus::NotNeeded,
+                WriteBackend::Http => RollbackStatus::Scheduled,
+            };
             let callback_result = match backend {
                 WriteBackend::Embedded => ACTIVE_EMBEDDED_TRANSACTION
                     .scope(
