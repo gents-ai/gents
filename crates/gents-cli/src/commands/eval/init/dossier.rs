@@ -495,7 +495,9 @@ mod tests {
         assert!(runtime_collections()
             .values()
             .all(|fields| !fields.is_empty()));
-        assert!(!runtime_collections()["InferenceBackend"].contains("auth"));
+        assert!(gents_protocol::schemas::CREDENTIAL_COLLECTION_NAMES
+            .iter()
+            .all(|name| !runtime_collections().contains_key(*name)));
     }
 
     fn canary_dir() -> PathBuf {
