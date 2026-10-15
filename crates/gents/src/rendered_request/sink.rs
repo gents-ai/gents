@@ -546,12 +546,11 @@ struct BlockPin {
     field_commit_cid: String,
 }
 
-/// Create mutation for one capture block. The payload travels as a typed
-/// GraphQL variable, never as rendered GraphQL text: block bytes are canonical
-/// JSON text, and the variable encoder preserves them exactly where rendered
-/// text would have to escape its way back to the same bytes.
-const CREATE_RENDERED_REQUEST_BLOCK_MUTATION: &str = "mutation($input: \
-RenderedRequestBlockMutationInputArg!) { create_RenderedRequestBlock(input: $input) { _docID } }";
+/// Typed variables preserve canonical JSON block bytes without GraphQL escaping.
+const CREATE_RENDERED_REQUEST_BLOCKS_MUTATION: &str = "mutation($input: \
+[RenderedRequestBlockMutationInputArg!]!) { create_RenderedRequestBlock(input: $input) { _docID content_key } }";
+
+const CAPTURE_BLOCK_CREATE_BATCH: usize = 32;
 
 /// The block pins of the latest earlier capture of this loop, by content key.
 ///
@@ -663,45 +662,70 @@ async fn stored_block_doc_ids_in_txn(
     Ok(stored)
 }
 
-/// Create one capture block document and return its document id. A create that
+/// A create that
 /// loses the unique content key to a concurrent writer surfaces as a
 /// transaction conflict; the transaction owner replays the capture on a fresh
 /// snapshot, whose existence read then finds the winner.
-async fn create_block_in_txn(
+/// Only content fields are written: DefraDB derives identical document ids
+/// from identical block content across writers.
+async fn create_blocks_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
-    block: &super::encoding::ChunkedBlock,
-) -> Result<String> {
-    let payload = std::str::from_utf8(&block.bytes).context(
-        "capture block bytes must be valid UTF-8; chunk boundaries land on character boundaries",
-    )?;
-    // Only content fields are written, so DefraDB's content-derived document
-    // id is the same for the same bytes on every writer and peer, and the
-    // document carries two field commits instead of four.
-    let variables = serde_json::json!({ "input": {
-        "content_key": block.content_key,
-        "payload": payload,
-    } });
-    let response = txn
-        .execute_with_variables(CREATE_RENDERED_REQUEST_BLOCK_MUTATION, &variables)
-        .await?;
-    // The result field is taken as the response's single mutation entry
-    // rather than by name: DefraDB answers a `create_X` mutation under an
-    // `add_X` key, and hard-coding either would turn a rename into a silently
-    // unverified write.
-    response
-        .get("data")
-        .and_then(single_mutation_result)
-        .and_then(Value::as_array)
-        .and_then(|rows| rows.first())
-        .and_then(|row| row.get("_docID"))
-        .and_then(Value::as_str)
-        .with_context(|| {
-            format!(
-                "creating capture block returned no document: {}",
-                block.content_key
+    blocks: &[&super::encoding::ChunkedBlock],
+) -> Result<std::collections::BTreeMap<String, String>> {
+    let mut created = std::collections::BTreeMap::new();
+    for batch in blocks.chunks(CAPTURE_BLOCK_CREATE_BATCH) {
+        let input = batch
+            .iter()
+            .map(|block| {
+                let payload = std::str::from_utf8(&block.bytes).context(
+                    "capture block bytes must be valid UTF-8; chunk boundaries land on character boundaries",
+                )?;
+                Ok(serde_json::json!({
+                    "content_key": block.content_key,
+                    "payload": payload,
+                }))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let response = txn
+            .execute_with_variables(
+                CREATE_RENDERED_REQUEST_BLOCKS_MUTATION,
+                &serde_json::json!({"input": input}),
             )
-        })
-        .map(ToOwned::to_owned)
+            .await?;
+        let rows = response
+            .get("data")
+            .and_then(single_mutation_result)
+            .and_then(Value::as_array)
+            .context("creating capture blocks returned no documents")?;
+        anyhow::ensure!(
+            rows.len() == batch.len(),
+            "capture block create omitted documents"
+        );
+        let expected = batch
+            .iter()
+            .map(|block| block.content_key.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        for row in rows {
+            let key = row
+                .get("content_key")
+                .and_then(Value::as_str)
+                .context("created capture block lacks content_key")?;
+            let doc_id = row
+                .get("_docID")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .context("created capture block lacks _docID")?;
+            anyhow::ensure!(
+                expected.contains(key),
+                "capture block create returned an unexpected key"
+            );
+            anyhow::ensure!(
+                created.insert(key.to_owned(), doc_id.to_owned()).is_none(),
+                "capture block create repeated a key"
+            );
+        }
+    }
+    Ok(created)
 }
 
 /// Pin every block a capture references: blocks the loop's previous manifest
@@ -725,12 +749,12 @@ async fn pin_capture_blocks(
         .map(|block| block.content_key.as_str())
         .collect();
     let mut doc_ids = stored_block_doc_ids_in_txn(txn, &keys).await?;
-    for block in &unpinned {
-        if !doc_ids.contains_key(&block.content_key) {
-            let doc_id = create_block_in_txn(txn, block).await?;
-            doc_ids.insert(block.content_key.clone(), doc_id);
-        }
-    }
+    let missing = unpinned
+        .iter()
+        .copied()
+        .filter(|block| !doc_ids.contains_key(&block.content_key))
+        .collect::<Vec<_>>();
+    doc_ids.extend(create_blocks_in_txn(txn, &missing).await?);
     let witness_docs = unpinned
         .iter()
         .map(|block| doc_ids[&block.content_key].clone())
@@ -1152,7 +1176,7 @@ mod tests {
 
         let request_json = json!({
             "model": "m",
-            "messages": [{"role": "user", "content": capture_text(23, 20 * 1024)}]
+            "messages": [{"role": "user", "content": capture_text(23, 256 * 1024)}]
         });
         let turns = (0..4)
             .map(|turn| rendered_turn(turn, request_json.clone()))
@@ -1171,7 +1195,9 @@ mod tests {
             .collect::<std::collections::BTreeSet<_>>();
         assert_eq!(rows.len(), keys.len(), "one document per content key");
         let layout = super::super::encoding::capture_block_layout(&request_json).unwrap();
-        for chunk in super::super::encoding::chunk_capture_body(&layout) {
+        let chunks = super::super::encoding::chunk_capture_body(&layout);
+        assert!(chunks.len() > CAPTURE_BLOCK_CREATE_BATCH);
+        for chunk in chunks {
             assert!(keys.contains(&chunk.content_key));
         }
         for rendered in &turns {
