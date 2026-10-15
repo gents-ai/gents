@@ -812,18 +812,16 @@ async fn dispatch_tool_calls_known_tool_and_reports_unknown() {
 async fn dispatch_tool_types_unparseable_args_as_argument_invalid() {
     use crate::llm::tool::{Tool, ToolDefinition};
 
-    // A tool whose Args require fields the (valid-JSON) call omits, so the real
-    // parse seam raises UnparseableArgs.
-    struct StrictArgsTool;
+    struct StrictArgsTool {
+        calls: Arc<AtomicUsize>,
+    }
     #[derive(Debug, thiserror::Error)]
     #[error("strict tool error")]
     struct StrictToolError;
     #[derive(serde::Deserialize)]
     struct StrictArgs {
         #[allow(dead_code)]
-        body: String,
-        #[allow(dead_code)]
-        findings: Vec<String>,
+        text: String,
     }
     impl Tool for StrictArgsTool {
         const NAME: &'static str = "strict";
@@ -838,38 +836,55 @@ async fn dispatch_tool_types_unparseable_args_as_argument_invalid() {
             }
         }
         async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
             Ok("ran".to_string())
         }
     }
 
-    let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(StrictArgsTool)];
-    // Truncated mid-string: escape-only repair cannot complete it, so it stays
-    // UnparseableArgs and dispatch types it `Failed(ArgumentInvalid)` carrying
-    // the model-facing notice — not the tool output.
-    let result = super::dispatch_tool(
-        &tools,
-        "strict",
-        r#"{"body":"cut off"#.to_string(),
-        None,
-        None,
-    )
-    .await;
-    match &result {
-        crate::tool_call_lifecycle::ToolOutcome::Failed {
-            class,
-            denial: None,
-            text,
-        } => {
-            assert_eq!(
-                *class,
-                crate::tool_call_lifecycle::FailureClass::ArgumentInvalid
-            );
-            assert!(
-                !text.contains("ran") && text.contains("token limit"),
-                "the notice must replace the tool output and guide the model to shorten, got: {text}"
-            );
+    #[derive(serde::Deserialize)]
+    struct Case {
+        termination: String,
+        arguments: String,
+        kind: String,
+    }
+    let cases: Vec<Case> = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/tool_argument_failure.json"
+    )))
+    .unwrap();
+    let cases: Vec<_> = cases
+        .into_iter()
+        .filter(|case| case.termination == "unreported" && case.kind == "malformed")
+        .collect();
+    assert!(!cases.is_empty());
+    let calls = Arc::new(AtomicUsize::new(0));
+    let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(StrictArgsTool {
+        calls: calls.clone(),
+    })];
+    for case in cases {
+        let result = super::dispatch_tool(&tools, "strict", case.arguments, None, None).await;
+        match &result {
+            crate::tool_call_lifecycle::ToolOutcome::Failed {
+                class,
+                denial: None,
+                text,
+            } => {
+                assert_eq!(
+                    *class,
+                    crate::tool_call_lifecycle::FailureClass::ArgumentInvalid
+                );
+                assert!(
+                    text.contains(&format!("arguments were rejected ({})", case.kind)),
+                    "{text}"
+                );
+                assert!(
+                    !text.contains("ran") && !text.contains("token limit"),
+                    "{text}"
+                );
+            }
+            other => panic!("unparseable args must classify ArgumentInvalid, got {other:?}"),
         }
-        other => panic!("unparseable args must classify ArgumentInvalid, got {other:?}"),
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
     }
 }
 

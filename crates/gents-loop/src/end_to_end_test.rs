@@ -20,6 +20,9 @@ use crate::tool::{Tool, ToolDefinition, ToolDyn};
 use crate::tool_call_lifecycle::ToolOutcome;
 use crate::{HookAction, ToolCallHookAction};
 
+#[cfg(feature = "native")]
+mod provider_finish_tests;
+
 /// A `CompletionModel` that replays a fixed script of streamed responses, one
 /// script entry per `stream` call: no network, no rig provider.
 #[derive(Clone, Default)]
