@@ -792,7 +792,7 @@ async fn an_explicitly_installed_documents_dependency_survives_its_dependent() {
 #[tokio::test]
 async fn an_upgrade_that_drops_a_documents_dependency_releases_it() {
     let (_node, access) = dependency_fixture().await;
-    let (_guards, dependee, dependent) = documents_dependency_pair(false);
+    let (_guards, dependee, dependent) = documents_dependency_pair(false, false);
     install_dependent_with_dependee(&access, &dependee, &dependent, None).await;
     let agents = access.execute("{ Agent { agent_id } }").await.unwrap();
     let before = agents["data"]["Agent"].as_array().unwrap().len();
@@ -955,9 +955,12 @@ async fn a_delayed_plugin_notification_projects_the_current_home_pin() {
 
 /// `dependent_fixture` rewired to depend on `dependee_fixture`, and
 /// `dependee_fixture` with the plugin `echo` when `dependee_plugin`; both
-/// packed the way an install reads them.
+/// packed the way an install reads them. With `broken_dependent_plugin` the
+/// dependent also ships an `echo` whose artifact is not a plugin, so its
+/// install fails at its own plugin step, after its dependency installed.
 fn documents_dependency_pair(
     dependee_plugin: bool,
+    broken_dependent_plugin: bool,
 ) -> (
     [tempfile::TempDir; 2],
     crate::pack_archive::PackArchive,
@@ -1002,6 +1005,23 @@ fn documents_dependency_pair(
     edit(&dependent_dir, &|manifest| {
         manifest["dependencies"] = json!(["fixture/dependee_fixture"]);
     });
+    if broken_dependent_plugin {
+        std::fs::create_dir_all(dependent_dir.join("plugins")).unwrap();
+        std::fs::write(dependent_dir.join("plugins/echo.afb"), b"not a plugin").unwrap();
+        edit(&dependent_dir, &|manifest| {
+            manifest["assets"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!("plugins/echo.afb"));
+            manifest["plugins"] = json!([{
+                "name": "echo",
+                "description": "Echoes nothing.",
+                "artifact": "plugins/echo.afb",
+                "language": "rust",
+                "input_schema": {"type": "object"},
+            }]);
+        });
+    }
     (
         [dependee_guard, dependent_guard],
         archive(&dependee_dir),
@@ -1015,6 +1035,17 @@ async fn install_dependent_with_dependee(
     dependent: &crate::pack_archive::PackArchive,
     plugin_home: Option<&std::path::Path>,
 ) {
+    try_install_dependent_with_dependee(access, dependee, dependent, plugin_home)
+        .await
+        .unwrap();
+}
+
+async fn try_install_dependent_with_dependee(
+    access: &ConfigAccess,
+    dependee: &crate::pack_archive::PackArchive,
+    dependent: &crate::pack_archive::PackArchive,
+    plugin_home: Option<&std::path::Path>,
+) -> Result<InstallReport> {
     let authored = crate::pack::load_pack_config(
         dependent.manifest(),
         &crate::pack::PackInstallOptions {
@@ -1046,13 +1077,12 @@ async fn install_dependent_with_dependee(
         DriftPolicy::Refuse,
     )
     .await
-    .unwrap();
 }
 
 #[tokio::test]
 async fn a_documents_dependency_installs_non_explicitly_before_its_dependent() {
     let (_node, access) = dependency_fixture().await;
-    let (_guards, dependee, dependent) = documents_dependency_pair(false);
+    let (_guards, dependee, dependent) = documents_dependency_pair(false, false);
     install_dependent_with_dependee(&access, &dependee, &dependent, None).await;
 
     let rows = access
@@ -1075,9 +1105,28 @@ async fn a_documents_dependency_installs_non_explicitly_before_its_dependent() {
 }
 
 #[tokio::test]
+async fn a_failing_dependent_leaves_its_documents_dependency_installed() {
+    let (_node, access) = dependency_fixture().await;
+    let (_guards, dependee, dependent) = documents_dependency_pair(false, true);
+    let home = tempfile::tempdir().unwrap();
+    try_install_dependent_with_dependee(&access, &dependee, &dependent, Some(home.path()))
+        .await
+        .unwrap_err();
+
+    let rows = access
+        .execute("{ PackInstallation { coordinate explicit } }")
+        .await
+        .unwrap();
+    assert_eq!(
+        rows["data"]["PackInstallation"],
+        json!([{"coordinate": "fixture/dependee_fixture", "explicit": false}])
+    );
+}
+
+#[tokio::test]
 async fn a_documents_dependency_plugin_installs_before_the_dependent_documents() {
     let (_node, access) = dependency_fixture().await;
-    let (_guards, dependee, dependent) = documents_dependency_pair(true);
+    let (_guards, dependee, dependent) = documents_dependency_pair(true, false);
     let home = tempfile::tempdir().unwrap();
     install_dependent_with_dependee(&access, &dependee, &dependent, Some(home.path())).await;
 
@@ -1090,6 +1139,26 @@ async fn a_documents_dependency_plugin_installs_before_the_dependent_documents()
         .await
         .unwrap();
     assert_eq!(installed.unwrap().digest, dependee.digest());
+}
+
+#[tokio::test]
+async fn a_documents_dependency_plugin_outlives_a_failing_dependent() {
+    let (_node, access) = dependency_fixture().await;
+    let (_guards, dependee, dependent) = documents_dependency_pair(true, true);
+    let home = tempfile::tempdir().unwrap();
+    try_install_dependent_with_dependee(&access, &dependee, &dependent, Some(home.path()))
+        .await
+        .unwrap_err();
+
+    let record = crate::plugin::store::read_record(home.path(), "fixture", "echo").unwrap();
+    assert_eq!(
+        record.owner_pack_coordinate.as_deref(),
+        Some("fixture/dependee_fixture")
+    );
+    let dependent = read_installed_pack(&access, OWNER, "fixture/dependent_fixture")
+        .await
+        .unwrap();
+    assert!(dependent.is_none(), "the dependent installed nothing");
 }
 
 /// The error `prepare_document_pack_install` gives `dependent_fixture` when
