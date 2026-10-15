@@ -264,6 +264,48 @@ fn session_snapshot_binds_generated_session_turn_cases() {
 }
 
 #[test]
+fn session_queue_order_matches_native_arrival_model_after_claim() {
+    let cases: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../gents/tests/fixtures/session_queue_order.json"
+    ))
+    .unwrap();
+    for case in cases.as_array().unwrap() {
+        let modeled: Vec<lean_vocab_test::LeanSessionTurnRow> =
+            serde_json::from_value(case["rows"].clone()).unwrap();
+        let rows = lean_session_rows("session-1", &modeled);
+        let store = ClientStore::from_rows(ClientStoreRows {
+            sessions: vec![contract_session(
+                "session-1",
+                rows.last().unwrap().requester_did.clone(),
+                rows.last(),
+            )],
+            requests: rows.clone(),
+            ..Default::default()
+        });
+        let mut snapshot = build_session_snapshot_from_store(&store, "session-1", None).unwrap();
+        let docs = |field: &str| {
+            case[field]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|id| format!("doc-{}", id.as_u64().unwrap()))
+                .collect::<Vec<_>>()
+        };
+        super::super::session::order_queued_turns(&mut snapshot, &docs("arrivals"));
+        assert_eq!(
+            snapshot
+                .queued_turns
+                .iter()
+                .filter_map(|turn| turn.request_doc_id.clone())
+                .collect::<Vec<_>>(),
+            docs("expected"),
+            "{}",
+            case["name"]
+        );
+    }
+}
+
+#[test]
 fn session_snapshot_projects_durable_goal_state() {
     let goal = GoalRow {
         goal_id: "goal-1".into(),
