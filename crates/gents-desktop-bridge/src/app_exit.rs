@@ -157,4 +157,60 @@ mod tests {
         assert!(!state.is_quitting());
         assert!(state.begin().is_some());
     }
+
+    #[tokio::test]
+    async fn client_start_claim_is_blocked_during_exit_and_restored_after_failed_exit() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let config = crate::config::BridgeConfig {
+            home: crate::config::HomePolicy::FixedRoot(temp.path().join("desktop")),
+            bootstrap: crate::config::BootstrapPolicy::PairedRemoteOnly,
+            store_key_custody: gents::store_key::StoreKeyCustodyChoice::File,
+            ..Default::default()
+        };
+        let policy = crate::state::resolve_policy(&config, None).expect("policy");
+        let state = DesktopAppState::new(policy);
+
+        let preparation = state.app_exit.clone().begin().expect("begin exit");
+        assert!(matches!(
+            crate::tauri_commands::lifecycle::register_client_start(&state),
+            Err(error) if error.code == crate::error::BridgeErrorCode::ClientStartFailed
+        ));
+        assert!(state
+            .bridge
+            .lock()
+            .expect("bridge lock")
+            .start_inflight
+            .is_none());
+
+        assert!(preparation
+            .settle(async { Err(BridgeError::untyped("managed stop failed")) })
+            .await
+            .is_err());
+        drop(preparation);
+        assert!(!state.app_exit.is_quitting());
+        let registration = crate::tauri_commands::lifecycle::register_client_start(&state)
+            .expect("failed exit permits client start retry");
+        let crate::tauri_commands::lifecycle::ClientStartRegistration::Claimed {
+            progress_tx,
+            progress_rx: _,
+        } = registration
+        else {
+            panic!("retry must claim an empty client-start slot")
+        };
+        state.bridge.lock().expect("bridge lock").start_inflight = None;
+        drop(progress_tx);
+
+        let preparation = state.app_exit.clone().begin().expect("begin second exit");
+        preparation
+            .settle(async { Ok::<(), BridgeError>(()) })
+            .await
+            .expect("successful exit preparation");
+        drop(preparation);
+        assert!(state.app_exit.ready.load(Ordering::Acquire));
+        assert!(state.app_exit.is_quitting());
+        assert!(matches!(
+            crate::tauri_commands::lifecycle::register_client_start(&state),
+            Err(error) if error.code == crate::error::BridgeErrorCode::ClientStartFailed
+        ));
+    }
 }

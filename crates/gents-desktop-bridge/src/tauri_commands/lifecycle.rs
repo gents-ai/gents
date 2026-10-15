@@ -106,6 +106,12 @@ pub async fn desktop_client_start<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, DesktopAppState>,
 ) -> Result<DesktopClientSnapshot, BridgeError> {
+    if state.app_exit.is_quitting() {
+        return Err(BridgeError::new(
+            BridgeErrorCode::ClientStartFailed,
+            "desktop client cannot start while the desktop is shutting down",
+        ));
+    }
     let grants = snapshot_grants(&state);
 
     // Single-flight: return the live core, wait on an in-flight start, or become
@@ -148,36 +154,80 @@ pub async fn desktop_client_start<R: Runtime>(
 
 /// Register as the single-flight starter or subscribe to the in-flight one.
 /// Synchronous so the bridge mutex is never held across an await.
-fn claim_or_join_client_start<R: Runtime>(
-    app: &AppHandle<R>,
-    state: &State<'_, DesktopAppState>,
-) -> watch::Receiver<ClientStartProgress> {
+pub(crate) enum ClientStartRegistration {
+    Joined(watch::Receiver<ClientStartProgress>),
+    Ready(watch::Receiver<ClientStartProgress>),
+    Claimed {
+        progress_tx: watch::Sender<ClientStartProgress>,
+        progress_rx: watch::Receiver<ClientStartProgress>,
+    },
+}
+
+/// The bridge mutex is the linearization point for a new client-start claim.
+/// Exit checks happen under the same mutex before the slot can be installed.
+pub(crate) fn register_client_start(
+    state: &DesktopAppState,
+) -> Result<ClientStartRegistration, BridgeError> {
     let mut bridge = state.bridge.lock().expect("desktop bridge lock poisoned");
+
+    if state.app_exit.is_quitting() {
+        return Err(BridgeError::new(
+            BridgeErrorCode::ClientStartFailed,
+            "desktop client cannot start while the desktop is shutting down",
+        ));
+    }
 
     // Another caller may have installed the core between our check and this lock.
     // Waiters still use the progress channel; Ready is sent after install.
     if let Some(sender) = bridge.start_inflight.as_ref() {
         tracing::debug!("desktop client start: joining in-flight single-flight start");
-        return sender.subscribe();
+        return Ok(ClientStartRegistration::Joined(sender.subscribe()));
     }
 
     let (tx, rx) = watch::channel(ClientStartProgress::Pending);
     // If a core is already live, mark ready immediately so waiters short-circuit.
     if bridge.core.is_some() {
         let _ = tx.send(ClientStartProgress::Ready);
-        return rx;
+        return Ok(ClientStartRegistration::Ready(rx));
     }
 
     bridge.start_inflight = Some(tx.clone());
-    let paths = state.policy.desktop_paths.clone();
-    let app_for_start = app.clone();
-    drop(bridge);
+    Ok(ClientStartRegistration::Claimed {
+        progress_tx: tx,
+        progress_rx: rx,
+    })
+}
 
-    tracing::info!("desktop client start: single-flight starter claimed");
-    tauri::async_runtime::spawn(async move {
-        run_detached_client_start(app_for_start, paths, tx).await;
-    });
-    rx
+fn claim_or_join_client_start<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &State<'_, DesktopAppState>,
+) -> watch::Receiver<ClientStartProgress> {
+    let registration = match register_client_start(state.inner()) {
+        Ok(registration) => registration,
+        Err(error) => {
+            let (sender, receiver) = watch::channel(ClientStartProgress::Failed(error));
+            drop(sender);
+            return receiver;
+        }
+    };
+    match registration {
+        ClientStartRegistration::Joined(receiver) | ClientStartRegistration::Ready(receiver) => {
+            receiver
+        }
+        ClientStartRegistration::Claimed {
+            progress_tx,
+            progress_rx,
+        } => {
+            let paths = state.policy.desktop_paths.clone();
+            let app_for_start = app.clone();
+
+            tracing::info!("desktop client start: single-flight starter claimed");
+            tauri::async_runtime::spawn(async move {
+                run_detached_client_start(app_for_start, paths, progress_tx).await;
+            });
+            progress_rx
+        }
+    }
 }
 
 async fn run_detached_client_start<R: Runtime>(
