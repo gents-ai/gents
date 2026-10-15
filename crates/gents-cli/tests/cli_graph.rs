@@ -206,6 +206,19 @@ fn clean_binary_install_is_idempotent_activates_and_is_owner_fenced() -> Result<
     Ok(())
 }
 
+/// A private copy of `dependent_fixture` depending on `review_graph`, so the
+/// graph dependency path stays covered now that the checked-in fixture
+/// depends on a documents pack.
+fn dependent_on_review_graph(parent: &std::path::Path) -> Result<std::path::PathBuf> {
+    let dependent = parent.join("dependent_on_review_graph");
+    copy_dir_all(&fixture_pack_dir("dependent_fixture"), &dependent)?;
+    let manifest_path = dependent.join("manifest.json");
+    let mut manifest: Value = serde_json::from_str(&std::fs::read_to_string(&manifest_path)?)?;
+    manifest["dependencies"] = serde_json::json!(["fixture/review_graph"]);
+    std::fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest)?)?;
+    Ok(dependent)
+}
+
 #[test]
 fn offline_pack_install_with_a_graph_dependency_holds_one_store_claim() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating pack install tempdir")?;
@@ -235,7 +248,7 @@ fn offline_pack_install_with_a_graph_dependency_holds_one_store_claim() -> Resul
         .iter()
         .map(|slot| format!("{slot}={profile}"))
         .collect();
-    let dependent = fixture_pack_dir("dependent_fixture");
+    let dependent = dependent_on_review_graph(tempdir.path())?;
     let mut install_args = vec![
         "pack".to_owned(),
         "install".to_owned(),
@@ -435,7 +448,7 @@ fn a_graph_dependency_is_released_with_its_dependent() -> Result<()> {
         ],
     )?;
 
-    let dependent = fixture_pack_dir("dependent_fixture");
+    let dependent = dependent_on_review_graph(tempdir.path())?;
     let mut install_args = vec![
         "pack".to_owned(),
         "install".to_owned(),
