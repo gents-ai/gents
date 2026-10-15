@@ -1792,7 +1792,7 @@ mod tests {
                         "residual open row {model_id} should remain on either side of the cursor"
                     );
                 }
-                let page_query = open_mailbox_page_query("did:test:agent", Some(cursor));
+                let page_query = open_mailbox_page_query("did:test:agent", Some(current_cursor));
                 let explain = node
                     .execute(&format!("query @explain(type: execute) {page_query}"))
                     .await;
