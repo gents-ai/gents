@@ -1,5 +1,6 @@
 [target.aarch64-apple-darwin]
 linker = "./scripts/macos-clang-lld.sh"
+rustflags = ["--cfg", "aes_armv8", "--cfg", "polyval_armv8"]
 
 [target.x86_64-apple-darwin]
 linker = "./scripts/macos-clang-lld.sh"
@@ -22,3 +23,4 @@ linker = "./scripts/linux-lld.sh"
 
 [target.aarch64-unknown-linux-gnu]
 linker = "./scripts/linux-lld.sh"
+rustflags = ["--cfg", "aes_armv8", "--cfg", "polyval_armv8"]
