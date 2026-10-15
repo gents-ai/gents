@@ -16,7 +16,7 @@ use gents_protocol::output::{
 use gents_protocol::row::AgentRequestRow;
 
 use crate::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
-use crate::graphql::escape_graphql_string;
+use crate::graphql::{escape_graphql_string, mutation_documents};
 use crate::lifecycle::execution_policy::{authorize_output_append, LeaseObservation};
 use crate::session::canonical_rows::{
     decode_transcript_message_row, output_segment_create_variables,
@@ -34,6 +34,60 @@ pub(crate) struct ProviderPublicationPlan {
     pub(crate) background_calls: Vec<String>,
     /// The queued message this authored publication answers and supersedes.
     pub(crate) consumes_folded: Option<crate::lifecycle::queue::FoldedConsumption>,
+}
+
+fn created_tool_call_doc_ids(
+    response: &serde_json::Value,
+    expected_keys: &[String],
+) -> Result<Vec<String>> {
+    let rows = mutation_documents(response, "create_AgentToolCall")?
+        .context("create AgentToolCall omitted response data")?;
+    anyhow::ensure!(
+        !rows.is_empty(),
+        "create AgentToolCall omitted its mutation field"
+    );
+    anyhow::ensure!(
+        rows.len() == expected_keys.len(),
+        "create AgentToolCall returned {} rows for {} tool calls",
+        rows.len(),
+        expected_keys.len()
+    );
+    let expected = expected_keys
+        .iter()
+        .map(String::as_str)
+        .collect::<std::collections::HashSet<_>>();
+    anyhow::ensure!(
+        expected.len() == expected_keys.len(),
+        "provider publication contains duplicate physical tool-call keys"
+    );
+    let mut doc_ids = std::collections::HashMap::with_capacity(rows.len());
+    for row in rows {
+        let key = row
+            .get("tool_call_key")
+            .and_then(serde_json::Value::as_str)
+            .context("create AgentToolCall omitted tool_call_key")?;
+        anyhow::ensure!(
+            expected.contains(key),
+            "create AgentToolCall returned an unexpected tool_call_key"
+        );
+        let doc_id = row
+            .get("_docID")
+            .and_then(serde_json::Value::as_str)
+            .filter(|id| !id.trim().is_empty())
+            .context("create AgentToolCall omitted its physical identity")?;
+        anyhow::ensure!(
+            doc_ids.insert(key.to_owned(), doc_id.to_owned()).is_none(),
+            "create AgentToolCall returned a duplicate tool_call_key"
+        );
+    }
+    expected_keys
+        .iter()
+        .map(|key| {
+            doc_ids
+                .remove(key)
+                .with_context(|| format!("create AgentToolCall omitted tool_call_key {key:?}"))
+        })
+        .collect()
 }
 
 /// Provider-native ids of a turn's `agent_new`/`agent_message` calls: a
@@ -169,7 +223,7 @@ pub(crate) fn retained_partial_blocks(
 }
 
 pub(crate) async fn close_provider_attempt(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     generation: &str,
     prepared: &OutputSegment,
     close: ProviderAttemptClose,
@@ -181,7 +235,7 @@ pub(crate) async fn close_provider_attempt(
 /// auxiliary closure without authorizing another write. Ordinary provider
 /// closes and every fresh auxiliary close remain fenced to the writer generation.
 pub(crate) async fn close_provider_attempt_at(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     generation: &str,
     prepared: &OutputSegment,
     close: ProviderAttemptClose,
@@ -617,7 +671,7 @@ use crate::graphql::created_doc_id;
 /// entry deliberately rejects them rather than publishing executable intent
 /// without its lifecycle documents.
 pub(crate) async fn publish_provider_turn(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     generation: &str,
     plan: ProviderPublicationPlan,
 ) -> Result<PublishedProviderTurn> {
@@ -626,7 +680,7 @@ pub(crate) async fn publish_provider_turn(
 
 #[cfg(test)]
 pub(crate) async fn publish_provider_turn_at(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     generation: &str,
     plan: ProviderPublicationPlan,
     now: DateTime<Utc>,
@@ -635,7 +689,7 @@ pub(crate) async fn publish_provider_turn_at(
 }
 
 pub(super) async fn publish_provider_turn_with_time(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     generation: &str,
     plan: ProviderPublicationPlan,
     fixture_now: Option<DateTime<Utc>>,
@@ -674,7 +728,12 @@ pub(super) async fn publish_provider_turn_with_time(
                 LeaseObservation { request: state, generation: owner, deadline_ms: deadline },
                 generation, fixture_now.unwrap_or_else(Utc::now).timestamp_millis()), "provider publication lost its live lease");
 
-            let records = load_source_in_txn(txn, exemplar).await?;
+            let mut reader = crate::session::TxnCanonicalReader::new_single(
+                txn, &exemplar.node_did, exemplar.requester_did.as_deref(),
+            );
+            let records = reader.load_source(
+                &exemplar.request_doc_id, &exemplar.session_id, &exemplar.source,
+            ).await?;
             if records.iter().any(|row| row.segment.close.is_some()) {
                 if let Some(candidate) = exemplar.close.as_ref() {
                     let accepted = records
@@ -691,6 +750,7 @@ pub(super) async fn publish_provider_turn_with_time(
                     .map(|row| row.segment.writer.clone());
                 let published = replay_publication_in_txn(
                     txn,
+                    &mut reader,
                     exemplar,
                     generation,
                     accepted_writer.as_ref(),
@@ -745,7 +805,8 @@ pub(super) async fn publish_provider_turn_with_time(
                     .all(|id| encoded.tool_calls.iter().any(|tool| tool.id == *id)),
                 "background publication names a tool call outside this turn"
             );
-            let mut tool_doc_ids = Vec::with_capacity(encoded.tool_calls.len());
+            let mut tool_call_keys = Vec::with_capacity(encoded.tool_calls.len());
+            let mut tool_inputs = Vec::with_capacity(encoded.tool_calls.len());
             for tool in &encoded.tool_calls {
                 let await_mode = if background_calls.contains(&tool.id) {
                     crate::tool_call_lifecycle::AwaitMode::Background
@@ -753,9 +814,8 @@ pub(super) async fn publish_provider_turn_with_time(
                     crate::tool_call_lifecycle::AwaitMode::Foreground
                 };
                 let tool_call_key = format!("{}:{}:{}", prepared.request_doc_id, message_key, tool.native_index);
-                let created = txn.execute_with_variables(
-                    "mutation($input: AgentToolCallMutationInputArg!) { create_AgentToolCall(input: $input) { _docID } }",
-                    &serde_json::json!({"input": {
+                tool_call_keys.push(tool_call_key.clone());
+                tool_inputs.push(serde_json::json!({
                         "tool_call_key": tool_call_key,
                         "request_id": request.request_id,
                         "request_doc_id": prepared.request_doc_id,
@@ -768,10 +828,17 @@ pub(super) async fn publish_provider_turn_with_time(
                         "lifecycle_state": "pending",
                         "deadline_at": tool_deadline_at,
                         "await_mode": await_mode.as_str()
-                    }}),
-                ).await?;
-                tool_doc_ids.push(created_doc_id(&created, "AgentToolCall")?);
+                    }));
             }
+            let tool_doc_ids = if tool_inputs.is_empty() {
+                Vec::new()
+            } else {
+                let created = txn.execute_with_variables(
+                    "mutation($input: [AgentToolCallMutationInputArg!]!) { create_AgentToolCall(input: $input) { _docID tool_call_key } }",
+                    &serde_json::json!({"input": tool_inputs}),
+                ).await?;
+                created_tool_call_doc_ids(&created, &tool_call_keys)?
+            };
             let blocks = encoded.build_blocks(&close_doc_id, &tool_doc_ids)?;
             let message = TranscriptMessage {
                 message_key,
@@ -791,9 +858,7 @@ pub(super) async fn publish_provider_turn_with_time(
                 CREATE_AGENT_MESSAGE_MUTATION, &transcript_message_create_variables(&message)?,
             ).await?;
             let message_doc_id = created_doc_id(&created, "AgentMessage")?;
-            let (_, reconstructed) = crate::session::load_canonical_message_in_txn(
-                txn, &message_doc_id, &prepared.node_did, prepared.requester_did.as_deref(),
-            ).await?;
+            let (_, reconstructed) = reader.load_created_message(&message_doc_id, &close_doc_id).await?;
             anyhow::ensure!(
                 &reconstructed == expected.as_ref(),
                 "first publication native message changed"
@@ -852,6 +917,7 @@ pub(super) async fn publish_provider_turn_with_time(
 
 async fn replay_publication_in_txn(
     txn: &ConfigApplyTxn<'_>,
+    reader: &mut crate::session::TxnCanonicalReader<'_, '_>,
     exemplar: &OutputSegment,
     generation: &str,
     accepted_writer: Option<&OutputWriter>,
@@ -898,13 +964,8 @@ async fn replay_publication_in_txn(
                     })),
         "publication replay generation changed"
     );
-    let (_, reconstructed) = crate::session::load_canonical_message_in_txn(
-        txn,
-        &row.doc_id,
-        &exemplar.node_did,
-        exemplar.requester_did.as_deref(),
-    )
-    .await?;
+    reader.observe_headers(std::slice::from_ref(&row));
+    let (_, reconstructed) = reader.load_message(&row.doc_id).await?;
     anyhow::ensure!(
         &reconstructed == expected,
         "publication replay native message changed"
@@ -1001,7 +1062,7 @@ async fn replay_publication_in_txn(
 /// Append exactly one provider flush. Replaying the same committed fact is a
 /// read, even after expiry; it never renews or reopens its source.
 pub(crate) async fn append_provider_segment(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     generation: &str,
     prepared: &OutputSegment,
 ) -> Result<String> {
@@ -1017,7 +1078,7 @@ pub(crate) async fn append_provider_segment(
 
 #[cfg(test)]
 pub(crate) async fn append_provider_segment_at(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     generation: &str,
     prepared: &OutputSegment,
     now: DateTime<Utc>,
@@ -1184,6 +1245,8 @@ async fn load_source_in_txn(
     txn: &ConfigApplyTxn<'_>,
     prepared: &OutputSegment,
 ) -> Result<Vec<OutputSegmentRow>> {
+    #[cfg(test)]
+    crate::session::record_request_output_scan();
     let response = txn
         .execute_local_response(
             &crate::session::canonical_rows::request_output_segments_query(
@@ -1208,4 +1271,50 @@ async fn load_source_in_txn(
             .filter(|row| row.segment.source == prepared.source)
             .collect()
     })
+}
+
+#[cfg(test)]
+mod tool_call_batch_tests {
+    use super::created_tool_call_doc_ids;
+
+    #[test]
+    fn batch_create_rows_bind_to_tool_keys_not_response_order() {
+        let response = serde_json::json!({
+            "data": {
+                "create_AgentToolCall": [
+                    {"_docID": "doc-b", "tool_call_key": "key-b"},
+                    {"_docID": "doc-a", "tool_call_key": "key-a"}
+                ]
+            }
+        });
+        let keys = vec!["key-a".to_owned(), "key-b".to_owned()];
+
+        assert_eq!(
+            created_tool_call_doc_ids(&response, &keys).unwrap(),
+            vec!["doc-a".to_owned(), "doc-b".to_owned()]
+        );
+    }
+
+    #[test]
+    fn batch_create_rejects_missing_or_duplicate_tool_keys() {
+        let keys = vec!["key-a".to_owned(), "key-b".to_owned()];
+        let missing = serde_json::json!({
+            "data": {
+                "create_AgentToolCall": [
+                    {"_docID": "doc-a", "tool_call_key": "key-a"}
+                ]
+            }
+        });
+        assert!(created_tool_call_doc_ids(&missing, &keys).is_err());
+
+        let duplicate = serde_json::json!({
+            "data": {
+                "create_AgentToolCall": [
+                    {"_docID": "doc-a", "tool_call_key": "key-a"},
+                    {"_docID": "doc-b", "tool_call_key": "key-a"}
+                ]
+            }
+        });
+        assert!(created_tool_call_doc_ids(&duplicate, &keys).is_err());
+    }
 }

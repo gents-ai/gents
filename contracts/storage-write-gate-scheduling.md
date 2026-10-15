@@ -60,7 +60,7 @@ DefraDB execution or its internal locks**. The negative control is test-only.
 The consumer waits on the actual held mutex, not on a copied state-machine flag.
 
 `lean_independent_completion_releases_native_canonical_gate` additionally drives
-the positive fixture through `ConfigAccess::transact_local` and
+the positive fixture through `ConfigAccess::transact_local_write` and
 `write_local_response` on an embedded node. The finalizer deliberately waits
 inside its transaction; the sibling canonical writer then completes without
 further stream polls, and both durable rows are read back. This fences the Gents

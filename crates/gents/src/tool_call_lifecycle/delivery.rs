@@ -2203,7 +2203,7 @@ mod spawned_background_tests {
                 !matches!(result, Ok(true)),
                 "changed comparison must not publish"
             );
-            let row = crate::config_client::ConfigAccess::Local(node.clone())
+            let row = crate::config_client::ConfigAccess::local(node.clone())
                 .execute(&format!(
                     r#"{{ AgentToolCall(docID: "{doc_id}") {{ lifecycle_state tool_name }} }}"#,
                 ))
@@ -2274,7 +2274,7 @@ mod spawned_background_tests {
             rendered
         );
         let observed = crate::tool_call_lifecycle::load_tool_call_presentation(
-            &crate::config_client::ConfigAccess::Local(node.clone()),
+            &crate::config_client::ConfigAccess::local(node.clone()),
             &tool_doc_id,
             &tool.node_did,
             &tool.session_id,
@@ -2440,7 +2440,7 @@ mod spawned_background_tests {
             .unwrap();
             assert_eq!(raw, "stdout-before-terminal\n");
             let presentation = crate::tool_call_lifecycle::load_tool_call_presentation(
-                &crate::config_client::ConfigAccess::Local(node.clone()),
+                &crate::config_client::ConfigAccess::local(node.clone()),
                 &tool_doc_id,
                 &tool.node_did,
                 &tool.session_id,
@@ -2545,7 +2545,7 @@ mod spawned_background_tests {
             update: tools,
         }])
         .unwrap();
-        ConfigAccess::transact_local(node, None, "test.output_budget", |txn| {
+        ConfigAccess::transact_local_write(node, None, "test.output_budget", |txn| {
             let plan = &plan;
             Box::pin(async move { apply_desired_state_plan(txn, plan).await })
         })
@@ -2558,7 +2558,7 @@ mod spawned_background_tests {
         tool: &ToolCallLifecycle,
     ) -> String {
         crate::tool_call_lifecycle::load_tool_call_presentation(
-            &crate::config_client::ConfigAccess::Local(node.clone()),
+            &crate::config_client::ConfigAccess::local(node.clone()),
             tool.doc_id().unwrap(),
             &tool.node_did,
             &tool.session_id,

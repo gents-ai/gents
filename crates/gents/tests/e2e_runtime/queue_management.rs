@@ -34,7 +34,7 @@ pub(super) async fn enqueue(
         AgentRequestAdmissionRecord::local_self(did),
     );
     request.input = gents::lifecycle::prepare_user_message_input(
-        &ConfigAccess::Local(db.node.clone()),
+        &ConfigAccess::local(db.node.clone()),
         did,
         session,
         request.input,
@@ -49,7 +49,7 @@ pub(super) async fn insert_signed(db: &TestDb, mut request: AgentRequestCreate) 
     gents::sign_agent_request_create(db.node_identity.as_ref(), &mut request)
         .await
         .unwrap();
-    let response = ConfigAccess::Local(db.node.clone())
+    let response = ConfigAccess::local(db.node.clone())
         .write(
             "test.queue_signed_input",
             &request.graphql_mutation().unwrap(),
@@ -66,7 +66,7 @@ async fn submit_edit(
     edit: PendingQueueEdit,
 ) -> anyhow::Result<SessionInputEditReceipt> {
     let did = db.node_identity.did();
-    let existing = ConfigAccess::Local(db.node.clone())
+    let existing = ConfigAccess::local(db.node.clone())
         .execute(&format!(
             r#"{{ AgentSession(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
             escape_graphql_string(session_id)
@@ -92,7 +92,7 @@ async fn submit_edit(
         cancel.clone(),
     ));
     let result = submit_pending_user_edit(
-        &ConfigAccess::Local(db.node.clone()),
+        &ConfigAccess::local(db.node.clone()),
         db.node_identity.as_ref(),
         AgentRequestAdmissionRecord::local_self(did),
         None,
@@ -107,7 +107,7 @@ async fn submit_edit(
 }
 
 pub(super) async fn row(db: &TestDb, doc: &str) -> serde_json::Value {
-    let response = ConfigAccess::Local(db.node.clone()).execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID request_id content input lifecycle_state failure_reason admission_signature superseded_by_request_doc_id terminal_output }} }}"#, escape_graphql_string(doc))).await.unwrap();
+    let response = ConfigAccess::local(db.node.clone()).execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID request_id content input lifecycle_state failure_reason admission_signature superseded_by_request_doc_id terminal_output }} }}"#, escape_graphql_string(doc))).await.unwrap();
     let rows = response["data"]["AgentRequest"].as_array().unwrap();
     assert_eq!(rows.len(), 1);
     rows[0].clone()
@@ -117,7 +117,7 @@ pub(super) async fn row(db: &TestDb, doc: &str) -> serde_json::Value {
 async fn signed_queue_edit_reorders_preserves_slots_and_cancels_atomically() {
     let db = test_db("signed-queue-management").await;
     let did = db.node_identity.did();
-    let access = ConfigAccess::Local(db.node.clone());
+    let access = ConfigAccess::local(db.node.clone());
     let first = enqueue(
         &db,
         "general",
@@ -251,7 +251,7 @@ async fn signed_queue_edit_reorders_preserves_slots_and_cancels_atomically() {
 async fn stale_queue_snapshot_rejects_edit_without_mutating_signed_requests() {
     let db = test_db("stale-queue-management").await;
     let did = db.node_identity.did();
-    let access = ConfigAccess::Local(db.node.clone());
+    let access = ConfigAccess::local(db.node.clone());
     let first = enqueue(
         &db,
         "general",
@@ -308,7 +308,7 @@ async fn stale_queue_snapshot_rejects_edit_without_mutating_signed_requests() {
 async fn signed_pending_replacement_authenticates_delivery_and_each_position_field() {
     let db = test_db("queue-signature-tampering").await;
     let did = db.node_identity.did();
-    let access = ConfigAccess::Local(db.node.clone());
+    let access = ConfigAccess::local(db.node.clone());
     let original = enqueue(
         &db,
         "general",

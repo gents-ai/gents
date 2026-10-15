@@ -11,9 +11,11 @@ use gents_protocol::schemas::{
 /// event carries only the stable `collection_id` string; consumers usually
 /// want the human-readable name. Collection IDs never change for the
 /// lifetime of a collection, so entries are never invalidated.
+/// Unknown IDs may become available through schema replication; only known
+/// ignored collections can be negatively cached.
 #[derive(Default)]
 pub struct CollectionResolver {
-    cache: RwLock<HashMap<String, &'static str>>,
+    cache: RwLock<HashMap<String, Option<&'static str>>>,
 }
 
 impl CollectionResolver {
@@ -33,13 +35,12 @@ impl CollectionResolver {
             .get(collection_id)
             .copied()
         {
-            return Ok(Some(name));
+            return Ok(name);
         }
 
         for name in ALL_COLLECTION_NAMES
             .iter()
             .chain(RUNTIME_COLLECTION_NAMES.iter())
-            .filter(|name| **name != INFERENCE_CALL_NAME)
         {
             let collection = node
                 .get_collection(name)
@@ -48,7 +49,10 @@ impl CollectionResolver {
                 self.cache
                     .write()
                     .expect("collection resolver lock poisoned")
-                    .insert(c.collection_id.clone(), *name);
+                    .insert(
+                        c.collection_id.clone(),
+                        (*name != INFERENCE_CALL_NAME).then_some(*name),
+                    );
             }
         }
 
@@ -57,7 +61,8 @@ impl CollectionResolver {
             .read()
             .expect("collection resolver lock poisoned")
             .get(collection_id)
-            .copied())
+            .copied()
+            .flatten())
     }
 }
 
@@ -147,6 +152,11 @@ mod tests {
             .await
             .expect("resolve");
         assert_eq!(name, None);
+        assert_eq!(
+            resolver.cache.read().expect("lock").get(&collection_id),
+            Some(&None),
+            "ignored known collections must not repeat the schema scan"
+        );
     }
 
     #[tokio::test]

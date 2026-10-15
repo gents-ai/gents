@@ -804,9 +804,12 @@ impl GoalSource {
     }
 
     async fn request_usage_limit_failure(&self, request_id: &str) -> Result<Option<String>> {
-        let call = ConfigAccess::transact_local(&self.node, None, "goal.last_failed_call", |txn| {
-            Box::pin(last_failed_call_in_txn(txn, request_id))
-        })
+        let call = ConfigAccess::transact_local_readonly(
+            &self.node,
+            None,
+            "goal.last_failed_call",
+            |txn| Box::pin(last_failed_call_in_txn(txn, request_id)),
+        )
         .await?;
         let reason = call
             .as_ref()

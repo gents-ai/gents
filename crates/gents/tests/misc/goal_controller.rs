@@ -412,7 +412,7 @@ async fn boot_goal_background_handoff_with_plans(
     .await;
     prepared.backend.enable_dynamic_followups(prompt);
     crate::support::fixtures::configure_agent_tools(
-        db.node.as_ref(),
+        &db.node,
         did,
         behavior,
         None,
@@ -611,7 +611,7 @@ async fn real_waited_process_defers_goal_until_completion_wake_becomes_parent() 
     assert!(!release_path.exists());
 
     set_goal(
-        db.node.as_ref(),
+        &db.node,
         db.node_identity.did(),
         SESSION,
         Some(objective),
@@ -916,7 +916,7 @@ async fn goal_continuation_preserves_nested_workspace_lineage() {
     set_request_lifecycle_state(db.node.as_ref(), &parent_doc_id, "completed").await;
     publish_canonical_terminal_activity(&db, &parent_doc_id, "durable progress").await;
     set_goal(
-        db.node.as_ref(),
+        &db.node,
         did,
         SESSION,
         Some("Preserve nested workspace scope"),
@@ -951,7 +951,7 @@ async fn goal_continuation_preserves_nested_workspace_lineage() {
         .continuation_sequence;
     drop(source);
     for _ in 0..2 {
-        let recovered = gents::RequestLifecycle::recover_all(db.node.as_ref(), did)
+        let recovered = gents::RequestLifecycle::recover_all(&db.node, did)
             .await
             .unwrap();
         assert_eq!(recovered.requests_recovered, 0);
@@ -1010,7 +1010,7 @@ async fn delimiter_ambiguous_goal_parent_pairs_get_distinct_retry_keys() {
         publish_canonical_terminal_activity(&db, &doc_id, "progress").await;
         assert!(!doc_id.is_empty());
         set_goal(
-            db.node.as_ref(),
+            &db.node,
             did,
             session,
             Some(&format!("goal for {session}")),
@@ -1042,7 +1042,7 @@ async fn completed_request_materializes_exactly_one_same_session_goal_child() {
     let db = test_db("goal-exactly-once").await;
     seed_completed_request(&db, "parent-complete").await;
     let goal = set_goal(
-        db.node.as_ref(),
+        &db.node,
         db.node_identity.did(),
         SESSION,
         Some("Finish the durable objective"),
@@ -1090,7 +1090,7 @@ async fn foreign_request_id_collision_cannot_preempt_owned_goal_continuation() {
     let db = test_db("goal-foreign-request-id-collision").await;
     seed_completed_request(&db, "parent-owned-collision").await;
     let goal = set_goal(
-        db.node.as_ref(),
+        &db.node,
         db.node_identity.did(),
         SESSION,
         Some("Ignore foreign request IDs"),
@@ -1150,7 +1150,7 @@ async fn foreign_retry_key_collision_is_rejected_instead_of_reused() {
     let db = test_db("goal-foreign-retry-key-collision").await;
     seed_completed_request(&db, "parent-owned-retry-collision").await;
     let goal = set_goal(
-        db.node.as_ref(),
+        &db.node,
         db.node_identity.did(),
         SESSION,
         Some("Reject foreign retry keys"),
@@ -1202,7 +1202,7 @@ async fn restart_reconcile_does_not_duplicate_a_goal_continuation() {
     let db = test_db("goal-restart-no-duplicate").await;
     seed_completed_request(&db, "parent-restart").await;
     set_goal(
-        db.node.as_ref(),
+        &db.node,
         db.node_identity.did(),
         SESSION,
         Some("Continue exactly once across restart"),
@@ -1234,7 +1234,7 @@ async fn restart_materializes_a_claimed_continuation_after_crash() {
     let db = test_db("goal-restart-claimed").await;
     seed_completed_request(&db, "parent-claimed").await;
     let goal = set_goal(
-        db.node.as_ref(),
+        &db.node,
         db.node_identity.did(),
         SESSION,
         Some("Recover the claimed continuation"),
@@ -1243,11 +1243,9 @@ async fn restart_materializes_a_claimed_continuation_after_crash() {
     )
     .await
     .expect("set goal");
-    assert!(
-        claim_continuation(db.node.as_ref(), &goal, "parent-claimed")
-            .await
-            .expect("claim continuation")
-    );
+    assert!(claim_continuation(&db.node, &goal, "parent-claimed")
+        .await
+        .expect("claim continuation"));
     assert!(goal_children(&db).await.is_empty());
 
     let (mut restarted, _restart_tx) = source(&db).await;
@@ -1263,7 +1261,7 @@ async fn restart_materializes_claimed_retry_without_charging_it_twice() {
     let db = test_db("goal-restart-claimed-retry").await;
     seed_failed_request(&db, "parent-claimed-retry").await;
     let goal = set_goal(
-        db.node.as_ref(),
+        &db.node,
         db.node_identity.did(),
         SESSION,
         Some("Recover one charged retry"),
@@ -1273,7 +1271,7 @@ async fn restart_materializes_claimed_retry_without_charging_it_twice() {
     .await
     .expect("set goal");
     assert!(
-        claim_retry_continuation(db.node.as_ref(), &goal, "parent-claimed-retry", 1, "failed",)
+        claim_retry_continuation(&db.node, &goal, "parent-claimed-retry", 1, "failed",)
             .await
             .expect("atomically charge and claim retry")
     );
@@ -1296,7 +1294,7 @@ async fn restart_materializes_claimed_wrapup_retry_without_charging_it_twice() {
     let db = test_db("goal-restart-claimed-wrapup-retry").await;
     seed_failed_request(&db, "parent-claimed-wrapup-retry").await;
     let goal = set_goal(
-        db.node.as_ref(),
+        &db.node,
         db.node_identity.did(),
         SESSION,
         Some("Recover one charged wrap-up retry"),
@@ -1305,15 +1303,11 @@ async fn restart_materializes_claimed_wrapup_retry_without_charging_it_twice() {
     )
     .await
     .expect("set budget-limited goal");
-    assert!(claim_retry_continuation(
-        db.node.as_ref(),
-        &goal,
-        "parent-claimed-wrapup-retry",
-        1,
-        "failed",
-    )
-    .await
-    .expect("atomically charge and claim wrap-up retry"));
+    assert!(
+        claim_retry_continuation(&db.node, &goal, "parent-claimed-wrapup-retry", 1, "failed",)
+            .await
+            .expect("atomically charge and claim wrap-up retry")
+    );
 
     let (mut restarted, _tx) = source(&db).await;
     tokio::time::timeout(Duration::from_secs(2), restarted.next_fire())
@@ -1335,7 +1329,7 @@ async fn restart_materializes_claimed_wrapup_retry_without_charging_it_twice() {
 async fn continuation_claim_rejects_a_stale_active_status_snapshot() {
     let db = test_db("goal-claim-status-cas").await;
     let stale = set_goal(
-        db.node.as_ref(),
+        &db.node,
         db.node_identity.did(),
         SESSION,
         Some("Do not race an operator pause"),
@@ -1347,18 +1341,16 @@ async fn continuation_claim_rejects_a_stale_active_status_snapshot() {
     seed_goal_fields(db.node.as_ref(), &stale, r#"status: "paused""#)
         .await
         .expect("pause goal");
-    assert!(
-        !claim_continuation(db.node.as_ref(), &stale, "parent-stale")
-            .await
-            .expect("stale claim returns cleanly")
-    );
+    assert!(!claim_continuation(&db.node, &stale, "parent-stale")
+        .await
+        .expect("stale claim returns cleanly"));
 }
 
 #[tokio::test]
 async fn controller_status_cas_never_overwrites_a_newer_completion() {
     let db = test_db("goal-controller-status-cas").await;
     let stale = set_goal(
-        db.node.as_ref(),
+        &db.node,
         db.node_identity.did(),
         SESSION,
         Some("Completion wins controller races"),
@@ -1371,7 +1363,7 @@ async fn controller_status_cas_never_overwrites_a_newer_completion() {
         .await
         .expect("complete goal");
     assert!(!update_goal_fields_if_status(
-        db.node.as_ref(),
+        &db.node,
         &stale,
         GoalStatus::Active,
         r#"status: "paused", last_failure: "stale controller""#,
@@ -1388,7 +1380,7 @@ async fn controller_status_cas_never_overwrites_a_newer_completion() {
 async fn assert_stale_controller_cannot_mutate_new_continuation(status: GoalStatus) {
     let db = test_db("goal-controller-continuation-cas").await;
     let stale = set_goal(
-        db.node.as_ref(),
+        &db.node,
         db.node_identity.did(),
         SESSION,
         Some("Preserve the newer continuation from stale controller decisions"),
@@ -1398,11 +1390,9 @@ async fn assert_stale_controller_cannot_mutate_new_continuation(status: GoalStat
     .await
     .expect("set active goal");
     assert_eq!(stale.continuation_sequence(), 0);
-    assert!(
-        claim_continuation(db.node.as_ref(), &stale, "newly-claimed-parent")
-            .await
-            .expect("claim newer continuation")
-    );
+    assert!(claim_continuation(&db.node, &stale, "newly-claimed-parent")
+        .await
+        .expect("claim newer continuation"));
     let claimed = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
         .await
         .expect("load claimed goal")
@@ -1418,7 +1408,7 @@ async fn assert_stale_controller_cannot_mutate_new_continuation(status: GoalStat
         status.as_str()
     );
     assert!(
-        !update_goal_fields_if_status(db.node.as_ref(), &stale, GoalStatus::Active, &fields,)
+        !update_goal_fields_if_status(&db.node, &stale, GoalStatus::Active, &fields,)
             .await
             .expect("stale controller mutation returns cleanly"),
         "same status must not authorize an older continuation snapshot"
@@ -1439,7 +1429,7 @@ async fn assert_stale_controller_cannot_mutate_new_continuation(status: GoalStat
     assert_eq!(current.last_failure, claimed.last_failure);
     // A current observation must still authorize the legitimate transition.
     assert!(
-        update_goal_fields_if_status(db.node.as_ref(), &current, GoalStatus::Active, &fields,)
+        update_goal_fields_if_status(&db.node, &current, GoalStatus::Active, &fields,)
             .await
             .expect("current controller mutation")
     );
@@ -1465,7 +1455,7 @@ async fn controller_block_rejects_same_status_from_an_older_continuation() {
 async fn model_goal_create_is_idempotent_and_never_mutates_a_conflict() {
     let db = test_db("goal-model-create").await;
     let created = create_goal_for_session(
-        db.node.as_ref(),
+        &db.node,
         db.node_identity.did(),
         SESSION,
         "Ship the feature",
@@ -1476,7 +1466,7 @@ async fn model_goal_create_is_idempotent_and_never_mutates_a_conflict() {
     assert!(matches!(created, CreateGoalForSessionOutcome::Created(_)));
 
     let duplicate = create_goal_for_session(
-        db.node.as_ref(),
+        &db.node,
         db.node_identity.did(),
         SESSION,
         " Ship the feature ",
@@ -1497,7 +1487,7 @@ async fn model_goal_create_is_idempotent_and_never_mutates_a_conflict() {
     );
 
     let error = create_goal_for_session(
-        db.node.as_ref(),
+        &db.node,
         db.node_identity.did(),
         SESSION,
         "Different objective",
@@ -1518,7 +1508,7 @@ async fn model_goal_create_is_idempotent_and_never_mutates_a_conflict() {
 async fn clearing_a_goal_also_clears_its_creation_claim() {
     let db = test_db("goal-model-create-clear").await;
     create_goal_for_session(
-        db.node.as_ref(),
+        &db.node,
         db.node_identity.did(),
         SESSION,
         "First objective",
@@ -1527,13 +1517,13 @@ async fn clearing_a_goal_also_clears_its_creation_claim() {
     .await
     .expect("create first goal");
     assert_eq!(
-        delete_goals_for_session(db.node.as_ref(), db.node_identity.did(), SESSION)
+        delete_goals_for_session(&db.node, db.node_identity.did(), SESSION)
             .await
             .expect("clear goal and claim"),
         1
     );
     let replacement = create_goal_for_session(
-        db.node.as_ref(),
+        &db.node,
         db.node_identity.did(),
         SESSION,
         "Replacement objective",
@@ -1575,7 +1565,7 @@ async fn signed_goal_backed_request(
 #[tokio::test]
 async fn goal_backed_submission_commits_goal_before_request_visibility_and_retries_idempotently() {
     let db = test_db("goal-backed-submit").await;
-    let access = ConfigAccess::Local(db.node.clone());
+    let access = ConfigAccess::local(db.node.clone());
     let create = signed_goal_backed_request(&db, "goal-backed-first").await;
     let first = gents::goal::submit_goal_backed_request(
         &access,
@@ -1649,7 +1639,7 @@ async fn goal_backed_submission_commits_goal_before_request_visibility_and_retri
 #[tokio::test]
 async fn goal_backed_retry_rejects_changed_logical_request_fields() {
     let db = test_db("goal-backed-submit-fingerprint-conflict").await;
-    let access = ConfigAccess::Local(db.node.clone());
+    let access = ConfigAccess::local(db.node.clone());
     let create = signed_goal_backed_request(&db, "goal-backed-fingerprint").await;
     gents::goal::submit_goal_backed_request(
         &access,
@@ -1688,9 +1678,9 @@ async fn goal_backed_retry_rejects_changed_logical_request_fields() {
 #[tokio::test]
 async fn goal_backed_submission_rejects_a_matching_terminal_goal_without_publishing() {
     let db = test_db("goal-backed-submit-terminal-goal").await;
-    let access = ConfigAccess::Local(db.node.clone());
+    let access = ConfigAccess::local(db.node.clone());
     set_goal(
-        db.node.as_ref(),
+        &db.node,
         db.node_identity.did(),
         SESSION,
         Some("Already terminal"),
@@ -1733,7 +1723,7 @@ async fn goal_backed_submission_rejects_a_matching_terminal_goal_without_publish
 #[tokio::test]
 async fn goal_backed_submission_discards_goal_when_request_staging_fails() {
     let db = test_db("goal-backed-submit-rollback").await;
-    let access = ConfigAccess::Local(db.node.clone());
+    let access = ConfigAccess::local(db.node.clone());
     let mut invalid = signed_goal_backed_request(&db, "goal-backed-invalid").await;
     invalid.initial_lifecycle_state =
         gents_protocol::client_protocol::RequestLifecycleState::Processing;
@@ -1781,24 +1771,10 @@ async fn concurrent_model_goal_create_converges_to_one_physical_goal() {
     let did = db.node_identity.did().to_string();
     let left_did = did.clone();
     let left = tokio::spawn(async move {
-        create_goal_for_session(
-            left_node.as_ref(),
-            &left_did,
-            SESSION,
-            "Concurrent objective",
-            None,
-        )
-        .await
+        create_goal_for_session(&left_node, &left_did, SESSION, "Concurrent objective", None).await
     });
     let right = tokio::spawn(async move {
-        create_goal_for_session(
-            right_node.as_ref(),
-            &did,
-            SESSION,
-            "Concurrent objective",
-            None,
-        )
-        .await
+        create_goal_for_session(&right_node, &did, SESSION, "Concurrent objective", None).await
     });
     left.await.expect("left task").expect("left create");
     right.await.expect("right task").expect("right create");
@@ -1829,7 +1805,7 @@ async fn any_newer_active_request_blocks_goal_continuation_for_the_whole_session
     )
     .await;
     set_goal(
-        db.node.as_ref(),
+        &db.node,
         db.node_identity.did(),
         SESSION,
         Some("Wait for session idleness"),
@@ -1865,7 +1841,7 @@ async fn interrupted_terminal_pauses_instead_of_self_continuing() {
     )
     .await;
     set_goal(
-        db.node.as_ref(),
+        &db.node,
         db.node_identity.did(),
         SESSION,
         Some("Respect human interruption"),
@@ -1925,7 +1901,7 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
         set_request_lifecycle_state(db.node.as_ref(), &parent_doc, terminal).await;
         // The accepted spawn has real provider usage before the failed call
         // below. Retain that usage instead of assuming an empty call history.
-        let prior_usage = session_token_usage(db.node.as_ref(), db.node_identity.did(), SESSION)
+        let prior_usage = session_token_usage(&db.node, db.node_identity.did(), SESSION)
             .await
             .unwrap();
         let expected_usage = prior_usage + 105;
@@ -1946,13 +1922,13 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
         let response = db.node.execute(&usage).await;
         assert!(!response.has_errors(), "seed usage: {:?}", response.errors);
         assert_eq!(
-            session_token_usage(db.node.as_ref(), db.node_identity.did(), SESSION)
+            session_token_usage(&db.node, db.node_identity.did(), SESSION)
                 .await
                 .unwrap(),
             expected_usage,
         );
         set_goal(
-            db.node.as_ref(),
+            &db.node,
             db.node_identity.did(),
             SESSION,
             Some(objective),
@@ -2215,7 +2191,7 @@ async fn token_budget_materializes_one_wrapup_and_never_repeats_it() {
     let response = db.node.execute(&usage).await;
     assert!(!response.has_errors(), "seed usage: {:?}", response.errors);
     set_goal(
-        db.node.as_ref(),
+        &db.node,
         db.node_identity.did(),
         SESSION,
         Some("Stop at the durable budget"),
@@ -2263,17 +2239,16 @@ async fn token_budget_materializes_one_wrapup_and_never_repeats_it() {
     );
     let continuation_sequence = goal.continuation_sequence;
     assert_eq!(
-        session_token_usage(db.node.as_ref(), db.node_identity.did(), SESSION)
+        session_token_usage(&db.node, db.node_identity.did(), SESSION)
             .await
             .expect("session usage before repeated recovery"),
         105,
     );
     drop(source);
     for _ in 0..2 {
-        let recovered =
-            gents::RequestLifecycle::recover_all(db.node.as_ref(), db.node_identity.did())
-                .await
-                .expect("repeat lease recovery");
+        let recovered = gents::RequestLifecycle::recover_all(&db.node, db.node_identity.did())
+            .await
+            .expect("repeat lease recovery");
         assert_eq!(recovered.requests_recovered, 0);
         assert_eq!(recovered.responses_recovered, 0);
         let (mut restarted, _restart_tx) = self::source(&db).await;
@@ -2296,7 +2271,7 @@ async fn token_budget_materializes_one_wrapup_and_never_repeats_it() {
         assert_eq!(current.continuation_sequence, continuation_sequence);
         assert_eq!(current.wrapup_completed, Some(true));
         assert_eq!(
-            session_token_usage(db.node.as_ref(), db.node_identity.did(), SESSION)
+            session_token_usage(&db.node, db.node_identity.did(), SESSION)
                 .await
                 .unwrap(),
             105,
@@ -2349,7 +2324,7 @@ async fn session_token_usage_charges_cached_input_as_part_of_the_total() {
     let response = db.node.execute(&usage).await;
     assert!(!response.has_errors(), "seed usage: {:?}", response.errors);
 
-    let tokens = session_token_usage(db.node.as_ref(), db.node_identity.did(), SESSION)
+    let tokens = session_token_usage(&db.node, db.node_identity.did(), SESSION)
         .await
         .expect("session token usage");
     // Charged total is prompt_tokens (1000, cached input included) +
@@ -2395,7 +2370,7 @@ async fn provider_usage_limit_moves_active_goal_to_usage_limited() {
         response.errors
     );
     set_goal(
-        db.node.as_ref(),
+        &db.node,
         db.node_identity.did(),
         SESSION,
         Some("Stop on provider quota exhaustion"),
@@ -2472,7 +2447,7 @@ async fn usage_limited_goal_after_failed_request(db: &TestDb) -> Option<String> 
     )
     .await;
     set_goal(
-        db.node.as_ref(),
+        &db.node,
         db.node_identity.did(),
         SESSION,
         Some("Stop on the call that ended the request"),
@@ -2551,7 +2526,7 @@ async fn a_later_limited_call_wins_over_an_earlier_retry() {
 async fn seed_a_passed_reset(db: &TestDb, opted_in: bool) {
     let did = db.node_identity.did();
     crate::support::fixtures::bind_agent_backend(
-        db.node.as_ref(),
+        &db.node,
         did,
         crate::support::AGENT_NAME,
         "reset-backend",
@@ -2604,7 +2579,7 @@ async fn seed_a_passed_reset(db: &TestDb, opted_in: bool) {
         .await;
     assert!(!response.has_errors(), "seed call: {:?}", response.errors);
     set_goal(
-        db.node.as_ref(),
+        &db.node,
         did,
         SESSION,
         Some("Resume at the reported reset"),
@@ -2615,7 +2590,7 @@ async fn seed_a_passed_reset(db: &TestDb, opted_in: bool) {
     .expect("set goal");
     if opted_in {
         set_goal_from_access(
-            &ConfigAccess::Local(db.node.clone()),
+            &ConfigAccess::local(db.node.clone()),
             did,
             SESSION,
             None,
@@ -2753,7 +2728,7 @@ async fn openrouter_credits_402_moves_active_goal_to_usage_limited() {
         response.errors
     );
     set_goal(
-        db.node.as_ref(),
+        &db.node,
         db.node_identity.did(),
         SESSION,
         Some("Stop on OpenRouter credits exhaustion"),
@@ -2785,7 +2760,7 @@ async fn failed_wrapup_retries_twice_then_is_durably_abandoned() {
     let db = test_db("goal-wrapup-retry-bound").await;
     seed_completed_request(&db, "parent-wrapup-retry").await;
     set_goal(
-        db.node.as_ref(),
+        &db.node,
         db.node_identity.did(),
         SESSION,
         Some("Bound failed wrap-up retries"),
@@ -2912,7 +2887,7 @@ async fn continuation_sequence_exhaustion_rejects_claims_without_retry_charge() 
         };
         let db = test_db(name).await;
         let initial = set_goal(
-            db.node.as_ref(),
+            &db.node,
             db.node_identity.did(),
             SESSION,
             Some("Never reuse an exhausted continuation sequence"),
@@ -2936,9 +2911,9 @@ async fn continuation_sequence_exhaustion_rejects_claims_without_retry_charge() 
             .unwrap()
             .unwrap();
         let claimed = if retry {
-            claim_retry_continuation(db.node.as_ref(), &before, "last-parent", 1, "failed").await
+            claim_retry_continuation(&db.node, &before, "last-parent", 1, "failed").await
         } else {
-            claim_continuation(db.node.as_ref(), &before, "last-parent").await
+            claim_continuation(&db.node, &before, "last-parent").await
         };
         assert!(claimed.expect("MAX-1 must permit one final sequence advance"));
         let exhausted = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
@@ -2953,7 +2928,7 @@ async fn continuation_sequence_exhaustion_rejects_claims_without_retry_charge() 
         assert_eq!(exhausted.infrastructure_retry_count, Some(i64::from(retry)));
         let rejected = if retry {
             claim_retry_continuation(
-                db.node.as_ref(),
+                &db.node,
                 &exhausted,
                 "must-not-be-claimed",
                 2,
@@ -2961,7 +2936,7 @@ async fn continuation_sequence_exhaustion_rejects_claims_without_retry_charge() 
             )
             .await
         } else {
-            claim_continuation(db.node.as_ref(), &exhausted, "must-not-be-claimed").await
+            claim_continuation(&db.node, &exhausted, "must-not-be-claimed").await
         };
         assert!(
             rejected.is_err(),
@@ -2983,7 +2958,7 @@ async fn continuation_sequence_exhaustion_rejects_claims_without_retry_charge() 
 async fn stale_usage_refresh_preserves_completed_goal_time_accounting() {
     let db = test_db("goal-stale-usage-after-completion").await;
     let initial = set_goal(
-        db.node.as_ref(),
+        &db.node,
         db.node_identity.did(),
         SESSION,
         Some("A stale observer cannot restart completed goal accounting"),
@@ -3004,7 +2979,7 @@ async fn stale_usage_refresh_preserves_completed_goal_time_accounting() {
         .unwrap()
         .unwrap();
     set_goal(
-        db.node.as_ref(),
+        &db.node,
         db.node_identity.did(),
         SESSION,
         None,
@@ -3030,7 +3005,7 @@ async fn stale_usage_refresh_preserves_completed_goal_time_accounting() {
     assert_eq!(completed.active_time_seconds, Some(73));
     assert!(completed.active_started_at.is_none());
 
-    gents::goal::refresh_goal_usage(db.node.as_ref(), &stale)
+    gents::goal::refresh_goal_usage(&db.node, &stale)
         .await
         .expect("stale usage observation must safely skip obsolete accounting writes");
     let after = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
@@ -3118,7 +3093,7 @@ async fn operator_resume_publishes_one_lineage_child_and_fences_old_pause() {
     let did = db.node_identity.did();
     let parent_doc = seed_operator_resume_parent(&db, "resume-parent").await;
     let stale_active = set_goal(
-        db.node.as_ref(),
+        &db.node,
         did,
         SESSION,
         Some("Complete graph work"),
@@ -3127,17 +3102,10 @@ async fn operator_resume_publishes_one_lineage_child_and_fences_old_pause() {
     )
     .await
     .unwrap();
-    set_goal(
-        db.node.as_ref(),
-        did,
-        SESSION,
-        None,
-        Some(GoalStatus::Paused),
-        None,
-    )
-    .await
-    .unwrap();
-    let access = ConfigAccess::Local(db.node.clone());
+    set_goal(&db.node, did, SESSION, None, Some(GoalStatus::Paused), None)
+        .await
+        .unwrap();
+    let access = ConfigAccess::local(db.node.clone());
     let receipt = gents::goal::resume_goal_request(
         &access,
         db.node_identity.as_ref(),
@@ -3199,7 +3167,7 @@ async fn operator_resume_publishes_one_lineage_child_and_fences_old_pause() {
     assert_eq!(child["workspace_seal_hash"], "resume-seal");
     assert!(
         !update_goal_fields_if_status(
-            db.node.as_ref(),
+            &db.node,
             &stale_active,
             GoalStatus::Active,
             r#"status: "paused""#
@@ -3224,7 +3192,7 @@ async fn operator_resume_retry_after_goal_progress_returns_original_child_withou
     let did = db.node_identity.did();
     seed_operator_resume_parent(&db, "retry-parent").await;
     set_goal(
-        db.node.as_ref(),
+        &db.node,
         did,
         SESSION,
         Some("Original objective"),
@@ -3233,7 +3201,7 @@ async fn operator_resume_retry_after_goal_progress_returns_original_child_withou
     )
     .await
     .unwrap();
-    let access = ConfigAccess::Local(db.node.clone());
+    let access = ConfigAccess::local(db.node.clone());
     let first = gents::goal::resume_goal_request(
         &access,
         db.node_identity.as_ref(),
@@ -3245,7 +3213,7 @@ async fn operator_resume_retry_after_goal_progress_returns_original_child_withou
     .unwrap();
     set_request_lifecycle_state(db.node.as_ref(), &first.doc_id, "interrupted").await;
     let before = set_goal(
-        db.node.as_ref(),
+        &db.node,
         did,
         SESSION,
         Some("Changed objective after progress"),
@@ -3291,7 +3259,7 @@ async fn operator_resume_rejects_foreign_identity_even_with_target_key_registere
     let did = target.node_identity.did();
     seed_operator_resume_parent(&target, "owned-parent").await;
     let before = set_goal(
-        target.node.as_ref(),
+        &target.node,
         did,
         SESSION,
         Some("Owner work"),
@@ -3300,7 +3268,7 @@ async fn operator_resume_rejects_foreign_identity_even_with_target_key_registere
     )
     .await
     .unwrap();
-    let access = ConfigAccess::Local(target.node.clone());
+    let access = ConfigAccess::local(target.node.clone());
     assert!(gents::goal::resume_goal_request(
         &access,
         foreign.node_identity.as_ref(),
@@ -3343,7 +3311,7 @@ async fn operator_resume_rejects_busy_session_and_old_predecessor() {
         )
         .await;
         let before = set_goal(
-            db.node.as_ref(),
+            &db.node,
             did,
             SESSION,
             Some("Respect latest work"),
@@ -3352,7 +3320,7 @@ async fn operator_resume_rejects_busy_session_and_old_predecessor() {
         )
         .await
         .unwrap();
-        let access = ConfigAccess::Local(db.node.clone());
+        let access = ConfigAccess::local(db.node.clone());
         assert!(gents::goal::resume_goal_request(
             &access,
             db.node_identity.as_ref(),
@@ -3382,7 +3350,7 @@ async fn resume_resets_blocked_audit_identity_and_count() {
     let did = db.node_identity.did();
     seed_operator_resume_parent(&db, "request-3").await;
     let goal = set_goal(
-        db.node.as_ref(),
+        &db.node,
         did,
         SESSION,
         Some("Resume with a fresh blocked audit"),
@@ -3393,7 +3361,7 @@ async fn resume_resets_blocked_audit_identity_and_count() {
     .unwrap();
     seed_goal_fields(db.node.as_ref(), &goal,
         r#"status: "blocked", consecutive_blocked_audits: 3, last_blocked_request_id: "request-3", last_blocked_reason: "needs approval", active_started_at: null"#).await.unwrap();
-    let access = ConfigAccess::Local(db.node.clone());
+    let access = ConfigAccess::local(db.node.clone());
     let receipt = gents::goal::resume_goal_request(
         &access,
         db.node_identity.as_ref(),
@@ -3421,7 +3389,7 @@ async fn concurrent_operator_resumes_publish_one_child() {
     let did = db.node_identity.did();
     seed_operator_resume_parent(&db, "concurrent-parent").await;
     set_goal(
-        db.node.as_ref(),
+        &db.node,
         did,
         SESSION,
         Some("One operator continuation"),
@@ -3430,7 +3398,7 @@ async fn concurrent_operator_resumes_publish_one_child() {
     )
     .await
     .unwrap();
-    let access = ConfigAccess::Local(db.node.clone());
+    let access = ConfigAccess::local(db.node.clone());
     let (left, right) = tokio::join!(
         gents::goal::resume_goal_request(
             &access,
@@ -3469,7 +3437,7 @@ async fn operator_resume_rejects_corrupted_child_receipt_without_reactivation() 
     let did = db.node_identity.did();
     seed_operator_resume_parent(&db, "corrupt-parent").await;
     set_goal(
-        db.node.as_ref(),
+        &db.node,
         did,
         SESSION,
         Some("Original signed work"),
@@ -3478,7 +3446,7 @@ async fn operator_resume_rejects_corrupted_child_receipt_without_reactivation() 
     )
     .await
     .unwrap();
-    let access = ConfigAccess::Local(db.node.clone());
+    let access = ConfigAccess::local(db.node.clone());
     let first = gents::goal::resume_goal_request(
         &access,
         db.node_identity.as_ref(),
@@ -3489,16 +3457,9 @@ async fn operator_resume_rejects_corrupted_child_receipt_without_reactivation() 
     .await
     .unwrap();
     set_request_lifecycle_state(db.node.as_ref(), &first.doc_id, "interrupted").await;
-    let goal_before = set_goal(
-        db.node.as_ref(),
-        did,
-        SESSION,
-        None,
-        Some(GoalStatus::Paused),
-        None,
-    )
-    .await
-    .unwrap();
+    let goal_before = set_goal(&db.node, did, SESSION, None, Some(GoalStatus::Paused), None)
+        .await
+        .unwrap();
     // Immutable content cannot be updated in place. Model hostile persisted
     // input by replacing the fixture row while retaining its original signature.
     let original = db.node.execute(&format!(
@@ -3585,7 +3546,7 @@ async fn operator_resume_rejects_older_unfinished_siblings_without_mutation() {
         )).await;
         assert!(!response.has_errors(), "{:?}", response.errors);
         let before = set_goal(
-            db.node.as_ref(),
+            &db.node,
             did,
             SESSION,
             Some("Do not bypass unfinished sibling work"),
@@ -3595,7 +3556,7 @@ async fn operator_resume_rejects_older_unfinished_siblings_without_mutation() {
         .await
         .unwrap();
         let error = gents::goal::resume_goal_request(
-            &ConfigAccess::Local(db.node.clone()),
+            &ConfigAccess::local(db.node.clone()),
             db.node_identity.as_ref(),
             did,
             SESSION,
@@ -3629,7 +3590,7 @@ async fn operator_resume_preserves_pending_wrapup_in_child_policy() {
     let did = db.node_identity.did();
     seed_operator_resume_parent(&db, "wrapup-parent").await;
     let paused = set_goal(
-        db.node.as_ref(),
+        &db.node,
         did,
         SESSION,
         Some("Finish the already requested wrap-up"),
@@ -3646,7 +3607,7 @@ async fn operator_resume_preserves_pending_wrapup_in_child_policy() {
     .await
     .unwrap();
     let receipt = gents::goal::resume_goal_request(
-        &ConfigAccess::Local(db.node.clone()),
+        &ConfigAccess::local(db.node.clone()),
         db.node_identity.as_ref(),
         did,
         SESSION,
@@ -3737,7 +3698,7 @@ async fn seed_same_second_canonical_goal_child(
         .to_owned();
     set_request_lifecycle_state(db.node.as_ref(), &parent_doc, "completed").await;
     let goal = set_goal(
-        db.node.as_ref(),
+        &db.node,
         did,
         SESSION,
         Some("Continue from the actual causal head"),
@@ -3880,7 +3841,7 @@ async fn operator_resume_accepts_same_second_child_that_sorts_before_root() {
         let (child_id, child_doc) =
             seed_same_second_canonical_goal_child(&db, parent_id, true).await;
         let receipt = gents::goal::resume_goal_request(
-            &ConfigAccess::Local(db.node.clone()),
+            &ConfigAccess::local(db.node.clone()),
             db.node_identity.as_ref(),
             db.node_identity.did(),
             SESSION,
@@ -3942,7 +3903,7 @@ async fn unready_behavior_defers_goal_continuation_without_writes_or_retry_charg
     let db = test_db("goal-readiness-wait").await;
     seed_completed_request(&db, "parent-waits-for-readiness").await;
     set_goal(
-        db.node.as_ref(),
+        &db.node,
         db.node_identity.did(),
         SESSION,
         Some("Wait for the behavior instead of spending retries"),
@@ -4052,7 +4013,7 @@ async fn readiness_rejected_goal_children_never_spend_the_retry_budget() {
     let db = test_db("goal-readiness-race").await;
     seed_completed_request(&db, "parent-before-race").await;
     set_goal(
-        db.node.as_ref(),
+        &db.node,
         db.node_identity.did(),
         SESSION,
         Some("Survive readiness races"),
@@ -4174,7 +4135,7 @@ async fn settled_invalid_agent_pauses_goal_with_its_reason() {
     let db = test_db("goal-readiness-settled").await;
     seed_completed_request(&db, "parent-invalid-behavior").await;
     set_goal(
-        db.node.as_ref(),
+        &db.node,
         db.node_identity.did(),
         SESSION,
         Some("Report a permanently invalid behavior"),
@@ -4216,7 +4177,7 @@ async fn claimed_continuation_waits_for_readiness_before_materializing() {
     let db = test_db("goal-claimed-readiness").await;
     seed_completed_request(&db, "parent-claimed-waits").await;
     let goal = set_goal(
-        db.node.as_ref(),
+        &db.node,
         db.node_identity.did(),
         SESSION,
         Some("Hold a durable claim until the behavior is ready"),
@@ -4225,11 +4186,9 @@ async fn claimed_continuation_waits_for_readiness_before_materializing() {
     )
     .await
     .expect("set goal");
-    assert!(
-        claim_continuation(db.node.as_ref(), &goal, "parent-claimed-waits")
-            .await
-            .expect("claim continuation")
-    );
+    assert!(claim_continuation(&db.node, &goal, "parent-claimed-waits")
+        .await
+        .expect("claim continuation"));
     publish_node_readiness(&db, Process::Recovering, None).await;
     let claimed = canonical_goal_json(&db).await;
     let (mut source, _tx) = unready_source(&db);

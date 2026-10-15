@@ -110,7 +110,7 @@ async fn production_materializer_persists_event_source_document_lineage() {
     let behavior = integration_test_agent("general");
     let identity = behavior.node_identity().clone();
     let owner = behavior.node_did();
-    crate::test_support::install_test_agent(node.as_ref(), owner, "general").await;
+    crate::test_support::install_test_agent(&node, owner, "general").await;
     let config = serde_json::from_value(serde_json::json!({
         "node":{"node_did":owner},
         "tasks":[{"node_did":owner,"task_id":"task-event","agent_id":"general","prompt_template":"event body"}],
@@ -118,8 +118,8 @@ async fn production_materializer_persists_event_source_document_lineage() {
         "triggers":[{"node_did":owner,"trigger_id":"event-trigger","task_id":"task-event","source":{"kind":"event","event_source_id":"source"}}]
     })).unwrap();
     let plan = crate::config_client::DesiredStateApplyPlan::from_pack_config(&config).unwrap();
-    let trigger_doc_id = crate::config_client::ConfigAccess::transact_local(
-        node.as_ref(),
+    let trigger_doc_id = crate::config_client::ConfigAccess::transact_local_write(
+        &node,
         None,
         "test.manual_source.fixture",
         |txn| {
@@ -226,7 +226,7 @@ async fn production_event_fire_into_a_paired_client_session_adopts_its_requester
     let behavior = integration_test_agent("general");
     let identity = behavior.node_identity().clone();
     let owner = behavior.node_did().to_owned();
-    crate::test_support::install_test_agent(node.as_ref(), &owner, "general").await;
+    crate::test_support::install_test_agent(&node, &owner, "general").await;
     let config = serde_json::from_value(serde_json::json!({
         "node":{"node_did":owner},
         "tasks":[{"node_did":owner,"task_id":"task-lead","agent_id":"general","prompt_template":"continue the lead"}],
@@ -234,8 +234,8 @@ async fn production_event_fire_into_a_paired_client_session_adopts_its_requester
         "triggers":[{"node_did":owner,"trigger_id":"lead-outcomes","task_id":"task-lead","source":{"kind":"event","event_source_id":"outcomes"},"session_id_template":"{{ doc.session_id }}"}]
     })).unwrap();
     let plan = crate::config_client::DesiredStateApplyPlan::from_pack_config(&config).unwrap();
-    let trigger_doc_id = crate::config_client::ConfigAccess::transact_local(
-        node.as_ref(),
+    let trigger_doc_id = crate::config_client::ConfigAccess::transact_local_write(
+        &node,
         None,
         "test.paired_session_fire.fixture",
         |txn| {
@@ -264,7 +264,7 @@ async fn production_event_fire_into_a_paired_client_session_adopts_its_requester
     .unwrap();
     let session_id = "paired-client-console";
     crate::session::ensure_session_with_agent_id_and_requester_did(
-        node.as_ref(),
+        &node,
         session_id,
         &owner,
         "general",
@@ -378,7 +378,7 @@ async fn production_schedule_materialization_passes_final_exact_config_admission
     let behavior = integration_test_agent("general");
     let identity = behavior.node_identity().clone();
     let owner = behavior.node_did();
-    crate::test_support::install_test_agent(node.as_ref(), owner, "general").await;
+    crate::test_support::install_test_agent(&node, owner, "general").await;
     let config = serde_json::from_value(serde_json::json!({
         "node":{"node_did":owner},
         "tasks":[{"node_did":owner,"task_id":"task-schedule","agent_id":"general","prompt_template":"schedule body"}],
@@ -386,8 +386,8 @@ async fn production_schedule_materialization_passes_final_exact_config_admission
         "triggers":[{"node_did":owner,"trigger_id":"schedule-trigger","task_id":"task-schedule","source":{"kind":"schedule","schedule_id":"source"}}]
     })).unwrap();
     let plan = crate::config_client::DesiredStateApplyPlan::from_pack_config(&config).unwrap();
-    let trigger_doc_id = crate::config_client::ConfigAccess::transact_local(
-        node.as_ref(),
+    let trigger_doc_id = crate::config_client::ConfigAccess::transact_local_write(
+        &node,
         None,
         "test.manual_source.fixture",
         |txn| {

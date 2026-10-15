@@ -291,6 +291,10 @@ fn recent_runs_aggregates_across_canonical_triggers() {
         Some("skipped"),
         Some("in-flight"),
     ));
+    store.trigger_observation_source_node_dids.extend([
+        Some("did:node:1".to_string()),
+        Some("did:node:1".to_string()),
+    ]);
 
     let runs = store.recent_runs_for_task("task-1");
     assert_eq!(runs.total_fires, 8);

@@ -83,7 +83,7 @@ impl Limited {
         let did = self.f.identity.did();
         let (_, value) = self
             .access
-            .transact("test.resume_on.read", |txn| {
+            .transact_write("test.resume_on.read", |txn| {
                 Box::pin(async move {
                     read_desired_state_record_in_txn(
                         txn,
@@ -293,7 +293,7 @@ async fn moved_profile_retry_rejects_a_removed_target_account() {
     let credential = limited.b_credential.clone();
     limited
         .access
-        .transact("test.resume_on.remove_retry_target", move |txn| {
+        .transact_write("test.resume_on.remove_retry_target", move |txn| {
             let did = did.clone();
             let credential = credential.clone();
             Box::pin(async move {

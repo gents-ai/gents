@@ -7,8 +7,8 @@ use std::collections::HashMap;
 const FOREIGN_REQUESTER: &str = "did:test:fold-foreign-requester";
 const OTHER_CWD: &str = "/tmp/gents-fold-other-context";
 
-async fn insert_row(node: &EmbeddedNode, input: serde_json::Value) -> String {
-    crate::config_client::ConfigAccess::transact_local(node, None, "test.fold.insert", |txn| {
+async fn insert_row(node: &Arc<EmbeddedNode>, input: serde_json::Value) -> String {
+    crate::config_client::ConfigAccess::transact_local_write(node, None, "test.fold.insert", |txn| {
         let input = input.clone();
         Box::pin(async move {
             let result = txn
@@ -759,7 +759,7 @@ async fn generated_fold_publication_scripts_bind_to_native_owners() {
                     }
                 }
                 Step::CancelFirstPending => {
-                    let access = crate::config_client::ConfigAccess::Local(db.node.clone());
+                    let access = crate::config_client::ConfigAccess::local(db.node.clone());
                     let snapshot =
                         pending_user_queue(&access, db.node_did(), &session_id, db.node_did())
                             .await

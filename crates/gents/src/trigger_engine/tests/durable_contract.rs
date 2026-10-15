@@ -171,13 +171,13 @@ fn durable_delivery_predicates_match_executable_lean_owners() {
 #[tokio::test]
 async fn generated_fire_transactions_are_atomic_and_owner_scoped() {
     for case in contract()["admissions"].as_array().unwrap() {
-        let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+        let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
         ensure_runtime_schemas(&node).await.unwrap();
         let pre: State = decode(&case["pre"]);
         for (index, request) in pre.requests.iter().enumerate() {
             let fire = receipt(&request.fire, index);
             let mutation = request_mutation(&fire);
-            crate::config_client::ConfigAccess::transact_local(
+            crate::config_client::ConfigAccess::transact_local_write(
                 &node,
                 None,
                 "test.seed_fire",
@@ -190,7 +190,7 @@ async fn generated_fire_transactions_are_atomic_and_owner_scoped() {
         let fire = receipt(&f, pre.requests.len());
         let mutation = request_mutation(&fire);
         let commit = case["commit"].as_bool().unwrap();
-        let result = crate::config_client::ConfigAccess::transact_local(
+        let result = crate::config_client::ConfigAccess::transact_local_write(
             &node,
             None,
             "test.fire_crash_boundary",
@@ -275,7 +275,7 @@ async fn generated_terminal_outcome_action_traces_use_native_owners() {
     for trace in contract()["outcome_traces"].as_array().unwrap() {
         let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
         ensure_runtime_schemas(&node).await.unwrap();
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         let mut published = std::collections::BTreeMap::new();
         let mut terminal_states = std::collections::BTreeMap::new();
         for (index, step) in trace["steps"].as_array().unwrap().iter().enumerate() {
@@ -286,7 +286,7 @@ async fn generated_terminal_outcome_action_traces_use_native_owners() {
                     let receipt = receipt(&fire, index);
                     let mutation = request_mutation(&receipt);
                     let result = access
-                        .transact("test.outcome_trace_admit", |txn| {
+                        .transact_write("test.outcome_trace_admit", |txn| {
                             let receipt = &receipt;
                             let mutation = &mutation;
                             Box::pin(async move {
@@ -339,7 +339,7 @@ async fn generated_terminal_outcome_action_traces_use_native_owners() {
                     if commit {
                         terminal_states.insert(identity.request_id(), terminal_state.clone());
                     }
-                    let result = access.transact("test.inject_terminal_publication_gap", |txn| {
+                    let result = access.transact_write("test.inject_terminal_publication_gap", |txn| {
                         let identity = &identity;
                         let terminal_state = &terminal_state;
                         Box::pin(async move {
@@ -363,7 +363,7 @@ async fn generated_terminal_outcome_action_traces_use_native_owners() {
                         durable::recover_outcomes(&node, "owner-a").await.unwrap();
                     } else {
                         let result: anyhow::Result<()> = access
-                            .transact("test.outcome_publication_rollback", |txn| {
+                            .transact_write("test.outcome_publication_rollback", |txn| {
                                 Box::pin(async move {
                                     durable::recover_outcomes_in_txn(txn, "owner-a").await?;
                                     anyhow::bail!("injected outcome transaction crash")
@@ -506,7 +506,7 @@ fn handoff_consumer() -> gents_protocol::event_delivery::EventConsumer {
 
 async fn saved_arrival_cursor(access: &crate::config_client::ConfigAccess) -> String {
     access
-        .transact("test.read_arrival_cursor", |txn| {
+        .transact_write("test.read_arrival_cursor", |txn| {
             Box::pin(async move {
                 Ok(crate::config_client::event_source_cursor::load_or_seed(
                     txn,
@@ -528,7 +528,7 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
     for case in contract()["cursors"].as_array().unwrap() {
         let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
         ensure_runtime_schemas(&node).await.unwrap();
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         access
             .add_schema("type Work { label: String eligible: Boolean }")
             .await
@@ -553,7 +553,7 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
                 .await,
             );
         }
-        access.transact("test.arrival_config", |txn| Box::pin(async move {
+        access.transact_write("test.arrival_config", |txn| Box::pin(async move {
             txn.execute_with_variables(
                 "mutation($input:EventSourceMutationInputArg!){create_EventSource(input:$input){_docID}}",
                 &serde_json::json!({"input":{"node_did":"owner-a","event_source_id":"source",
@@ -588,7 +588,7 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
         }
         let pre_after = case["pre_cursor"]["after"].as_str().unwrap();
         access
-            .transact("test.prior_checkpoint", |txn| {
+            .transact_write("test.prior_checkpoint", |txn| {
                 Box::pin(async move {
                     event_source_cursor::advance(
                         txn,
@@ -619,7 +619,7 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
             let receipt = receipt(&adapt_fire(request.fire.clone()), index);
             let mutation = request_mutation(&receipt);
             access
-                .transact("test.prior_arrival_admission", |txn| {
+                .transact_write("test.prior_arrival_admission", |txn| {
                     let receipt = &receipt;
                     let mutation = &mutation;
                     Box::pin(async move {
@@ -634,7 +634,7 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
             let receipt = receipt(&adapt_fire(decode(&case["fire"])), pre.requests.len());
             let mutation = request_mutation(&receipt);
             let admitted: anyhow::Result<()> = access
-                .transact("test.arrival_admission_crash", |txn| {
+                .transact_write("test.arrival_admission_crash", |txn| {
                     let receipt = &receipt;
                     let mutation = &mutation;
                     Box::pin(async move {
@@ -650,7 +650,7 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
             let entry: Arrival = decode(&case["entry"]);
             let busy = case["busy"].as_bool().unwrap();
             let checkpointed: anyhow::Result<bool> = access
-                .transact("test.arrival_checkpoint_crash", |txn| {
+                .transact_write("test.arrival_checkpoint_crash", |txn| {
                     let entry = &entry;
                     Box::pin(async move {
                         let accepted = event_source_cursor::checkpoint_prefix(
@@ -747,7 +747,11 @@ fn handoff_binding() -> gents_protocol::event_delivery::EventConsumer {
 
 /// Admits `doc_id` for the `handoff` binding through the invocation owner,
 /// freezing `version` as its source version.
-async fn admit_callback_arrival(node: &defra_node::EmbeddedNode, doc_id: &str, version: &str) {
+async fn admit_callback_arrival(
+    node: &std::sync::Arc<defra_node::EmbeddedNode>,
+    doc_id: &str,
+    version: &str,
+) {
     crate::callback::create_pending_invocation(
         node,
         &crate::callback::CallbackInvocationDoc {
@@ -783,7 +787,7 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
         let name = &case["name"];
         let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
         ensure_runtime_schemas(&node).await.unwrap();
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         access
             .add_schema("type Work { label: String eligible: Boolean }")
             .await
@@ -801,7 +805,7 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
         }
         let binding_enabled = case["binding_enabled"].as_bool().unwrap();
         let callback_enabled = case["callback_enabled"].as_bool().unwrap();
-        access.transact("test.callback_arrival_config", |txn| Box::pin(async move {
+        access.transact_write("test.callback_arrival_config", |txn| Box::pin(async move {
             txn.execute_with_variables(
                 "mutation($input:CallbackMutationInputArg!){create_Callback(input:$input){_docID}}",
                 &serde_json::json!({"input":{"node_did":"owner-a","callback_id":"callback",
@@ -825,7 +829,7 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
             let access = access.clone();
             async move {
                 access
-                    .transact("test.read_callback_cursor", |txn| {
+                    .transact_write("test.read_callback_cursor", |txn| {
                         Box::pin(async move {
                             Ok(event_source_cursor::load_or_seed(
                                 txn,
@@ -851,7 +855,7 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
         }
         let pre_after = case["pre_cursor"]["after"].as_str().unwrap();
         access
-            .transact("test.prior_callback_checkpoint", |txn| {
+            .transact_write("test.prior_callback_checkpoint", |txn| {
                 Box::pin(async move {
                     event_source_cursor::advance(
                         txn,
@@ -892,7 +896,7 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
         }
         if let Some(commit) = case["checkpoint_commit"].as_bool() {
             let checkpointed: anyhow::Result<bool> = access
-                .transact("test.callback_checkpoint_crash", |txn| {
+                .transact_write("test.callback_checkpoint_crash", |txn| {
                     let entry = &entry;
                     Box::pin(async move {
                         let accepted = event_source_cursor::checkpoint_prefix(

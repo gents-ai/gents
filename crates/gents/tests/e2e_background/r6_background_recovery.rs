@@ -88,7 +88,7 @@ async fn run_recovery_crash_worker(ready_path: &std::path::Path) {
         .backend
         .enable_dynamic_followups("start recovery background process");
     configure_agent_tools(
-        db.node.as_ref(),
+        &db.node,
         &node_did,
         agent_id,
         None,

@@ -1850,7 +1850,7 @@ async fn a_definition_that_no_longer_validates_fails_the_job_as_definition_chang
     // edited underneath it, as a writer that skips validation would.
     harness
         .access()
-        .transact("matrix.invalidate_definition", |txn| {
+        .transact_write("matrix.invalidate_definition", |txn| {
             Box::pin(async move {
                 txn.execute(&format!(
                     r#"mutation {{ update_EvalDefinition(filter: {{ definition_id: {{ _eq: "{}" }}, node_did: {{ _eq: "{}" }} }}, input: {{ comparability_version: 0 }}) {{ _docID }} }}"#,

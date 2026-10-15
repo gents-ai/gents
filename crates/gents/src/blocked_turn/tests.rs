@@ -461,7 +461,7 @@ async fn embedded() -> (Arc<EmbeddedNode>, ConfigAccess) {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     crate::ensure_node(&node, DID).await.unwrap();
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let sign_in = |who: &str| {
         crate::claude_oauth::credential_from_login_tokens(
             DID,
@@ -508,7 +508,7 @@ async fn embedded() -> (Arc<EmbeddedNode>, ConfigAccess) {
         .collect();
     let plan = DesiredStateApplyPlan::new(documents).unwrap();
     access
-        .transact("test.blocked_turn", |txn| {
+        .transact_write("test.blocked_turn", |txn| {
             let plan = &plan;
             Box::pin(async move {
                 crate::config_client::apply_desired_state_plan(txn, plan)

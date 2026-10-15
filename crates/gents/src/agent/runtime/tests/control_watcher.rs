@@ -147,7 +147,7 @@ async fn update_node_enabled(node: &defra_node::EmbeddedNode, node_did: &str, en
 }
 
 async fn write_documents(
-    node: &defra_node::EmbeddedNode,
+    node: &Arc<defra_node::EmbeddedNode>,
     operation: &'static str,
     documents: Vec<(crate::Collection, serde_json::Value)>,
 ) {
@@ -162,7 +162,7 @@ async fn write_documents(
         )
         .collect();
     let plan = crate::config_client::DesiredStateApplyPlan::new(documents).unwrap();
-    crate::config_client::ConfigAccess::transact_local(node, None, operation, |txn| {
+    crate::config_client::ConfigAccess::transact_local_write(node, None, operation, |txn| {
         let plan = &plan;
         Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, plan).await })
     })
@@ -177,7 +177,7 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("control-watcher"));
     bind_default_agent_backend(
-        node.as_ref(),
+        &node,
         identity.did(),
         "backend-control",
         "http://127.0.0.1:8111/v1",
@@ -229,8 +229,8 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
         },
     ])
     .unwrap();
-    crate::config_client::ConfigAccess::transact_local(
-        node.as_ref(),
+    crate::config_client::ConfigAccess::transact_local_write(
+        &node,
         None,
         "test.context.update",
         |txn| {
@@ -305,13 +305,9 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
         filter: {{context_id: {{_eq: "{context_id}"}}}},
         input: {{display_name: "Retagged context"}}) {{context_id}} }}"#
     );
-    crate::config_client::ConfigAccess::write_local(
-        node.as_ref(),
-        "test.context.metadata",
-        &mutation,
-    )
-    .await
-    .unwrap();
+    crate::config_client::ConfigAccess::write_local(&node, "test.context.metadata", &mutation)
+        .await
+        .unwrap();
     let repeated = tokio::time::timeout(PROPOSAL_TIMEOUT, proposal_rx.recv())
         .await
         .expect("metadata write must reach reconcile owner")
@@ -338,7 +334,7 @@ async fn control_watcher_reconciles_a_local_write_without_the_replication_deboun
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("control-watcher-local"));
     bind_default_agent_backend(
-        node.as_ref(),
+        &node,
         identity.did(),
         "backend-control",
         "http://127.0.0.1:8111/v1",
@@ -382,7 +378,7 @@ async fn control_watcher_reconciles_a_local_write_without_the_replication_deboun
     ));
 
     write_documents(
-        node.as_ref(),
+        &node,
         "test.context.local",
         vec![(
             crate::Collection::AgentContext,
@@ -424,7 +420,7 @@ async fn control_watcher_demotes_and_recovers_agent_on_measured_health_flip() {
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("control-watcher-health"));
     bind_default_agent_backend(
-        node.as_ref(),
+        &node,
         identity.did(),
         "backend-measured",
         "http://127.0.0.1:8113/v1",
@@ -553,7 +549,7 @@ async fn control_watcher_recovers_after_resolve_error() {
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("control-watcher-recover"));
     bind_default_agent_backend(
-        node.as_ref(),
+        &node,
         identity.did(),
         "backend-control-recover",
         "http://127.0.0.1:8112/v1",
@@ -634,7 +630,7 @@ async fn control_watcher_resolves_context_tools_into_reconciled_tool_surface() {
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("control-watcher-tools"));
     bind_default_agent_backend(
-        node.as_ref(),
+        &node,
         identity.did(),
         "backend-control-tools",
         "http://127.0.0.1:8113/v1",
@@ -683,7 +679,7 @@ async fn control_watcher_resolves_context_tools_into_reconciled_tool_surface() {
     }))
     .unwrap();
     crate::config_client::write_tools_document(
-        &crate::config_client::ConfigAccess::Local(node.clone()),
+        &crate::config_client::ConfigAccess::local(node.clone()),
         &tools,
     )
     .await
@@ -713,7 +709,7 @@ async fn control_watcher_settles_when_an_unselected_agent_is_permanently_invalid
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("control-watcher-settle"));
     bind_default_agent_backend(
-        node.as_ref(),
+        &node,
         identity.did(),
         "backend-settle",
         "http://127.0.0.1:8114/v1",
@@ -755,7 +751,7 @@ async fn control_watcher_settles_when_an_unselected_agent_is_permanently_invalid
     // The spare profile is published while its model is advertised; a later
     // discovery drops that model, which leaves the profile permanently invalid.
     crate::backend_registry::record_model_catalog(
-        node.as_ref(),
+        &node,
         &backend,
         catalog(
             "2026-01-01T00:00:00Z",
@@ -782,7 +778,7 @@ async fn control_watcher_settles_when_an_unselected_agent_is_permanently_invalid
     let spare_agent_id = format!("{selected_agent_id}:spare");
     let spare_profile_id = format!("{spare_agent_id}:inference");
     write_documents(
-        node.as_ref(),
+        &node,
         "test.settle.spare",
         vec![
             (
@@ -806,7 +802,7 @@ async fn control_watcher_settles_when_an_unselected_agent_is_permanently_invalid
     )
     .await;
     crate::backend_registry::record_model_catalog(
-        node.as_ref(),
+        &node,
         &backend,
         catalog("2026-01-02T00:00:00Z", vec![advertised("default")]),
     )
@@ -842,7 +838,7 @@ async fn control_watcher_settles_when_an_unselected_agent_is_permanently_invalid
     let _ = shutdown_tx.send(true);
     watcher_task.await.unwrap().unwrap();
 
-    let view = crate::agent::document_view::load_document_runtime_view(node.as_ref(), &node_did)
+    let view = crate::agent::document_view::load_document_runtime_view(&node, &node_did)
         .await
         .unwrap();
     assert!(
@@ -870,7 +866,7 @@ async fn record_plugin_install(
         dependencies: Vec::new(),
     };
     crate::pack::record_plugin_store_change(
-        &crate::config_client::ConfigAccess::Local(node.clone()),
+        &crate::config_client::ConfigAccess::local(node.clone()),
         node_did,
         plugin_home,
         &identity.coordinate,
@@ -892,7 +888,7 @@ async fn write_tools_naming_plugin(
     }))
     .unwrap();
     crate::config_client::write_tools_document(
-        &crate::config_client::ConfigAccess::Local(node.clone()),
+        &crate::config_client::ConfigAccess::local(node.clone()),
         &tools,
     )
     .await
@@ -927,7 +923,7 @@ async fn control_watcher_proposes_a_new_fingerprint_when_the_named_plugin_instal
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("control-watcher-plugin-install"));
     bind_default_agent_backend(
-        node.as_ref(),
+        &node,
         identity.did(),
         "backend-plugin-install",
         "http://127.0.0.1:8115/v1",

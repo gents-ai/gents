@@ -110,14 +110,10 @@ pub(crate) async fn bind_codex_shim(
     )
     .await
     .map_err(CodexShimBindError::DependencyMissing)?;
-    bound_behavior::load_bound_inference_profile_id(
-        args.node.as_ref(),
-        &args.node_did,
-        &bound_agent_id,
-    )
-    .await
-    .with_context(|| format!("validating Codex shim bound agent {bound_agent_id:?}"))
-    .map_err(CodexShimBindError::DependencyMissing)?;
+    bound_behavior::load_bound_inference_profile_id(&args.node, &args.node_did, &bound_agent_id)
+        .await
+        .with_context(|| format!("validating Codex shim bound agent {bound_agent_id:?}"))
+        .map_err(CodexShimBindError::DependencyMissing)?;
 
     let state = ShimState {
         codex_home: codex_home.clone(),

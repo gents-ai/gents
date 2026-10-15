@@ -40,8 +40,9 @@ impl SelfConfigCore {
         no_lockout: bool,
         preview: bool,
     ) -> Result<Value> {
-        ConfigAccess::transact_local(
-            self.node(),
+        let node = self.node_handle();
+        ConfigAccess::transact_local_readonly(
+            &node,
             Some(self.identity()?),
             "self_config.read",
             move |txn| {

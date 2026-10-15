@@ -233,7 +233,7 @@ async fn waits_after_the_account_was_removed() {
     reset
         .accounts
         .access
-        .transact("test.remove_account", |txn| {
+        .transact_write("test.remove_account", |txn| {
             Box::pin(crate::oauth_credential::remove_account_in_txn(
                 txn, did, credential,
             ))

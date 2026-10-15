@@ -315,6 +315,48 @@ pub enum ClientHydrationRequestState {
     Rejected(Option<BTreeSet<SessionHydrationDocumentKey>>),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HydrationAdmissionAction {
+    PassiveStart,
+    ExplicitRetry,
+}
+
+/// Admit a target-scoped passive start or explicit rejected-request retry.
+/// Passive observation only creates a missing durable row; it cannot reset a
+/// pending or terminal row. Retry requires both the exact failed observation
+/// and a currently rejected durable request.
+pub fn can_admit_hydration_request(
+    action: HydrationAdmissionAction,
+    request: &ClientHydrationRequestState,
+    prev: &ClientHydrationProgress,
+    session_id: &str,
+    node_did: &str,
+    foreign_header: bool,
+    owned_session: bool,
+    has_documents: bool,
+    nonterminal_request: bool,
+) -> bool {
+    match action {
+        HydrationAdmissionAction::PassiveStart => {
+            matches!(request, ClientHydrationRequestState::Missing)
+                && prev.session_id == session_id
+                && prev.node_did == node_did
+                && prev.phase == ClientHydrationPhase::Idle
+                && can_start_hydration(
+                    foreign_header,
+                    owned_session,
+                    has_documents,
+                    nonterminal_request,
+                )
+        }
+        HydrationAdmissionAction::ExplicitRetry => {
+            matches!(request, ClientHydrationRequestState::Rejected(_))
+                && !foreign_header
+                && can_retry_hydration(prev, session_id, node_did)
+        }
+    }
+}
+
 /// Begin a new receiver attempt, clearing any terminal state and denominator
 /// retained by the previous request for this target.
 pub fn begin_hydration_request(session_id: &str, node_did: &str) -> ClientHydrationProgress {

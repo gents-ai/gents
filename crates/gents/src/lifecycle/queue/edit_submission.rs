@@ -136,7 +136,7 @@ async fn effect_visible(
     );
     let response = access
         .execute(&format!(
-            r#"{{ AgentRequest(filter: {{ _docID: {{ _in: {ids} }} }}) {{ _docID request_id lifecycle_state }} }}"#
+            r#"{{ AgentRequest(docIDs: {ids}) {{ _docID request_id lifecycle_state }} }}"#
         ))
         .await?;
     let rows: Vec<AgentRequestRow> =

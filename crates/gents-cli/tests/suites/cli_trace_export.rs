@@ -4,7 +4,12 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
+use axum::{
+    extract::{Path, State},
+    http::StatusCode,
+    routing::post,
+    Json, Router,
+};
 use gents::defra_node::{EmbeddedNode, StorageBackend};
 use gents::ensure_runtime_schemas;
 use gents::rendered_request::RenderedCompletionRequest;
@@ -2261,6 +2266,14 @@ struct ProjectionGraphqlAcpMock {
     graphql: String,
 }
 
+async fn projection_txn_begin() -> Json<Value> {
+    Json(json!({ "id": "projection-snapshot" }))
+}
+
+async fn projection_txn_finish(Path(_id): Path<String>) -> StatusCode {
+    StatusCode::NO_CONTENT
+}
+
 #[derive(Clone)]
 struct ProjectionGraphqlAcpState {
     allowed: Arc<BTreeMap<(String, String), bool>>,
@@ -2308,6 +2321,11 @@ async fn spawn_projection_graphql_acp_mock() -> Result<ProjectionGraphqlAcpMock>
     };
     let router = Router::new()
         .route("/api/v0/graphql", post(projection_graphql_mock))
+        .route("/api/v0/tx", post(projection_txn_begin))
+        .route(
+            "/api/v0/tx/{id}",
+            post(projection_txn_finish).delete(projection_txn_finish),
+        )
         .route("/api/v0/acp/document/decide", post(projection_acp_mock))
         .with_state(state);
     tokio::spawn(async move {
@@ -2612,6 +2630,28 @@ fn filter_projection_mock_headers(query: &str, rows: Vec<Value>) -> Value {
         let predicate = format!(r#"node_did: {{ _eq: "{node_did}" }}"#);
         if query.contains(&predicate) {
             rows.retain(|row| row["node_did"].as_str() == Some(node_did));
+        }
+    }
+    for session_id in ["session-acp", "session-forged-child"] {
+        let predicate = format!(
+            r#"session_id: {{ _eq: "{}" }}"#,
+            gents::graphql::escape_graphql_string(session_id)
+        );
+        if query.contains(&predicate) {
+            rows.retain(|row| row["session_id"].as_str() == Some(session_id));
+        }
+    }
+    if query.contains("requester_did: { _eq: null }") {
+        rows.retain(|row| row["requester_did"].is_null());
+    } else {
+        for requester_did in ["did:test:amy", "did:test:reviewer"] {
+            let predicate = format!(
+                r#"requester_did: {{ _eq: "{}" }}"#,
+                gents::graphql::escape_graphql_string(requester_did)
+            );
+            if query.contains(&predicate) {
+                rows.retain(|row| row["requester_did"].as_str() == Some(requester_did));
+            }
         }
     }
     if query.contains("_or:") {

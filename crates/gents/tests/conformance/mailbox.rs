@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use gents::defra_node::EmbeddedNode;
 use gents::mailbox::{
     dismiss_mailbox_item, load_mailbox_item, stamp_create, FileMailboxItemArgs, MailboxAction,
@@ -61,10 +63,12 @@ async fn rust_mailbox_dismiss_owner_drives_only_lean_legal_transitions() {
         "every legal Mailbox transition must leave the single open state"
     );
 
-    let node = EmbeddedNode::builder()
-        .build()
-        .await
-        .expect("embedded node");
+    let node = Arc::new(
+        EmbeddedNode::builder()
+            .build()
+            .await
+            .expect("embedded node"),
+    );
     gents::ensure_runtime_schemas(&node)
         .await
         .expect("runtime schemas");

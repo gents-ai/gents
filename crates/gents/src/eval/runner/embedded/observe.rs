@@ -105,7 +105,7 @@ pub struct RequestEvidence {
 /// of today's `nonterminal_after_interrupt` observation: the caller still learns
 /// that the deadline fired, and a missing or unparseable row is not unwrapped.
 pub async fn await_terminal(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     request_id: &str,
     deadline: Duration,
     grace: Duration,
@@ -115,7 +115,7 @@ pub async fn await_terminal(
 }
 
 pub async fn await_terminal_with(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     request_id: &str,
     deadline: Duration,
     grace: Duration,
@@ -193,7 +193,7 @@ pub async fn collect_request_evidence(
         .data
         .context("collect request evidence returned no data")?;
     let timeline = crate::run_timeline_fetch::load_run_timeline_rows(
-        &ConfigAccess::Local(node.clone()),
+        &ConfigAccess::local(node.clone()),
         request_id,
     )
     .await

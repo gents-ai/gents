@@ -54,7 +54,7 @@ async fn generated_goal_operator_resume_cases_drive_real_transactions() {
             name => panic!("unmapped generated resume case {name}"),
         }
         assert_eq!(f.observe().await, case.before, "{} initial", case.name);
-        let access = crate::ConfigAccess::Local(f.node.clone());
+        let access = crate::ConfigAccess::local(f.node.clone());
         if !case.commit {
             assert_eq!(case.name, "staging_failure_rolls_back");
             let txn = ConfigApplyTxn::begin_local(&f.node, None).await.unwrap();
@@ -179,7 +179,7 @@ async fn generated_goal_config_reactivation_cases_drive_transactional_setter() {
             "children":[],"tokens_used":37,"token_budget":1000});
         let f = Fixture::new(&before).await;
         assert_eq!(f.observe().await, before);
-        let access = crate::ConfigAccess::Local(f.node.clone());
+        let access = crate::ConfigAccess::local(f.node.clone());
         let result = set_goal_from_access(
             &access,
             f.identity.did(),
@@ -226,7 +226,7 @@ async fn waiting_requests_keep_resume_idle_guard_closed_without_duplicate_childr
         let before = f.observe().await;
         let rows_before = serde_json::to_value(request_rows(&f.node).await).unwrap();
         let error = resume_goal_request(
-            &crate::ConfigAccess::Local(f.node.clone()),
+            &crate::ConfigAccess::local(f.node.clone()),
             f.identity.as_ref(),
             f.identity.did(),
             SESSION,

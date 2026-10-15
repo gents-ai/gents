@@ -11,6 +11,9 @@ use crate::request_lifecycle::RequestLifecycleControl;
 use crate::session_hook::CanonicalSessionHook;
 use crate::stream_writer::CanonicalStreamWriter;
 
+mod progress;
+pub use progress::flush_while_polling;
+
 pub enum StreamAction {
     Continue,
     Done,

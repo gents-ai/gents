@@ -47,7 +47,7 @@ pub(crate) async fn query(args: QueryArgs) -> Result<()> {
     let (access, _) =
         crate::resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let (command, scope) = command_from_args(args)?;
-    let output = gents::defra_query::execute_command(&*access, &command, &scope).await?;
+    let output = gents::defra_query::execute_command(&access, &command, &scope).await?;
     print_json(&output)?;
     Ok(())
 }

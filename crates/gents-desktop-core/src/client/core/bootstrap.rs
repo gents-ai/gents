@@ -15,7 +15,7 @@ use super::super::paths::DesktopPaths;
 use super::super::peer_directory::{PeerDirectory, PeerRecord};
 use super::super::principal_identity::PrincipalIdentity;
 use super::super::query::load_full_snapshot_with_peer_records;
-use super::super::schema::{ensure_runtime_schemas, subscribe_all_collections};
+use super::super::schema::subscribe_all_collections;
 use super::p2p_ops::{
     p2p_connect_peer, p2p_connected_peers, p2p_listen_addresses, p2p_local_peer_id,
 };
@@ -93,11 +93,19 @@ impl ClientCore {
                 .await
                 .context("starting embedded desktop node")?,
         );
+        let store_access =
+            match gents::config_client::ConfigAccess::claimed_local(node.clone(), store_lock) {
+                Ok(access) => access,
+                Err(error) => {
+                    node.shutdown().await;
+                    return Err(error);
+                }
+            };
 
         checkpoint("embedded_node");
 
         let result: Result<Self> = async {
-            ensure_runtime_schemas(node.as_ref())
+            gents::migration::ensure_all_runtime_migrations(node.clone())
                 .await
                 .map_err(|error| {
                     gents::storage_backend::classify_store_error(error, paths.node_data_dir())
@@ -192,7 +200,7 @@ impl ClientCore {
                 options.install_replicators_on_bootstrap,
             );
             Ok(Self {
-                store_lock: tokio::sync::Mutex::new(None),
+                store_access: tokio::sync::Mutex::new(None),
                 paths,
                 options,
                 node_identity,
@@ -203,11 +211,12 @@ impl ClientCore {
                 observer: tokio::sync::Mutex::new(Some(observer)),
                 sync_state,
                 p2p_supervisor: tokio::sync::Mutex::new(Some(p2p_supervisor)),
-                hydration_transition: tokio::sync::Mutex::new(()),
                 selected_node_did,
-                last_loaded_for: tokio::sync::Mutex::new(std::collections::HashMap::new()),
                 request_patch_signatures: tokio::sync::Mutex::new(std::collections::HashMap::new()),
                 p2p_control: tokio::sync::Mutex::new(Some(p2p_control)),
+                shutdown_completion: tokio::sync::Mutex::new(None),
+                #[cfg(test)]
+                shutdown_test_pause: tokio::sync::Mutex::new(None),
                 last_mutation_error: std::sync::RwLock::new(None),
                 local_peer_id,
                 listen_addresses,
@@ -217,7 +226,7 @@ impl ClientCore {
         .await;
         match result {
             Ok(mut core) => {
-                *core.store_lock.get_mut() = Some(store_lock);
+                *core.store_access.get_mut() = Some(store_access);
                 Ok(core)
             }
             Err(error) => {
@@ -578,8 +587,8 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        ensure_runtime_schemas(&plain).await.unwrap();
-        let access = ConfigAccess::Local(Arc::clone(&plain));
+        gents::ensure_runtime_schemas(&plain).await.unwrap();
+        let access = ConfigAccess::local(Arc::clone(&plain));
         access
             .write(
                 "test.client_upgrade.session",
@@ -654,7 +663,7 @@ mod tests {
                 std::fs::read(paths.identity_key_path()).unwrap(),
                 identity_bytes
             );
-            let access = ConfigAccess::Local(core.node_arc());
+            let access = ConfigAccess::local(core.node_arc());
             assert_eq!(access.execute(query).await.unwrap(), expected_document);
             assert_eq!(
                 access.execute(&history_query).await.unwrap(),
@@ -665,6 +674,7 @@ mod tests {
             assert!(sensitive.iter().all(|name| subscriptions.contains(name)));
             drop(admin);
             drop(access);
+            let core = Arc::new(core);
             core.shutdown().await.unwrap();
             drop(core);
             assert!(paths.store_encryption_path().is_file());
@@ -702,7 +712,7 @@ mod tests {
             .unwrap();
         assert_eq!(std::fs::read(paths.store_key_path()).unwrap(), key);
         assert_eq!(std::fs::read(paths.identity_key_path()).unwrap(), identity);
-        core.shutdown().await.unwrap();
+        Arc::new(core).shutdown().await.unwrap();
     }
 
     #[tokio::test]
@@ -731,6 +741,7 @@ mod tests {
             "{error:#}"
         );
         assert_eq!(std::fs::read(paths.store_key_path()).unwrap(), key);
+        let core = Arc::new(core);
         core.shutdown().await.unwrap();
         drop(core);
         let reopened =
@@ -738,6 +749,6 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(reopened.node_identity().did(), did);
-        reopened.shutdown().await.unwrap();
+        Arc::new(reopened).shutdown().await.unwrap();
     }
 }

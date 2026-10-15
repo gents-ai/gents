@@ -201,36 +201,80 @@ impl WriteTool {
             "preview returns a digest; omit digest while previewing"
         );
         match &self.access {
-            ConfigAccess::Local(node) => {
-                ConfigAccess::transact_local(node, self.actor.clone(), "application_write", |txn| {
-                    Box::pin(self.in_transaction(
-                        txn,
-                        args,
-                        operation,
-                        preview,
-                        collection,
-                        limit,
-                        filter.clone(),
-                        input.clone(),
-                    ))
-                })
-                .await
+            ConfigAccess::Local(local) => {
+                let node = local.node();
+                if preview {
+                    ConfigAccess::transact_local_readonly(
+                        node,
+                        self.actor.clone(),
+                        "application_write",
+                        |txn| {
+                            Box::pin(self.in_transaction(
+                                txn,
+                                args,
+                                operation,
+                                preview,
+                                collection,
+                                limit,
+                                filter.clone(),
+                                input.clone(),
+                            ))
+                        },
+                    )
+                    .await
+                } else {
+                    ConfigAccess::transact_local_write(
+                        node,
+                        self.actor.clone(),
+                        "application_write",
+                        |txn| {
+                            Box::pin(self.in_transaction(
+                                txn,
+                                args,
+                                operation,
+                                preview,
+                                collection,
+                                limit,
+                                filter.clone(),
+                                input.clone(),
+                            ))
+                        },
+                    )
+                    .await
+                }
             }
             ConfigAccess::Graphql(_) => {
-                self.access
-                    .transact("application_write", |txn| {
-                        Box::pin(self.in_transaction(
-                            txn,
-                            args,
-                            operation,
-                            preview,
-                            collection,
-                            limit,
-                            filter.clone(),
-                            input.clone(),
-                        ))
-                    })
-                    .await
+                if preview {
+                    self.access
+                        .transact_readonly("application_write", |txn| {
+                            Box::pin(self.in_transaction(
+                                txn,
+                                args,
+                                operation,
+                                preview,
+                                collection,
+                                limit,
+                                filter.clone(),
+                                input.clone(),
+                            ))
+                        })
+                        .await
+                } else {
+                    self.access
+                        .transact_write("application_write", |txn| {
+                            Box::pin(self.in_transaction(
+                                txn,
+                                args,
+                                operation,
+                                preview,
+                                collection,
+                                limit,
+                                filter.clone(),
+                                input.clone(),
+                            ))
+                        })
+                        .await
+                }
             }
         }
     }
@@ -353,11 +397,14 @@ impl WriteTool {
                 .as_array()
                 .unwrap()
                 .iter()
-                .map(|row| row["_docID"].clone())
-                .collect::<Vec<_>>();
-            let rendered =
-                crate::defra_query::render::render_filter(&json!({"_docID":{"_in":ids}}))?;
-            format!("filter: {rendered}")
+                .map(|row| {
+                    row["_docID"]
+                        .as_str()
+                        .context("write preview row missing physical document ID")
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let rendered = crate::graphql::graphql_string_list_literal(ids);
+            format!("docIDs: {rendered}")
         };
         let native_operation = if operation == "create" {
             "add"

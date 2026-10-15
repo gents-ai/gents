@@ -69,7 +69,7 @@ pub(crate) async fn schema_apply(args: SchemaApplyArgs) -> Result<()> {
 
     let (access, home_dir) =
         resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
-    let graphql = match &*access {
+    let graphql = match &access {
         ConfigAccess::Graphql(endpoint) => Some(endpoint.url().to_owned()),
         ConfigAccess::Local(_) => None,
     };
@@ -530,7 +530,7 @@ mod pack_schema_tests {
                 .await
                 .unwrap(),
         );
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         fs::write(&path, "type Widget { message: String }").unwrap();
         assert_eq!(
             apply_sdl_file(&access, &path).await.unwrap().status,

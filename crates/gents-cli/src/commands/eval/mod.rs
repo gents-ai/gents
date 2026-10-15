@@ -20,7 +20,7 @@ use crate::cli::{EvalCommand, EvalScopeArgs};
 
 /// The launching home a command acts for.
 pub(crate) struct EvalContext {
-    pub(crate) access: crate::CommandAccess,
+    pub(crate) access: gents::config_client::ConfigAccess,
     pub(crate) home_dir: PathBuf,
     /// The home's identity: owner of the runs it launches, and `by` on what
     /// it invalidates.

@@ -11,20 +11,11 @@
 //! require unsafe memory tricks and the integration coverage is sufficient.
 
 use anyhow::{anyhow, Context, Result};
-use defra_node::{EmbeddedNode, QueryResponse};
 
 use crate::graphql::{escape_graphql_string, response_has_documents};
 use crate::toolset::CommandPolicyDenial;
 
 use super::{AwaitMode, CancelCause, FailureClass, ToolCallLifecycle, ToolCallState};
-
-async fn execute_mutation_with_retry(
-    node: &EmbeddedNode,
-    mutation: &str,
-    operation: &'static str,
-) -> Result<QueryResponse> {
-    crate::config_client::ConfigAccess::write_local_response(node, operation, mutation).await
-}
 
 /// Error returned when a transition method is called from an illegal
 /// pre-state.

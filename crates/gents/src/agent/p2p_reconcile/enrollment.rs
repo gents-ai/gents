@@ -81,6 +81,45 @@ impl EnrollmentRequest {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EnrollmentRequestAuthority {
+    pub network_id: String,
+    pub admin_did: String,
+    pub server_peer: String,
+    pub candidate_did: String,
+    pub candidate_peer: String,
+    pub owner_node: String,
+    pub profile: String,
+}
+
+impl From<&EnrollmentRequest> for EnrollmentRequestAuthority {
+    fn from(request: &EnrollmentRequest) -> Self {
+        Self {
+            network_id: request.network_id.clone(),
+            admin_did: request.admin_did.clone(),
+            server_peer: request.server_peer.clone(),
+            candidate_did: request.candidate_did.clone(),
+            candidate_peer: request.candidate_peer.clone(),
+            owner_node: request.owner_node.clone(),
+            profile: request.profile.clone(),
+        }
+    }
+}
+
+/// The current approval must come from `DurableEnrollmentDocuments::current_approval`;
+/// applied-route evidence must bind its exact signed request and authorization generation.
+/// This projects pending-request visibility without granting authority or retiring documents.
+pub fn pending_request_satisfied(
+    requested: &EnrollmentRequestAuthority,
+    current: &EnrollmentRequestAuthority,
+    has_decision: bool,
+    current_approval: bool,
+    route_applied: bool,
+) -> bool {
+    !has_decision && current_approval && route_applied && requested == current
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum EnrollmentDecisionKind {
     Approved,

@@ -351,8 +351,11 @@ mod tests {
                     .await
                     .unwrap();
             }
-            let result =
-                ConfigAccess::transact_local(&node, None, "test.plugin_child_accounting", |txn| {
+            let result = ConfigAccess::transact_local_write(
+                &node,
+                None,
+                "test.plugin_child_accounting",
+                |txn| {
                     let request_doc = request_doc.clone();
                     let session = session.clone();
                     let agent = agent.clone();
@@ -388,8 +391,9 @@ mod tests {
                         )
                         .await
                     })
-                })
-                .await;
+                },
+            )
+            .await;
             if normal {
                 assert_eq!(
                     result.is_ok(),
@@ -398,7 +402,7 @@ mod tests {
             } else {
                 result.unwrap();
             }
-            let response = ConfigAccess::Local(node.clone()).execute(&format!(
+            let response = ConfigAccess::local(node.clone()).execute(&format!(
                 r#"{{ AgentToolCall(docID: "{}") {{ lifecycle_state started_at stuck_since terminal_output }} }}"#,
                 escape_graphql_string(&child_doc),
             )).await.unwrap();

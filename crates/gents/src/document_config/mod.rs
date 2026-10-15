@@ -109,9 +109,12 @@ pub use datastore_tool_surface::{list_datastore_tool_surfaces, DatastoreToolSurf
 pub use eth_tool::{eth_tool_by_id_query, list_eth_tools, EthToolDocument};
 pub use skill::SkillDocument;
 
+#[cfg(test)]
+pub(crate) use event_trigger::count_trigger_cursor_batch_queries;
 #[allow(unused_imports)]
 pub(crate) use event_trigger::{
-    load_trigger_next_run_at, update_trigger_runtime_fields, TriggerRuntimeUpdate,
+    load_trigger_next_run_at_batch, update_trigger_runtime_fields, TriggerRuntimeUpdate,
+    TRIGGER_CURSOR_BATCH_SIZE,
 };
 pub use event_trigger::{EventGroup, EventGroupCount, EventSource};
 pub use schedule::{Schedule, ScheduleCadence, ScheduleObservation};
@@ -128,7 +131,7 @@ pub fn default_agent_id_for_node(node_did: &str) -> String {
 
 /// Ensure the runtime's node exists without inventing executable configuration.
 /// Packs or explicit configuration select agents, contexts and inference.
-pub async fn ensure_node(node: &EmbeddedNode, node_did: &str) -> Result<Node> {
+pub async fn ensure_node(node: &std::sync::Arc<EmbeddedNode>, node_did: &str) -> Result<Node> {
     use crate::collection::Collection;
     use crate::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
     anyhow::ensure!(!node_did.trim().is_empty(), "node DID must not be blank");
@@ -152,7 +155,7 @@ pub async fn ensure_node(node: &EmbeddedNode, node_did: &str) -> Result<Node> {
     if let Some(principal) = existing {
         return Ok(principal);
     }
-    ConfigAccess::transact_local(node, None, "ensure_node", move |txn| {
+    ConfigAccess::transact_local_write(node, None, "ensure_node", move |txn| {
         let owner = owner.clone();
         Box::pin(async move {
             if let Some((_, value)) = crate::config_client::read_desired_state_record_in_txn(
@@ -200,7 +203,7 @@ mod principal_bootstrap_tests {
 
     #[tokio::test]
     async fn bootstrap_is_idempotent_and_does_not_invent_executable_configuration() -> Result<()> {
-        let node = EmbeddedNode::builder().build().await?;
+        let node = std::sync::Arc::new(EmbeddedNode::builder().build().await?);
         crate::ensure_runtime_schemas(&node).await?;
         let principal = ensure_node(&node, "did:key:bootstrap").await?;
         assert_eq!(principal.default_agent_id, None);

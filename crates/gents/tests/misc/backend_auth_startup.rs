@@ -59,7 +59,7 @@ async fn document_runtime_uses_backend_specific_api_key_env_var() -> Result<()> 
     let mock_endpoint =
         MockModelEndpoint::start_with_required_bearer("default", Some("backend-key"))?;
     bind_default_agent_backend(
-        node.as_ref(),
+        &node,
         identity.did(),
         "backend-startup-auth",
         mock_endpoint.endpoint(),
@@ -121,7 +121,7 @@ async fn openrouter_oneshot_uses_provider_request_preferences() -> Result<()> {
     };
     behavior.model_name = "openai/gpt-4o-mini".to_string();
     crate::support::fixtures::bind_agent_backend(
-        node.as_ref(),
+        &node,
         behavior.node_did(),
         &behavior.agent_id,
         "backend-openrouter",

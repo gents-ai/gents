@@ -45,7 +45,7 @@ fn stub_runtime_node() -> Arc<RuntimeNode> {
 }
 
 async fn snapshot_for_agents(
-    node: &defra_node::EmbeddedNode,
+    node: &Arc<defra_node::EmbeddedNode>,
     default_agent_id: &str,
     agents: Vec<Arc<ResolvedAgent>>,
 ) -> ResolvedRuntimeSnapshot {
@@ -56,7 +56,7 @@ async fn snapshot_for_agents(
 /// alongside each agent_config, so isolating one agent_config field requires both
 /// snapshots to carry the same node.
 async fn snapshot_for_agents_with_node(
-    node: &defra_node::EmbeddedNode,
+    node: &Arc<defra_node::EmbeddedNode>,
     default_agent_id: &str,
     agents: Vec<Arc<ResolvedAgent>>,
     runtime_node: Arc<RuntimeNode>,
@@ -80,7 +80,7 @@ async fn snapshot_for_agents_with_node(
 }
 
 async fn snapshot_for_agents_with_admission(
-    node: &defra_node::EmbeddedNode,
+    node: &Arc<defra_node::EmbeddedNode>,
     default_agent_id: &str,
     agents: Vec<Arc<ResolvedAgent>>,
     backend_admission_configs: HashMap<String, BackendAdmissionConfig>,
@@ -167,9 +167,8 @@ async fn operator_write_changes_snapshot_fingerprint() {
         .build_with_identity_for_test(test_identity("pairing-contract-updated"));
     updated_agent.system_prompt = "after operator write".to_string();
     let current_resolved =
-        snapshot_for_agents(node.as_ref(), "general", vec![Arc::new(initial_agent)]).await;
-    let proposed =
-        snapshot_for_agents(node.as_ref(), "general", vec![Arc::new(updated_agent)]).await;
+        snapshot_for_agents(&node, "general", vec![Arc::new(initial_agent)]).await;
+    let proposed = snapshot_for_agents(&node, "general", vec![Arc::new(updated_agent)]).await;
     let current = current_resolved.activate(1, HashMap::new());
     let diff = diff_counts(&current, &proposed);
 
@@ -206,14 +205,14 @@ async fn max_turns_provenance_only_edit_changes_snapshot_and_slot_fingerprints()
     let unset = Arc::new(unset);
     let explicit = Arc::new(explicit);
     let unset_snapshot = snapshot_for_agents_with_node(
-        node.as_ref(),
+        &node,
         "general",
         vec![Arc::clone(&unset)],
         Arc::clone(&runtime_node),
     )
     .await;
     let explicit_snapshot = snapshot_for_agents_with_node(
-        node.as_ref(),
+        &node,
         "general",
         vec![Arc::clone(&explicit)],
         Arc::clone(&runtime_node),
@@ -232,15 +231,11 @@ async fn max_turns_provenance_only_edit_changes_snapshot_and_slot_fingerprints()
     assert_eq!(setting.added, 0);
     assert_eq!(setting.removed, 0);
 
-    let explicit_snapshot = snapshot_for_agents_with_node(
-        node.as_ref(),
-        "general",
-        vec![explicit],
-        Arc::clone(&runtime_node),
-    )
-    .await;
+    let explicit_snapshot =
+        snapshot_for_agents_with_node(&node, "general", vec![explicit], Arc::clone(&runtime_node))
+            .await;
     let unset_snapshot =
-        snapshot_for_agents_with_node(node.as_ref(), "general", vec![unset], runtime_node).await;
+        snapshot_for_agents_with_node(&node, "general", vec![unset], runtime_node).await;
     let active_explicit = explicit_snapshot.activate(1, HashMap::new());
     assert_ne!(
         active_explicit.configuration_fingerprint(),
@@ -310,8 +305,7 @@ async fn reconcile_install_applies_added_agent() {
         HashMap::new(),
     )
     .with_node(stub_runtime_node());
-    let proposed =
-        snapshot_for_agents(node.as_ref(), "general", vec![Arc::new(agent_config)]).await;
+    let proposed = snapshot_for_agents(&node, "general", vec![Arc::new(agent_config)]).await;
     let current = current_resolved.activate(1, HashMap::new());
     let diff = diff_counts(&current, &proposed);
     let applied = proposed.clone().activate(2, HashMap::new());
@@ -332,7 +326,7 @@ async fn reconcile_teardown_applies_removed_agent() {
     let agent_config = PendingAgent::new("general")
         .build_with_identity_for_test(test_identity("pairing-contract-teardown"));
     let current_resolved =
-        snapshot_for_agents(node.as_ref(), "general", vec![Arc::new(agent_config)]).await;
+        snapshot_for_agents(&node, "general", vec![Arc::new(agent_config)]).await;
     let proposed = ResolvedRuntimeSnapshot::from_parts(
         "general".to_string(),
         Vec::new(),
@@ -364,7 +358,7 @@ async fn slot_panic_restarts_agent() {
     let tool_surface = Arc::new(
         agent_config
             .tools
-            .resolve(node.as_ref(), agent_config.node_did(), &Default::default())
+            .resolve(&node, agent_config.node_did(), &Default::default())
             .await
             .unwrap(),
     );
@@ -450,7 +444,7 @@ async fn dropping_agent_slot_aborts_a_held_executor() {
     let tool_surface = Arc::new(
         agent_config
             .tools
-            .resolve(node.as_ref(), agent_config.node_did(), &Default::default())
+            .resolve(&node, agent_config.node_did(), &Default::default())
             .await
             .unwrap(),
     );
@@ -500,7 +494,7 @@ async fn agent_slot_fans_out_background_children_to_backend_capacity() {
         .build_with_identity_for_test(test_identity("background-fanout"));
     agent_config.backend_id = Some("backend-wide".to_string());
     let snapshot = snapshot_for_agents_with_admission(
-        node.as_ref(),
+        &node,
         "general",
         vec![Arc::new(agent_config)],
         HashMap::from([(
@@ -644,7 +638,7 @@ async fn generation_supervisor_rotates_dispatcher_on_backend_capacity_change() {
     agent_config.backend_id = Some("backend-general".to_string());
     let agent_config = Arc::new(agent_config);
     let initial_snapshot = snapshot_for_agents_with_admission(
-        node.as_ref(),
+        &node,
         "general",
         vec![agent_config.clone()],
         HashMap::from([(
@@ -654,7 +648,7 @@ async fn generation_supervisor_rotates_dispatcher_on_backend_capacity_change() {
     )
     .await;
     let updated_snapshot = snapshot_for_agents_with_admission(
-        node.as_ref(),
+        &node,
         "general",
         vec![agent_config],
         HashMap::from([(
@@ -780,7 +774,7 @@ async fn generation_supervisor_restages_slot_on_api_key_rotation() {
         HashMap::from([("backend-general".to_string(), config)])
     };
     let initial_snapshot = snapshot_for_agents_with_admission(
-        node.as_ref(),
+        &node,
         "general",
         vec![Arc::new(agent_config.clone())],
         admission(crate::completion_factory::agent_connection_fingerprint(
@@ -789,7 +783,7 @@ async fn generation_supervisor_restages_slot_on_api_key_rotation() {
     )
     .await;
     let rotated_snapshot = snapshot_for_agents_with_admission(
-        node.as_ref(),
+        &node,
         "general",
         vec![Arc::new(rotated)],
         admission(new_connection.clone()),
@@ -919,19 +913,15 @@ async fn backend_change_restages_the_slot_and_drains_the_call_in_flight() {
     };
     let runtime_node = stub_runtime_node();
     let initial_snapshot = snapshot_for_agents_with_node(
-        node.as_ref(),
+        &node,
         "general",
         vec![Arc::new(agent_config)],
         runtime_node.clone(),
     )
     .await;
-    let switched_snapshot = snapshot_for_agents_with_node(
-        node.as_ref(),
-        "general",
-        vec![Arc::new(switched)],
-        runtime_node,
-    )
-    .await;
+    let switched_snapshot =
+        snapshot_for_agents_with_node(&node, "general", vec![Arc::new(switched)], runtime_node)
+            .await;
 
     // (request id, generation, backend id, account ref) of each finished request.
     let (done_tx, mut done_rx) =
@@ -1061,7 +1051,10 @@ struct RuntimeStatusRow {
     last_reconcile_error: String,
 }
 
-async fn fetch_runtime_status(node: &defra_node::EmbeddedNode, node_did: &str) -> RuntimeStatusRow {
+async fn fetch_runtime_status(
+    node: &Arc<defra_node::EmbeddedNode>,
+    node_did: &str,
+) -> RuntimeStatusRow {
     let node_did = escape_graphql_string(node_did);
     let query = format!(
         r#"{{
@@ -1108,9 +1101,9 @@ async fn generation_supervisor_rotates_dispatcher_on_agent_change() {
     updated_agent.system_prompt = "updated prompt".to_string();
 
     let initial_snapshot =
-        snapshot_for_agents(node.as_ref(), "general", vec![Arc::new(initial_agent)]).await;
+        snapshot_for_agents(&node, "general", vec![Arc::new(initial_agent)]).await;
     let updated_snapshot =
-        snapshot_for_agents(node.as_ref(), "general", vec![Arc::new(updated_agent)]).await;
+        snapshot_for_agents(&node, "general", vec![Arc::new(updated_agent)]).await;
 
     let runner = {
         let starts = starts.clone();
@@ -1206,7 +1199,7 @@ async fn generation_supervisor_rotates_dispatcher_on_agent_change() {
             .system_prompt,
         "updated prompt"
     );
-    let status = fetch_runtime_status(node.as_ref(), node_did).await;
+    let status = fetch_runtime_status(&node, node_did).await;
     assert_eq!(status.reconcile_phase, publish.post_phase.as_str());
     assert_eq!(status.last_reconcile_result, "applied");
     assert!(status.last_reconcile_error.is_empty());
@@ -1254,9 +1247,9 @@ async fn generation_supervisor_keeps_previous_generation_after_failed_apply() {
     updated_agent.system_prompt = "updated prompt".to_string();
 
     let initial_snapshot =
-        snapshot_for_agents(node.as_ref(), "general", vec![Arc::new(initial_agent)]).await;
+        snapshot_for_agents(&node, "general", vec![Arc::new(initial_agent)]).await;
     let valid_updated_snapshot =
-        snapshot_for_agents(node.as_ref(), "general", vec![Arc::new(updated_agent)]).await;
+        snapshot_for_agents(&node, "general", vec![Arc::new(updated_agent)]).await;
     let mut extra_tool_surface_snapshot = valid_updated_snapshot.clone();
     extra_tool_surface_snapshot.tool_surfaces.insert(
         "extra".to_string(),
@@ -1328,7 +1321,7 @@ async fn generation_supervisor_keeps_previous_generation_after_failed_apply() {
         active_rx.borrow().generation,
         apply_failed.post_active_generation as u64
     );
-    let failed_status = fetch_runtime_status(node.as_ref(), node_did).await;
+    let failed_status = fetch_runtime_status(&node, node_did).await;
     assert_eq!(
         failed_status.reconcile_phase,
         apply_failed.post_phase.as_str()
@@ -1342,7 +1335,7 @@ async fn generation_supervisor_keeps_previous_generation_after_failed_apply() {
         .expect("valid update should publish after failed apply")
         .unwrap();
     assert_eq!(active_rx.borrow().generation, 2);
-    let recovered_status = fetch_runtime_status(node.as_ref(), node_did).await;
+    let recovered_status = fetch_runtime_status(&node, node_did).await;
     assert_eq!(recovered_status.reconcile_phase, "idle");
     assert_eq!(recovered_status.last_reconcile_result, "applied");
     assert!(recovered_status.last_reconcile_error.is_empty());
@@ -1479,9 +1472,9 @@ async fn registration_failure_rolls_back_standing_before_any_staged_slot_spawns(
         PendingAgent::new("second")
             .build_with_identity_for_test(test_identity("register-failure-second")),
     );
-    let initial_snapshot = snapshot_for_agents(node.as_ref(), "general", vec![initial]).await;
+    let initial_snapshot = snapshot_for_agents(&node, "general", vec![initial]).await;
     let replacement_snapshot =
-        snapshot_for_agents(node.as_ref(), "general", vec![Arc::new(changed), added]).await;
+        snapshot_for_agents(&node, "general", vec![Arc::new(changed), added]).await;
     let started_generations = Arc::new(StdMutex::new(Vec::new()));
     let runner = {
         let started_generations = started_generations.clone();
@@ -1559,19 +1552,15 @@ async fn retired_slot_drain_failure_reaches_supervisor_shutdown() {
     let mut replacement = initial.clone();
     replacement.system_prompt = "replacement generation".to_string();
     let initial_snapshot = snapshot_for_agents_with_node(
-        node.as_ref(),
+        &node,
         "general",
         vec![Arc::new(initial)],
         runtime_node.clone(),
     )
     .await;
-    let replacement_snapshot = snapshot_for_agents_with_node(
-        node.as_ref(),
-        "general",
-        vec![Arc::new(replacement)],
-        runtime_node,
-    )
-    .await;
+    let replacement_snapshot =
+        snapshot_for_agents_with_node(&node, "general", vec![Arc::new(replacement)], runtime_node)
+            .await;
     let (runtime_status_owner, runtime_status) =
         RuntimeStatusHandle::start(node.clone(), "did:test:retired-drain-failure");
     let (started_tx, mut started_rx) = mpsc::unbounded_channel();
@@ -1653,9 +1642,9 @@ async fn source_publish_failure_rolls_back_and_joins_staged_slots() {
     let mut replacement = PendingAgent::new("general")
         .build_with_identity_for_test(test_identity("source-failure-replacement"));
     replacement.system_prompt = "replacement".to_string();
-    let initial_snapshot = snapshot_for_agents(node.as_ref(), "general", vec![initial]).await;
+    let initial_snapshot = snapshot_for_agents(&node, "general", vec![initial]).await;
     let replacement_snapshot =
-        snapshot_for_agents(node.as_ref(), "general", vec![Arc::new(replacement)]).await;
+        snapshot_for_agents(&node, "general", vec![Arc::new(replacement)]).await;
 
     let fatal_attempted = Arc::new(Notify::new());
     let fatal_release = Arc::new(Semaphore::new(0));
@@ -1816,9 +1805,9 @@ async fn closed_snapshot_receiver_does_not_detach_retired_or_active_slots() {
     let mut replacement = PendingAgent::new("general")
         .build_with_identity_for_test(test_identity("closed-watch-replacement"));
     replacement.system_prompt = "replacement".to_string();
-    let initial_snapshot = snapshot_for_agents(node.as_ref(), "general", vec![initial]).await;
+    let initial_snapshot = snapshot_for_agents(&node, "general", vec![initial]).await;
     let replacement_snapshot =
-        snapshot_for_agents(node.as_ref(), "general", vec![Arc::new(replacement)]).await;
+        snapshot_for_agents(&node, "general", vec![Arc::new(replacement)]).await;
     let exited = Arc::new(AtomicUsize::new(0));
     let generation_one_exit = Arc::new(Semaphore::new(0));
     let generation_two_exit = Arc::new(Semaphore::new(0));
@@ -1992,8 +1981,8 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
         ..initial_agent.as_ref().clone()
     });
 
-    let initial_snapshot = snapshot_for_agents(node.as_ref(), "general", vec![initial_agent]).await;
-    let updated_snapshot = snapshot_for_agents(node.as_ref(), "general", vec![updated_agent]).await;
+    let initial_snapshot = snapshot_for_agents(&node, "general", vec![initial_agent]).await;
+    let updated_snapshot = snapshot_for_agents(&node, "general", vec![updated_agent]).await;
 
     let observed_tool_names = Arc::new(StdMutex::new(Vec::<Vec<String>>::new()));
     let runner = {
@@ -2125,8 +2114,7 @@ async fn retiring_a_slot_notifies_the_failure_policy() {
         PendingAgent::new("general")
             .build_with_identity_for_test(test_identity("policy-retirement-559")),
     );
-    let initial_snapshot =
-        snapshot_for_agents(node.as_ref(), "general", vec![agent_config.clone()]).await;
+    let initial_snapshot = snapshot_for_agents(&node, "general", vec![agent_config.clone()]).await;
     // A runner that parks until shutdown: the agent_config never "starts", exactly
     // the mid-startup window the retirement release exists for.
     let runner = |_agent: Arc<ResolvedAgent>,
@@ -2168,8 +2156,7 @@ async fn retiring_a_slot_notifies_the_failure_policy() {
         PendingAgent::new("replacement")
             .build_with_identity_for_test(test_identity("policy-replacement-559")),
     );
-    let replacement_snapshot =
-        snapshot_for_agents(node.as_ref(), "replacement", vec![replacement]).await;
+    let replacement_snapshot = snapshot_for_agents(&node, "replacement", vec![replacement]).await;
     proposal_tx.send(replacement_snapshot).await.unwrap();
     tokio::time::timeout(Duration::from_secs(1), active_rx.changed())
         .await
@@ -2205,7 +2192,7 @@ async fn retiring_a_slot_notifies_the_failure_policy() {
 /// One Agent whose Tools selection names `fixture/list_files`, resolved
 /// against two plugin homes: one without the record, one with it.
 async fn plugin_resolution_surfaces(
-    node: &defra_node::EmbeddedNode,
+    node: &Arc<defra_node::EmbeddedNode>,
 ) -> (Arc<ResolvedAgent>, Arc<ToolSurface>, Arc<ToolSurface>) {
     let mut agent_config = PendingAgent::new("general")
         .build_with_identity_for_test(test_identity("plugin-resolution-fingerprint"));
@@ -2287,8 +2274,7 @@ async fn a_changed_plugin_resolution_changes_the_fingerprint_and_recreates_the_s
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let runtime_node = stub_runtime_node();
-    let (agent_config, absent_surface, installed_surface) =
-        plugin_resolution_surfaces(node.as_ref()).await;
+    let (agent_config, absent_surface, installed_surface) = plugin_resolution_surfaces(&node).await;
 
     let snapshot_for = |surface: Arc<ToolSurface>| {
         ResolvedRuntimeSnapshot::from_parts(
@@ -2351,7 +2337,7 @@ async fn a_changed_plugin_resolution_changes_the_fingerprint_and_recreates_the_s
     let reinstalled_surface = Arc::new(
         agent_config
             .tools
-            .resolve(node.as_ref(), agent_config.node_did(), &plugins)
+            .resolve(&node, agent_config.node_did(), &plugins)
             .await
             .unwrap(),
     );

@@ -269,7 +269,7 @@ mod tests {
     #[tokio::test]
     async fn native_schema_evidence_grades_indexes_relations_and_wrong_contracts() {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         let sdl = r#"
           type Author { name: String books: [Book] }
           type Book {

@@ -5,6 +5,115 @@ use gents_protocol::schemas::AGENT_MESSAGE_NAME;
 use std::sync::Arc;
 
 #[tokio::test]
+async fn pending_edit_request_patch_reads_only_selected_and_replacement_documents() {
+    let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
+    ensure_runtime_schemas(node.as_ref())
+        .await
+        .expect("schemas");
+    let access = gents::ConfigAccess::local(node.clone());
+    let response = access
+        .write(
+            "test.pending_edit_request_patch",
+            r#"mutation {
+                retired: create_AgentRequest(input: {
+                    request_id: "edit-retired",
+                    purpose: "normal",
+                    node_did: "did:test:agent",
+                    requester_did: "did:test:requester",
+                    agent_id: "default",
+                    session_id: "edit-session",
+                    content: "old text",
+                    lifecycle_state: "superseded",
+                    execution_origin: "interactive",
+                    created_at: "2026-09-01T00:00:00Z"
+                }) { _docID }
+                replacement: create_AgentRequest(input: {
+                    request_id: "edit-replacement",
+                    purpose: "normal",
+                    node_did: "did:test:agent",
+                    requester_did: "did:test:requester",
+                    agent_id: "default",
+                    session_id: "edit-session",
+                    content: "new text",
+                    lifecycle_state: "pending",
+                    execution_origin: "interactive",
+                    created_at: "2026-09-01T00:00:01Z"
+                }) { _docID }
+                unrelated: create_AgentRequest(input: {
+                    request_id: "other-session-request",
+                    purpose: "normal",
+                    node_did: "did:test:agent",
+                    requester_did: "did:test:requester",
+                    agent_id: "default",
+                    session_id: "other-session",
+                    content: "unrelated",
+                    lifecycle_state: "pending",
+                    execution_origin: "interactive",
+                    created_at: "2026-09-01T00:00:02Z"
+                }) { _docID }
+            }"#,
+        )
+        .await
+        .expect("seed edit and unrelated requests");
+    let doc_id = |alias: &str| {
+        response["data"][alias][0]["_docID"]
+            .as_str()
+            .expect("physical request identity")
+            .to_owned()
+    };
+    let selected = doc_id("retired");
+    let replacement = doc_id("replacement");
+    let patch = load_request_documents_on(&access, &[selected.clone(), replacement.clone()])
+        .await
+        .expect("exact edit request patch");
+
+    assert_eq!(
+        patch
+            .iter()
+            .filter_map(|row| row.doc_id.as_deref())
+            .collect::<std::collections::HashSet<_>>(),
+        [selected.as_str(), replacement.as_str()]
+            .into_iter()
+            .collect()
+    );
+    assert_eq!(patch.len(), 2, "unrelated session rows stay unread");
+    assert!(patch.iter().any(|row| {
+        row.request_id == "edit-retired"
+            && row.lifecycle_state
+                == Some(gents_protocol::request_lifecycle::RequestLifecycleState::Superseded)
+    }));
+    assert!(patch.iter().any(|row| {
+        row.request_id == "edit-replacement"
+            && row.lifecycle_state
+                == Some(gents_protocol::request_lifecycle::RequestLifecycleState::Pending)
+    }));
+    let existing_unrelated = serde_json::from_value(serde_json::json!({
+        "request_id": "already-local",
+        "purpose": "normal",
+        "node_did": "did:test:agent",
+        "requester_did": "did:test:requester",
+        "session_id": "another-session",
+        "content": "keep this local row",
+        "lifecycle_state": "pending",
+        "created_at": "2026-09-01T00:00:03Z"
+    }))
+    .expect("unrelated local request");
+    let merged = ClientStore::from_rows(ClientStoreRows {
+        requests: vec![existing_unrelated],
+        ..ClientStoreRows::default()
+    })
+    .merge_chat_patch(ClientStore::from_rows(ClientStoreRows {
+        requests: patch,
+        ..ClientStoreRows::default()
+    }));
+    assert_eq!(merged.requests.len(), 3);
+    assert!(merged
+        .requests
+        .iter()
+        .any(|row| row.request_id == "already-local"));
+}
+
+#[tokio::test]
 async fn fetch_doc_patch_returns_only_matching_rows() {
     let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
     ensure_runtime_schemas(node.as_ref())
@@ -277,7 +386,7 @@ async fn title_request_patch_preserves_existence_without_public_projection() {
     ensure_runtime_schemas(node.as_ref())
         .await
         .expect("schemas");
-    let access = gents::ConfigAccess::Local(node.clone());
+    let access = gents::ConfigAccess::local(node.clone());
     access
         .write(
             "test.title_request_patch",
@@ -326,12 +435,17 @@ async fn title_request_patch_preserves_existence_without_public_projection() {
         .await
         .expect("title-only patch");
     assert_eq!(title_only.observed_documents, 1);
+    assert!(title_only
+        .missing_doc_ids
+        .as_ref()
+        .is_some_and(Vec::is_empty));
     assert!(title_only.store.requests.is_empty());
 
     let mixed = fetch_doc_patch(node.as_ref(), AGENT_REQUEST_NAME, &[normal_id, title_id])
         .await
         .expect("mixed patch");
     assert_eq!(mixed.observed_documents, 2);
+    assert!(mixed.missing_doc_ids.as_ref().is_some_and(Vec::is_empty));
     assert_eq!(mixed.store.requests.len(), 1);
     assert_eq!(mixed.store.requests[0].request_id, "patch-normal");
     assert_eq!(
@@ -349,6 +463,10 @@ async fn title_request_patch_preserves_existence_without_public_projection() {
     .await
     .expect("mixed present/missing patch");
     assert_eq!(missing.observed_documents, 1);
+    assert_eq!(
+        missing.missing_doc_ids.as_ref().unwrap(),
+        &["physically-absent-request".to_owned()]
+    );
     assert!(missing.store.requests.is_empty());
     assert!(
         missing.observed_documents < 2,

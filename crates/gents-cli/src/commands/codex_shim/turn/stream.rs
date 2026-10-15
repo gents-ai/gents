@@ -280,7 +280,7 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
             serde_json::from_value(request_row.cloned().context("live request row missing")?)
                 .context("decoding canonical Codex request")?;
         let canonical_output = gents::session::observe_request_output(
-            &ConfigAccess::Local(state.node.clone()),
+            &ConfigAccess::local(state.node.clone()),
             &canonical_request,
         )
         .await
@@ -413,7 +413,7 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
                 continue;
             }
             let tool = match hydrate_gents_tool_call_progress(
-                &ConfigAccess::Local(state.node.clone()),
+                &ConfigAccess::local(state.node.clone()),
                 row,
                 &current.node_did,
                 &current.session_id,
@@ -746,7 +746,7 @@ async fn canonical_output_started_at_ms(
         return Ok(header.and_then(|header| timestamp_millis(&header.created_at)));
     };
     let response = query_node_json(
-        state.node.as_ref(),
+        &state.node,
         &format!(
             r#"{{ AgentOutputSegment(
                 filter: {{ request_doc_id: {{ _eq: "{}" }} }},
@@ -1137,7 +1137,7 @@ async fn send_thread_token_usage_update(
 ) -> Result<()> {
     let total_usage = submitted_token_usage(state, request, None).await?;
     let model_context_window = load_bound_context_window(
-        state.node.as_ref(),
+        &state.node,
         &request.node_did,
         request
             .agent_id
@@ -1234,7 +1234,7 @@ async fn announce_consumed_inputs(
         .pointer("/data/AgentRequest")
         .and_then(Value::as_array)
         .context("consumed input query omitted rows")?;
-    let access = ConfigAccess::Local(state.node.clone());
+    let access = ConfigAccess::local(state.node.clone());
     let mut ready = Vec::new();
     for raw in rows {
         let row: gents_protocol::row::AgentRequestRow = serde_json::from_value(raw.clone())?;
@@ -1307,7 +1307,7 @@ async fn cancel_pending_steering_request(
 ) {
     connection.take_steering_input(&request.request_id).await;
     if let Err(error) = gents::interrupt_request_by_doc_id(
-        state.node.as_ref(),
+        &state.node,
         &request.request_doc_id,
         &state.node_did,
         Some(state.local_requester_did()),

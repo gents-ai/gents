@@ -1,4 +1,5 @@
 use super::*;
+use crate::tests::support::refresh_request_and_wait_for_projection;
 use gents_protocol::rendered_request::{
     ContextAccounting, ContextCompactionReason, ContextInputComponents, CONTEXT_ACCOUNTING_VERSION,
 };
@@ -93,9 +94,7 @@ async fn shared_snapshot_keeps_previous_accounting_until_new_request_dispatches(
             "seed request failed: {:?}",
             response.errors
         );
-        core.refresh_local_request(node_did, request_id)
-            .await
-            .expect("refresh request");
+        refresh_request_and_wait_for_projection(&core, node_did, request_id).await;
         assert!(
             core.store()
                 .snapshot()

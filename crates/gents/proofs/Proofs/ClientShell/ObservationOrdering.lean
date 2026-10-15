@@ -129,6 +129,24 @@ inductive StartupPhase where
   | managedServerError | configurationError | clientError | ready
   deriving DecidableEq, Repr
 
+inductive FirstRunPhase where
+  | unknown | active | done
+  deriving DecidableEq, Repr
+
+/-- First-run enters setup only after the local init-config owner explicitly
+reports absence, or after a configured home has a complete operator snapshot.
+Unreadable init state and partial operator snapshots remain unresolved. Once
+setup owns the window, observations cannot restart or dismiss it. -/
+def observeFirstRun (phase : FirstRunPhase) (snapshotReady initConfigAbsent needsSetup authoritative : Bool) : FirstRunPhase :=
+  match phase with
+  | .active => .active
+  | .done => .done
+  | .unknown =>
+      if !snapshotReady then .unknown
+      else if initConfigAbsent then .active
+      else if !authoritative then .unknown
+      else if needsSetup then .active else .done
+
 /-- A client observation can recover a client error, not managed-server authority.
 
 `autostartDeclined` is true exactly when the desktop will not autostart the
@@ -153,6 +171,318 @@ theorem client_observation_does_not_clear_managed_error (running autostartDeclin
     observeStartup .managedServerError running autostartDeclined = .managedServerError := by rfl
 
 end ClientSnapshotObservation
+
+/-! A data-read publication fence is separate from the shell's UI-intent epoch
+and lineage provenance. The native projection owner compares retained snapshot
+identity and a request-event generation. Transcript-only invalidations do not
+replace the snapshot or alter either read-fence component; an observed request
+event advances its own generation even when no row is cached. -/
+namespace ClientDataPublication
+
+structure State where
+  dataEpoch : Nat
+  provenanceEpoch : Nat
+  requestEventEpoch : Nat
+  transcriptEpoch : Nat
+  deriving DecidableEq, Repr
+
+structure Read where
+  dataEpoch : Nat
+  requestEventEpoch : Nat
+  deriving DecidableEq, Repr
+
+def beginRead (s : State) : Read :=
+  { dataEpoch := s.dataEpoch, requestEventEpoch := s.requestEventEpoch }
+
+def accepts (s : State) (read : Read) : Bool :=
+  decide (s.dataEpoch = read.dataEpoch ∧ s.requestEventEpoch = read.requestEventEpoch)
+
+def publish (s : State) (read : Read) : State :=
+  if accepts s read then { s with dataEpoch := s.dataEpoch + 1 } else s
+
+def requestEvent (s : State) : State :=
+  { s with requestEventEpoch := s.requestEventEpoch + 1 }
+
+def transcriptInvalidation (s : State) : State :=
+  { s with transcriptEpoch := s.transcriptEpoch + 1 }
+
+theorem newer_data_rejects_old_read (s : State) (read : Read)
+    (h : read.dataEpoch < s.dataEpoch) : publish s read = s := by
+  have hne : s.dataEpoch ≠ read.dataEpoch := by omega
+  simp [publish, accepts, hne]
+
+theorem uncached_request_event_rejects_old_read (s : State) :
+    publish (requestEvent s) (beginRead s) = requestEvent s := by
+  simp [publish, requestEvent, beginRead, accepts]
+
+theorem request_event_does_not_invalidate_lineage_cache (s : State) :
+    (requestEvent s).provenanceEpoch = s.provenanceEpoch := by
+  rfl
+
+theorem transcript_invalidation_preserves_read (s : State) :
+    accepts (transcriptInvalidation s) (beginRead s) = true := by
+  simp [transcriptInvalidation, beginRead, accepts]
+
+theorem accepted_publication_advances_data_epoch (s : State) :
+    (publish s (beginRead s)).dataEpoch = s.dataEpoch + 1 := by
+  simp [publish, beginRead, accepts]
+
+/-- A configuration row carries its canonical owner independently of where the
+desktop observed it. Scoped replacement removes only rows owned by the target;
+an unscoped local-replica row for another owner remains valid. -/
+structure ScopedConfigRow where
+  owner : Nat
+  key : String
+  value : String
+  source : Option Nat
+  deriving DecidableEq, Repr
+
+/-- Companion observations do not carry their own canonical owner. Their
+`source` is taken from the parent document that supplied them. A scoped reload
+replaces only observations with known target provenance and keeps unknown rows
+for a future full reconciliation. -/
+structure ScopedObservationRow where
+  key : String
+  value : String
+  source : Option Nat
+  deriving DecidableEq, Repr
+
+def upsertConfigRow (rows : List ScopedConfigRow) (incoming : ScopedConfigRow) :
+    List ScopedConfigRow :=
+  match rows with
+  | [] => [incoming]
+  | row :: rest =>
+    if row.owner = incoming.owner ∧ row.key = incoming.key then
+      incoming :: rest
+    else
+      row :: upsertConfigRow rest incoming
+
+def upsertConfigRows (rows : List ScopedConfigRow) : List ScopedConfigRow →
+    List ScopedConfigRow
+  | [] => rows
+  | incoming :: rest => upsertConfigRows (upsertConfigRow rows incoming) rest
+
+def upsertObservationRow (rows : List ScopedObservationRow)
+    (incoming : ScopedObservationRow) : List ScopedObservationRow :=
+  match rows with
+  | [] => [incoming]
+  | row :: rest =>
+    if row.source = incoming.source ∧ row.key = incoming.key then
+      incoming :: rest
+    else
+      row :: upsertObservationRow rest incoming
+
+def upsertObservationRows (rows : List ScopedObservationRow) :
+    List ScopedObservationRow → List ScopedObservationRow
+  | [] => rows
+  | incoming :: rest => upsertObservationRows (upsertObservationRow rows incoming) rest
+
+/-- The native scoped replacement removes every existing target-owned row before
+upserting incoming rows, and filters incoming rows to the target owner. Thus
+existing duplicate keys cannot reach the upsert stage; duplicate incoming keys
+are resolved in input order by the upsert fold. -/
+def replaceConfigScope (scope : Nat) (current incoming : List ScopedConfigRow) :
+    List ScopedConfigRow :=
+  upsertConfigRows (current.filter (fun row => row.owner != scope))
+    (incoming.filter (fun row => row.owner == scope))
+
+/-- The native scoped replacement removes every existing target-sourced row
+before upserting incoming rows, and filters incoming rows to the target source.
+Thus existing duplicate keys cannot reach the upsert stage; duplicate incoming
+keys are resolved in input order by the upsert fold. -/
+def replaceObservationScope (scope : Nat)
+    (current incoming : List ScopedObservationRow) : List ScopedObservationRow :=
+  upsertObservationRows (current.filter (fun row => row.source != some scope))
+    (incoming.filter (fun row => row.source == some scope))
+
+/-- Unknown provenance is retained in the store but cannot satisfy a
+node-scoped observation lookup. -/
+def scopedObservationFor (scope : Nat) (key : String)
+    (rows : List ScopedObservationRow) : Option ScopedObservationRow :=
+  rows.find? (fun row => row.key == key && row.source == some scope)
+
+theorem upsert_config_row_preserves_foreign
+    (row : ScopedConfigRow) (scope : Nat) (rows : List ScopedConfigRow)
+    (incoming : ScopedConfigRow) (hincoming : incoming.owner = scope)
+    (hrow : row.owner ≠ scope) :
+    row ∈ upsertConfigRow rows incoming ↔ row ∈ rows := by
+  induction rows with
+  | nil =>
+    have hne : row ≠ incoming := by
+      intro heq
+      apply hrow
+      rw [heq]
+      exact hincoming
+    simp [upsertConfigRow, hne]
+  | cons head tail ih =>
+    by_cases hmatch : head.owner = incoming.owner ∧ head.key = incoming.key
+    · have hneIncoming : row ≠ incoming := by
+        intro heq
+        apply hrow
+        rw [heq]
+        exact hincoming
+      have hneHead : row ≠ head := by
+        intro heq
+        apply hrow
+        rw [heq, hmatch.1, hincoming]
+      simp [upsertConfigRow, hmatch, hneIncoming, hneHead]
+    · simp [upsertConfigRow, hmatch, ih]
+
+theorem upsert_config_rows_preserves_foreign
+    (row : ScopedConfigRow) (scope : Nat) (rows incoming : List ScopedConfigRow)
+    (hincoming : ∀ item ∈ incoming, item.owner = scope)
+    (hrow : row.owner ≠ scope) :
+    row ∈ upsertConfigRows rows incoming ↔ row ∈ rows := by
+  induction incoming generalizing rows with
+  | nil => simp [upsertConfigRows]
+  | cons item rest ih =>
+    have howner := hincoming item (by simp)
+    simp only [upsertConfigRows]
+    have hrest : ∀ next ∈ rest, next.owner = scope := by
+      intro next hnext
+      exact hincoming next (by simp [hnext])
+    exact (ih (upsertConfigRow rows item) hrest).trans
+      (upsert_config_row_preserves_foreign row scope rows item howner hrow)
+
+
+theorem scoped_config_replacement_preserves_other_owner
+    (scope : Nat) (current incoming : List ScopedConfigRow) (row : ScopedConfigRow)
+    (h : row.owner ≠ scope) :
+    row ∈ replaceConfigScope scope current incoming ↔ row ∈ current := by
+  unfold replaceConfigScope
+  have hIncoming : ∀ item ∈ incoming.filter (fun item => item.owner == scope),
+      item.owner = scope := by
+    intro item hitem
+    simp at hitem
+    exact hitem.2
+  rw [upsert_config_rows_preserves_foreign row scope _ _ hIncoming h]
+  simp [h]
+
+
+theorem upsert_observation_row_preserves_foreign
+    (row : ScopedObservationRow) (scope : Nat) (rows : List ScopedObservationRow)
+    (incoming : ScopedObservationRow) (hincoming : incoming.source = some scope)
+    (hrow : row.source ≠ some scope) :
+    row ∈ upsertObservationRow rows incoming ↔ row ∈ rows := by
+  induction rows with
+  | nil =>
+    have hne : row ≠ incoming := by
+      intro heq
+      apply hrow
+      rw [heq]
+      exact hincoming
+    simp [upsertObservationRow, hne]
+  | cons head tail ih =>
+    by_cases hmatch : head.source = incoming.source ∧ head.key = incoming.key
+    · have hneIncoming : row ≠ incoming := by
+        intro heq
+        apply hrow
+        rw [heq]
+        exact hincoming
+      have hneHead : row ≠ head := by
+        intro heq
+        apply hrow
+        rw [heq, hmatch.1, hincoming]
+      simp [upsertObservationRow, hmatch, hneIncoming, hneHead]
+    · simp [upsertObservationRow, hmatch, ih]
+
+theorem upsert_observation_rows_preserves_foreign
+    (row : ScopedObservationRow) (scope : Nat) (rows incoming : List ScopedObservationRow)
+    (hincoming : ∀ item ∈ incoming, item.source = some scope)
+    (hrow : row.source ≠ some scope) :
+    row ∈ upsertObservationRows rows incoming ↔ row ∈ rows := by
+  induction incoming generalizing rows with
+  | nil => simp [upsertObservationRows]
+  | cons item rest ih =>
+    have howner := hincoming item (by simp)
+    simp only [upsertObservationRows]
+    have hrest : ∀ next ∈ rest, next.source = some scope := by
+      intro next hnext
+      exact hincoming next (by simp [hnext])
+    exact (ih (upsertObservationRow rows item) hrest).trans
+      (upsert_observation_row_preserves_foreign row scope rows item howner hrow)
+
+
+theorem scoped_observation_replacement_preserves_other_source
+    (scope : Nat) (current incoming : List ScopedObservationRow)
+    (row : ScopedObservationRow) (h : row.source ≠ some scope) :
+    row ∈ replaceObservationScope scope current incoming ↔ row ∈ current := by
+  unfold replaceObservationScope
+  -- Exact-source observations are keyed by both parent owner and logical ID.
+  have hIncoming : ∀ item ∈ incoming.filter (fun item => item.source == some scope),
+      item.source = some scope := by
+    intro item hitem
+    simp at hitem
+    exact hitem.2
+  rw [upsert_observation_rows_preserves_foreign row scope _ _ hIncoming h]
+  simp [h]
+
+
+theorem unknown_observation_is_not_node_scoped
+    (scope : Nat) (key : String) (rows : List ScopedObservationRow)
+    (h : ∀ row ∈ rows, row.source ≠ some scope) :
+    scopedObservationFor scope key rows = none := by
+  unfold scopedObservationFor
+  apply List.find?_eq_none.mpr
+  intro row hrow
+  simp [h row hrow]
+
+structure Recovery where
+  full : Bool
+  pendingScopes : List Nat
+  generation : Nat
+  retryScheduled : Bool
+  deriving DecidableEq, Repr
+
+def requestScope (r : Recovery) (scope : Nat) : Recovery :=
+  if r.full then { r with generation := r.generation + 1 }
+  else if scope ∈ r.pendingScopes then { r with generation := r.generation + 1 }
+  else { r with pendingScopes := r.pendingScopes ++ [scope], generation := r.generation + 1 }
+
+def requestFull (r : Recovery) : Recovery :=
+  { r with full := true, pendingScopes := [], generation := r.generation + 1 }
+
+def takeBatch (r : Recovery) : Recovery × List Nat :=
+  ({ r with pendingScopes := [] }, r.pendingScopes)
+
+/-- A failed batch retains the failed and not-yet-processed scopes. It schedules
+the existing observer timer without publishing another wake notification. -/
+def failBatch (r : Recovery) (remainingScopes : List Nat) : Recovery :=
+  if r.full then { r with retryScheduled := true }
+  else { r with pendingScopes := r.pendingScopes ++ remainingScopes, retryScheduled := true }
+
+def retryTimer (r : Recovery) : Recovery := { r with retryScheduled := false }
+
+theorem failed_batch_retains_every_scope (r : Recovery) (scopes : List Nat)
+    (scope : Nat) (h : scope ∈ scopes) :
+    scope ∈ (failBatch r scopes).pendingScopes ∨ (failBatch r scopes).full = true := by
+  by_cases hf : r.full
+  · simp [failBatch, hf]
+  · simp [failBatch, hf, List.mem_append, h]
+
+theorem failed_batch_does_not_self_notify (r : Recovery) (scopes : List Nat) :
+    (failBatch r scopes).generation = r.generation := by
+  by_cases hf : r.full <;> simp [failBatch, hf]
+
+theorem request_during_retry_is_retained (r : Recovery) (scopes : List Nat) (scope : Nat) :
+    (scope ∈ (requestScope (failBatch r scopes) scope).pendingScopes ∨
+      (requestScope (failBatch r scopes) scope).full = true) ∧
+      (requestScope (failBatch r scopes) scope).retryScheduled := by
+  by_cases hf : r.full
+  · simp [failBatch, requestScope, hf]
+  · by_cases hmem : scope ∈ r.pendingScopes ++ scopes
+    · simp [failBatch, requestScope, hf, hmem]
+    · simp [failBatch, requestScope, hf, hmem]
+
+theorem timer_retry_keeps_pending_work (r : Recovery) :
+    (retryTimer r).pendingScopes = r.pendingScopes ∧
+      (retryTimer r).full = r.full ∧ !(retryTimer r).retryScheduled := by
+  simp [retryTimer]
+
+theorem request_event_does_not_change_lineage (s : State) :
+    (requestEvent s).provenanceEpoch = s.provenanceEpoch := by rfl
+
+end ClientDataPublication
 
 namespace ClientLiveDelta
 

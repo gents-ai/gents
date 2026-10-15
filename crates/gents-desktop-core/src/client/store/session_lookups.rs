@@ -34,7 +34,15 @@ impl ClientStore {
             .into_iter()
             .flat_map(|indexes| indexes.iter())
             .copied()
-            .filter(|index| source_node_matches(&self.tool_call_source_node_dids, *index, node_did))
+            .filter(|index| {
+                row_is_in_node_scope(
+                    self.tool_calls[*index].node_did.as_deref(),
+                    self.tool_call_source_node_dids
+                        .get(*index)
+                        .and_then(|source| source.as_deref()),
+                    node_did,
+                )
+            })
             .collect::<Vec<_>>();
         TranscriptView {
             messages: message_indexes

@@ -11,18 +11,20 @@ async fn generated_interrupt_drain_preserves_foreign_owner_and_requester_queues(
     assert_eq!(case.preserved_foreign_requester_request_ids.len(), 1);
     assert_eq!(case.preserved_foreign_owner_request_ids.len(), 1);
     let dir = tempfile::tempdir().unwrap();
-    let node = EmbeddedNode::builder()
-        .data_path(dir.path().join("db"))
-        .build()
-        .await
-        .unwrap();
+    let node = Arc::new(
+        EmbeddedNode::builder()
+            .data_path(dir.path().join("db"))
+            .build()
+            .await
+            .unwrap(),
+    );
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let session = case.session_id.to_string();
     let owner = "did:test:drain-owner";
     let foreign_owner = "did:test:foreign-owner";
     let requester = "did:test:foreign-requester";
     async fn create(
-        node: &EmbeddedNode,
+        node: &Arc<EmbeddedNode>,
         id: &str,
         owner: &str,
         requester: Option<&str>,
@@ -32,7 +34,7 @@ async fn generated_interrupt_drain_preserves_foreign_owner_and_requester_queues(
         let input=source.map(|source|json!({"queue":{"source":source,"policy":if source=="background_completion" {"coalesce"} else {"append"},"key":if source=="background_completion" {Some(format!("background_completion:{session}"))}else{None}}}));
         let value = json!({"request_id":id,"purpose":"normal","node_did":owner,"requester_did":requester,"session_id":session,
             "agent_id":"configured","lifecycle_state":"pending","execution_origin":if source.is_some(){"scheduled"}else{"interactive"},"input":input,"created_at":"2026-09-01T00:00:00Z"});
-        crate::config_client::ConfigAccess::transact_local(
+        crate::config_client::ConfigAccess::transact_local_write(
             node, None, "test.interrupt.scope_fixture", |txn| { let value = value.clone(); Box::pin(async move {
                 let response = txn.execute_with_variables(
                     "mutation($input: AgentRequestMutationInputArg!) { create_AgentRequest(input: $input) { _docID } }",

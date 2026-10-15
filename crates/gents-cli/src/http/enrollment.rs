@@ -46,7 +46,7 @@ impl EnrollmentDecisionService {
     ) -> Result<gents::agent::p2p_reconcile::EnrollmentDecisionOutcome> {
         let now = Utc::now();
         authenticate_operator_command(self.identity.as_ref(), command, now).await?;
-        consume_operator_nonce(self.node.as_ref(), &command.admin_did, &command.nonce, now).await?;
+        consume_operator_nonce(&self.node, &command.admin_did, &command.nonce, now).await?;
         match command.action {
             EnrollmentOperatorAction::Approve => {
                 self.store
@@ -77,7 +77,7 @@ impl EnrollmentDecisionService {
     ) -> Result<Vec<serde_json::Value>> {
         let now = Utc::now();
         authenticate_operator_query(self.identity.as_ref(), command, now).await?;
-        consume_operator_nonce(self.node.as_ref(), &command.admin_did, &command.nonce, now).await?;
+        consume_operator_nonce(&self.node, &command.admin_did, &command.nonce, now).await?;
         anyhow::ensure!(
             command.query == EnrollmentOperatorQuery::Pending,
             "unsupported enrollment operator query"
@@ -124,7 +124,7 @@ impl EnrollmentDecisionService {
             self.identity.verify(signer_did, payload, sig).await?,
             "operator command signature is invalid"
         );
-        consume_operator_nonce(self.node.as_ref(), signer_did, nonce, Utc::now()).await
+        consume_operator_nonce(&self.node, signer_did, nonce, Utc::now()).await
     }
 }
 
@@ -134,7 +134,7 @@ const OPERATOR_NONCE_RETENTION_SECONDS: i64 = 5 * 60;
 /// decision. The durable unique key survives process restart; storing only a
 /// domain-separated digest avoids retaining the bearer value itself.
 async fn consume_operator_nonce(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     admin_did: &str,
     nonce: &str,
     now: chrono::DateTime<Utc>,
@@ -363,7 +363,7 @@ struct NetworkRow {
 }
 
 pub async fn ensure_enrollment_network(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     identity: &dyn NodeIdentity,
     display_name: &str,
 ) -> Result<NetworkRecord> {
@@ -529,8 +529,8 @@ mod tests {
             .unwrap();
 
         let (first, second) = tokio::join!(
-            consume_operator_nonce(node.as_ref(), "did:key:admin", "nonce-concurrent", now),
-            consume_operator_nonce(node.as_ref(), "did:key:admin", "nonce-concurrent", now),
+            consume_operator_nonce(&node, "did:key:admin", "nonce-concurrent", now),
+            consume_operator_nonce(&node, "did:key:admin", "nonce-concurrent", now),
         );
         assert_eq!(usize::from(first.is_ok()) + usize::from(second.is_ok()), 1);
         let duplicate = first.err().or_else(|| second.err()).unwrap();
@@ -539,10 +539,9 @@ mod tests {
         node.shutdown().await;
         drop(node);
         let restarted = nonce_test_node(&node_path).await;
-        let replay =
-            consume_operator_nonce(restarted.as_ref(), "did:key:admin", "nonce-concurrent", now)
-                .await
-                .unwrap_err();
+        let replay = consume_operator_nonce(&restarted, "did:key:admin", "nonce-concurrent", now)
+            .await
+            .unwrap_err();
         assert!(replay.to_string().contains("already consumed"));
     }
 
@@ -553,11 +552,11 @@ mod tests {
         let first = "2026-08-30T12:00:00Z"
             .parse::<chrono::DateTime<Utc>>()
             .unwrap();
-        consume_operator_nonce(node.as_ref(), "did:key:admin", "nonce-old", first)
+        consume_operator_nonce(&node, "did:key:admin", "nonce-old", first)
             .await
             .unwrap();
         consume_operator_nonce(
-            node.as_ref(),
+            &node,
             "did:key:admin",
             "nonce-new",
             first + Duration::seconds(OPERATOR_NONCE_RETENTION_SECONDS + 1),

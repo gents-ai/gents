@@ -118,7 +118,7 @@ impl<'a> LiveObserver<'a> {
 }
 
 async fn collection_names(node: &std::sync::Arc<EmbeddedNode>) -> Result<BTreeSet<String>> {
-    ConfigAccess::Local(node.clone()).collection_names().await
+    ConfigAccess::local(node.clone()).collection_names().await
 }
 
 /// Requests, model turns, tokens and tool calls across the whole home: every
@@ -200,7 +200,7 @@ async fn last_tool_call(node: &std::sync::Arc<EmbeddedNode>) -> Option<LastToolC
         .clone();
     let text = |key: &str| row.get(key).and_then(Value::as_str).map(str::to_owned);
     let result = crate::tool_call_lifecycle::query::load_tool_call_presentation(
-        &ConfigAccess::Local(node.clone()),
+        &ConfigAccess::local(node.clone()),
         row.get("_docID")?.as_str()?,
         row.get("node_did")?.as_str()?,
         row.get("session_id")?.as_str()?,

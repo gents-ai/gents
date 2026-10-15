@@ -16,11 +16,11 @@ const B: &str = "did:key:z6MkUsageB";
 const CODEX: &str = "chatgpt-codex";
 
 async fn node() -> Arc<EmbeddedNode> {
-    Arc::new(test_support::test_node().await)
+    test_support::test_node().await
 }
 
 fn local(node: &Arc<EmbeddedNode>) -> ConfigAccess {
-    ConfigAccess::Local(node.clone())
+    ConfigAccess::local(node.clone())
 }
 
 fn credential(node_did: &str, account_ref: Option<&str>, key: Option<&str>) -> OAuthCredential {
@@ -372,7 +372,7 @@ async fn store_next_original_account_never_shows_the_removed_accounts_usage() {
 
     let credential_id = removed.credential_id.as_str();
     access
-        .transact("test.remove_account", |txn| {
+        .transact_write("test.remove_account", |txn| {
             Box::pin(async move {
                 crate::oauth_credential::remove_account_in_txn(txn, A, credential_id).await
             })
@@ -403,7 +403,7 @@ async fn late_response_from_removed_account_does_not_populate_replacement_usage(
     let old_client_account = UsageAccount::for_credential(&removed);
     let credential_id = removed.credential_id.as_str();
     access
-        .transact("test.remove_account", |txn| {
+        .transact_write("test.remove_account", |txn| {
             Box::pin(async move {
                 crate::oauth_credential::remove_account_in_txn(txn, A, credential_id).await
             })
@@ -450,7 +450,7 @@ async fn queued_usage_write_rechecks_removed_or_disabled_account_under_gate() {
         let queued = Arc::new(tokio::sync::Notify::new());
         let acquired = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let writer = access
-            .transact("test.hold_usage_gate", |txn| {
+            .transact_write("test.hold_usage_gate", |txn| {
                 let node = node.clone();
                 let account = account.clone();
                 let original = original.clone();
@@ -1970,7 +1970,7 @@ async fn seed_remove_fixture(node: &Arc<EmbeddedNode>) -> (OAuthCredential, Stri
 
 async fn remove(node: &Arc<EmbeddedNode>, credential_id: &str) {
     local(node)
-        .transact("test.remove_account", |txn| {
+        .transact_write("test.remove_account", |txn| {
             Box::pin(async move {
                 crate::oauth_credential::remove_account_in_txn(txn, A, credential_id).await
             })

@@ -407,7 +407,7 @@ mod tests {
                 .unwrap(),
         );
         gents::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-        let access = ConfigAccess::Local(node);
+        let access = ConfigAccess::local(node);
         for host in ["twin-a", "twin-b", "twin-c"] {
             let host = escape_graphql_string(host);
             access

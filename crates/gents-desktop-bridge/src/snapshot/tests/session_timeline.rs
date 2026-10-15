@@ -281,6 +281,7 @@ fn session_snapshot_consumes_generated_live_overlay_cases() {
         gents_desktop_core::client::StoreProjectionRevision {
             store_version: 7,
             provenance_version: 1,
+            request_event_version: 1,
         },
         "sess-1",
         Some("did:test:amy"),
@@ -348,6 +349,7 @@ fn live_delta_requires_a_canonical_source() {
     let revision = gents_desktop_core::client::StoreProjectionRevision {
         store_version: 9,
         provenance_version: 1,
+        request_event_version: 1,
     };
     let current = build_session_live_delta_from_store(
         &store,

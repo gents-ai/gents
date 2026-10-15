@@ -72,7 +72,7 @@ async fn tool_publications_follow_lean_session_activity() {
             epoch,
         );
         let session = escape_graphql_string(&session_id);
-        let before_session = ConfigAccess::transact_local(&admission.node, None, "test.seed_tool_activity", |txn| {
+        let before_session = ConfigAccess::transact_local_write(&admission.node, None, "test.seed_tool_activity", |txn| {
             let before = before.clone();
             let session = session.clone();
             let session_id = session_id.clone();
@@ -122,7 +122,7 @@ async fn tool_publications_follow_lean_session_activity() {
                 .await
                 .unwrap();
             assert_eq!(changed, published, "{name} turn {turn}");
-            let after = ConfigAccess::transact_local(
+            let after = ConfigAccess::transact_local_write(
                 &admission.node,
                 None,
                 "test.read_tool_activity",

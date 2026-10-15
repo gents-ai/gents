@@ -30,7 +30,7 @@ enum InferenceRecoveryOutcome {
 
 impl InferenceCall {
     pub async fn recover_all(
-        node: &EmbeddedNode,
+        node: &std::sync::Arc<EmbeddedNode>,
         node_did: &str,
     ) -> Result<InferenceCallRecoveryReport> {
         let rows = load_stale_inference_calls(node, node_did).await?;
@@ -159,7 +159,7 @@ fn recovery_outcome(
 }
 
 async fn recover_inference_call_row(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     row: &StaleInferenceCallRow,
     outcome: InferenceRecoveryOutcome,
 ) -> Result<bool> {

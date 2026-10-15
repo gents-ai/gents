@@ -156,7 +156,7 @@ pub(super) async fn config_rm(spec: ConfigDocumentSpec, args: ConfigShowArgs) ->
     let node_did = &live.node.node_did;
     let id_ref = &id;
     let deleted = access
-        .transact("cli.config.delete", move |txn| {
+        .transact_write("cli.config.delete", move |txn| {
             Box::pin(async move {
                 apply_delete_collection(txn, collection, node_did, std::slice::from_ref(id_ref))
                     .await
@@ -381,7 +381,7 @@ mod tests {
     async fn canonical_reads_keep_shared_labels_in_the_selected_owner() -> Result<()> {
         let node = Arc::new(gents::defra_node::EmbeddedNode::builder().build().await?);
         gents::ensure_runtime_schemas(&node).await?;
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         for owner in ["owner-a", "owner-b"] {
             let config = serde_json::from_value(json!({
                 "node":{"node_did":owner},
@@ -390,7 +390,7 @@ mod tests {
             }))?;
             let plan = DesiredStateApplyPlan::from_pack_config(&config)?;
             access
-                .transact("test.config.crud.seed", |txn| {
+                .transact_write("test.config.crud.seed", |txn| {
                     let plan = &plan;
                     Box::pin(async move { apply_desired_state_plan(txn, plan).await })
                 })

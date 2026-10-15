@@ -449,7 +449,7 @@ fn validate_file_args(
 /// Stamp and persist a mailbox item. The model never supplies owner, acting
 /// principal, target route, lifecycle state, timestamps, or item key.
 pub async fn stamp_create(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     context: &MailboxStampContext,
     args: FileMailboxItemArgs,
 ) -> Result<MailboxItem> {
@@ -457,7 +457,7 @@ pub async fn stamp_create(
 }
 
 pub async fn stamp_create_with_close_collections(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     context: &MailboxStampContext,
     args: FileMailboxItemArgs,
     close_collections: &[MailboxCloseCollection],
@@ -474,7 +474,7 @@ pub async fn stamp_create_with_close_collections(
 }
 
 async fn stamp_notification(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     context: &MailboxStampContext,
     mut args: FileMailboxItemArgs,
     identity: &NotificationIdentity,
@@ -838,7 +838,7 @@ pub async fn list_mailbox_items(
 }
 
 pub async fn dismiss_mailbox_item(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     doc_id: &str,
     principal_did: &str,
 ) -> Result<MailboxItem> {
@@ -861,7 +861,7 @@ pub async fn dismiss_mailbox_item(
 }
 
 async fn transition_open_item(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     item: &MailboxItem,
     target: MailboxStatus,
     resolved_doc_id: Option<&str>,
@@ -936,12 +936,12 @@ pub struct MailboxSweepReport {
     pub skipped_errors: usize,
 }
 
-pub async fn sweep_open_mailbox_items(node: &EmbeddedNode) -> Result<MailboxSweepReport> {
+pub async fn sweep_open_mailbox_items(node: &Arc<EmbeddedNode>) -> Result<MailboxSweepReport> {
     sweep_open_mailbox_items_with_close_collections(node, MAILBOX_CLOSE_COLLECTIONS).await
 }
 
 pub async fn sweep_open_mailbox_items_with_close_collections(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     close_collections: &[MailboxCloseCollection],
 ) -> Result<MailboxSweepReport> {
     validate_close_collections(close_collections)?;
@@ -953,7 +953,14 @@ pub async fn sweep_open_mailbox_items_with_close_collections(
         "load open mailbox items",
     )
     .await?;
-    let raw_items = rows::<Value>(&response, MAILBOX_COLLECTION)?;
+    let raw_items = response
+        .data
+        .and_then(|mut data| data.as_object_mut()?.remove(MAILBOX_COLLECTION));
+    let raw_items: Vec<Value> = match raw_items {
+        Some(Value::Array(rows)) => rows,
+        Some(rows) => serde_json::from_value(rows).context("decode MailboxItem rows")?,
+        None => Vec::new(),
+    };
     let mut report = MailboxSweepReport {
         scanned: raw_items.len(),
         ..Default::default()
@@ -1228,7 +1235,7 @@ mod tests {
         .await
         .unwrap();
         let enqueued = crate::lifecycle::materialize::write_pending_agent_request_with_lineage_workspace_and_conversation_title(
-            node.as_ref(),
+            &node,
             ::identity::Did::new(identity.did().to_owned()).expect("fixture creator DID"),
             identity.did(),
             "operator",
@@ -1278,7 +1285,7 @@ mod tests {
         )
         .unwrap();
         let request = &request;
-        crate::config_client::ConfigAccess::transact_local(
+        crate::config_client::ConfigAccess::transact_local_write(
             &node,
             None,
             "test.mailbox_event",

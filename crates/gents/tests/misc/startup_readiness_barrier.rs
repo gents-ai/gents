@@ -152,7 +152,7 @@ async fn persistent_build_failure_demotes_instead_of_wedging_ready() -> Result<(
     ensure_runtime_schemas(node.as_ref()).await?;
     let mock_endpoint = MockModelEndpoint::start("default")?;
     bind_default_agent_backend(
-        node.as_ref(),
+        &node,
         identity.did(),
         "backend-559",
         mock_endpoint.endpoint(),
@@ -287,7 +287,7 @@ async fn transient_build_failure_within_budget_still_reaches_ready_healthy() -> 
     ensure_runtime_schemas(node.as_ref()).await?;
     let mock_endpoint = MockModelEndpoint::start("default")?;
     bind_default_agent_backend(
-        node.as_ref(),
+        &node,
         identity.did(),
         "backend-559-late",
         mock_endpoint.endpoint(),

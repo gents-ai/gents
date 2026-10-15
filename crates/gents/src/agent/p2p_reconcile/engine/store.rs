@@ -300,7 +300,7 @@ impl PairingStateStore for GraphqlPairingStateStore {
                 graphql_string_list_literal(applied.duplicate_doc_ids.iter().map(String::as_str));
             format!(
                 r#"delete_PeerPairingApplied(
-                    filter: {{ _docID: {{ _in: {ids} }} }}
+                    docIDs: {ids}
                 ) {{ _docID }}"#
             )
         };
