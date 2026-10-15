@@ -2,6 +2,7 @@ mod control_plane_lookups;
 mod indexing;
 mod merge_helpers;
 mod merges;
+mod publication;
 mod session_lookups;
 mod turns;
 

@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, RwLock};
 
@@ -83,6 +84,30 @@ enum ProvenanceUpdate {
 struct ObservedState {
     snapshot: SharedClientStore,
     revision: StoreProjectionRevision,
+    global_epoch: u64,
+    node_epochs: HashMap<String, u64>,
+}
+
+pub(crate) struct ReloadRead {
+    snapshot: SharedClientStore,
+    request_event_version: u64,
+    node_did: Option<String>,
+    global_epoch: u64,
+    node_epoch: u64,
+}
+
+impl ObservedState {
+    fn invalidate_scopes(&mut self, owners: Option<HashSet<String>>) {
+        match owners {
+            Some(owners) => {
+                for owner in owners {
+                    let epoch = self.node_epochs.entry(owner).or_default();
+                    *epoch = epoch.saturating_add(1);
+                }
+            }
+            None => self.global_epoch = self.global_epoch.saturating_add(1),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -114,6 +139,8 @@ impl ObservedStore {
             state: RwLock::new(ObservedState {
                 snapshot: Arc::new(initial_snapshot.into_observer_projection()),
                 revision,
+                global_epoch: 0,
+                node_epochs: HashMap::new(),
             }),
             focused_request_id: RwLock::new(None),
             version_tx,
@@ -135,6 +162,20 @@ impl ObservedStore {
     pub fn snapshot_with_revision(&self) -> (SharedClientStore, StoreProjectionRevision) {
         let state = self.state.read().expect("store snapshot lock poisoned");
         (state.snapshot.clone(), state.revision)
+    }
+
+    pub(crate) fn begin_reload(&self, node_did: Option<&str>) -> ReloadRead {
+        let state = self.state.read().expect("store snapshot lock poisoned");
+        ReloadRead {
+            snapshot: state.snapshot.clone(),
+            request_event_version: state.revision.request_event_version,
+            node_did: node_did.map(str::to_owned),
+            global_epoch: state.global_epoch,
+            node_epoch: node_did
+                .and_then(|did| state.node_epochs.get(did))
+                .copied()
+                .unwrap_or_default(),
+        }
     }
 
     pub fn projection_revision(&self) -> StoreProjectionRevision {
@@ -212,14 +253,16 @@ impl ObservedStore {
 
     pub fn replace_snapshot(&self, snapshot: ClientStore) -> u64 {
         let snapshot = snapshot.into_observer_projection();
-        self.update(ProvenanceUpdate::Invalidate, |_| snapshot)
+        self.update(None, ProvenanceUpdate::Invalidate, |_| snapshot)
     }
 
     pub fn merge_chat_patch(&self, patch: ClientStore) -> u64 {
         let patch = patch.into_observer_projection();
-        self.update(provenance_update(&patch), |snapshot| {
-            snapshot.merge_chat_patch(patch)
-        })
+        self.update(
+            patch.publication_owners(),
+            provenance_update(&patch),
+            |snapshot| snapshot.merge_chat_patch(patch),
+        )
     }
 
     /// Publishes a patch read only while the data snapshot and lineage token it
@@ -235,6 +278,7 @@ impl ObservedStore {
         self.update_at_snapshot(
             captured_snapshot,
             captured_request_event_version,
+            patch.publication_owners(),
             provenance_update(&patch),
             |snapshot| snapshot.merge_chat_patch(patch),
         )
@@ -256,9 +300,11 @@ impl ObservedStore {
     ) -> StorePatchMergeOutcome {
         let incoming = incoming.into_observer_projection();
         StorePatchMergeOutcome {
-            store_version: self.update(provenance_update(&incoming), |snapshot| {
-                snapshot.merge_snapshot(incoming)
-            }),
+            store_version: self.update(
+                incoming.publication_owners(),
+                provenance_update(&incoming),
+                |snapshot| snapshot.merge_snapshot(incoming),
+            ),
         }
     }
 
@@ -272,28 +318,34 @@ impl ObservedStore {
         self.update_at_snapshot(
             captured_snapshot,
             captured_request_event_version,
+            incoming.publication_owners(),
             provenance_update(&incoming),
             |snapshot| snapshot.merge_snapshot(incoming),
         )
         .map(|store_version| StorePatchMergeOutcome { store_version })
     }
 
-    /// An awaited authoritative read publishes only while the retained data
-    /// snapshot and lineage token it observed remain current. An accepted
-    /// reload invalidates unretained tool-call lineage after lost events.
-    pub(crate) fn replace_reloaded_snapshot_at_snapshot(
-        &self,
-        captured_snapshot: &SharedClientStore,
-        captured_request_event_version: u64,
-        node_did: Option<&str>,
-        incoming: ClientStore,
-    ) -> bool {
+    /// Scoped reads depend on their node and unknown changes. Whole-store
+    /// reads retain the global data and request-event fence.
+    pub(crate) fn publish_reload(&self, read: &ReloadRead, incoming: ClientStore) -> bool {
         let incoming = incoming.into_observer_projection();
-        self.update_at_snapshot(
-            captured_snapshot,
-            captured_request_event_version,
+        self.update_if(
+            |state| match read.node_did.as_deref() {
+                Some(node_did) => {
+                    state.global_epoch == read.global_epoch
+                        && state.node_epochs.get(node_did).copied().unwrap_or_default()
+                            == read.node_epoch
+                }
+                None => {
+                    Arc::ptr_eq(&read.snapshot, &state.snapshot)
+                        && read.request_event_version == state.revision.request_event_version
+                }
+            },
+            read.node_did
+                .as_ref()
+                .map(|node| HashSet::from([node.clone()])),
             ProvenanceUpdate::Invalidate,
-            |snapshot| match node_did {
+            |snapshot| match read.node_did.as_deref() {
                 Some(node_did) => snapshot.replace_node_scope(node_did, incoming),
                 None => incoming,
             },
@@ -308,6 +360,9 @@ impl ObservedStore {
     pub fn invalidate_projection(&self, provenance_changed: bool) -> u64 {
         let notice = {
             let mut state = self.state.write().expect("store snapshot lock poisoned");
+            if provenance_changed {
+                state.invalidate_scopes(None);
+            }
             state.revision = StoreProjectionRevision {
                 store_version: state.revision.store_version.saturating_add(1),
                 provenance_version: state
@@ -331,17 +386,34 @@ impl ObservedStore {
     /// Advances the request-read fence without invalidating lineage caches.
     pub(crate) fn observe_request_event(&self) -> u64 {
         let mut state = self.state.write().expect("store snapshot lock poisoned");
+        state.invalidate_scopes(None);
         state.revision.request_event_version =
             state.revision.request_event_version.saturating_add(1);
         state.revision.request_event_version
     }
 
+    pub(crate) fn observe_request_document_event(&self, doc_id: &str) {
+        let mut state = self.state.write().expect("store snapshot lock poisoned");
+        let owner = state
+            .snapshot
+            .requests
+            .iter()
+            .find(|row| row.doc_id.as_deref() == Some(doc_id))
+            .and_then(|row| row.node_did.as_deref())
+            .filter(|owner| !owner.is_empty())
+            .map(|owner| HashSet::from([owner.to_owned()]));
+        state.invalidate_scopes(owner);
+        state.revision.request_event_version =
+            state.revision.request_event_version.saturating_add(1);
+    }
+
     fn update(
         &self,
+        owners: Option<HashSet<String>>,
         provenance: ProvenanceUpdate,
         transform: impl FnOnce(&ClientStore) -> ClientStore,
     ) -> u64 {
-        self.update_if(|_| true, provenance, transform)
+        self.update_if(|_| true, owners, provenance, transform)
             .expect("unconditional store update")
     }
 
@@ -349,6 +421,7 @@ impl ObservedStore {
         &self,
         captured_snapshot: &SharedClientStore,
         captured_request_event_version: u64,
+        owners: Option<HashSet<String>>,
         provenance: ProvenanceUpdate,
         transform: impl FnOnce(&ClientStore) -> ClientStore,
     ) -> Option<u64> {
@@ -357,6 +430,7 @@ impl ObservedStore {
                 Arc::ptr_eq(captured_snapshot, &state.snapshot)
                     && captured_request_event_version == state.revision.request_event_version
             },
+            owners,
             provenance,
             transform,
         )
@@ -365,6 +439,7 @@ impl ObservedStore {
     fn update_if(
         &self,
         accepts: impl FnOnce(&ObservedState) -> bool,
+        owners: Option<HashSet<String>>,
         provenance: ProvenanceUpdate,
         transform: impl FnOnce(&ClientStore) -> ClientStore,
     ) -> Option<u64> {
@@ -375,6 +450,7 @@ impl ObservedStore {
             }
             let store_version = state.revision.store_version.saturating_add(1);
             let next = transform(state.snapshot.as_ref());
+            state.invalidate_scopes(owners);
             let provenance_version =
                 state
                     .revision
@@ -506,23 +582,13 @@ mod reload_tests {
     #[test]
     fn accepted_reload_refreshes_unretained_lineage_but_rejected_reload_does_not() {
         let (store, _) = ObservedStore::new(requests(&["parent"]));
-        let (captured, captured_revision) = store.snapshot_with_revision();
+        let read = store.begin_reload(None);
         store.invalidate_projection(true);
         let current = store.projection_revision();
-        assert!(!store.replace_reloaded_snapshot_at_snapshot(
-            &captured,
-            captured_revision.request_event_version,
-            None,
-            requests(&["parent"]),
-        ));
+        assert!(!store.publish_reload(&read, requests(&["parent"]),));
         assert_eq!(store.projection_revision(), current);
-        let (current_snapshot, current_revision) = store.snapshot_with_revision();
-        assert!(store.replace_reloaded_snapshot_at_snapshot(
-            &current_snapshot,
-            current_revision.request_event_version,
-            None,
-            requests(&["parent"]),
-        ));
+        let current_read = store.begin_reload(None);
+        assert!(store.publish_reload(&current_read, requests(&["parent"]),));
         assert_eq!(
             store.projection_revision().provenance_version,
             current.provenance_version + 1
@@ -533,29 +599,19 @@ mod reload_tests {
     fn late_reload_cannot_erase_a_request_refreshed_after_capture() {
         for scope in [None, Some("did:test:reload")] {
             let (store, _) = ObservedStore::new(requests(&["accounted"]));
-            let (captured, captured_revision) = store.snapshot_with_revision();
+            let read = store.begin_reload(scope);
             let old_database_read = requests(&["accounted"]);
             store.merge_chat_patch(requests(&["pending"]));
             let refreshed = store.projection_revision();
-            assert!(!store.replace_reloaded_snapshot_at_snapshot(
-                &captured,
-                captured_revision.request_event_version,
-                scope,
-                old_database_read,
-            ));
+            assert!(!store.publish_reload(&read, old_database_read,));
             assert_eq!(store.projection_revision(), refreshed);
             assert!(store
                 .snapshot()
                 .requests
                 .iter()
                 .any(|row| row.request_id == "pending"));
-            let (refreshed_snapshot, refreshed_revision) = store.snapshot_with_revision();
-            assert!(store.replace_reloaded_snapshot_at_snapshot(
-                &refreshed_snapshot,
-                refreshed_revision.request_event_version,
-                scope,
-                requests(&["pending"]),
-            ));
+            let refreshed_read = store.begin_reload(scope);
+            assert!(store.publish_reload(&refreshed_read, requests(&["pending"]),));
             assert_eq!(store.snapshot().requests.len(), 1);
             assert_eq!(store.snapshot().requests[0].request_id, "pending");
         }
@@ -655,6 +711,136 @@ mod reload_tests {
                 )
                 .is_some();
             assert_eq!(published, expected, "modeled case {name}");
+        }
+    }
+
+    #[tokio::test]
+    async fn generated_scoped_publication_cases_match_observed_store() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../gents/tests/fixtures/client_data_publication.json"
+        ))
+        .expect("generated ClientDataPublication cases");
+        let rows = |owner: Option<u64>, content: &str| {
+            let mut patch = requests(&[&format!("request-{}", owner.unwrap_or(0))]);
+            for row in &mut patch.requests {
+                row.doc_id = Some(row.request_id.clone());
+                row.node_did = owner.map(|id| format!("did:scope:{id}"));
+                row.content = Some(content.to_owned());
+            }
+            patch
+        };
+        for case in fixture["scoped_publication"]
+            .as_array()
+            .expect("scoped cases")
+        {
+            for patch_kind in ["request", "session", "observation"] {
+                let node = format!("did:scope:{}", case["node"].as_u64().unwrap());
+                let initial = rows(Some(1), "original").merge_snapshot(rows(Some(2), "original"));
+                let (store, _) = ObservedStore::new(initial);
+                let read = store.begin_reload(Some(&node));
+                let (release, loaded) = tokio::sync::oneshot::channel();
+                let publishing = Arc::clone(&store);
+                let publication = tokio::spawn(async move {
+                    loaded.await.expect("release blocked scoped load");
+                    publishing.publish_reload(&read, rows(Some(1), "recovered"))
+                });
+                for (i, action) in case["actions"].as_array().unwrap().iter().enumerate() {
+                    let owner = action["owner"].as_u64();
+                    match action["op"].as_str().unwrap() {
+                        "request_event" => {
+                            store.observe_request_document_event(&format!(
+                                "request-{}",
+                                owner.unwrap_or(0)
+                            ));
+                        }
+                        "patch" => {
+                            let mut patch = match patch_kind {
+                            "request" => rows(owner, &format!("update-{i}")),
+                            "session" => ClientStore::from_rows(crate::client::store::ClientStoreRows {
+                                sessions: vec![serde_json::from_value(serde_json::json!({
+                                    "session_id": "session",
+                                    "node_did": owner.map(|id| format!("did:scope:{id}")).unwrap_or_default(),
+                                    "agent_id": "agent",
+                                    "created_at": "2026-01-01T00:00:00Z"
+                                })).unwrap()],
+                                ..Default::default()
+                            }),
+                            "observation" => ClientStore::from_rows(crate::client::store::ClientStoreRows {
+                                trigger_observations: vec![serde_json::from_value(serde_json::json!({
+                                    "trigger_id": "trigger",
+                                    "fire_count": i,
+                                    "last_attempt_at": null,
+                                    "last_fired_source_doc_id": null,
+                                    "last_status": null,
+                                    "last_error": null
+                                })).unwrap()],
+                                trigger_observation_source_node_dids: vec![owner.map(|id| format!("did:scope:{id}"))],
+                                ..Default::default()
+                            }),
+                            _ => unreachable!(),
+                        };
+                            store.merge_snapshot(std::mem::take(&mut patch));
+                        }
+                        "replace" => {
+                            store.replace_snapshot(rows(Some(2), "replacement"));
+                        }
+                        other => panic!("unknown modeled action {other}"),
+                    }
+                    tokio::task::yield_now().await;
+                }
+                let running = Arc::new(std::sync::atomic::AtomicBool::new(true));
+                let traffic = if case["accepted"].as_bool().unwrap() {
+                    let running = Arc::clone(&running);
+                    let foreign = Arc::clone(&store);
+                    let (started, ready) = tokio::sync::oneshot::channel();
+                    let traffic = tokio::spawn(async move {
+                        foreign.merge_snapshot(rows(Some(2), "ongoing foreign traffic"));
+                        started.send(()).unwrap();
+                        while running.load(Ordering::Relaxed) {
+                            foreign.observe_request_document_event("request-2");
+                            foreign.merge_snapshot(rows(Some(2), "ongoing foreign traffic"));
+                            tokio::task::yield_now().await;
+                        }
+                    });
+                    ready.await.unwrap();
+                    Some(traffic)
+                } else {
+                    None
+                };
+                release.send(()).expect("blocked scoped load");
+                let accepted = tokio::time::timeout(std::time::Duration::from_secs(5), publication)
+                    .await
+                    .expect("scoped publication must not wait for foreign traffic to stop")
+                    .expect("scoped publication");
+                running.store(false, Ordering::Relaxed);
+                if let Some(traffic) = traffic {
+                    traffic.await.unwrap();
+                }
+                assert_eq!(
+                    accepted,
+                    case["accepted"].as_bool().unwrap(),
+                    "{}",
+                    case["name"]
+                );
+                if accepted {
+                    assert_eq!(
+                        store
+                            .snapshot()
+                            .requests
+                            .iter()
+                            .find(|r| r.node_did.as_deref() == Some(&node))
+                            .unwrap()
+                            .content
+                            .as_deref(),
+                        Some("recovered")
+                    );
+                    assert!(store
+                        .snapshot()
+                        .requests
+                        .iter()
+                        .any(|r| r.node_did.as_deref() == Some("did:scope:2")));
+                }
+            }
         }
     }
 

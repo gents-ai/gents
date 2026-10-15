@@ -169,7 +169,7 @@ pub fn spawn_observer_with_selection(
                 }
                 resync_pending = false;
                 for (scope_index, scope) in scopes.iter().enumerate() {
-                    let (captured, captured_revision) = store.snapshot_with_revision();
+                    let read = store.begin_reload(scope.as_deref());
                     let result = match scope.as_deref() {
                         Some(did) => {
                             load_node_scoped_snapshot_with_peer_records(
@@ -191,12 +191,7 @@ pub fn spawn_observer_with_selection(
                     };
                     match result {
                         Ok(snapshot) => {
-                            if !store.replace_reloaded_snapshot_at_snapshot(
-                                &captured,
-                                captured_revision.request_event_version,
-                                scope.as_deref(),
-                                snapshot,
-                            ) {
+                            if !store.publish_reload(&read, snapshot) {
                                 for pending_scope in &scopes[scope_index..] {
                                     store.enqueue_resync_request(pending_scope.as_deref());
                                 }
@@ -408,7 +403,7 @@ async fn accumulate_dirty(
             // Fence prior request reads as soon as collection identity is known,
             // before this event can be delayed behind the observer's retry timer.
             if name == AGENT_REQUEST_NAME {
-                store.observe_request_event();
+                store.observe_request_document_event(doc_id);
             }
             if !is_relay && supports_doc_patch_collection(name) {
                 metrics

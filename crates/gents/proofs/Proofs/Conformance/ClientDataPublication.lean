@@ -14,6 +14,32 @@ private def optionNatJson : Option Nat → String
   | none => "null"
   | some value => toString value
 
+private def scopedPublicationCaseJson (name : String)
+    (actions : List (String × Option Nat)) : String :=
+  let initial : ScopedState := { globalEpoch := 0, nodeEpoch := fun _ => 0 }
+  let read := beginScopedRead initial 1
+  let current := actions.foldl (fun state action => scopedChange state action.2) initial
+  let actionJson (action : String × Option Nat) :=
+    "{\"op\":\"" ++ action.1 ++ "\",\"owner\":" ++ optionNatJson action.2 ++ "}"
+  "{\"name\":\"" ++ name ++ "\",\"node\":1,\"initial_global_epoch\":0," ++
+    "\"initial_node_epochs\":[[1,0],[2,0]],\"actions\":[" ++
+    String.intercalate "," (actions.map actionJson) ++ "],\"accepted\":" ++
+    toString (acceptsScoped current read) ++ "}"
+
+private def scopedPublicationCasesJson : String :=
+  "[" ++ String.intercalate "," [
+    scopedPublicationCaseJson "stable_target_accepts_continuous_foreign_events_and_writes"
+      ((List.replicate 32 [("request_event", some 2), ("patch", some 2)]).flatten),
+    scopedPublicationCaseJson "target_request_event_rejects_scoped_reload"
+      [("request_event", some 1)],
+    scopedPublicationCaseJson "target_patch_rejects_scoped_reload" [("patch", some 1)],
+    scopedPublicationCaseJson "unknown_request_event_rejects_scoped_reload"
+      [("request_event", none)],
+    scopedPublicationCaseJson "unknown_patch_rejects_scoped_reload" [("patch", none)],
+    scopedPublicationCaseJson "global_replacement_rejects_scoped_reload"
+      [("replace", none)]
+  ] ++ "]"
+
 private def scopedConfigRowsJson (rows : List ScopedConfigRow) : String :=
   "[" ++ String.intercalate "," (rows.map fun row =>
     "{\"owner\":" ++ toString row.owner ++ ",\"key\":\"" ++ row.key ++
@@ -149,7 +175,8 @@ def casesJson : String := Id.run do
     recoveryJson "retry_timer_releases_gate_without_losing_scopes" recovery afterRetryTimer setupScopes setupScopes [] true
   ] ++ "]"
   return "{\"publication\":" ++ publicationCases ++ ",\"recovery\":" ++ recoveryCases ++
-    ",\"scoped_replacement\":" ++ scopedReplacementCasesJson ++ "}"
+    ",\"scoped_replacement\":" ++ scopedReplacementCasesJson ++
+    ",\"scoped_publication\":" ++ scopedPublicationCasesJson ++ "}"
 
 end Conformance.ClientDataPublication
 

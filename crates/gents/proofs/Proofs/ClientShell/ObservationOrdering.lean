@@ -227,6 +227,66 @@ theorem accepted_publication_advances_data_epoch (s : State) :
     (publish s (beginRead s)).dataEpoch = s.dataEpoch + 1 := by
   simp [publish, beginRead, accepts]
 
+/-- A scoped recovery replaces only its node's data. Changes with no known
+owner may affect every node and invalidate every scoped read; changes with a
+known owner invalidate that owner's reads alone. The observer retains the
+global publication fence for reads that replace the whole store. -/
+structure ScopedState where
+  globalEpoch : Nat
+  nodeEpoch : Nat → Nat
+
+structure ScopedRead where
+  node : Nat
+  globalEpoch : Nat
+  nodeEpoch : Nat
+  deriving DecidableEq, Repr
+
+def beginScopedRead (s : ScopedState) (node : Nat) : ScopedRead :=
+  { node, globalEpoch := s.globalEpoch, nodeEpoch := s.nodeEpoch node }
+
+def acceptsScoped (s : ScopedState) (read : ScopedRead) : Bool :=
+  decide (s.globalEpoch = read.globalEpoch ∧ s.nodeEpoch read.node = read.nodeEpoch)
+
+def scopedChange (s : ScopedState) (owner : Option Nat) : ScopedState :=
+  match owner with
+  | none => { s with globalEpoch := s.globalEpoch + 1 }
+  | some node => { s with nodeEpoch := fun n => if n = node then s.nodeEpoch n + 1 else s.nodeEpoch n }
+
+theorem target_change_rejects_scoped_read (s : ScopedState) (node : Nat) :
+    acceptsScoped (scopedChange s (some node)) (beginScopedRead s node) = false := by
+  simp [acceptsScoped, scopedChange, beginScopedRead]
+
+theorem unknown_change_rejects_scoped_read (s : ScopedState) (node : Nat) :
+    acceptsScoped (scopedChange s none) (beginScopedRead s node) = false := by
+  simp [acceptsScoped, scopedChange, beginScopedRead]
+
+theorem unrelated_change_preserves_scoped_read (s : ScopedState) (read : ScopedRead)
+    (other : Nat) (h : read.node ≠ other) :
+    acceptsScoped (scopedChange s (some other)) read = acceptsScoped s read := by
+  simp [acceptsScoped, scopedChange, h]
+
+/-- Publication of a stable target needs no interval of global quiescence:
+any finite prefix of changes owned by other nodes leaves its read valid. -/
+theorem stable_target_can_publish_after_unrelated_changes
+    (s : ScopedState) (node : Nat) (others : List Nat)
+    (h : ∀ other ∈ others, node ≠ other) :
+    acceptsScoped (others.foldl (fun state owner => scopedChange state (some owner)) s)
+      (beginScopedRead s node) = true := by
+  have preserves : ∀ (changes : List Nat) (state : ScopedState) (read : ScopedRead),
+      (∀ other ∈ changes, read.node ≠ other) →
+      acceptsScoped (changes.foldl (fun current owner => scopedChange current (some owner)) state) read =
+        acceptsScoped state read := by
+    intro changes
+    induction changes with
+    | nil => simp
+    | cons other rest ih =>
+      intro state read hs
+      simp only [List.foldl_cons]
+      rw [ih _ _ (fun next hn => hs next (by simp [hn]))]
+      exact unrelated_change_preserves_scoped_read state read other (hs other (by simp))
+  rw [preserves others s (beginScopedRead s node) h]
+  simp [acceptsScoped, beginScopedRead]
+
 /-- A configuration row carries its canonical owner independently of where the
 desktop observed it. Scoped replacement removes only rows owned by the target;
 an unscoped local-replica row for another owner remains valid. -/
