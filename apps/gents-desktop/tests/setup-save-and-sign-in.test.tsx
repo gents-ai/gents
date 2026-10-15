@@ -251,6 +251,58 @@ describe("a connected account in setup", () => {
     await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
     await waitFor(() => expect(api.claudeLogin).toHaveBeenCalledTimes(1));
   });
+
+  it("finds models through the account signed in after the first was set aside", async () => {
+    const harness = createDesktopUiHarness({ scenario: "empty-fleet" });
+    const discover = vi.fn(
+      harness.adapter.discoverInferenceModels.bind(harness.adapter),
+    );
+    const work = {
+      ...claude(),
+      credentialId: "credential-work",
+      accountId: "work@example.com",
+      accountRef: "acct-2",
+      label: "Work",
+    };
+    const accounts = vi.fn().mockResolvedValue([claude()]);
+    const { app } = setup(
+      {
+        listProviderAccounts: accounts,
+        discoverInferenceModels: discover,
+        claudeLogin: vi.fn().mockResolvedValue({
+          docId: "credential-doc",
+          credentialId: "credential-work",
+          nodeDid: NODE_DID,
+          provider: "claude-subscription",
+          accountId: "work@example.com",
+          chatgptPlanType: null,
+          isFedramp: false,
+          accessTokenExpiresAt: "2099-01-01T00:00:00Z",
+          enabled: true,
+          signIn: { result: "added", label: "Work", accountRef: "acct-2", hint: null },
+        }),
+      },
+      harness,
+    );
+    renderIn(
+      app,
+      <SetupScreen initialStep="inference" nodeDid={NODE_DID} onDone={vi.fn()} />,
+    );
+    await userEvent.click(await screen.findByTestId("setup-provider-anthropic"));
+    expect(await screen.findByText("Connected as me@example.com")).toBeVisible();
+    await userEvent.click(screen.getByRole("button", { name: "Use another account" }));
+    /* the runtime keeps the first account and stores the new one beside it */
+    accounts.mockResolvedValue([claude(), work]);
+    await userEvent.click(await screen.findByRole("button", { name: "Sign in" }));
+    /* connected again, now through the new account */
+    const find = await screen.findByRole("button", { name: /find models/i });
+    discover.mockClear();
+    await userEvent.click(find);
+    await waitFor(() => expect(discover).toHaveBeenCalled());
+    expect(discover).toHaveBeenLastCalledWith(
+      expect.objectContaining({ accountRef: "acct-2" }),
+    );
+  });
 });
 
 describe("the provider catalog", () => {

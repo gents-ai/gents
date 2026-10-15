@@ -72,7 +72,7 @@ export function ConnectionFields({
   const { accountLabel, signInHint, authUrl } = form;
   const { signedIn, pendingSave, stored } = form.accounts;
   const connectedAccount = stored.find(
-    (account) => account.credentialId === signedIn[provider],
+    (account) => account.credentialId === signedIn[provider]?.credentialId,
   );
   const discovery = form.model.discovery;
   const authOptions = option?.authOptions ?? [];

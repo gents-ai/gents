@@ -22,6 +22,7 @@ export function buildInferenceSetupPlan({
   provider,
   apiKey,
   oauth,
+  accountRef = null,
   discovery,
   model,
   recommendation,
@@ -32,6 +33,8 @@ export function buildInferenceSetupPlan({
   provider: InferenceProviderId;
   apiKey: string;
   oauth: boolean;
+  /** which of the provider's accounts a sign-in backend runs on; null, the original */
+  accountRef?: string | null;
   discovery: InferenceDiscoveryResult;
   model: string;
   recommendation: InferenceModelRecommendation;
@@ -44,7 +47,7 @@ export function buildInferenceSetupPlan({
   const sameConnection = deployment.inferenceBackends.find(
     (backend) =>
       backend.providerKind === discovery.providerKind &&
-      !backend.accountRef &&
+      (backend.accountRef ?? null) === (oauth ? accountRef : null) &&
       normalizedEndpoint(backend.endpoint) ===
         normalizedEndpoint(discovery.effectiveEndpoint),
   );
@@ -106,7 +109,7 @@ export function buildInferenceSetupPlan({
           openai_wire_api: discovery.openaiWireApi,
           endpoint: discovery.effectiveEndpoint,
           auth: oauth
-            ? { kind: "node_oauth" }
+            ? { kind: "node_oauth", ...(accountRef ? { account_ref: accountRef } : {}) }
             : apiKey.trim()
               ? { kind: "api_key", key: apiKey.trim() }
               : { kind: "unauthenticated" },

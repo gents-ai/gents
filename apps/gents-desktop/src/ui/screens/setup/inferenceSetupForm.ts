@@ -14,6 +14,10 @@ import {
   type InferenceSettingsDraft,
 } from "../inference/InferenceModelControls";
 
+/** An account a provider is connected through: discovery and the saved
+    backend name it by `accountRef`, or run on the original when it is null. */
+export type SignedIn = { credentialId: string; accountRef: string | null };
+
 export type ProviderId = InferenceProviderId;
 
 export type ConnectionDraft = {
@@ -53,7 +57,9 @@ export type SetupForm = {
   runtimeGate: RuntimeGate;
   accounts: {
     stored: readonly ProviderAccountView[];
-    signedIn: Partial<Record<ProviderId, string>>;
+    /** the account each provider is connected through: its credential, and
+        which of the provider's accounts it is (null, the original) */
+    signedIn: Partial<Record<ProviderId, SignedIn>>;
     pendingSave: Partial<Record<ProviderId, true>>;
     /** providers the person set aside an account for, to sign in with
         another: a read does not connect the stored one again */
@@ -92,7 +98,7 @@ export type SetupEvent =
       seedSignedIn: boolean;
     }
   | { type: "pendingSaveCleared"; provider: ProviderId }
-  | { type: "connected"; provider: ProviderId; credentialId: string }
+  | { type: "connected"; provider: ProviderId; account: SignedIn }
   /** the person set the connected account aside, to sign in with another */
   | { type: "signedOut"; provider: ProviderId }
   | { type: "autoSignInTaken" }
@@ -249,7 +255,7 @@ export function setupFormReducer(form: SetupForm, event: SetupEvent): SetupForm 
         ...form,
         accounts: {
           ...form.accounts,
-          signedIn: { ...form.accounts.signedIn, [event.provider]: event.credentialId },
+          signedIn: { ...form.accounts.signedIn, [event.provider]: event.account },
           switching: without(form.accounts.switching, event.provider),
         },
         model: modelCleared(form.model),
@@ -339,13 +345,17 @@ export const connectionDefaults = (
 });
 
 export function providerSignInState(accounts: readonly ProviderAccountView[]) {
-  const next: Partial<Record<ProviderId, string>> = {};
+  const next: Partial<Record<ProviderId, SignedIn>> = {};
   for (const [providerId, credentialKind] of Object.entries(PROVIDER_CREDENTIAL_KIND)) {
     const account = accounts.find(
       (entry) =>
         entry.enabled && !entry.pendingSave && entry.provider === credentialKind,
     );
-    if (account) next[providerId as OauthProvider] = account.credentialId;
+    if (account)
+      next[providerId as OauthProvider] = {
+        credentialId: account.credentialId,
+        accountRef: account.accountRef,
+      };
   }
   return next;
 }

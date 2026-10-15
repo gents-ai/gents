@@ -90,6 +90,7 @@ describe("the inference setup form", () => {
         enabled: true,
         pendingSave: false,
         provider: "chatgpt-codex",
+        accountRef: null,
       }) as unknown as ProviderAccountView;
     const read = (...ids: string[]) =>
       ({
@@ -98,7 +99,9 @@ describe("the inference setup form", () => {
         seedSignedIn: true,
       }) as const;
     const connected = run(initialSetupForm(), read("c-1"));
-    expect(connected.accounts.signedIn).toEqual({ openai: "c-1" });
+    expect(connected.accounts.signedIn).toEqual({
+      openai: { credentialId: "c-1", accountRef: null },
+    });
     /* set aside: a later read of the same stored account does not connect it */
     const aside = run(
       connected,
@@ -109,10 +112,16 @@ describe("the inference setup form", () => {
     /* a sign-in connects the new account, and reads seed again */
     const again = run(
       aside,
-      { type: "connected", provider: "openai", credentialId: "c-2" },
+      {
+        type: "connected",
+        provider: "openai",
+        account: { credentialId: "c-2", accountRef: "acct-2" },
+      },
       read("c-2"),
     );
-    expect(again.accounts.signedIn).toEqual({ openai: "c-2" });
+    expect(again.accounts.signedIn).toEqual({
+      openai: { credentialId: "c-2", accountRef: null },
+    });
     expect(again.accounts.switching).toEqual({});
   });
 });
