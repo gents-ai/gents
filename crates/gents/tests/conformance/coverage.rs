@@ -1008,6 +1008,11 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "client_request_cache_identity_cases".into(),
         "ClientRequestCacheIdentityCases".into(),
     ));
+    assert!(!snapshot.client_session_queue_order_cases.is_empty());
+    emitted.insert((
+        "client_session_queue_order_cases".into(),
+        "ClientSessionQueueOrderCases".into(),
+    ));
     assert_eq!(
         snapshot.frontend_client_shell_case_count,
         snapshot.frontend_client_shell_cases.len(),

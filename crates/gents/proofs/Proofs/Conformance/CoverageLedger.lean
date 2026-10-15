@@ -1107,6 +1107,11 @@ def caseCoverage : List CoverageEntry :=
       "ClientSessionTurnCases"
       "gents_desktop_bridge::snapshot::tests::session_state::session_snapshot_binds_generated_session_turn_cases")
       "client-shell" [Surface.operatorUi]
+  , tagged (consumerCoverage
+      "client_session_queue_order_cases"
+      "ClientSessionQueueOrderCases"
+      "gents_desktop_bridge::snapshot::tests::session_state::session_queue_order_matches_native_arrival_model_after_claim")
+      "client-shell" [Surface.operatorUi]
   , tagged (consumerWithFollowUp
       "client_agent_readiness_cases"
       "ClientAgentReadinessCases"

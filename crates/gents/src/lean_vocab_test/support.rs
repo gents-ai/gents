@@ -79,6 +79,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) client_request_patch_publication_cases: serde_json::Value,
     pub(crate) client_request_closure_cases: Vec<serde_json::Value>,
     pub(crate) client_request_cache_identity_cases: Vec<serde_json::Value>,
+    pub(crate) client_session_queue_order_cases: Vec<serde_json::Value>,
     pub(crate) graph_invocation_publication_cases: Vec<serde_json::Value>,
     pub(crate) graph_failure_attribution_traces: Vec<serde_json::Value>,
     pub(crate) request_transition_cases: Vec<LeanLifecycleTransitionCase>,
@@ -1543,6 +1544,10 @@ pub(crate) fn lean_desktop_client_shell_cases() -> &'static [LeanClientShellCase
 
 pub(crate) fn lean_client_session_turn_cases() -> &'static [LeanSessionTurnCase] {
     &lean_contract_snapshot().client_session_turn_cases
+}
+
+pub(crate) fn lean_client_session_queue_order_cases() -> &'static [serde_json::Value] {
+    &lean_contract_snapshot().client_session_queue_order_cases
 }
 
 pub(crate) fn lean_request_lifecycle_operator_ui_cases() -> &'static [LeanClientShellCase] {

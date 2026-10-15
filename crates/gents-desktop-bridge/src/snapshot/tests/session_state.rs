@@ -6,8 +6,8 @@ use gents_protocol::request_lifecycle::RequestLifecycleState;
 mod lean_vocab_test;
 
 use lean_vocab_test::{
-    lean_desktop_client_shell_cases, lean_live_overlay_cases,
-    lean_request_lifecycle_operator_ui_cases, lean_transcript_cases,
+    lean_client_session_queue_order_cases, lean_desktop_client_shell_cases,
+    lean_live_overlay_cases, lean_request_lifecycle_operator_ui_cases, lean_transcript_cases,
 };
 
 fn session(requester_did: Option<&str>) -> AgentSession {
@@ -352,11 +352,7 @@ fn session_snapshot_binds_generated_session_turn_cases() {
 
 #[test]
 fn session_queue_order_matches_native_arrival_model_after_claim() {
-    let cases: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../../gents/tests/fixtures/session_queue_order.json"
-    ))
-    .unwrap();
-    for case in cases.as_array().unwrap() {
+    for case in lean_client_session_queue_order_cases() {
         let modeled: Vec<lean_vocab_test::LeanSessionTurnRow> =
             serde_json::from_value(case["rows"].clone()).unwrap();
         let rows = lean_session_rows("session-1", &modeled);
