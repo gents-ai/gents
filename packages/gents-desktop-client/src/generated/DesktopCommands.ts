@@ -184,6 +184,8 @@ export type DesktopCommands = {
   desktop_peer_status_fetch: { args: { request: PeerStatusFetchRequest }; result: JsonValue };
   desktop_pending_queue_edit: { args: { request: PendingQueueEditRequest }; result: PendingQueueEditResult };
   desktop_plugin_approval_decide: { args: { id: string; decision: string }; result: void };
+  desktop_plugin_approval_subscribe: { args: { token: string }; result: void };
+  desktop_plugin_approval_unsubscribe: { args: { token: string }; result: void };
   desktop_plugin_approvals_pending: { args: Record<string, never>; result: PluginApprovalsView };
   desktop_probe_inference_endpoint: { args: { request: InferenceProbeRequest }; result: InferenceProbeResult };
   desktop_probe_mcp_service: { args: { request: DesktopProbeMcpServiceRequest }; result: McpServiceProbeResult };
