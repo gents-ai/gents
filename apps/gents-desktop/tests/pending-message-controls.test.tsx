@@ -146,7 +146,6 @@ describe("pending message controls", () => {
   );
 
   it("cannot move a source across a different execution group", async () => {
-
     setup([entry("a"), entry("b", "other")]);
     const [a, b] = screen.getAllByTestId("queued-input");
     expect(await moveDisabled(a!, "down")).toBe(true);
