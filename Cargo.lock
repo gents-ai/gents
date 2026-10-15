@@ -91,7 +91,7 @@ dependencies = [
 [[package]]
 name = "afterburner"
 version = "0.2.9"
-source = "git+https://github.com/afterburner-sh/afterburner.git?rev=ea11816488e161a1f561031c9d395f79f3b7e77a#ea11816488e161a1f561031c9d395f79f3b7e77a"
+source = "git+https://github.com/afterburner-sh/afterburner.git?rev=02e34dfea499eb085761d215680295e02b89713a#02e34dfea499eb085761d215680295e02b89713a"
 dependencies = [
  "afterburner-adaptive",
  "afterburner-afb",
@@ -120,7 +120,7 @@ dependencies = [
 [[package]]
 name = "afterburner-adaptive"
 version = "0.2.9"
-source = "git+https://github.com/afterburner-sh/afterburner.git?rev=ea11816488e161a1f561031c9d395f79f3b7e77a#ea11816488e161a1f561031c9d395f79f3b7e77a"
+source = "git+https://github.com/afterburner-sh/afterburner.git?rev=02e34dfea499eb085761d215680295e02b89713a#02e34dfea499eb085761d215680295e02b89713a"
 dependencies = [
  "afterburner-core",
  "afterburner-ignite",
@@ -134,7 +134,7 @@ dependencies = [
 [[package]]
 name = "afterburner-afb"
 version = "0.2.9"
-source = "git+https://github.com/afterburner-sh/afterburner.git?rev=ea11816488e161a1f561031c9d395f79f3b7e77a#ea11816488e161a1f561031c9d395f79f3b7e77a"
+source = "git+https://github.com/afterburner-sh/afterburner.git?rev=02e34dfea499eb085761d215680295e02b89713a#02e34dfea499eb085761d215680295e02b89713a"
 dependencies = [
  "afterburner-core",
  "semver 1.0.28",
@@ -150,7 +150,7 @@ dependencies = [
 [[package]]
 name = "afterburner-cloud"
 version = "0.2.9"
-source = "git+https://github.com/afterburner-sh/afterburner.git?rev=ea11816488e161a1f561031c9d395f79f3b7e77a#ea11816488e161a1f561031c9d395f79f3b7e77a"
+source = "git+https://github.com/afterburner-sh/afterburner.git?rev=02e34dfea499eb085761d215680295e02b89713a#02e34dfea499eb085761d215680295e02b89713a"
 dependencies = [
  "afterburner-afb",
  "afterburner-core",
@@ -175,7 +175,7 @@ dependencies = [
 [[package]]
 name = "afterburner-core"
 version = "0.2.9"
-source = "git+https://github.com/afterburner-sh/afterburner.git?rev=ea11816488e161a1f561031c9d395f79f3b7e77a#ea11816488e161a1f561031c9d395f79f3b7e77a"
+source = "git+https://github.com/afterburner-sh/afterburner.git?rev=02e34dfea499eb085761d215680295e02b89713a#02e34dfea499eb085761d215680295e02b89713a"
 dependencies = [
  "blake3",
  "fastrace",
@@ -191,7 +191,7 @@ dependencies = [
 [[package]]
 name = "afterburner-ignite"
 version = "0.2.9"
-source = "git+https://github.com/afterburner-sh/afterburner.git?rev=ea11816488e161a1f561031c9d395f79f3b7e77a#ea11816488e161a1f561031c9d395f79f3b7e77a"
+source = "git+https://github.com/afterburner-sh/afterburner.git?rev=02e34dfea499eb085761d215680295e02b89713a#02e34dfea499eb085761d215680295e02b89713a"
 dependencies = [
  "afterburner-core",
  "afterburner-node-compat",
@@ -205,7 +205,7 @@ dependencies = [
 [[package]]
 name = "afterburner-node-compat"
 version = "0.2.9"
-source = "git+https://github.com/afterburner-sh/afterburner.git?rev=ea11816488e161a1f561031c9d395f79f3b7e77a#ea11816488e161a1f561031c9d395f79f3b7e77a"
+source = "git+https://github.com/afterburner-sh/afterburner.git?rev=02e34dfea499eb085761d215680295e02b89713a#02e34dfea499eb085761d215680295e02b89713a"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -250,7 +250,7 @@ dependencies = [
 [[package]]
 name = "afterburner-thrust"
 version = "0.2.9"
-source = "git+https://github.com/afterburner-sh/afterburner.git?rev=ea11816488e161a1f561031c9d395f79f3b7e77a#ea11816488e161a1f561031c9d395f79f3b7e77a"
+source = "git+https://github.com/afterburner-sh/afterburner.git?rev=02e34dfea499eb085761d215680295e02b89713a#02e34dfea499eb085761d215680295e02b89713a"
 dependencies = [
  "afterburner-core",
  "afterburner-wasi",
@@ -264,7 +264,7 @@ dependencies = [
 [[package]]
 name = "afterburner-wasi"
 version = "0.2.9"
-source = "git+https://github.com/afterburner-sh/afterburner.git?rev=ea11816488e161a1f561031c9d395f79f3b7e77a#ea11816488e161a1f561031c9d395f79f3b7e77a"
+source = "git+https://github.com/afterburner-sh/afterburner.git?rev=02e34dfea499eb085761d215680295e02b89713a#02e34dfea499eb085761d215680295e02b89713a"
 dependencies = [
  "afterburner-afb",
  "afterburner-core",
