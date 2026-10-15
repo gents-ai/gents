@@ -23,6 +23,8 @@ use gents_protocol::session::AgentSession;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::Value;
+use std::future::Future;
+use std::pin::Pin;
 
 use super::peer_directory::PeerRecord;
 use super::store::{ClientStore, ClientStoreRows};
@@ -134,47 +136,6 @@ pub(super) const MAILBOX_ITEM_FIELDS: &str = "_docID item_key requester_did node
 /// by the selected page and its physical/logical canonical dependencies.
 /// This is the bounded polling fallback for a dropped/coalesced observer event.
 pub async fn load_chat_patch(
-    node: &EmbeddedNode,
-    node_did: &str,
-    session_id: &str,
-    request_id: Option<&str>,
-    fallback_request_id: Option<&str>,
-    page_request_doc_ids: &[String],
-) -> Result<ClientStore> {
-    let node_did = node_did.trim();
-    let session_id = session_id.trim();
-    let request_id = request_id.map(str::trim).filter(|id| !id.is_empty());
-    let fallback_request_id = fallback_request_id
-        .map(str::trim)
-        .filter(|id| !id.is_empty());
-    if node_did.is_empty() || session_id.is_empty() {
-        return Ok(ClientStore::default());
-    }
-
-    let session = load_selected_session_local(node, node_did, session_id).await?;
-    let requester_did = session.requester_did.clone();
-    let lookup = selected_request_lookup(
-        node_did,
-        session_id,
-        requester_did.as_deref(),
-        session.observation.as_ref(),
-        request_id,
-        fallback_request_id,
-        page_request_doc_ids,
-    )?;
-    let selected = if let Some(lookup) = lookup {
-        let data =
-            execute_local_graphql_query(node, &lookup.query, "selected request refresh").await?;
-        lookup.decode(&data, node_did, session_id, requester_did.as_deref())?
-    } else {
-        Vec::new()
-    };
-    let seeds = load_session_request_seeds_local(node, selected, page_request_doc_ids).await?;
-    let requests = close_request_rows(node, seeds).await?;
-    load_request_patch_context_local(node, requests, session, requester_did).await
-}
-
-pub async fn load_chat_patch_on(
     access: &gents::config_client::ConfigAccess,
     node_did: &str,
     session_id: &str,
@@ -182,6 +143,47 @@ pub async fn load_chat_patch_on(
     fallback_request_id: Option<&str>,
     page_request_doc_ids: &[String],
 ) -> Result<ClientStore> {
+    let node_did = node_did.to_owned();
+    let session_id = session_id.to_owned();
+    let request_id = request_id.map(str::to_owned);
+    let fallback_request_id = fallback_request_id.map(str::to_owned);
+    let page_request_doc_ids = page_request_doc_ids.to_vec();
+    access
+        .transact_readonly("desktop.selected_request_refresh", |txn| {
+            Box::pin(async move {
+                let mut execute = |query: String, operation: &'static str| {
+                    Box::pin(async move {
+                        let response = txn
+                            .execute(&query)
+                            .await
+                            .with_context(|| operation.to_string())?;
+                        into_access_graphql_data(response, operation)
+                    }) as QueryFuture<'_>
+                };
+                load_chat_patch_with(
+                    &node_did,
+                    &session_id,
+                    request_id.as_deref(),
+                    fallback_request_id.as_deref(),
+                    &page_request_doc_ids,
+                    &mut execute,
+                )
+                .await
+            })
+        })
+        .await
+}
+
+type QueryFuture<'a> = Pin<Box<dyn Future<Output = Result<Value>> + Send + 'a>>;
+
+async fn load_chat_patch_with<'a>(
+    node_did: &str,
+    session_id: &str,
+    request_id: Option<&str>,
+    fallback_request_id: Option<&str>,
+    page_request_doc_ids: &[String],
+    execute: &mut (impl FnMut(String, &'static str) -> QueryFuture<'a> + 'a),
+) -> Result<ClientStore> {
     let node_did = node_did.trim();
     let session_id = session_id.trim();
     let request_id = request_id.map(str::trim).filter(|id| !id.is_empty());
@@ -192,7 +194,9 @@ pub async fn load_chat_patch_on(
         return Ok(ClientStore::default());
     }
 
-    let session = load_selected_session_on(access, node_did, session_id).await?;
+    let session_query = selected_session_query(node_did, session_id);
+    let session_data = execute(session_query, "selected session owner").await?;
+    let session = selected_session_from_data(&session_data, node_did, session_id)?;
     let requester_did = session.requester_did.clone();
     let lookup = selected_request_lookup(
         node_did,
@@ -204,15 +208,34 @@ pub async fn load_chat_patch_on(
         page_request_doc_ids,
     )?;
     let selected = if let Some(lookup) = lookup {
-        let data =
-            execute_access_graphql_query(access, &lookup.query, "selected request refresh").await?;
+        let data = execute(lookup.query, "selected request refresh").await?;
         lookup.decode(&data, node_did, session_id, requester_did.as_deref())?
     } else {
         Vec::new()
     };
-    let seeds = load_session_request_seeds_on(access, selected, page_request_doc_ids).await?;
-    let requests = close_request_rows_on(access, seeds).await?;
-    load_request_patch_context_on(access, requests, session, requester_did).await
+    let scopes = request_seed_scopes(&selected);
+    let seeds = if scopes.is_empty() {
+        selected
+    } else {
+        let query = session_request_seed_query(&scopes, page_request_doc_ids);
+        let data = execute(query, "session request seeds").await?;
+        request_seeds_from_data(&data, selected, &scopes)?
+    };
+    let requests = request_closure::close_request_rows_with(seeds, |query| {
+        execute(query, "request dependency closure")
+    })
+    .await?;
+    let scopes = request_context_scopes(&requests);
+    if scopes.is_empty() {
+        return Ok(ClientStore::from_rows(ClientStoreRows {
+            requests,
+            sessions: vec![session],
+            ..ClientStoreRows::default()
+        }));
+    }
+    let query = request_context_query(&scopes);
+    let data = execute(query, "request session context").await?;
+    request_patch_from_context_data(&data, requests, vec![session], requester_did, &scopes)
 }
 
 pub(crate) async fn load_request_documents_on(
@@ -391,26 +414,6 @@ fn selected_session_query(node_did: &str, session_id: &str) -> String {
     )
 }
 
-async fn load_selected_session_local(
-    node: &EmbeddedNode,
-    node_did: &str,
-    session_id: &str,
-) -> Result<AgentSession> {
-    let query = selected_session_query(node_did, session_id);
-    let data = execute_local_graphql_query(node, &query, "selected session owner").await?;
-    selected_session_from_data(&data, node_did, session_id)
-}
-
-async fn load_selected_session_on(
-    access: &gents::config_client::ConfigAccess,
-    node_did: &str,
-    session_id: &str,
-) -> Result<AgentSession> {
-    let query = selected_session_query(node_did, session_id);
-    let data = execute_access_graphql_query(access, &query, "selected session owner").await?;
-    selected_session_from_data(&data, node_did, session_id)
-}
-
 fn selected_session_from_data(
     data: &Value,
     node_did: &str,
@@ -435,34 +438,6 @@ fn selected_session_from_data(
         "selected session refresh returned a row outside its exact node/session scope"
     );
     Ok(session)
-}
-
-async fn load_session_request_seeds_local(
-    node: &EmbeddedNode,
-    selected: Vec<AgentRequestRow>,
-    page_request_doc_ids: &[String],
-) -> Result<Vec<AgentRequestRow>> {
-    let scopes = request_seed_scopes(&selected);
-    if scopes.is_empty() {
-        return Ok(selected);
-    }
-    let query = session_request_seed_query(&scopes, page_request_doc_ids);
-    let data = execute_local_graphql_query(node, &query, "session request seeds").await?;
-    request_seeds_from_data(&data, selected, &scopes)
-}
-
-async fn load_session_request_seeds_on(
-    access: &gents::config_client::ConfigAccess,
-    selected: Vec<AgentRequestRow>,
-    page_request_doc_ids: &[String],
-) -> Result<Vec<AgentRequestRow>> {
-    let scopes = request_seed_scopes(&selected);
-    if scopes.is_empty() {
-        return Ok(selected);
-    }
-    let query = session_request_seed_query(&scopes, page_request_doc_ids);
-    let data = execute_access_graphql_query(access, &query, "session request seeds").await?;
-    request_seeds_from_data(&data, selected, &scopes)
 }
 
 fn session_request_seed_query(
@@ -540,44 +515,6 @@ fn request_seed_scopes(requests: &[AgentRequestRow]) -> Vec<(String, String, Opt
         .collect::<std::collections::BTreeSet<_>>()
         .into_iter()
         .collect()
-}
-
-async fn load_request_patch_context_local(
-    node: &EmbeddedNode,
-    requests: Vec<AgentRequestRow>,
-    session: AgentSession,
-    requester_did: Option<String>,
-) -> Result<ClientStore> {
-    let scopes = request_context_scopes(&requests);
-    if scopes.is_empty() {
-        return Ok(ClientStore::from_rows(ClientStoreRows {
-            requests,
-            sessions: vec![session],
-            ..ClientStoreRows::default()
-        }));
-    }
-    let query = request_context_query(&scopes);
-    let data = execute_local_graphql_query(node, &query, "request session context").await?;
-    request_patch_from_context_data(&data, requests, vec![session], requester_did, &scopes)
-}
-
-async fn load_request_patch_context_on(
-    access: &gents::config_client::ConfigAccess,
-    requests: Vec<AgentRequestRow>,
-    session: AgentSession,
-    requester_did: Option<String>,
-) -> Result<ClientStore> {
-    let scopes = request_context_scopes(&requests);
-    if scopes.is_empty() {
-        return Ok(ClientStore::from_rows(ClientStoreRows {
-            requests,
-            sessions: vec![session],
-            ..ClientStoreRows::default()
-        }));
-    }
-    let query = request_context_query(&scopes);
-    let data = execute_access_graphql_query(access, &query, "request session context").await?;
-    request_patch_from_context_data(&data, requests, vec![session], requester_did, &scopes)
 }
 
 fn request_context_scopes(requests: &[AgentRequestRow]) -> Vec<(String, String)> {

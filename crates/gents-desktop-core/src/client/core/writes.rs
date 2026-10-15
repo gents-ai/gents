@@ -24,7 +24,7 @@ use serde::Deserialize;
 use super::super::mutations::{self, PeerMutationResult, SubmitRequestOptions, SubmittedRequest};
 use super::super::observe::ObservedStore;
 use super::super::peer_directory::PeerRecord;
-use super::super::query::{load_chat_patch, load_chat_patch_on};
+use super::super::query::load_chat_patch;
 use super::super::store::{ClientStore, ClientStoreRows};
 use super::bootstrap::normalize_required;
 use super::p2p_ops;
@@ -702,35 +702,27 @@ impl ClientCore {
         }
 
         let captured = self.store.capture_read();
-        let (patch, source) = match self.operator_graphql(node_did) {
-            Some(graphql) => {
-                let access = ConfigAccess::Graphql(graphql);
-                (
-                    load_chat_patch_on(
-                        &access,
-                        node_did,
-                        session_id,
-                        request_id,
-                        fallback_request_id,
-                        page_request_doc_ids,
-                    )
-                    .await?,
-                    "operator",
-                )
-            }
+        let (access, source) = match self.operator_graphql(node_did) {
+            Some(graphql) => (ConfigAccess::Graphql(graphql), "operator"),
             None => (
-                load_chat_patch(
-                    self.node.as_ref(),
-                    node_did,
-                    session_id,
-                    request_id,
-                    fallback_request_id,
-                    page_request_doc_ids,
-                )
-                .await?,
+                self.store_access
+                    .lock()
+                    .await
+                    .as_ref()
+                    .context("local store access is unavailable")?
+                    .clone(),
                 "local",
             ),
         };
+        let patch = load_chat_patch(
+            &access,
+            node_did,
+            session_id,
+            request_id,
+            fallback_request_id,
+            page_request_doc_ids,
+        )
+        .await?;
         let rows = patch.row_count();
         if rows == 0 {
             return Ok(None);

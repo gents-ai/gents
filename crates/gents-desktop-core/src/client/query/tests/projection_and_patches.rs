@@ -312,6 +312,7 @@ async fn load_chat_patch_reads_only_the_selected_local_session() {
     ensure_runtime_schemas(node.as_ref())
         .await
         .expect("schemas");
+    let access = gents::ConfigAccess::local(node.clone());
 
     let mutation = r#"mutation {
         selected_session: create_AgentSession(input: {
@@ -383,16 +384,9 @@ async fn load_chat_patch_reads_only_the_selected_local_session() {
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
 
-    let patch = load_chat_patch(
-        node.as_ref(),
-        "did:test:agent",
-        "sess-selected",
-        None,
-        None,
-        &[],
-    )
-    .await
-    .expect("selected local chat patch");
+    let patch = load_chat_patch(&access, "did:test:agent", "sess-selected", None, None, &[])
+        .await
+        .expect("selected local chat patch");
     assert_eq!(patch.requests.len(), 1);
     assert_eq!(patch.requests[0].request_id, "req-selected");
     assert_eq!(
@@ -426,7 +420,7 @@ async fn load_chat_patch_reads_only_the_selected_local_session() {
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
     let terminal_patch = load_chat_patch(
-        node.as_ref(),
+        &access,
         "did:test:agent",
         "sess-selected",
         Some("req-selected"),
@@ -475,6 +469,7 @@ async fn load_chat_patch_uses_the_canonical_nullable_session_requester() {
     ensure_runtime_schemas(node.as_ref())
         .await
         .expect("schemas");
+    let access = gents::ConfigAccess::local(node.clone());
     let response = node
         .execute(
             r#"mutation {
@@ -502,7 +497,7 @@ async fn load_chat_patch_uses_the_canonical_nullable_session_requester() {
     assert!(!response.has_errors(), "{:?}", response.errors);
 
     let patch = load_chat_patch(
-        node.as_ref(),
+        &access,
         "did:test:agent",
         "sess-public",
         Some("req-public"),

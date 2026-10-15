@@ -119,7 +119,7 @@ impl ReadBatch {
     }
 }
 
-async fn close_request_rows_with<'a>(
+pub(super) async fn close_request_rows_with<'a>(
     seeds: Vec<AgentRequestRow>,
     mut execute: impl FnMut(String) -> QueryFuture<'a> + 'a,
 ) -> Result<Vec<AgentRequestRow>> {
