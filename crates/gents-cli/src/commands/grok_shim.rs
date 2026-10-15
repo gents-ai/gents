@@ -38,6 +38,7 @@ pub(crate) mod acp;
 mod binding;
 mod goals;
 mod graph_runs;
+mod observation_cursor;
 pub(crate) mod projection;
 pub(crate) mod protocol;
 pub(crate) mod server;
