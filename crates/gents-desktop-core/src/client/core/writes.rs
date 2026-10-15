@@ -1861,9 +1861,7 @@ impl ClientCore {
         let node_did = normalize_required("node_did", node_did)?;
         let evidence = match action {
             Action::PassiveStart => Some(
-                evidence
-                    .context("passive hydration admission requires local start evidence")?
-                    .clone(),
+                evidence.context("passive hydration admission requires local start evidence")?,
             ),
             Action::ExplicitRetry => {
                 anyhow::ensure!(
@@ -1938,13 +1936,9 @@ impl ClientCore {
             move |txn| {
                 let request_query = request_query.clone();
                 let mutation = mutation.clone();
-                let action = action;
-                let session_id = session_id.clone();
-                let node_did = node_did.clone();
                 let request_key = request_key.clone();
                 let expected_requester_did = expected_requester_did.clone();
                 let observed_progress = observed_progress.clone();
-                let evidence = evidence.clone();
                 Box::pin(async move {
                     if action == Action::PassiveStart {
                         gents::graphql::fence_arrivals(txn, "SessionHydrationRequest").await?;
