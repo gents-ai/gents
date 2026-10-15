@@ -15,14 +15,14 @@ pub(super) const LOADS_PER_TICK: usize = 4;
 
 /// The revision of the terminal frame sent when observation stops. The pager
 /// keeps the highest revision it holds across leader reconnects (see
-/// [`durable_revision`]), so this frame must outrank anything an earlier
+/// [`ObservedView::durable_revision`]), so this frame must outrank anything an earlier
 /// observer delivered. Stopping is final for this actor, so no frame follows
 /// it. 2^53 - 1 is the largest integer a JSON number keeps exactly as an
 /// IEEE double.
 pub(super) const ABANDONED_REVISION: u64 = (1 << 53) - 1;
 
-/// Upper bound on the delay before re-reading a run or `run_graph` reply
-/// whose last read failed.
+/// Upper bound on the delay before re-reading a subject whose last read
+/// failed.
 pub(super) const MAX_RETRY_DELAY_SECS: i64 = 30;
 
 /// The display-only failure streak of one observed subject. It defers the
@@ -169,8 +169,11 @@ impl ObservationSet {
 pub(super) trait ObservedView {
     /// `Err` is permanent: reading the same view again fails the same way.
     fn is_terminal(&self) -> Result<bool>;
-    /// A count of durable facts that only grow, so a fresh observer never
-    /// delivers a revision below what an earlier one delivered.
+    /// The stock pager keeps the highest revision it holds for a subject,
+    /// across leader reconnects, and drops a lower one (probed against
+    /// v1.0.46). So this is a count of durable facts that only grow, and a
+    /// fresh observer never delivers a revision below what an earlier one
+    /// delivered.
     fn durable_revision(&self) -> u64;
     /// The `workflow_updated` body at `revision`.
     fn project(&self, revision: u64, now: DateTime<Utc>) -> Value;
