@@ -136,7 +136,7 @@ async fn local_request_refresh_preserves_projection_boundaries_and_database_trut
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Result<()> {
-    use wiremock::matchers::method;
+    use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     const NODE_DID: &str = "did:test:hosted-amy";
@@ -235,6 +235,19 @@ async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Re
     });
     let response_operator_data = operator_data.clone();
     Mock::given(method("POST"))
+        .and(path("/api/v0/tx"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "selected-request-refresh"
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/v0/tx/selected-request-refresh"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/v0/graphql"))
         .respond_with(move |request: &wiremock::Request| {
             let body = String::from_utf8_lossy(&request.body);
             let data = if body.contains("DesktopSelectedSession") {
