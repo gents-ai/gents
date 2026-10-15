@@ -365,7 +365,9 @@ async fn desired_state_apply_batches_identity_reads_by_collection_and_owner() ->
         .collect::<Vec<_>>();
     apply(&access, docs.clone()).await?;
 
-    let expected = docs
+    let plan = DesiredStateApplyPlan::new(docs)?;
+    let expected = plan
+        .documents()
         .iter()
         .map(|doc| {
             let (owner, id) = document_identity(doc.collection, &doc.add)?;
@@ -377,7 +379,7 @@ async fn desired_state_apply_batches_identity_reads_by_collection_and_owner() ->
             })
         })
         .collect::<Result<Vec<_>>>()?;
-    let plan = DesiredStateApplyPlan::new(docs)?.with_expected(expected)?;
+    let plan = plan.with_expected(expected)?;
     let (result, read_queries) = count_desired_state_read_page_queries(access.transact_write(
         "test.desired.apply.batched_reads",
         |txn| {
