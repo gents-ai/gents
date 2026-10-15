@@ -1952,8 +1952,8 @@ async fn a_capture_pinning_a_block_that_does_not_hash_drops_only_its_own_turn() 
     });
     // The exact bytes the sink will chunk for this body, so the poisoned block
     // lands under the content key the sink's manifest will pin.
-    let canonical = gents_loop::rendered_request::canonical_json_string(&body).unwrap();
-    let chunks = crate::rendered_request::encoding::chunk_capture_body(&canonical);
+    let layout = crate::rendered_request::encoding::capture_block_layout(&body).unwrap();
+    let chunks = crate::rendered_request::encoding::chunk_capture_body(&layout);
     let index = chunks
         .iter()
         .position(|chunk| {

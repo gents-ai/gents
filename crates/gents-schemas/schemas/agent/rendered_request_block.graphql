@@ -35,6 +35,9 @@ type RenderedRequestBlock @branchable {
     # Canonical body bytes for this block, exactly as chunked from one capture
     # payload. Raw UTF-8 stored as a GraphQL String; not parsed, never rewritten.
     payload: String @immutable
+    # Unset on blocks written by content-only creates: DefraDB derives the
+    # document id from the fields written, so writing only `content_key` and
+    # `payload` gives every writer and peer the same id for the same bytes.
     byte_len: Int @immutable
     created_at: String @immutable
 }

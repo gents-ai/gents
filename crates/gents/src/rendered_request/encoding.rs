@@ -342,6 +342,45 @@ pub(crate) struct ChunkedBlock {
     pub(crate) bytes: Vec<u8>,
 }
 
+/// Top-level capture fields that grow by appending from one capture of a loop
+/// to the next: provider message lists and the assembly trace's per-turn lists.
+const APPEND_GROWING_FIELDS: [&str; 5] = [
+    "assistant_message_ids",
+    "effective_messages",
+    "input",
+    "messages",
+    "threaded_tool_results",
+];
+
+/// The bytes a capture payload is chunked from: its canonical JSON with the
+/// append-growing top-level fields moved last.
+///
+/// Readers depend only on the decoded value, so the layout is free. Canonical
+/// key order puts stable fields such as `tools`, `instructions` and `system`
+/// after `messages`/`input`, where every appended turn re-cuts and re-stores
+/// them; moving the growing lists to the end keeps the stable fields in
+/// unchanged leading blocks and confines each new capture's fresh bytes to its
+/// tail.
+pub(crate) fn capture_block_layout(value: &Value) -> Result<String> {
+    let Value::Object(map) = super::canonical_json(value) else {
+        return super::canonical_json_string(value);
+    };
+    let (growing, stable): (Vec<_>, Vec<_>) = map
+        .iter()
+        .partition(|(key, _)| APPEND_GROWING_FIELDS.contains(&key.as_str()));
+    let mut layout = String::from("{");
+    for (index, (key, field)) in stable.into_iter().chain(growing).enumerate() {
+        if index > 0 {
+            layout.push(',');
+        }
+        layout.push_str(&serde_json::to_string(key)?);
+        layout.push(':');
+        layout.push_str(&serde_json::to_string(field)?);
+    }
+    layout.push('}');
+    Ok(layout)
+}
+
 /// The write-side v3 policy: split canonical capture bytes into content-defined
 /// blocks (#2333). Every cut lands on a UTF-8 character boundary.
 ///
@@ -1182,6 +1221,46 @@ mod tests {
                 {shared_tail} shared tail blocks of {}/{}",
             before.len(),
             after.len()
+        );
+    }
+
+    #[test]
+    fn appending_a_message_writes_only_trailing_blocks() {
+        let tools =
+            json!([{ "name": "query", "description": deterministic_capture_text(12 * 1024) }]);
+        let message = |seed: usize| json!({ "role": "user", "content": deterministic_capture_text(3 * 1024 + seed) });
+        let before = json!({ "model": "m", "tools": tools, "messages": [message(1), message(2)] });
+        let mut after = before.clone();
+        after["messages"].as_array_mut().unwrap().push(message(3));
+
+        let layout = capture_block_layout(&after).unwrap();
+        assert_eq!(serde_json::from_str::<Value>(&layout).unwrap(), after);
+        // Fresh blocks under each encoding, in body order.
+        let fresh = |encode: fn(&Value) -> String| {
+            let stored = chunk_capture_body(&encode(&before))
+                .into_iter()
+                .map(|block| block.content_key)
+                .collect::<Vec<_>>();
+            chunk_capture_body(&encode(&after))
+                .into_iter()
+                .map(|block| !stored.contains(&block.content_key))
+                .collect::<Vec<_>>()
+        };
+        let is_tail = |fresh: &[bool]| {
+            fresh
+                .iter()
+                .skip_while(|fresh| !**fresh)
+                .all(|fresh| *fresh)
+        };
+        assert!(
+            is_tail(&fresh(|value| capture_block_layout(value).unwrap())),
+            "only trailing blocks may be fresh when the growing list is last"
+        );
+        assert!(
+            !is_tail(&fresh(
+                |value| super::super::canonical_json_string(value).unwrap()
+            )),
+            "canonical order re-cuts the stable fields that follow the growing list"
         );
     }
 
