@@ -130,7 +130,6 @@ pub struct WorkspaceReceiptDoc {
     pub head_sha: Option<String>,
     pub changed_files: Option<String>,
     pub diff_artifact: Option<String>,
-    pub checks_run: Option<String>,
     pub unresolved_conflicts: Option<String>,
     pub integration_instructions: Option<String>,
 }
@@ -474,7 +473,6 @@ fn workspace_receipt_upsert_field(alias: &str, doc: &WorkspaceReceiptDoc) -> Str
                     head_sha: {head_sha},
                     changed_files: {changed_files},
                     diff_artifact: {diff_artifact},
-                    checks_run: {checks_run},
                     unresolved_conflicts: {unresolved_conflicts},
                     integration_instructions: {integration_instructions}
                 }},
@@ -482,7 +480,6 @@ fn workspace_receipt_upsert_field(alias: &str, doc: &WorkspaceReceiptDoc) -> Str
                     head_sha: {head_sha},
                     changed_files: {changed_files},
                     diff_artifact: {diff_artifact},
-                    checks_run: {checks_run},
                     unresolved_conflicts: {unresolved_conflicts},
                     integration_instructions: {integration_instructions}
                 }}
@@ -500,7 +497,6 @@ fn workspace_receipt_upsert_field(alias: &str, doc: &WorkspaceReceiptDoc) -> Str
         head_sha = graphql_nullable_string(doc.head_sha.as_deref()),
         changed_files = graphql_nullable_string(doc.changed_files.as_deref()),
         diff_artifact = graphql_nullable_string(doc.diff_artifact.as_deref()),
-        checks_run = graphql_nullable_string(doc.checks_run.as_deref()),
         unresolved_conflicts = graphql_nullable_string(doc.unresolved_conflicts.as_deref()),
         integration_instructions = graphql_nullable_string(doc.integration_instructions.as_deref()),
     )

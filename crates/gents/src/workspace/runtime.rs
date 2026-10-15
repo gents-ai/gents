@@ -591,7 +591,6 @@ async fn load_receipts(
                 head_sha
                 changed_files
                 diff_artifact
-                checks_run
                 unresolved_conflicts
                 integration_instructions
             }}
@@ -877,7 +876,6 @@ mod tests {
             head_sha: None,
             changed_files: None,
             diff_artifact: None,
-            checks_run: None,
             unresolved_conflicts: None,
             integration_instructions: None,
         }
