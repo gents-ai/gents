@@ -46,11 +46,11 @@ impl RequestLifecycle {
     /// there is no per-doc anti-entropy on a running peer (defradb.rs#1074) to
     /// re-request it. This re-drive is the owner side of the fix — periodically
     /// re-asserting the current terminal value of recently-terminalized routed
-    /// requests. Local-only requests are excluded because no peer consumes
-    /// their request state (#683). A same-value re-write is a genuine
-    /// higher-priority CRDT delta (it does not no-op), so it flows through the
-    /// normal PushLog path and a lagging requester accepts it (LWW, higher
-    /// priority ⇒ applied).
+    /// requests. Local-only requests, whose requester is absent or the owner
+    /// itself, are excluded: no peer acts on their request state (#683). A
+    /// same-value re-write is a genuine higher-priority CRDT delta (it does not
+    /// no-op), so it flows through the normal PushLog path and a lagging
+    /// requester accepts it (LWW, higher priority ⇒ applied).
     ///
     /// BOUNDED, NOT CONVERGENCE-OBSERVING. The owner has no back-channel telling
     /// it whether a peer caught up. Each successful re-assert atomically advances
@@ -79,7 +79,10 @@ impl RequestLifecycle {
                 AgentRequest(
                     filter: {{
                         node_did: {{ _eq: "{escaped_node_did}" }},
-                        requester_did: {{ _neq: null }},
+                        _and: [
+                            {{ requester_did: {{ _neq: null }} }},
+                            {{ requester_did: {{ _neq: "{escaped_node_did}" }} }}
+                        ],
                         lifecycle_state: {{ _in: {terminal_states} }},
                         terminal_redrive_attempts: {{ _lt: {cap} }}
                     }},
@@ -137,7 +140,10 @@ impl RequestLifecycle {
                         docID: "{escaped_doc_id}", filter: {{
                             _docID: {{ _eq: "{escaped_doc_id}" }},
                             node_did: {{ _eq: "{escaped_node_did}" }},
-                            requester_did: {{ _neq: null }},
+                            _and: [
+                                {{ requester_did: {{ _neq: null }} }},
+                                {{ requester_did: {{ _neq: "{escaped_node_did}" }} }}
+                            ],
                             lifecycle_state: {{ _eq: "{escaped_lifecycle_state}" }},
                             terminal_redrive_attempts: {{ _eq: {attempts} }}
                         }},
