@@ -2362,7 +2362,7 @@ mod tests {
     }
 
     #[test]
-    fn document_captures_reject_inline_and_collection_credentials() {
+    fn document_captures_reject_credential_bearing_collections() {
         let error = documents_capture_query(
             "InferenceBackend",
             &json!({"node_did": {"_eq": "did:test"}}),
@@ -2371,7 +2371,7 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("InferenceBackend"));
-        assert!(error.to_string().contains("restricted"));
+        assert!(error.to_string().contains("credential collection"));
 
         let error = documents_capture_query(
             "InferenceBackend",
@@ -2380,7 +2380,7 @@ mod tests {
             "did:test",
         )
         .unwrap_err();
-        assert!(error.to_string().contains("restricted"));
+        assert!(error.to_string().contains("credential collection"));
 
         let error = documents_capture_query(
             "OAuthCredential",
@@ -2392,13 +2392,13 @@ mod tests {
         assert!(error.to_string().contains("credential collection"));
 
         let safe = documents_capture_query(
-            "InferenceBackend",
+            "Task",
             &json!({"node_did": {"_eq": "did:test"}}),
-            &["backend_id".into(), "endpoint".into()],
+            &["task_id".into(), "display_name".into()],
             "did:test",
         )
         .unwrap();
-        assert!(safe.contains("backend_id endpoint"));
+        assert!(safe.contains("task_id display_name"));
     }
 
     /// The matched files and the matches that were refused, for a glob that ran.
