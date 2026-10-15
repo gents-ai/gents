@@ -236,7 +236,7 @@ mod tests {
     /// Compiles `root` (already written by [`write_package`]) and asserts
     /// the produced `.afb` is genuine: readable, declares `language`, and
     /// carries a `wasm32-wasip1` precompiled WASI command module.
-    fn assert_compiles_to_wasm32_wasip1(root: &Path, language: &str) {
+    fn assert_compiles_to_wasm32_wasip1(root: &Path, language: &str) -> Vec<u8> {
         let owner = format!("test plugin ({language})");
         let out = root.parent().unwrap().join(format!("{language}.afb"));
         let local = load_and_validate(&owner, root).unwrap_or_else(|error| {
@@ -262,32 +262,98 @@ mod tests {
                 .contains_key("precompiled/wasm32-wasip1/main.wasm"),
             "{language}'s .afb must carry the precompiled WASI command module"
         );
+        bytes
     }
 
-    /// `rustc` with the `wasm32-wasip1` target: verified present on this
-    /// machine before writing this test (`rustc --version`, `rustup target
-    /// list --installed`).
-    #[test]
-    fn rust_compiles_to_a_genuine_wasm32_wasip1_afb() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().join("pkg");
+    fn write_rust_package(root: &Path) {
         write_package(
-            &root,
+            root,
             "rust",
             "source/main.rs",
             b"fn main() { println!(\"{{}}\"); }",
         );
-        // Rust is the one language whose compile path shells out to `cargo
-        // build` directly (`lang::compile_rust`), so it is also the one
-        // that needs its own Cargo.toml on disk; the others need only the
-        // afb.toml + source `write_package` already writes.
         write(
             &root.join("Cargo.toml"),
             b"[workspace]\n\n\
               [package]\nname = \"sample\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
               [[bin]]\nname = \"sample\"\npath = \"source/main.rs\"\n",
         );
+    }
+
+    #[test]
+    fn rust_compiles_to_a_genuine_wasm32_wasip1_afb() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("pkg");
+        write_rust_package(&root);
         assert_compiles_to_wasm32_wasip1(&root, "rust");
+    }
+
+    #[test]
+    fn rust_compiles_with_configured_target_directories() {
+        const PACKAGE_ENV: &str = "GENTS_TEST_RUST_PLUGIN_PACKAGE";
+        let inherited_target = std::env::var_os("CARGO_TARGET_DIR");
+        if let Some(root) = std::env::var_os(PACKAGE_ENV) {
+            let root = Path::new(&root);
+            let bytes = assert_compiles_to_wasm32_wasip1(root, "rust");
+            assert!(root
+                .join("target/wasm32-wasip1/release/sample.wasm")
+                .is_file());
+            assert_eq!(std::env::var_os("CARGO_TARGET_DIR"), inherited_target);
+
+            let plugin: gents::pack::PackPlugin = serde_json::from_value(serde_json::json!({
+                "name": "sample",
+                "description": "a test plugin",
+                "artifact": "plugins/rust.afb",
+                "language": "rust",
+                "input_schema": {"type": "object"},
+            }))
+            .unwrap();
+            let result = gents::plugin::PluginRunner::compile(&bytes, &plugin)
+                .unwrap()
+                .call(
+                    &serde_json::json!({}),
+                    &gents::plugin::PluginBudget::default(),
+                )
+                .unwrap();
+            assert_eq!(result.verdict, gents::plugin::PluginVerdict::Success);
+            assert_eq!(result.output, serde_json::json!({}));
+            return;
+        }
+
+        let test_name = std::thread::current().name().unwrap().to_owned();
+        for (environment, config) in [(true, false), (false, true), (true, true)] {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path().join("pkg");
+            write_rust_package(&root);
+            if config {
+                write(
+                    &root.join(".cargo/config.toml"),
+                    b"[build]\ntarget-dir = \"configured-target\"\n",
+                );
+            }
+            let redirected = dir.path().join("environment-target");
+            let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+            child
+                .args([test_name.as_str(), "--exact", "--nocapture"])
+                .current_dir(dir.path())
+                .env(PACKAGE_ENV, "pkg");
+            if environment {
+                child.env("CARGO_TARGET_DIR", &redirected);
+            } else {
+                child.env_remove("CARGO_TARGET_DIR");
+            }
+            let output = child.output().unwrap();
+            assert!(
+                output.status.success(),
+                "Rust compilation failed with environment={environment}, config={config}:\n{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(dir.path().join("rust.afb").is_file());
+            assert!(!redirected.exists());
+            assert!(!root.join("configured-target").exists());
+        }
+        assert_eq!(std::env::var_os("CARGO_TARGET_DIR"), inherited_target);
     }
 
     /// `go` 1.27.1: verified present on this machine (`go version`).
