@@ -477,15 +477,15 @@ mod tests {
     #[test]
     fn group_caused_orders_by_created_at_then_doc_id() {
         let grouped = group_caused(&[
-            caused_row("bae-c", "r3", "2026-09-26T00:00:02Z", "call-1"),
+            caused_row("bae-a", "r1", "2026-09-26T00:00:03Z", "call-1"),
+            caused_row("bae-c", "r3", "2026-09-26T00:00:01Z", "call-1"),
             caused_row("bae-b", "r2", "2026-09-26T00:00:01Z", "call-1"),
-            caused_row("bae-a", "r1", "2026-09-26T00:00:01Z", "call-1"),
         ]);
         let doc_ids = grouped["call-1"]
             .iter()
             .map(|request| request.request_doc_id.as_str())
             .collect::<Vec<_>>();
-        assert_eq!(doc_ids, ["bae-a", "bae-b", "bae-c"]);
+        assert_eq!(doc_ids, ["bae-b", "bae-c", "bae-a"]);
     }
 
     #[test]
