@@ -57,6 +57,7 @@ mod request_patch_publication_tests {
             doc_id: Some("request-doc".to_owned()),
             request_id: "request".to_owned(),
             node_did: Some("did:test:node".to_owned()),
+            purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
             lifecycle_state: Some(match state {
                 "pending" => RequestLifecycleState::Pending,
                 "processing" => RequestLifecycleState::Processing,
