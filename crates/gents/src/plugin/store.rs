@@ -743,3 +743,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "store_guard_tests.rs"]
+mod store_guard_tests;

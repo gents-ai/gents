@@ -1025,8 +1025,6 @@ pub mod install;
 pub mod model_calls;
 mod rounds;
 pub mod store;
-#[cfg(test)]
-mod store_guard_tests;
 pub mod tool;
 pub(crate) mod tool_calls;
 
