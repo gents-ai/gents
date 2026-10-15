@@ -17,7 +17,7 @@ import {
   describeManagedServerWait,
   managedServerWaitKind,
 } from "../../../lib/managedServerStartup";
-import { Fact, Group, Row } from "./rows";
+import { Fact, Group, Row, StackedRow } from "./rows";
 import { useApp } from "@/app/AppContext";
 import { ManagedRuntimeUnavailableError } from "../../../lib/managedRuntimeReadiness";
 import { useStartup } from "@/hooks/useClient";
@@ -203,7 +203,9 @@ export function LocalServer() {
         label="Host access"
         description="Reviewed host access, confirmed by the runtime while running. Changing access stops the OS service, saves your choices, and starts it again."
       >
-        <div className="grid justify-items-end gap-1 text-right">
+        {/* not narrower than its facts (up to half the row), which truncate
+            within it rather than spill over the description */}
+        <div className="grid justify-items-end gap-1 text-right *:max-w-full max-md:justify-items-start max-md:text-left md:max-w-1/2 md:shrink-0">
           <Fact>{status?.effectiveToolCeiling ?? "—"}</Fact>
           <Fact mono>{status?.effectiveToolRoot ?? "No host path"}</Fact>
           {running && status?.state !== "external" ? (
@@ -214,15 +216,10 @@ export function LocalServer() {
         </div>
       </Row>
       {editingAuthority && home ? (
-        <div className="grid gap-4 border-t border-border/60 pt-4">
-          <div>
-            <p className="text-sm font-medium">Restart-required access change</p>
-            <p className="text-xs text-muted-foreground">
-              The node keeps its current access unless the native service stops
-              successfully. It restarts only after the reviewed root and ceiling are
-              saved.
-            </p>
-          </div>
+        <StackedRow
+          label="Restart-required access change"
+          description="The node keeps its current access unless the native service stops successfully. It restarts only after the reviewed root and ceiling are saved."
+        >
           <ManagedRuntimeAuthorityPicker
             home={home}
             toolCeiling={toolCeiling}
@@ -250,7 +247,7 @@ export function LocalServer() {
               {busy ? <Spinner /> : null} Review complete — restart
             </Button>
           </div>
-        </div>
+        </StackedRow>
       ) : null}
       <Row label="GraphQL">
         <Fact mono>{status?.graphql ?? "—"}</Fact>
