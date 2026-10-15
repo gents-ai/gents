@@ -2796,20 +2796,28 @@ pub(crate) async fn prepare_app_exit<R: Runtime>(
     state: &DesktopAppState,
 ) -> Result<(), BridgeError> {
     let _lifecycle = state.managed_server_lifecycle.lock().await;
-    if load_preference(state).await?.is_none()
-        && state.managed_server.lock().await.start_wait.is_none()
-    {
-        return Ok(());
-    }
-    let native = run_native(native_service(app, state)?, |service| service.status()).await?;
+    let service = match native_service(app, state) {
+        Ok(service) => service,
+        // Hosts without a native service manager cannot have a service owned
+        // by this path; quitting remains available on those platforms.
+        Err(error) if error.code == BridgeErrorCode::Unsupported => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    let native = run_native(service, |service| service.status()).await?;
     if native.enabled {
         return Ok(());
     }
     cancel_start_wait(state).await;
-    if native.job_loaded || native.running || native.is_active_or_transitioning() {
+    if should_stop_managed_service_on_exit(&native) {
         stop_managed_server_locked(app, false, state).await?;
     }
     Ok(())
+}
+
+fn should_stop_managed_service_on_exit(
+    native: &gents_server::native_service::NativeServiceStatus,
+) -> bool {
+    !native.enabled && (native.job_loaded || native.running || native.is_active_or_transitioning())
 }
 
 fn ensure_app_not_quitting(state: &DesktopAppState) -> Result<(), BridgeError> {
@@ -3432,6 +3440,39 @@ async fn save_preference(
 mod tests {
     use super::*;
     use crate::state::ManagedServerState as ManagedServerRuntimeState;
+
+    #[test]
+    fn exit_stops_active_service_without_a_desktop_preference_but_respects_login_enablement() {
+        let active = gents_server::native_service::NativeServiceStatus {
+            installed: true,
+            running: true,
+            job_loaded: true,
+            enabled: false,
+            requires_approval: false,
+            background_item: gents_server::native_service::BackgroundItemStatus::Unavailable,
+            failed: false,
+            detail: None,
+        };
+        assert!(should_stop_managed_service_on_exit(&active));
+
+        let keep_running = gents_server::native_service::NativeServiceStatus {
+            enabled: true,
+            ..active.clone()
+        };
+        assert!(!should_stop_managed_service_on_exit(&keep_running));
+
+        let absent = gents_server::native_service::NativeServiceStatus {
+            installed: false,
+            running: false,
+            job_loaded: false,
+            enabled: false,
+            requires_approval: false,
+            background_item: gents_server::native_service::BackgroundItemStatus::Unavailable,
+            failed: false,
+            detail: None,
+        };
+        assert!(!should_stop_managed_service_on_exit(&absent));
+    }
 
     fn write_home(node_home: &Path, did: &str, ceiling: &str, root: Option<&str>) {
         let init = serde_json::json!({
