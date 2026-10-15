@@ -1159,6 +1159,30 @@
           "markdownDescription": "Denies the desktop_plugin_approval_decide command without any pre-configured scope."
         },
         {
+          "description": "Enables the desktop_plugin_approval_subscribe command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-plugin-approval-subscribe",
+          "markdownDescription": "Enables the desktop_plugin_approval_subscribe command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_plugin_approval_subscribe command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-plugin-approval-subscribe",
+          "markdownDescription": "Denies the desktop_plugin_approval_subscribe command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_plugin_approval_unsubscribe command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-plugin-approval-unsubscribe",
+          "markdownDescription": "Enables the desktop_plugin_approval_unsubscribe command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_plugin_approval_unsubscribe command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-plugin-approval-unsubscribe",
+          "markdownDescription": "Denies the desktop_plugin_approval_unsubscribe command without any pre-configured scope."
+        },
+        {
           "description": "Enables the desktop_plugin_approvals_pending command without any pre-configured scope.",
           "type": "string",
           "const": "allow-desktop-plugin-approvals-pending",
@@ -1681,10 +1705,10 @@
           "markdownDescription": "The folders plugins may read or write, and the plugin questions waiting for an answer\n#### This permission set includes:\n\n- `allow-desktop-allowed-dirs-list`\n- `allow-desktop-plugin-approvals-pending`"
         },
         {
-          "description": "Allow, change and remove plugin folders, and answer a plugin question\n#### This permission set includes:\n\n- `allow-desktop-allowed-dirs-add`\n- `allow-desktop-allowed-dirs-remove`\n- `allow-desktop-plugin-approval-decide`",
+          "description": "Allow, change and remove plugin folders, and answer a plugin question\n#### This permission set includes:\n\n- `allow-desktop-allowed-dirs-add`\n- `allow-desktop-allowed-dirs-remove`\n- `allow-desktop-plugin-approval-decide`\n- `allow-desktop-plugin-approval-subscribe`\n- `allow-desktop-plugin-approval-unsubscribe`",
           "type": "string",
           "const": "allowed-dirs-admin",
-          "markdownDescription": "Allow, change and remove plugin folders, and answer a plugin question\n#### This permission set includes:\n\n- `allow-desktop-allowed-dirs-add`\n- `allow-desktop-allowed-dirs-remove`\n- `allow-desktop-plugin-approval-decide`"
+          "markdownDescription": "Allow, change and remove plugin folders, and answer a plugin question\n#### This permission set includes:\n\n- `allow-desktop-allowed-dirs-add`\n- `allow-desktop-allowed-dirs-remove`\n- `allow-desktop-plugin-approval-decide`\n- `allow-desktop-plugin-approval-subscribe`\n- `allow-desktop-plugin-approval-unsubscribe`"
         },
         {
           "description": "Authenticated peer enrollment, removal/rename, and P2P repair\n#### This permission set includes:\n\n- `allow-desktop-peer-enroll-status`\n- `allow-desktop-peer-remove`\n- `allow-desktop-peer-rename`\n- `allow-desktop-p2p-repair`",

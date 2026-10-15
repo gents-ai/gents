@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-plugin-approval-unsubscribe"
+description = "Enables the desktop_plugin_approval_unsubscribe command without any pre-configured scope."
+commands.allow = ["desktop_plugin_approval_unsubscribe"]
+
+[[permission]]
+identifier = "deny-desktop-plugin-approval-unsubscribe"
+description = "Denies the desktop_plugin_approval_unsubscribe command without any pre-configured scope."
+commands.deny = ["desktop_plugin_approval_unsubscribe"]

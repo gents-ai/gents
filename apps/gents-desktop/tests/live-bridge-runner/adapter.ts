@@ -89,6 +89,8 @@ export function createBridgeHttpAdapter(
     listAllowedFolders: unsupported("listAllowedFolders"),
     addAllowedFolder: unsupported("addAllowedFolder"),
     removeAllowedFolder: unsupported("removeAllowedFolder"),
+    subscribePluginApprovals: unsupported("subscribePluginApprovals"),
+    unsubscribePluginApprovals: unsupported("unsubscribePluginApprovals"),
     listPendingPluginApprovals: unsupported("listPendingPluginApprovals"),
     decidePluginApproval: unsupported("decidePluginApproval"),
 

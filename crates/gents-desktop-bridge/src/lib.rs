@@ -9,6 +9,7 @@
 //!
 //! Invoke paths: `plugin:gents-desktop-bridge|<command>`.
 
+pub mod approvals_watch;
 pub mod cause_derivation;
 pub mod commands;
 pub mod config;

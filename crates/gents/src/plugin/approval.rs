@@ -24,7 +24,7 @@ use crate::pack::BindAccess;
 /// How long a call waits for an answer before it gives up and fails.
 pub const WAIT: Duration = Duration::from_secs(10 * 60);
 
-/// How long a listener's last poll still counts as someone listening.
+/// How long a listener's last mark still counts as someone listening.
 const LISTENER_FRESH: Duration = Duration::from_secs(15);
 
 /// How long a call waits for a first listener before it fails for want of one.
@@ -172,10 +172,28 @@ fn listener_file(home: &Path) -> PathBuf {
     dir(home).join(".listening")
 }
 
+/// Preparing the queue does not advertise a listener. Native watchers mark
+/// listening only after their filesystem subscription succeeds.
+pub fn prepare_listener(home: &Path) -> Result<PathBuf> {
+    let queue = dir(home);
+    std::fs::create_dir_all(&queue).context("creating the approval queue")?;
+    let mark = listener_file(home);
+    if !mark.try_exists()? {
+        let file = tempfile::NamedTempFile::new_in(&queue)?;
+        file.as_file().set_modified(std::time::UNIX_EPOCH)?;
+        match file.persist_noclobber(&mark) {
+            Ok(_) => {}
+            Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error).context("preparing the approval listener mark"),
+        }
+    }
+    Ok(queue)
+}
+
 /// Marks `home` as having someone who answers questions, by touching a file.
-fn mark_listening(home: &Path) -> Result<()> {
+pub fn mark_listening(home: &Path) -> Result<()> {
     let path = listener_file(home);
-    std::fs::create_dir_all(dir(home)).context("creating the approval queue")?;
+    prepare_listener(home)?;
     std::fs::OpenOptions::new()
         .create(true)
         .write(true)
@@ -279,6 +297,12 @@ pub async fn ask(home: &Path, request: &Request, wait: Duration) -> Result<bool>
 /// caller as listening for [`ask`].
 pub fn pending(home: &Path) -> Result<Vec<Request>> {
     mark_listening(home)?;
+    pending_requests(home)
+}
+
+/// Native event consumers advertise listener freshness only while their watch
+/// and answer surface are both available; reading the queue does not renew it.
+pub fn pending_requests(home: &Path) -> Result<Vec<Request>> {
     let entries = match std::fs::read_dir(dir(home)) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),

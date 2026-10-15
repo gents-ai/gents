@@ -122,3 +122,38 @@ async fn window_scope_reaches_the_core_and_survives_core_recreation() {
     state.bridge.lock().unwrap().core.take();
     core.shutdown().await.expect("shutdown recreated core");
 }
+
+#[test]
+fn destroying_or_navigating_a_window_retires_only_its_prompt_subscriptions() {
+    let (_temp, state) = state();
+    state.register_window("main");
+    state.register_window("second");
+    let active = {
+        let mut bridge = state.bridge.lock().unwrap();
+        bridge
+            .approvals_prompt_subscriptions
+            .subscribe("main", "main-prompt".into());
+        bridge
+            .approvals_prompt_subscriptions
+            .subscribe("second", "second-prompt".into());
+        bridge.approvals_prompt_subscriptions.changes()
+    };
+    state.window_event("main", &tauri::WindowEvent::Focused(false));
+    assert!(state
+        .bridge
+        .lock()
+        .unwrap()
+        .approvals_prompt_subscriptions
+        .contains_window("main"));
+    state.window_event("main", &tauri::WindowEvent::Destroyed);
+    assert!(*active.borrow());
+    assert!(!state
+        .bridge
+        .lock()
+        .unwrap()
+        .approvals_prompt_subscriptions
+        .contains_window("main"));
+    state.clear_plugin_approval_subscriptions("second");
+    assert!(!*active.borrow());
+    assert!(state.bridge.lock().unwrap().has_window("second"));
+}

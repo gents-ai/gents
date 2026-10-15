@@ -371,6 +371,7 @@ jobs:
             -p fixture-domain-plugin \
             -p gents-fixture-host
           cargo test --no-fail-fast -p gents-desktop-tauri --lib
+          cargo test -p gents-desktop-bridge --lib --features notify/macos_kqueue approvals_watch::tests::
 
       - name: Run full CLI test suite
         if: matrix.suite == 'cli' && github.event_name != 'pull_request'

@@ -21,6 +21,25 @@ pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
             );
             hold_desktop_process(app, &policy.desktop_paths)?;
             app.manage(DesktopAppState::new(policy));
+            let state = app.state::<DesktopAppState>();
+            if let Some(home) = state.policy.node_home.clone() {
+                let subscriptions = state
+                    .bridge
+                    .lock()
+                    .expect("desktop bridge lock poisoned")
+                    .approvals_prompt_subscriptions
+                    .changes();
+                let watch = crate::approvals_watch::spawn_plugin_approvals_watch(
+                    app.clone(),
+                    home,
+                    subscriptions,
+                );
+                state
+                    .bridge
+                    .lock()
+                    .expect("desktop bridge lock poisoned")
+                    .approvals_watch_task = Some(watch);
+            }
             // Off the setup path: reading the packaged runtime and asking the
             // service manager for its state are both blocking.
             let handle = app.clone();
@@ -46,6 +65,13 @@ pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
             Ok(())
         })
         .on_webview_ready(register_window)
+        .on_page_load(|webview, payload| {
+            if matches!(payload.event(), tauri::webview::PageLoadEvent::Started) {
+                webview
+                    .state::<DesktopAppState>()
+                    .clear_plugin_approval_subscriptions(webview.window().label());
+            }
+        })
         .on_event({
             let exit_owner = Arc::new(ExitRequestOwner::default());
             move |app, event| match event {
@@ -104,6 +130,8 @@ pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
             tauri_commands::allowed_dirs::desktop_allowed_dirs_remove,
             tauri_commands::allowed_dirs::desktop_plugin_approvals_pending,
             tauri_commands::allowed_dirs::desktop_plugin_approval_decide,
+            tauri_commands::allowed_dirs::desktop_plugin_approval_subscribe,
+            tauri_commands::allowed_dirs::desktop_plugin_approval_unsubscribe,
             tauri_commands::lifecycle::desktop_bootstrap_summary,
             tauri_commands::e2e::desktop_native_e2e_config,
             tauri_commands::e2e::desktop_native_e2e_status,

@@ -1,0 +1,306 @@
+use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use gents::home::PLUGIN_APPROVALS_DIR_NAME;
+use gents::pack::BindAccess;
+use gents::plugin::approval::{self, Answer, Request};
+use notify::event::{AccessKind, CreateKind, Flag, ModifyKind, RenameMode};
+use notify::{Event, EventKind};
+use tokio::sync::{mpsc, watch};
+
+use super::{changes_queue, watch_queue, PendingQueue, PromptSubscriptions, QueueWatch};
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64
+}
+
+fn question(id: &str) -> Request {
+    Request {
+        id: id.to_owned(),
+        plugin: "team/ocr".to_owned(),
+        path: "/data/x.pdf".to_owned(),
+        folder: PathBuf::from("/data"),
+        is_dir: false,
+        access: BindAccess::Read,
+        session_id: None,
+        created_at_ms: now_ms(),
+    }
+}
+
+fn file_question(home: &Path, id: &str) {
+    use std::io::Write;
+    let queue = home.join(PLUGIN_APPROVALS_DIR_NAME);
+    std::fs::create_dir_all(&queue).unwrap();
+    let mut file = tempfile::NamedTempFile::new_in(&queue).unwrap();
+    file.write_all(&serde_json::to_vec(&question(id)).unwrap())
+        .unwrap();
+    file.persist(queue.join(format!("{id}.json"))).unwrap();
+}
+
+async fn signalled<T>(receive: &mut mpsc::Receiver<T>) -> T {
+    tokio::time::timeout(Duration::from_secs(5), receive.recv())
+        .await
+        .expect("native queue change was not delivered")
+        .expect("watch ended")
+}
+
+#[test]
+fn pending_changes_include_questions_and_answers() {
+    let home = tempfile::tempdir().unwrap();
+    let mut pending = PendingQueue::default();
+    assert!(!pending.refresh(home.path()).unwrap());
+    assert!(pending.expires_at.is_none());
+    file_question(home.path(), "q1");
+    assert!(pending.refresh(home.path()).unwrap());
+    assert!(pending.expires_at.is_some());
+    assert!(!pending.refresh(home.path()).unwrap());
+    approval::decide(home.path(), "q1", Answer::Once).unwrap();
+    assert!(pending.refresh(home.path()).unwrap());
+    assert!(pending.expires_at.is_none());
+}
+
+#[test]
+fn listener_marks_and_read_notifications_are_not_queue_changes() {
+    let queue = Path::new("/home/plugin-approvals");
+    let create = |name| Event::new(EventKind::Create(CreateKind::File)).add_path(queue.join(name));
+    assert!(!changes_queue(&create(".listening"), queue));
+    assert!(changes_queue(&create("temporary"), queue));
+    assert!(changes_queue(&create("q1.json"), queue));
+    assert!(changes_queue(&create("q1.decision"), queue));
+    assert!(!changes_queue(
+        &Event::new(EventKind::Access(AccessKind::Read)).add_path(queue.join("q1.json")),
+        queue
+    ));
+    assert!(changes_queue(
+        &Event::new(EventKind::Modify(ModifyKind::Name(RenameMode::Both)))
+            .add_path(queue.join("temporary"))
+            .add_path(queue.join("q1.json")),
+        queue
+    ));
+    assert!(changes_queue(
+        &Event::new(EventKind::Any).set_flag(Flag::Rescan),
+        queue
+    ));
+}
+
+#[tokio::test]
+async fn filesystem_notifications_cover_atomic_questions_and_decisions() {
+    let home = tempfile::tempdir().unwrap();
+    let (send, mut receive) = mpsc::channel(1);
+    let _watch = QueueWatch::start(home.path(), send).unwrap();
+    let mut pending = PendingQueue::default();
+    pending.refresh(home.path()).unwrap();
+    file_question(home.path(), "q1");
+    loop {
+        signalled(&mut receive).await;
+        if pending.refresh(home.path()).unwrap() {
+            break;
+        }
+    }
+    while receive.try_recv().is_ok() {}
+    approval::decide(home.path(), "q1", Answer::Once).unwrap();
+    loop {
+        signalled(&mut receive).await;
+        if pending.refresh(home.path()).unwrap() {
+            break;
+        }
+    }
+    assert!(pending.seen.is_empty());
+}
+
+#[tokio::test]
+async fn a_partial_question_is_announced_when_its_write_finishes() {
+    let home = tempfile::tempdir().unwrap();
+    let (send, mut receive) = mpsc::channel(1);
+    let _watch = QueueWatch::start(home.path(), send).unwrap();
+    let mut pending = PendingQueue::default();
+    let path = home.path().join(PLUGIN_APPROVALS_DIR_NAME).join("q1.json");
+    std::fs::write(&path, b"{").unwrap();
+    signalled(&mut receive).await;
+    assert!(!pending.refresh(home.path()).unwrap());
+    std::fs::write(&path, serde_json::to_vec(&question("q1")).unwrap()).unwrap();
+    loop {
+        signalled(&mut receive).await;
+        if pending.refresh(home.path()).unwrap() {
+            break;
+        }
+    }
+    assert_eq!(pending.seen.into_iter().collect::<Vec<_>>(), ["q1"]);
+}
+
+#[tokio::test]
+async fn native_watch_recovers_after_the_queue_is_replaced() {
+    let home = tempfile::tempdir().unwrap();
+    let (send, mut receive) = mpsc::channel(8);
+    let (_active, subscriptions) = watch::channel(true);
+    let task = tokio::spawn(watch_queue(
+        home.path().to_owned(),
+        Duration::from_millis(100),
+        subscriptions,
+        move |changed| {
+            if changed {
+                let _ = send.try_send(());
+            }
+        },
+    ));
+    file_question(home.path(), "q1");
+    signalled(&mut receive).await;
+    std::fs::remove_dir_all(home.path().join(PLUGIN_APPROVALS_DIR_NAME)).unwrap();
+    signalled(&mut receive).await;
+    assert!(approval::pending_requests(home.path()).unwrap().is_empty());
+    assert!(
+        home.path()
+            .join(PLUGIN_APPROVALS_DIR_NAME)
+            .join(".listening")
+            .metadata()
+            .unwrap()
+            .modified()
+            .unwrap()
+            > UNIX_EPOCH,
+        "reattaching a live prompt must renew the replacement queue immediately"
+    );
+    file_question(home.path(), "q2");
+    signalled(&mut receive).await;
+    let pending = approval::pending_requests(home.path()).unwrap();
+    assert_eq!(
+        pending
+            .iter()
+            .map(|request| request.id.as_str())
+            .collect::<Vec<_>>(),
+        ["q2"]
+    );
+    task.abort();
+}
+
+#[tokio::test]
+async fn native_heartbeat_keeps_listening_without_queue_reads_or_webview_commands() {
+    let home = tempfile::tempdir().unwrap();
+    let (send, mut receive) = mpsc::channel(8);
+    let (_active, subscriptions) = watch::channel(true);
+    let task = tokio::spawn(watch_queue(
+        home.path().to_owned(),
+        Duration::from_millis(100),
+        subscriptions,
+        move |changed| {
+            let _ = send.try_send(changed);
+        },
+    ));
+    let mark = home
+        .path()
+        .join(PLUGIN_APPROVALS_DIR_NAME)
+        .join(".listening");
+    assert!(!signalled(&mut receive).await, "the startup queue is empty");
+    let stale = SystemTime::now() - Duration::from_secs(60);
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&mark)
+        .unwrap()
+        .set_modified(stale)
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while mark.metadata().unwrap().modified().unwrap() <= stale {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the Rust heartbeat did not renew the listener mark");
+    assert!(
+        receive.try_recv().is_err(),
+        "heartbeats must not scan the queue"
+    );
+    task.abort();
+}
+
+#[test]
+fn prompt_tokens_keep_other_mounts_and_windows_subscribed() {
+    let mut subscriptions = PromptSubscriptions::default();
+    let active = subscriptions.changes();
+    assert!(!*active.borrow());
+    subscriptions.subscribe("main", "old".into());
+    subscriptions.subscribe("main", "new".into());
+    subscriptions.unsubscribe("main", "old");
+    subscriptions.unsubscribe("second", "new");
+    assert!(subscriptions.contains_window("main"));
+    assert!(*active.borrow());
+    subscriptions.subscribe("second", "second".into());
+    subscriptions.remove_window("main");
+    assert!(*active.borrow());
+    subscriptions.unsubscribe("second", "second");
+    assert!(!*active.borrow());
+}
+
+#[tokio::test]
+async fn native_watch_advertises_only_while_a_prompt_is_subscribed() {
+    let home = tempfile::tempdir().unwrap();
+    let (send, mut receive) = mpsc::channel(8);
+    let (active, subscriptions) = watch::channel(false);
+    let task = tokio::spawn(watch_queue(
+        home.path().to_owned(),
+        Duration::from_millis(20),
+        subscriptions,
+        move |changed| {
+            if changed {
+                let _ = send.try_send(changed);
+            }
+        },
+    ));
+    let mark = home
+        .path()
+        .join(PLUGIN_APPROVALS_DIR_NAME)
+        .join(".listening");
+    file_question(home.path(), "q1");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(
+        !mark.exists(),
+        "startup without a prompt must not advertise"
+    );
+    assert!(receive.try_recv().is_err());
+
+    active.send_replace(true);
+    assert!(signalled(&mut receive).await);
+    assert!(mark.metadata().is_ok());
+    active.send_replace(false);
+    let stale = SystemTime::now() - Duration::from_secs(60);
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&mark)
+        .unwrap()
+        .set_modified(stale)
+        .unwrap();
+    file_question(home.path(), "q2");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(mark.metadata().unwrap().modified().unwrap(), stale);
+    assert!(receive.try_recv().is_err());
+
+    approval::mark_listening(home.path()).unwrap();
+    let cli_mark = mark.metadata().unwrap().modified().unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        mark.metadata().unwrap().modified().unwrap(),
+        cli_mark,
+        "unsubscribing must preserve a CLI listener's mark"
+    );
+    task.abort();
+}
+
+#[tokio::test]
+async fn an_unavailable_queue_does_not_advertise_a_prompt_listener() {
+    let home = tempfile::tempdir().unwrap();
+    let queue = home.path().join(PLUGIN_APPROVALS_DIR_NAME);
+    std::fs::write(&queue, b"not a directory").unwrap();
+    let (_active, subscriptions) = watch::channel(true);
+    let task = tokio::spawn(watch_queue(
+        home.path().to_owned(),
+        Duration::from_millis(20),
+        subscriptions,
+        |_| panic!("an unavailable queue must not be announced"),
+    ));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(!queue.join(".listening").exists());
+    assert!(!task.is_finished(), "the native watcher must stay alive");
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+}

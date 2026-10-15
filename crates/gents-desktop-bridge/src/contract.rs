@@ -30,6 +30,10 @@ pub const GROK_LOGIN_URL_EVENT: &str = "desktop://grok-login-url";
 /// One-shot auth URL emission during the guided Claude login flow.
 pub const CLAUDE_LOGIN_URL_EVENT: &str = "desktop://claude-login-url";
 
+/// The plugin approval queue's pending set changed; the prompt re-reads it
+/// through the pending command.
+pub const PLUGIN_APPROVALS_CHANGED_EVENT: &str = "desktop://plugin-approvals-changed";
+
 /// Coarse ping reasons on `desktop://client-updated`.
 pub const EVENT_REASONS: &[&str] = &["store", "health", "lifecycle", "config"];
 
@@ -79,6 +83,8 @@ pub fn command_inventory() -> Vec<CommandContract> {
         ("desktop_allowed_dirs_add", "allowed-dirs-admin"),
         ("desktop_allowed_dirs_remove", "allowed-dirs-admin"),
         ("desktop_plugin_approval_decide", "allowed-dirs-admin"),
+        ("desktop_plugin_approval_subscribe", "allowed-dirs-admin"),
+        ("desktop_plugin_approval_unsubscribe", "allowed-dirs-admin"),
         // session-read
         ("desktop_session_snapshot", "session-read"),
         ("desktop_session_live_delta", "session-read"),
@@ -482,6 +488,8 @@ mod tests {
             ("desktop_allowed_dirs_add", "mutate"),
             ("desktop_allowed_dirs_remove", "mutate"),
             ("desktop_plugin_approval_decide", "mutate"),
+            ("desktop_plugin_approval_subscribe", "mutate"),
+            ("desktop_plugin_approval_unsubscribe", "mutate"),
             ("desktop_session_snapshot", "read"),
             ("desktop_session_live_delta", "read"),
             ("desktop_session_hydration_retry", "mutate"),
@@ -623,6 +631,7 @@ mod tests {
             MANAGED_SERVER_TRAY_START_EVENT,
             MANAGED_SERVER_TRAY_STOP_EVENT,
             MANAGED_SERVER_TRAY_RESTART_EVENT,
+            PLUGIN_APPROVALS_CHANGED_EVENT,
         ] {
             assert!(
                 event.starts_with("desktop://"),

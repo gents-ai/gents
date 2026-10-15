@@ -6,7 +6,7 @@
 use gents::pack::BindAccess;
 use gents::plugin::{allowed, approval};
 use serde_json::{json, Value};
-use tauri::State;
+use tauri::{Runtime, State, WebviewWindow};
 
 use crate::error::{BridgeError, BridgeErrorCode};
 use crate::state::DesktopAppState;
@@ -57,10 +57,21 @@ pub fn desktop_allowed_dirs_remove(
 
 /// The questions running plugin calls are waiting on, oldest first.
 #[tauri::command]
-pub fn desktop_plugin_approvals_pending(
+pub fn desktop_plugin_approvals_pending<R: Runtime>(
+    window: WebviewWindow<R>,
     state: State<'_, DesktopAppState>,
 ) -> Result<Value, BridgeError> {
-    let pending = approval::pending(&home(&state)?).map_err(failed)?;
+    let subscribed = state
+        .bridge
+        .lock()
+        .expect("desktop bridge lock poisoned")
+        .approvals_prompt_subscriptions
+        .contains_window(window.label());
+    let pending = if subscribed {
+        approval::pending_requests(&home(&state)?).map_err(failed)?
+    } else {
+        Vec::new()
+    };
     Ok(json!({
         "requests": pending
             .iter()
@@ -97,3 +108,38 @@ pub fn desktop_plugin_approval_decide(
     };
     approval::decide(&home(&state)?, &id, answer).map_err(failed)
 }
+
+#[tauri::command]
+pub fn desktop_plugin_approval_subscribe<R: Runtime>(
+    window: WebviewWindow<R>,
+    token: String,
+    state: State<'_, DesktopAppState>,
+) -> Result<(), BridgeError> {
+    home(&state)?;
+    let mut bridge = state.bridge.lock().expect("desktop bridge lock poisoned");
+    if bridge.has_window(window.label()) {
+        bridge
+            .approvals_prompt_subscriptions
+            .subscribe(window.label(), token);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn desktop_plugin_approval_unsubscribe<R: Runtime>(
+    window: WebviewWindow<R>,
+    token: String,
+    state: State<'_, DesktopAppState>,
+) -> Result<(), BridgeError> {
+    state
+        .bridge
+        .lock()
+        .expect("desktop bridge lock poisoned")
+        .approvals_prompt_subscriptions
+        .unsubscribe(window.label(), &token);
+    Ok(())
+}
+
+#[cfg(test)]
+#[path = "allowed_dirs_tests.rs"]
+mod tests;

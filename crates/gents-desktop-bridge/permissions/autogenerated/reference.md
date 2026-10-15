@@ -1896,6 +1896,58 @@ Denies the desktop_plugin_approval_decide command without any pre-configured sco
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-plugin-approval-subscribe`
+
+</td>
+<td>
+
+Enables the desktop_plugin_approval_subscribe command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-plugin-approval-subscribe`
+
+</td>
+<td>
+
+Denies the desktop_plugin_approval_subscribe command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-plugin-approval-unsubscribe`
+
+</td>
+<td>
+
+Enables the desktop_plugin_approval_unsubscribe command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-plugin-approval-unsubscribe`
+
+</td>
+<td>
+
+Denies the desktop_plugin_approval_unsubscribe command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-plugin-approvals-pending`
 
 </td>

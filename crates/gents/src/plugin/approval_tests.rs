@@ -27,6 +27,61 @@ fn the_prompt_names_the_plugin_the_exact_path_and_the_access() {
     assert!(request.prompt().contains("to read and write"));
 }
 
+#[test]
+fn preparing_a_watch_does_not_advertise_a_listener_or_stale_an_existing_one() {
+    let home = tempfile::tempdir().unwrap();
+    prepare_listener(home.path()).unwrap();
+    assert!(!listener_fresh(home.path()));
+    mark_listening(home.path()).unwrap();
+    let before = std::fs::metadata(listener_file(home.path()))
+        .unwrap()
+        .modified()
+        .unwrap();
+    prepare_listener(home.path()).unwrap();
+    assert!(listener_fresh(home.path()));
+    assert_eq!(
+        std::fs::metadata(listener_file(home.path()))
+            .unwrap()
+            .modified()
+            .unwrap(),
+        before
+    );
+}
+
+#[test]
+fn queue_reads_do_not_advertise_or_refresh_a_listener() {
+    let home = tempfile::tempdir().unwrap();
+    assert!(pending_requests(home.path()).unwrap().is_empty());
+    assert!(!dir(home.path()).exists());
+
+    let request = request(home.path());
+    write_atomic(
+        &request_file(home.path(), &request.id),
+        &serde_json::to_vec(&request).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(pending_requests(home.path()).unwrap(), [request.clone()]);
+    assert!(!listener_file(home.path()).exists());
+
+    assert_eq!(pending(home.path()).unwrap(), [request.clone()]);
+    assert!(listener_fresh(home.path()));
+    let mark = listener_file(home.path());
+    let fresh = mark.metadata().unwrap().modified().unwrap();
+    pending_requests(home.path()).unwrap();
+    assert_eq!(mark.metadata().unwrap().modified().unwrap(), fresh);
+
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&mark)
+        .unwrap()
+        .set_modified(std::time::UNIX_EPOCH)
+        .unwrap();
+    assert_eq!(pending_requests(home.path()).unwrap(), [request.clone()]);
+    assert!(!listener_fresh(home.path()));
+    assert_eq!(pending(home.path()).unwrap(), [request]);
+    assert!(listener_fresh(home.path()));
+}
+
 #[tokio::test]
 async fn an_allow_reaches_the_waiting_call_and_clears_the_question() {
     let home = tempfile::tempdir().unwrap();
