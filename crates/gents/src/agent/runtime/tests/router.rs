@@ -251,7 +251,11 @@ async fn snapshot_change_reroutes_request_blocked_on_old_executor_queue() {
     let (status_owner, status) =
         RuntimeStatusHandle::start_with_unbounded_test_clock(node.clone(), node_did);
     status.initialize_startup("general").await.unwrap();
-    status.readiness().register_slot("general", 1).await.unwrap();
+    status
+        .readiness()
+        .register_slot("general", 1)
+        .await
+        .unwrap();
     status
         .readiness()
         .publish_snapshot(initial_snapshot.as_ref())

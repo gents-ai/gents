@@ -414,7 +414,7 @@ where
                 }
             }
         };
-        pending_request = Some(request);
+        *pending_request = Some(request);
     }
 }
 
