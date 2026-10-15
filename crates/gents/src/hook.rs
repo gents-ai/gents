@@ -1307,7 +1307,7 @@ impl gents_loop::session_hook::SessionHook for DefraSessionHook {
                     "plugin child did not durably terminalize"
                 );
                 crate::tool_call_lifecycle::query::load_tool_call_result(
-                    &crate::config_client::ConfigAccess::Local(self.node.clone()),
+                    &crate::config_client::ConfigAccess::local(self.node.clone()),
                     current.doc_id().expect("loaded physical child"),
                     current.node_did(),
                     current.session_id(),

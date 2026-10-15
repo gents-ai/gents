@@ -37,6 +37,10 @@ function snapshot(configured: boolean, running: boolean): DesktopClientSnapshot 
   return {
     bootstrap: {
       ...bootstrap,
+      initConfigStatus: configured ? "configured" : "absent",
+      ...(configured
+        ? {}
+        : { initNodeName: null, initNodeDid: null, nodeHomeExists: false }),
       savedPeers: configured ? [savedPeer] : [],
     },
     client: running
@@ -62,6 +66,7 @@ function snapshot(configured: boolean, running: boolean): DesktopClientSnapshot 
           peerIssueCount: 0,
           rowCount: 42,
           approxSerializedBytes: 2048,
+          operatorConfigAuthoritativeNodeDids: configured ? [deployment.nodeDid] : [],
           deployments: [deployment],
         }
       : null,
@@ -104,6 +109,19 @@ function bridge(
 }
 
 describe("desktop startup screen", () => {
+  it("explains an unreadable saved node config and offers a retry", () => {
+    const app = testApp();
+    renderIn(app, <StartupScreen configurationPending initConfigStatus="unreadable" />);
+
+    expect(screen.getByTestId("startup-configuration-pending")).toHaveTextContent(
+      "Unable to read saved node settings",
+    );
+    expect(screen.getByTestId("startup-configuration-pending")).toHaveTextContent(
+      "The saved node settings could not be read. Try again to reload them.",
+    );
+    expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
+  });
+
   it("names local-agent observation instead of misreporting a configuration read", async () => {
     const status = deferred<ManagedServerStatus>();
     const base = bridge(
@@ -277,6 +295,10 @@ describe("desktop startup screen", () => {
     const localOnly: DesktopClientSnapshot = {
       bootstrap: {
         ...bootstrap,
+        initConfigStatus: "absent",
+        initNodeName: null,
+        initNodeDid: null,
+        nodeHomeExists: false,
         clientStateExists: false,
         savedPeers: [{ ...savedPeer, source: "local-standard" }],
       },
@@ -330,6 +352,10 @@ describe("desktop startup screen", () => {
     const localOnly: DesktopClientSnapshot = {
       bootstrap: {
         ...bootstrap,
+        initConfigStatus: "absent",
+        initNodeName: null,
+        initNodeDid: null,
+        nodeHomeExists: false,
         clientStateExists: false,
         savedPeers: [{ ...savedPeer, source: "local-standard" }],
       },

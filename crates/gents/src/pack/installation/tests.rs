@@ -7,7 +7,7 @@ const OWNER: &str = "did:key:zPackInstallOwner";
 async fn access() -> ConfigAccess {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    ConfigAccess::Local(node)
+    ConfigAccess::local(node)
 }
 
 fn config(tools: &[(&str, &str)]) -> PackConfig {
@@ -54,7 +54,7 @@ async fn edit_tools(access: &ConfigAccess, id: &str, name: &str) {
     }])
     .unwrap();
     access
-        .transact("test.edit", |txn| {
+        .transact_write("test.edit", |txn| {
             let edit = &edit;
             Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, edit).await })
         })
@@ -353,7 +353,7 @@ async fn corrupt_installation_field(
     let variables = json!({ "input": Value::Object(input) });
     let variables = &variables;
     let response = access
-        .transact("test.corrupt_installation_field", |txn| {
+        .transact_write("test.corrupt_installation_field", |txn| {
             Box::pin(async move {
                 txn.execute_with_variables(
                     &format!(
@@ -468,7 +468,7 @@ async fn read_installed_pack_fails_loudly_on_more_than_one_record() {
         "",
     );
     node.add_schema(&schema).await.unwrap();
-    let access = ConfigAccess::Local(node);
+    let access = ConfigAccess::local(node);
 
     for digest_seed in ["1", "2"] {
         let input = json!({
@@ -521,7 +521,7 @@ async fn dependency_fixture() -> (
             ("verifier".into(), "grok:inference".into()),
         ]),
     };
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     (node, access, options)
 }
 
@@ -769,7 +769,7 @@ async fn installing_a_pack_keeps_the_users_default_behavior() {
     ])
     .unwrap();
     access
-        .transact("test.seed", |txn| {
+        .transact_write("test.seed", |txn| {
             let seed = &seed;
             Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, seed).await })
         })

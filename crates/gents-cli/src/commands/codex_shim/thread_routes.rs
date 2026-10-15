@@ -73,13 +73,10 @@ pub(super) async fn fork_thread_response(
             .map_err(internal_error)?
     };
     let thread = codex_thread_json_with_turns(&record, turns);
-    let bound_model_id = load_bound_model_selection_id_for_state(
-        state.node.as_ref(),
-        &state.node_did,
-        &state.agent_id,
-    )
-    .await
-    .map_err(internal_error)?;
+    let bound_model_id =
+        load_bound_model_selection_id_for_state(&state.node, &state.node_did, &state.agent_id)
+            .await
+            .map_err(internal_error)?;
     let response = thread_response_json(&record, thread, &bound_model_id);
     Ok((record, response))
 }

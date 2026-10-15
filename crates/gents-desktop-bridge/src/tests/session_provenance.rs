@@ -1,7 +1,9 @@
 use gents::session_origin::SessionScope;
 
 use crate::provenance::session_provenance;
-use crate::tests::support::{seed_provenance_fixture, OPERATOR};
+use crate::tests::support::{
+    refresh_request_and_wait_for_projection, seed_provenance_fixture, OPERATOR,
+};
 use crate::types::LinkedSessionView;
 
 fn scope(session_id: &str) -> SessionScope {
@@ -101,9 +103,7 @@ async fn maps_the_lineage_owner_and_each_call_to_its_caused_request() {
 async fn a_started_session_names_its_starter_and_the_sender_of_each_turn() {
     let (core, _tmp, _) = seed_provenance_fixture().await;
     for request_id in ["req_parent", "req_child", "req_child_2"] {
-        core.refresh_local_request(OPERATOR, request_id)
-            .await
-            .expect("refresh request");
+        refresh_request_and_wait_for_projection(&core, OPERATOR, request_id).await;
     }
     let view = session_provenance(&core, scope("sess_child"))
         .await
@@ -152,9 +152,7 @@ async fn a_root_session_has_no_provenance() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_replicated_session_message_keeps_the_call_that_sent_it() {
     let (core, _tmp, parent) = seed_provenance_fixture().await;
-    core.refresh_local_request(OPERATOR, "req_child_2")
-        .await
-        .expect("refresh request");
+    refresh_request_and_wait_for_projection(&core, OPERATOR, "req_child_2").await;
     let store = core.store().snapshot();
     let row = store
         .request_row("req_child_2")

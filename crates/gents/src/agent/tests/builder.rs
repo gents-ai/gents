@@ -33,7 +33,7 @@ async fn builder_includes_custom_tools_in_resolved_tool_surface() {
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("builder-custom-tools"));
     insert_backend(
-        node.as_ref(),
+        &node,
         identity.did(),
         "builder-backend",
         "http://127.0.0.1:8777/v1",
@@ -63,7 +63,7 @@ async fn builder_includes_custom_tools_in_resolved_tool_surface() {
 
     let tool_surface = agent.agents()[0]
         .tools
-        .resolve(node.as_ref(), identity.did(), &Default::default())
+        .resolve(&node, identity.did(), &Default::default())
         .await
         .unwrap();
     assert!(tool_surface
@@ -101,7 +101,7 @@ async fn builder_rejects_backend_vetoed_by_measured_health() {
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("builder-measured-unhealthy"));
     insert_backend(
-        node.as_ref(),
+        &node,
         identity.did(),
         "builder-vetoed-backend",
         "http://127.0.0.1:8778/v1",

@@ -5,6 +5,7 @@ use gents_protocol::output::{
     OutputSegment, OutputSource, OutputWriter, SegmentRun, StreamDeclaration, StreamPayload,
 };
 use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
+use std::sync::Arc;
 
 fn rows() -> ClientStoreRows {
     ClientStoreRows {
@@ -74,6 +75,7 @@ fn delta(store: &ClientStore, cursor: &str) -> SessionLiveDeltaView {
         StoreProjectionRevision {
             store_version: 900,
             provenance_version: 1,
+            request_event_version: 1,
         },
         "session",
         Some("node"),
@@ -142,6 +144,7 @@ fn a_lagging_replica_request_row_binds_the_same_cursor_as_the_full_snapshot() {
         StoreProjectionRevision {
             store_version: 900,
             provenance_version: 1,
+            request_event_version: 1,
         },
         "session",
         Some("node"),
@@ -224,6 +227,7 @@ fn snapshot_and_delta_preserve_the_same_markdown_bytes() {
         StoreProjectionRevision {
             store_version: 1,
             provenance_version: 1,
+            request_event_version: 1,
         },
         "session",
         Some("node"),
@@ -364,5 +368,5 @@ async fn operator_delta_uses_fresh_rows_with_a_payload_free_observer_and_snapsho
     .unwrap();
     assert_eq!(terminal.outcome, "snapshotRequired");
     assert!(core.store().snapshot().output_segments.is_empty());
-    core.shutdown().await.unwrap();
+    Arc::new(core).shutdown().await.unwrap();
 }

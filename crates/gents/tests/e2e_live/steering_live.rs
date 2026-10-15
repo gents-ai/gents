@@ -80,7 +80,7 @@ async fn enqueue(db: &TestDb, id: &str, content: &str) -> Result<String> {
         AgentRequestAdmissionRecord::local_self(did),
     );
     create.input = gents::lifecycle::prepare_user_message_input(
-        &ConfigAccess::Local(db.node.clone()),
+        &ConfigAccess::local(db.node.clone()),
         did,
         SESSION,
         create.input,
@@ -88,7 +88,7 @@ async fn enqueue(db: &TestDb, id: &str, content: &str) -> Result<String> {
     )
     .await?;
     gents::sign_agent_request_create(db.node_identity.as_ref(), &mut create).await?;
-    let result = ConfigAccess::Local(db.node.clone())
+    let result = ConfigAccess::local(db.node.clone())
         .write(
             "test.live_steering.enqueue",
             &create.graphql_mutation().map_err(anyhow::Error::msg)?,
@@ -107,7 +107,7 @@ async fn live_steering_edits_reorders_and_removes_before_same_request_continues(
     let target = live_target();
     let db = test_db("live-steering").await;
     let did = db.node_identity.did();
-    let access = ConfigAccess::Local(db.node.clone());
+    let access = ConfigAccess::local(db.node.clone());
     bind_agent_backend(
         &db.node,
         did,
@@ -123,7 +123,7 @@ async fn live_steering_edits_reorders_and_removes_before_same_request_continues(
         add: backend.clone(),
         update: backend,
     }])?;
-    ConfigAccess::transact_local(&db.node, None, "test.live_steering.backend", |txn| {
+    ConfigAccess::transact_local_write(&db.node, None, "test.live_steering.backend", |txn| {
         let plan = &plan;
         Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
     })

@@ -701,6 +701,11 @@ def caseCoverage : List CoverageEntry :=
       "conformance::session_hydration::generated_session_hydration_start_cases_match_receiver_start")
       "session-hydration" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "session_hydration_admission_cases"
+      "SessionHydrationAdmissionCases"
+      "conformance::session_hydration::generated_session_hydration_admission_cases_match_receiver_owner")
+      "session-hydration" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "enrollment_cases"
       "EnrollmentCases"
       "conformance::enrollment::generated_enrollment_cases_match_production_transition_core")
@@ -726,6 +731,11 @@ def caseCoverage : List CoverageEntry :=
       "EnrollmentDurableProjectionCases"
       "conformance::enrollment::generated_enrollment_durable_cases_drive_current_projection")
       "authenticated-enrollment" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "enrollment_pending_request_cases"
+      "EnrollmentPendingRequests"
+      "client::core::enrollment::tests::generated_pending_request_satisfaction_matches_lean")
+      "authenticated-enrollment" [Surface.operatorUi]
   , tagged (consumerCoverage
       "pending_user_turn_cases"
       "PendingUserTurnCases"
@@ -1163,6 +1173,11 @@ def caseCoverage : List CoverageEntry :=
       "session_input_edit_cases"
       "SessionInputEditRemoteCases"
       "e2e_runtime::session_input_edit::generated_remote_edits_replicate_signed_effect_and_receipt")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "session_input_edit_client_observation_cases"
+      "SessionInputEditClientObservationCases"
+      "client::core::writes::accepted_edit_projection_tests::generated_accepted_receipt_survives_projection_refresh_failure")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "queue_management_cases"
@@ -1815,7 +1830,7 @@ def caseCoverage : List CoverageEntry :=
       "prompt_assembly_cases"
       "PromptAssemblyClaudeReplayCases"
       "agent::loop_stream::tests::claude_messages_redacted_and_signed_tool_round_trip_through_owned_loop"
-      "Drives only the ordered-signed-redacted-tool case through the owned loop: its replay blocks become turn-1 SSE (thinking and signature as deltas, redacted data at block start) and the turn-2 capture must equal the modeled replay. The persisted canonical grouping of streamed reasoning is not modeled, so it is not compared to the case's blocks. Other replay cases and the thinking-stream family remain unbound through the owned loop.")
+      "Drives the streamed-signed-redacted-tool case through the owned loop: its canonical blocks become turn-1 SSE, the persisted message must retain their exact grouping and payloads, and the turn-2 capture must equal the modeled replay. Other replay cases and the thinking-stream family remain unbound through the owned loop.")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "prompt_assembly_cases"

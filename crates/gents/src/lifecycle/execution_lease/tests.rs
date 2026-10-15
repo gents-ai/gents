@@ -1,5 +1,46 @@
 use super::*;
 use std::{sync::Arc, time::Duration};
+use tracing::field::{Field, Visit};
+use tracing::instrument::WithSubscriber;
+use tracing_subscriber::layer::{Context as LayerContext, SubscriberExt};
+use tracing_subscriber::{Layer, Registry};
+
+struct PendingNativeObserver(Arc<tokio::sync::Notify>);
+
+#[derive(Default)]
+struct PendingNativeOutcome(bool);
+
+impl Visit for PendingNativeOutcome {
+    fn record_str(&mut self, field: &Field, value: &str) {
+        if field.name() == "outcome" && value == "pending_native" {
+            self.0 = true;
+        }
+    }
+
+    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+        if field.name() == "outcome" && format!("{value:?}").trim_matches('"') == "pending_native" {
+            self.0 = true;
+        }
+    }
+}
+
+impl<S> Layer<S> for PendingNativeObserver
+where
+    S: tracing::Subscriber,
+{
+    fn on_event(&self, event: &tracing::Event<'_>, _context: LayerContext<'_, S>) {
+        if event.metadata().target()
+            != crate::config_client::write_telemetry::WRITE_ATTEMPT_EVENT_TARGET
+        {
+            return;
+        }
+        let mut outcome = PendingNativeOutcome::default();
+        event.record(&mut outcome);
+        if outcome.0 {
+            self.0.notify_one();
+        }
+    }
+}
 
 struct LeaseTestIdentity;
 
@@ -488,7 +529,7 @@ async fn expire_observed_execution(node: &EmbeddedNode, doc_id: &str) -> AgentRe
 }
 
 async fn recover_observed_execution(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     row: &AgentRequestRow,
 ) -> Result<TerminalizeResult> {
     // The canonical recovery coordinator re-observes its fence inside the
@@ -1526,4 +1567,204 @@ async fn natural_finish_retries_changed_pending_snapshot_and_selects_exact_saved
         request_row(&node, &pending_doc_id).await.lifecycle_state,
         Some(RequestLifecycleState::Pending)
     );
+}
+
+#[derive(serde::Deserialize)]
+struct NativeCompletionRenewalCase {
+    name: String,
+    periodic_renewal: bool,
+    initial: NativeCompletionRenewalInitial,
+    events: Vec<String>,
+    observations: Vec<NativeCompletionRenewalObservation>,
+}
+
+#[derive(serde::Deserialize)]
+struct NativeCompletionRenewalInitial {
+    cleanup_required: bool,
+    native_outstanding: usize,
+    gate_held: bool,
+}
+
+#[derive(serde::Deserialize)]
+struct NativeCompletionRenewalObservation {
+    renewal_attempt_returned: bool,
+    next_renewal_started: bool,
+    gate_held: bool,
+}
+
+#[tokio::test]
+async fn lean_periodic_renewal_waits_for_abandoned_native_operation_before_next_attempt() {
+    let cases: Vec<NativeCompletionRenewalCase> = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/native_completion.json"
+    ))
+    .unwrap();
+    let cases: Vec<_> = cases
+        .into_iter()
+        .filter(|case| case.periodic_renewal)
+        .collect();
+    assert_eq!(cases.len(), 2, "Lean owns both renewal completion cases");
+
+    for case in cases {
+        assert!(case.initial.cleanup_required, "{}", case.name);
+        assert_eq!(case.initial.native_outstanding, 0, "{}", case.name);
+        assert!(!case.initial.gate_held, "renewal bypasses mutation gate");
+        assert_eq!(case.events.len(), case.observations.len(), "{}", case.name);
+
+        let (node, _dir) = test_node().await;
+        let mut lifecycle = owner(&node).await;
+        drop(lifecycle.renewal_task.take());
+        let doc_id = lifecycle.request().doc_id.clone();
+        let row = request_row(&node, &doc_id).await;
+        let generation = row
+            .execution_generation
+            .clone()
+            .expect("active execution generation");
+        let deadline = DateTime::parse_from_rfc3339(
+            row.execution_lease_expires_at
+                .as_deref()
+                .expect("active execution deadline"),
+        )
+        .unwrap()
+        .with_timezone(&Utc);
+
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let pending_native = Arc::new(tokio::sync::Notify::new());
+        let subscriber = tracing::Dispatch::new(
+            Registry::default().with(PendingNativeObserver(Arc::clone(&pending_native))),
+        );
+        let node_for_attempt = Arc::clone(&node);
+        let request_for_attempt = doc_id.clone();
+        let generation_for_attempt = generation.clone();
+        let mut first_attempt = tokio::spawn(
+            crate::config_client::ConfigApplyTxn::with_native_operation_pause(
+                Arc::clone(&entered),
+                Arc::clone(&release),
+                async move {
+                    crate::lifecycle::renew_execution_lease_once_at(
+                        &node_for_attempt,
+                        &request_for_attempt,
+                        &generation_for_attempt,
+                        deadline,
+                        Utc::now(),
+                    )
+                    .await
+                },
+            )
+            .with_subscriber(subscriber),
+        );
+
+        let mut first_result = None;
+        for (event, observed) in case.events.iter().zip(&case.observations) {
+            match event.as_str() {
+                "native_started" => {
+                    tokio::time::timeout(Duration::from_secs(10), entered.notified())
+                        .await
+                        .expect("renewal admitted one native operation");
+                }
+                "caller_timed_out" => {
+                    tokio::time::pause();
+                    tokio::time::advance(
+                        crate::config_client::EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
+                    )
+                    .await;
+                    tokio::time::resume();
+                    tokio::time::timeout(Duration::from_secs(10), pending_native.notified())
+                        .await
+                        .expect("transaction owner records native work as pending before release");
+                }
+                "native_returned" => {
+                    release.notify_one();
+                    first_result = Some(
+                        tokio::time::timeout(Duration::from_secs(10), &mut first_attempt)
+                            .await
+                            .expect("renewal owner drains after native completion")
+                            .expect("renewal attempt task"),
+                    );
+                }
+                "renewal_attempt_returned" => {
+                    if !observed.renewal_attempt_returned && first_result.is_none() {
+                        if let Ok(result) =
+                            tokio::time::timeout(Duration::from_millis(50), &mut first_attempt)
+                                .await
+                        {
+                            first_result = Some(result.expect("renewal attempt task"));
+                        }
+                    }
+                    let actually_returned = first_result.is_some() || first_attempt.is_finished();
+                    if actually_returned != observed.renewal_attempt_returned {
+                        release.notify_one();
+                        panic!(
+                            "{}: renewal return observation diverged at {event}",
+                            case.name
+                        );
+                    }
+                    assert_eq!(
+                        actually_returned, observed.renewal_attempt_returned,
+                        "{}: {event}",
+                        case.name
+                    );
+                }
+                "renewal_requested" => {
+                    let actually_returned = first_result.is_some() || first_attempt.is_finished();
+                    assert_eq!(
+                        actually_returned, observed.renewal_attempt_returned,
+                        "{}: next renewal cannot be admitted while the prior attempt is pending",
+                        case.name
+                    );
+                    if observed.next_renewal_started {
+                        assert!(first_result.is_some(), "{}", case.name);
+                        let current = request_row(&node, &doc_id).await;
+                        let next_deadline = DateTime::parse_from_rfc3339(
+                            current
+                                .execution_lease_expires_at
+                                .as_deref()
+                                .expect("active execution deadline after rollback"),
+                        )
+                        .unwrap()
+                        .with_timezone(&Utc);
+                        let next = crate::lifecycle::renew_execution_lease_once_at(
+                            &node,
+                            &doc_id,
+                            &generation,
+                            next_deadline,
+                            Utc::now(),
+                        )
+                        .await
+                        .unwrap();
+                        assert!(
+                            matches!(
+                                next,
+                                crate::lifecycle::RenewalAttemptOutcome::Skipped
+                                    | crate::lifecycle::RenewalAttemptOutcome::Committed
+                            ),
+                            "{}: fresh renewal runs after the prior native call drains",
+                            case.name
+                        );
+                    }
+                }
+                other => panic!("unexpected Lean native-completion event: {other}"),
+            }
+            assert!(!observed.gate_held, "renewal remains outside mutation gate");
+        }
+
+        if first_result.is_none() {
+            release.notify_one();
+            first_result = Some(
+                tokio::time::timeout(Duration::from_secs(10), &mut first_attempt)
+                    .await
+                    .expect("renewal owner drains after native completion")
+                    .expect("renewal attempt task"),
+            );
+        }
+        let first_error = first_result
+            .take()
+            .expect("native completion releases the owner")
+            .expect_err("the timed-out attempt must not replay or commit");
+        assert!(
+            crate::config_client::is_transaction_step_unavailable(&first_error),
+            "{}: abandoned native renewal remains an availability failure",
+            case.name
+        );
+    }
 }

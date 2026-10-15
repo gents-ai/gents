@@ -52,6 +52,112 @@ async fn startup_subscriptions_use_one_batch_with_the_exact_allowed_scope() {
 }
 
 #[tokio::test]
+async fn cancelled_shutdown_waiter_keeps_claim_until_node_shutdown_returns() {
+    let fixture: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../gents/tests/fixtures/native_claim_lifetime.json"
+    ))
+    .expect("generated native claim lifetime fixture");
+    let case = fixture
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["name"] == "client_shutdown_cancel_retains_claim_until_return")
+        .expect("Lean client shutdown cancellation case");
+    let events = case["events"].as_array().unwrap();
+    let expected_events = [
+        "native_started",
+        "caller_cancelled",
+        "native_returned",
+        "access_released",
+        "lifecycle_guard_released",
+        "gate_release_requested",
+    ]
+    .map(|event| serde_json::Value::String(event.to_owned()));
+    assert_eq!(events, expected_events.as_slice());
+    let claim_held_for = |event: &str| {
+        let index = events
+            .iter()
+            .position(|candidate| candidate == event)
+            .expect("event in generated trace");
+        case["observations"][index]["claim_held"]
+            .as_bool()
+            .expect("claim observation in generated trace")
+    };
+
+    let temp = tempfile::tempdir().expect("temporary desktop home");
+    let paths = DesktopPaths::from_root(temp.path().join("client"));
+    let core = Arc::new(
+        ClientCore::start_with_paths_and_options(paths.clone(), ClientCoreOptions::local_only())
+            .await
+            .expect("start claimed desktop client"),
+    );
+    let home = paths.root().to_path_buf();
+    let data = paths.node_data_dir().to_path_buf();
+    let pause = Arc::new(ShutdownTestPause {
+        node_shutdown_started: Notify::new(),
+        allow_node_shutdown: Notify::new(),
+        node_shutdown_returned: Notify::new(),
+        allow_access_release: Notify::new(),
+    });
+    *core.shutdown_test_pause.lock().await = Some(Arc::clone(&pause));
+
+    let shutdown_core = Arc::clone(&core);
+    let waiter = tokio::spawn(async move { shutdown_core.shutdown().await });
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        pause.node_shutdown_started.notified(),
+    )
+    .await
+    .expect("single-flight shutdown owner starts node shutdown");
+    waiter.abort();
+    assert!(waiter.await.unwrap_err().is_cancelled());
+    drop(core);
+
+    assert_eq!(
+        gents::home::lock_store(&home, &data).is_err(),
+        claim_held_for("caller_cancelled"),
+        "the claim observation after shutdown waiter cancellation"
+    );
+
+    pause.allow_node_shutdown.notify_one();
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        pause.node_shutdown_returned.notified(),
+    )
+    .await
+    .expect("native shutdown returns before the claim is released");
+    assert_eq!(
+        gents::home::lock_store(&home, &data).is_err(),
+        claim_held_for("native_returned"),
+        "the claim observation after native shutdown return"
+    );
+
+    pause.allow_access_release.notify_one();
+    let retry_home = home.clone();
+    let retry_data = data.clone();
+    let reacquired = tokio::task::spawn_blocking(move || {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            match gents::home::lock_store(&retry_home, &retry_data) {
+                Ok(lock) => return lock,
+                Err(_) if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => panic!("shutdown did not release the claim: {error:#}"),
+            }
+        }
+    })
+    .await
+    .expect("store lock probe panicked");
+    drop(reacquired);
+    assert_eq!(
+        gents::home::lock_store(&home, &data).is_err(),
+        claim_held_for("access_released"),
+        "the claim observation after access release"
+    );
+}
+
+#[tokio::test]
 async fn startup_subscription_failure_is_not_swallowed() {
     let p2p = RecordingP2P::default();
     *p2p.collection_error.write().unwrap() = Some("subscription denied".to_string());
@@ -448,6 +554,7 @@ async fn restart_clears_and_defers_persisted_enrollment_until_current_authority(
     assert_eq!(persisted, restarted.directory);
     assert!(!persisted[0].pairing_ready);
 
+    let core = Arc::new(core);
     core.shutdown().await.expect("shutdown");
 }
 
@@ -496,7 +603,7 @@ async fn expired_enrollment_is_persistently_demoted_before_submit_can_write() {
         .unwrap();
     assert!(!persisted[0].pairing_ready);
 
-    core.shutdown().await.expect("shutdown");
+    Arc::new(core).shutdown().await.expect("shutdown");
 }
 
 #[tokio::test]
@@ -629,7 +736,7 @@ async fn remove_peer_hides_deployment_and_persists_cleanup_tombstone_when_offlin
         "failed manual authoring and offline removal must not leave alternate desired authority"
     );
 
-    core.shutdown().await.expect("shutdown");
+    Arc::new(core).shutdown().await.expect("shutdown");
 }
 
 #[tokio::test]
@@ -980,7 +1087,7 @@ async fn selected_node_did_channel_updates_subscribers() {
     rx.changed().await.expect("watch update");
     assert_eq!(rx.borrow().clone(), None);
 
-    core.shutdown().await.expect("shutdown");
+    Arc::new(core).shutdown().await.expect("shutdown");
 }
 
 #[tokio::test]
@@ -999,7 +1106,7 @@ async fn refresh_store_succeeds_with_selection_set() {
     core.set_selected_node_did(Some("did:any".to_string()));
     core.refresh_store().await.expect("refresh scoped");
 
-    core.shutdown().await.expect("shutdown");
+    Arc::new(core).shutdown().await.expect("shutdown");
 }
 
 #[tokio::test]
@@ -1028,44 +1135,36 @@ async fn resending_an_unknown_enrollment_request_fails_without_pushing() {
         .unwrap()
         .is_empty());
 
-    core.shutdown().await.expect("shutdown");
+    Arc::new(core).shutdown().await.expect("shutdown");
 }
 
 #[tokio::test]
-async fn ensure_node_loaded_debounces_repeats() {
+async fn failed_selection_refresh_schedules_scoped_observer_recovery() {
     use crate::client::paths::DesktopPaths;
 
     let tmp = tempfile::TempDir::new().expect("tmpdir");
     let paths = DesktopPaths::from_root(tmp.path().to_path_buf());
-    let core = ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_only())
-        .await
-        .expect("core");
-
-    let first = core.ensure_node_loaded("did:alpha").await.expect("first");
-    let second = core.ensure_node_loaded("did:alpha").await.expect("second");
-    assert!(first, "first call should load");
-    assert!(
-        !second,
-        "second call within debounce window should be a no-op"
+    let core = Arc::new(
+        ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_only())
+            .await
+            .expect("client core"),
     );
+    let observer = core.observer.lock().await.take().expect("observer owner");
+    observer.shutdown().await;
+    let _ = core.store.take_resync_requests();
 
-    core.shutdown().await.expect("shutdown");
-}
-
-#[tokio::test]
-async fn ensure_node_loaded_distinguishes_nodes() {
-    use crate::client::paths::DesktopPaths;
-
-    let tmp = tempfile::TempDir::new().expect("tmpdir");
-    let paths = DesktopPaths::from_root(tmp.path().to_path_buf());
-    let core = ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_only())
+    core.node.shutdown().await;
+    let error = core
+        .refresh_node("did:test:selection-recovery")
         .await
-        .expect("core");
+        .expect_err("a stopped local database cannot refresh the selected scope");
+    assert!(!error.to_string().is_empty());
 
-    assert!(core.ensure_node_loaded("did:alpha").await.expect("alpha"));
-    assert!(core.ensure_node_loaded("did:beta").await.expect("beta"));
+    let (full, scopes) = core.store.take_resync_requests();
+    assert!(!full, "the failed selected refresh remains scoped");
+    assert_eq!(scopes, vec!["did:test:selection-recovery"]);
 
-    core.shutdown().await.expect("shutdown");
+    core.shutdown().await.expect("shutdown client core");
 }
 
 #[test]
@@ -1103,6 +1202,7 @@ async fn observer_metrics_returns_snapshot() {
         "observer should be running and expose metrics"
     );
 
+    let core = Arc::new(core);
     core.shutdown().await.expect("shutdown");
 
     let metrics = core.observer_metrics().await;
@@ -1229,7 +1329,7 @@ async fn runtime_schema_skew_refuses_enrollment_and_projects_incompatible_sync()
         .expect("same collection versions are compatible");
     assert!(core.sync_state().peer_schema_skew.is_empty());
 
-    core.shutdown().await.expect("shutdown");
+    Arc::new(core).shutdown().await.expect("shutdown");
 }
 
 /// A new client store is recorded before its first write and reopens with
@@ -1244,6 +1344,7 @@ async fn the_client_store_is_encrypted_with_its_recorded_key() {
         ClientCore::start_with_paths_and_options(paths.clone(), ClientCoreOptions::local_only())
             .await
             .expect("fresh client core");
+    let core = Arc::new(core);
     core.shutdown().await.expect("shutdown");
     drop(core);
     let record: gents::store_key::StoreEncryption =
@@ -1255,6 +1356,7 @@ async fn the_client_store_is_encrypted_with_its_recorded_key() {
         ClientCore::start_with_paths_and_options(paths.clone(), ClientCoreOptions::local_only())
             .await
             .expect("reopened client core");
+    let core = Arc::new(core);
     core.shutdown().await.expect("shutdown");
     drop(core);
 

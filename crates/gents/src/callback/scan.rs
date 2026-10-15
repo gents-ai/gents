@@ -83,13 +83,7 @@ impl CallbackEngine {
         // Per grouped collection, each binding and the source field that correlates it.
         let mut consumers: HashMap<String, Vec<(String, Option<String>)>> = HashMap::new();
         for binding in &bindings {
-            match load_event_source(
-                self.node.as_ref(),
-                &binding.event_source_id,
-                &binding.node_did,
-            )
-            .await
-            {
+            match load_event_source(&self.node, &binding.event_source_id, &binding.node_did).await {
                 Ok(Some(source)) => {
                     if source.group.is_none() {
                         // Configuration applies seed this cursor when they
@@ -245,8 +239,11 @@ impl CallbackEngine {
         let consumer = EventConsumer::CallbackBinding {
             binding_id: binding.binding_id.clone(),
         };
-        let record =
-            ConfigAccess::transact_local(&self.node, None, "callback.seed_arrival_cursor", |txn| {
+        let record = ConfigAccess::transact_local_write(
+            &self.node,
+            None,
+            "callback.seed_arrival_cursor",
+            |txn| {
                 let consumer = &consumer;
                 Box::pin(async move {
                     event_source_cursor::load_or_seed_for_source(
@@ -257,8 +254,9 @@ impl CallbackEngine {
                     )
                     .await
                 })
-            })
-            .await;
+            },
+        )
+        .await;
         match record {
             Ok(record) => Ok(record.cursor.after),
             Err(error) => {
@@ -283,7 +281,7 @@ impl CallbackEngine {
         let consumer = EventConsumer::CallbackBinding {
             binding_id: binding.binding_id.clone(),
         };
-        ConfigAccess::transact_local(&self.node, None, "callback.advance_arrival", |txn| {
+        ConfigAccess::transact_local_write(&self.node, None, "callback.advance_arrival", |txn| {
             let consumer = &consumer;
             Box::pin(async move {
                 event_source_cursor::checkpoint_prefix(
@@ -323,7 +321,7 @@ impl CallbackEngine {
                 continue;
             }
             let source = match load_event_source(
-                self.node.as_ref(),
+                &self.node,
                 &binding.event_source_id,
                 &binding.node_did,
             )
@@ -453,7 +451,7 @@ impl CallbackEngine {
         grouped: bool,
     ) -> Result<bool> {
         let Some(binding) =
-            load_binding(self.node.as_ref(), &binding.binding_id, &binding.node_did).await?
+            load_binding(&self.node, &binding.binding_id, &binding.node_did).await?
         else {
             return Ok(false);
         };
@@ -469,18 +467,14 @@ impl CallbackEngine {
             );
             return Ok(false);
         }
-        let event = load_event_source(
-            self.node.as_ref(),
-            &binding.event_source_id,
-            &binding.node_did,
-        )
-        .await?
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "CallbackBinding {} EventSource missing for owner",
-                binding.binding_id
-            )
-        })?;
+        let event = load_event_source(&self.node, &binding.event_source_id, &binding.node_did)
+            .await?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "CallbackBinding {} EventSource missing for owner",
+                    binding.binding_id
+                )
+            })?;
         if event.source_collection != collection || event.group.is_some() != grouped {
             return Ok(false);
         }
@@ -494,7 +488,7 @@ impl CallbackEngine {
             event.filter.as_deref(),
             None,
         )?;
-        let callback = load_callback(self.node.as_ref(), &binding.callback_id, &binding.node_did)
+        let callback = load_callback(&self.node, &binding.callback_id, &binding.node_did)
             .await?
             .ok_or_else(|| anyhow::anyhow!("Callback {} missing for owner", binding.callback_id))?;
         if !callback.enabled {
@@ -591,7 +585,7 @@ impl CallbackEngine {
         invocation: CallbackInvocationDoc,
         callback: &crate::document_config::Callback,
     ) -> Result<bool> {
-        let stored = create_pending_invocation(self.node.as_ref(), &invocation).await?;
+        let stored = create_pending_invocation(&self.node, &invocation).await?;
         if invocation_is_claimable(&self.node_did, &stored) {
             if let Err(error) = self.execute_invocation(&stored, callback).await {
                 tracing::warn!(

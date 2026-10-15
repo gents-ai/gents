@@ -45,9 +45,13 @@ impl ToolCallLifecycle {
             }}"#
         );
 
-        let response = execute_mutation_with_retry(&self.node, &mutation, "background")
-            .await
-            .context("background mutation")?;
+        let response = crate::config_client::ConfigAccess::write_local_response(
+            &self.node,
+            "background",
+            &mutation,
+        )
+        .await
+        .context("background mutation")?;
         if !response
             .data
             .as_ref()
@@ -107,9 +111,13 @@ impl ToolCallLifecycle {
             }}"#
         );
 
-        let response = execute_mutation_with_retry(&self.node, &mutation, "foreground")
-            .await
-            .context("foreground mutation")?;
+        let response = crate::config_client::ConfigAccess::write_local_response(
+            &self.node,
+            "foreground",
+            &mutation,
+        )
+        .await
+        .context("foreground mutation")?;
         if !response
             .data
             .as_ref()

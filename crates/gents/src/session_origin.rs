@@ -133,7 +133,7 @@ pub async fn request_scopes<'a, R: ConfigRead + ?Sized>(
     // an empty list literal into a database operation.
     for batch in doc_ids.chunks(128) {
         let query = format!(
-            "{{AgentRequest(filter: {{_docID: {{_in: {}}}}}) {{{SCOPE_FIELDS}}}}}",
+            "{{AgentRequest(docIDs: {}) {{{SCOPE_FIELDS}}}}}",
             graphql_string_list_literal(batch.iter().copied())
         );
         scopes.extend(
@@ -434,6 +434,48 @@ mod tests {
             .collect()
     }
 
+    #[tokio::test]
+    async fn physical_request_scope_batch_keeps_requested_missing_and_foreign_rows_distinct() {
+        let dir = tempfile::tempdir().unwrap();
+        let node = std::sync::Arc::new(
+            EmbeddedNode::builder()
+                .data_path(dir.path().join("node"))
+                .build()
+                .await
+                .unwrap(),
+        );
+        crate::ensure_runtime_schemas(&node).await.unwrap();
+        let requested = seed(
+            &node,
+            "requested",
+            "requested-session",
+            "2026-09-26T00:00:00Z",
+            None,
+        )
+        .await;
+        let _foreign = seed(
+            &node,
+            "foreign",
+            "foreign-session",
+            "2026-09-26T00:00:01Z",
+            None,
+        )
+        .await;
+        let access = ConfigAccess::local(node.clone());
+
+        let missing =
+            document::DocID::new_v0_from_seed("missing-session-origin-request").to_string();
+        let scopes = request_scopes(&access, [requested.as_str(), missing.as_str()])
+            .await
+            .unwrap();
+        assert_eq!(
+            scopes,
+            vec![(requested, scope("requested-session"))],
+            "the direct-ID read must return only found requested documents with their stored scope"
+        );
+        node.shutdown().await;
+    }
+
     /// Only the stored provenance makes a session started: a message into an
     /// existing session, even one ordered first in the same second, is a
     /// `sent`/`received` link, never a start.
@@ -474,7 +516,7 @@ mod tests {
         let other = seed(&node, "o1", "other", "2026-09-26T00:00:01Z", None).await;
         seed_session(&node, "other", None).await;
         seed(&node, "a0", "started", "2026-09-26T00:00:02Z", Some(&other)).await;
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
 
         let from_parent = lineage(&access, &scope("parent")).await.unwrap();
         assert_eq!(from_parent.started_by, None);

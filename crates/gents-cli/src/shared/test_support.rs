@@ -21,7 +21,7 @@ pub(crate) async fn seed_unsent_xai_effort(owner: &str) -> gents::config_client:
             .await;
         assert!(!result.has_errors(), "{:?}", result.errors);
     }
-    gents::config_client::ConfigAccess::Local(node)
+    gents::config_client::ConfigAccess::local(node)
 }
 
 pub(crate) fn xai_effort_backend(owner: &str) -> Value {

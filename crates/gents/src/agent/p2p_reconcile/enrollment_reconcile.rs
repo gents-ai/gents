@@ -710,7 +710,7 @@ fn desired_routes_at(
 }
 
 async fn reconcile_data_plane(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     local_did: &str,
     store: &GraphqlEnrollmentStore,
     projection: &EnrollmentProjection,
@@ -828,7 +828,7 @@ fn enrollment_route_matches_fence(
         && route.authorization_expires_at == fence.authorization_expires_at
 }
 
-async fn delete_enrollment_route(node: &EmbeddedNode, peer_id: &str) -> Result<()> {
+async fn delete_enrollment_route(node: &std::sync::Arc<EmbeddedNode>, peer_id: &str) -> Result<()> {
     let mutation = delete_enrollment_route_mutation(peer_id);
     crate::config_client::ConfigAccess::write_local_response(
         node,
@@ -1172,7 +1172,7 @@ mod tests {
         crate::schema::ensure_runtime_schemas(node.as_ref())
             .await
             .unwrap();
-        crate::test_support::install_test_agent(node.as_ref(), target.did(), "behavior-1").await;
+        crate::test_support::install_test_agent(&node, target.did(), "behavior-1").await;
 
         let mut generation_one = active_enrollment(1, "2030-01-01T00:10:00Z");
         generation_one.request.candidate_did = member.did().to_string();

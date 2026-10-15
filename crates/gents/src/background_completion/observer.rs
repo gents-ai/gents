@@ -103,7 +103,7 @@ impl BackgroundCompletionObserver {
     }
 
     async fn run_reconcilers(&mut self) -> Result<()> {
-        match crate::mailbox::sweep_open_mailbox_items(self.node.as_ref()).await {
+        match crate::mailbox::sweep_open_mailbox_items(&self.node).await {
             Ok(mailbox)
                 if mailbox.acted > 0
                     || mailbox.expired > 0
@@ -136,11 +136,9 @@ impl BackgroundCompletionObserver {
                 );
             }
         }
-        let wake_redrive = crate::RequestLifecycle::redrive_failed_background_wakeups(
-            self.node.as_ref(),
-            &self.local_did,
-        )
-        .await?;
+        let wake_redrive =
+            crate::RequestLifecycle::redrive_failed_background_wakeups(&self.node, &self.local_did)
+                .await?;
         if !wake_redrive.is_noop() {
             tracing::debug!(
                 redriven = wake_redrive.redriven,
@@ -156,11 +154,9 @@ impl BackgroundCompletionObserver {
         // Owner-scoped terminal-convergence re-drive (#664): re-assert the
         // terminal state of recently-terminalized own-requests so the terminal
         // delta reaches replicas that missed the one-shot PushLog.
-        let redrive = crate::RequestLifecycle::redrive_terminal_convergence(
-            self.node.as_ref(),
-            &self.local_did,
-        )
-        .await?;
+        let redrive =
+            crate::RequestLifecycle::redrive_terminal_convergence(&self.node, &self.local_did)
+                .await?;
         if !redrive.is_noop() {
             tracing::debug!(
                 reasserted = redrive.reasserted,

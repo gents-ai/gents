@@ -1032,7 +1032,7 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
         .and_then(serde_json::Value::as_str)
         .expect("physical tool call identity");
     let native = crate::session::load_tool_call_result(
-        &crate::config_client::ConfigAccess::Local(node.clone()),
+        &crate::config_client::ConfigAccess::local(node.clone()),
         tool_doc_id,
         "did:test:test",
         &session_id,

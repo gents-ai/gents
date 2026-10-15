@@ -344,6 +344,16 @@ fn ts_rs_exports_tagged_enum_and_camel_case_structs() {
         bootstrap.contains("defaultNodeHome") && bootstrap.contains("clientStateExists"),
         "serde rename_all camelCase should be reflected; got:\n{bootstrap}"
     );
+    assert!(
+        bootstrap.contains("initConfigStatus?: InitConfigStatus | null"),
+        "optional nullable bootstrap status should match the wire shape; got:\n{bootstrap}"
+    );
+    let runtime = std::fs::read_to_string(tmp.path().join("DesktopRuntimeSnapshot.ts"))
+        .expect("DesktopRuntimeSnapshot.ts");
+    assert!(
+        runtime.contains("operatorConfigAuthoritativeNodeDids?: Array<string>"),
+        "operator-config authority is optional and absent when unavailable; got:\n{runtime}"
+    );
     let error = std::fs::read_to_string(tmp.path().join("BridgeError.ts")).expect("BridgeError.ts");
     assert!(
         error.contains("retryable"),

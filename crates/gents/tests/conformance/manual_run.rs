@@ -66,7 +66,7 @@ async fn manual_run_materializes_agent_request_with_lineage() {
     let db = test_db("manual-run-lineage").await;
 
     let doc_id = write_manual_agent_request(
-        db.node.as_ref(),
+        &db.node,
         actor(db.node_identity.did()),
         db.node_identity.did(),
         AGENT_NAME,
@@ -112,7 +112,7 @@ async fn manual_run_renders_args_scope() {
     let db = test_db("manual-run-args-scope").await;
 
     let doc_id = write_manual_agent_request(
-        db.node.as_ref(),
+        &db.node,
         actor(db.node_identity.did()),
         db.node_identity.did(),
         AGENT_NAME,
@@ -136,7 +136,7 @@ async fn manual_submissions_materialize_distinct_requests() {
     let db = test_db("manual-run-parallel").await;
 
     let first = write_manual_agent_request(
-        db.node.as_ref(),
+        &db.node,
         actor(db.node_identity.did()),
         db.node_identity.did(),
         AGENT_NAME,
@@ -153,7 +153,7 @@ async fn manual_submissions_materialize_distinct_requests() {
     );
 
     let second = write_manual_agent_request(
-        db.node.as_ref(),
+        &db.node,
         actor(db.node_identity.did()),
         db.node_identity.did(),
         AGENT_NAME,
@@ -199,7 +199,7 @@ async fn manual_run_exposes_manual_event_and_node_scope() {
     let db = test_db("manual-run-event-scope").await;
 
     let doc_id = write_manual_agent_request(
-        db.node.as_ref(),
+        &db.node,
         actor(db.node_identity.did()),
         db.node_identity.did(),
         AGENT_NAME,
@@ -236,7 +236,7 @@ async fn manual_run_render_failure_materializes_no_request() {
     let db = test_db("manual-run-render-err").await;
 
     let error = write_manual_agent_request(
-        db.node.as_ref(),
+        &db.node,
         actor(db.node_identity.did()),
         db.node_identity.did(),
         AGENT_NAME,
@@ -258,7 +258,7 @@ async fn manual_run_render_failure_materializes_no_request() {
     );
 
     let doc_id = write_manual_agent_request(
-        db.node.as_ref(),
+        &db.node,
         actor(db.node_identity.did()),
         db.node_identity.did(),
         AGENT_NAME,

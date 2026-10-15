@@ -9,11 +9,12 @@ use defra_p2p_adapter::{
 };
 use futures::{stream, StreamExt};
 use gents::agent::p2p_reconcile::enrollment::{
-    AuthorizationRevision as PureRevision, AuthorizationRevisionKind as PureRevisionKind,
-    DurableEnrollmentDocuments, EnrollmentDecision as PureDecision,
-    EnrollmentDecisionKind as PureDecisionKind, EnrollmentOffer as PureOffer,
-    EnrollmentRequest as PureRequest, EnrollmentRouteDirection as PureRouteDirection,
-    EnrollmentRouteReceipt as PureRouteReceipt, NetworkAdminPin as PureAdminPin,
+    pending_request_satisfied, AuthorizationRevision as PureRevision,
+    AuthorizationRevisionKind as PureRevisionKind, DurableEnrollmentDocuments,
+    EnrollmentDecision as PureDecision, EnrollmentDecisionKind as PureDecisionKind,
+    EnrollmentOffer as PureOffer, EnrollmentRequest as PureRequest, EnrollmentRequestAuthority,
+    EnrollmentRouteDirection as PureRouteDirection, EnrollmentRouteReceipt as PureRouteReceipt,
+    NetworkAdminPin as PureAdminPin,
 };
 use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
 use gents::NodeIdentity;
@@ -281,6 +282,9 @@ impl ClientCore {
         let request_rows = rows::<EnrollmentRequestRow>(&response, "NetworkEnrollmentRequest")?;
         let retired = self.sync_state.retired_enrollment_digests().await;
         let assembly_requests = listing_assembly_requests(&request_rows, &self.node_identity).await;
+        let peers = self.sync_state.records();
+        let now = Utc::now();
+        let mut satisfied_authorities = Vec::new();
         let mut active = Vec::new();
 
         for row in &request_rows {
@@ -330,10 +334,14 @@ impl ClientCore {
             let expires_at = DateTime::parse_from_rfc3339(&request.expires_at)
                 .context("parsing enrollment request expiry")?
                 .with_timezone(&Utc);
-            if expires_at <= Utc::now() {
+            if expires_at <= now
+                && !peers.iter().any(|peer| {
+                    peer.enrollment_request_id.as_deref() == Some(&request.request_id)
+                        && peer.is_chat_ready_at(now)
+                })
+            {
                 continue;
             }
-
             let projection = assemble_durable_enrollment_documents(
                 &offer,
                 &request,
@@ -353,6 +361,9 @@ impl ClientCore {
                 decision.validate_against_request(&request)?;
             }
 
+            let authority = EnrollmentRequestAuthority::from(&projection.request);
+            let has_decision = !projection.decisions.is_empty();
+            let mut route_applied = false;
             let state = match projection.decisions.as_slice() {
                 [] => "pending_approval",
                 [(decision, _)] if decision.decision == EnrollmentDecisionKind::Denied => continue,
@@ -363,30 +374,57 @@ impl ClientCore {
                         &projection.request,
                         &pure_decision,
                     ) {
-                        // The approval is no longer current (revoked or
-                        // lease-expired), exactly as the reconciler reads it.
                         continue;
+                    }
+                    route_applied = peers.iter().any(|peer| {
+                        peer.is_enrollment()
+                            && peer.is_chat_ready_at(now)
+                            && peer.peer_id == request.server_peer
+                            && peer.node_did == request.owner_agent
+                            && peer.pairing_network_id.as_deref() == Some(&request.network_id)
+                            && peer.pairing_template.as_deref() == Some(&request.profile)
+                            && peer.enrollment_request_id.as_deref() == Some(&request.request_id)
+                            && peer.enrollment_request_digest.as_deref()
+                                == Some(&request.request_digest)
+                            && peer.enrollment_admin_did.as_deref() == Some(&request.admin_did)
+                            && peer.enrollment_authorization_sequence
+                                == Some(decision.authorization_sequence)
+                            && peer.enrollment_authorization_expires_at.as_deref()
+                                == Some(&decision.authorization_expires_at)
+                    });
+                    if route_applied {
+                        satisfied_authorities.push(authority.clone());
                     }
                     "approved"
                 }
                 _ => unreachable!("multiple authenticated decisions fail closed above"),
             };
-            if self.sync_state.records().iter().any(|peer| {
-                peer.enrollment_request_id.as_deref() == Some(&request.request_id)
-                    && peer.is_chat_ready_at(Utc::now())
-            }) {
+            if expires_at <= now || route_applied {
                 continue;
             }
-            active.push(EnrollmentRequestResult {
-                request_id: request.request_id,
-                network_id: request.network_id,
-                admin_did: request.admin_did,
-                server_peer: request.server_peer,
-                owner_node: request.owner_agent,
-                state: state.to_string(),
-                expires_at: request.expires_at,
-            });
+            active.push((
+                authority,
+                has_decision,
+                EnrollmentRequestResult {
+                    request_id: request.request_id,
+                    network_id: request.network_id,
+                    admin_did: request.admin_did,
+                    server_peer: request.server_peer,
+                    owner_node: request.owner_agent,
+                    state: state.to_string(),
+                    expires_at: request.expires_at,
+                },
+            ));
         }
+        let mut active: Vec<_> = active
+            .into_iter()
+            .filter(|(requested, has_decision, _)| {
+                !satisfied_authorities.iter().any(|current| {
+                    pending_request_satisfied(requested, current, *has_decision, true, true)
+                })
+            })
+            .map(|(_, _, request)| request)
+            .collect();
         active.sort_by(|left, right| left.request_id.cmp(&right.request_id));
         Ok(active)
     }
@@ -480,7 +518,7 @@ impl ClientCore {
             }}"#
         );
         let committed = gents::config_client::ConfigAccess::write_local(
-            self.node.as_ref(),
+            &self.node,
             "desktop.enrollment.create_admin_pin",
             &mutation,
         )
@@ -509,7 +547,7 @@ impl ClientCore {
         let mutation =
             format!("mutation {{ create_NetworkEnrollmentRequest(input: {input}) {{ _docID }} }}");
         let response = gents::config_client::ConfigAccess::write_local(
-            self.node.as_ref(),
+            &self.node,
             "desktop.enrollment.create_request",
             &mutation,
         )
@@ -2131,6 +2169,45 @@ fn enrollment_signature(kind: &str, value: &str) -> Result<Vec<u8>> {
 mod tests {
     use super::*;
 
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct PendingRequestCase {
+        name: String,
+        requested: gents::agent::p2p_reconcile::enrollment::EnrollmentRequestAuthority,
+        current: gents::agent::p2p_reconcile::enrollment::EnrollmentRequestAuthority,
+        has_decision: bool,
+        current_approval: bool,
+        route_applied: bool,
+        expected_satisfied: bool,
+    }
+
+    fn pending_request_cases() -> Vec<PendingRequestCase> {
+        let snapshot: Value = gents_lean_contract::load_contract_snapshot()
+            .expect("Lean pending enrollment request cases");
+        serde_json::from_value(snapshot["enrollment_pending_request_cases"].clone())
+            .expect("decode pending enrollment request cases")
+    }
+
+    #[test]
+    fn generated_pending_request_satisfaction_matches_lean() {
+        let cases = pending_request_cases();
+        assert!(!cases.is_empty());
+        for case in cases {
+            assert_eq!(
+                gents::agent::p2p_reconcile::enrollment::pending_request_satisfied(
+                    &case.requested,
+                    &case.current,
+                    case.has_decision,
+                    case.current_approval,
+                    case.route_applied,
+                ),
+                case.expected_satisfied,
+                "{}",
+                case.name,
+            );
+        }
+    }
+
     #[test]
     fn request_mutation_escapes_every_string_and_never_emits_an_empty_array() {
         let request = EnrollmentRequestRecord {
@@ -3123,6 +3200,16 @@ mod tests {
         candidate: &PrincipalIdentity,
         candidate_peer: &str,
     ) -> SignedEnrollmentAuthority {
+        signed_enrollment_authority_at(admin, candidate, candidate_peer, Utc::now(), "1")
+    }
+
+    fn signed_enrollment_authority_at(
+        admin: &PrincipalIdentity,
+        candidate: &PrincipalIdentity,
+        candidate_peer: &str,
+        issued: DateTime<Utc>,
+        generation: &str,
+    ) -> SignedEnrollmentAuthority {
         use gents_protocol::enrollment::{
             derive_decision_id, derive_revision_id, derive_route_receipt_id, encode_offer,
             EnrollmentOfferRecord,
@@ -3131,7 +3218,6 @@ mod tests {
         let server_ticket =
             "127.0.0.1:56000/p2p/6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb";
         let server_peer = parse_public_peer_addr(server_ticket).unwrap().0.to_string();
-        let issued = Utc::now();
         let issued_at = issued.to_rfc3339_opts(SecondsFormat::Secs, true);
         let request_expires_at =
             (issued + chrono::Duration::minutes(5)).to_rfc3339_opts(SecondsFormat::Secs, true);
@@ -3139,8 +3225,8 @@ mod tests {
             (issued + chrono::Duration::days(1)).to_rfc3339_opts(SecondsFormat::Secs, true);
         let mut offer = EnrollmentOfferRecord {
             version: ENROLLMENT_PROTOCOL_VERSION,
-            offer_id: "offer-1".into(),
-            challenge: "challenge-1".into(),
+            offer_id: format!("offer-{generation}"),
+            challenge: format!("challenge-{generation}"),
             network_id: "network-1".into(),
             admin_did: admin.did().into(),
             server_peer: server_peer.clone(),
@@ -3155,7 +3241,7 @@ mod tests {
         offer.admin_sig = admin.sign(&offer.signing_payload()).unwrap();
         let offer_token = encode_offer(&offer).unwrap();
 
-        let client_nonce = "nonce-1";
+        let client_nonce = format!("nonce-{generation}");
         let request_id = format!(
             "enroll-{}",
             derive_enrollment_id(
@@ -3164,7 +3250,7 @@ mod tests {
                     &offer.offer_id,
                     candidate.did(),
                     candidate_peer,
-                    client_nonce
+                    &client_nonce
                 ],
             )
         );
@@ -3279,7 +3365,7 @@ mod tests {
     }
 
     async fn commit_document(core: &ClientCore, stage: &'static str, mutation: &str) {
-        gents::config_client::ConfigAccess::write_local(core.node(), stage, mutation)
+        gents::config_client::ConfigAccess::write_local(&core.node_arc(), stage, mutation)
             .await
             .expect("commit enrollment authority document");
     }
@@ -3564,7 +3650,7 @@ mod tests {
         );
         assert!(core.peer_records().await.is_empty());
 
-        core.shutdown().await.unwrap();
+        Arc::new(core).shutdown().await.unwrap();
     }
 
     #[tokio::test]
@@ -3603,7 +3689,282 @@ mod tests {
             "a revoked authorization ends the request before its own expiry: {listed:?}"
         );
 
-        core.shutdown().await.unwrap();
+        Arc::new(core).shutdown().await.unwrap();
+    }
+
+    async fn assert_pending_visibility_matches_model(
+        core: &ClientCore,
+        request: &EnrollmentRequestRecord,
+        case_name: &str,
+    ) {
+        let case = pending_request_cases()
+            .into_iter()
+            .find(|case| case.name == case_name)
+            .expect("modeled enrollment case");
+        let listed = core.active_status_enrollment_requests().await.unwrap();
+        assert_eq!(
+            listed
+                .iter()
+                .any(|row| row.request_id == request.request_id),
+            !case.expected_satisfied,
+            "{case_name}: {listed:?}",
+        );
+    }
+
+    async fn configure_test_enrollment_route(
+        core: &ClientCore,
+        authority: &SignedEnrollmentAuthority,
+        server_peer: &str,
+    ) -> crate::client::peer_directory::PeerRecord {
+        core.sync_state
+            .upsert_enrollment_peer(
+                server_peer,
+                "Enrolled server",
+                &authority.offer.server_ticket,
+                &authority.request.owner_agent,
+                &authority.request.network_id,
+                &authority.request.request_id,
+                &authority.request.request_digest,
+                &authority.request.admin_did,
+                authority.decision.authorization_sequence,
+                &authority.decision.authorization_expires_at,
+            )
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn reconnected_authority_satisfies_pending_request_until_a_newer_revision() {
+        use crate::client::paths::DesktopPaths;
+
+        let temp = tempfile::tempdir().unwrap();
+        let core = start_unsupervised_core(temp.path().join("desktop")).await;
+        let admin =
+            PrincipalIdentity::load_or_create(&DesktopPaths::from_root(temp.path().join("admin")))
+                .await
+                .unwrap();
+        let authority = signed_enrollment_authority_at(
+            &admin,
+            core.node_identity(),
+            core.local_peer_id(),
+            Utc::now() - chrono::Duration::minutes(10),
+            "old",
+        );
+        let pending = signed_enrollment_authority_at(
+            &admin,
+            core.node_identity(),
+            core.local_peer_id(),
+            Utc::now(),
+            "pending",
+        );
+        assert!(DateTime::parse_from_rfc3339(&authority.request.expires_at).unwrap() < Utc::now());
+        assert!(
+            DateTime::parse_from_rfc3339(&authority.decision.authorization_expires_at).unwrap()
+                > Utc::now()
+        );
+        commit_admin_pin(&core, &authority).await;
+        commit_enrollment_request(&core, &authority.request).await;
+        commit_decision(&core, &authority).await;
+        commit_revision(&core, &authority.revision).await;
+        commit_route_receipt(&core, &authority).await;
+        commit_enrollment_request(&core, &pending.request).await;
+        let mut archived = signed_enrollment_authority_at(
+            &admin,
+            core.node_identity(),
+            core.local_peer_id(),
+            Utc::now() - chrono::Duration::minutes(20),
+            "archived",
+        );
+        archived.decision.owner_agent = "unrelated-owner".into();
+        archived.decision.admin_sig = admin.sign(&archived.decision.signing_payload()).unwrap();
+        commit_enrollment_request(&core, &archived.request).await;
+        commit_decision(&core, &archived).await;
+        let before = graphql_with_transaction_retry(
+            core.node(),
+            STATUS_ENROLLMENT_QUERY,
+            "capture enrollment documents before reconnect",
+        )
+        .await
+        .unwrap();
+        let configured =
+            configure_test_enrollment_route(&core, &authority, &authority.request.server_peer)
+                .await;
+        assert_pending_visibility_matches_model(
+            &core,
+            &pending.request,
+            "route_still_reconnecting",
+        )
+        .await;
+        let ready = core
+            .sync_state
+            .set_pairing_ready(&configured, true)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_pending_visibility_matches_model(
+            &core,
+            &pending.request,
+            "reconnected_route_satisfies_pending_request",
+        )
+        .await;
+        assert!(core
+            .active_status_enrollment_requests()
+            .await
+            .unwrap()
+            .is_empty());
+        let after = graphql_with_transaction_retry(
+            core.node(),
+            STATUS_ENROLLMENT_QUERY,
+            "capture enrollment documents after reconnect",
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            before.data, after.data,
+            "visibility must not mutate signed documents"
+        );
+        assert!(core
+            .sync_state
+            .retired_enrollment_digests()
+            .await
+            .is_empty());
+
+        let mut newer = authority.revoked.clone();
+        newer.kind = AuthorizationRevisionKind::Active;
+        newer.revision_id = gents_protocol::enrollment::derive_revision_id(
+            &newer.network_id,
+            &newer.member_did,
+            newer.sequence,
+            &newer.kind,
+            &newer.request_digest,
+        );
+        newer.admin_sig = admin.sign(&newer.signing_payload()).unwrap();
+        commit_revision(&core, &newer).await;
+        assert_eq!(core.sync_state.records(), vec![ready.clone()]);
+        assert_pending_visibility_matches_model(
+            &core,
+            &pending.request,
+            "revoked_or_expired_authorization",
+        )
+        .await;
+
+        let mut revoked = authority.revoked.clone();
+        revoked.sequence = 3;
+        revoked.revision_id = gents_protocol::enrollment::derive_revision_id(
+            &revoked.network_id,
+            &revoked.member_did,
+            revoked.sequence,
+            &revoked.kind,
+            &revoked.request_digest,
+        );
+        revoked.admin_sig = admin.sign(&revoked.signing_payload()).unwrap();
+        commit_revision(&core, &revoked).await;
+        assert_eq!(core.sync_state.records(), vec![ready]);
+        assert_pending_visibility_matches_model(
+            &core,
+            &pending.request,
+            "revoked_or_expired_authorization",
+        )
+        .await;
+        Arc::new(core).shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn pending_request_requires_the_exact_current_applied_route() {
+        use crate::client::paths::DesktopPaths;
+
+        let temp = tempfile::tempdir().unwrap();
+        let core = start_unsupervised_core(temp.path().join("desktop")).await;
+        let admin =
+            PrincipalIdentity::load_or_create(&DesktopPaths::from_root(temp.path().join("admin")))
+                .await
+                .unwrap();
+        let authority =
+            signed_enrollment_authority(&admin, core.node_identity(), core.local_peer_id());
+        let pending = signed_enrollment_authority_at(
+            &admin,
+            core.node_identity(),
+            core.local_peer_id(),
+            Utc::now(),
+            "pending",
+        );
+        commit_admin_pin(&core, &authority).await;
+        commit_enrollment_request(&core, &authority.request).await;
+        commit_decision(&core, &authority).await;
+        commit_revision(&core, &authority.revision).await;
+        commit_route_receipt(&core, &authority).await;
+        commit_enrollment_request(&core, &pending.request).await;
+        let unrelated = configure_test_enrollment_route(&core, &authority, "another-server").await;
+        core.sync_state
+            .set_pairing_ready(&unrelated, true)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_pending_visibility_matches_model(
+            &core,
+            &pending.request,
+            "route_still_reconnecting",
+        )
+        .await;
+        let configured =
+            configure_test_enrollment_route(&core, &authority, &authority.request.server_peer)
+                .await;
+        let mut ready = core
+            .sync_state
+            .set_pairing_ready(&configured, true)
+            .await
+            .unwrap()
+            .unwrap();
+        for field in [
+            "node", "network", "profile", "request", "digest", "admin", "sequence", "expiry",
+        ] {
+            let mut mismatched = ready.clone();
+            match field {
+                "node" => mismatched.node_did = "another-node".into(),
+                "network" => mismatched.pairing_network_id = Some("another-network".into()),
+                "profile" => mismatched.pairing_template = Some("another-profile".into()),
+                "request" => mismatched.enrollment_request_id = Some("another-request".into()),
+                "digest" => mismatched.enrollment_request_digest = Some("another-digest".into()),
+                "admin" => mismatched.enrollment_admin_did = Some("another-admin".into()),
+                "sequence" => mismatched.enrollment_authorization_sequence = Some(2),
+                "expiry" => {
+                    mismatched.enrollment_authorization_expires_at = Some(
+                        (Utc::now() + chrono::Duration::hours(2))
+                            .to_rfc3339_opts(SecondsFormat::Secs, true),
+                    )
+                }
+                _ => unreachable!(),
+            }
+            assert!(
+                mismatched.is_chat_ready_at(Utc::now()),
+                "cached readiness remains true: {field}"
+            );
+            let mismatched = core
+                .sync_state
+                .replace_record(&ready, mismatched)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_pending_visibility_matches_model(
+                &core,
+                &pending.request,
+                "route_still_reconnecting",
+            )
+            .await;
+            ready = core
+                .sync_state
+                .replace_record(&mismatched, ready.clone())
+                .await
+                .unwrap()
+                .unwrap();
+        }
+        assert_pending_visibility_matches_model(
+            &core,
+            &pending.request,
+            "reconnected_route_satisfies_pending_request",
+        )
+        .await;
+        Arc::new(core).shutdown().await.unwrap();
     }
 
     #[tokio::test]
@@ -3631,7 +3992,7 @@ mod tests {
             "{error:#}"
         );
 
-        core.shutdown().await.unwrap();
+        Arc::new(core).shutdown().await.unwrap();
     }
 
     #[tokio::test]
@@ -3668,7 +4029,7 @@ mod tests {
         assert_eq!(listed[0].state, "approved");
         assert_eq!(listed[0].request_id, authority.request.request_id);
 
-        core.shutdown().await.unwrap();
+        Arc::new(core).shutdown().await.unwrap();
     }
 
     #[tokio::test]
@@ -3758,7 +4119,7 @@ mod tests {
             vec![Some(authority.request.request_digest.as_str())]
         );
 
-        core.shutdown().await.unwrap();
+        Arc::new(core).shutdown().await.unwrap();
     }
 
     #[tokio::test]
@@ -3833,6 +4194,6 @@ mod tests {
         );
         assert_eq!(transport.observations.load(SeqCst), 0);
 
-        core.shutdown().await.unwrap();
+        Arc::new(core).shutdown().await.unwrap();
     }
 }

@@ -36,8 +36,8 @@ async fn seed_config(node: &Arc<EmbeddedNode>) {
         "inference_backends":[{"node_did":NODE_DID,"backend_id":BACKEND_ID,"name":"Local","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:11434/v1","auth":{"kind":"api_key","key":SECRET},"max_concurrent":1}]
     })).unwrap();
     let plan = DesiredStateApplyPlan::from_pack_config(&config).unwrap();
-    ConfigAccess::Local(node.clone())
-        .transact("test.self_config.seed", |txn| {
+    ConfigAccess::local(node.clone())
+        .transact_write("test.self_config.seed", |txn| {
             let plan = plan.clone();
             Box::pin(async move { apply_desired_state_plan(txn, &plan).await })
         })
@@ -47,8 +47,8 @@ async fn seed_config(node: &Arc<EmbeddedNode>) {
 
 async fn read(node: &Arc<EmbeddedNode>, collection: Collection, id: &str) -> Value {
     let id = id.to_owned();
-    ConfigAccess::Local(node.clone())
-        .transact("test.self_config.read", |txn| {
+    ConfigAccess::local(node.clone())
+        .transact_write("test.self_config.read", |txn| {
             let id = id.clone();
             Box::pin(async move {
                 Ok(
@@ -387,7 +387,7 @@ async fn configure_event_source_rejects_filter_and_collection_injection() {
         .await
         .expect_err("collection identifiers cannot contain GraphQL syntax");
     }
-    let rows = ConfigAccess::Local(db.node.clone())
+    let rows = ConfigAccess::local(db.node.clone())
         .execute("{ EventSource { _docID } Agent { agent_id } }")
         .await
         .unwrap();

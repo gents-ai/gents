@@ -171,7 +171,7 @@ async fn signed_claude_tool_round_trip_with_scope(
 
     // The delivered result reconstructs exactly through the session owner.
     let native = crate::session::load_tool_call_result(
-        &crate::config_client::ConfigAccess::Local(node.clone()),
+        &crate::config_client::ConfigAccess::local(node.clone()),
         &tool_doc_id,
         "did:test:test",
         &session_id,
@@ -185,17 +185,25 @@ async fn signed_claude_tool_round_trip_with_scope(
     );
 }
 
-/// Streams the Lean `ordered-signed-redacted-tool` replay (signed thinking,
-/// redacted thinking, `tool_use echo`) as turn 1 through the owned loop. The
-/// accepted continuation must replay exactly the modeled native blocks in
-/// stream order.
 #[tokio::test]
 async fn claude_messages_redacted_and_signed_tool_round_trip_through_owned_loop() {
     let case = crate::lean_vocab_test::lean_prompt_assembly_claude_replay_cases()
         .iter()
-        .find(|case| case.name == "ordered-signed-redacted-tool")
-        .expect("Lean ordered signed/redacted/tool replay case");
+        .find(|case| case.name == "streamed-signed-redacted-tool")
+        .expect("Lean streamed signed/redacted/tool replay case");
     assert_eq!(case.outcome, "ok", "{}", case.name);
+    let expected_content = crate::lean_vocab_test::native_claude_replay_content(&case.blocks);
+    let input = crate::claude_messages::build_messages_body_native(
+        "claude-sonnet-5",
+        None,
+        Some(128),
+        &[Message::Assistant {
+            id: None,
+            content: expected_content.clone(),
+        }],
+        &[],
+    )
+    .expect("modeled canonical blocks render as Messages input");
     let expected = case
         .replay
         .iter()
@@ -211,7 +219,11 @@ async fn claude_messages_redacted_and_signed_tool_round_trip_through_owned_loop(
         "{}: the model case must keep its ordered shape",
         case.name
     );
-    let first_turn = claude_sse_for_blocks(&expected);
+    let first_turn = claude_sse_for_blocks(
+        input["messages"][0]["content"]
+            .as_array()
+            .expect("modeled Messages content"),
+    );
 
     let scope_kind = gents_protocol::rendered_request::CaptureScopeKind::Inference;
     let ClaudeFixtureRun {
@@ -223,6 +235,39 @@ async fn claude_messages_redacted_and_signed_tool_round_trip_through_owned_loop(
     assert!(collected.error.is_none(), "{:?}", collected.error);
     assert_eq!(collected.tool_results, vec!["ECHOED".to_string()]);
     assert_eq!(collected.final_text.as_deref(), Some("done"));
+
+    let request = lifecycle.request();
+    let headers = crate::graphql::graphql_with_transaction_retry(
+        &node,
+        &format!(
+            r#"{{ AgentMessage(filter: {{ request_doc_id: {{ _eq: "{}" }}, role: {{ _eq: "assistant" }} }}, order: {{ sequence: ASC }}) {{ _docID }} }}"#,
+            crate::graphql::escape_graphql_string(&request.doc_id),
+        ),
+        "Claude fixture provider messages",
+    )
+    .await
+    .expect("persisted assistant message headers");
+    let headers = headers.data.as_ref().expect("query data")["AgentMessage"]
+        .as_array()
+        .expect("assistant headers");
+    assert_eq!(headers.len(), 2, "both provider turns were persisted");
+    let (_, stored) = crate::session::load_canonical_message_from_node(
+        &node,
+        headers[0]["_docID"]
+            .as_str()
+            .expect("provider message document"),
+        &request.node_did,
+        request.requester_did.as_deref(),
+    )
+    .await
+    .expect("canonical first provider turn");
+    let Message::Assistant { content, .. } = stored else {
+        panic!("provider turn must reconstruct as an assistant message");
+    };
+    assert_eq!(
+        content, expected_content,
+        "persisted canonical blocks must retain the modeled stream grouping"
+    );
 
     let sends = captured_claude_sends(
         &node,
@@ -521,7 +566,7 @@ async fn captured_claude_sends(
         assert_eq!(row["source"], expected_source, "Claude origin is physical");
         assert_eq!(row["request_commit_cid"].as_str(), Some(request_commit_cid));
         let (body, _) = crate::rendered_request::decode_capture_pair(
-            &crate::config_client::ConfigAccess::Local(node.clone()),
+            &crate::config_client::ConfigAccess::local(node.clone()),
             u32::try_from(row["capture_version"].as_u64().expect("capture version"))
                 .expect("version fits u32"),
             row["request_json"].as_str().expect("encoded request JSON"),

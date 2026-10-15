@@ -291,7 +291,7 @@ pub(crate) async fn run(
     deps: &Deps<'_>,
     out: &mut dyn Write,
 ) -> Result<()> {
-    let gents::ConfigAccess::Graphql(graphql) = &*ctx.access else {
+    let gents::ConfigAccess::Graphql(graphql) = &ctx.access else {
         anyhow::bail!(
             "start `gents server` for this home and retry: the author runs on a served home"
         );
@@ -656,7 +656,7 @@ mod tests {
             let mut documents = Vec::new();
             for (collection, id) in ids {
                 let found = access
-                    .transact("cli.eval.init.test_read_author", |txn| {
+                    .transact_write("cli.eval.init.test_read_author", |txn| {
                         Box::pin(async move {
                             gents::config_client::read_desired_state_record_in_txn(
                                 txn, collection, owner, id,

@@ -95,7 +95,7 @@ pub(crate) async fn apply_bound_desired_manifest(
     let desired_bundle_ref = &desired_bundle;
     let planned_ref = &planned;
     let (applied, pruned) = access
-        .transact("cli.config.apply", move |txn| {
+        .transact_write("cli.config.apply", move |txn| {
             Box::pin(async move {
                 let applied_total =
                     apply_desired_state_changes(txn, desired_bundle_ref, planned_ref).await?;

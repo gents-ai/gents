@@ -120,7 +120,7 @@ async fn apply_with_counts(
 ) -> Result<DesiredStateApplyCounts> {
     let plan = DesiredStateApplyPlan::new(docs)?;
     access
-        .transact("test.desired.apply", |txn| {
+        .transact_write("test.desired.apply", |txn| {
             let plan = &plan;
             Box::pin(async move { apply_desired_state_plan(txn, plan).await })
         })
@@ -132,7 +132,7 @@ async fn ignored_wire_api_warns_once_per_changed_backend_through_common_apply_ow
 {
     let node = Arc::new(EmbeddedNode::builder().build().await?);
     register_config_schemas(&node).await?;
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let capture = IgnoredWireWarningCapture::default();
     let warnings = Arc::clone(&capture.0);
     let subscriber = tracing::Dispatch::new(Registry::default().with(capture));
@@ -233,7 +233,7 @@ fn task_projection_excludes_runtime_updated_at_and_normalizes_defaults() {
 async fn replacement_resets_defaults_and_preserves_backend_observations() -> Result<()> {
     let node = Arc::new(EmbeddedNode::builder().build().await?);
     register_config_schemas(&node).await?;
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let mut initial = backend("did:key:owner", "local");
     initial["max_concurrent"] = 7.into();
     initial["enabled"] = false.into();
@@ -281,7 +281,7 @@ async fn replacement_resets_defaults_and_preserves_backend_observations() -> Res
 async fn ambiguous_scope_aborts_transaction_including_prior_staged_writes() -> Result<()> {
     let node = Arc::new(EmbeddedNode::builder().build().await?);
     register_config_schemas_dropping_unique_indexes(&node, &[Collection::InferenceBackend]).await?;
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     apply(
         &access,
         vec![document(backend("did:key:owner", "z_duplicate"))],
@@ -321,14 +321,14 @@ async fn ambiguous_scope_aborts_transaction_including_prior_staged_writes() -> R
 async fn read_records_pages_across_batches_and_omits_missing_ids() -> Result<()> {
     let node = Arc::new(EmbeddedNode::builder().build().await?);
     register_config_schemas(&node).await?;
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let owner = "did:key:owner";
     let ids = ["a", "b", "c", "d", "e"];
     for id in ids {
         apply(&access, vec![document(backend(owner, id))]).await?;
     }
     let records = access
-        .transact("test.read_records.paged", |txn| {
+        .transact_write("test.read_records.paged", |txn| {
             Box::pin(async move {
                 // A page size smaller than the ID set forces several pages,
                 // exercising the pager rather than a single query.
@@ -357,7 +357,7 @@ async fn read_records_pages_across_batches_and_omits_missing_ids() -> Result<()>
 async fn read_records_rejects_duplicate_live_documents_naming_them() -> Result<()> {
     let node = Arc::new(EmbeddedNode::builder().build().await?);
     register_config_schemas_dropping_unique_indexes(&node, &[Collection::InferenceBackend]).await?;
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let owner = "did:key:owner";
     apply(&access, vec![document(backend(owner, "dup"))]).await?;
     let mut duplicate = backend(owner, "dup");
@@ -372,7 +372,7 @@ async fn read_records_rejects_duplicate_live_documents_naming_them() -> Result<(
         )
         .await?;
     let error = access
-        .transact("test.read_records.duplicate.read", |txn| {
+        .transact_write("test.read_records.duplicate.read", |txn| {
             Box::pin(async move {
                 read_records(txn, Collection::InferenceBackend, owner, &["dup"]).await
             })
@@ -431,7 +431,7 @@ async fn generated_default_replacements_preserve_runtime_startup_selection() -> 
     assert_eq!(cases.len(), 6);
     let node = Arc::new(EmbeddedNode::builder().build().await?);
     register_config_schemas(&node).await?;
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     for (index, case) in cases.iter().enumerate() {
         let owner = format!("did:key:default-replacement-{index}");
         let principal = |default: &Value, name: &str| {
@@ -470,19 +470,19 @@ async fn generated_default_replacements_preserve_runtime_startup_selection() -> 
         replacement.add["default_agent_id"] = json!("coding");
         let plan = DesiredStateApplyPlan::new(vec![replacement])?;
         let before = access
-            .transact("test.default.before", |txn| {
+            .transact_write("test.default.before", |txn| {
                 let owner = &owner;
                 Box::pin(async move { read_record(txn, Collection::Node, owner, owner).await })
             })
             .await?;
         let preview = access
-            .transact("test.default.preview", |txn| {
+            .transact_write("test.default.preview", |txn| {
                 let plan = &plan;
                 Box::pin(async move { validate_desired_state_plan(txn, plan).await })
             })
             .await;
         let published = access
-            .transact("test.default.publish", |txn| {
+            .transact_write("test.default.publish", |txn| {
                 let plan = &plan;
                 Box::pin(async move { apply_desired_state_plan(txn, plan).await })
             })
@@ -491,7 +491,7 @@ async fn generated_default_replacements_preserve_runtime_startup_selection() -> 
         assert_eq!(preview.is_ok(), allowed, "preview: {case}: {preview:?}");
         assert_eq!(published.is_ok(), allowed, "publish: {case}: {published:?}");
         let after = access
-            .transact("test.default.after", |txn| {
+            .transact_write("test.default.after", |txn| {
                 let owner = &owner;
                 Box::pin(async move { read_record(txn, Collection::Node, owner, owner).await })
             })
@@ -515,7 +515,7 @@ async fn generated_default_replacements_preserve_runtime_startup_selection() -> 
 async fn retained_inbound_references_and_cycles_share_atomic_publication() -> Result<()> {
     let node = Arc::new(EmbeddedNode::builder().build().await?);
     register_config_schemas(&node).await?;
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let owner = "did:key:owner";
     let mut documents = cyclic_configuration(owner);
     documents.extend(cyclic_configuration("did:key:foreign"));
@@ -537,7 +537,7 @@ async fn retained_inbound_references_and_cycles_share_atomic_publication() -> Re
     drifted_replacement.update["context_id"] = "absent".into();
     let preview_plan = DesiredStateApplyPlan::new(vec![drifted_replacement])?;
     assert!(access
-        .transact("test.preview.replacement", |txn| {
+        .transact_write("test.preview.replacement", |txn| {
             let plan = &preview_plan;
             Box::pin(async move { validate_desired_state_plan(txn, plan).await })
         })
@@ -550,7 +550,7 @@ async fn retained_inbound_references_and_cycles_share_atomic_publication() -> Re
         "context".into(),
     )])?;
     assert!(access
-        .transact("test.preview.removal", |txn| {
+        .transact_write("test.preview.removal", |txn| {
             let plan = &preview_removal;
             Box::pin(async move { validate_desired_state_plan(txn, plan).await })
         })
@@ -560,7 +560,7 @@ async fn retained_inbound_references_and_cycles_share_atomic_publication() -> Re
     let preview_addition =
         DesiredStateApplyPlan::new(vec![document(backend(owner, "preview-only"))])?;
     access
-        .transact("test.preview.addition", |txn| {
+        .transact_write("test.preview.addition", |txn| {
             let plan = &preview_addition;
             Box::pin(async move { validate_desired_state_plan(txn, plan).await })
         })
@@ -586,7 +586,7 @@ async fn retained_inbound_references_and_cycles_share_atomic_publication() -> Re
         "context".into(),
     )])?;
     let error = access
-        .transact("test.reject.removal", |txn| {
+        .transact_write("test.reject.removal", |txn| {
             let plan = &plan;
             Box::pin(async move { apply_desired_state_plan(txn, plan).await })
         })
@@ -615,7 +615,7 @@ async fn retained_inbound_references_and_cycles_share_atomic_publication() -> Re
         .collect();
     let plan = DesiredStateApplyPlan::new(Vec::new())?.with_removals(removals)?;
     access
-        .transact("test.remove.cycle", |txn| {
+        .transact_write("test.remove.cycle", |txn| {
             let plan = &plan;
             Box::pin(async move { apply_desired_state_plan(txn, plan).await })
         })
@@ -638,7 +638,7 @@ async fn retained_inbound_references_and_cycles_share_atomic_publication() -> Re
 async fn replacement_checks_actual_update_and_unchanged_duplicate_rows() -> Result<()> {
     let node = Arc::new(EmbeddedNode::builder().build().await?);
     register_config_schemas_dropping_unique_indexes(&node, &[Collection::AgentContext]).await?;
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let owner = "did:key:owner";
     apply(&access, cyclic_configuration(owner)).await?;
     let mut replacement = cyclic_configuration(owner)
@@ -673,14 +673,14 @@ async fn expect_existing_documents_unchanged_rejects_drifted_live_rows() -> Resu
     // re-install against out-of-band mutation of live package documents.
     let node = Arc::new(EmbeddedNode::builder().build().await?);
     register_config_schemas(&node).await?;
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let owner = "did:key:owner";
     apply(&access, vec![document(backend(owner, "packaged"))]).await?;
 
     // The matching plan (authored digest == live projection) verifies clean.
     let matching = DesiredStateApplyPlan::new(vec![document(backend(owner, "packaged"))])?;
     access
-        .transact("test.verify.matching", |txn| {
+        .transact_write("test.verify.matching", |txn| {
             let plan = &matching;
             Box::pin(async move { expect_existing_documents_unchanged(txn, plan).await })
         })
@@ -689,7 +689,7 @@ async fn expect_existing_documents_unchanged_rejects_drifted_live_rows() -> Resu
     // Mutate a non-committed live field out of band; the same plan now drifts.
     access.write("test.drift", r#"mutation { update_InferenceBackend(filter:{node_did:{_eq:"did:key:owner"},backend_id:{_eq:"packaged"}},input:{name:"out-of-band"}){_docID} }"#).await?;
     let error = access
-        .transact("test.verify.drifted", |txn| {
+        .transact_write("test.verify.drifted", |txn| {
             let plan = &matching;
             Box::pin(async move { expect_existing_documents_unchanged(txn, plan).await })
         })
@@ -739,13 +739,13 @@ fn expectation(owner: &str, id: &str, digest: Option<String>) -> DesiredStateExp
 async fn cas_node() -> Result<(ConfigAccess, &'static str)> {
     let node = Arc::new(EmbeddedNode::builder().build().await?);
     register_config_schemas(&node).await?;
-    Ok((ConfigAccess::Local(node), "did:key:owner"))
+    Ok((ConfigAccess::local(node), "did:key:owner"))
 }
 
 async fn live_digest(access: &ConfigAccess, owner: &str, id: &str) -> Result<Option<String>> {
     let (owner, id) = (owner.to_owned(), id.to_owned());
     access
-        .transact("test.cas.read", |txn| {
+        .transact_write("test.cas.read", |txn| {
             let (owner, id) = (owner.clone(), id.clone());
             Box::pin(async move {
                 read_desired_state_document_in_txn(txn, Collection::InferenceBackend, &owner, &id)
@@ -771,7 +771,7 @@ async fn matching_expectation_applies_the_plan() -> Result<()> {
     let plan = DesiredStateApplyPlan::new(vec![document(renamed(owner, "target", "Promoted"))])?
         .with_expected(vec![expectation(owner, "target", digest)])?;
     access
-        .transact("test.cas.apply", |txn| {
+        .transact_write("test.cas.apply", |txn| {
             let plan = &plan;
             Box::pin(async move { apply_desired_state_plan(txn, plan).await })
         })
@@ -803,7 +803,7 @@ async fn drifted_expectation_refuses_and_writes_nothing() -> Result<()> {
             expectation(owner, "other", frozen_other.clone()),
         ])?;
     let error = access
-        .transact("test.cas.stale", |txn| {
+        .transact_write("test.cas.stale", |txn| {
             let plan = &plan;
             Box::pin(async move { apply_desired_state_plan(txn, plan).await })
         })
@@ -830,7 +830,7 @@ async fn absent_expectations_are_checked_in_both_directions() -> Result<()> {
     let must_be_absent = DesiredStateApplyPlan::new(vec![document(backend(owner, "fresh"))])?
         .with_expected(vec![expectation(owner, "fresh", None)])?;
     access
-        .transact("test.cas.absent_ok", |txn| {
+        .transact_write("test.cas.absent_ok", |txn| {
             let plan = &must_be_absent;
             Box::pin(async move { apply_desired_state_plan(txn, plan).await })
         })
@@ -839,7 +839,7 @@ async fn absent_expectations_are_checked_in_both_directions() -> Result<()> {
     let wrongly_absent = DesiredStateApplyPlan::new(vec![document(backend(owner, "again"))])?
         .with_expected(vec![expectation(owner, "present", None)])?;
     let error = access
-        .transact("test.cas.absent_stale", |txn| {
+        .transact_write("test.cas.absent_stale", |txn| {
             let plan = &wrongly_absent;
             Box::pin(async move { apply_desired_state_plan(txn, plan).await })
         })
@@ -852,7 +852,7 @@ async fn absent_expectations_are_checked_in_both_directions() -> Result<()> {
             vec![expectation(owner, "missing", Some("sha256:00".into()))],
         )?;
     let error = access
-        .transact("test.cas.present_stale", |txn| {
+        .transact_write("test.cas.present_stale", |txn| {
             let plan = &wrongly_present;
             Box::pin(async move { apply_desired_state_plan(txn, plan).await })
         })
@@ -917,7 +917,7 @@ async fn guarded_publication_matches_lean_publish_if_cases() -> Result<()> {
         .with_expected(expected)?;
 
         let outcome = access
-            .transact("test.cas.lean", |txn| {
+            .transact_write("test.cas.lean", |txn| {
                 let plan = &plan;
                 Box::pin(async move { apply_desired_state_plan(txn, plan).await })
             })
@@ -962,7 +962,7 @@ async fn guarded_publication_matches_lean_publish_if_cases() -> Result<()> {
                     == expectation.content.as_deref()
             });
             let replay = access
-                .transact("test.cas.lean.replay", |txn| {
+                .transact_write("test.cas.lean.replay", |txn| {
                     let plan = &plan;
                     Box::pin(async move { apply_desired_state_plan(txn, plan).await })
                 })
@@ -1032,14 +1032,14 @@ async fn canonical_replacement_preserves_revocation_and_attested_creation() {
             .unwrap(),
     );
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let original: crate::document_config::PackConfig = serde_json::from_value(serde_json::json!({
         "node":{"node_did":"binding-owner"},
         "chain_key_bindings":[{"node_did":"binding-owner","binding_id":"signing","address":"0x1111111111111111111111111111111111111111","key_backend":"keyring","attestation":"signed-owner-binding","created_at":"2026-01-01T00:00:00Z","revoked_at":"2026-01-02T00:00:00Z"}]
     })).unwrap();
     let plan = DesiredStateApplyPlan::from_pack_config(&original).unwrap();
     access
-        .transact("seed_revoked_binding", |txn| {
+        .transact_write("seed_revoked_binding", |txn| {
             let plan = plan.clone();
             Box::pin(async move { apply_desired_state_plan(txn, &plan).await.map(|_| ()) })
         })
@@ -1066,7 +1066,7 @@ async fn canonical_replacement_preserves_revocation_and_attested_creation() {
         let config = serde_json::from_value(raw).unwrap();
         let plan = DesiredStateApplyPlan::from_pack_config(&config).unwrap();
         access
-            .transact("stale_binding_update", |txn| {
+            .transact_write("stale_binding_update", |txn| {
                 let plan = plan.clone();
                 Box::pin(async move { apply_desired_state_plan(txn, &plan).await.map(|_| ()) })
             })
@@ -1087,7 +1087,7 @@ async fn canonical_replacement_preserves_revocation_and_attested_creation() {
 async fn preview_rejects_a_context_window_above_the_advertised_maximum() -> Result<()> {
     let node = Arc::new(EmbeddedNode::builder().build().await?);
     register_config_schemas(&node).await?;
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let owner = "did:key:owner";
     let profile = |window: Value| {
         config(
@@ -1132,7 +1132,7 @@ async fn preview_window(
 ) -> Result<()> {
     let plan = DesiredStateApplyPlan::new(vec![profile(json!(window))])?;
     access
-        .transact("test.preview.context_window", |txn| {
+        .transact_write("test.preview.context_window", |txn| {
             let plan = &plan;
             Box::pin(async move { validate_desired_state_plan(txn, plan).await })
         })
@@ -1186,7 +1186,7 @@ async fn obligation_node() -> Result<Arc<EmbeddedNode>> {
 #[tokio::test]
 async fn output_obligation_count_field_must_hold_a_count_on_the_target_collection() -> Result<()> {
     let node = obligation_node().await?;
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let owner = "did:key:obligation-owner";
 
     for (count_field, reported_type) in [
@@ -1250,7 +1250,7 @@ async fn output_obligation_count_field_must_hold_a_count_on_the_target_collectio
         "flag",
     )])?;
     let previewed = access
-        .transact("test.obligation.preview", |txn| {
+        .transact_write("test.obligation.preview", |txn| {
             let plan = &plan;
             Box::pin(async move { validate_desired_state_plan(txn, plan).await })
         })
@@ -1275,7 +1275,7 @@ async fn output_obligation_count_field_must_hold_a_count_on_the_target_collectio
 #[tokio::test]
 async fn output_obligation_accepts_every_count_field_the_runtime_can_parse() -> Result<()> {
     let node = obligation_node().await?;
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let owner = "did:key:obligation-owner";
 
     let mut refused = Vec::new();
@@ -1327,7 +1327,7 @@ async fn output_obligation_accepts_every_count_field_the_runtime_can_parse() -> 
 #[tokio::test]
 async fn string_count_field_from_the_reported_failure_is_still_accepted() -> Result<()> {
     let node = obligation_node().await?;
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let owner = "did:key:obligation-owner";
 
     // A String field's reported type cannot separate a canonical decimal
@@ -1390,7 +1390,7 @@ async fn published_count_field(
 #[tokio::test]
 async fn creation_judges_the_count_field_of_the_add_payload() -> Result<()> {
     let node = obligation_node().await?;
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let owner = "did:key:obligation-owner";
 
     let refused = apply(
@@ -1410,7 +1410,7 @@ async fn creation_judges_the_count_field_of_the_add_payload() -> Result<()> {
         owner, "created", "flag", "total",
     )])?;
     let previewed = access
-        .transact("test.obligation.preview.add", |txn| {
+        .transact_write("test.obligation.preview.add", |txn| {
             let plan = &plan;
             Box::pin(async move { validate_desired_state_plan(txn, plan).await })
         })
@@ -1443,7 +1443,7 @@ async fn creation_judges_the_count_field_of_the_add_payload() -> Result<()> {
 #[tokio::test]
 async fn replacement_judges_the_count_field_of_the_update_payload() -> Result<()> {
     let node = obligation_node().await?;
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let owner = "did:key:obligation-owner";
     apply(
         &access,
@@ -1473,7 +1473,7 @@ async fn replacement_judges_the_count_field_of_the_update_payload() -> Result<()
         owner, "replaced", "amount", "flag",
     )])?;
     let previewed = access
-        .transact("test.obligation.preview.update", |txn| {
+        .transact_write("test.obligation.preview.update", |txn| {
             let plan = &plan;
             Box::pin(async move { validate_desired_state_plan(txn, plan).await })
         })
@@ -1573,7 +1573,7 @@ async fn published_event_sources(node: &EmbeddedNode) -> Result<Vec<Value>> {
 #[tokio::test]
 async fn event_source_count_field_must_hold_a_count_on_the_source_collection() -> Result<()> {
     let node = event_source_node().await?;
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let owner = "did:key:event-source-owner";
 
     for (count_field, reported_type) in [
@@ -1636,7 +1636,7 @@ async fn event_source_count_field_must_hold_a_count_on_the_source_collection() -
         "flag",
     )])?;
     let previewed = access
-        .transact("test.event_source.preview", |txn| {
+        .transact_write("test.event_source.preview", |txn| {
             let plan = &plan;
             Box::pin(async move { validate_desired_state_plan(txn, plan).await })
         })
@@ -1659,7 +1659,7 @@ async fn event_source_count_field_must_hold_a_count_on_the_source_collection() -
 #[tokio::test]
 async fn event_source_accepts_every_count_field_the_runtime_can_parse() -> Result<()> {
     let node = event_source_node().await?;
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let owner = "did:key:event-source-owner";
 
     let mut refused = Vec::new();
@@ -1732,7 +1732,7 @@ async fn event_source_accepts_every_count_field_the_runtime_can_parse() -> Resul
 #[tokio::test]
 async fn event_source_correlation_field_must_be_a_string() -> Result<()> {
     let node = event_source_node().await?;
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let owner = "did:key:event-source-owner";
 
     let mistyped = apply(
@@ -1810,7 +1810,7 @@ async fn published_count_field_of(node: &EmbeddedNode, event_source_id: &str) ->
 #[tokio::test]
 async fn creation_judges_the_count_field_of_the_event_source_add_payload() -> Result<()> {
     let node = event_source_node().await?;
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let owner = "did:key:event-source-owner";
 
     let refused = apply(
@@ -1838,7 +1838,7 @@ async fn creation_judges_the_count_field_of_the_event_source_add_payload() -> Re
         "total",
     )])?;
     let previewed = access
-        .transact("test.event_source.preview.add", |txn| {
+        .transact_write("test.event_source.preview.add", |txn| {
             let plan = &plan;
             Box::pin(async move { validate_desired_state_plan(txn, plan).await })
         })
@@ -1870,7 +1870,7 @@ async fn creation_judges_the_count_field_of_the_event_source_add_payload() -> Re
 #[tokio::test]
 async fn replacement_judges_the_count_field_of_the_event_source_update_payload() -> Result<()> {
     let node = event_source_node().await?;
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let owner = "did:key:event-source-owner";
     apply(
         &access,
@@ -1908,7 +1908,7 @@ async fn replacement_judges_the_count_field_of_the_event_source_update_payload()
         "flag",
     )])?;
     let previewed = access
-        .transact("test.event_source.preview.update", |txn| {
+        .transact_write("test.event_source.preview.update", |txn| {
             let plan = &plan;
             Box::pin(async move { validate_desired_state_plan(txn, plan).await })
         })
@@ -1971,7 +1971,7 @@ async fn outcome_delivery_requires_a_string_handoff_id_on_its_source_collection(
         "type PlainPing { message: String } type HandoffPing { handoff_id: String message: String } type NumberedPing { handoff_id: Int }",
     )
     .await?;
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let owner = "did:key:outcome-owner";
     apply(&access, cyclic_configuration(owner)).await?;
     let source = |collection: &str| {
@@ -2273,7 +2273,7 @@ async fn publication_applies_native_route_template_fields_the_schema_does_not_de
     // cursor, and the registered WorkspaceReceipt declares none of the fields
     // the native route injects.
     crate::ensure_runtime_schemas(&node).await?;
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let owner = "did:key:native-route-owner";
     apply(&access, cyclic_configuration(owner)).await?;
     let documents = vec![
@@ -2292,7 +2292,7 @@ async fn publication_applies_native_route_template_fields_the_schema_does_not_de
     ];
     let plan = DesiredStateApplyPlan::new(documents.clone())?;
     access
-        .transact("test.native_route.preview", |txn| {
+        .transact_write("test.native_route.preview", |txn| {
             let plan = &plan;
             Box::pin(async move { validate_desired_state_plan(txn, plan).await })
         })

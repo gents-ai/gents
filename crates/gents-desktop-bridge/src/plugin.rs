@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::Arc;
 use tauri::plugin::{Builder, TauriPlugin};
 use tauri::{Manager, Runtime};
 
@@ -42,6 +44,47 @@ pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
                 }
             });
             Ok(())
+        })
+        .on_webview_ready(register_window)
+        .on_event({
+            let exit_owner = Arc::new(ExitRequestOwner::default());
+            move |app, event| match event {
+                tauri::RunEvent::WindowEvent { label, event, .. } => {
+                    app.state::<DesktopAppState>().window_event(label, event);
+                }
+                // Tauri ignores prevent_exit for its restart code, so that path cannot await shutdown.
+                tauri::RunEvent::ExitRequested { code, api, .. }
+                    if *code != Some(tauri::RESTART_EXIT_CODE) =>
+                {
+                    let exit_code = *code;
+                    match exit_owner.request() {
+                        ExitRequest::StartShutdown => {
+                            api.prevent_exit();
+                            let app = app.clone();
+                            let exit_owner = Arc::clone(&exit_owner);
+                            tauri::async_runtime::spawn(async move {
+                                let state = app.state::<DesktopAppState>();
+                                if let Err(error) =
+                                    tauri_commands::lifecycle::shutdown_client_for_app_exit(
+                                        &app, &state,
+                                    )
+                                    .await
+                                {
+                                    tracing::warn!(
+                                        error = %error.message,
+                                        "desktop client shutdown failed during app exit"
+                                    );
+                                }
+                                exit_owner.complete();
+                                app.exit(exit_code.unwrap_or(0));
+                            });
+                        }
+                        ExitRequest::WaitForShutdown => api.prevent_exit(),
+                        ExitRequest::Allow => {}
+                    }
+                }
+                _ => {}
+            }
         })
         .invoke_handler(tauri::generate_handler![
             tauri_commands::external_url::desktop_open_external_url,
@@ -155,6 +198,40 @@ pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
         .build()
 }
 
+#[derive(Default)]
+struct ExitRequestOwner(AtomicU8);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExitRequest {
+    StartShutdown,
+    WaitForShutdown,
+    Allow,
+}
+
+impl ExitRequestOwner {
+    fn request(&self) -> ExitRequest {
+        match self
+            .0
+            .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
+        {
+            Ok(_) => ExitRequest::StartShutdown,
+            Err(1) => ExitRequest::WaitForShutdown,
+            Err(_) => ExitRequest::Allow,
+        }
+    }
+
+    fn complete(&self) {
+        self.0.store(2, Ordering::Release);
+    }
+}
+
+fn register_window<R: Runtime>(webview: tauri::Webview<R>) {
+    let window = webview.window();
+    window
+        .state::<DesktopAppState>()
+        .register_window(window.label());
+}
+
 /// Takes the desktop process lock through the reset reservation, so a
 /// waiting reset is never overtaken, and holds it for the app's lifetime.
 fn hold_desktop_process<R: Runtime>(
@@ -180,6 +257,15 @@ mod tests {
     };
 
     #[test]
+    fn exit_is_deferred_once_until_the_existing_shutdown_owner_finishes() {
+        let owner = ExitRequestOwner::default();
+        assert_eq!(owner.request(), ExitRequest::StartShutdown);
+        assert_eq!(owner.request(), ExitRequest::WaitForShutdown);
+        owner.complete();
+        assert_eq!(owner.request(), ExitRequest::Allow);
+    }
+
+    #[test]
     fn browser_store_and_process_locks_are_both_held_after_setup() {
         let temp = tempfile::tempdir().unwrap();
         let paths = DesktopPaths::from_root(temp.path().join("desktop"));
@@ -193,5 +279,66 @@ mod tests {
         assert!(app.try_state::<DesktopProcessLock>().is_some());
         assert!(lock_browser_store(Some(&store)).is_err());
         assert!(lock_desktop_process(&paths, false).is_err());
+    }
+
+    #[test]
+    fn native_views_register_before_selection_and_closed_view_ipc_is_ignored() {
+        use tauri::ipc::InvokeBody;
+        use tauri::webview::InvokeRequest;
+
+        let temp = tempfile::tempdir().unwrap();
+        let config = BridgeConfig {
+            home: crate::config::HomePolicy::FixedRoot(temp.path().join("desktop")),
+            bootstrap: crate::config::BootstrapPolicy::PairedRemoteOnly,
+            ..Default::default()
+        };
+        let app = tauri::test::mock_builder()
+            .manage(DesktopAppState::new(resolve_policy(&config, None).unwrap()))
+            .plugin(
+                Builder::<tauri::test::MockRuntime>::new("window-selection-test")
+                    .on_webview_ready(register_window)
+                    .build(),
+            )
+            .invoke_handler(tauri::generate_handler![
+                tauri_commands::lifecycle::desktop_set_selected_node
+            ])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let main = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .unwrap();
+        let second = tauri::WebviewWindowBuilder::new(&app, "second", Default::default())
+            .build()
+            .unwrap();
+        let state = app.state::<DesktopAppState>();
+        for label in ["main", "second"] {
+            assert!(state.bridge.lock().unwrap().has_window(label));
+        }
+        main.hide().unwrap();
+        state.window_event("main", &tauri::WindowEvent::Focused(false));
+        assert!(state.bridge.lock().unwrap().has_window("main"));
+
+        let invoke = |view: &tauri::WebviewWindow<tauri::test::MockRuntime>| {
+            tauri::test::get_ipc_response(
+                view,
+                InvokeRequest {
+                    cmd: "desktop_set_selected_node".into(),
+                    callback: tauri::ipc::CallbackFn(0),
+                    error: tauri::ipc::CallbackFn(1),
+                    url: "http://tauri.localhost".parse().unwrap(),
+                    body: InvokeBody::Json(serde_json::json!({"nodeDid": "did:stale"})),
+                    headers: Default::default(),
+                    invoke_key: tauri::test::INVOKE_KEY.to_string(),
+                },
+            )
+        };
+        assert!(invoke(&main)
+            .expect_err("a live view still requires a running client")
+            .to_string()
+            .contains("desktop client not initialized"));
+        state.window_event("second", &tauri::WindowEvent::Destroyed);
+        invoke(&second).expect("IPC already queued by a destroyed view is ignored");
+        assert!(!state.bridge.lock().unwrap().has_window("second"));
+        assert!(state.bridge.lock().unwrap().has_window("main"));
     }
 }

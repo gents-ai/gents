@@ -89,7 +89,7 @@ impl ProductionMaterializer {
 }
 
 pub(crate) async fn recover_workspace_binding_pending_requests(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
 ) -> Result<usize> {
     let query = format!(
@@ -268,8 +268,7 @@ impl MaterializerHandle for ProductionMaterializer {
                 None => None,
             };
             let mut workspace = graph.map(|resolved| resolved.lineage).unwrap_or(explicit);
-            crate::workspace::stamp_workspace_lineage(node.as_ref(), &node_did, &mut workspace)
-                .await?;
+            crate::workspace::stamp_workspace_lineage(&node, &node_did, &mut workspace).await?;
             workspace.require_authority_if_workspace_id()?;
             let lineage = TriggerLineage {
                 trigger_id: trigger_id.clone(),
@@ -308,7 +307,7 @@ impl MaterializerHandle for ProductionMaterializer {
                     Some(retry_key), session_scope.as_deref(), trigger_doc_id.as_deref(),
                 ).await?;
                 let admission = crate::lifecycle::write_trigger_delivery(
-                    node.as_ref(),
+                    &node,
                     runtime_actor,
                     prepared,
                     &create,
@@ -336,7 +335,7 @@ impl MaterializerHandle for ProductionMaterializer {
                 )
                 .await?;
                 let enqueued = crate::goal::submit_goal_backed_request_local(
-                    node.as_ref(),
+                    &node,
                     runtime_actor,
                     &node_did,
                     &identity.session_id,
@@ -364,7 +363,7 @@ impl MaterializerHandle for ProductionMaterializer {
                 let conversation_title = task_session_title(&task_label);
                 let enqueued =
                     write_pending_agent_request_with_lineage_workspace_and_conversation_title(
-                        node.as_ref(),
+                        &node,
                         runtime_actor,
                         &node_did,
                         &agent_id,
@@ -383,15 +382,14 @@ impl MaterializerHandle for ProductionMaterializer {
             };
             if workspace_ref.is_some() {
                 crate::workspace::materialize_workspace_binding(
-                    node.as_ref(),
+                    &node,
                     &enqueued.request_id,
                     &enqueued.doc_id,
                     &node_did,
                     &workspace,
                 )
                 .await?;
-                crate::lifecycle::activate_workspace_bound_request(node.as_ref(), &enqueued.doc_id)
-                    .await?;
+                crate::lifecycle::activate_workspace_bound_request(&node, &enqueued.doc_id).await?;
             }
             tracing::info!(
                 task_id = %task_id,
@@ -528,8 +526,8 @@ impl MaterializerHandle for ProductionMaterializer {
                 trigger_id = escaped_trigger_id,
                 request_exclusion_filter = request_exclusion_filter,
             );
-            let resp = crate::config_client::ConfigAccess::transact_local(
-                node.as_ref(),
+            let resp = crate::config_client::ConfigAccess::transact_local_write(
+                &node,
                 None,
                 "supersede_active_runtime_requests_for_trigger",
                 |txn| {
@@ -602,7 +600,7 @@ impl MaterializerHandle for ProductionMaterializer {
                 }
                 for row in active_rows {
                     if crate::lifecycle::revoke_execution_preserving_output(
-                        node.as_ref(),
+                        &node,
                         &row,
                         crate::lifecycle::RequestTerminalOutcome::Superseded,
                         "superseded by a newer trigger fire",
@@ -637,8 +635,8 @@ impl MaterializerHandle for ProductionMaterializer {
         let identity = identity.clone();
         Box::pin(async move {
             let key = crate::trigger_engine::durable::fire_key(&identity);
-            crate::config_client::ConfigAccess::transact_local(
-                self.node.as_ref(), Some(self.runtime_actor()?), "trigger.recover_admitted_fire",
+            crate::config_client::ConfigAccess::transact_local_write(
+                &self.node, Some(self.runtime_actor()?), "trigger.recover_admitted_fire",
                 |txn| { let key = key.clone(); let identity = identity.clone(); Box::pin(async move {
                     let result = txn.execute(&format!(
                         "{{ TriggerFire(filter: {{fire_key: {{_eq: \"{}\"}}}}, limit: 2) {{request_id}} }}",

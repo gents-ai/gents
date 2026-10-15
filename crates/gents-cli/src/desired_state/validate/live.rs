@@ -181,7 +181,7 @@ mod tests {
                 .build()
                 .await?,
         );
-        let access = ConfigAccess::Local(node);
+        let access = ConfigAccess::local(node);
         access.add_schema(PROBE_SDL).await?;
         Ok(access)
     }

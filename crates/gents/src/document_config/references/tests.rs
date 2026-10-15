@@ -201,7 +201,7 @@ async fn event_args_rejection_rolls_back_the_whole_configuration_plan() {
     };
     let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    let access = ConfigAccess::Local(node);
+    let access = ConfigAccess::local(node);
     let mut config = json!({
         "node":{"node_did":"owner"},
         "agents":[{"node_did":"owner","agent_id":"behavior","inference_profile_id":"profile"}],
@@ -215,7 +215,7 @@ async fn event_args_rejection_rolls_back_the_whole_configuration_plan() {
     )
     .unwrap();
     access
-        .transact("test.manual_task", |txn| {
+        .transact_write("test.manual_task", |txn| {
             let plan = &plan;
             Box::pin(async move { apply_desired_state_plan(txn, plan).await })
         })
@@ -228,14 +228,14 @@ async fn event_args_rejection_rolls_back_the_whole_configuration_plan() {
     )
     .unwrap();
     assert!(access
-        .transact("test.invalid_event_task", |txn| {
+        .transact_write("test.invalid_event_task", |txn| {
             let plan = &plan;
             Box::pin(async move { apply_desired_state_plan(txn, plan).await })
         })
         .await
         .is_err());
     access
-        .transact("test.rollback", |txn| {
+        .transact_write("test.rollback", |txn| {
             Box::pin(async move {
                 let (_, task) =
                     read_desired_state_record_in_txn(txn, Collection::Task, "owner", "task")
@@ -261,7 +261,7 @@ async fn event_args_rejection_rolls_back_the_whole_configuration_plan() {
     )
     .unwrap();
     access
-        .transact("test.valid_event_task", |txn| {
+        .transact_write("test.valid_event_task", |txn| {
             let plan = &plan;
             Box::pin(async move { apply_desired_state_plan(txn, plan).await })
         })

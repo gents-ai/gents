@@ -15,7 +15,7 @@ use std::{sync::Arc, time::Duration};
 async fn writer_recovers_complete_large_task_contract_in_provider_input() {
     let db = test_db("field-recovery-writer").await;
     let did = db.node_identity.did().to_owned();
-    let access = gents::config_client::ConfigAccess::Local(db.node.clone());
+    let access = gents::config_client::ConfigAccess::local(db.node.clone());
     access
         .add_schema("type ReaderWork { instructions: String owned_files: String }")
         .await

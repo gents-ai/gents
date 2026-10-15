@@ -26,7 +26,7 @@ pub(super) fn row_matches_coalesced_source_and_key(
 }
 
 pub async fn reconcile_coalesced_pending_request(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     session_id: &str,
     node_did: &str,
     source: QueueSource,

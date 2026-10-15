@@ -140,7 +140,7 @@ async fn assert_replicated_nonclosing_ordinal_twin_rejected() -> Result<()> {
     )
     .await;
 
-    let a_access = ConfigAccess::Local(a.node.clone());
+    let a_access = ConfigAccess::local(a.node.clone());
     let header_query = format!(
         "{{ AgentMessage(filter: {{ node_did: {{ _eq: \"{}\" }}, session_id: {{ _eq: \"{}\" }}, sequence: {{ _eq: 1 }} }}) {{ {AGENT_MESSAGE_FIELDS} }} }}",
         escape_graphql_string(node_did),
@@ -203,8 +203,8 @@ async fn assert_replicated_nonclosing_ordinal_twin_rejected() -> Result<()> {
         "twin must be nonclosing without changing the sealed byte extent"
     );
     let variables = output_segment_create_variables(&twin)?;
-    ConfigAccess::transact_local(
-        b.node.as_ref(),
+    ConfigAccess::transact_local_write(
+        &b.node,
         None,
         "test.p2p_replicated_output_conflict",
         |txn| {
@@ -217,7 +217,7 @@ async fn assert_replicated_nonclosing_ordinal_twin_rejected() -> Result<()> {
         },
     )
     .await?;
-    let b_access = ConfigAccess::Local(b.node.clone());
+    let b_access = ConfigAccess::local(b.node.clone());
     let source_rows = b_access.execute(&segment_query).await?;
     let source_rows = source_rows["data"]["AgentOutputSegment"]
         .as_array()

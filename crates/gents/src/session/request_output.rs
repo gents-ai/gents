@@ -20,8 +20,9 @@ use gents_protocol::transcript::present_message;
 use crate::config_client::ConfigAccess;
 
 use super::canonical_rows::{
-    decode_output_segment_row, decode_transcript_message_row, OutputSegmentRow,
-    TranscriptMessageRow, AGENT_MESSAGE_FIELDS, AGENT_OUTPUT_SEGMENT_FIELDS,
+    decode_scoped_canonical_rows, decode_scoped_request_output_segments,
+    decode_transcript_message_row, request_output_facts_query, OutputSegmentRow,
+    TranscriptMessageRow,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -137,15 +138,8 @@ async fn load_facts(
         .session_id
         .as_deref()
         .context("request output observation omitted session")?;
-    let scope = super::session_scope_filter(node_did, session_id, request.requester_did.as_deref());
-    let physical = crate::graphql::escape_graphql_string(request_doc_id);
     let response = access
-        .execute(&format!(
-            r#"{{
-                AgentOutputSegment(filter:{{{scope},request_doc_id:{{_eq:"{physical}"}}}}){{{AGENT_OUTPUT_SEGMENT_FIELDS}}}
-                AgentMessage(filter:{{{scope},request_doc_id:{{_eq:"{physical}"}}}}){{{AGENT_MESSAGE_FIELDS}}}
-            }}"#
-        ))
+        .execute(&request_output_facts_query(request_doc_id))
         .await?;
     anyhow::ensure!(
         response
@@ -155,20 +149,27 @@ async fn load_facts(
         "canonical request output query failed: {}",
         response.get("errors").unwrap_or(&serde_json::Value::Null)
     );
-    let segments = response
+    let segment_rows = response
         .pointer("/data/AgentOutputSegment")
         .and_then(serde_json::Value::as_array)
-        .context("canonical request output query omitted segments")?
-        .iter()
-        .map(decode_output_segment_row)
-        .collect::<Result<Vec<_>>>()?;
-    let messages = response
+        .context("canonical request output query omitted segments")?;
+    let message_rows = response
         .pointer("/data/AgentMessage")
         .and_then(serde_json::Value::as_array)
-        .context("canonical request output query omitted messages")?
-        .iter()
-        .map(decode_transcript_message_row)
-        .collect::<Result<Vec<_>>>()?;
+        .context("canonical request output query omitted messages")?;
+    let segments = decode_scoped_request_output_segments(
+        segment_rows,
+        node_did,
+        Some(session_id),
+        request.requester_did.as_deref(),
+    )?;
+    let messages = decode_scoped_canonical_rows(
+        message_rows,
+        node_did,
+        Some(session_id),
+        request.requester_did.as_deref(),
+        decode_transcript_message_row,
+    )?;
     Ok((segments, messages))
 }
 

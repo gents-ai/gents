@@ -100,6 +100,9 @@ pub struct ClientStoreRows {
     #[serde(skip)]
     pub chain_key_binding_source_node_dids: Vec<Option<String>>,
     #[serde(skip)]
+    /// Node DIDs whose current operator overlay fully decoded first-run config roots.
+    pub operator_config_authoritative_node_dids: HashSet<String>,
+    #[serde(skip)]
     pub inference_backend_source_node_dids: Vec<Option<String>>,
     #[serde(skip)]
     pub backend_observation_source_node_dids: Vec<Option<String>>,
@@ -160,6 +163,8 @@ pub struct ClientStore {
     pub datastore_tool_surface_source_node_dids: Vec<Option<String>>,
     pub chain_key_bindings: Vec<ChainKeyBindingDocument>,
     pub chain_key_binding_source_node_dids: Vec<Option<String>>,
+    /// Provenance of the current operator config projection, not transport history.
+    pub operator_config_authoritative_node_dids: HashSet<String>,
     pub inference_backend_source_node_dids: Vec<Option<String>>,
     pub backend_observation_source_node_dids: Vec<Option<String>>,
     pub inference_profile_source_node_dids: Vec<Option<String>>,

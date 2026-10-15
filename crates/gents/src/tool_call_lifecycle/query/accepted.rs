@@ -17,7 +17,7 @@ impl ToolCallLifecycle {
     /// live request and pending row atomically under the mutation gate.
     #[cfg(test)]
     pub(crate) async fn load_accepted_for_dispatch(
-        node: &EmbeddedNode,
+        node: &std::sync::Arc<EmbeddedNode>,
         tool_doc_id: &str,
         node_did: &str,
         session_id: &str,
@@ -28,7 +28,7 @@ impl ToolCallLifecycle {
     }
 
     pub(super) async fn load_direct_binding(
-        node: &EmbeddedNode,
+        node: &std::sync::Arc<EmbeddedNode>,
         tool_doc_id: &str,
         node_did: &str,
         session_id: &str,

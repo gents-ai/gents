@@ -1815,7 +1815,7 @@ async fn drive_cancel_drains_automated_wakeups_preserves_user_pending(
     .await;
     assert_pre_queue_snapshot(case, &pre);
 
-    gents::interrupt_request(db.node.as_ref(), parent_request_id)
+    gents::interrupt_request(&db.node, parent_request_id)
         .await
         .unwrap();
 
@@ -2057,7 +2057,7 @@ async fn terminal_repair_sweep_ignores_foreign_did_claims() {
         let mutation = format!(
             r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{escaped_doc}" }} }}, input: {{ execution_lease_expires_at: "{expired}" }}) {{ _docID }} }}"#,
         );
-        gents::ConfigAccess::transact_local(
+        gents::ConfigAccess::transact_local_write(
             &db.node,
             None,
             "test.expire_terminal_repair_fixture",

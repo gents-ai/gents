@@ -58,7 +58,7 @@ fn real_web_research_registry_mutation(node_did: &str) -> String {
 async fn live_research_registry_matches_measured_loopback_endpoint() -> Result<()> {
     let node = Arc::new(gents::defra_node::EmbeddedNode::builder().build().await?);
     gents::ensure_runtime_schemas(node.as_ref()).await?;
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let node_did = "did:key:web-research-registry-test";
     access
         .write(
@@ -105,7 +105,7 @@ async fn configure_live_research_inference_profile(
 ) -> Result<()> {
     let access = ConfigAccess::Graphql(crate::support::graphql::served_endpoint(&graphql));
     access
-        .transact("test.web_research.inference", |txn| {
+        .transact_write("test.web_research.inference", |txn| {
             Box::pin(async move {
                 let (_, value) = read_desired_state_record_in_txn(
                     txn,

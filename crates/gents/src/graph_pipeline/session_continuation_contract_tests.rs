@@ -286,7 +286,7 @@ async fn admit_session_graph_task(
         attempt: None,
         created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
     };
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let triggers = access
         .execute(&format!(
             "{{Trigger(filter: {{trigger_id: {{_eq: \"{}\"}}}}) {{_docID}}}}",

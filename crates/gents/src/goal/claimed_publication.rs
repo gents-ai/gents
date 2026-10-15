@@ -12,7 +12,7 @@ use crate::request_admission::{verify_runtime_local_control_receipt, SIGNED_REQU
 use gents_protocol::row::AgentRequestRow;
 
 pub(crate) async fn publish_claimed_continuation(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     observed: &GoalDocument,
     parent_request_id: &str,
     content: &str,
@@ -24,7 +24,7 @@ pub(crate) async fn publish_claimed_continuation(
     let stopped_ref = &stopped;
     // Preserve the automatic queue writer's node actor; target identity signs
     // the child independently of the database actor.
-    let receipt = crate::config_client::ConfigAccess::transact_local(
+    let receipt = crate::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "goal.publish_claimed_continuation",
@@ -58,12 +58,12 @@ pub(crate) async fn publish_claimed_continuation(
 /// head. Publication writes the same Goal row, so a conflicting child commit
 /// retries this transaction and must pass these observations again.
 pub(crate) async fn stop_claimed_continuation_for_unavailable_agent(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     observed: &GoalDocument,
     parent_request_id: &str,
     reason: &str,
 ) -> Result<bool> {
-    crate::config_client::ConfigAccess::transact_local(
+    crate::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "goal.stop_unavailable_claimed_continuation",

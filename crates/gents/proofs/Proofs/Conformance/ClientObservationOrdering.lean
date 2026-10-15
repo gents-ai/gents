@@ -12,6 +12,11 @@ private def phaseName : ClientSnapshotObservation.StartupPhase → String
   | .clientError => "client-error"
   | .ready => "ready"
 
+private def firstRunName : ClientSnapshotObservation.FirstRunPhase → String
+  | .unknown => "unknown"
+  | .active => "active"
+  | .done => "done"
+
 /-- Expected guard outcomes are evaluated from the executable Lean owner. -/
 def main : IO Unit := do
   let rows := (List.range 5).flatMap fun current =>
@@ -28,6 +33,17 @@ def main : IO Unit := do
         "{\"phase\":\"" ++ phaseName phase ++ "\",\"running\":" ++ toString running ++
         ",\"autostartDeclined\":" ++ toString autostartDeclined ++ ",\"expected\":\"" ++
         phaseName (ClientSnapshotObservation.observeStartup phase running autostartDeclined) ++ "\"}"
+  let firstRunPhases : List ClientSnapshotObservation.FirstRunPhase := [.unknown, .active, .done]
+  let firstRunRows := firstRunPhases.flatMap fun phase =>
+    [false, true].flatMap fun snapshotReady =>
+      [false, true].flatMap fun initConfigAbsent =>
+        [false, true].flatMap fun needsSetup =>
+          [false, true].map fun authoritative =>
+            let expected := ClientSnapshotObservation.observeFirstRun phase snapshotReady initConfigAbsent needsSetup authoritative
+            "{\"phase\":\"" ++ firstRunName phase ++ "\",\"snapshotReady\":" ++ toString snapshotReady ++
+            ",\"initConfigAbsent\":" ++ toString initConfigAbsent ++ ",\"needsSetup\":" ++ toString needsSetup ++
+            ",\"authoritative\":" ++ toString authoritative ++ ",\"expected\":\"" ++ firstRunName expected ++ "\"}"
   IO.println ("{\"fences\":[" ++ String.intercalate "," rows ++
     "],\"startup\":[" ++ String.intercalate "," startupRows ++
+    "],\"firstRun\":[" ++ String.intercalate "," firstRunRows ++
     "],\"liveDeltas\":" ++ Conformance.ClientLiveDeltaContracts.casesJson ++ "}")

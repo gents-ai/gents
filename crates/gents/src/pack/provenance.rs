@@ -45,7 +45,7 @@ pub(super) async fn apply_pack_documents(
 ) -> Result<super::installation::InstallReport> {
     let documents = super::installation::installable_documents(config)?;
     access
-        .transact("pack.documents.install", |txn| {
+        .transact_write("pack.documents.install", |txn| {
             let documents = documents.clone();
             Box::pin(async move {
                 super::installation::install_in_txn(txn, owner, pack, documents, policy).await

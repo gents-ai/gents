@@ -18,7 +18,7 @@ pub(crate) async fn native_queue_image(
         request_id: String,
         lifecycle_state: RequestLifecycleState,
     }
-    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let access = crate::config_client::ConfigAccess::local(node.clone());
     let response = access
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ request_id lifecycle_state }} }}"#,

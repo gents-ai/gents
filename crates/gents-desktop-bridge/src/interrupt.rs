@@ -118,7 +118,7 @@ pub async fn interrupt_request(
         ));
     }
     gents::interrupt::interrupt_request_by_doc_id_with_access(
-        &ConfigAccess::Local(core.node_arc()),
+        &ConfigAccess::local(core.node_arc()),
         &target.doc_id,
         &target.node_did,
         target.requester_did.as_deref(),

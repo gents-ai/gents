@@ -15,14 +15,9 @@ async fn fixture(
     let hook =
         DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
     let session = hook.session_id().await.unwrap();
-    crate::session::create_session_with_agent_id(
-        node.as_ref(),
-        &session,
-        "did:test:general",
-        "general",
-    )
-    .await
-    .unwrap();
+    crate::session::create_session_with_agent_id(&node, &session, "did:test:general", "general")
+        .await
+        .unwrap();
     let request = format!("native-transcript-{name}");
     bind_interruptible_request(
         node.as_ref(),

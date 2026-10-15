@@ -72,7 +72,7 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
     let node_did = crate::resolve_node_did(args.home.as_deref(), None)?;
     ensure_local_request_signer(args.home.as_deref(), &node_did)?;
     let (task_doc_id, task) = access
-        .transact("cli.task_run.read", |txn| {
+        .transact_write("cli.task_run.read", |txn| {
             let node_did = &node_did;
             let task_id = &task_id;
             Box::pin(async move {

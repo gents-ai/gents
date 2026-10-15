@@ -56,6 +56,13 @@ impl ConformanceConsumer {
 pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
     &[
         ConformanceConsumer::RustTest {
+            id: "client::core::writes::accepted_edit_projection_tests::generated_accepted_receipt_survives_projection_refresh_failure",
+            package: "gents-desktop-core",
+            source_path: "crates/gents-desktop-core/src/client/core/writes.rs",
+            module_path: "client::core::writes::accepted_edit_projection_tests",
+            function: "generated_accepted_receipt_survives_projection_refresh_failure",
+        },
+        ConformanceConsumer::RustTest {
             id: "e2e_runtime::session_input_edit::generated_remote_edits_replicate_signed_effect_and_receipt",
             package: "gents",
             source_path: "crates/gents/tests/e2e_runtime/session_input_edit.rs",
@@ -341,6 +348,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             source_path: "crates/gents/tests/conformance/enrollment.rs",
             module_path: "conformance::enrollment",
             function: "generated_enrollment_durable_cases_drive_current_projection",
+        },
+        ConformanceConsumer::RustTest {
+            id: "client::core::enrollment::tests::generated_pending_request_satisfaction_matches_lean",
+            package: "gents-desktop-core",
+            source_path: "crates/gents-desktop-core/src/client/core/enrollment.rs",
+            module_path: "client::core::enrollment::tests",
+            function: "generated_pending_request_satisfaction_matches_lean",
         },
         ConformanceConsumer::RustTest {
             id: "conformance::live_overlay::pending_user_turn_cases_match_lean_table",
@@ -985,6 +999,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             source_path: "crates/gents/tests/conformance/session_hydration.rs",
             module_path: "conformance::session_hydration",
             function: "generated_session_hydration_start_cases_match_receiver_start",
+        },
+        ConformanceConsumer::RustTest {
+            id: "conformance::session_hydration::generated_session_hydration_admission_cases_match_receiver_owner",
+            package: "gents",
+            source_path: "crates/gents/tests/conformance/session_hydration.rs",
+            module_path: "conformance::session_hydration",
+            function: "generated_session_hydration_admission_cases_match_receiver_owner",
         },
         ConformanceConsumer::RustTest {
             id: "conformance::enrollment::generated_enrollment_cases_match_production_transition_core",

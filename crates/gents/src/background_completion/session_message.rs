@@ -154,7 +154,7 @@ pub(crate) async fn settle_session_message_row(
                 return Ok(false);
             }
             append_background_tool_completion(
-                node.as_ref(),
+                node,
                 lifecycle.session_id(),
                 &calling_request_id,
                 &doc_id,
@@ -173,7 +173,7 @@ pub(crate) async fn settle_session_message_row(
         .as_deref()
         .context("caused request lacks physical identity")?;
     let Some(terminal) =
-        crate::background_tools::load_caused_request_terminal(node.as_ref(), caused_doc_id).await?
+        crate::background_tools::load_caused_request_terminal(node, caused_doc_id).await?
     else {
         return Ok(false);
     };
@@ -181,7 +181,7 @@ pub(crate) async fn settle_session_message_row(
         return Ok(false);
     }
     append_background_tool_completion(
-        node.as_ref(),
+        node,
         lifecycle.session_id(),
         &calling_request_id,
         &doc_id,

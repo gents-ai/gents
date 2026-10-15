@@ -94,7 +94,7 @@ pub(super) fn retained_trial_dir(runs_dir: &Path, hint: &str) -> Result<PathBuf>
 }
 
 async fn read_requests(home: &EmbeddedHome) -> Result<Vec<RetainedRequest>> {
-    let access = ConfigAccess::Local(home.node.clone());
+    let access = ConfigAccess::local(home.node.clone());
     let query = format!(
         r#"{{ AgentRequest(
             filter: {{ node_did: {{ _eq: "{}" }} }},
@@ -198,7 +198,7 @@ resources:
             )
             .await
             .unwrap();
-        ConfigAccess::Local(node.clone())
+        ConfigAccess::local(node.clone())
             .add_schema(&crate::schema::AGENT_REQUEST_SCHEMA.replace(
                 "type AgentRequest ",
                 &format!(
@@ -226,7 +226,7 @@ resources:
             r#"{{ AgentRequest(filter: {{node_did: {{_eq: "{}"}}}}) {{content}} }}"#,
             escape_graphql_string(&did)
         );
-        let denied_rows = ConfigAccess::transact_local(
+        let denied_rows = ConfigAccess::transact_local_write(
             &node,
             Some(denied.did().parse().unwrap()),
             "eval.inspect.test.denied_read",

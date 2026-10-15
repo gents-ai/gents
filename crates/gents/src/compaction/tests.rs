@@ -2002,7 +2002,7 @@ async fn the_summarizer_and_its_fallback_arm_distinct_capture_scopes() {
         .await
         .unwrap();
     let created = crate::config_client::ConfigAccess::write_local_response(
-        node.as_ref(),
+        &node,
         "test.compaction.capture_scope_request",
         &create.graphql_mutation().unwrap(),
     )

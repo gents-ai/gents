@@ -440,7 +440,7 @@ async fn a_profile_resolves_to_its_chat_completions_endpoint() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     crate::test_support::install_test_agent(&node, owner, "chandra").await;
-    let models = AccessModels(ConfigAccess::Local(node.clone()));
+    let models = AccessModels(ConfigAccess::local(node.clone()));
     let binding = |profile: &str| ModelBinding {
         node_did: owner.to_owned(),
         profile_id: profile.to_owned(),

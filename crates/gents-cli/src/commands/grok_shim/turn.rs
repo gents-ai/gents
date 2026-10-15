@@ -3273,7 +3273,7 @@ mod tests {
             .await
             .expect("runtime schemas");
         super::super::seed_test_agent_configuration(
-            node.as_ref(),
+            &node,
             &node_did,
             &agent_id,
             &agent_id,

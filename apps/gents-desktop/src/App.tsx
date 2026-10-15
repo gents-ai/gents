@@ -190,7 +190,17 @@ function AppBody() {
     );
   }
 
-  if (!firstRun.settled) return null;
+  if (!firstRun.settled) {
+    return (
+      <>
+        {titlebar}
+        <StartupScreen
+          configurationPending
+          initConfigStatus={firstRun.initConfigStatus}
+        />
+      </>
+    );
+  }
 
   return (
     <TooltipProvider>
