@@ -3,7 +3,7 @@ import { setEnabled } from "./enabled";
 import { dependentsWarning } from "./dependents";
 import { useState } from "react";
 import { SetupScreen } from "../setup/SetupScreen";
-import { PROVIDER_VISUALS } from "../setup/InferenceSetup";
+import { isProviderId, PROVIDER_VISUALS } from "../setup/InferenceSetup";
 import type { ProviderId } from "../setup/inferenceSetupForm";
 import { toast } from "sonner";
 import type { InferenceBackendView } from "@source-inc/gents-desktop-client";
@@ -25,6 +25,8 @@ import { healthy, KINDS, SUBSCRIPTION } from "./inferenceKinds";
 import { UsageBar } from "./ProviderUsage";
 import { AccountDialogs, backendAccount, type AccountAction } from "./ProviderAccounts";
 import { BackendEditor } from "./BackendEditor";
+import { addItem, addingFrom } from "./draftItems";
+import { leave, navigate } from "@/lib/router";
 
 /* which catalog provider a configured backend belongs to */
 function providerOf(b: InferenceBackendView): ProviderId {
@@ -83,23 +85,26 @@ export function InferencePanel({
   const catalog = useSetupCatalog();
   const providers = catalog.providers;
   /* the provider whose inputs are open, from a catalog row or Add another */
-  const [adding, setAdding] = useState<ProviderId | null>(null);
-  if (adding)
+  const adding = addingFrom(item);
+  const setAdding = (provider: ProviderId) =>
+    navigate({ ...base, item: addItem(provider) });
+  if (adding && isProviderId(adding)) {
+    const here = { ...base, item: addItem(adding) };
     return (
       <SetupScreen
         initialStep="inference"
         purpose="add-backend"
         provider={adding}
         nodeDid={deployment.nodeDid}
-        onCancel={() => setAdding(null)}
+        onCancel={() => leave(here, models)}
         onDone={() => {
-          /* back to the catalog: the new backend's row now offers Add profile */
-          setAdding(null);
+          leave(here, models);
           toast("Backend connected. Add a profile under it to use it.");
           void reload();
         }}
       />
     );
+  }
   /* the catalog: configured backends under their provider, then the rest */
   /* backends in the catalog's provider order, so two of one provider sit together */
   const order = (id: ProviderId) => providers.findIndex((p) => p.id === id);

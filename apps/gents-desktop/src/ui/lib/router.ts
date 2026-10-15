@@ -9,7 +9,7 @@ export { pathFor, parseRoute };
 
 let current: Nav | null = null;
 
-export function bindNav(nav: Nav) {
+export function bindNav(nav: Nav | null) {
   current = nav;
 }
 
@@ -22,6 +22,27 @@ export function href(route: Route) {
 export function navigate(route: Route) {
   if (!current || pathFor(route) === pathFor(current.route)) return;
   current.navigate(route);
+}
+
+/* a draft's save can settle after the person has left it, and must not
+   take them back */
+const navShowing = (route: Route) =>
+  current && pathFor(route) === pathFor(current.route) ? current : null;
+
+export function leave(from: Route, fallback: Route) {
+  const nav = navShowing(from);
+  if (!nav) return;
+  if (nav.canBack) nav.back();
+  else navigate(fallback);
+}
+
+/* the memory nav has no replace: going back one entry and pushing drops
+   the draft from the history */
+export function replace(from: Route, to: Route) {
+  const nav = navShowing(from);
+  if (!nav) return;
+  if (nav.canBack) nav.back();
+  nav.navigate(to);
 }
 
 export function useRoute(): Route {

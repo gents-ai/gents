@@ -4,29 +4,34 @@ import { TooltipProvider } from "@gents/ui/components/tooltip";
 import { describe, expect, it, vi } from "vitest";
 
 import { AgentScreen } from "../src/ui/screens/agent/AgentScreen";
-import { node, renderIn, testApp } from "./app-fixture";
+import { navigate } from "../src/ui/lib/router";
+import { node, renderIn, renderRouted, testApp } from "./app-fixture";
 
 describe("switching nodes on the configuration screen", () => {
   it("drops a draft opened on the previous node", async () => {
     const app = testApp({
       deployments: [node({ nodeDid: "did:key:a" }), node({ nodeDid: "did:key:b" })],
     });
-    const view = renderIn(
-      app,
-      <TooltipProvider>
-        <AgentScreen nodeDid="did:key:a" section="agents" />
-      </TooltipProvider>,
+    const agents = (nodeDid: string) => ({
+      name: "agent" as const,
+      nodeDid,
+      section: "agents",
+    });
+    renderRouted(app, agents("did:key:a"), (route) =>
+      route.name === "agent" ? (
+        <TooltipProvider>
+          <AgentScreen
+            nodeDid={route.nodeDid}
+            section={route.section}
+            item={route.item}
+          />
+        </TooltipProvider>
+      ) : null,
     );
     await userEvent.click(screen.getByRole("button", { name: "New agent" }));
     expect(screen.getByRole("button", { name: "Agents" })).toBeInTheDocument();
 
-    act(() =>
-      view.rerender(
-        <TooltipProvider>
-          <AgentScreen nodeDid="did:key:b" section="agents" />
-        </TooltipProvider>,
-      ),
-    );
+    act(() => navigate(agents("did:key:b")));
     expect(screen.queryByRole("button", { name: "Agents" })).toBeNull();
     expect(screen.getByRole("button", { name: "New agent" })).toBeInTheDocument();
   });
