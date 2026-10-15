@@ -60,12 +60,22 @@ fn snapshot_coalesces_shared_roots_and_splits_strict_projections() {
         &format!("{TRIGGER_OBSERVATION_FIELDS} {SCHEDULE_OBSERVATION_FIELDS}"),
     )
     .expect("strict config projection");
-    let observation: Vec<TriggerObservation> =
-        parse_observation_query_rows(&data, "triggers", TRIGGER_OBSERVATION_FIELDS)
-            .expect("independent observation projection");
-    let schedule_observation: Vec<ScheduleObservation> =
-        parse_observation_query_rows(&data, "triggers", SCHEDULE_OBSERVATION_FIELDS)
-            .expect("independent schedule observation projection");
+    let observation: Vec<TriggerObservation> = parse_observation_query_rows_with_source(
+        &data,
+        "triggers",
+        TRIGGER_OBSERVATION_FIELDS,
+        None,
+    )
+    .expect("independent observation projection")
+    .0;
+    let schedule_observation: Vec<ScheduleObservation> = parse_observation_query_rows_with_source(
+        &data,
+        "triggers",
+        SCHEDULE_OBSERVATION_FIELDS,
+        None,
+    )
+    .expect("independent schedule observation projection")
+    .0;
     assert_eq!(trigger.len(), 1);
     assert_eq!(observation.len(), 2);
     assert_eq!(observation[1].last_status.as_deref(), Some("ok"));
@@ -97,9 +107,14 @@ fn combined_snapshot_keeps_unknown_config_fields_rejected_and_observations_indep
         &format!("{TRIGGER_OBSERVATION_FIELDS} {SCHEDULE_OBSERVATION_FIELDS}"),
     )
     .expect("row-level malformed config is skipped");
-    let trigger_observations: Vec<TriggerObservation> =
-        parse_observation_query_rows(&data, "triggers", TRIGGER_OBSERVATION_FIELDS)
-            .expect("trigger observation remains independently decodable");
+    let trigger_observations: Vec<TriggerObservation> = parse_observation_query_rows_with_source(
+        &data,
+        "triggers",
+        TRIGGER_OBSERVATION_FIELDS,
+        None,
+    )
+    .expect("trigger observation remains independently decodable")
+    .0;
     let backends: Vec<InferenceBackend> = parse_projected_query_rows(
         &data,
         "inference_backends",
@@ -119,12 +134,15 @@ fn combined_snapshot_keeps_unknown_config_fields_rejected_and_observations_indep
         INFERENCE_BACKEND_OBSERVATION_FIELDS,
     )
     .expect("canonical backend fixture");
-    let backend_observations: Vec<InferenceBackendObservation> = parse_observation_query_rows(
-        &data,
-        "inference_backends",
-        INFERENCE_BACKEND_OBSERVATION_FIELDS,
-    )
-    .expect("backend observation remains independently decodable");
+    let backend_observations: Vec<InferenceBackendObservation> =
+        parse_observation_query_rows_with_source(
+            &data,
+            "inference_backends",
+            INFERENCE_BACKEND_OBSERVATION_FIELDS,
+            None,
+        )
+        .expect("backend observation remains independently decodable")
+        .0;
 
     assert!(
         triggers.is_empty(),
@@ -143,6 +161,131 @@ fn combined_snapshot_keeps_unknown_config_fields_rejected_and_observations_indep
     assert_eq!(
         backend_observations[0].probe_status.as_deref(),
         Some("ready")
+    );
+}
+
+#[test]
+fn full_and_scoped_snapshots_preserve_observation_owners() {
+    let snapshot = |alpha_status: &str, alpha_probe: &str| {
+        serde_json::json!({
+            "nodes": [], "agents": [], "runtimes": [], "node_readiness": [],
+            "requests": [], "mailbox_items": [], "goals": [], "sessions": [],
+            "tools": [], "contexts": [], "compactions": [], "tasks": [],
+            "schedules": [], "skills": [], "inference_profiles": [],
+            "inference_sampling": [], "inference_execution": [],
+            "tool_service_registries": [], "event_sources": [], "agent_targets": [],
+            "datastore_tool_surfaces": [], "chain_key_bindings": [],
+            "triggers": [
+                {
+                    "node_did": "did:alpha", "trigger_id": "shared-trigger", "task_id": "task-alpha",
+                    "source": {"kind": "event", "event_source_id": "source-alpha"},
+                    "enabled": true, "last_status": alpha_status,
+                    "last_attempt_at": "2026-10-14T00:00:00Z", "last_fired_source_doc_id": null,
+                    "last_error": null, "fire_count": 1, "next_run_at": "alpha-next"
+                },
+                {
+                    "node_did": "did:beta", "trigger_id": "shared-trigger", "task_id": "task-beta",
+                    "source": {"kind": "event", "event_source_id": "source-beta"},
+                    "enabled": true, "last_status": "beta-status",
+                    "last_attempt_at": "2026-10-14T00:00:00Z", "last_fired_source_doc_id": null,
+                    "last_error": null, "fire_count": 2, "next_run_at": "beta-next"
+                }
+            ],
+            "inference_backends": [
+                {
+                    "node_did": "did:alpha", "backend_id": "shared-backend", "name": "alpha",
+                    "provider_kind": "OpenAiCompatible", "openai_wire_api": "chat_completions",
+                    "endpoint": "http://alpha.invalid/v1", "auth": {"kind": "unauthenticated"},
+                    "enabled": true, "catalogs": [], "last_probe": "2026-10-14T00:00:00Z",
+                    "probe_status": alpha_probe
+                },
+                {
+                    "node_did": "did:beta", "backend_id": "shared-backend", "name": "beta",
+                    "provider_kind": "OpenAiCompatible", "openai_wire_api": "chat_completions",
+                    "endpoint": "http://beta.invalid/v1", "auth": {"kind": "unauthenticated"},
+                    "enabled": true, "catalogs": [], "last_probe": "2026-10-14T00:00:00Z",
+                    "probe_status": "beta-probe"
+                }
+            ]
+        })
+    };
+    let full = super::super::snapshot_loaders::snapshot_rows(
+        &snapshot("stale-alpha", "stale-probe"),
+        None,
+    )
+    .expect("full two-node snapshot");
+    assert_eq!(
+        full.trigger_observation_source_node_dids,
+        vec![Some("did:alpha".into()), Some("did:beta".into())]
+    );
+    assert_eq!(
+        full.backend_observation_source_node_dids,
+        vec![Some("did:alpha".into()), Some("did:beta".into())]
+    );
+    assert_eq!(
+        full.schedule_observation_source_node_dids,
+        vec![Some("did:alpha".into()), Some("did:beta".into())]
+    );
+
+    let scoped = super::super::snapshot_loaders::snapshot_rows(
+        &snapshot("fresh-alpha", "fresh-probe"),
+        Some("did:alpha"),
+    )
+    .expect("scoped alpha snapshot");
+    let merged = full.replace_node_scope("did:alpha", scoped);
+    assert_eq!(merged.triggers.len(), 2);
+    assert_eq!(merged.inference_backends.len(), 2);
+    assert!(merged
+        .triggers
+        .iter()
+        .any(|row| { row.node_did == "did:beta" && row.task_id == "task-beta" }));
+    assert!(merged
+        .triggers
+        .iter()
+        .any(|row| { row.node_did == "did:alpha" && row.task_id == "task-alpha" }));
+    assert!(merged
+        .inference_backends
+        .iter()
+        .any(|row| { row.node_did == "did:beta" && row.endpoint == "http://beta.invalid/v1" }));
+    assert!(merged
+        .inference_backends
+        .iter()
+        .any(|row| { row.node_did == "did:alpha" && row.endpoint == "http://alpha.invalid/v1" }));
+    assert_eq!(
+        merged.trigger_observation_source_node_dids,
+        vec![Some("did:beta".into()), Some("did:alpha".into())]
+    );
+    assert_eq!(
+        merged.schedule_observation_source_node_dids,
+        vec![Some("did:beta".into()), Some("did:alpha".into())]
+    );
+    assert_eq!(
+        merged
+            .schedule_observations
+            .iter()
+            .map(|row| row.next_run_at.as_deref())
+            .collect::<Vec<_>>(),
+        vec![Some("beta-next"), Some("alpha-next")]
+    );
+    assert_eq!(
+        merged
+            .trigger_observations
+            .iter()
+            .map(|row| row.last_status.as_deref())
+            .collect::<Vec<_>>(),
+        vec![Some("beta-status"), Some("fresh-alpha")]
+    );
+    assert_eq!(
+        merged.backend_observation_source_node_dids,
+        vec![Some("did:beta".into()), Some("did:alpha".into())]
+    );
+    assert_eq!(
+        merged
+            .backend_observations
+            .iter()
+            .map(|row| row.probe_status.as_deref())
+            .collect::<Vec<_>>(),
+        vec![Some("beta-probe"), Some("fresh-probe")]
     );
 }
 

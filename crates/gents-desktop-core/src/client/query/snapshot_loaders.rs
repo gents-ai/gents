@@ -40,14 +40,32 @@ pub(crate) fn snapshot_query(filter: Option<&str>) -> Result<String> {
 }
 
 pub(crate) fn snapshot_rows(data: &Value, source_node_did: Option<&str>) -> Result<ClientStore> {
-    let trigger_observations: Vec<TriggerObservation> =
-        parse_observation_query_rows(data, "triggers", TRIGGER_OBSERVATION_FIELDS)?;
-    let schedule_observations: Vec<ScheduleObservation> =
-        parse_observation_query_rows(data, "triggers", SCHEDULE_OBSERVATION_FIELDS)?;
-    let backend_observations: Vec<InferenceBackendObservation> = parse_observation_query_rows(
+    let (trigger_observations, trigger_observation_source_node_dids): (
+        Vec<TriggerObservation>,
+        Vec<Option<String>>,
+    ) = parse_observation_query_rows_with_source(
+        data,
+        "triggers",
+        TRIGGER_OBSERVATION_FIELDS,
+        Some("node_did"),
+    )?;
+    let (schedule_observations, schedule_observation_source_node_dids): (
+        Vec<ScheduleObservation>,
+        Vec<Option<String>>,
+    ) = parse_observation_query_rows_with_source(
+        data,
+        "triggers",
+        SCHEDULE_OBSERVATION_FIELDS,
+        Some("node_did"),
+    )?;
+    let (backend_observations, backend_observation_source_node_dids): (
+        Vec<InferenceBackendObservation>,
+        Vec<Option<String>>,
+    ) = parse_observation_query_rows_with_source(
         data,
         "inference_backends",
         INFERENCE_BACKEND_OBSERVATION_FIELDS,
+        Some("node_did"),
     )?;
     let triggers: Vec<Trigger> = parse_projected_query_rows(
         data,
@@ -67,10 +85,7 @@ pub(crate) fn snapshot_rows(data: &Value, source_node_did: Option<&str>) -> Resu
             .unwrap_or_default()
     };
     let trigger_source_node_dids = scope(triggers.len());
-    let trigger_observation_source_node_dids = scope(trigger_observations.len());
-    let schedule_observation_source_node_dids = scope(schedule_observations.len());
     let inference_backend_source_node_dids = scope(inference_backends.len());
-    let backend_observation_source_node_dids = scope(backend_observations.len());
     macro_rules! rows {
         ($ty:ty, $key:literal) => {
             parse_query_rows::<$ty>(data, $key)?
@@ -174,17 +189,6 @@ where
 {
     parse_projected_query_rows_with_source(data, root, fields, sibling_fields, None)
         .map(|(rows, _)| rows)
-}
-
-pub(crate) fn parse_observation_query_rows<T>(
-    data: &Value,
-    root: &str,
-    fields: &str,
-) -> Result<Vec<T>>
-where
-    T: DeserializeOwned,
-{
-    parse_rows_with_source(data, root, fields, "", None, true).map(|(rows, _)| rows)
 }
 
 pub(crate) fn parse_projected_query_rows_with_source<T>(
@@ -413,6 +417,27 @@ pub(crate) fn operator_config_store_from_data(data: &Value, node_did: &str) -> R
         INFERENCE_BACKEND_FIELDS,
         INFERENCE_BACKEND_OBSERVATION_FIELDS,
     )?;
+    let (backend_observations, backend_observation_source_node_dids) =
+        parse_observation_query_rows_with_source(
+            data,
+            "inference_backends",
+            INFERENCE_BACKEND_OBSERVATION_FIELDS,
+            Some("node_did"),
+        )?;
+    let (schedule_observations, schedule_observation_source_node_dids) =
+        parse_observation_query_rows_with_source(
+            data,
+            "triggers",
+            SCHEDULE_OBSERVATION_FIELDS,
+            Some("node_did"),
+        )?;
+    let (trigger_observations, trigger_observation_source_node_dids) =
+        parse_observation_query_rows_with_source(
+            data,
+            "triggers",
+            TRIGGER_OBSERVATION_FIELDS,
+            Some("node_did"),
+        )?;
     let mut rows = ClientStoreRows {
         nodes,
         agents,
@@ -421,32 +446,23 @@ pub(crate) fn operator_config_store_from_data(data: &Value, node_did: &str) -> R
         contexts: parse_query_rows(data, "contexts")?,
         tools: parse_query_rows(data, "tools")?,
         inference_backends,
-        backend_observations: parse_observation_query_rows(
-            data,
-            "inference_backends",
-            INFERENCE_BACKEND_OBSERVATION_FIELDS,
-        )?,
+        backend_observations,
+        backend_observation_source_node_dids,
         inference_profiles,
         inference_sampling: parse_query_rows(data, "inference_sampling")?,
         inference_execution: parse_query_rows(data, "inference_execution")?,
         tasks: parse_query_rows(data, "tasks")?,
         schedules: parse_query_rows(data, "schedules")?,
-        schedule_observations: parse_observation_query_rows(
-            data,
-            "triggers",
-            SCHEDULE_OBSERVATION_FIELDS,
-        )?,
+        schedule_observations,
+        schedule_observation_source_node_dids,
         triggers: parse_projected_query_rows(
             data,
             "triggers",
             TRIGGER_FIELDS,
             &format!("{TRIGGER_OBSERVATION_FIELDS} {SCHEDULE_OBSERVATION_FIELDS}"),
         )?,
-        trigger_observations: parse_observation_query_rows(
-            data,
-            "triggers",
-            TRIGGER_OBSERVATION_FIELDS,
-        )?,
+        trigger_observations,
+        trigger_observation_source_node_dids,
         skills: parse_query_rows(data, "skills")?,
         compactions: parse_query_rows(data, "compactions")?,
         tool_service_registries: parse_query_rows(data, "tool_service_registries")?,
