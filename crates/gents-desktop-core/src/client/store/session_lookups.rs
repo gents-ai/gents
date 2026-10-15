@@ -222,6 +222,16 @@ impl ClientStore {
             .map(|index| &self.node_readiness[*index])
     }
 
+    pub(crate) fn request_row_by_doc_id(&self, doc_id: &str) -> Option<&AgentRequestRow> {
+        let index = self
+            .request_index_by_doc_id
+            .get(doc_id)
+            .copied()
+            .flatten()?;
+        let row = self.requests.get(index)?;
+        (row.doc_id.as_deref() == Some(doc_id)).then_some(row)
+    }
+
     pub fn request_row(&self, request_id: &str) -> Option<&AgentRequestRow> {
         self.request_index_by_id
             .get(request_id)

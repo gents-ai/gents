@@ -449,16 +449,7 @@ impl ObservedStore {
                 let Some(doc_id) = expected.doc_id.as_deref() else {
                     return false;
                 };
-                let mut matches = state
-                    .snapshot
-                    .requests
-                    .iter()
-                    .filter(|current| current.doc_id.as_deref() == Some(doc_id));
-                let Some(current) = matches.next() else {
-                    return false;
-                };
-                matches.next().is_none()
-                    && serde_json::to_value(current).ok() == serde_json::to_value(expected).ok()
+                state.snapshot.request_row_by_doc_id(doc_id) == Some(expected)
             });
         (fence_accepted, rows_current)
     }
