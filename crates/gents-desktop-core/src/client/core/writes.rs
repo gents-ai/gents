@@ -115,6 +115,34 @@ mod request_patch_publication_tests {
                 case["name"].as_str().expect("case name")
             );
         }
+        for case in fixture["fresh_read"].as_array().expect("fresh-read cases") {
+            let (store, _) = ObservedStore::new(ClientStore::from_rows(ClientStoreRows::default()));
+            let captured = store.capture_read();
+            let fence_accepted = case["fence_accepted"].as_bool().expect("fence expectation");
+            if !fence_accepted {
+                store.merge_chat_patch(request_patch(request_row("processing")));
+            }
+            let published = case["patch_available"]
+                .as_bool()
+                .expect("fresh patch availability")
+                .then(|| {
+                    store.merge_chat_patch_at_read(&captured, request_patch(request_row("pending")))
+                })
+                .flatten()
+                .is_some();
+            let action = match (case["patch_available"].as_bool().unwrap(), published) {
+                (false, false) => "no_patch",
+                (true, true) => "merge_fresh",
+                (true, false) => "reject_candidate",
+                (false, true) => panic!("missing patch was published"),
+            };
+            assert_eq!(
+                action,
+                case["expected_action"].as_str().expect("Lean action"),
+                "{}",
+                case["name"].as_str().expect("case name")
+            );
+        }
     }
 }
 
@@ -777,8 +805,14 @@ impl ClientCore {
                     }));
                 }
                 signatures.remove(&cache_key);
-                self.store.request_resync(Some(node_did));
-                return Ok(None);
+                if !fence_accepted {
+                    self.store.request_resync(Some(node_did));
+                    return Ok(None);
+                }
+                // The query above already produced a fresh patch. A bounded
+                // snapshot may have evicted its rows since the prior identical
+                // read, so publish this result through the current fence below
+                // instead of treating cache absence as a stale read.
             }
         }
 

@@ -125,6 +125,23 @@ async fn a_started_session_names_its_starter_and_the_sender_of_each_turn() {
             .any(|row| row.request_id == "req_child"),
         "terminal history can be absent from the bounded global cache"
     );
+    refresh_request_and_assert_fresh_projection(
+        &core,
+        OPERATOR,
+        "sess_child",
+        Some(OPERATOR),
+        "req_child",
+    )
+    .await;
+    assert!(
+        !core
+            .store()
+            .snapshot()
+            .requests
+            .iter()
+            .any(|row| row.request_id == "req_child"),
+        "the fresh selected projection remains authoritative after bounded cache eviction"
+    );
     let view = session_provenance(&core, scope("sess_child"))
         .await
         .expect("provenance");
