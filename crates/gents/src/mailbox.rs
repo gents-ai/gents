@@ -1625,6 +1625,9 @@ mod tests {
         assert_eq!(actions.len(), 4);
         let future = (Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
         let mut modeled_doc_ids = BTreeMap::<u64, String>::new();
+        let mut modeled_item_keys = BTreeMap::<u64, String>::new();
+        let mut modeled_ids_by_doc = BTreeMap::<String, u64>::new();
+        let mut modeled_ids_by_item_key = BTreeMap::<String, u64>::new();
         let mut modeled_due = BTreeMap::<u64, bool>::new();
         let mut created_local_ids = Vec::new();
         let mut foreign_doc_id = None;
@@ -1647,6 +1650,10 @@ mod tests {
                     .await
                     .unwrap();
             if local {
+                modeled_doc_ids.insert(model_id, created.doc_id.clone());
+                modeled_item_keys.insert(model_id, created.item_key.clone());
+                modeled_ids_by_doc.insert(created.doc_id.clone(), model_id);
+                modeled_ids_by_item_key.insert(created.item_key, model_id);
                 created_local_ids.push(created.doc_id);
             } else {
                 foreign_doc_id = Some(created.doc_id);
@@ -1718,12 +1725,8 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(ordered_rows.len(), created_local_ids.len());
         for (doc_id, item_key) in ordered_rows {
-            let model_id = item_key
-                .strip_prefix("model-row-")
-                .unwrap()
-                .parse::<u64>()
-                .unwrap();
-            modeled_doc_ids.insert(model_id, doc_id.clone());
+            let model_id = modeled_ids_by_doc[&doc_id];
+            assert_eq!(modeled_item_keys[&model_id], item_key);
             if modeled_due[&model_id] {
                 let item = load_mailbox_item(&node, &doc_id).await.unwrap().unwrap();
                 let response = node.execute(&format!(
@@ -1748,15 +1751,10 @@ mod tests {
                 _ => None,
             }
         }
-        fn cursor_model_id(token: &str) -> u64 {
+        fn cursor_model_id(token: &str, modeled_ids_by_item_key: &BTreeMap<String, u64>) -> u64 {
             let decoded = cursor::Cursor::decode(token).expect("native cursor token");
-            decoded.keys["item_key"]
-                .as_str()
-                .unwrap()
-                .strip_prefix("model-row-")
-                .unwrap()
-                .parse()
-                .unwrap()
+            let item_key = decoded.keys["item_key"].as_str().unwrap();
+            modeled_ids_by_item_key[item_key]
         }
         fn cursor_doc_id(token: &str) -> String {
             cursor::Cursor::decode(token)
@@ -1766,7 +1764,9 @@ mod tests {
         for (index, action) in actions.iter().enumerate() {
             let input_cursor = action["cursor"].as_u64();
             assert_eq!(
-                cursor.as_deref().map(cursor_model_id),
+                cursor
+                    .as_deref()
+                    .map(|token| cursor_model_id(token, &modeled_ids_by_item_key)),
                 input_cursor,
                 "native indexed cursor follows Lean row ordering"
             );
@@ -1779,7 +1779,7 @@ mod tests {
             }
             if index == 1 {
                 let current_cursor = cursor.as_deref().expect("second page keyset cursor");
-                let cursor_model_id = cursor_model_id(current_cursor);
+                let cursor_model_id = cursor_model_id(current_cursor, &modeled_ids_by_item_key);
                 for model_id in [4, cursor_model_id + 4] {
                     assert!(!modeled_due[&model_id]);
                     assert_eq!(
@@ -1837,7 +1837,9 @@ mod tests {
             let expected_next = action["next_cursor"].as_u64();
             if let Some(next) = expected_next {
                 assert_eq!(
-                    page.next_cursor.as_deref().map(cursor_model_id),
+                    page.next_cursor
+                        .as_deref()
+                        .map(|token| { cursor_model_id(token, &modeled_ids_by_item_key) }),
                     Some(next),
                     "returned cursor is the last processed indexed row"
                 );
