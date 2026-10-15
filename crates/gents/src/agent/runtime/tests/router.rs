@@ -233,6 +233,85 @@ async fn closing_admission_cancels_a_send_to_a_full_executor_queue() {
 }
 
 #[tokio::test]
+async fn snapshot_change_reroutes_request_blocked_on_old_executor_queue() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let node_did = "did:test:full-queue-generation-handoff";
+    let (old_dispatcher, mut old_rx) = mpsc::channel(1);
+    old_dispatcher
+        .send(request(Some("general"), "already-queued"))
+        .await
+        .unwrap();
+    let (new_dispatcher, mut new_rx) = mpsc::channel(1);
+    let initial_snapshot = routed_snapshot(1, old_dispatcher);
+    let updated_snapshot = routed_snapshot(2, new_dispatcher);
+    let (active_tx, active_rx) = watch::channel(initial_snapshot.clone());
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let (request_tx, request_rx) = mpsc::channel(1);
+    let (status_owner, status) =
+        RuntimeStatusHandle::start_with_unbounded_test_clock(node.clone(), node_did);
+    status.initialize_startup("general").await.unwrap();
+    status.readiness().register_slot("general", 1).await.unwrap();
+    status
+        .readiness()
+        .publish_snapshot(initial_snapshot.as_ref())
+        .await
+        .unwrap();
+    status
+        .set_process_state_durable(crate::agent::ProcessLifecycleState::Ready)
+        .await
+        .unwrap();
+    let gate = RuntimeAdmissionGate::closed();
+    gate.open().await;
+
+    let mut routed = request(Some("general"), "blocked-dispatch");
+    routed.node_did = node_did.to_string();
+    request_tx.send(Ok(routed)).await.unwrap();
+    let gate_for_router = gate.clone();
+    let router_node = node.clone();
+    let status_for_router = status.clone();
+    let router = tokio::spawn(async move {
+        super::super::router::run_router_with_watcher(
+            router_node,
+            node_did.to_string(),
+            ScriptedWatcher { rx: request_rx },
+            active_rx,
+            shutdown_rx,
+            gate_for_router,
+            status_for_router,
+            None,
+        )
+        .await
+    });
+
+    tokio::time::timeout(Duration::from_secs(1), gate.wait_for_entry_for_test())
+        .await
+        .expect("router must reach the full queue");
+    status
+        .readiness()
+        .publish_snapshot(updated_snapshot.as_ref())
+        .await
+        .unwrap();
+    active_tx.send(updated_snapshot).unwrap();
+    let dispatched = tokio::time::timeout(Duration::from_secs(1), new_rx.recv())
+        .await
+        .expect("router must leave the old full queue")
+        .expect("updated executor must receive the request");
+    assert_eq!(dispatched.session_id, "blocked-dispatch");
+    assert_eq!(old_rx.recv().await.unwrap().session_id, "already-queued");
+    assert!(old_rx.try_recv().is_err());
+
+    shutdown_tx.send(true).unwrap();
+    tokio::time::timeout(Duration::from_secs(1), router)
+        .await
+        .expect("router must shut down")
+        .unwrap()
+        .unwrap();
+    status_owner.close().await.unwrap();
+    node.shutdown().await;
+}
+
+#[tokio::test]
 async fn router_generation_write_failure_closes_admission_before_dequeue_or_dispatch() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
@@ -358,6 +437,7 @@ async fn router_holds_request_during_generation_handoff_and_dispatches_after_ali
     let mut admission_rx = admission_gate.subscribe();
     let (_readiness_tx, mut readiness_rx) =
         watch::channel(crate::node_readiness_publisher::AgentAdmissionObservation::for_test(2, []));
+    let mut pending_request = None;
     let (request, routed_snapshot, routed_observation) = {
         let wait = wait_for_next_request_with_latest_snapshot(
             node_did,
@@ -368,6 +448,7 @@ async fn router_holds_request_during_generation_handoff_and_dispatches_after_ali
             &admission_gate,
             &mut admission_rx,
             &mut readiness_rx,
+            &mut pending_request,
             None,
             None,
         );
@@ -469,6 +550,7 @@ async fn router_publishes_observed_generation_without_waiting_for_request() {
     let admission_gate = RuntimeAdmissionGate::closed();
     admission_gate.open().await;
     let mut admission_rx = admission_gate.subscribe();
+    let mut pending_request = None;
     let router_task = tokio::spawn(async move {
         wait_for_next_request_with_latest_snapshot(
             node_did,
@@ -479,6 +561,7 @@ async fn router_publishes_observed_generation_without_waiting_for_request() {
             &admission_gate,
             &mut admission_rx,
             &mut readiness_rx,
+            &mut pending_request,
             Some(&runtime_status_for_router),
             None,
         )
