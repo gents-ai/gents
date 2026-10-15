@@ -6333,6 +6333,86 @@ async fn pack_documents_install_and_release_documents_dependencies() {
 }
 
 #[tokio::test]
+async fn pack_documents_install_and_release_graph_dependencies() {
+    let (_dependent, dependent_dir) =
+        crate::test_support::fixture_pack_copy("dependent_fixture", &json!({}));
+    let manifest_path = dependent_dir.join("manifest.json");
+    let mut manifest: Value =
+        serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+    manifest["dependencies"] = json!(["fixture/review_graph"]);
+    std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    let (home, plugins) = crate::test_support::home_with_pack_dir(&dependent_dir);
+    let (_graph, graph_dir) = crate::test_support::fixture_pack_copy("review_graph", &json!({}));
+    let (bytes, _) = crate::pack_archive::pack_dir(&graph_dir).unwrap();
+    crate::pack_store::PackStore::new(home.path())
+        .import(&bytes[..], None)
+        .unwrap();
+    let (node, did, tools) = pack_tool("graph-dependencies", plugins).await;
+    let slots = [
+        "--inference-slot",
+        "worker=setup:inference",
+        "--inference-slot",
+        "coordinator=setup:inference",
+        "--inference-slot",
+        "verifier=setup:inference",
+    ];
+    let mut args = vec!["pack", "preview", "install", "fixture/dependent_fixture"];
+    args.extend(slots);
+    let preview: Value = serde_json::from_str(&config_call(&tools, &args).await.unwrap()).unwrap();
+    assert_eq!(preview["ready"], true, "{preview}");
+    assert_eq!(
+        preview["dependencies"][0]["coordinate"],
+        "fixture/review_graph"
+    );
+    let digest = preview["artifact_digest"].as_str().unwrap();
+    let mut args = vec![
+        "pack",
+        "install",
+        "fixture/dependent_fixture",
+        "--digest",
+        digest,
+    ];
+    args.extend(slots);
+    config_call(&tools, &args).await.unwrap();
+    let access = crate::config_client::ConfigAccess::local(node);
+    assert!(
+        crate::pack::read_installed_pack(&access, &did, "fixture/review_graph")
+            .await
+            .unwrap()
+            .is_some()
+    );
+    let rows = access
+        .execute(
+            r#"{ PackInstallation(filter: {coordinate: {_eq: "fixture/review_graph"}}) { explicit } }"#,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        rows["data"]["PackInstallation"],
+        json!([{"explicit": false}])
+    );
+    let graphs = access
+        .execute(r#"{ GraphDefinition { active_revision_digest } }"#)
+        .await
+        .unwrap();
+    let graphs = graphs["data"]["GraphDefinition"].as_array().unwrap();
+    assert_eq!(graphs.len(), 1, "{graphs:?}");
+    assert!(
+        graphs[0]["active_revision_digest"].is_string(),
+        "{graphs:?}"
+    );
+    config_call(&tools, &["pack", "remove", "fixture/dependent_fixture"])
+        .await
+        .unwrap();
+    assert!(
+        crate::pack::read_installed_pack(&access, &did, "fixture/review_graph")
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
 async fn pack_install_blocks_a_dependency_plugin_without_operator_authority() {
     let edit = |dir: &std::path::Path, change: &dyn Fn(&mut Value)| {
         let path = dir.join("manifest.json");
