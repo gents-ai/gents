@@ -201,3 +201,28 @@ test.describe("half-screen window", () => {
     await expect(page.getByRole("combobox", { name: "Section" })).toBeHidden();
   });
 });
+
+test.describe("nav modes", () => {
+  test("the mark keeps its place in every nav mode", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await gotoHarness(page);
+    const mark = page.getByTestId("window-bar").getByRole("link", { name: "Nodes" });
+    const places: Record<string, Box> = {};
+    for (const nav of ["hover", "collapsed", "expanded"]) {
+      await page.evaluate(
+        (mode) =>
+          localStorage.setItem(
+            "gents-preferences",
+            JSON.stringify({ state: { nav: mode }, version: 1 }),
+          ),
+        nav,
+      );
+      await page.reload();
+      await expect(page.getByTestId("app-shell")).toBeVisible();
+      places[nav] = await boxOf(mark);
+    }
+    /* over the rail's own column, whichever mode draws it */
+    expect(places.expanded!.x).toBeCloseTo(places.hover!.x, 0);
+    expect(places.collapsed!.x).toBeCloseTo(places.hover!.x, 0);
+  });
+});
