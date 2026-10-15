@@ -151,6 +151,8 @@ export type MobilePerformanceHarnessController = {
   finishStreaming(): void;
   streamUpdate(): number;
   streamBurst(count: number): number;
+  /** a settled group of `count` commands near the long session's foot */
+  toolBatch(count: number): void;
   /** appends `text` to the live reply, as one update */
   streamText(text: string): void;
   /** how long a read of an older timeline page takes, as the bridge's do */
@@ -2738,6 +2740,50 @@ export function createDesktopUiHarness(
                 ),
                 group,
               ],
+            });
+            syncSessions();
+            notify("store");
+          },
+          /* a settled group of `count` commands near the long session's
+             foot, where rows are always drawn: enough steps to cap its box */
+          toolBatch(count) {
+            const session = sessions.get("session-large");
+            if (!session) {
+              throw new Error("mobile performance fixture lost session-large");
+            }
+            const at = Math.max(0, session.timelineItems.length - 2);
+            const group = {
+              kind: "toolGroup" as const,
+              itemKey: "batch-tools",
+              messageSequence: at,
+              tools: Array.from({ length: count }, (_, index) => ({
+                itemKey: `batch-exec-${index}`,
+                toolName: "gents_exec",
+                statusKind: "success",
+                reconstruction: HARNESS_READY_RECONSTRUCTION,
+                presentation: {
+                  kind: "command" as const,
+                  command: `cargo test -p gents step_${index}`,
+                  exitCode: 0,
+                  timedOut: false,
+                  failed: false,
+                  durationMs: null,
+                  cwd: null,
+                  executionMode: "read_only",
+                  networkMode: "disabled",
+                  stdout: "",
+                  stderr: "",
+                  fallbackOutput: null,
+                },
+                partialOutputTail: null,
+              })),
+            };
+            const rest = session.timelineItems.filter(
+              (item) => item.itemKey !== group.itemKey,
+            );
+            sessions.set("session-large", {
+              ...session,
+              timelineItems: [...rest.slice(0, at), group, ...rest.slice(at)],
             });
             syncSessions();
             notify("store");

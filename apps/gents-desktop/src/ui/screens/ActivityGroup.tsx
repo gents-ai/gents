@@ -284,12 +284,11 @@ export function ActivityGroup({
           <ScrollArea
             className={cn(
               capped && "max-h-80",
-              /* a scroll that starts in the box stays in the box: reaching its end
-                 does not carry on into the transcript (overscroll-behavior, which
-                 the ScrollArea's native viewport honours). The box's own viewport
-                 only, a direct child: a code block inside an opened step
-                 keeps its own scroll, and its end carries on into the box */
-              "[&>[data-slot=scroll-area-viewport]]:max-h-[inherit] [&>[data-slot=scroll-area-viewport]]:overscroll-contain",
+              /* no overscroll containment: a mouse wheel sends each notch as
+                 a new scroll, so a reader wheeling the transcript past an open
+                 box hands it to the box, and a contained box at its end would
+                 keep the rest and stop the transcript under the pointer */
+              "[&>[data-slot=scroll-area-viewport]]:max-h-[inherit]",
             )}
           >
             <ToolSteps
