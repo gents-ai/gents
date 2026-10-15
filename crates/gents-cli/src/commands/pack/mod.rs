@@ -567,26 +567,47 @@ async fn install_documents_pack(
             .iter()
             .map(|(slot, profile)| format!("{slot}={profile}"))
             .collect();
-        super::graph::install_with_access(
-            &access,
-            &owner,
-            dependency,
-            PackInstallArgs {
-                package: dependency.manifest().name.clone(),
-                bindings: None,
-                inference_slots: dependency_slots,
-                preview: false,
-                scope: args.scope.clone(),
-                output: args.output,
-                force_rebind_concrete_did: false,
-                registry: args.registry.clone(),
-                drift: args.drift,
-                grant_authority: args.grant_authority,
-                explicit: false,
-            },
-            false,
-        )
-        .await?;
+        let dependency_args = PackInstallArgs {
+            package: dependency.manifest().name.clone(),
+            bindings: None,
+            inference_slots: dependency_slots,
+            preview: false,
+            scope: args.scope.clone(),
+            output: args.output,
+            force_rebind_concrete_did: false,
+            registry: args.registry.clone(),
+            drift: args.drift,
+            grant_authority: args.grant_authority,
+            explicit: false,
+        };
+        match dependency.manifest().metadata.kind {
+            PackKind::Graph => {
+                super::graph::install_with_access(
+                    &access,
+                    &owner,
+                    dependency,
+                    dependency_args,
+                    false,
+                )
+                .await?;
+            }
+            // A dependency installs exactly as `gents pack install <dep>`
+            // would; the boxed future breaks the async recursion.
+            PackKind::Documents => {
+                Box::pin(install_documents_pack(
+                    &access,
+                    &owner,
+                    dependency,
+                    &dependency_args,
+                    false,
+                ))
+                .await?;
+            }
+            // `prepare_document_pack_install` above already refused these.
+            PackKind::Assets | PackKind::Plugins => {
+                unreachable!("dependency preparation refuses asset and plugin dependencies")
+            }
+        }
     }
     let schemas = super::schema::apply_pack_schemas_if_present(&access, temp.path())
         .await
