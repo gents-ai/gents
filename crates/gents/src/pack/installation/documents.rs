@@ -86,12 +86,23 @@ pub async fn prepare_document_pack_install(
     environment: &(dyn Fn(&str) -> Option<String> + Sync),
 ) -> Result<PreparedDocumentPackInstall> {
     for dependency in dependencies {
+        let dependency = dependency.manifest();
         anyhow::ensure!(
             matches!(
-                dependency.manifest().metadata.kind,
+                dependency.metadata.kind,
                 super::super::PackKind::Graph | super::super::PackKind::Documents
             ),
-            "only graph and documents dependencies are currently installable"
+            "dependency {}/{} is a {:?} pack, which cannot be installed as a dependency; \
+             install it with `gents pack install` or `gents plugin install`, then remove it from `dependencies`",
+            dependency.metadata.namespace,
+            dependency.name,
+            dependency.metadata.kind
+        );
+        anyhow::ensure!(
+            dependency.metadata.dependencies.is_empty(),
+            "dependency {}/{} declares dependencies of its own; dependencies are one level",
+            dependency.metadata.namespace,
+            dependency.name
         );
     }
     for slot in requested.keys() {

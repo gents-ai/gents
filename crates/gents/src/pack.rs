@@ -540,7 +540,7 @@ pub fn validate_pack_manifest(manifest: &PackManifest) -> Result<()> {
     );
     anyhow::ensure!(
         manifest.metadata.kind == PackKind::Documents || manifest.metadata.dependencies.is_empty(),
-        "only document packs support package dependencies; nested graph/asset dependencies are unsupported"
+        "only document packs support package dependencies; nested dependencies are unsupported"
     );
     for dependency in &manifest.metadata.dependencies {
         anyhow::ensure!(
