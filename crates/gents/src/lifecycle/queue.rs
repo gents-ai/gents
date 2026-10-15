@@ -75,8 +75,8 @@ pub(crate) use management::{
     validate_pending_user_edit_in_txn, PersistedReplacements,
 };
 pub use management::{
-    pending_user_queue, prepare_pending_user_edit, PendingQueueEntry, PendingQueueSnapshot,
-    REMOVED_REASON, REPLACED_REASON,
+    pending_user_queue, pending_user_queue_projection, prepare_pending_user_edit,
+    PendingQueueEntry, PendingQueueProjection, PendingQueueSnapshot, REMOVED_REASON, REPLACED_REASON,
 };
 pub use management::{PendingMessageEdit, PendingQueueEdit, PendingQueueReceipt};
 #[cfg(test)]

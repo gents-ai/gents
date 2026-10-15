@@ -36,6 +36,28 @@ pub async fn pending_user_queue(
     session_id: &str,
     requester_did: &str,
 ) -> Result<PendingQueueSnapshot> {
+    Ok(
+        pending_user_queue_projection(access, node_did, session_id, requester_did, &[])
+            .await?
+            .pending,
+    )
+}
+
+pub struct PendingQueueProjection {
+    pub pending: PendingQueueSnapshot,
+    pub arrival_order: Vec<String>,
+}
+
+/// Pending controls and receipt-validated arrival order share one read snapshot.
+/// Arrival evidence includes requests a concurrent claim already took out of
+/// the pending listing; their earlier client observations still need ordering.
+pub async fn pending_user_queue_projection(
+    access: &ConfigAccess,
+    node_did: &str,
+    session_id: &str,
+    requester_did: &str,
+    observed_doc_ids: &[String],
+) -> Result<PendingQueueProjection> {
     access
         .transact_readonly("queue.pending_user_snapshot", |txn| {
             Box::pin(async move {
@@ -77,7 +99,13 @@ pub async fn pending_user_queue(
                         })
                     })
                     .collect::<Result<Vec<_>>>()?;
-                Ok(PendingQueueSnapshot { entries })
+                let arrival_order =
+                    crate::trigger_engine::durable::request_arrival_order(txn, observed_doc_ids)
+                        .await?;
+                Ok(PendingQueueProjection {
+                    pending: PendingQueueSnapshot { entries },
+                    arrival_order,
+                })
             })
         })
         .await
