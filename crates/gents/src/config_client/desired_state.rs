@@ -1389,10 +1389,12 @@ pub async fn apply_desired_state_plan(
             }
             _ => {}
         }
-        let response = txn
-            .execute_with_variables(&mutation, &serde_json::json!({"input": input}))
-            .await?;
-        extract_mutation_doc_id(&response, name)?;
+        if changed {
+            let response = txn
+                .execute_with_variables(&mutation, &serde_json::json!({"input": input}))
+                .await?;
+            extract_mutation_doc_id(&response, name)?;
+        }
         counts.increment(document.collection);
         if changed && document.collection == Collection::InferenceBackend {
             // DesiredStateApplyPlan already validates this canonical document.

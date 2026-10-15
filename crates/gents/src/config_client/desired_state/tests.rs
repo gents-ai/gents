@@ -157,6 +157,64 @@ async fn ignored_wire_api_warns_once_per_changed_backend_through_common_apply_ow
     Ok(())
 }
 
+#[tokio::test]
+async fn unchanged_desired_state_replay_does_not_add_document_commit() -> Result<()> {
+    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    register_config_schemas(&node).await?;
+    let access = ConfigAccess::local(node.clone());
+    let owner = "did:key:desired-state-replay";
+    let backend_id = "unchanged-backend";
+    let document = document(backend(owner, backend_id));
+
+    let created = apply_with_counts(&access, vec![document.clone()]).await?;
+    assert_eq!(created.get(Collection::InferenceBackend), 1);
+    let query = format!(
+        r#"{{ InferenceBackend(filter: {{ node_did: {{ _eq: "{}" }}, backend_id: {{ _eq: "{}" }} }}, limit: 1) {{ _docID }} }}"#,
+        crate::graphql::escape_graphql_string(owner),
+        crate::graphql::escape_graphql_string(backend_id),
+    );
+    let response = crate::graphql::graphql_with_transaction_retry(
+        node.as_ref(),
+        &query,
+        "test.desired_state_replay.read_backend",
+    )
+    .await?;
+    let doc_id = crate::graphql::first_row::<Value>(&response, "InferenceBackend")?
+        .and_then(|row| {
+            row.get("_docID")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+        })
+        .context("created backend is missing _docID")?;
+    let before = crate::graphql::composite_commits(
+        node.as_ref(),
+        &doc_id,
+        "test.desired_state_replay.before",
+    )
+    .await?;
+    assert!(!before.is_empty(), "create must publish a document commit");
+
+    let replayed = apply_with_counts(&access, vec![document]).await?;
+    assert_eq!(
+        replayed.get(Collection::InferenceBackend),
+        1,
+        "counts continue to report each planned document"
+    );
+    let after = crate::graphql::composite_commits(
+        node.as_ref(),
+        &doc_id,
+        "test.desired_state_replay.after",
+    )
+    .await?;
+    assert_eq!(
+        after, before,
+        "an identical desired-state replay must not add a whole-document commit"
+    );
+
+    node.shutdown().await;
+    Ok(())
+}
+
 #[test]
 fn every_canonical_collection_uses_derived_owner_and_identity_fields() {
     for collection in Collection::ALL {
