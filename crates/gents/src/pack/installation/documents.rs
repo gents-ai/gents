@@ -35,8 +35,8 @@ pub fn document_pack_schema_paths(manifest: &super::super::PackManifest) -> Resu
 pub enum PreparedDependency {
     Graph(LoadedGraphPackage, GraphPackageInstallBindings),
     /// Installed like the root, flagged non-explicit. `manifest`, `digest`
-    /// and `assets` (its schemas and plugin files) stand in for the archive,
-    /// which the install no longer receives.
+    /// and `assets` hold what its install reads: the manifest, the pack
+    /// digest, and the schema and plugin files.
     Documents {
         coordinate: String,
         config: PackConfig,
