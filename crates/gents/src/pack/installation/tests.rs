@@ -1012,3 +1012,109 @@ async fn a_documents_dependency_plugin_installs_before_the_dependent_documents()
         .unwrap();
     assert_eq!(installed.unwrap().digest, dependee.digest());
 }
+
+/// The error `prepare_document_pack_install` gives `dependent_fixture` when
+/// it names `dependee_fixture` after `change` edited its manifest; with
+/// `dependee_plugin` the dependee also ships the plugin `echo`.
+async fn refused_dependency(dependee_plugin: bool, change: &dyn Fn(&mut Value)) -> String {
+    let archive = |dir: &std::path::Path| {
+        let (bytes, _) = crate::pack_archive::pack_dir(dir).unwrap();
+        crate::pack_archive::PackArchive::from_bytes(&bytes).unwrap()
+    };
+    let edit = |dir: &std::path::Path, change: &dyn Fn(&mut Value)| {
+        let path = dir.join("manifest.json");
+        let mut manifest: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        change(&mut manifest);
+        std::fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    };
+    let (_dependee_guard, dependee_dir) =
+        crate::test_support::fixture_pack_copy("dependee_fixture", &json!({}));
+    if dependee_plugin {
+        std::fs::create_dir_all(dependee_dir.join("plugins")).unwrap();
+        let wat = crate::plugin::tests::constant_output_wat(b"{}");
+        std::fs::write(
+            dependee_dir.join("plugins/echo.afb"),
+            crate::plugin::tests::build_plugin_afb(&wat),
+        )
+        .unwrap();
+        edit(&dependee_dir, &|manifest| {
+            manifest["assets"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!("plugins/echo.afb"));
+            manifest["plugins"] = json!([{
+                "name": "echo",
+                "description": "Echoes nothing.",
+                "artifact": "plugins/echo.afb",
+                "language": "rust",
+                "input_schema": {"type": "object"},
+            }]);
+        });
+    }
+    edit(&dependee_dir, change);
+    let (_dependent_guard, dependent_dir) =
+        crate::test_support::fixture_pack_copy("dependent_fixture", &json!({}));
+    edit(&dependent_dir, &|manifest| {
+        manifest["dependencies"] = json!(["fixture/dependee_fixture"]);
+    });
+    let (dependee, dependent) = (archive(&dependee_dir), archive(&dependent_dir));
+    let authored = crate::pack::load_pack_config(
+        dependent.manifest(),
+        &crate::pack::PackInstallOptions {
+            node_did: OWNER.into(),
+        },
+        &|path| Ok(dependent.asset(path)?.to_vec()),
+        &|_| None,
+    )
+    .unwrap();
+    let (_node, access, _) = dependency_fixture().await;
+    let error = prepare_document_pack_install(
+        &access,
+        OWNER,
+        dependent.manifest(),
+        &authored,
+        &BTreeMap::from([("worker".to_owned(), "glm:inference".to_owned())]),
+        &[&dependee],
+        &|_| None,
+    )
+    .await
+    .err()
+    .expect("the dependency is refused");
+    format!("{error:#}")
+}
+
+const DEPENDENCY_NEXT_STEP: &str = "install it with `gents pack install` or `gents plugin install`, then remove it from `dependencies`";
+
+#[tokio::test]
+async fn an_assets_dependency_is_refused_with_a_next_step() {
+    let error = refused_dependency(false, &|manifest| {
+        manifest["kind"] = json!("assets");
+        manifest.as_object_mut().unwrap().remove("config");
+        manifest["inference_slots"] = json!([]);
+    })
+    .await;
+    assert!(error.contains(DEPENDENCY_NEXT_STEP), "{error}");
+}
+
+#[tokio::test]
+async fn a_plugins_dependency_is_refused_with_a_next_step() {
+    let error = refused_dependency(true, &|manifest| {
+        manifest["kind"] = json!("plugins");
+        manifest.as_object_mut().unwrap().remove("config");
+        manifest["inference_slots"] = json!([]);
+    })
+    .await;
+    assert!(error.contains(DEPENDENCY_NEXT_STEP), "{error}");
+}
+
+#[tokio::test]
+async fn a_documents_dependency_with_its_own_dependencies_is_refused() {
+    let error = refused_dependency(false, &|manifest| {
+        manifest["dependencies"] = json!(["fixture/other_fixture"]);
+    })
+    .await;
+    assert!(
+        error.contains("declares dependencies of its own"),
+        "{error}"
+    );
+}
