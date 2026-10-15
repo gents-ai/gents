@@ -109,7 +109,7 @@ async fn apply(
         .collect();
     let plan = DesiredStateApplyPlan::new(documents)?;
     access
-        .transact("test.delivery_live.configure", |txn| {
+        .transact_write("test.delivery_live.configure", |txn| {
             let plan = &plan;
             Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
         })
@@ -145,7 +145,7 @@ fn string<'a>(row: &'a Value, field: &str) -> Result<&'a str> {
 
 async fn configure(
     access: &ConfigAccess,
-    node: &gents::defra_node::EmbeddedNode,
+    node: &std::sync::Arc<gents::defra_node::EmbeddedNode>,
     owner: &str,
     endpoints: &[String; 2],
 ) -> Result<()> {
@@ -258,7 +258,7 @@ async fn two_lead_sessions_route_64_real_worker_outcomes_without_chaining() -> R
     let db = support::test_db_from_home(home);
     let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
     let owner = identity.did().to_owned();
-    let access = ConfigAccess::Local(db.node.clone());
+    let access = ConfigAccess::local(db.node.clone());
     access.add_schema(SCHEMA).await?;
     configure(&access, &db.node, &owner, &endpoints).await?;
     let runtime = boot_live_agent(&db, identity).await?;

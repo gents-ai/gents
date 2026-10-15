@@ -47,12 +47,65 @@ pub(crate) async fn load_session_tool_calls(
     .await
 }
 
+/// Canonical accepted calls for selected physical tool documents in an
+/// authorized session scope. Reads only those tool rows and their accepted
+/// message sequences; deliveries are not resolved.
+pub(crate) async fn load_accepted_tool_calls(
+    access: &ConfigAccess,
+    node_did: &str,
+    session_id: &str,
+    requester_did: Option<&str>,
+    tool_doc_ids: &[String],
+) -> Result<Vec<TimelineToolCallRow>> {
+    let observations = event_loaders::load_timeline_tool_observations(
+        access,
+        node_did,
+        session_id,
+        requester_did,
+        tool_doc_ids,
+    )
+    .await?;
+    let sequences = observations
+        .iter()
+        .filter_map(|observation| observation.row.message_sequence)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let messages = event_loaders::resolve_timeline_messages_at_sequences(
+        access,
+        node_did,
+        session_id,
+        requester_did,
+        &sequences,
+    )
+    .await?;
+    let mut messages_by_sequence = BTreeMap::<i64, Vec<TimelineMessageRow>>::new();
+    for message in messages {
+        messages_by_sequence
+            .entry(message.sequence)
+            .or_default()
+            .push(message);
+    }
+    let mut calls = Vec::with_capacity(observations.len());
+    for observation in observations {
+        let sequence = observation
+            .row
+            .message_sequence
+            .context("accepted tool lacks its accepted message sequence")?;
+        let messages = messages_by_sequence
+            .get(&sequence)
+            .context("accepted tool sequence has no canonical messages")?;
+        let call = event_loaders::resolve_tool_payloads(observation, messages)?;
+        anyhow::ensure!(
+            call.session_id == session_id,
+            "accepted tool call crossed the requested session scope"
+        );
+        calls.push(call);
+    }
+    Ok(calls)
+}
+
 #[cfg(test)]
-/// Canonical accepted arguments of one exact physical tool document in an
-/// authorized session scope, one entry per matching physical row. Reads only
-/// the tool row and the messages at its accepted sequence, binding them with
-/// the session timeline's accepted-header rules, so the cost is independent of
-/// the session or run transcript. Deliveries are not resolved.
 pub(crate) async fn load_accepted_tool_arguments(
     access: &ConfigAccess,
     node_did: &str,
@@ -60,31 +113,14 @@ pub(crate) async fn load_accepted_tool_arguments(
     requester_did: Option<&str>,
     tool_doc_id: &str,
 ) -> Result<Vec<String>> {
-    let observations = event_loaders::load_timeline_tool_observation(
-        access,
-        node_did,
-        session_id,
-        requester_did,
-        tool_doc_id,
+    let tool_doc_id = tool_doc_id.to_owned();
+    Ok(
+        load_accepted_tool_calls(access, node_did, session_id, requester_did, &[tool_doc_id])
+            .await?
+            .into_iter()
+            .map(|call| call.args)
+            .collect(),
     )
-    .await?;
-    let mut arguments = Vec::with_capacity(observations.len());
-    for observation in observations {
-        let sequence = observation
-            .row
-            .message_sequence
-            .context("accepted tool lacks its accepted message sequence")?;
-        let messages = event_loaders::resolve_timeline_messages_at_sequence(
-            access,
-            node_did,
-            session_id,
-            requester_did,
-            sequence,
-        )
-        .await?;
-        arguments.push(event_loaders::resolve_tool_payloads(observation, &messages)?.args);
-    }
-    Ok(arguments)
 }
 
 pub async fn load_run_timeline(access: &ConfigAccess, request_id: &str) -> Result<RunTimeline> {
@@ -127,7 +163,7 @@ async fn name_serving_accounts(
 ) -> Result<()> {
     let accounts = crate::oauth_credential::list_accounts(access, node_did).await?;
     let backends = access
-        .transact("timeline.serving_accounts", |txn| {
+        .transact_readonly("timeline.serving_accounts", |txn| {
             Box::pin(async move {
                 crate::config_client::list_inference_backends_in_txn(txn, node_did).await
             })
@@ -673,7 +709,7 @@ mod tests {
         );
 
         let rows = load_run_activity_rows(
-            &ConfigAccess::Local(node.clone()),
+            &ConfigAccess::local(node.clone()),
             &["activity-request".to_owned()],
             &["activity-session".to_owned()],
         )
@@ -768,7 +804,7 @@ mod tests {
             ))
             .await;
         assert!(!response.has_errors(), "seed calls: {:?}", response.errors);
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         let timeline = load_run_timeline(&access, "request-timeline")
             .await
             .expect("load timeline");
@@ -795,7 +831,7 @@ mod tests {
         let did = "did:key:z6MkTestTimelineAccounts";
         let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         let spec = crate::inference_setup::connection_spec(
             crate::inference_setup::InferenceProviderId::Anthropic,
             crate::inference_setup::InferenceAuthMethod::ClaudeOauth,
@@ -902,7 +938,7 @@ mod tests {
 
         for account in list_accounts(&access, did).await.unwrap() {
             access
-                .transact("test.remove", |txn| {
+                .transact_write("test.remove", |txn| {
                     let credential_id = account.credential_id.clone();
                     Box::pin(async move { remove_account_in_txn(txn, did, &credential_id).await })
                 })
@@ -972,7 +1008,7 @@ mod tests {
         );
 
         let active = crate::goal::set_goal(
-            node.as_ref(),
+            &node,
             "did:test:agent",
             "session-goal-history",
             Some("ship the timeline"),
@@ -981,11 +1017,11 @@ mod tests {
         )
         .await
         .expect("create goal");
-        crate::goal::refresh_goal_usage(node.as_ref(), &active)
+        crate::goal::refresh_goal_usage(&node, &active)
             .await
             .expect("refresh usage");
         crate::goal::set_goal(
-            node.as_ref(),
+            &node,
             "did:test:agent",
             "session-goal-history",
             None,
@@ -995,7 +1031,7 @@ mod tests {
         .await
         .expect("pause goal");
 
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         let timeline = load_run_timeline(&access, "request-goal-history")
             .await
             .expect("load timeline");

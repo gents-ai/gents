@@ -490,6 +490,10 @@ pub struct DesktopRuntimeSnapshot {
     pub peer_issue_count: usize,
     pub row_count: usize,
     pub approx_serialized_bytes: usize,
+    /// DIDs whose retained operator config projection decoded all first-run roots.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub operator_config_authoritative_node_dids: Option<Vec<String>>,
     pub deployments: Vec<DeploymentView>,
 }
 
@@ -580,6 +584,7 @@ mod peer_remove_response_tests {
                 default_node_home: "/agent".to_string(),
                 init_node_name: None,
                 init_node_did: None,
+                init_config_status: Some(crate::types::InitConfigStatus::Absent),
                 init_tool_ceiling: None,
                 init_tool_root: None,
                 desktop_home: "/desktop".to_string(),

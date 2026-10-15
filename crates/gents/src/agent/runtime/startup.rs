@@ -420,7 +420,7 @@ async fn run_agent_owned(
         Some(agent.runtime_node_arc().identity.clone()),
     )
     .with_plugins(agent.plugins().clone());
-    backend_registry::probe_and_promote_enabled_backends(agent.node.as_ref()).await;
+    backend_registry::probe_and_promote_enabled_backends(&agent.node).await;
 
     let resolved_snapshot = match resolve_startup_snapshot(&agent).await {
         Ok(snapshot) => snapshot,
@@ -626,7 +626,7 @@ async fn run_agent_owned(
             _ = trigger_engine_startup_barrier.wait_ready() => {}
         }
         match crate::trigger_engine::production_materializer::recover_workspace_binding_pending_requests(
-            trigger_engine_node.as_ref(),
+            &trigger_engine_node,
             &trigger_engine_node_did,
         )
         .await
@@ -1266,7 +1266,7 @@ async fn validate_startup_snapshot(
 }
 
 async fn resolve_tool_surfaces(
-    node: &defra_node::EmbeddedNode,
+    node: &std::sync::Arc<defra_node::EmbeddedNode>,
     agents: &[Arc<crate::config::ResolvedAgent>],
     plugins: &crate::plugin::executor::PluginExecutor,
 ) -> Result<HashMap<String, Arc<ToolSurface>>> {
@@ -1281,13 +1281,13 @@ async fn resolve_tool_surfaces(
 async fn resolve_startup_snapshot(agent: &Gents) -> Result<ResolvedRuntimeSnapshot> {
     match agent.document_runtime_context() {
         Some(resolve_context) => {
-            resolve_document_snapshot_with_tools(agent.node.as_ref(), resolve_context).await
+            resolve_document_snapshot_with_tools(&agent.node, resolve_context).await
         }
         None => {
             let tool_surfaces =
-                resolve_tool_surfaces(agent.node.as_ref(), &agent.agents, agent.plugins()).await?;
+                resolve_tool_surfaces(&agent.node, &agent.agents, agent.plugins()).await?;
             let backend_admission_configs =
-                resolve_backend_admission_configs(agent.node.as_ref(), &agent.agents).await?;
+                resolve_backend_admission_configs(&agent.node, &agent.agents).await?;
             Ok(ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
                 agent.default_agent_id().to_string(),
                 agent.agents.clone(),
@@ -1305,7 +1305,7 @@ async fn resolve_startup_snapshot(agent: &Gents) -> Result<ResolvedRuntimeSnapsh
 }
 
 async fn resolve_backend_admission_configs(
-    node: &defra_node::EmbeddedNode,
+    node: &std::sync::Arc<defra_node::EmbeddedNode>,
     agents: &[Arc<crate::config::ResolvedAgent>],
 ) -> Result<HashMap<String, BackendAdmissionConfig>> {
     let mut configs = HashMap::new();
@@ -1363,7 +1363,7 @@ async fn resolve_backend_admission_configs(
 }
 
 async fn resolve_document_snapshot_with_tools(
-    node: &defra_node::EmbeddedNode,
+    node: &std::sync::Arc<defra_node::EmbeddedNode>,
     resolve_context: &DocumentResolveContext,
 ) -> Result<ResolvedRuntimeSnapshot> {
     crate::agent::resolve_document_runtime_snapshot(node, resolve_context).await

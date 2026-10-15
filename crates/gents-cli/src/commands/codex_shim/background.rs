@@ -128,7 +128,7 @@ fn spawn_background_tool_watcher_handle(
                                 );
                                 continue;
                             };
-                            let access = ConfigAccess::Local(state.node.clone());
+                            let access = ConfigAccess::local(state.node.clone());
                             let presentation =
                                 match gents::tool_call_lifecycle::load_tool_call_presentation(
                                     &access,

@@ -63,4 +63,27 @@ example : (cases.map fun c => (run c).2.map (·.outcome)) =
     [some .applied,some .rejected,some .rejected,some .applied,some .rejected,
      some .rejected,none,some .rejected,some .rejected,some .rejected,
      some .rejected,some .applied,some .applied,none,none,none,none] := by native_decide
+
+structure ClientObservationCase where
+  name : String
+  receiptOutcome : Outcome
+  projectionRefreshSucceeded : Bool
+  deriving DecidableEq, Repr
+
+def clientObservationCases : List ClientObservationCase :=
+  [ ⟨"applied_receipt_projection_failure", .applied, false⟩
+  , ⟨"rejected_receipt_projection_failure", .rejected, false⟩
+  , ⟨"applied_receipt_projection_success", .applied, true⟩
+  ]
+
+def runClientObservation (c : ClientObservationCase) : ClientObservation :=
+  let receipt : Receipt := ⟨0, 0, c.receiptOutcome, []⟩
+  observeProjectionRefresh (receiveValidatedReceipt receipt) c.projectionRefreshSucceeded
+
+example : (clientObservationCases.map fun c =>
+    (runClientObservation c).commandOutcome) = [.applied, .rejected, .applied] := by
+  native_decide
+example : (clientObservationCases.map fun c =>
+    (runClientObservation c).projectionFresh) = [false, false, true] := by
+  native_decide
 end SessionQueue.InputEditCases

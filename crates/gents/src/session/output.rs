@@ -126,6 +126,22 @@ pub(crate) async fn count_request_output_scans<F: std::future::Future>(
 
 #[cfg(test)]
 tokio::task_local! {
+    static REPLAY_REQUEST_FACT_BATCHES: std::sync::Arc<std::sync::atomic::AtomicUsize>;
+}
+
+#[cfg(test)]
+pub(crate) async fn count_replay_request_fact_batches<F: std::future::Future>(
+    future: F,
+) -> (F::Output, usize) {
+    let batches = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let output = REPLAY_REQUEST_FACT_BATCHES
+        .scope(batches.clone(), future)
+        .await;
+    (output, batches.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+#[cfg(test)]
+tokio::task_local! {
     static CAPTURE_ROW_QUERIES: std::sync::Arc<std::sync::atomic::AtomicUsize>;
 }
 
@@ -383,6 +399,9 @@ impl<'a, 'txn> TxnCanonicalReader<'a, 'txn> {
         }
     }
 
+    /// Reuse headers from an exact scoped batch read. A separate `_docID`
+    /// equality is a point lookup, but reusing the rows avoids another read
+    /// per header in this transaction.
     pub(crate) fn observe_headers(
         &mut self,
         headers: &[super::canonical_rows::TranscriptMessageRow],
@@ -924,6 +943,148 @@ async fn request_rows(
     Ok(rows)
 }
 
+/// Load output segments for all request documents in the bounded replay view
+/// through the indexed request field, in chunks. The per-pass cache still
+/// owns freshness: if reconstruction detects an incomplete reused scan, its
+/// existing retry evicts and rereads that request alone.
+async fn preload_replay_request_output_segments(
+    node: &EmbeddedNode,
+    request_doc_ids: &[String],
+    node_did: &str,
+    requester_did: Option<&str>,
+    cache: &mut ReadCache,
+) -> Result<()> {
+    let distinct = request_doc_ids
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    for chunk in distinct.chunks(crate::rendered_request::commits::FIELD_COMMIT_ALIAS_BATCH) {
+        let filter = chunk
+            .iter()
+            .map(|request_doc_id| {
+                format!(
+                    r#""{}""#,
+                    crate::graphql::escape_graphql_string(request_doc_id)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let query = format!(
+            r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _in: [{filter}] }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"#
+        );
+        #[cfg(test)]
+        record_request_output_scan();
+        let response = ReadAccess::Node(node)
+            .query(&query, "preload_canonical_replay_output_segments")
+            .await?;
+        let rows = decode_scoped_request_output_segments(
+            rows_value(&response, "AgentOutputSegment")?,
+            node_did,
+            None,
+            requester_did,
+        )?;
+        let allowed = chunk.iter().cloned().collect::<BTreeSet<_>>();
+        let mut grouped: BTreeMap<String, Vec<super::canonical_rows::OutputSegmentRow>> =
+            BTreeMap::new();
+        for row in rows {
+            anyhow::ensure!(
+                allowed.contains(&row.segment.request_doc_id),
+                "canonical replay output batch returned an unrequested physical request"
+            );
+            grouped
+                .entry(row.segment.request_doc_id.clone())
+                .or_default()
+                .push(row);
+        }
+        for request_doc_id in chunk {
+            cache.requests.insert(
+                request_doc_id.clone(),
+                Arc::new(RequestOutputRows::from(
+                    grouped.remove(request_doc_id).unwrap_or_default(),
+                )),
+            );
+        }
+    }
+    Ok(())
+}
+
+async fn load_replay_request_facts_batch(
+    node: &EmbeddedNode,
+    request_doc_ids: &[String],
+) -> Result<BTreeMap<String, ReplayRequestFacts>> {
+    let distinct = request_doc_ids
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let mut facts = BTreeMap::new();
+    for chunk in distinct.chunks(crate::rendered_request::commits::FIELD_COMMIT_ALIAS_BATCH) {
+        let ids = chunk
+            .iter()
+            .map(|request_doc_id| {
+                format!(
+                    r#""{}""#,
+                    crate::graphql::escape_graphql_string(request_doc_id)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut query = format!(
+            r#"{{ requests: AgentRequest(docIDs: [{ids}]) {{ _docID request_id purpose session_id node_did requester_did }}"#
+        );
+        for (index, request_doc_id) in chunk.iter().enumerate() {
+            let escaped = crate::graphql::escape_graphql_string(request_doc_id);
+            query.push_str(&format!(
+                r#" commit{index}: _commits(docID: "{escaped}") {{ cid height fieldName signature {{ identity type }} }}"#
+            ));
+        }
+        query.push_str(" }");
+        #[cfg(test)]
+        let _ = REPLAY_REQUEST_FACT_BATCHES
+            .try_with(|batches| batches.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+        let response = ReadAccess::Node(node)
+            .query(&query, "load_canonical_replay_request_facts")
+            .await?;
+        let request_rows = rows_value(&response, "requests")?;
+        let allowed = chunk.iter().cloned().collect::<BTreeSet<_>>();
+        let mut grouped = chunk
+            .iter()
+            .map(|request_doc_id| (request_doc_id.clone(), Vec::new()))
+            .collect::<BTreeMap<_, Vec<_>>>();
+        for row in request_rows {
+            let request_doc_id = row
+                .get("_docID")
+                .and_then(serde_json::Value::as_str)
+                .with_context(|| "canonical replay request batch returned a row without _docID")?;
+            anyhow::ensure!(
+                allowed.contains(request_doc_id),
+                "canonical replay request batch returned an unrequested physical request"
+            );
+            grouped
+                .get_mut(request_doc_id)
+                .expect("requested request IDs were initialized")
+                .push(row.clone());
+        }
+        for (index, request_doc_id) in chunk.iter().enumerate() {
+            let commit_rows = response
+                .pointer(&format!("/data/commit{index}"))
+                .and_then(serde_json::Value::as_array)
+                .with_context(|| {
+                    format!("canonical replay commit batch omitted {request_doc_id}")
+                })?;
+            let commits = crate::graphql::decode_composite_commits(commit_rows)?;
+            let rows = grouped
+                .remove(request_doc_id)
+                .expect("requested request IDs were initialized");
+            facts.insert(request_doc_id.clone(), ReplayRequestFacts { rows, commits });
+        }
+    }
+    Ok(facts)
+}
+
 /// `request_hint` is the physical request whose output the header's payloads
 /// are expected to close; closes found there need no `_docID` lookup, which
 /// DefraDB serves by reading the node's whole output.
@@ -1141,31 +1302,31 @@ pub(crate) async fn load_canonical_assistant_candidates(
     load_canonical_assistant_candidates_with(node, node, scope, boundary, None).await
 }
 
-/// Physical-request reads for replay. A failed store read is an error, never
-/// empty rows, so it cannot pass for a missing request.
+/// Physical-request reads for replay. Implementations read a bounded batch so
+/// replay does not issue one request and commit query per historical turn. A
+/// failed store read is an error, never empty rows, so it cannot pass for a
+/// missing request.
 #[async_trait::async_trait]
 pub(crate) trait ReplayRequestReader: Sync {
-    async fn request_rows(&self, query: &str) -> Result<serde_json::Value>;
-    async fn request_commits(
+    async fn request_facts(
         &self,
-        request_doc_id: &str,
-    ) -> Result<Vec<crate::graphql::CompositeCommit>>;
+        request_doc_ids: &[String],
+    ) -> Result<BTreeMap<String, ReplayRequestFacts>>;
+}
+
+#[derive(Clone)]
+pub(crate) struct ReplayRequestFacts {
+    pub(super) rows: Vec<serde_json::Value>,
+    commits: Vec<crate::graphql::CompositeCommit>,
 }
 
 #[async_trait::async_trait]
 impl ReplayRequestReader for EmbeddedNode {
-    async fn request_rows(&self, query: &str) -> Result<serde_json::Value> {
-        ReadAccess::Node(self)
-            .query(query, "load_canonical_replay_request")
-            .await
-    }
-
-    async fn request_commits(
+    async fn request_facts(
         &self,
-        request_doc_id: &str,
-    ) -> Result<Vec<crate::graphql::CompositeCommit>> {
-        crate::graphql::composite_commits(self, request_doc_id, "canonical replay request commits")
-            .await
+        request_doc_ids: &[String],
+    ) -> Result<BTreeMap<String, ReplayRequestFacts>> {
+        load_replay_request_facts_batch(self, request_doc_ids).await
     }
 }
 
@@ -1235,7 +1396,24 @@ pub(crate) async fn load_canonical_assistant_candidates_with(
         "canonical replay high-water header is absent from its bounded view"
     );
 
-    let mut selected = Vec::new();
+    let replay_output_requests = headers
+        .iter()
+        .filter(|row| {
+            row.message.role == MessageRole::Assistant
+                && !row.message.payload_references().is_empty()
+        })
+        .filter_map(|row| row.message.request_doc_id.clone())
+        .collect::<Vec<_>>();
+    preload_replay_request_output_segments(
+        node,
+        &replay_output_requests,
+        scope.node_did,
+        scope.requester_did,
+        &mut cache,
+    )
+    .await?;
+
+    let mut pending = Vec::new();
     for row in headers
         .into_iter()
         .filter(|row| row.message.role == MessageRole::Assistant)
@@ -1298,50 +1476,7 @@ pub(crate) async fn load_canonical_assistant_candidates_with(
                 continue;
             }
         }
-        let request_scope = (
-            request_doc_id.to_owned(),
-            origin_header.node_did.clone(),
-            origin_header.requester_did.clone(),
-            origin_header.session_id.clone(),
-        );
-        let loaded = match request_facts.get(&request_scope) {
-            Some(facts) => Ok(facts.clone()),
-            None => {
-                load_replay_physical_request(
-                    requests,
-                    request_doc_id,
-                    &origin_header.node_did,
-                    origin_header.requester_did.as_deref(),
-                    &origin_header.session_id,
-                )
-                .await
-            }
-        };
-        let (request_id, request_commits) = match loaded {
-            Ok(request) => request,
-            // A historical request that is verifiably missing or out of scope
-            // makes only its turn non-replayable; the current request is
-            // validated above. A failed store read says nothing about the
-            // request and must not silently strip reasoning, so it propagates.
-            Err(error)
-                if request_doc_id != scope.request_doc_id
-                    && error
-                        .downcast_ref::<gents_loop::loop_stream::ReplayEvidenceViolation>()
-                        .is_some() =>
-            {
-                tracing::warn!(
-                    header_doc_id = %row.doc_id,
-                    error = %format!("{error:#}"),
-                    "accepted turn request is unverifiable; its reasoning is not replayed"
-                );
-                continue;
-            }
-            Err(error) => return Err(error),
-        };
-        request_facts
-            .entry(request_scope)
-            .or_insert_with(|| (request_id.clone(), request_commits.clone()));
-        selected.push(SelectedReplayCandidate {
+        pending.push(PendingReplayCandidate {
             capture_key: replay_capture_key(
                 &origin_header.node_did,
                 &origin_header.session_id,
@@ -1353,12 +1488,88 @@ pub(crate) async fn load_canonical_assistant_candidates_with(
             node_did: origin_header.node_did.clone(),
             requester_did: origin_header.requester_did.clone(),
             session_id: origin_header.session_id.clone(),
-            request_id,
-            request_commits,
             coordinate,
             #[cfg(test)]
             sequence: row.message.sequence,
             message: reconstructed.message,
+        });
+    }
+    let missing_request_ids = pending
+        .iter()
+        .filter(|candidate| {
+            !request_facts.contains_key(&(
+                candidate.request_doc_id.clone(),
+                candidate.node_did.clone(),
+                candidate.requester_did.clone(),
+                candidate.session_id.clone(),
+            ))
+        })
+        .map(|candidate| candidate.request_doc_id.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let loaded_request_facts = requests.request_facts(&missing_request_ids).await?;
+    let mut selected = Vec::new();
+    for candidate in pending {
+        let request_scope = (
+            candidate.request_doc_id.clone(),
+            candidate.node_did.clone(),
+            candidate.requester_did.clone(),
+            candidate.session_id.clone(),
+        );
+        let loaded = match request_facts.get(&request_scope) {
+            Some(facts) => Ok(facts.clone()),
+            None => match loaded_request_facts.get(&candidate.request_doc_id) {
+                Some(facts) => validate_replay_request_facts(
+                    &candidate.request_doc_id,
+                    &candidate.node_did,
+                    candidate.requester_did.as_deref(),
+                    &candidate.session_id,
+                    facts,
+                ),
+                None => Err(anyhow::anyhow!(
+                    "canonical replay request batch omitted {}",
+                    candidate.request_doc_id
+                )),
+            },
+        };
+        let (request_id, request_commits) = match loaded {
+            Ok(request) => request,
+            // A historical request that is verifiably missing or out of scope
+            // makes only its turn non-replayable; the current request is
+            // validated above. A failed store read says nothing about the
+            // request and must not silently strip reasoning, so it propagates.
+            Err(error)
+                if candidate.request_doc_id != scope.request_doc_id
+                    && error
+                        .downcast_ref::<gents_loop::loop_stream::ReplayEvidenceViolation>()
+                        .is_some() =>
+            {
+                tracing::warn!(
+                    header_doc_id = %candidate.header_doc_id,
+                    error = %format!("{error:#}"),
+                    "accepted turn request is unverifiable; its reasoning is not replayed"
+                );
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
+        request_facts
+            .entry(request_scope)
+            .or_insert_with(|| (request_id.clone(), request_commits.clone()));
+        selected.push(SelectedReplayCandidate {
+            capture_key: candidate.capture_key,
+            header_doc_id: candidate.header_doc_id,
+            request_doc_id: candidate.request_doc_id,
+            node_did: candidate.node_did,
+            requester_did: candidate.requester_did,
+            session_id: candidate.session_id,
+            request_id,
+            request_commits,
+            coordinate: candidate.coordinate,
+            #[cfg(test)]
+            sequence: candidate.sequence,
+            message: candidate.message,
         });
     }
     // Capture reads are the pass's dominant per-candidate store cost; they
@@ -1393,6 +1604,19 @@ pub(crate) async fn load_canonical_assistant_candidates_with(
         });
     }
     Ok(candidates)
+}
+
+struct PendingReplayCandidate {
+    capture_key: String,
+    header_doc_id: String,
+    request_doc_id: String,
+    node_did: String,
+    requester_did: Option<String>,
+    session_id: String,
+    coordinate: CanonicalProviderCoordinate,
+    #[cfg(test)]
+    sequence: u32,
+    message: gents_protocol::message::Message,
 }
 
 /// One assistant of the bounded canonical view that passed every check a
@@ -1720,12 +1944,22 @@ async fn load_replay_physical_request(
     requester_did: Option<&str>,
     session_id: &str,
 ) -> Result<(String, BTreeSet<String>)> {
-    let query = format!(
-        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ _docID request_id purpose session_id node_did requester_did }} }}"#,
-        crate::graphql::escape_graphql_string(request_doc_id)
-    );
-    let response = requests.request_rows(&query).await?;
-    let rows = rows_value(&response, "AgentRequest")?;
+    let request_doc_ids = [request_doc_id.to_owned()];
+    let mut facts = requests.request_facts(&request_doc_ids).await?;
+    let facts = facts
+        .remove(request_doc_id)
+        .with_context(|| format!("canonical replay request batch omitted {request_doc_id}"))?;
+    validate_replay_request_facts(request_doc_id, node_did, requester_did, session_id, &facts)
+}
+
+fn validate_replay_request_facts(
+    request_doc_id: &str,
+    node_did: &str,
+    requester_did: Option<&str>,
+    session_id: &str,
+    facts: &ReplayRequestFacts,
+) -> Result<(String, BTreeSet<String>)> {
+    let rows = &facts.rows;
     replay_ensure!(
         rows.len() == 1,
         "canonical replay request is missing or ambiguous"
@@ -1740,11 +1974,10 @@ async fn load_replay_physical_request(
             && row["requester_did"].as_str() == requester_did,
         "canonical replay request crossed its physical node/session scope"
     );
-    let commits = requests
-        .request_commits(request_doc_id)
-        .await?
-        .into_iter()
-        .map(|commit| commit.cid)
+    let commits = facts
+        .commits
+        .iter()
+        .map(|commit| commit.cid.clone())
         .collect::<BTreeSet<_>>();
     Ok((required_row_str(row, "request_id")?.to_owned(), commits))
 }
@@ -2211,6 +2444,55 @@ pub(super) async fn load_sequenced_messages(
 mod tests {
     use super::*;
     use gents_protocol::output::{MessageRole, OutputOutcome, TranscriptMessage};
+
+    #[tokio::test]
+    async fn replay_preloads_output_and_request_facts_in_bounded_chunks() {
+        let node = EmbeddedNode::builder().build().await.unwrap();
+        crate::ensure_runtime_schemas(&node).await.unwrap();
+        let mut request_doc_ids = (0..=crate::rendered_request::commits::FIELD_COMMIT_ALIAS_BATCH)
+            .map(|index| {
+                document::DocID::new_v0_from_seed(&format!("missing-replay-request-{index}"))
+                    .to_string()
+            })
+            .collect::<Vec<_>>();
+        request_doc_ids.push(request_doc_ids[0].clone());
+        let distinct_request_count = crate::rendered_request::commits::FIELD_COMMIT_ALIAS_BATCH + 1;
+        let mut cache = ReadCache {
+            reuse_node_scans: true,
+            ..ReadCache::default()
+        };
+
+        let (output_result, output_batches) =
+            count_request_output_scans(preload_replay_request_output_segments(
+                &node,
+                &request_doc_ids,
+                "did:test:replay-batch",
+                None,
+                &mut cache,
+            ))
+            .await;
+        output_result.unwrap();
+        assert_eq!(
+            output_batches, 2,
+            "33 request IDs require two indexed output reads at the 32-ID bound"
+        );
+        assert_eq!(cache.requests.len(), distinct_request_count);
+        assert!(cache.requests.values().all(|rows| rows.rows.is_empty()));
+
+        let (request_facts, request_fact_batches) = count_replay_request_fact_batches(
+            ReplayRequestReader::request_facts(&node, &request_doc_ids),
+        )
+        .await;
+        let request_facts = request_facts.unwrap();
+        assert_eq!(
+            request_fact_batches, 2,
+            "request and composite-commit aliases stay below the 32-document bound"
+        );
+        assert_eq!(request_facts.len(), distinct_request_count);
+        assert!(request_facts
+            .values()
+            .all(|facts| facts.rows.is_empty() && facts.commits.is_empty()));
+    }
 
     #[test]
     fn session_header_index_preserves_coordinate_observations() {

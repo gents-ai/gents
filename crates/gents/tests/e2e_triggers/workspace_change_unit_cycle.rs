@@ -42,7 +42,7 @@ async fn change_unit_pack_completes_writer_seal_review_and_host_integration() {
     let backend = scripted_backend();
     let db = test_db("workspace-change-unit-cycle").await;
     let owner = db.node_identity.did().to_owned();
-    let access = ConfigAccess::Local(db.node.clone());
+    let access = ConfigAccess::local(db.node.clone());
     let root = tempfile::tempdir().unwrap();
     let repo = root.path().join("source-repo");
     let (base_sha, base_tree) = create_repository(&repo);
@@ -337,7 +337,7 @@ async fn change_unit_pack_rejection_records_terminal_result_without_integration(
     let backend = rejected_backend();
     let db = test_db("workspace-change-unit-rejected-cycle").await;
     let owner = db.node_identity.did().to_owned();
-    let access = ConfigAccess::Local(db.node.clone());
+    let access = ConfigAccess::local(db.node.clone());
     let root = tempfile::tempdir().unwrap();
     let repo = root.path().join("source-repo");
     let (base_sha, _) = create_repository(&repo);
@@ -495,7 +495,7 @@ async fn failed_stage_outcome_reaches_the_existing_supervisor_session() {
     let backend = failure_inbox_backend();
     let db = test_db("workspace-change-unit-failure-inbox").await;
     let owner = db.node_identity.did().to_owned();
-    let access = ConfigAccess::Local(db.node.clone());
+    let access = ConfigAccess::local(db.node.clone());
     let root = tempfile::tempdir().unwrap();
     let repo = root.path().join("source-repo");
     let (base_sha, _) = create_repository(&repo);
@@ -633,7 +633,7 @@ fn ensure_native_fs_runner_for_test() {
 
 async fn select_default_agent(
     access: &ConfigAccess,
-    node: &gents::defra_node::EmbeddedNode,
+    node: &std::sync::Arc<gents::defra_node::EmbeddedNode>,
     owner: &str,
 ) {
     let mut principal = gents::ensure_node(node, owner).await.unwrap();
@@ -646,7 +646,7 @@ async fn select_default_agent(
     }])
     .unwrap();
     access
-        .transact("workspace_cycle.select_default_agent", |txn| {
+        .transact_write("workspace_cycle.select_default_agent", |txn| {
             let plan = &plan;
             Box::pin(async move { gents::config_client::apply_desired_state_plan(txn, plan).await })
         })
@@ -961,7 +961,7 @@ async fn install_inference(access: &ConfigAccess, owner: &str, endpoint: &str) {
     )
     .unwrap();
     access
-        .transact("workspace_cycle.install_inference", |txn| {
+        .transact_write("workspace_cycle.install_inference", |txn| {
             let plan = &plan;
             Box::pin(async move { gents::config_client::apply_desired_state_plan(txn, plan).await })
         })
@@ -1133,7 +1133,7 @@ async fn install_failure_inbox_triggers(access: &ConfigAccess, owner: &str) {
     let plan = DesiredStateApplyPlan::from_pack_config(&config)
         .expect("test event and Task documents validate");
     access
-        .transact("workspace_cycle.install_failure_inbox_triggers", |txn| {
+        .transact_write("workspace_cycle.install_failure_inbox_triggers", |txn| {
             let plan = &plan;
             Box::pin(async move { gents::config_client::apply_desired_state_plan(txn, plan).await })
         })

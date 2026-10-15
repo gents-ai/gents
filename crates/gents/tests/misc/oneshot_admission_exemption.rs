@@ -35,7 +35,7 @@ async fn oneshot_completes_without_backend_admission_reconciliation() -> Result<
     );
     behavior.backend_endpoint = mock_endpoint.endpoint().to_string();
     bind_agent_backend(
-        node.as_ref(),
+        &node,
         behavior.node_did(),
         &behavior.agent_id,
         "backend-oneshot-exempt",

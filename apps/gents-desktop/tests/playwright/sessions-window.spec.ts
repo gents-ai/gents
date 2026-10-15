@@ -31,9 +31,7 @@ test.describe("a large session index", () => {
     await expect(page.getByTestId("session-screen")).toBeVisible();
   });
 
-  test("keyboard navigation reaches both ends and crosses a window boundary", async ({
-    page,
-  }) => {
+  test("keyboard navigation reaches both ends", async ({ page }) => {
     const list = page.getByRole("list", { name: "Sessions", exact: true });
     const first = list.locator("a[data-testid^='session-']").first();
     await first.focus();
@@ -42,13 +40,29 @@ test.describe("a large session index", () => {
     await expect(last).toBeFocused();
     await last.press("Home");
     await expect(page.getByTestId("session-session-intro")).toBeFocused();
-    for (let i = 0; i < 45; i += 1) await page.keyboard.press("Tab");
-    const index = await page.evaluate(() =>
-      Number(
-        document.activeElement?.closest("[data-index]")?.getAttribute("data-index"),
-      ),
-    );
-    expect(index).toBe(45);
+    expect(await list.locator("a[data-testid^='session-']").count()).toBeLessThan(80);
+  });
+
+  test("Tab crosses a window boundary and returns to the previous row", async ({
+    page,
+  }) => {
+    const list = page.getByRole("list", { name: "Sessions", exact: true });
+    const edge = list.locator("li[data-index]").last();
+    await expect(edge).toBeAttached();
+    const index = Number(await edge.getAttribute("data-index"));
+    const previous = list.locator(`li[data-index="${index}"] a`);
+    const next = list.locator(`li[data-index="${index + 1}"] a`);
+    await expect(next).toHaveCount(0);
+    await previous.evaluate((link: HTMLAnchorElement) => {
+      link.focus({ preventScroll: true });
+    });
+    await expect(previous).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(next).toBeFocused();
+    await expect(next).toBeInViewport();
+    await page.keyboard.press("Shift+Tab");
+    await expect(previous).toBeFocused();
+    await expect(previous).toBeInViewport();
     expect(await list.locator("a[data-testid^='session-']").count()).toBeLessThan(80);
   });
 

@@ -21,8 +21,16 @@ pub use gents_migration::{
 /// Registers the canonical baseline SDL, applies configured migration steps,
 /// and verifies collection lineages. The current registry has no historical steps.
 pub async fn ensure_all_runtime_migrations(node: Arc<EmbeddedNode>) -> Result<()> {
-    ensure_migrations(node.as_ref())
-        .await
-        .context("ensure_migrations")?;
+    crate::config_client::ConfigAccess::local(node)
+        .run_local_owned(|node| async move { ensure_migrations_borrowed(node.as_ref()).await })
+        .await?;
     Ok(())
+}
+
+pub(crate) async fn ensure_migrations_borrowed(node: &EmbeddedNode) -> Result<()> {
+    ensure_migrations(node)
+        .await
+        .map(|_| ())
+        .map_err(|error| anyhow::anyhow!(error))
+        .context("ensure_migrations")
 }

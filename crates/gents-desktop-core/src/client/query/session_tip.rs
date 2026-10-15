@@ -464,7 +464,7 @@ mod tests {
     #[tokio::test]
     async fn reopening_completed_request_reads_only_its_prompt_and_active_reads_stay_request_scoped(
     ) {
-        let node = defra_node::NodeBuilder::default().build().await.unwrap();
+        let node = std::sync::Arc::new(defra_node::NodeBuilder::default().build().await.unwrap());
         crate::client::schema::ensure_runtime_schemas(&node)
             .await
             .unwrap();
@@ -684,7 +684,7 @@ mod tests {
     #[ignore = "measures repeated-owner index planning against a large disposable session"]
     async fn folded_prompt_ownership_index_benchmark() {
         let node = std::sync::Arc::new(defra_node::NodeBuilder::default().build().await.unwrap());
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         access
             .add_schema(gents_protocol::schemas::AGENT_MESSAGE)
             .await
@@ -828,7 +828,7 @@ mod tests {
         use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestInput, RequestQueue};
         use gents_protocol::request_lifecycle::RequestLifecycleState;
 
-        let node = defra_node::NodeBuilder::default().build().await.unwrap();
+        let node = std::sync::Arc::new(defra_node::NodeBuilder::default().build().await.unwrap());
         crate::client::schema::ensure_runtime_schemas(&node)
             .await
             .unwrap();

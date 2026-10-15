@@ -48,7 +48,7 @@ impl Fixture {
             .await
             .unwrap();
         crate::test_support::install_test_agent(&node, identity.did(), "package").await;
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         let installed = install_test_graph_package(
             &access,
             identity.did(),

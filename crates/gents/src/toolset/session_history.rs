@@ -626,16 +626,21 @@ pub fn build_session_history_tool(
 }
 
 pub async fn load_session_history_snapshot(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
     limit: Option<usize>,
 ) -> Result<SessionHistorySnapshot> {
     let agent = node_did.trim().to_owned();
     anyhow::ensure!(!agent.is_empty(), "session history requires a node DID");
-    crate::config_client::ConfigAccess::transact_local(node, None, "session.history", move |txn| {
-        let agent = agent.clone();
-        Box::pin(async move { load_session_history_in_txn(txn, &agent, limit).await })
-    })
+    crate::config_client::ConfigAccess::transact_local_readonly(
+        node,
+        None,
+        "session.history",
+        move |txn| {
+            let agent = agent.clone();
+            Box::pin(async move { load_session_history_in_txn(txn, &agent, limit).await })
+        },
+    )
     .await
 }
 
@@ -647,7 +652,7 @@ pub async fn load_session_history_snapshot_with_access(
     let agent = node_did.trim().to_owned();
     anyhow::ensure!(!agent.is_empty(), "session history requires a node DID");
     access
-        .transact("session.history", move |txn| {
+        .transact_readonly("session.history", move |txn| {
             let agent = agent.clone();
             Box::pin(async move { load_session_history_in_txn(txn, &agent, limit).await })
         })
@@ -1649,7 +1654,7 @@ mod tests {
                 .await
                 .unwrap();
             let response = crate::config_client::ConfigAccess::write_local_response(
-                node.as_ref(),
+                &node,
                 "test.session_history.signed_request",
                 &create.graphql_mutation().unwrap(),
             )
@@ -1665,7 +1670,7 @@ mod tests {
                 r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, input: {{ lifecycle_state: "{state}" }}) {{ _docID }} }}"#
             );
             let response = crate::config_client::ConfigAccess::write_local_response(
-                node.as_ref(),
+                &node,
                 "test.session_history.request_state",
                 &transition,
             )
@@ -2422,7 +2427,7 @@ mod tests {
             .await
             .unwrap();
         let response = crate::config_client::ConfigAccess::write_local_response(
-            node.as_ref(),
+            &node,
             "test.session_history.foreign_request",
             &foreign_request.graphql_mutation().unwrap(),
         )
@@ -2637,7 +2642,7 @@ mod tests {
             .await
             .unwrap();
         let response = crate::config_client::ConfigAccess::write_local_response(
-            node.as_ref(),
+            &node,
             "test.session_history.duplicate_request",
             &duplicate.graphql_mutation().unwrap(),
         )

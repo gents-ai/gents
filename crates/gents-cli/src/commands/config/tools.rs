@@ -44,7 +44,7 @@ pub(super) async fn tools_set(args: ToolsSetArgs) -> Result<()> {
     let id = tools.tools_id.clone();
     let (plan, owner, id) = (&plan, &owner, &id);
     let doc_id = access
-        .transact("cli.tools.set", move |txn| {
+        .transact_write("cli.tools.set", move |txn| {
             Box::pin(async move {
                 apply_desired_state_plan(txn, plan).await?;
                 let (doc_id, _) =

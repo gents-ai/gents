@@ -68,7 +68,7 @@ async fn setup_hook(
     let request_id = format!("{test_name}-request");
     let did = db.node_identity.did();
     gents::session::ensure_session_with_agent_id_and_requester_did(
-        db.node.as_ref(),
+        &db.node,
         &session_id,
         did,
         "r4c-background-tools",
@@ -323,7 +323,7 @@ async fn setup_hook_on_db(
 ) -> (DefraSessionHook, String, String) {
     let did = db.node_identity.did();
     gents::session::ensure_session_with_agent_id_and_requester_did(
-        db.node.as_ref(),
+        &db.node,
         session_id,
         did,
         "r4c-background-tools",

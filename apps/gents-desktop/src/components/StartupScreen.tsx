@@ -36,12 +36,52 @@ function useAside() {
 
 /** Where startup has got to, until the client is ready: each step, the
     managed server's wait, and on failure the ways on. */
-export function StartupScreen() {
+export function StartupScreen({
+  configurationPending = false,
+  initConfigStatus,
+}: {
+  configurationPending?: boolean;
+  initConfigStatus?: "absent" | "configured" | "unreadable" | null;
+}) {
   const { actions, lifecycle } = useApp();
   const startup = useStartup();
   const aside = useAside();
   const waiting = startup.managedServerWait !== null;
   const now = useNow(waiting);
+  if (configurationPending) {
+    return (
+      <section
+        aria-labelledby="startup-title"
+        className="viewport-frame grid place-items-center bg-background px-8 text-foreground"
+        data-testid="startup-configuration-pending"
+      >
+        <div className="grid w-full max-w-md gap-6">
+          <Mark className="h-4 text-ink" />
+          <div className="grid gap-2">
+            <p className="font-mono text-[10px] tracking-wide text-muted-foreground uppercase">
+              System startup
+            </p>
+            <h2
+              id="startup-title"
+              className="font-heading text-2xl font-medium text-heading"
+            >
+              {initConfigStatus === "unreadable"
+                ? "Unable to read saved node settings"
+                : "Loading saved node settings"}
+            </h2>
+            <p aria-live="polite" className="text-sm text-muted-foreground">
+              {initConfigStatus === "unreadable"
+                ? "The saved node settings could not be read. Try again to reload them."
+                : "Waiting for your saved settings and sessions."}
+            </p>
+          </div>
+          <Button variant="outline" onClick={() => void actions.refreshSnapshot()}>
+            Try again
+          </Button>
+        </div>
+      </section>
+    );
+  }
   if (startup.phase === "ready") return null;
   const { phase, managedServerWait } = startup;
   const status = projectStartupLoadingStatus(phase, lifecycle.supportsManagedServer);

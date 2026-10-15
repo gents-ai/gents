@@ -577,7 +577,7 @@ async fn install(spec: &TrialSpec, home: &EmbeddedHome, workspace: &Path) -> Res
         .context("binding the pack's inference slots to the frozen profile")?;
     let mut config = root_host_tools(config, workspace)?;
     config.node.default_agent_id = Some(spec.agent_id.clone());
-    let access = ConfigAccess::Local(home.node.clone());
+    let access = ConfigAccess::local(home.node.clone());
     for path in &manifest.schemas {
         let bytes = assets
             .get(path)
@@ -659,7 +659,7 @@ async fn apply(
     plan: &DesiredStateApplyPlan,
 ) -> Result<()> {
     access
-        .transact(operation, |txn| {
+        .transact_write(operation, |txn| {
             let plan = &plan;
             Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
         })
@@ -756,7 +756,10 @@ fn object<'a>(value: &'a mut Value, named: &str) -> Result<&'a mut serde_json::M
 
 /// The trial's workspace, published the way the configurator evals publish
 /// theirs: an operator-owned root the trial's host tools may reach.
-async fn install_workspace_root(node: &EmbeddedNode, workspace: &Path) -> Result<()> {
+async fn install_workspace_root(
+    node: &std::sync::Arc<EmbeddedNode>,
+    workspace: &Path,
+) -> Result<()> {
     let root = escape_graphql_string(
         workspace
             .to_str()
@@ -853,7 +856,7 @@ async fn create_document(
     );
     let variables = json!({ "input": document });
     access
-        .transact(label, |txn| {
+        .transact_write(label, |txn| {
             let (mutation, variables) = (&mutation, &variables);
             Box::pin(async move {
                 let response = txn.execute_with_variables(mutation, variables).await?;
@@ -1020,7 +1023,7 @@ enum StageSubmission {
 }
 
 async fn observe_stage_terminal(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     cancel: &CancellationToken,
     runtime: &RunningRuntime,
     request_id: &str,
@@ -1443,6 +1446,7 @@ fn outcome_kind(classification: &str) -> OutcomeKind {
         "tool" => OutcomeKind::Tool,
         "provider" => OutcomeKind::Provider,
         "runtime" => OutcomeKind::Runtime,
+        "infrastructure" => OutcomeKind::Infrastructure,
         _ => OutcomeKind::Unknown,
     }
 }
@@ -1560,7 +1564,7 @@ async fn runtime_exited(runtime: &RunningRuntime) {
 /// uses: the request is interrupted, then watched until it settles, so the
 /// evidence names a state the home actually reached.
 async fn interrupt_and_settle(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     request_id: &str,
 ) -> Result<TerminalObservation> {
     crate::interrupt::interrupt_request(node, request_id)
@@ -1576,7 +1580,7 @@ async fn interrupt_and_settle(
 /// `valid_until` and `retry` are unset for a request that is nobody's retry,
 /// which is exactly what `RequestSpec::new` already carries.
 async fn submit_stage(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     locator: &TrialLocator,
     agent_id: &str,
     stage: &StageSpec,
@@ -1633,7 +1637,7 @@ async fn seed_and_await_fire(
     if let Some(Err(error)) = reconciled {
         anyhow::bail!("the trial runtime's event sources did not reconcile: {error}");
     }
-    let access = ConfigAccess::Local(home.node.clone());
+    let access = ConfigAccess::local(home.node.clone());
     let since = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let doc_id = create_document(
         &access,
@@ -1731,7 +1735,7 @@ async fn run_captures(
     for capture in captures {
         match capture {
             Capture::Schema { name, collections } => {
-                let access = crate::config_client::ConfigAccess::Local(node.clone());
+                let access = crate::config_client::ConfigAccess::local(node.clone());
                 let mut versions = Vec::new();
                 let mut failed = false;
                 for collection in collections {
@@ -2187,7 +2191,7 @@ mod tests {
     #[tokio::test]
     async fn schema_capture_reads_active_indexes_and_records_absent_collections() {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-        ConfigAccess::Local(node.clone())
+        ConfigAccess::local(node.clone())
             .add_schema("type SearchNote { body: String @fulltext(language: \"english\") }")
             .await
             .unwrap();
@@ -2280,7 +2284,7 @@ mod tests {
     #[tokio::test]
     async fn document_capture_excludes_other_sessions_with_the_same_sequence() {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         access
             .add_schema("type CaptureHeader { session_id: String sequence: Int }")
             .await
@@ -2469,6 +2473,41 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_lease_failure_uses_the_existing_infrastructure_outcome() {
+        let cases: Vec<Value> = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/eval_request_outcome.json"
+        )))
+        .unwrap();
+        let case = cases
+            .iter()
+            .find(|case| {
+                case["state"] == "failed"
+                    && case["deadline"] == false
+                    && case["request_reason"] == "execution lease expired"
+                    && case["inference_reason"].is_null()
+                    && case["inference_failed"] == false
+                    && case["tool_failed"] == false
+            })
+            .unwrap();
+        let expected = OutcomeKind::parse(case["outcome"].as_str().unwrap()).unwrap();
+        let evidence = RequestEvidence {
+            failure_reason: Some(case["request_reason"].as_str().unwrap().into()),
+            ..Default::default()
+        };
+        let terminal = TerminalObservation {
+            terminal_state: RequestLifecycleState::Failed,
+            session_id: Some("session".into()),
+            interrupted_on_deadline: false,
+            elapsed: Duration::ZERO,
+        };
+        let outcome = stage_failure_kind(Some(&terminal), true, false, &evidence);
+        assert_eq!(outcome, Some(expected));
+        assert_eq!(provider_reason(outcome, &evidence), None);
+        assert_failure_class(outcome, expected, crate::eval::EvidenceClass::NotEvidence);
+    }
+
     /// Cancellation reaches a seed stage before it has a request: while it
     /// waits for the event sources, writes the seed, or polls for the fire.
     /// It ends the way a cancelled running stage does, as the request not
@@ -2584,7 +2623,7 @@ mod tests {
             .await
             .unwrap();
 
-        let access = ConfigAccess::Local(home.node.clone());
+        let access = ConfigAccess::local(home.node.clone());
         let response = access
             .execute("query { Node { default_agent_id } }")
             .await
@@ -2692,7 +2731,7 @@ mod tests {
         let home = EmbeddedHome::create_temp("subject-schema").await.unwrap();
         let workspace = dir.path().join("workspace");
         install(&spec, &home, &workspace).await.unwrap();
-        let access = ConfigAccess::Local(home.node.clone());
+        let access = ConfigAccess::local(home.node.clone());
         let response = access
             .execute("query { EvalSubmission { message } }")
             .await
@@ -2800,6 +2839,152 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
+    }
+
+    #[tokio::test]
+    async fn trial_teardown_settles_scheduled_inference_without_expiring_its_lease() {
+        use crate::support::streaming_backend::{
+            MockStreamingBackend, StreamPlan, StreamResponse, StreamScript,
+        };
+
+        for cancel_stage in [false, true] {
+            let marker = "scheduled-trial-teardown";
+            let backend = MockStreamingBackend::start_with_plans(
+                "frozen-model",
+                vec![StreamPlan::new(
+                    marker,
+                    vec![StreamResponse::Stream(StreamScript::paused(
+                        marker,
+                        ["received before shutdown"],
+                    ))],
+                )],
+            )
+            .unwrap();
+            let dir = tempfile::tempdir().unwrap();
+            let pack_dir = dir.path().join("pack");
+            write_slot_pack(&pack_dir, "gents:inference-slot:primary");
+            let mut inference = frozen_binding(json!("frozen-profile"));
+            inference.backend["endpoint"] = json!(backend.endpoint());
+            let spec = TrialSpec {
+                pack_digest: materialized_digest(&pack_dir),
+                pack_dir,
+                agent_id: "subject".into(),
+                inference,
+                ..TrialSpec::empty_for_tests("scheduled-teardown")
+            };
+            let home = EmbeddedHome::create_temp("scheduled-teardown")
+                .await
+                .unwrap();
+            install(&spec, &home, &dir.path().join("workspace"))
+                .await
+                .unwrap();
+            let (runtime, _agent) = boot_runtime(
+                &home,
+                home.identity.clone(),
+                DocumentRuntimeOptions::default(),
+            )
+            .await
+            .unwrap();
+            let request_id = uuid::Uuid::new_v4().to_string();
+            let request = build_signed_request(
+                RequestSpec::new(
+                    gents_protocol::request_admission::RequestPurpose::Normal,
+                    RequestIdentity {
+                        request_id: request_id.clone(),
+                        node_did: home.did().into(),
+                        requester_did: None,
+                        agent_id: "subject".into(),
+                        session_id: uuid::Uuid::new_v4().to_string(),
+                        content: marker.into(),
+                        execution_origin: ExecutionOrigin::Scheduled,
+                        created_at: chrono::Utc::now()
+                            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                    },
+                    gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
+                        home.did(),
+                    ),
+                ),
+                RequestSigner::RegisteredTarget,
+            )
+            .await
+            .unwrap();
+            ConfigAccess::write_local(
+                &home.node,
+                "test.eval_scheduled_shutdown",
+                &request.graphql_mutation().unwrap(),
+            )
+            .await
+            .unwrap();
+            tokio::time::timeout(Duration::from_secs(30), async {
+                while backend.observed_chunks(marker) == 0 {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await
+            .expect("scheduled inference must reach its paused provider stream");
+            let before = graphql_with_transaction_retry(
+                &home.node,
+                &super::super::observe::evidence_query(&request_id),
+                "test.eval_scheduled_inference",
+            )
+            .await
+            .unwrap();
+            let before = request_evidence_from_query_data(before.data.as_ref().unwrap());
+            assert!(before
+                .inference_calls
+                .iter()
+                .any(|call| call.call_state.as_deref() == Some("running")));
+
+            if cancel_stage {
+                let cancel = CancellationToken::new();
+                cancel.cancel();
+                let (terminal, stopped) = tokio::time::timeout(
+                    Duration::from_secs(30),
+                    observe_stage_terminal(
+                        &home.node,
+                        &cancel,
+                        &runtime,
+                        &request_id,
+                        Duration::from_secs(120),
+                    ),
+                )
+                .await
+                .expect("stage cancellation must settle active inference");
+                assert!(stopped);
+                assert_eq!(
+                    terminal.unwrap().terminal_state,
+                    RequestLifecycleState::Interrupted
+                );
+            }
+
+            tokio::time::timeout(Duration::from_secs(30), runtime.shutdown())
+                .await
+                .expect("trial shutdown must settle active inference")
+                .unwrap();
+            let state = poll_request(&home.node, &request_id)
+                .await
+                .unwrap()
+                .unwrap();
+            let terminal_state =
+                RequestLifecycleState::parse(state.lifecycle_state.as_deref().unwrap()).unwrap();
+            assert!(terminal_state.is_terminal());
+            let evidence = collect_request_evidence(&home.node, &request_id)
+                .await
+                .unwrap();
+            assert!(!evidence.inference_calls.is_empty());
+            assert!(evidence.inference_calls.iter().all(|call| {
+                matches!(
+                    call.call_state.as_deref(),
+                    Some("completed" | "failed" | "cancelled")
+                ) && call.ended_at.is_some()
+            }));
+            assert_ne!(
+                classify_request_outcome(terminal_state, false, &evidence),
+                Some("infrastructure"),
+                "{evidence:?}"
+            );
+            close(home).await;
+        }
     }
 
     /// The materialized pack is real and readable; only the digest the run
@@ -3194,7 +3379,7 @@ mod tests {
         let workspace = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace).unwrap();
         install_schema(
-            &ConfigAccess::Local(home.node.clone()),
+            &ConfigAccess::local(home.node.clone()),
             "type EvalSeed { payload: JSON }",
         )
         .await
@@ -3459,7 +3644,7 @@ mod tests {
         let home = EmbeddedHome::create_temp("seed-observation-race")
             .await
             .unwrap();
-        let access = ConfigAccess::Local(home.node.clone());
+        let access = ConfigAccess::local(home.node.clone());
         install_schema(&access, "type RaceSeed { label: String }")
             .await
             .unwrap();

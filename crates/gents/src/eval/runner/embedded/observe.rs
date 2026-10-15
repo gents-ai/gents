@@ -105,7 +105,7 @@ pub struct RequestEvidence {
 /// of today's `nonterminal_after_interrupt` observation: the caller still learns
 /// that the deadline fired, and a missing or unparseable row is not unwrapped.
 pub async fn await_terminal(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     request_id: &str,
     deadline: Duration,
     grace: Duration,
@@ -115,7 +115,7 @@ pub async fn await_terminal(
 }
 
 pub async fn await_terminal_with(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     request_id: &str,
     deadline: Duration,
     grace: Duration,
@@ -193,7 +193,7 @@ pub async fn collect_request_evidence(
         .data
         .context("collect request evidence returned no data")?;
     let timeline = crate::run_timeline_fetch::load_run_timeline_rows(
-        &ConfigAccess::Local(node.clone()),
+        &ConfigAccess::local(node.clone()),
         request_id,
     )
     .await
@@ -302,7 +302,8 @@ fn assistant_messages(timeline: &RunTimelineRows) -> Vec<MessageEvidence> {
 }
 
 /// Same string kinds the stage runner returns today: `"deadline"`, `"tool"`,
-/// `"provider"`, `"runtime"`, or `"unknown"`. `None` means the request completed.
+/// `"provider"`, `"runtime"`, `"infrastructure"`, or `"unknown"`.
+/// `None` means the request completed.
 pub fn classify_request_outcome(
     terminal_state: RequestLifecycleState,
     interrupted_on_deadline: bool,
@@ -320,6 +321,26 @@ pub fn classify_request_outcome(
     });
     if budget_exhausted {
         return Some("tool");
+    }
+    if evidence
+        .failure_reason
+        .iter()
+        .chain(
+            evidence
+                .inference_calls
+                .iter()
+                .filter_map(|call| call.failure_reason.as_ref()),
+        )
+        .any(|reason| {
+            matches!(
+                reason.as_str(),
+                "execution lease expired"
+                    | "execution lease expired or ownership was revoked"
+                    | "request execution lease: execution lease expired or ownership was revoked"
+            )
+        })
+    {
+        return Some("infrastructure");
     }
     let inference_failed = evidence.inference_calls.iter().any(|call| {
         matches!(call.call_state.as_deref(), Some("failed" | "error"))
@@ -439,6 +460,62 @@ mod tests {
     use crate::eval::runner::embedded::EmbeddedHome;
     use gents_protocol::request_lifecycle::RequestLifecycleState;
     use serde_json::Value;
+
+    #[test]
+    fn request_outcomes_match_generated_native_failure_contract() {
+        #[derive(Debug, Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Case {
+            state: String,
+            deadline: bool,
+            inference_failed: bool,
+            tool_failed: bool,
+            request_reason: Option<String>,
+            inference_reason: Option<String>,
+            outcome: Option<String>,
+        }
+        let cases: Vec<Case> = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/eval_request_outcome.json"
+        )))
+        .unwrap();
+        assert_eq!(cases.len(), 400);
+        let native_ownership_loss = crate::lifecycle::ExecutionOwnershipLost.to_string();
+        assert!(cases.iter().any(|case| {
+            case.request_reason.as_deref() == Some(native_ownership_loss.as_str())
+                && case.outcome.as_deref() == Some("infrastructure")
+        }));
+        for case in cases {
+            let mut evidence = evidence(
+                case.inference_failed,
+                case.tool_failed,
+                case.request_reason.as_deref(),
+            );
+            if evidence.inference_calls.is_empty() {
+                evidence.inference_calls.push(InferenceCallEvidence {
+                    call_seq: 1,
+                    call_state: Some("running".into()),
+                    failure_reason: case.inference_reason.clone(),
+                    prompt_tokens: None,
+                    completion_tokens: None,
+                    queued_at: None,
+                    started_at: None,
+                    ended_at: None,
+                });
+            } else {
+                evidence.inference_calls[0].failure_reason = case.inference_reason.clone();
+            }
+            assert_eq!(
+                classify_request_outcome(
+                    RequestLifecycleState::parse(&case.state).unwrap(),
+                    case.deadline,
+                    &evidence,
+                ),
+                case.outcome.as_deref(),
+                "{case:?}"
+            );
+        }
+    }
 
     fn evidence(
         inference_failed: bool,

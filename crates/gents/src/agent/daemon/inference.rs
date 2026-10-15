@@ -377,7 +377,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                             let reduction_index = compaction_request.prior_reduction_keys.len() + 1;
                             let (row, _) =
                                 crate::provider_context_reduction::persist_exact(
-                                node.as_ref(),
+                                &node,
                                 crate::provider_context_reduction::NewExactProviderContextReduction {
                                     node_did: &request.node_did,
                                     requester_did: request.requester_did.as_deref(),
@@ -576,6 +576,7 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                         let mut stream_error = None;
 
                         loop {
+                            let mut flush_failure = None;
                             let flush_deadline = processor.next_flush_deadline().await;
                             let item = match tokio::select! {
                                 biased;
@@ -615,10 +616,10 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                                 _ = interrupt_rx.changed() => {
                                     request_token.cancel();
                                     inference_token.cancel();
+                                    drop(stream);
                                     let output_result = processor
                                         .persist_received_partial_turn("persist interrupted assistant turn")
                                         .await;
-                                    drop(stream);
                                     if let Err(error) =
                                         persistence_hook.cancel_in_flight_tool_calls().await
                                     {
@@ -666,8 +667,30 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                                         None => std::future::pending::<()>().await,
                                     }
                                 } => {
-                                    processor.flush_pending().await?;
-                                    continue;
+                                    let progress = async {
+                                        crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
+                                            request_deadline,
+                                            request_token.clone(),
+                                            None,
+                                            None,
+                                            Some(session_id.clone()),
+                                            trigger_correlation.clone(),
+                                            trigger_context.source_fields.clone(),
+                                            false,
+                                            stream.next(),
+                                        ).await
+                                    };
+                                    let (flushed, item) = crate::agent::stream_processor::flush_while_polling(
+                                        processor.flush_pending(), progress,
+                                    ).await;
+                                    match item {
+                                        Some(Some(item)) => {
+                                            flush_failure = flushed.err();
+                                            Some(item)
+                                        }
+                                        Some(None) => { flushed?; None }
+                                        None => { flushed?; continue }
+                                    }
                                 }
                                 result = await_with_request_deadline(
                                     request_deadline,
@@ -691,12 +714,12 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                                                 &terminal_failure_reason,
                                                 error.to_string(),
                                             );
+                                            drop(stream);
                                             let output_result = processor
                                                 .persist_received_partial_turn(
                                                     "persist deadline-expired assistant turn",
                                                 )
                                                 .await;
-                                            drop(stream);
                                             if let Err(sweep_error) =
                                                 persistence_hook.timeout_expired_tool_calls().await
                                             {
@@ -724,9 +747,29 @@ impl<M: crate::llm::rig_compat::ProviderModel> AgentDaemon<M> {
                                 Ok(processed) => processed,
                                 Err(error) => {
                                     drop(stream);
-                                    return Err(error);
+                                    return Err(match flush_failure {
+                                        Some(flush_error) => error.context(format!(
+                                            "retaining the received stream item after a flush failed: {flush_error:#}"
+                                        )),
+                                        None => error,
+                                    });
                                 }
                             };
+                            if let Some(error) = flush_failure {
+                                drop(stream);
+                                if processor.natural_finished {
+                                    return Err(error);
+                                }
+                                let retained = processor
+                                    .persist_received_partial_turn("persist received assistant turn after flush failure")
+                                    .await;
+                                return Err(match retained {
+                                    Ok(_) => error,
+                                    Err(retention_error) => retention_error.context(format!(
+                                        "retaining received output after a flush failed: {error:#}"
+                                    )),
+                                });
+                            }
                             if let Err(error) = if processor.natural_finished { Ok(()) } else { ensure_request_deadline_open(
                                 request_deadline,
                                 "processing inference stream item",
@@ -1228,7 +1271,7 @@ pub(super) mod tests {
     }
 
     async fn create_routed_request(
-        node: &defra_node::EmbeddedNode,
+        node: &std::sync::Arc<defra_node::EmbeddedNode>,
         agent_config: &ResolvedAgent,
         requester_did: &str,
     ) -> AgentRequest {
@@ -1282,7 +1325,7 @@ pub(super) mod tests {
     }
 
     async fn create_enrollment_daemon_request(
-        node: &defra_node::EmbeddedNode,
+        node: &std::sync::Arc<defra_node::EmbeddedNode>,
         agent_config: &ResolvedAgent,
         member: &dyn NodeIdentity,
         fence: &crate::agent::p2p_reconcile::enrollment_reconcile::EnrollmentAuthorizationFence,
@@ -1506,7 +1549,7 @@ pub(super) mod tests {
 
         let agent_config = test_agent();
         let requester_did = agent_config.node_did().to_string();
-        let request = create_routed_request(node.as_ref(), &agent_config, &requester_did).await;
+        let request = create_routed_request(&node, &agent_config, &requester_did).await;
         let prompt_builder = LayeredPromptBuilder::for_agent(
             &agent_config.system_prompt,
             &agent_config.agent_id,
@@ -1574,7 +1617,7 @@ pub(super) mod tests {
             .and_then(|data| data.get("AgentMessage"))
             .and_then(serde_json::Value::as_array)
             .expect("AgentMessage rows");
-        let access = crate::config_client::ConfigAccess::Local(node.clone());
+        let access = crate::config_client::ConfigAccess::local(node.clone());
         let mut found_reply = false;
         for row in rows {
             assert_eq!(
@@ -1710,7 +1753,7 @@ pub(super) mod tests {
         );
         tokio::time::timeout(Duration::from_secs(30), async {
             loop {
-                let response = crate::config_client::ConfigAccess::Local(node.clone())
+                let response = crate::config_client::ConfigAccess::local(node.clone())
                     .execute(&format!(
                         r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{node_did}" }}, session_id: {{ _eq: "{session_id}" }}, purpose: {{ _eq: "{title_purpose}" }} }}) {{ lifecycle_state caused_by_parent_request_id caused_by_parent_request_doc_id }} }}"#
                     ))
@@ -1813,7 +1856,7 @@ pub(super) mod tests {
 
         let agent_config = test_agent();
         let requester_did = agent_config.node_did().to_string();
-        let first = create_routed_request(node.as_ref(), &agent_config, &requester_did).await;
+        let first = create_routed_request(&node, &agent_config, &requester_did).await;
         let prompt_builder = LayeredPromptBuilder::for_agent(
             &agent_config.system_prompt,
             &agent_config.agent_id,
@@ -1898,7 +1941,7 @@ pub(super) mod tests {
             ))
             .await;
         assert!(!revoked.has_errors(), "{:?}", revoked.errors);
-        let second = create_routed_request(node.as_ref(), &agent_config, &requester_did).await;
+        let second = create_routed_request(&node, &agent_config, &requester_did).await;
         let second_doc_id = second.doc_id.clone();
         daemon.process_request(second, shutdown_rx).await.unwrap();
         assert_eq!(
@@ -1971,7 +2014,7 @@ pub(super) mod tests {
         };
         let generation_one = fence(1, "enrollment-1");
         let revoked = create_enrollment_daemon_request(
-            node.as_ref(),
+            &node,
             &agent_config,
             member.as_ref(),
             &generation_one,
@@ -2045,7 +2088,7 @@ pub(super) mod tests {
         let generation_two = fence(2, "enrollment-2");
         authority.replace(Some(generation_two.clone())).await;
         let replacement = create_enrollment_daemon_request(
-            node.as_ref(),
+            &node,
             &agent_config,
             member.as_ref(),
             &generation_two,

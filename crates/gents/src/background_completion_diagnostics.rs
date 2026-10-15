@@ -91,7 +91,7 @@ pub async fn load_background_completion_diagnostics(
         }}"#
     );
     access
-        .transact("background_completion.diagnostics", |txn| {
+        .transact_readonly("background_completion.diagnostics", |txn| {
             let query = &query;
             Box::pin(async move {
                 let response = txn.execute(query).await?;
@@ -130,17 +130,13 @@ pub async fn load_background_completion_diagnostics(
                         sessions.insert(session_id);
                     }
                 }
-                let mut heads = BTreeMap::new();
-                for session_id in sessions {
-                    // The diagnostic scan is bounded, but authority comes from all
-                    // actual scoped requests, including ordinary later user turns.
-                    if let Some(head) =
-                        crate::session::load_latest_request_in_txn(txn, node_did, session_id, None)
-                            .await?
-                    {
-                        heads.insert(session_id.to_owned(), head.observed.request_doc_id);
-                    }
-                }
+                let session_ids = sessions.into_iter().map(str::to_owned).collect::<Vec<_>>();
+                let heads =
+                    crate::session::load_latest_requests_in_txn(txn, node_did, &session_ids, None)
+                        .await?
+                        .into_iter()
+                        .map(|(session_id, head)| (session_id, head.observed.request_doc_id))
+                        .collect::<BTreeMap<_, _>>();
                 Ok(summarize(wakes, notifications, heads, Utc::now()))
             })
         })
@@ -661,7 +657,7 @@ mod tests {
             .await?;
         node.add_schema(gents_protocol::schemas::AGENT_MESSAGE)
             .await?;
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         // An escaped owner exercises the distinction between raw lookup scope
         // and GraphQL spelling. Diagnostics read authoritative documents
         // directly and maintain no session cache.

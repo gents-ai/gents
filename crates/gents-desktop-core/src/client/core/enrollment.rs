@@ -518,7 +518,7 @@ impl ClientCore {
             }}"#
         );
         let committed = gents::config_client::ConfigAccess::write_local(
-            self.node.as_ref(),
+            &self.node,
             "desktop.enrollment.create_admin_pin",
             &mutation,
         )
@@ -547,7 +547,7 @@ impl ClientCore {
         let mutation =
             format!("mutation {{ create_NetworkEnrollmentRequest(input: {input}) {{ _docID }} }}");
         let response = gents::config_client::ConfigAccess::write_local(
-            self.node.as_ref(),
+            &self.node,
             "desktop.enrollment.create_request",
             &mutation,
         )
@@ -3365,7 +3365,7 @@ mod tests {
     }
 
     async fn commit_document(core: &ClientCore, stage: &'static str, mutation: &str) {
-        gents::config_client::ConfigAccess::write_local(core.node(), stage, mutation)
+        gents::config_client::ConfigAccess::write_local(&core.node_arc(), stage, mutation)
             .await
             .expect("commit enrollment authority document");
     }
@@ -3650,7 +3650,7 @@ mod tests {
         );
         assert!(core.peer_records().await.is_empty());
 
-        core.shutdown().await.unwrap();
+        Arc::new(core).shutdown().await.unwrap();
     }
 
     #[tokio::test]
@@ -3689,7 +3689,7 @@ mod tests {
             "a revoked authorization ends the request before its own expiry: {listed:?}"
         );
 
-        core.shutdown().await.unwrap();
+        Arc::new(core).shutdown().await.unwrap();
     }
 
     async fn assert_pending_visibility_matches_model(
@@ -3866,7 +3866,7 @@ mod tests {
             "revoked_or_expired_authorization",
         )
         .await;
-        core.shutdown().await.unwrap();
+        Arc::new(core).shutdown().await.unwrap();
     }
 
     #[tokio::test]
@@ -3964,7 +3964,7 @@ mod tests {
             "reconnected_route_satisfies_pending_request",
         )
         .await;
-        core.shutdown().await.unwrap();
+        Arc::new(core).shutdown().await.unwrap();
     }
 
     #[tokio::test]
@@ -3992,7 +3992,7 @@ mod tests {
             "{error:#}"
         );
 
-        core.shutdown().await.unwrap();
+        Arc::new(core).shutdown().await.unwrap();
     }
 
     #[tokio::test]
@@ -4029,7 +4029,7 @@ mod tests {
         assert_eq!(listed[0].state, "approved");
         assert_eq!(listed[0].request_id, authority.request.request_id);
 
-        core.shutdown().await.unwrap();
+        Arc::new(core).shutdown().await.unwrap();
     }
 
     #[tokio::test]
@@ -4119,7 +4119,7 @@ mod tests {
             vec![Some(authority.request.request_digest.as_str())]
         );
 
-        core.shutdown().await.unwrap();
+        Arc::new(core).shutdown().await.unwrap();
     }
 
     #[tokio::test]
@@ -4194,6 +4194,6 @@ mod tests {
         );
         assert_eq!(transport.observations.load(SeqCst), 0);
 
-        core.shutdown().await.unwrap();
+        Arc::new(core).shutdown().await.unwrap();
     }
 }

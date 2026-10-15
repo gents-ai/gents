@@ -105,7 +105,7 @@ async fn assert_access_control(
         .await
         .expect("the home principal may write over HTTP");
     signed
-        .transact("test.nac.signed_txn", |txn| {
+        .transact_write("test.nac.signed_txn", |txn| {
             Box::pin(async move { txn.execute(&insert(&format!("signed-txn-{phase}"))).await })
         })
         .await

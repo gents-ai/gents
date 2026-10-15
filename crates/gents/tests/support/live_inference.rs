@@ -294,7 +294,7 @@ pub fn live_target() -> InferenceTarget {
 /// Bind one isolated live-test node to a target: its backend, its model
 /// selection as the default agent's profile, and that agent.
 pub async fn bind_target(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     identity: &dyn NodeIdentity,
     target: &InferenceTarget,
 ) -> (String, String) {
@@ -325,7 +325,7 @@ pub async fn bind_target(
 }
 
 async fn apply_live_backend_documents(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     node_doc: Node,
     backend: InferenceBackend,
     profile: InferenceProfile,
@@ -351,7 +351,7 @@ async fn apply_live_backend_documents(
         .collect(),
     )
     .expect("build live backend plan");
-    gents::ConfigAccess::transact_local(node, None, "test.bind_live_backend", |txn| {
+    gents::ConfigAccess::transact_local_write(node, None, "test.bind_live_backend", |txn| {
         let plan = &plan;
         Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
     })

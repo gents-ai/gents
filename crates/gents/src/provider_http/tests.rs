@@ -301,7 +301,7 @@ fn usage_account(backend_id: &str) -> crate::usage_observation::UsageAccount {
 async fn usage_client(
     backend_id: &str,
 ) -> (std::sync::Arc<defra_node::EmbeddedNode>, ProviderHttpClient) {
-    let node = std::sync::Arc::new(crate::oauth_credential::test_support::test_node().await);
+    let node = crate::oauth_credential::test_support::test_node().await;
     let reporter =
         crate::usage_observation::UsageReporter::new(node.clone(), usage_account(backend_id));
     (
@@ -315,7 +315,7 @@ pub(crate) async fn stored_usage_eventually(
     node: &std::sync::Arc<defra_node::EmbeddedNode>,
     account: &crate::usage_observation::UsageAccount,
 ) -> Option<crate::usage_observation::StoredUsage> {
-    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let access = crate::config_client::ConfigAccess::local(node.clone());
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
         let stored = crate::usage_observation::load_usage(&access, account)
@@ -394,14 +394,14 @@ async fn usage_capture_rejected_records_error_source_and_keeps_the_marker() {
 
 #[tokio::test]
 async fn usage_capture_without_reporter_writes_nothing() {
-    let node = std::sync::Arc::new(crate::oauth_credential::test_support::test_node().await);
+    let node = crate::oauth_credential::test_support::test_node().await;
     let url = one_shot_server("200 OK", CODEX_USAGE_HEADERS, r#"{"ok":true}"#).await;
     ProviderHttpClient::default()
         .send::<Bytes, Bytes>(post(&url))
         .await
         .expect("200");
     tokio::time::sleep(Duration::from_millis(200)).await;
-    let rows = crate::config_client::ConfigAccess::Local(node)
+    let rows = crate::config_client::ConfigAccess::local(node)
         .execute("{ ProviderAccountUsage { usage_key } }")
         .await
         .expect("read");

@@ -309,7 +309,7 @@ pub async fn capture_source_boundary(
 }
 
 pub(crate) async fn persist(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     input: NewProviderContextReduction<'_>,
 ) -> Result<ProviderContextReduction> {
     if input.checkpoint_messages.is_empty() {
@@ -449,7 +449,7 @@ pub(crate) async fn persist(
 mod durable_reduction_conformance;
 
 pub(crate) async fn persist_exact(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     input: NewExactProviderContextReduction<'_>,
     reduction: crate::compaction::ExactReduction<'_>,
 ) -> Result<(ProviderContextReduction, Vec<Message>)> {
@@ -982,6 +982,8 @@ fn required_str<'a>(row: &'a Value, field: &str) -> Result<&'a str> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use crate::llm::message::{
         AssistantContent, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent, UserContent,
@@ -1106,7 +1108,7 @@ mod tests {
 
     #[tokio::test]
     async fn durable_chain_is_idempotent_conflict_visible_and_restartable() {
-        let node = EmbeddedNode::builder().build().await.unwrap();
+        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
         let prefix = vec![Message::user("old")];
         let suffix = vec![Message::assistant("current")];
@@ -1483,7 +1485,7 @@ mod tests {
 
     #[tokio::test]
     async fn persistence_rejects_a_split_through_a_tool_pair() {
-        let node = EmbeddedNode::builder().build().await.unwrap();
+        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
         let call = Message::Assistant {
             id: None,
@@ -1559,7 +1561,7 @@ mod tests {
 
     #[tokio::test]
     async fn source_boundary_pins_bounded_canonical_high_water() {
-        let node = EmbeddedNode::builder().build().await.unwrap();
+        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
         for sequence in [2, 1] {
             let mutation = format!(

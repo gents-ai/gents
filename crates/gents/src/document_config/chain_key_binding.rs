@@ -199,10 +199,10 @@ pub fn delete_chain_key_binding_mutation(doc_id: &str) -> String {
 }
 
 pub async fn upsert_chain_key_binding(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     doc: &ChainKeyBindingDocument,
 ) -> Result<()> {
-    crate::config_client::ConfigAccess::transact_local(
+    crate::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "document.upsert_chain_key_binding",

@@ -340,7 +340,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::WORKSPACE_RECEIPT_NAME,
         gents_protocol::schemas::WORKSPACE_RECEIPT,
-        "bafyreicagx2x2cdnt7t67blfcsfyyxaoy4ufjv4zgydxs7d4ftfjo6jscy"
+        "bafyreiecsdzgs6zctavbmm7hom5saefv3k23qmrfmnbeguriji346ofnnq"
     ),
     baseline_entry!(
         gents_protocol::schemas::CALLBACK_NAME,

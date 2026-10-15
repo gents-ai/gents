@@ -299,7 +299,6 @@ fn isolated_workspace_mutation_has_no_host_path() {
         head_sha: None,
         changed_files: None,
         diff_artifact: None,
-        checks_run: None,
         unresolved_conflicts: None,
         integration_instructions: None,
     };

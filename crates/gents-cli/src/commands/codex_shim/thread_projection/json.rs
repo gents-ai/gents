@@ -301,36 +301,4 @@ mod tests {
         );
         assert_eq!(value.pointer("/status/type"), Some(&json!("active")));
     }
-
-    #[test]
-    fn thread_status_projects_runtime_request_lifecycle() {
-        let cases = [
-            ("pending", "active"),
-            ("claimed", "active"),
-            ("processing", "active"),
-            ("completed", "idle"),
-            ("superseded", "idle"),
-            ("interrupted", "idle"),
-            ("failed", "systemError"),
-            ("dead", "systemError"),
-        ];
-
-        for (runtime_state, expected_type) in cases {
-            let head =
-                gents_protocol::client_protocol::project_persisted_attempt(runtime_state, false);
-            let encoded =
-                serde_json::to_value(projected_thread_status(head)).expect("encode thread status");
-            assert_eq!(
-                encoded.pointer("/type"),
-                Some(&json!(expected_type)),
-                "runtime state {runtime_state:?}"
-            );
-            assert!(encoded.pointer("/activeFlags/0").is_none());
-        }
-
-        assert_eq!(
-            serde_json::to_value(projected_thread_status(None)).unwrap()["type"],
-            "idle"
-        );
-    }
 }

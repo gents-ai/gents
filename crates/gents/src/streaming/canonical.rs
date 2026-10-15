@@ -16,7 +16,7 @@ use gents_protocol::output::{
 use gents_protocol::row::AgentRequestRow;
 
 use crate::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
-use crate::graphql::escape_graphql_string;
+use crate::graphql::{escape_graphql_string, mutation_documents};
 use crate::lifecycle::execution_policy::{authorize_output_append, LeaseObservation};
 use crate::session::canonical_rows::{
     decode_transcript_message_row, output_segment_create_variables,
@@ -34,6 +34,60 @@ pub(crate) struct ProviderPublicationPlan {
     pub(crate) background_calls: Vec<String>,
     /// The queued message this authored publication answers and supersedes.
     pub(crate) consumes_folded: Option<crate::lifecycle::queue::FoldedConsumption>,
+}
+
+fn created_tool_call_doc_ids(
+    response: &serde_json::Value,
+    expected_keys: &[String],
+) -> Result<Vec<String>> {
+    let rows = mutation_documents(response, "create_AgentToolCall")?
+        .context("create AgentToolCall omitted response data")?;
+    anyhow::ensure!(
+        !rows.is_empty(),
+        "create AgentToolCall omitted its mutation field"
+    );
+    anyhow::ensure!(
+        rows.len() == expected_keys.len(),
+        "create AgentToolCall returned {} rows for {} tool calls",
+        rows.len(),
+        expected_keys.len()
+    );
+    let expected = expected_keys
+        .iter()
+        .map(String::as_str)
+        .collect::<std::collections::HashSet<_>>();
+    anyhow::ensure!(
+        expected.len() == expected_keys.len(),
+        "provider publication contains duplicate physical tool-call keys"
+    );
+    let mut doc_ids = std::collections::HashMap::with_capacity(rows.len());
+    for row in rows {
+        let key = row
+            .get("tool_call_key")
+            .and_then(serde_json::Value::as_str)
+            .context("create AgentToolCall omitted tool_call_key")?;
+        anyhow::ensure!(
+            expected.contains(key),
+            "create AgentToolCall returned an unexpected tool_call_key"
+        );
+        let doc_id = row
+            .get("_docID")
+            .and_then(serde_json::Value::as_str)
+            .filter(|id| !id.trim().is_empty())
+            .context("create AgentToolCall omitted its physical identity")?;
+        anyhow::ensure!(
+            doc_ids.insert(key.to_owned(), doc_id.to_owned()).is_none(),
+            "create AgentToolCall returned a duplicate tool_call_key"
+        );
+    }
+    expected_keys
+        .iter()
+        .map(|key| {
+            doc_ids
+                .remove(key)
+                .with_context(|| format!("create AgentToolCall omitted tool_call_key {key:?}"))
+        })
+        .collect()
 }
 
 /// Provider-native ids of a turn's `agent_new`/`agent_message` calls: a
@@ -169,7 +223,7 @@ pub(crate) fn retained_partial_blocks(
 }
 
 pub(crate) async fn close_provider_attempt(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     generation: &str,
     prepared: &OutputSegment,
     close: ProviderAttemptClose,
@@ -181,7 +235,7 @@ pub(crate) async fn close_provider_attempt(
 /// auxiliary closure without authorizing another write. Ordinary provider
 /// closes and every fresh auxiliary close remain fenced to the writer generation.
 pub(crate) async fn close_provider_attempt_at(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     generation: &str,
     prepared: &OutputSegment,
     close: ProviderAttemptClose,
@@ -219,134 +273,207 @@ pub(crate) async fn close_provider_attempt_at(
         move |txn| {
             let candidate = candidate.clone();
             Box::pin(async move {
-            let request = load_request_in_txn(txn, prepared).await?;
-            let records = load_source_in_txn(txn, prepared).await?;
-            let closures = records.iter().filter(|row| row.segment.close.is_some()).collect::<Vec<_>>();
-            if let [existing] = closures.as_slice() {
-                if existing.segment.writer != prepared.writer {
+                let request = load_request_in_txn(txn, prepared).await?;
+                let records = load_source_in_txn(txn, prepared).await?;
+                let closures = records
+                    .iter()
+                    .filter(|row| row.segment.close.is_some())
+                    .collect::<Vec<_>>();
+                if let [existing] = closures.as_slice() {
+                    if existing.segment.writer != prepared.writer {
+                        return Err(ProviderCloseRejection::WriterMismatch.into());
+                    }
+                    validate_closing_shape(prepared, &existing.segment)?;
+                    if !writer_matches_generation {
+                        let proposed = candidate.as_ref().map_or(prepared, |value| &value.closing);
+                        if proposed != &existing.segment {
+                            return Err(ProviderCloseRejection::InvalidExtent.into());
+                        }
+                        validate_closed_source_extent(
+                            &records,
+                            &prepared.request_doc_id,
+                            &prepared.source,
+                            existing,
+                        )?;
+                    }
+                    let matches = match (&existing.segment.close, close) {
+                        (Some(SourceClose::Retracted), ProviderAttemptClose::Retracted) => true,
+                        (
+                            Some(SourceClose::Closed {
+                                outcome: OutputOutcome::Partial,
+                                ..
+                            }),
+                            ProviderAttemptClose::Partial,
+                        ) => true,
+                        (
+                            Some(SourceClose::Closed {
+                                outcome: OutputOutcome::Complete,
+                                ..
+                            }),
+                            ProviderAttemptClose::AuxiliaryComplete,
+                        ) => true,
+                        _ => false,
+                    };
+                    anyhow::ensure!(matches, "provider close replay changed outcome");
+                    if let Some(candidate) = candidate.as_ref() {
+                        validate_closing_shape(prepared, &candidate.closing)?;
+                        anyhow::ensure!(
+                            candidate.closing == existing.segment,
+                            "partial close replay changed its closure candidate"
+                        );
+                    }
+                    if request.purpose
+                        == Some(gents_protocol::request_admission::RequestPurpose::TitleAudit)
+                    {
+                        match existing.segment.close.as_ref() {
+                            Some(SourceClose::Closed { .. }) => validate_closed_source_extent(
+                                &records,
+                                &prepared.request_doc_id,
+                                &prepared.source,
+                                existing,
+                            )?,
+                            Some(SourceClose::Retracted) => validate_source_physical_identities(
+                                &records,
+                                &prepared.request_doc_id,
+                                &prepared.source,
+                            )?,
+                            None => unreachable!("closure row selected"),
+                        }
+                    }
+                    return partial_header_in_txn(
+                        txn,
+                        prepared,
+                        generation,
+                        existing,
+                        &records,
+                        close,
+                        candidate.as_ref().and_then(|value| value.header.as_ref()),
+                        now,
+                        true,
+                    )
+                    .await;
+                }
+                if request.purpose
+                    == Some(gents_protocol::request_admission::RequestPurpose::TitleAudit)
+                    && closures.len() > 1
+                {
+                    return Err(ReconstructionError::ConflictingClosures {
+                        request_doc_id: prepared.request_doc_id.clone(),
+                        source: prepared.source.clone(),
+                    }
+                    .into());
+                }
+                anyhow::ensure!(
+                    closures.is_empty(),
+                    "provider source has multiple closing records"
+                );
+                if !writer_matches_generation {
                     return Err(ProviderCloseRejection::WriterMismatch.into());
                 }
-                validate_closing_shape(prepared, &existing.segment)?;
-                if !writer_matches_generation {
-                    let proposed = candidate.as_ref().map_or(prepared, |value| &value.closing);
-                    if proposed != &existing.segment {
-                        return Err(ProviderCloseRejection::InvalidExtent.into());
+                let observations = records
+                    .iter()
+                    .map(|row| ObservedSegment {
+                        doc_id: &row.doc_id,
+                        segment: &row.segment,
+                    })
+                    .collect::<Vec<_>>();
+                let extent = gents_protocol::output::extent::inspect_open_source(
+                    &observations,
+                    &prepared.request_doc_id,
+                    &prepared.source,
+                    &prepared.writer,
+                )?;
+                if !matches!(close, ProviderAttemptClose::Retracted) {
+                    if let Some(last_created_at) = extent.last_created_at.as_deref() {
+                        let closing = candidate.as_ref().map_or(prepared, |value| &value.closing);
+                        let last_created_at = DateTime::parse_from_rfc3339(last_created_at)
+                            .context("provider source has an invalid committed timestamp")?;
+                        let closing_created_at = DateTime::parse_from_rfc3339(&closing.created_at)
+                            .context("provider closure has an invalid created_at")?;
+                        if closing_created_at < last_created_at {
+                            return Err(ProviderCloseRejection::RegressedTimestamp.into());
+                        }
                     }
-                    validate_closed_source_extent(
-                        &records,
-                        &prepared.request_doc_id,
-                        &prepared.source,
-                        existing,
-                    )?;
                 }
-                let matches = match (&existing.segment.close, close) {
-                    (Some(SourceClose::Retracted), ProviderAttemptClose::Retracted) => true,
-                    (Some(SourceClose::Closed { outcome: OutputOutcome::Partial, .. }), ProviderAttemptClose::Partial) => true,
-                    (Some(SourceClose::Closed { outcome: OutputOutcome::Complete, .. }), ProviderAttemptClose::AuxiliaryComplete) => true,
-                    _ => false,
+                let derived_close = match close {
+                    ProviderAttemptClose::Retracted => SourceClose::Retracted,
+                    ProviderAttemptClose::Partial | ProviderAttemptClose::AuxiliaryComplete => {
+                        SourceClose::Closed {
+                            outcome: if matches!(close, ProviderAttemptClose::AuxiliaryComplete) {
+                                OutputOutcome::Complete
+                            } else {
+                                OutputOutcome::Partial
+                            },
+                            segments: extent.segments,
+                            stream_bytes: extent.stream_bytes,
+                        }
+                    }
                 };
-                anyhow::ensure!(matches, "provider close replay changed outcome");
-                if let Some(candidate) = candidate.as_ref() {
-                    validate_closing_shape(prepared, &candidate.closing)?;
-                    anyhow::ensure!(candidate.closing == existing.segment, "partial close replay changed its closure candidate");
+                let closure = candidate
+                    .as_ref()
+                    .map(|value| value.closing.clone())
+                    .unwrap_or_else(|| {
+                        let mut closure = prepared.clone();
+                        closure.ordinal = None;
+                        closure.runs.clear();
+                        closure.payload.clear();
+                        closure.close = Some(derived_close.clone());
+                        closure
+                    });
+                if closure.close.as_ref() != Some(&derived_close) {
+                    return Err(ProviderCloseRejection::InvalidExtent.into());
                 }
-                if request.purpose == Some(gents_protocol::request_admission::RequestPurpose::TitleAudit) {
-                    match existing.segment.close.as_ref() {
-                        Some(SourceClose::Closed { .. }) => validate_closed_source_extent(
-                            &records, &prepared.request_doc_id, &prepared.source, existing,
-                        )?,
-                        Some(SourceClose::Retracted) => validate_source_physical_identities(
-                            &records, &prepared.request_doc_id, &prepared.source,
-                        )?,
-                        None => unreachable!("closure row selected"),
-                    }
-                }
-                return partial_header_in_txn(txn, prepared, generation, existing, &records, close, candidate.as_ref().and_then(|value| value.header.as_ref()), now, true).await;
-            }
-            if request.purpose == Some(gents_protocol::request_admission::RequestPurpose::TitleAudit)
-                && closures.len() > 1
-            {
-                return Err(ReconstructionError::ConflictingClosures {
-                    request_doc_id: prepared.request_doc_id.clone(),
-                    source: prepared.source.clone(),
-                }
-                .into());
-            }
-            anyhow::ensure!(closures.is_empty(), "provider source has multiple closing records");
-            if !writer_matches_generation {
-                return Err(ProviderCloseRejection::WriterMismatch.into());
-            }
-            let observations = records.iter().map(|row| ObservedSegment {
-                doc_id: &row.doc_id,
-                segment: &row.segment,
-            }).collect::<Vec<_>>();
-            let extent = gents_protocol::output::extent::inspect_open_source(
-                &observations, &prepared.request_doc_id, &prepared.source, &prepared.writer,
-            )?;
-            if !matches!(close, ProviderAttemptClose::Retracted) {
-                if let Some(last_created_at) = extent.last_created_at.as_deref() {
-                    let closing = candidate.as_ref().map_or(prepared, |value| &value.closing);
-                    let last_created_at = DateTime::parse_from_rfc3339(last_created_at)
-                        .context("provider source has an invalid committed timestamp")?;
-                    let closing_created_at = DateTime::parse_from_rfc3339(&closing.created_at)
-                        .context("provider closure has an invalid created_at")?;
-                    if closing_created_at < last_created_at {
-                        return Err(ProviderCloseRejection::RegressedTimestamp.into());
-                    }
-                }
-            }
-            let derived_close = match close {
-                ProviderAttemptClose::Retracted => SourceClose::Retracted,
-                ProviderAttemptClose::Partial | ProviderAttemptClose::AuxiliaryComplete => SourceClose::Closed {
-                    outcome: if matches!(close, ProviderAttemptClose::AuxiliaryComplete) {
-                        OutputOutcome::Complete
-                    } else {
-                        OutputOutcome::Partial
+                validate_closing_shape(prepared, &closure)?;
+                let owner = request
+                    .execution_generation
+                    .as_deref()
+                    .context("request generation missing")?;
+                let state = request
+                    .lifecycle_state
+                    .context("request lifecycle missing")?;
+                let expiry = request
+                    .execution_lease_expires_at
+                    .as_deref()
+                    .context("request expiry missing")?;
+                let deadline = DateTime::parse_from_rfc3339(expiry)?.timestamp_millis();
+                if !authorize_output_append(
+                    LeaseObservation {
+                        request: state,
+                        generation: owner,
+                        deadline_ms: deadline,
                     },
-                    segments: extent.segments,
-                    stream_bytes: extent.stream_bytes,
-                },
-            };
-            let closure = candidate.as_ref().map(|value| value.closing.clone()).unwrap_or_else(|| {
-                let mut closure = prepared.clone();
-                closure.ordinal = None;
-                closure.runs.clear();
-                closure.payload.clear();
-                closure.close = Some(derived_close.clone());
-                closure
-            });
-            if closure.close.as_ref() != Some(&derived_close) {
-                return Err(ProviderCloseRejection::InvalidExtent.into());
-            }
-            validate_closing_shape(prepared, &closure)?;
-            let owner = request.execution_generation.as_deref().context("request generation missing")?;
-            let state = request.lifecycle_state.context("request lifecycle missing")?;
-            let expiry = request.execution_lease_expires_at.as_deref().context("request expiry missing")?;
-            let deadline = DateTime::parse_from_rfc3339(expiry)?.timestamp_millis();
-            if !authorize_output_append(
-                LeaseObservation { request: state, generation: owner, deadline_ms: deadline },
-                generation, now.timestamp_millis()) {
-                return Err(ProviderCloseRejection::LostLease.into());
-            }
-            let response = txn.execute_with_variables(
-                CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
-                &output_segment_create_variables(&closure)?,
-            ).await?;
-            let close_doc_id = created_doc_id(&response, "AgentOutputSegment")?;
-            let closing = OutputSegmentRow { doc_id: close_doc_id, segment: closure };
-            let request_id = escape_graphql_string(&prepared.request_doc_id);
-            let escaped_generation = escape_graphql_string(generation);
-            let expiry = escape_graphql_string(expiry);
-            let state = escape_graphql_string(state.as_str());
-            let response = txn.execute_local_response(&format!(r#"mutation {{ update_AgentRequest(
-                filter: {{ _docID: {{ _eq: "{request_id}" }}, lifecycle_state: {{ _eq: "{state}" }},
-                    execution_generation: {{ _eq: "{escaped_generation}" }}, execution_lease_expires_at: {{ _eq: "{expiry}" }} }},
-                input: {{ execution_generation: "{escaped_generation}" }}) {{ _docID }} }}"#)).await?;
-            anyhow::ensure!(response.data.as_ref().and_then(|data| data.get("update_AgentRequest"))
-                .is_some_and(crate::graphql::response_has_documents), "provider close lost request CAS");
-            partial_header_in_txn(txn, prepared, generation, &closing, &records, close, candidate.as_ref().and_then(|value| value.header.as_ref()), now, false).await
-        })},
-    ).await
+                    generation,
+                    now.timestamp_millis(),
+                ) {
+                    return Err(ProviderCloseRejection::LostLease.into());
+                }
+                let response = txn
+                    .execute_with_variables(
+                        CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+                        &output_segment_create_variables(&closure)?,
+                    )
+                    .await?;
+                let close_doc_id = created_doc_id(&response, "AgentOutputSegment")?;
+                let closing = OutputSegmentRow {
+                    doc_id: close_doc_id,
+                    segment: closure,
+                };
+                partial_header_in_txn(
+                    txn,
+                    prepared,
+                    generation,
+                    &closing,
+                    &records,
+                    close,
+                    candidate.as_ref().and_then(|value| value.header.as_ref()),
+                    now,
+                    false,
+                )
+                .await
+            })
+        },
+    )
+    .await
 }
 
 fn validate_closing_shape(prepared: &OutputSegment, closing: &OutputSegment) -> Result<()> {
@@ -617,7 +744,7 @@ use crate::graphql::created_doc_id;
 /// entry deliberately rejects them rather than publishing executable intent
 /// without its lifecycle documents.
 pub(crate) async fn publish_provider_turn(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     generation: &str,
     plan: ProviderPublicationPlan,
 ) -> Result<PublishedProviderTurn> {
@@ -626,7 +753,7 @@ pub(crate) async fn publish_provider_turn(
 
 #[cfg(test)]
 pub(crate) async fn publish_provider_turn_at(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     generation: &str,
     plan: ProviderPublicationPlan,
     now: DateTime<Utc>,
@@ -635,7 +762,7 @@ pub(crate) async fn publish_provider_turn_at(
 }
 
 pub(super) async fn publish_provider_turn_with_time(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     generation: &str,
     plan: ProviderPublicationPlan,
     fixture_now: Option<DateTime<Utc>>,
@@ -751,7 +878,8 @@ pub(super) async fn publish_provider_turn_with_time(
                     .all(|id| encoded.tool_calls.iter().any(|tool| tool.id == *id)),
                 "background publication names a tool call outside this turn"
             );
-            let mut tool_doc_ids = Vec::with_capacity(encoded.tool_calls.len());
+            let mut tool_call_keys = Vec::with_capacity(encoded.tool_calls.len());
+            let mut tool_inputs = Vec::with_capacity(encoded.tool_calls.len());
             for tool in &encoded.tool_calls {
                 let await_mode = if background_calls.contains(&tool.id) {
                     crate::tool_call_lifecycle::AwaitMode::Background
@@ -759,9 +887,8 @@ pub(super) async fn publish_provider_turn_with_time(
                     crate::tool_call_lifecycle::AwaitMode::Foreground
                 };
                 let tool_call_key = format!("{}:{}:{}", prepared.request_doc_id, message_key, tool.native_index);
-                let created = txn.execute_with_variables(
-                    "mutation($input: AgentToolCallMutationInputArg!) { create_AgentToolCall(input: $input) { _docID } }",
-                    &serde_json::json!({"input": {
+                tool_call_keys.push(tool_call_key.clone());
+                tool_inputs.push(serde_json::json!({
                         "tool_call_key": tool_call_key,
                         "request_id": request.request_id,
                         "request_doc_id": prepared.request_doc_id,
@@ -774,10 +901,17 @@ pub(super) async fn publish_provider_turn_with_time(
                         "lifecycle_state": "pending",
                         "deadline_at": tool_deadline_at,
                         "await_mode": await_mode.as_str()
-                    }}),
-                ).await?;
-                tool_doc_ids.push(created_doc_id(&created, "AgentToolCall")?);
+                    }));
             }
+            let tool_doc_ids = if tool_inputs.is_empty() {
+                Vec::new()
+            } else {
+                let created = txn.execute_with_variables(
+                    "mutation($input: [AgentToolCallMutationInputArg!]!) { create_AgentToolCall(input: $input) { _docID tool_call_key } }",
+                    &serde_json::json!({"input": tool_inputs}),
+                ).await?;
+                created_tool_call_doc_ids(&created, &tool_call_keys)?
+            };
             let blocks = encoded.build_blocks(&close_doc_id, &tool_doc_ids)?;
             let message = TranscriptMessage {
                 message_key,
@@ -803,18 +937,6 @@ pub(super) async fn publish_provider_turn_with_time(
                 "first publication native message changed"
             );
 
-            // The matching-generation write is the ordering point against
-            // cancellation/recovery. It changes no lease deadline.
-            let request_id = escape_graphql_string(&prepared.request_doc_id);
-            let escaped_generation = escape_graphql_string(generation);
-            let expiry = escape_graphql_string(expiry);
-            let state = escape_graphql_string(state.as_str());
-            let response = txn.execute_local_response(&format!(r#"mutation {{ update_AgentRequest(
-                filter: {{ _docID: {{ _eq: "{request_id}" }}, lifecycle_state: {{ _eq: "{state}" }},
-                    execution_generation: {{ _eq: "{escaped_generation}" }}, execution_lease_expires_at: {{ _eq: "{expiry}" }} }},
-                input: {{ execution_generation: "{escaped_generation}" }}) {{ _docID }} }}"#)).await?;
-            anyhow::ensure!(response.data.as_ref().and_then(|data| data.get("update_AgentRequest"))
-                .is_some_and(crate::graphql::response_has_documents), "provider publication lost request CAS");
             if let Some(consumption) = plan.consumes_folded.as_ref() {
                 anyhow::ensure!(
                     crate::lifecycle::RequestLifecycle::input_publication_before_deadline(
@@ -1001,7 +1123,7 @@ async fn replay_publication_in_txn(
 /// Append exactly one provider flush. Replaying the same committed fact is a
 /// read, even after expiry; it never renews or reopens its source.
 pub(crate) async fn append_provider_segment(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     generation: &str,
     prepared: &OutputSegment,
 ) -> Result<String> {
@@ -1017,7 +1139,7 @@ pub(crate) async fn append_provider_segment(
 
 #[cfg(test)]
 pub(crate) async fn append_provider_segment_at(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     generation: &str,
     prepared: &OutputSegment,
     now: DateTime<Utc>,
@@ -1132,6 +1254,11 @@ async fn append_in_txn_with_time(
 }
 
 /// Read the existing authorized request owner, not a parallel principal check.
+///
+/// This in-transaction `_docID` point read is the publication's fence against
+/// recovery and cancellation: native OCC validates point-read keys at commit
+/// (`RequestExecutionLease/ObservedTransaction.lean`). Keep it a point read,
+/// and do not add a same-value request write: that only replicates a commit.
 async fn load_request_in_txn(
     txn: &ConfigApplyTxn<'_>,
     prepared: &OutputSegment,
@@ -1210,4 +1337,50 @@ async fn load_source_in_txn(
             .filter(|row| row.segment.source == prepared.source)
             .collect()
     })
+}
+
+#[cfg(test)]
+mod tool_call_batch_tests {
+    use super::created_tool_call_doc_ids;
+
+    #[test]
+    fn batch_create_rows_bind_to_tool_keys_not_response_order() {
+        let response = serde_json::json!({
+            "data": {
+                "create_AgentToolCall": [
+                    {"_docID": "doc-b", "tool_call_key": "key-b"},
+                    {"_docID": "doc-a", "tool_call_key": "key-a"}
+                ]
+            }
+        });
+        let keys = vec!["key-a".to_owned(), "key-b".to_owned()];
+
+        assert_eq!(
+            created_tool_call_doc_ids(&response, &keys).unwrap(),
+            vec!["doc-a".to_owned(), "doc-b".to_owned()]
+        );
+    }
+
+    #[test]
+    fn batch_create_rejects_missing_or_duplicate_tool_keys() {
+        let keys = vec!["key-a".to_owned(), "key-b".to_owned()];
+        let missing = serde_json::json!({
+            "data": {
+                "create_AgentToolCall": [
+                    {"_docID": "doc-a", "tool_call_key": "key-a"}
+                ]
+            }
+        });
+        assert!(created_tool_call_doc_ids(&missing, &keys).is_err());
+
+        let duplicate = serde_json::json!({
+            "data": {
+                "create_AgentToolCall": [
+                    {"_docID": "doc-a", "tool_call_key": "key-a"},
+                    {"_docID": "doc-b", "tool_call_key": "key-a"}
+                ]
+            }
+        });
+        assert!(created_tool_call_doc_ids(&duplicate, &keys).is_err());
+    }
 }

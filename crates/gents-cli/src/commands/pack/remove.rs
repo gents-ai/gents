@@ -73,7 +73,7 @@ pub(crate) async fn remove(args: PackRemoveArgs) -> Result<()> {
     // could delete one a local install still uses (see the module doc: a
     // remote node's local assets are not this process's to release).
     let archives = if args.scope.graphql.is_none() {
-        release_archives(&home, Some(&*access), &archive_digests).await?
+        release_archives(&home, Some(&access), &archive_digests).await?
     } else {
         Vec::new()
     };

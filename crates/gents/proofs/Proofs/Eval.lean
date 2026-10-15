@@ -1,4 +1,5 @@
 import Mathlib.Data.List.Basic
+import Proofs.Request.State
 
 /-! Eval core contract (#1515): the closed outcome vocabulary and its projection
 onto evidence classes.
@@ -9,8 +10,8 @@ reason, because a candidate prompt can cause a context overflow (`rejected`) but
 not an outage (`unavailable`). A `provider` outcome with no reason is `unknown`:
 the evaluator could not tell, and an unknown never helps a candidate.
 
-Refinement boundaries: checks, reducers over numeric scores, and the runner are
-outside this model. -/
+Refinement boundaries: checks, reducers over numeric scores, and trial scheduling
+are outside this model. -/
 namespace Eval
 
 inductive OutcomeKind where
@@ -32,6 +33,63 @@ def toDefraDB : OutcomeKind → String
   | .grader => "grader"
   | .unknown => "unknown"
 end OutcomeKind
+
+/-- These are the durable recovery reason and the owned execution errors.
+An arbitrary provider or tool message mentioning a lease is not native evidence
+of lost execution authority. -/
+def executionLeaseFailure (reason : String) : Bool :=
+  reason == "execution lease expired" ||
+  reason == "execution lease expired or ownership was revoked" ||
+  reason == "request execution lease: execution lease expired or ownership was revoked"
+
+structure RequestEvidence where
+  state : RequestState
+  interruptedOnDeadline : Bool
+  toolBudgetExhausted : Bool
+  executionLeaseLost : Bool
+  inferenceFailed : Bool
+  toolFailed : Bool
+  deriving DecidableEq, Repr
+
+/-- Native execution leases belong to runtime infrastructure. Their loss alone
+does not establish a subject failure. A completed request, an observed stage
+deadline, or an explicit tool budget result retains its existing attribution. -/
+def classifyRequestOutcome (e : RequestEvidence) : Option OutcomeKind :=
+  if e.interruptedOnDeadline then some .deadline
+  else if e.state == .completed then none
+  else if e.toolBudgetExhausted then some .tool
+  else if e.executionLeaseLost then some .infrastructure
+  else if e.inferenceFailed && e.toolFailed then some .unknown
+  else if e.inferenceFailed then some .provider
+  else if e.toolFailed then some .tool
+  else match e.state with
+    | .failed | .interrupted | .dead | .superseded => some .runtime
+    | _ => some .unknown
+
+theorem lease_loss_is_infrastructure (e : RequestEvidence)
+    (deadline : e.interruptedOnDeadline = false)
+    (unfinished : e.state ≠ .completed)
+    (budget : e.toolBudgetExhausted = false)
+    (lost : e.executionLeaseLost = true) :
+    classifyRequestOutcome e = some .infrastructure := by
+  simp [classifyRequestOutcome, deadline, unfinished, budget, lost]
+
+theorem completed_request_is_accepted (e : RequestEvidence)
+    (deadline : e.interruptedOnDeadline = false)
+    (completed : e.state = .completed) : classifyRequestOutcome e = none := by
+  simp [classifyRequestOutcome, deadline, completed]
+
+theorem observed_deadline_is_a_deadline (e : RequestEvidence)
+    (deadline : e.interruptedOnDeadline = true) :
+    classifyRequestOutcome e = some .deadline := by
+  simp [classifyRequestOutcome, deadline]
+
+theorem exhausted_tool_budget_is_a_tool_failure (e : RequestEvidence)
+    (deadline : e.interruptedOnDeadline = false)
+    (unfinished : e.state ≠ .completed)
+    (budget : e.toolBudgetExhausted = true) :
+    classifyRequestOutcome e = some .tool := by
+  simp [classifyRequestOutcome, deadline, unfinished, budget]
 
 def allKinds : List OutcomeKind :=
   [.passed, .modelAcceptance, .deadline, .tool, .runtime, .skippedPrerequisite,

@@ -2,6 +2,7 @@ mod control_plane_lookups;
 mod indexing;
 mod merge_helpers;
 mod merges;
+mod scope;
 mod session_lookups;
 mod turns;
 
@@ -27,6 +28,8 @@ use serde::Serialize;
 
 use self::indexing::{clean_string, indexes_to_refs};
 use self::merge_helpers::*;
+use self::scope::nonblank;
+pub(crate) use self::scope::StoreScope;
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct ClientStoreRows {
@@ -100,6 +103,9 @@ pub struct ClientStoreRows {
     #[serde(skip)]
     pub chain_key_binding_source_node_dids: Vec<Option<String>>,
     #[serde(skip)]
+    /// Node DIDs whose current operator overlay fully decoded first-run config roots.
+    pub operator_config_authoritative_node_dids: HashSet<String>,
+    #[serde(skip)]
     pub inference_backend_source_node_dids: Vec<Option<String>>,
     #[serde(skip)]
     pub backend_observation_source_node_dids: Vec<Option<String>>,
@@ -160,6 +166,8 @@ pub struct ClientStore {
     pub datastore_tool_surface_source_node_dids: Vec<Option<String>>,
     pub chain_key_bindings: Vec<ChainKeyBindingDocument>,
     pub chain_key_binding_source_node_dids: Vec<Option<String>>,
+    /// Provenance of the current operator config projection, not transport history.
+    pub operator_config_authoritative_node_dids: HashSet<String>,
     pub inference_backend_source_node_dids: Vec<Option<String>>,
     pub backend_observation_source_node_dids: Vec<Option<String>>,
     pub inference_profile_source_node_dids: Vec<Option<String>>,
@@ -171,6 +179,9 @@ pub struct ClientStore {
     runtimes_by_node_did: HashMap<String, usize>,
     node_readiness_by_node_did: HashMap<String, usize>,
     request_index_by_id: HashMap<String, usize>,
+    request_index_by_doc_id: HashMap<String, Option<usize>>,
+    unscoped_request_ids: HashSet<String>,
+    mailbox_index_by_doc_id: HashMap<String, Option<usize>>,
 }
 
 #[derive(Debug)]
@@ -208,6 +219,78 @@ impl Default for ClientStore {
 pub type SharedClientStore = Arc<ClientStore>;
 
 impl ClientStore {
+    pub(crate) fn merge_scope(
+        &self,
+        incoming: &ClientStore,
+        remove_unscoped_requests: bool,
+    ) -> StoreScope {
+        let mut scope = StoreScope::default();
+        scope.extend_rows(incoming);
+
+        if remove_unscoped_requests {
+            for row in incoming
+                .requests
+                .iter()
+                .filter(|row| row.node_did.is_some())
+            {
+                if self.unscoped_request_ids.contains(&row.request_id) {
+                    return StoreScope::All;
+                }
+            }
+        }
+
+        for mailbox in &incoming.mailbox_items {
+            let Some(doc_id) = nonblank(Some(&mailbox.doc_id)) else {
+                return StoreScope::All;
+            };
+            match self.mailbox_index_by_doc_id.get(doc_id) {
+                Some(Some(index)) => {
+                    let Some(previous) = self.mailbox_items.get(*index) else {
+                        return StoreScope::All;
+                    };
+                    if nonblank(Some(&previous.doc_id)) != Some(doc_id) {
+                        return StoreScope::All;
+                    }
+                    scope.insert_node(&previous.node_did);
+                }
+                Some(None) => return StoreScope::All,
+                None => {}
+            }
+        }
+
+        scope
+    }
+
+    pub(crate) fn replacement_scope(&self, node_did: &str, incoming: &ClientStore) -> StoreScope {
+        let Some(node_did) = nonblank(Some(node_did)) else {
+            return StoreScope::All;
+        };
+        let mut scope = self.merge_scope(incoming, false);
+        scope.insert_node(&node_did);
+        scope
+    }
+
+    pub(crate) fn request_event_scope(&self, doc_id: Option<&str>) -> StoreScope {
+        let Some(doc_id) = nonblank(doc_id) else {
+            return StoreScope::All;
+        };
+        match self.request_index_by_doc_id.get(doc_id) {
+            Some(Some(index)) => {
+                let Some(row) = self.requests.get(*index) else {
+                    return StoreScope::All;
+                };
+                if nonblank(row.doc_id.as_deref()) != Some(doc_id) {
+                    return StoreScope::All;
+                }
+                match nonblank(row.node_did.as_deref()) {
+                    Some(node_did) => StoreScope::node(node_did.to_owned()),
+                    None => StoreScope::All,
+                }
+            }
+            Some(None) | None => StoreScope::All,
+        }
+    }
+
     /// The observer retains request/config facts only. Immutable transcript
     /// facts are read through the exact session projection scope, so an
     /// observer snapshot cannot accidentally turn a missing dependency into

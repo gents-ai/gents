@@ -227,7 +227,7 @@ async fn status_enrollment_from_fresh_desktop_replicates_chat_without_node() -> 
                 "accepted pairing must clear the pending enrollment queue so another agent can be added; got {remaining:?}"
             );
 
-            core.shutdown().await?;
+            std::sync::Arc::new(core).shutdown().await?;
             Ok(())
         })
         .await

@@ -701,6 +701,11 @@ def caseCoverage : List CoverageEntry :=
       "conformance::session_hydration::generated_session_hydration_start_cases_match_receiver_start")
       "session-hydration" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "session_hydration_admission_cases"
+      "SessionHydrationAdmissionCases"
+      "conformance::session_hydration::generated_session_hydration_admission_cases_match_receiver_owner")
+      "session-hydration" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "enrollment_cases"
       "EnrollmentCases"
       "conformance::enrollment::generated_enrollment_cases_match_production_transition_core")
@@ -1169,6 +1174,11 @@ def caseCoverage : List CoverageEntry :=
       "SessionInputEditRemoteCases"
       "e2e_runtime::session_input_edit::generated_remote_edits_replicate_signed_effect_and_receipt")
       "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "session_input_edit_client_observation_cases"
+      "SessionInputEditClientObservationCases"
+      "client::core::writes::accepted_edit_projection_tests::generated_accepted_receipt_survives_projection_refresh_failure")
+      "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "queue_management_cases"
       "QueueManagementCases"
@@ -1526,21 +1536,21 @@ def caseCoverage : List CoverageEntry :=
       "CodexShimReasoningProjectionCases"
       "commands::codex_shim::turn_projection::tests::generated_reasoning_projection_cases_drive_turn_projection_notifications")
       "codex-shim" [Surface.api, Surface.runtimeInternal]
-  , tagged (consumerWithFollowUp
+  , tagged (consumerCoverage
       "codex_shim_thread_status_cases"
       "CodexShimThreadStatusCases"
-      "conformance::generated_codex_shim_projection_cases_pin_adapter_mapping"
-      "Exercises the canonical persisted-attempt projector, followed by test-local phase/status mapping. Drive the gents-cli Codex shim mapping and local-interrupt override before claiming end-to-end shim projection coverage.")
-      "codex-shim" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
+      "commands::codex_shim::thread_projection::conformance::generated_thread_status_cases_drive_thread_projection")
+      "codex-shim" [Surface.api, Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "codex_shim_agent_selection_cases"
       "CodexShimAgentSelectionCases"
-      "The conformance suite's copied mappings and fixture-field assertions do not exercise the gents-cli Codex shim owner. Route these generated inputs through its production projection before claiming adapter coverage.")
+      "commands::codex_shim::thread_projection::conformance::generated_agent_selection_cases_drive_scoped_model_binding")
       "codex-shim" [Surface.api, Surface.runtimeInternal]
-  , tagged (followUpCoverage
+  , tagged (consumerWithFollowUp
       "codex_shim_tool_metadata_cases"
       "CodexShimToolMetadataCases"
-      "The conformance suite's copied mappings and fixture-field assertions do not exercise the gents-cli Codex shim owner. Route these generated inputs through its production projection before claiming adapter coverage.")
+      "commands::codex_shim::turn_projection::tests::generated_tool_metadata_cases_drive_the_tool_item_owner"
+      "Generated cases exercise the shipping tool-item owner for diagnostic priority and duration. Generated event-timestamp expectations still need binding to the notification sender; separate sender tests cover persisted-time precedence and clock fallback, not these generated inputs.")
       "codex-shim" [Surface.api, Surface.runtimeInternal]
   , tagged (followUpCoverage
       "codex_shim_context_usage_cases"
@@ -1820,7 +1830,7 @@ def caseCoverage : List CoverageEntry :=
       "prompt_assembly_cases"
       "PromptAssemblyClaudeReplayCases"
       "agent::loop_stream::tests::claude_messages_redacted_and_signed_tool_round_trip_through_owned_loop"
-      "Drives only the ordered-signed-redacted-tool case through the owned loop: its replay blocks become turn-1 SSE (thinking and signature as deltas, redacted data at block start) and the turn-2 capture must equal the modeled replay. The persisted canonical grouping of streamed reasoning is not modeled, so it is not compared to the case's blocks. Other replay cases and the thinking-stream family remain unbound through the owned loop.")
+      "Drives the streamed-signed-redacted-tool case through the owned loop: its canonical blocks become turn-1 SSE, the persisted message must retain their exact grouping and payloads, and the turn-2 capture must equal the modeled replay. Other replay cases and the thinking-stream family remain unbound through the owned loop.")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "prompt_assembly_cases"

@@ -164,7 +164,7 @@ pub(crate) async fn count_trigger_cursor_batch_queries<F: std::future::Future>(
 /// Update only runtime observations on the exact owner-scoped trigger.
 /// Deleted triggers are harmless; concurrent fire-count updates may undercount.
 pub(crate) async fn update_trigger_runtime_fields(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
     trigger_id: &str,
     updates: TriggerRuntimeUpdate,

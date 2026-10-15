@@ -12,9 +12,10 @@ use gents::document_config::{EventSource, Schedule, Task, Trigger};
 use gents::task_session_title;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
+use std::sync::Arc;
 
 #[cfg(test)]
-pub async fn upsert_task(node: &EmbeddedNode, document: &Task) -> Result<()> {
+pub async fn upsert_task(node: &Arc<EmbeddedNode>, document: &Task) -> Result<()> {
     let value = serde_json::to_value(document)?;
     let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
         collection: Collection::Task,
@@ -35,7 +36,7 @@ pub async fn upsert_task_on(access: &ConfigAccess, document: &Task) -> Result<()
 }
 
 #[cfg(test)]
-pub async fn delete_task(node: &EmbeddedNode, node_did: &str, id: &str) -> Result<usize> {
+pub async fn delete_task(node: &Arc<EmbeddedNode>, node_did: &str, id: &str) -> Result<usize> {
     super::delete_scoped_document_local(node, "desktop.task.delete", Collection::Task, node_did, id)
         .await
 }
@@ -52,7 +53,7 @@ pub async fn delete_task_on(access: &ConfigAccess, node_did: &str, id: &str) -> 
 }
 
 #[cfg(test)]
-pub async fn upsert_schedule(node: &EmbeddedNode, document: &Schedule) -> Result<()> {
+pub async fn upsert_schedule(node: &Arc<EmbeddedNode>, document: &Schedule) -> Result<()> {
     let value = serde_json::to_value(document)?;
     let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
         collection: Collection::Schedule,
@@ -73,7 +74,7 @@ pub async fn upsert_schedule_on(access: &ConfigAccess, document: &Schedule) -> R
 }
 
 #[cfg(test)]
-pub async fn delete_schedule(node: &EmbeddedNode, node_did: &str, id: &str) -> Result<usize> {
+pub async fn delete_schedule(node: &Arc<EmbeddedNode>, node_did: &str, id: &str) -> Result<usize> {
     super::delete_scoped_document_local(
         node,
         "desktop.schedule.delete",
@@ -96,7 +97,7 @@ pub async fn delete_schedule_on(access: &ConfigAccess, node_did: &str, id: &str)
 }
 
 #[cfg(test)]
-pub async fn upsert_trigger(node: &EmbeddedNode, document: &Trigger) -> Result<()> {
+pub async fn upsert_trigger(node: &Arc<EmbeddedNode>, document: &Trigger) -> Result<()> {
     let value = serde_json::to_value(document)?;
     let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
         collection: Collection::Trigger,
@@ -117,7 +118,7 @@ pub async fn upsert_trigger_on(access: &ConfigAccess, document: &Trigger) -> Res
 }
 
 #[cfg(test)]
-pub async fn delete_trigger(node: &EmbeddedNode, node_did: &str, id: &str) -> Result<usize> {
+pub async fn delete_trigger(node: &Arc<EmbeddedNode>, node_did: &str, id: &str) -> Result<usize> {
     super::delete_scoped_document_local(
         node,
         "desktop.trigger.delete",
@@ -140,7 +141,7 @@ pub async fn delete_trigger_on(access: &ConfigAccess, node_did: &str, id: &str) 
 }
 
 #[cfg(test)]
-pub async fn upsert_event_source(node: &EmbeddedNode, document: &EventSource) -> Result<()> {
+pub async fn upsert_event_source(node: &Arc<EmbeddedNode>, document: &EventSource) -> Result<()> {
     let value = serde_json::to_value(document)?;
     let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
         collection: Collection::EventSource,
@@ -161,7 +162,11 @@ pub async fn upsert_event_source_on(access: &ConfigAccess, document: &EventSourc
 }
 
 #[cfg(test)]
-pub async fn delete_event_source(node: &EmbeddedNode, node_did: &str, id: &str) -> Result<usize> {
+pub async fn delete_event_source(
+    node: &Arc<EmbeddedNode>,
+    node_did: &str,
+    id: &str,
+) -> Result<usize> {
     super::delete_scoped_document_local(
         node,
         "desktop.event_source.delete",
@@ -198,7 +203,7 @@ pub async fn delete_event_source_on(
 ///
 /// Returns the new `AgentRequest`'s `_docID` on success.
 pub async fn fire_task_now(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     actor: identity::Did,
     task_row: &Task,
     args: serde_json::Value,
@@ -518,7 +523,7 @@ pub async fn resolve_task_now_on(
 }
 
 async fn enqueue_task_now(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     actor: identity::Did,
     task_row: &Task,
     args: serde_json::Value,
@@ -580,7 +585,7 @@ async fn enqueue_task_now(
 /// caught up yet). The `SELECT` mirrors every field on
 /// canonical document so `serde_json::from_value` sees the authoritative shape.
 pub async fn fire_schedule_now(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     actor: identity::Did,
     schedule: &Schedule,
 ) -> Result<String> {
@@ -801,7 +806,7 @@ mod tests {
     #[tokio::test]
     async fn canonical_task_resolution_ignores_stale_desktop_revision() -> Result<()> {
         let operator = Arc::new(EmbeddedNode::builder().build().await?);
-        let desktop = EmbeddedNode::builder().build().await?;
+        let desktop = Arc::new(EmbeddedNode::builder().build().await?);
         gents::ensure_runtime_schemas(operator.as_ref()).await?;
         gents::ensure_runtime_schemas(&desktop).await?;
         let owner = "did:test:canonical-task-run";
@@ -812,8 +817,8 @@ mod tests {
             "agents":[{"node_did":owner,"agent_id":"agent","inference_profile_id":"profile"}]
         }))?;
         let plan = DesiredStateApplyPlan::from_pack_config(&config)?;
-        for node in [operator.as_ref(), &desktop] {
-            ConfigAccess::transact_local(node, None, "desktop.canonical_task.seed", |txn| {
+        for node in [Arc::clone(&operator), Arc::clone(&desktop)] {
+            ConfigAccess::transact_local_write(&node, None, "desktop.canonical_task.seed", |txn| {
                 let plan = &plan;
                 Box::pin(async move {
                     apply_desired_state_plan(txn, plan).await?;
@@ -830,13 +835,13 @@ mod tests {
             "prompt_template":"Canonical {{ args.item }}",
             "enabled":true
         }))?;
-        upsert_task(operator.as_ref(), &canonical).await?;
+        upsert_task(&operator, &canonical).await?;
         let mut stale = canonical.clone();
         stale.enabled = false;
         stale.prompt_template = "Stale {{ args.item }}".into();
         upsert_task(&desktop, &stale).await?;
 
-        let operator_access = ConfigAccess::Local(Arc::clone(&operator));
+        let operator_access = ConfigAccess::local(Arc::clone(&operator));
         let invocation =
             resolve_task_now_on(&operator_access, owner, "task", json!({"item":"truth"})).await?;
         assert_eq!(invocation.content, "Canonical truth");
@@ -890,7 +895,7 @@ mod tests {
             None,
         )?;
         let local_node_did = identity.did();
-        let node = EmbeddedNode::builder().build().await?;
+        let node = Arc::new(EmbeddedNode::builder().build().await?);
         gents::ensure_runtime_schemas(&node).await?;
         // A replicated foreign Task is visible while this node's selected Task is absent.
         ConfigAccess::write_local(
@@ -956,7 +961,7 @@ mod tests {
     #[tokio::test]
     async fn automation_replacements_preserve_scoped_references_and_goal_hook_rules() -> Result<()>
     {
-        let node = EmbeddedNode::builder().build().await?;
+        let node = Arc::new(EmbeddedNode::builder().build().await?);
         gents::ensure_runtime_schemas(&node).await?;
         for owner in ["did:test:automation-a", "did:test:automation-b"] {
             let config: gents::document_config::PackConfig = serde_json::from_value(json!({
@@ -966,7 +971,7 @@ mod tests {
                 "agents":[{"node_did":owner,"agent_id":"agent","inference_profile_id":"profile"}]
             }))?;
             let plan = DesiredStateApplyPlan::from_pack_config(&config)?;
-            ConfigAccess::transact_local(&node, None, "desktop.automation.seed", |txn| {
+            ConfigAccess::transact_local_write(&node, None, "desktop.automation.seed", |txn| {
                 let plan = &plan;
                 Box::pin(async move {
                     apply_desired_state_plan(txn, plan).await?;
@@ -1015,7 +1020,7 @@ mod tests {
         upsert_trigger(&node, &trigger).await?;
         assert_eq!(delete_event_source(&node, owner, "source").await?, 1);
         assert!(delete_schedule(&node, owner, "schedule").await.is_err());
-        ConfigAccess::transact_local(&node, None, "desktop.automation.verify", |txn| {
+        ConfigAccess::transact_local_write(&node, None, "desktop.automation.verify", |txn| {
             Box::pin(async move {
                 let (_, value) =
                     read_desired_state_record_in_txn(txn, Collection::Task, owner, "task")

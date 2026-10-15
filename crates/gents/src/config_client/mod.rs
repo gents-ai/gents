@@ -5,7 +5,7 @@
 //! writers under `gents-cli/src/config_writes`) and the runtime
 //! self-configuration tools (`crate::self_config`).
 //!
-//! The client is DID-parameterized: [`ConfigAccess::transact_local`] accepts an
+//! The client is DID-parameterized: [`ConfigAccess::transact_local_write`] accepts an
 //! optional `identity::Did`, and every statement executed inside that
 //! transaction carries it as the DefraDB ACP actor. Authorization remains at
 //! the node. Embedded CLI paths default to the node DID and signer. HTTP paths
@@ -29,14 +29,14 @@ mod graphql;
 mod inference_backend;
 mod inference_profile;
 mod profile_switch;
+#[cfg(test)]
+mod query_tests;
 mod retry;
 mod schema_contract;
 mod schema_install;
 mod schema_management;
 mod txn;
 pub(crate) mod write_telemetry;
-
-pub(crate) use graphql::ensure_query_document;
 
 /// A transaction step this owner classified as unavailable (a conflict that
 /// outlived its retries, a storage failure, or a step timeout), as opposed to
@@ -93,7 +93,7 @@ pub use tools::write_tools_document;
 pub(crate) use txn::ReentrantEmbeddedWrite;
 pub(crate) use txn::TransactionOutcome;
 pub(crate) use txn::EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT;
-pub use txn::{ConfigApplyTxn, IdempotentTransactionRetry};
+pub use txn::{ConfigApplyTxn, IdempotentTransactionRetry, LocalConfigAccess};
 
 mod tools;
 
@@ -222,9 +222,7 @@ impl std::fmt::Display for GraphqlEndpoint {
 #[derive(Clone)]
 pub enum ConfigAccess {
     Graphql(GraphqlEndpoint),
-    /// Shared so callers that already hold the node (desktop client) can
-    /// construct access without moving it; `EmbeddedNode` is not `Clone`.
-    Local(Arc<EmbeddedNode>),
+    Local(LocalConfigAccess),
 }
 
 /// Executes reads through the existing access or transaction owner. A
@@ -261,6 +259,37 @@ impl ConfigAccess {
         Self::Graphql(GraphqlEndpoint::as_principal(url, principal_did))
     }
 
+    /// Shared so callers that already hold the node can construct access
+    /// without moving it; `EmbeddedNode` is not `Clone`.
+    pub fn local(node: Arc<EmbeddedNode>) -> Self {
+        Self::Local(LocalConfigAccess::new(node))
+    }
+
+    /// Construct local access that retains the process claim for the store
+    /// until every access and Gents-owned native operation has returned.
+    pub fn claimed_local(node: Arc<EmbeddedNode>, claim: crate::home::StoreLock) -> Result<Self> {
+        Ok(Self::Local(LocalConfigAccess::claimed(node, claim)?))
+    }
+
+    pub fn local_node(&self) -> Option<&Arc<EmbeddedNode>> {
+        match self {
+            Self::Local(local) => Some(local.node()),
+            Self::Graphql(_) => None,
+        }
+    }
+
+    pub(crate) async fn run_local_owned<T, F, Fut>(&self, operation: F) -> Result<T>
+    where
+        T: Send + 'static,
+        F: FnOnce(Arc<EmbeddedNode>) -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = Result<T>> + Send + 'static,
+    {
+        match self {
+            Self::Local(local) => local.run_owned(operation).await,
+            Self::Graphql(_) => anyhow::bail!("owned native operation requires local access"),
+        }
+    }
+
     pub fn mode(&self) -> &'static str {
         match self {
             Self::Graphql(_) => "graphql",
@@ -270,16 +299,12 @@ impl ConfigAccess {
 
     pub fn execute<'a>(&'a self, query: &'a str) -> BoxFuture<'a, Result<Value>> {
         Box::pin(async move {
-            graphql::ensure_query_document(query)?;
             match self {
                 Self::Graphql(graphql) => post_graphql(graphql, query).await,
-                Self::Local(node) => {
-                    let response = crate::graphql::graphql_with_transaction_retry(
-                        node,
-                        query,
-                        "config GraphQL",
-                    )
-                    .await?;
+                Self::Local(local) => {
+                    let response =
+                        Self::read_local_response_owned(local, query, "config GraphQL").await?;
+                    crate::graphql::ensure_no_errors(&response, "config GraphQL")?;
                     Ok(crate::graphql::into_data_envelope(response.data))
                 }
             }
@@ -315,7 +340,14 @@ impl ConfigAccess {
                 }
                 Ok(())
             }
-            Self::Local(node) => node.add_schema(sdl).await.context("adding schema SDL"),
+            Self::Local(local) => {
+                let sdl = sdl.to_owned();
+                local
+                    .run_owned(move |node| async move {
+                        node.add_schema(&sdl).await.context("adding schema SDL")
+                    })
+                    .await
+            }
         }
     }
 
@@ -338,7 +370,7 @@ impl ConfigAccess {
     /// The names of every collection the node has registered, sorted.
     pub async fn collection_names(&self) -> Result<BTreeSet<String>> {
         match self {
-            Self::Local(node) => Ok(node.list_collections()?.into_iter().collect()),
+            Self::Local(local) => Ok(local.node().list_collections()?.into_iter().collect()),
             Self::Graphql(graphql) => {
                 let api_base = graphql_api_base(graphql.url())?;
                 let url = format!("{api_base}/collections/versions");
@@ -376,7 +408,8 @@ impl ConfigAccess {
     pub async fn collection_version(&self, collection: &str) -> Result<Option<Value>> {
         crate::graphql::validate_collection_identifier(collection)?;
         match self {
-            Self::Local(node) => node
+            Self::Local(local) => local
+                .node()
                 .get_collection(collection)?
                 .map(serde_json::to_value)
                 .transpose()
@@ -478,5 +511,8 @@ pub async fn query_graphql_with_options(
 ) -> Result<Value> {
     graphql::query_with_options(graphql, query, options)
         .await
-        .map_err(|error| anyhow::anyhow!("{error}\n{}", graphql_diagnostic_hint(graphql.url())))
+        .map_err(|error| {
+            let diagnostic = format!("{error}\n{}", graphql_diagnostic_hint(graphql.url()));
+            error.context(diagnostic)
+        })
 }

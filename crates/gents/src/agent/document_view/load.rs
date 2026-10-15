@@ -9,7 +9,7 @@ use serde::de::DeserializeOwned;
 use std::collections::HashMap;
 
 pub(crate) async fn load_document_runtime_view(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
 ) -> Result<DocumentRuntimeView> {
     anyhow::ensure!(

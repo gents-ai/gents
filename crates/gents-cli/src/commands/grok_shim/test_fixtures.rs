@@ -10,12 +10,13 @@ use gents_protocol::output::{
     OutputWriter, PayloadPresentation, PayloadRef, PresentedPayload, ReasoningPart, SegmentRun,
     SourceClose, StreamDeclaration, StreamPayload, TranscriptMessage,
 };
+use std::sync::Arc;
 
 #[path = "../../../../gents/tests/support/streaming_backend.rs"]
 pub(super) mod streaming_backend;
 
 pub(super) async fn configure_runtime_agent(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     node_did: &str,
     agent_id: &str,
     backend_id: &str,
@@ -28,7 +29,7 @@ pub(super) async fn configure_runtime_agent(
     use gents::Collection;
 
     super::seed_test_agent_configuration(node, node_did, agent_id, agent_id, model, true).await;
-    gents::ConfigAccess::transact_local(node, None, "grok.runtime_fixture", |txn| {
+    gents::ConfigAccess::transact_local_write(node, None, "grok.runtime_fixture", |txn| {
         Box::pin(async move {
             use gents::config_client::read_desired_state_record_in_txn as read;
             let (_, mut agent) = read(txn, Collection::Agent, node_did, agent_id)

@@ -87,7 +87,7 @@ async fn generated_background_lifecycle_cases_use_canonical_admission_owner() {
         assert_eq!(actual["lifecycle_state"], lifecycle_state, "{}", case.name);
         if let Some(expected) = case.result.as_deref() {
             let presentation = super::load_tool_call_presentation(
-                &ConfigAccess::Local(admission.node.clone()),
+                &ConfigAccess::local(admission.node.clone()),
                 &tool_doc_id,
                 &admission.node_did,
                 &format!("session-background-{}", case.name),

@@ -492,7 +492,7 @@ pub(super) async fn project_tools(
         anyhow::ensure!(identities.insert(id), "duplicate tool physical identity");
     }
     let rows = decode_tool_call_rows(&tool_response)?;
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let mut presentations = std::collections::HashMap::new();
     for row in &rows {
         let presentation = load_tool_call_presentation(
@@ -550,7 +550,7 @@ pub(crate) async fn session_tool_results(
             .context("missing AgentToolCall rows")?,
     )
     .context("invalid AgentToolCall identity")?;
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let mut results = Vec::new();
     for Row { doc_id } in rows {
         if skip.contains(&doc_id) {

@@ -33,7 +33,7 @@ const NODE_EXECUTE_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents/src/background_completion/notification_delivery.rs", 2),
     ("crates/gents/src/background_completion/side_effects.rs", 1),
     ("crates/gents/src/background_tools.rs", 2),
-    ("crates/gents/src/callback/scan.rs", 3),
+    ("crates/gents/src/callback/scan.rs", 2),
     ("crates/gents/src/completion_factory.rs", 1),
     ("crates/gents/src/eth/submit.rs", 2),
     ("crates/gents/src/graph_pipeline/run.rs", 1),
@@ -261,7 +261,7 @@ fn production_defradb_writes_have_one_owner() {
     }
     assert!(
         violations.is_empty(),
-        "production DefraDB writes bypass ConfigAccess::write/transact:\n{}",
+        "production DefraDB writes bypass ConfigAccess::write/transact_write:\n{}",
         violations.join("\n")
     );
 }

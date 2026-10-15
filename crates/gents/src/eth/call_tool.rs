@@ -338,7 +338,7 @@ fn declared_schema(params: &[CompiledParam]) -> Value {
 }
 
 async fn execute_call(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     resolved: &ResolvedEthCall,
     args: &str,
 ) -> Result<String, ToolError> {
@@ -426,7 +426,7 @@ async fn execute_call(
 }
 
 async fn execute_sign_typed_data(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     resolved: &ResolvedEthCall,
     domain: &Value,
     types: &Value,
@@ -482,7 +482,7 @@ async fn execute_sign_typed_data(
 }
 
 async fn execute_write(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     resolved: &ResolvedEthCall,
     client: &HttpEthRpc,
     to: Option<&str>,
@@ -632,12 +632,15 @@ fn require_runtime_principal(resolved: &ResolvedEthCall) -> Result<(), ToolError
     Ok(())
 }
 
-async fn load_signing_key(node: &EmbeddedNode, resolved: &ResolvedEthCall) -> Result<[u8; 32]> {
+async fn load_signing_key(
+    node: &Arc<EmbeddedNode>,
+    resolved: &ResolvedEthCall,
+) -> Result<[u8; 32]> {
     load_signing_key_with_store(node, resolved, &KeyringChainKeyStore).await
 }
 
 async fn load_signing_key_with_store(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     resolved: &ResolvedEthCall,
     store: &dyn ChainKeyMaterialStore,
 ) -> Result<[u8; 32]> {
@@ -646,7 +649,7 @@ async fn load_signing_key_with_store(
         .as_deref()
         .ok_or_else(|| anyhow!("write tool has no chain key binding"))?;
     let (tool, binding): (EthToolDocument, ChainKeyBindingDocument) =
-        crate::config_client::ConfigAccess::transact_local(
+        crate::config_client::ConfigAccess::transact_local_write(
             node,
             None,
             "eth.signing_config.read",
@@ -1054,7 +1057,7 @@ mod tests {
     use super::*;
 
     async fn signing_fixture() -> (
-        EmbeddedNode,
+        Arc<EmbeddedNode>,
         ChainKeyBindingDocument,
         ResolvedEthCall,
         super::super::keys::MemoryChainKeyStore,
@@ -1063,7 +1066,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let identity =
             crate::identity::KeyIdentity::load_or_create(dir.path().join("key"), None).unwrap();
-        let node = EmbeddedNode::builder().build().await.unwrap();
+        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
         let secret = [1u8; 32];
         let address = address_from_secret(&secret).unwrap();

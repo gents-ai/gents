@@ -37,7 +37,7 @@ impl RequestLifecycle {
     /// A unique per-source `retry_key` plus a private transaction makes the
     /// sweep idempotent across concurrent ticks and process restarts.
     pub async fn redrive_failed_background_wakeups(
-        node: &EmbeddedNode,
+        node: &std::sync::Arc<EmbeddedNode>,
         node_did: &str,
     ) -> Result<BackgroundWakeRedriveReport> {
         let (candidates, successors, pending) = load_candidates(node, node_did).await?;
@@ -241,7 +241,10 @@ fn retry_is_due(candidate: &AgentRequestRow, now: chrono::DateTime<chrono::Utc>)
     .is_none_or(|next_retry_at| next_retry_at <= now))
 }
 
-async fn redrive_one(node: &EmbeddedNode, candidate: &AgentRequestRow) -> Result<RedriveOutcome> {
+async fn redrive_one(
+    node: &std::sync::Arc<EmbeddedNode>,
+    candidate: &AgentRequestRow,
+) -> Result<RedriveOutcome> {
     let request_id = uuid::Uuid::new_v4().to_string();
     let request_id = &request_id;
     crate::config_client::ConfigAccess::transact_local_idempotent(

@@ -96,7 +96,7 @@ pub async fn inference_profile_options(
     node_did: &str,
 ) -> Result<Vec<PackInferenceProfileOption>> {
     let (node_enabled, profiles, backends) = access
-        .transact("pack.inference_binding_preview", |txn| {
+        .transact_readonly("pack.inference_binding_preview", |txn| {
             Box::pin(async move {
                 let refs = crate::ConfigReferences::load_in_txn(txn, node_did).await?;
                 let node_enabled = refs
@@ -413,7 +413,7 @@ mod tests {
             .await
             .unwrap();
         crate::test_support::install_test_agent(&node, owner, "only").await;
-        let access = ConfigAccess::Local(node);
+        let access = ConfigAccess::local(node);
         let one = manifest(json!([
             {"name":"worker","description":"works","agents":["work"]}
         ]));
@@ -443,7 +443,7 @@ mod tests {
             .await
             .unwrap();
         crate::test_support::install_test_agent(&node, foreign_owner, "foreign").await;
-        let access = ConfigAccess::Local(node.clone());
+        let access = ConfigAccess::local(node.clone());
         for requested in [
             BTreeMap::from([
                 ("coordinator".into(), "claude:inference".into()),

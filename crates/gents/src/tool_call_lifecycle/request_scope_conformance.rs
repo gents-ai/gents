@@ -83,7 +83,7 @@ async fn generated_background_completion_queue_case_uses_accepted_session_messag
             .unwrap(),
     );
     crate::schema::ensure_runtime_schemas(&node).await.unwrap();
-    crate::test_support::install_test_agent(node.as_ref(), node_did, "general").await;
+    crate::test_support::install_test_agent(&node, node_did, "general").await;
     let parent_id = format!("queue-deadline-coalesce-parent-{}", uuid::Uuid::new_v4());
     let session_id = case.session_id.to_string();
     let mut parent = claimed_signed_request(&node, &parent_id, &session_id, &identity, None).await;

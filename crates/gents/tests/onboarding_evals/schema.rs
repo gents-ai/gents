@@ -101,7 +101,7 @@ async fn admiral_search_fixture_grades_native_writes_and_ranked_results() {
             .await
             .unwrap(),
     );
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let configure = &case["stages"][0];
     let schema_params = &configure["checks"][0]["params"];
     access

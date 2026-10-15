@@ -20,6 +20,9 @@ pub struct DesktopBootstrapSummary {
     pub default_node_home: String,
     pub init_node_name: Option<String>,
     pub init_node_did: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub init_config_status: Option<InitConfigStatus>,
     pub init_tool_ceiling: Option<String>,
     pub init_tool_root: Option<String>,
     pub desktop_home: String,
@@ -31,6 +34,15 @@ pub struct DesktopBootstrapSummary {
     pub peer_directory_exists: bool,
     pub client_state_exists: bool,
     pub saved_peers: Vec<SavedPeerView>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(rename_all = "lowercase")]
+pub enum InitConfigStatus {
+    Absent,
+    Configured,
+    Unreadable,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, TS)]
@@ -78,3 +90,32 @@ pub struct ManagedServerRootValidation {
 pub use gents_desktop_core::home_reset::{
     HomeResetDisposition, IncompatibleStoreScope, IncompatibleStoreView, ManagedServerResetResult,
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_init_config_status_is_omitted_from_the_wire() {
+        let summary = DesktopBootstrapSummary {
+            default_node_home: String::new(),
+            init_node_name: None,
+            init_node_did: None,
+            init_config_status: None,
+            init_tool_ceiling: None,
+            init_tool_root: None,
+            desktop_home: String::new(),
+            peer_directory_path: String::new(),
+            node_data_dir: String::new(),
+            diagnostics_hint: String::new(),
+            node_home_exists: false,
+            desktop_home_exists: false,
+            peer_directory_exists: false,
+            client_state_exists: false,
+            saved_peers: Vec::new(),
+        };
+
+        let wire = serde_json::to_value(summary).expect("serialize bootstrap summary");
+        assert!(wire.get("initConfigStatus").is_none());
+    }
+}

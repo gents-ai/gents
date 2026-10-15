@@ -56,6 +56,13 @@ impl ConformanceConsumer {
 pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
     &[
         ConformanceConsumer::RustTest {
+            id: "client::core::writes::accepted_edit_projection_tests::generated_accepted_receipt_survives_projection_refresh_failure",
+            package: "gents-desktop-core",
+            source_path: "crates/gents-desktop-core/src/client/core/writes.rs",
+            module_path: "client::core::writes::accepted_edit_projection_tests",
+            function: "generated_accepted_receipt_survives_projection_refresh_failure",
+        },
+        ConformanceConsumer::RustTest {
             id: "e2e_runtime::session_input_edit::generated_remote_edits_replicate_signed_effect_and_receipt",
             package: "gents",
             source_path: "crates/gents/tests/e2e_runtime/session_input_edit.rs",
@@ -446,6 +453,27 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             source_path: "crates/gents-cli/src/commands/codex_shim/turn_projection.rs",
             module_path: "commands::codex_shim::turn_projection::tests",
             function: "generated_reasoning_projection_cases_drive_turn_projection_notifications",
+        },
+        ConformanceConsumer::RustTest {
+            id: "commands::codex_shim::turn_projection::tests::generated_tool_metadata_cases_drive_the_tool_item_owner",
+            package: "gents-cli",
+            source_path: "crates/gents-cli/src/commands/codex_shim/turn_projection.rs",
+            module_path: "commands::codex_shim::turn_projection::tests",
+            function: "generated_tool_metadata_cases_drive_the_tool_item_owner",
+        },
+        ConformanceConsumer::RustTest {
+            id: "commands::codex_shim::thread_projection::conformance::generated_thread_status_cases_drive_thread_projection",
+            package: "gents-cli",
+            source_path: "crates/gents-cli/src/commands/codex_shim/thread_projection/conformance.rs",
+            module_path: "commands::codex_shim::thread_projection::conformance",
+            function: "generated_thread_status_cases_drive_thread_projection",
+        },
+        ConformanceConsumer::RustTest {
+            id: "commands::codex_shim::thread_projection::conformance::generated_agent_selection_cases_drive_scoped_model_binding",
+            package: "gents-cli",
+            source_path: "crates/gents-cli/src/commands/codex_shim/thread_projection/conformance.rs",
+            module_path: "commands::codex_shim::thread_projection::conformance",
+            function: "generated_agent_selection_cases_drive_scoped_model_binding",
         },
         ConformanceConsumer::RustTest {
             id: "gents_desktop_core::client::mutations::chat::request::tests::generated_session_recovery_cases_drive_desktop_retry_request",
@@ -971,6 +999,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             source_path: "crates/gents/tests/conformance/session_hydration.rs",
             module_path: "conformance::session_hydration",
             function: "generated_session_hydration_start_cases_match_receiver_start",
+        },
+        ConformanceConsumer::RustTest {
+            id: "conformance::session_hydration::generated_session_hydration_admission_cases_match_receiver_owner",
+            package: "gents",
+            source_path: "crates/gents/tests/conformance/session_hydration.rs",
+            module_path: "conformance::session_hydration",
+            function: "generated_session_hydration_admission_cases_match_receiver_owner",
         },
         ConformanceConsumer::RustTest {
             id: "conformance::enrollment::generated_enrollment_cases_match_production_transition_core",

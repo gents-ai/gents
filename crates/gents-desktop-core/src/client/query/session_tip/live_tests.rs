@@ -228,7 +228,7 @@ async fn live_read_observes_exact_request_lifecycle_and_every_crdt_record_withou
         .unwrap_err()
         .to_string()
         .contains("bounded session-tip"));
-    let access = ConfigAccess::Local(node.clone());
+    let access = ConfigAccess::local(node.clone());
     let start = std::time::Instant::now();
     let live = load_session_live_store_on(&access, &request).await.unwrap();
     tracing::info!(

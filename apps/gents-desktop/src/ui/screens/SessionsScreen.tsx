@@ -194,8 +194,6 @@ export function SessionsScreen({
       root?.querySelector<HTMLElement>('[data-slot="scroll-area-viewport"]') ?? null,
     );
   }, []);
-  const window = useListWindow(nested, scroller, rowKey, rowHeight);
-
   return (
     <ScrollArea ref={scrollRoot} className="h-full" data-testid="sessions-screen">
       <div className="mx-auto max-w-page px-6 py-6">
@@ -271,85 +269,116 @@ export function SessionsScreen({
             </Button>
           </div>
         )}
-        <ul
-          {...window.listProps}
-          aria-label="Sessions"
-          data-session-count={nested.length}
-          className={cn("mt-4", !window.enabled && "divide-y divide-border/60")}
-        >
-          {window.items.map(({ index, start }) => {
-            const row = nested[index]!;
-            const attributes = window.attributes(index, start);
-            if (attributes && index > 0)
-              attributes.className = "border-t border-border/60";
-            return row.kind === "toggle" ? (
-              <li key={rowKey(row)} {...attributes}>
-                <button
-                  type="button"
-                  aria-expanded={row.open}
-                  className="-mx-3 flex w-[calc(100%+1.5rem)] cursor-pointer items-center gap-1.5 rounded-lg py-2.5 pl-12 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
-                  onClick={() =>
-                    setExpanded((was) => {
-                      const next = new Set(was);
-                      if (!next.delete(row.of)) next.add(row.of);
-                      return next;
-                    })
-                  }
-                >
-                  <ChevronDown
-                    className={cn(
-                      "size-3.5 transition-transform",
-                      row.open && "rotate-180",
-                    )}
-                  />
-                  {row.open || row.hidden === 0
-                    ? `${row.kin} started session${row.kin === 1 ? "" : "s"}`
-                    : `${row.hidden} more started session${row.hidden === 1 ? "" : "s"}`}
-                  {row.running > 0 && <span>· {row.running} running</span>}
-                </button>
-              </li>
-            ) : (
-              <SessionRow
-                key={rowKey(row)}
-                attributes={attributes}
-                session={row.session}
-                child={row.child}
-                delay={row.delay ?? null}
-                parent={parentOf(row.session)}
-                workers={
-                  row.child
-                    ? NO_SESSIONS
-                    : (workers[sessionKeyOf(row.session)] ?? NO_SESSIONS)
-                }
-              />
-            );
-          })}
-          {conversations.length === 0 && narrowed && (
-            <li className="py-8 text-center text-sm text-muted-foreground">
-              No sessions match.
-            </li>
-          )}
-          {conversations.length === 0 && !narrowed && (
-            <li className="grid min-h-[50vh] place-items-center animate-in fade-in-0 slide-in-from-bottom-2 duration-300 ease-out fill-mode-both motion-reduce:animate-none">
-              <div className="text-center">
-                <MessageSquare className="mx-auto size-6 text-muted-foreground" />
-                <p className="mt-3 font-heading text-lg font-medium text-heading">
-                  No sessions yet
-                </p>
-                <Button
-                  variant="brand"
-                  className="mt-5"
-                  nativeButton={false}
-                  render={<a href={href({ name: "session", sessionId: null })} />}
-                >
-                  <Plus /> New session
-                </Button>
-              </div>
-            </li>
-          )}
-        </ul>
+        <SessionList
+          rows={nested}
+          conversations={conversations}
+          narrowed={narrowed}
+          scroller={scroller}
+          parentOf={parentOf}
+          workers={workers}
+          toggleExpanded={(sessionId) =>
+            setExpanded((was) => {
+              const next = new Set(was);
+              if (!next.delete(sessionId)) next.add(sessionId);
+              return next;
+            })
+          }
+        />
       </div>
     </ScrollArea>
+  );
+}
+
+function SessionList({
+  rows,
+  conversations,
+  narrowed,
+  scroller,
+  parentOf,
+  workers,
+  toggleExpanded,
+}: {
+  rows: Row[];
+  conversations: SessionSummary[];
+  narrowed: boolean;
+  scroller: HTMLElement | null;
+  parentOf: (session: SessionSummary) => SessionSummary | null;
+  workers: Record<string, readonly SessionSummary[]>;
+  toggleExpanded: (sessionId: string) => void;
+}) {
+  const window = useListWindow(rows, scroller, rowKey, rowHeight);
+
+  return (
+    <ul
+      {...window.listProps}
+      aria-label="Sessions"
+      data-session-count={rows.length}
+      className={cn("mt-4", !window.enabled && "divide-y divide-border/60")}
+    >
+      {window.items.map(({ index, start }) => {
+        const row = rows[index]!;
+        const attributes = window.attributes(index, start);
+        if (attributes && index > 0) attributes.className = "border-t border-border/60";
+        return row.kind === "toggle" ? (
+          <li key={rowKey(row)} {...attributes}>
+            <button
+              type="button"
+              aria-expanded={row.open}
+              className="-mx-3 flex w-[calc(100%+1.5rem)] cursor-pointer items-center gap-1.5 rounded-lg py-2.5 pl-12 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+              onClick={() => toggleExpanded(row.of)}
+            >
+              <ChevronDown
+                className={cn(
+                  "size-3.5 transition-transform",
+                  row.open && "rotate-180",
+                )}
+              />
+              {row.open || row.hidden === 0
+                ? `${row.kin} started session${row.kin === 1 ? "" : "s"}`
+                : `${row.hidden} more started session${row.hidden === 1 ? "" : "s"}`}
+              {row.running > 0 && <span>· {row.running} running</span>}
+            </button>
+          </li>
+        ) : (
+          <SessionRow
+            key={rowKey(row)}
+            attributes={attributes}
+            session={row.session}
+            child={row.child}
+            delay={row.delay ?? null}
+            parent={parentOf(row.session)}
+            workers={
+              row.child
+                ? NO_SESSIONS
+                : (workers[sessionKeyOf(row.session)] ?? NO_SESSIONS)
+            }
+          />
+        );
+      })}
+      {conversations.length === 0 && narrowed && (
+        <li className="py-8 text-center text-sm text-muted-foreground">
+          No sessions match.
+        </li>
+      )}
+      {conversations.length === 0 && !narrowed && (
+        <li className="grid min-h-[50vh] place-items-center animate-in fade-in-0 slide-in-from-bottom-2 duration-300 ease-out fill-mode-both motion-reduce:animate-none">
+          <div className="text-center">
+            <MessageSquare className="mx-auto size-6 text-muted-foreground" />
+            <p className="mt-3 font-heading text-lg font-medium text-heading">
+              No sessions yet
+            </p>
+            <Button
+              variant="brand"
+              className="mt-5"
+              nativeButton={false}
+              render={<a href={href({ name: "session", sessionId: null })} />}
+            >
+              <Plus /> New session
+            </Button>
+          </div>
+        </li>
+      )}
+    </ul>
   );
 }
 

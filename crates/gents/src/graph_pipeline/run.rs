@@ -1008,7 +1008,10 @@ pub async fn load_graph_run_result_view_with_access(
 /// Reconcile every running graph owned by one node. The durable run and
 /// its pinned revision remain the only source of truth; this sweep merely
 /// applies the already-modeled terminal transition when evidence is ready.
-pub async fn reconcile_owned_graph_runs(node: &EmbeddedNode, owner_did: &str) -> Result<usize> {
+pub async fn reconcile_owned_graph_runs(
+    node: &std::sync::Arc<EmbeddedNode>,
+    owner_did: &str,
+) -> Result<usize> {
     let response = node
         .execute(&format!(
             r#"{{ GraphRun(filter: {{ owner_did: {{ _eq: "{}" }}, status: {{ _eq: "running" }} }}, limit: 1001) {{ run_id }} }}"#,
@@ -1055,7 +1058,7 @@ pub async fn run_graph_run_reconciler(
         tokio::select! {
             _ = cancel.cancelled() => return Ok(()),
             _ = interval.tick() => {
-                match reconcile_owned_graph_runs(node.as_ref(), &owner_did).await {
+                match reconcile_owned_graph_runs(&node, &owner_did).await {
                     Ok(terminalized) if terminalized > 0 => tracing::info!(
                         owner_did,
                         terminalized,
@@ -1074,14 +1077,14 @@ pub async fn run_graph_run_reconciler(
 }
 
 async fn commit_terminal(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     identity: Option<Did>,
     view: &GraphRunView,
     status: &str,
 ) -> Result<()> {
     let completed_at = chrono::Utc::now().to_rfc3339();
     let completed_at = &completed_at;
-    ConfigAccess::transact_local(
+    ConfigAccess::transact_local_write(
         node,
         identity,
         "graph_pipeline.commit_terminal",
@@ -1100,7 +1103,7 @@ async fn commit_terminal_with_access(
     let completed_at = chrono::Utc::now().to_rfc3339();
     let completed_at = &completed_at;
     access
-        .transact("graph_pipeline.commit_terminal", move |txn| {
+        .transact_write("graph_pipeline.commit_terminal", move |txn| {
             Box::pin(async move { commit_terminal_in_txn(txn, view, status, completed_at).await })
         })
         .await
@@ -1212,7 +1215,7 @@ fn terminal_projection(
 }
 
 async fn interrupt_active_requests(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     requests: &[GraphRunRequestView],
 ) -> Result<()> {
     for request in requests {
@@ -1239,7 +1242,7 @@ fn needs_failure_capture(view: &GraphRunView) -> bool {
 /// the single terminal transaction. A losing reconciler reloads on its next
 /// pass; no completion-owner lock exists.
 pub async fn reconcile_graph_run(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     identity: Option<Did>,
     actor_did: &str,
     run_id: &str,
@@ -1330,7 +1333,7 @@ pub async fn reconcile_graph_run_with_access(
 /// path for every currently correlated request. Recovery can repeat this
 /// operation until the run has no active work.
 pub async fn request_graph_run_cancellation(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     identity: Option<Did>,
     actor_did: &str,
     run_id: &str,
@@ -1345,11 +1348,17 @@ pub async fn request_graph_run_cancellation(
     }
     let requested_at = chrono::Utc::now().to_rfc3339();
     let requested_at = &requested_at;
-    ConfigAccess::transact_local(node, identity, "graph_pipeline.cancel_intent", move |txn| {
-        Box::pin(async move {
-            persist_cancellation_intent_in_txn(txn, actor_did, run_id, reason, requested_at).await
-        })
-    })
+    ConfigAccess::transact_local_write(
+        node,
+        identity,
+        "graph_pipeline.cancel_intent",
+        move |txn| {
+            Box::pin(async move {
+                persist_cancellation_intent_in_txn(txn, actor_did, run_id, reason, requested_at)
+                    .await
+            })
+        },
+    )
     .await?;
     interrupt_active_requests(node, &before.requests).await?;
     reconcile_graph_run(node, None, actor_did, run_id).await
@@ -1429,7 +1438,7 @@ pub async fn request_graph_run_cancellation_with_access(
     let requested_at = chrono::Utc::now().to_rfc3339();
     let requested_at = &requested_at;
     access
-        .transact("graph_pipeline.cancel_intent", move |txn| {
+        .transact_write("graph_pipeline.cancel_intent", move |txn| {
             Box::pin(async move {
                 persist_cancellation_intent_in_txn(txn, actor_did, run_id, reason, requested_at)
                     .await

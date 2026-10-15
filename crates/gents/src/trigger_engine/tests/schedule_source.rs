@@ -32,7 +32,7 @@ fn schedule_test_behavior() -> Arc<ResolvedAgent> {
 /// agent and cadence configuration only; task selection, enablement,
 /// concurrency, and the runtime cursor live on the referencing `Trigger`.
 async fn create_schedule_cadence_doc(
-    node: &defra_node::EmbeddedNode,
+    node: &Arc<defra_node::EmbeddedNode>,
     owner_did: &str,
     schedule_id: &str,
     cadence: serde_json::Value,
@@ -42,7 +42,7 @@ async fn create_schedule_cadence_doc(
         "schedule_id": schedule_id,
         "cadence": cadence,
     });
-    crate::config_client::ConfigAccess::transact_local(
+    crate::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "test.schedule_cadence_fixture",
@@ -73,7 +73,7 @@ async fn create_schedule_cadence_doc(
 /// observational increment has a value to read back. Returns the created
 /// `Trigger` document id for `ResolvedSchedule.trigger_doc_id`.
 async fn create_schedule_with_next_run_at(
-    node: &defra_node::EmbeddedNode,
+    node: &Arc<defra_node::EmbeddedNode>,
     owner_did: &str,
     trigger_id: &str,
     schedule_id: &str,
@@ -95,7 +95,7 @@ async fn create_schedule_with_next_run_at(
     if let Some(next_run_at) = next_run_at {
         input["next_run_at"] = serde_json::Value::String(next_run_at.to_owned());
     }
-    crate::config_client::ConfigAccess::transact_local(
+    crate::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "test.schedule_trigger_fixture",
@@ -195,7 +195,7 @@ async fn schedule_cursor_batch_matches_exact_owner_reads_and_isolates_scope_erro
     let cursor_a = "2026-08-26T00:00:00Z";
     let cursor_b = "2026-08-27T00:00:00Z";
     create_schedule_with_next_run_at(
-        node.as_ref(),
+        &node,
         &owner_a,
         "shared-trigger-id",
         "cursor-schedule-a",
@@ -206,7 +206,7 @@ async fn schedule_cursor_batch_matches_exact_owner_reads_and_isolates_scope_erro
     )
     .await;
     create_schedule_with_next_run_at(
-        node.as_ref(),
+        &node,
         owner_b,
         "shared-trigger-id",
         "cursor-schedule-b",
@@ -277,7 +277,7 @@ async fn schedule_source_stops_loading_chunks_after_first_due_trigger() {
     let owner = schedule_test_behavior().node_did().to_owned();
     let past = (Utc::now() - ChronoDuration::seconds(1)).to_rfc3339();
     create_schedule_with_next_run_at(
-        node.as_ref(),
+        &node,
         &owner,
         &first_trigger_id,
         &first_trigger_id,
@@ -324,7 +324,7 @@ async fn schedule_source_next_fire_emits_intent_when_schedule_is_due() {
     let owner_did = behavior.node_did().to_string();
     let past = (Utc::now() - ChronoDuration::seconds(1)).to_rfc3339();
     let trigger_doc_id = create_schedule_with_next_run_at(
-        node.as_ref(),
+        &node,
         &owner_did,
         "sched-1",
         "sched-1",
@@ -416,7 +416,7 @@ async fn schedule_source_on_result_writes_runtime_fields_on_fired_and_skipped() 
     // so next_fire() will immediately yield an intent.
     let initial_next_run_at = (Utc::now() - ChronoDuration::seconds(1)).to_rfc3339();
     let trigger_doc_id = create_schedule_with_next_run_at(
-        node.as_ref(),
+        &node,
         &owner_did,
         "sched-1",
         "sched-1",
@@ -673,7 +673,7 @@ async fn trigger_engine_enqueues_agent_request_for_due_schedule_e2e() {
     let owner_did = behavior.node_did().to_string();
     let past = (Utc::now() - ChronoDuration::seconds(1)).to_rfc3339();
     let trigger_doc_id = create_schedule_with_next_run_at(
-        node.as_ref(),
+        &node,
         &owner_did,
         "sched-e2e",
         "sched-e2e",
@@ -848,7 +848,7 @@ async fn schedule_source_seeds_null_next_run_at_and_fires_on_first_tick() {
     // inert forever because ScheduleSource treated a null cursor as
     // "not due, skip."
     let trigger_doc_id = create_schedule_with_next_run_at(
-        node.as_ref(),
+        &node,
         &owner_did,
         "sched-null",
         "sched-null",
@@ -941,7 +941,7 @@ async fn schedule_source_seeds_cron_next_run_at_without_immediate_fire() {
     let owner_did = behavior.node_did().to_string();
 
     let trigger_doc_id = create_schedule_with_next_run_at(
-        node.as_ref(),
+        &node,
         &owner_did,
         "sched-cron-null",
         "sched-cron-null",

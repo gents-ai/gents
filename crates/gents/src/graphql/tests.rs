@@ -89,6 +89,62 @@ fn native_data_envelope_preserves_payload_allocations_and_null_data() {
 }
 
 #[test]
+fn mutation_documents_borrows_normalized_single_and_batch_rows() {
+    let response = serde_json::json!({
+        "data": {
+            "add_AgentToolCall": [
+                {"_docID": "doc-a", "tool_call_key": "key-a"},
+                {"_docID": "doc-b", "tool_call_key": "key-b"}
+            ]
+        }
+    });
+    let expected = response["data"]["add_AgentToolCall"][0]["_docID"]
+        .as_str()
+        .unwrap()
+        .as_ptr();
+    let documents = mutation_documents(&response, "create_AgentToolCall")
+        .unwrap()
+        .unwrap();
+    assert_eq!(documents.len(), 2);
+    assert_eq!(documents[0]["_docID"].as_str().unwrap(), "doc-a");
+    assert_eq!(documents[0]["_docID"].as_str().unwrap().as_ptr(), expected);
+
+    let single = serde_json::json!({"data": {"add_AgentRequest": {"_docID": "request"}}});
+    assert_eq!(
+        mutation_documents(&single, "create_AgentRequest")
+            .unwrap()
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn mutation_documents_preserves_missing_null_alias_and_error_handling() {
+    let missing = serde_json::json!({"data": {}});
+    assert!(mutation_documents(&missing, "create_AgentRequest")
+        .unwrap()
+        .is_none());
+    let null = serde_json::json!({"data": {"create_AgentRequest": null}});
+    assert!(mutation_documents(&null, "create_AgentRequest").is_err());
+    let both = serde_json::json!({"data": {
+        "create_AgentRequest": {"_docID": "a"},
+        "add_AgentRequest": {"_docID": "b"}
+    }});
+    assert!(mutation_documents(&both, "create_AgentRequest").is_err());
+    let errors = serde_json::json!({
+        "errors": [{"message": "failed"}],
+        "data": {"add_AgentRequest": {"_docID": "a"}}
+    });
+    assert!(mutation_documents(&errors, "create_AgentRequest").is_err());
+
+    let multi = QueryResponse::success(serde_json::json!({
+        "create_AgentRequest": [{"_docID": "a"}, {"_docID": "b"}]
+    }));
+    assert!(single_mutation_document(&multi, "create_AgentRequest").is_err());
+}
+
+#[test]
 #[ignore = "manual native GraphQL envelope benchmark"]
 fn native_data_envelope_payload_size_benchmark() {
     let data = serde_json::json!({"AgentOutputSegment": (0..128).map(|index| {

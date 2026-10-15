@@ -282,7 +282,6 @@ fn lean_boundary_metadata_is_typed_and_reviewable() {
         "boundary.session-recovery.client-retry-surface",
         "boundary.coverage-ledger.review-discipline",
         "boundary.event-delivery.fair-substrate",
-        "boundary.event-delivery.rescan-doc-cap",
         "boundary.prompt-assembly.provider-input-sanitization",
         "boundary.model.nat-typed-ids-time",
         "boundary.p2p-backpressure.obligation-model",
@@ -1118,6 +1117,15 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             emitted.insert(("session_input_edit_cases".to_string(), domain.to_string()));
         }
     }
+    if !snapshot
+        .session_input_edit_client_observation_cases
+        .is_empty()
+    {
+        emitted.insert((
+            "session_input_edit_client_observation_cases".to_string(),
+            "SessionInputEditClientObservationCases".to_string(),
+        ));
+    }
     if !snapshot.queue_management_cases.is_empty() {
         emitted.insert((
             "queue_management_cases".to_string(),
@@ -1666,6 +1674,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         emitted.insert((
             "session_hydration_start_cases".to_string(),
             "SessionHydrationStartCases".to_string(),
+        ));
+    }
+    if !snapshot.session_hydration_admission_cases.is_empty() {
+        emitted.insert((
+            "session_hydration_admission_cases".to_string(),
+            "SessionHydrationAdmissionCases".to_string(),
         ));
     }
     if !snapshot.enrollment_cases.is_empty() {

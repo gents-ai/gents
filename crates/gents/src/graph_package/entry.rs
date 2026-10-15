@@ -349,7 +349,7 @@ async fn persist_prepared_documents(
     }
     let documents = documents.to_vec();
     access
-        .transact("graph.prepare_entry_documents", move |txn| {
+        .transact_write("graph.prepare_entry_documents", move |txn| {
             let documents = documents.clone();
             Box::pin(async move {
                 let mut start = 0;

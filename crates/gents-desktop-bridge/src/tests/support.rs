@@ -178,6 +178,33 @@ pub async fn seed_provenance_fixture() -> (Arc<ClientCore>, TempDir, String) {
     (core, tmp, parent)
 }
 
+pub async fn refresh_request_and_wait_for_projection(
+    core: &ClientCore,
+    node_did: &str,
+    request_id: &str,
+) {
+    let mut updates = core.store_updates();
+    core.refresh_local_request(node_did, request_id)
+        .await
+        .expect("refresh request");
+
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            if core.store().snapshot().requests.iter().any(|row| {
+                row.node_did.as_deref() == Some(node_did) && row.request_id == request_id
+            }) {
+                return;
+            }
+            updates
+                .changed()
+                .await
+                .expect("observed store remains open while waiting for request projection");
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("request {request_id} was not projected for node {node_did}"));
+}
+
 /// A fleet-shaped provenance fixture for the snapshot starter join: two parent
 /// requests in their own sessions, two children started by the first parent,
 /// one by the second, one child whose stored parent names no stored request,

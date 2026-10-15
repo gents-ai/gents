@@ -64,7 +64,7 @@ const PLACEMENT_FIELDS: &str = r#"
 /// when `workspace_id` is set but IsolatedWorkspace is missing, and refuse
 /// ReadWrite after Sealed / Integrate before Sealed.
 pub async fn stamp_workspace_lineage(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
     lineage: &mut WorkspaceLineage,
 ) -> Result<()> {
@@ -154,7 +154,7 @@ pub(crate) fn apply_workspace_lineage_stamp(
 }
 
 pub async fn seal_on_writer_success(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     request: &AgentRequest,
     operator_tool_root: Option<&Path>,
 ) -> Result<()> {
@@ -217,7 +217,7 @@ pub async fn seal_on_writer_success(
 /// to trunk). Never worker bash against the source checkout. No-op unless the
 /// request is Integrate-bound.
 pub async fn integrate_on_integrator_success(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     request: &AgentRequest,
     operator_tool_root: Option<&Path>,
 ) -> Result<()> {
@@ -288,7 +288,7 @@ fn ctx_repository_path(repository: &RepositoryPlacementRef) -> PathBuf {
 
 /// Explicit operator/ack cleanup. Never invoked from request terminal.
 pub async fn cleanup_workspace(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
     workspace_id: &str,
     operator_tool_root: Option<&Path>,
@@ -331,7 +331,7 @@ pub async fn cleanup_workspace(
 /// Crash recovery: this writer already sealed (or left a Sealed workspace
 /// after a partial flush). Skip ReadWrite overlay/inference and only complete.
 pub async fn writer_request_already_sealed(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     request: &AgentRequest,
 ) -> Result<bool> {
     let Some(workspace_id) = optional_id(request.workspace_id.as_deref()) else {
@@ -389,7 +389,7 @@ fn writer_already_sealed(
 }
 
 pub async fn materialize_workspace_binding(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     request_id: &str,
     request_doc_id: &str,
     principal_did: &str,
@@ -473,7 +473,10 @@ pub async fn materialize_workspace_binding(
     }
 }
 
-pub async fn release_writer_binding(node: &EmbeddedNode, request: &AgentRequest) -> Result<()> {
+pub async fn release_writer_binding(
+    node: &std::sync::Arc<EmbeddedNode>,
+    request: &AgentRequest,
+) -> Result<()> {
     let Some(workspace_id) = optional_id(request.workspace_id.as_deref()) else {
         return Ok(());
     };
@@ -588,7 +591,6 @@ async fn load_receipts(
                 head_sha
                 changed_files
                 diff_artifact
-                checks_run
                 unresolved_conflicts
                 integration_instructions
             }}
@@ -677,7 +679,7 @@ async fn load_repository(
 }
 
 async fn flush_seal_outcome(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     docs: &MemoryWorkspaceDocuments,
     outcome: &SealWorkspaceOutcome,
 ) -> Result<()> {
@@ -711,7 +713,7 @@ async fn flush_seal_outcome(
 }
 
 async fn flush_integrate_outcome(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     outcome: &IntegrateWorkspaceOutcome,
 ) -> Result<()> {
     let mutation = workspace_integrate_docs_mutation(&[], &outcome.receipt);
@@ -731,7 +733,7 @@ async fn flush_integrate_outcome(
 }
 
 async fn release_integrate_binding(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     docs: &MemoryWorkspaceDocuments,
     outcome: &IntegrateWorkspaceOutcome,
 ) -> Result<()> {
@@ -766,7 +768,7 @@ async fn release_integrate_binding(
 }
 
 async fn flush_cleanup_outcome(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     docs: &MemoryWorkspaceDocuments,
     outcome: &CleanupWorkspaceOutcome,
 ) -> Result<()> {
@@ -874,7 +876,6 @@ mod tests {
             head_sha: None,
             changed_files: None,
             diff_artifact: None,
-            checks_run: None,
             unresolved_conflicts: None,
             integration_instructions: None,
         }

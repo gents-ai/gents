@@ -301,7 +301,7 @@ async fn delivery_crash_child() -> Result<()> {
     };
     let db = support::test_db_from_home(home);
     let owner = db.node_identity.did().to_owned();
-    let access = ConfigAccess::Local(db.node.clone());
+    let access = ConfigAccess::local(db.node.clone());
     if phase == "seed" {
         let endpoints = [
             std::env::var("GENTS_DELIVERY_ENDPOINT_1")?,

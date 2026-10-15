@@ -67,7 +67,7 @@ async fn authored_publication_replays_and_reconstructs_exact_message() {
         .unwrap();
     assert_eq!(first, replay);
     let (_, reconstructed) = crate::session::load_canonical_message(
-        &crate::config_client::ConfigAccess::Local(node.clone()),
+        &crate::config_client::ConfigAccess::local(node.clone()),
         &first,
         "did:test:test",
         None,
@@ -333,7 +333,7 @@ async fn provider_publication_request_size_benchmark() {
             segments: 1,
             stream_bytes: vec![noise.payload.len().try_into().unwrap()],
         });
-        ConfigAccess::transact_local(&node, None, "test.publication_benchmark_seed", |txn| {
+        ConfigAccess::transact_local_write(&node, None, "test.publication_benchmark_seed", |txn| {
             let mut noise = noise.clone();
             Box::pin(async move {
                 for index in 0..sources {
@@ -452,7 +452,7 @@ async fn first_publication_rejects_native_message_that_differs_from_reconstructi
 }
 
 async fn publish_tool_turn_for_rollback_test(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     lifecycle: &RequestLifecycle,
     message: &gents_protocol::message::Message,
 ) -> anyhow::Result<super::canonical::PublishedProviderTurn> {
@@ -568,7 +568,7 @@ async fn recovery_receipt_fixture(
 ) {
     let (node, path, lifecycle, writer) = fixture(name).await;
     let request = lifecycle.request();
-    crate::config_client::ConfigAccess::transact_local(
+    crate::config_client::ConfigAccess::transact_local_write(
         &node,
         None,
         "test.recovery_session_observation",
@@ -957,7 +957,7 @@ async fn multiple_flushes_close_and_reconstruct_exact_final_message() {
         .await
         .unwrap();
     let (_, reconstructed) = crate::session::load_canonical_message(
-        &crate::config_client::ConfigAccess::Local(node.clone()),
+        &crate::config_client::ConfigAccess::local(node.clone()),
         &published.message_doc_id,
         "did:test:test",
         None,
@@ -999,7 +999,7 @@ async fn published_turn_stays_nonterminal_until_request_selection_commits() {
         crate::graphql::escape_graphql_string(&lifecycle.request().doc_id),
         crate::watcher::AGENT_REQUEST_FIELDS,
     );
-    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let access = crate::config_client::ConfigAccess::local(node.clone());
     writer
         .flush_native_partial(&lifecycle, &expected)
         .await
@@ -1130,7 +1130,7 @@ async fn final_delta_shares_its_closing_record_and_replay_adds_nothing() {
             })
         );
         let (_, reconstructed) = crate::session::load_canonical_message(
-            &crate::config_client::ConfigAccess::Local(node.clone()),
+            &crate::config_client::ConfigAccess::local(node.clone()),
             &published.message_doc_id,
             "did:test:test",
             None,
@@ -1208,7 +1208,7 @@ async fn publication_timestamp_follows_a_flush_that_already_owns_the_tail() {
         .await
         .expect("publication must timestamp after the earlier flusher");
     let (_, observed) = crate::session::load_canonical_message(
-        &crate::config_client::ConfigAccess::Local(node.clone()),
+        &crate::config_client::ConfigAccess::local(node.clone()),
         &published.message_doc_id,
         &request.node_did,
         request.requester_did.as_deref(),
@@ -1291,7 +1291,7 @@ async fn failed_attempt_closes_the_acknowledged_prefix_as_partial() {
         panic!("a retained text prefix must publish a selectable partial header")
     };
     let (header, reconstructed) = crate::session::load_canonical_message(
-        &crate::config_client::ConfigAccess::Local(node.clone()),
+        &crate::config_client::ConfigAccess::local(node.clone()),
         &message_doc_id,
         "did:test:test",
         None,
@@ -1441,13 +1441,25 @@ async fn accepted_tool_publication_replay_returns_exact_physical_bindings() {
         .await;
     let message = Message::Assistant {
         id: Some("provider-message".into()),
-        content: vec![AssistantContent::ToolCall(ToolCall {
-            id: "native-tool".into(),
-            call_id: Some("provider-call".into()),
-            function: ToolFunction::new("read".into(), serde_json::json!({"path":"文.txt"})),
-            signature: Some("sig".into()),
-            additional_params: None,
-        })],
+        content: vec![
+            AssistantContent::ToolCall(ToolCall {
+                id: "native-tool".into(),
+                call_id: Some("provider-call".into()),
+                function: ToolFunction::new("read".into(), serde_json::json!({"path":"文.txt"})),
+                signature: Some("sig".into()),
+                additional_params: None,
+            }),
+            AssistantContent::ToolCall(ToolCall {
+                id: "native-tool-2".into(),
+                call_id: Some("provider-call-2".into()),
+                function: ToolFunction::new(
+                    "write".into(),
+                    serde_json::json!({"path":"other.txt"}),
+                ),
+                signature: None,
+                additional_params: None,
+            }),
+        ],
     };
     let first = writer
         .publish_native_turn(&lifecycle, 0, 0, &message)
@@ -1459,15 +1471,43 @@ async fn accepted_tool_publication_replay_returns_exact_physical_bindings() {
         .unwrap();
     assert_eq!(first.message_doc_id, replay.message_doc_id);
     assert_eq!(first.sequence, replay.sequence);
-    assert_eq!(first.accepted_tools.len(), 1);
-    assert_eq!(replay.accepted_tools.len(), 1);
-    let a = &first.accepted_tools[0];
-    let b = &replay.accepted_tools[0];
-    assert_eq!(a.tool_call_doc_id, b.tool_call_doc_id);
-    assert_eq!(a.accepted_header_doc_id, b.accepted_header_doc_id);
-    assert_eq!(a.arguments, b.arguments);
-    assert_eq!(a.id, "native-tool");
-    assert_eq!(a.call_id.as_deref(), Some("provider-call"));
+    assert_eq!(first.accepted_tools.len(), 2);
+    assert_eq!(replay.accepted_tools.len(), 2);
+    let tool_rows = node
+        .execute(&format!(
+            r#"{{ AgentToolCall(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ _docID tool_call_id }} }}"#,
+            crate::graphql::escape_graphql_string(&lifecycle.request().doc_id),
+        ))
+        .await;
+    assert!(!tool_rows.has_errors(), "{:?}", tool_rows.errors);
+    let rows = tool_rows.data.unwrap()["AgentToolCall"]
+        .as_array()
+        .unwrap()
+        .clone();
+    let doc_id_for = |tool_call_id: &str| {
+        rows.iter()
+            .find(|row| row["tool_call_id"] == tool_call_id)
+            .unwrap()["_docID"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    for (index, (tool_id, call_id)) in [
+        ("native-tool", Some("provider-call")),
+        ("native-tool-2", Some("provider-call-2")),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let a = &first.accepted_tools[index];
+        let b = &replay.accepted_tools[index];
+        assert_eq!(a.id, tool_id);
+        assert_eq!(a.call_id.as_deref(), call_id);
+        assert_eq!(a.tool_call_doc_id, doc_id_for(tool_id));
+        assert_eq!(a.tool_call_doc_id, b.tool_call_doc_id);
+        assert_eq!(a.accepted_header_doc_id, b.accepted_header_doc_id);
+        assert_eq!(a.arguments, b.arguments);
+    }
     node.shutdown().await;
     let _ = std::fs::remove_dir_all(path);
 }
