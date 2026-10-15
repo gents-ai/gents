@@ -105,6 +105,7 @@ struct ReconstructedScopedMessage {
 #[cfg(test)]
 tokio::task_local! {
     static REQUEST_OUTPUT_SCANS: std::sync::Arc<std::sync::atomic::AtomicUsize>;
+    static SOURCE_OUTPUT_QUERIES: std::sync::Arc<std::sync::atomic::AtomicUsize>;
 }
 
 #[cfg(test)]
@@ -122,6 +123,15 @@ pub(crate) async fn count_request_output_scans<F: std::future::Future>(
     let scans = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let output = REQUEST_OUTPUT_SCANS.scope(scans.clone(), future).await;
     (output, scans.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+#[cfg(test)]
+pub(crate) async fn count_source_output_queries<F: std::future::Future>(
+    future: F,
+) -> (F::Output, usize) {
+    let queries = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let output = SOURCE_OUTPUT_QUERIES.scope(queries.clone(), future).await;
+    (output, queries.load(std::sync::atomic::Ordering::Relaxed))
 }
 
 #[cfg(test)]
@@ -170,6 +180,7 @@ enum ReadAccess<'a, 'txn> {
 struct ReadCache {
     headers: BTreeMap<String, super::canonical_rows::TranscriptMessageRow>,
     requests: BTreeMap<String, Arc<RequestOutputRows>>,
+    sources: HashMap<(String, OutputSource), Vec<super::canonical_rows::OutputSegmentRow>>,
     source_reads: bool,
     /// Rows the caller read by an exact scoped query in the same transaction;
     /// each still passes coordinate validation before it enters `headers`.
@@ -422,6 +433,7 @@ impl<'a, 'txn> TxnCanonicalReader<'a, 'txn> {
 
     pub(crate) fn clear_output_cache(&mut self) {
         self.cache.requests.clear();
+        self.cache.sources.clear();
     }
 
     pub(crate) async fn load_source(
@@ -438,6 +450,9 @@ impl<'a, 'txn> TxnCanonicalReader<'a, 'txn> {
             self.requester_did,
         )
         .await?;
+        self.cache
+            .sources
+            .insert((request_doc_id.to_owned(), source.clone()), rows.clone());
         Ok(rows
             .into_iter()
             .filter(|row| row.segment.session_id == session_id)
@@ -498,6 +513,12 @@ impl<'a, 'txn> TxnCanonicalReader<'a, 'txn> {
                 && header.message.requester_did.as_deref() == self.requester_did,
             "created canonical rows crossed their authorized scope"
         );
+        if let Some(rows) = self.cache.sources.get_mut(&(
+            output.segment.request_doc_id.clone(),
+            output.segment.source.clone(),
+        )) {
+            rows.push(output.clone());
+        }
         if let Some(rows) = self.cache.requests.get_mut(&output.segment.request_doc_id) {
             Arc::make_mut(rows).push(output);
         }
@@ -958,6 +979,9 @@ async fn source_rows(
     node_did: &str,
     requester_did: Option<&str>,
 ) -> Result<Vec<super::canonical_rows::OutputSegmentRow>> {
+    #[cfg(test)]
+    let _ = SOURCE_OUTPUT_QUERIES
+        .try_with(|queries| queries.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
     let query = super::canonical_rows::source_output_segments_query(request_doc_id, source)?;
     let response = access.query(&query, "load_output_source").await?;
     Ok(decode_scoped_request_output_segments(
@@ -1188,9 +1212,13 @@ async fn load_referenced_segments(
     let mut records = Vec::new();
     for (request_doc_id, source) in sources {
         if cache.source_reads {
-            records.extend(
-                source_rows(access, &request_doc_id, &source, node_did, requester_did).await?,
-            );
+            if let Some(rows) = cache.sources.get(&(request_doc_id.clone(), source.clone())) {
+                records.extend(rows.iter().cloned());
+            } else {
+                records.extend(
+                    source_rows(access, &request_doc_id, &source, node_did, requester_did).await?,
+                );
+            }
             continue;
         }
         let rows = request_rows(
