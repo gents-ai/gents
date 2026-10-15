@@ -347,7 +347,10 @@ impl RuntimeStatusHandle {
         }
         *guard = next.clone();
         let mut persisted = self.persisted.lock().await;
-        match upsert_runtime_status(&self.node, persisted.as_ref(), &next).await {
+        // A failed, timed-out or cancelled write may still commit, so the
+        // next write after one names every field.
+        let previous = persisted.take();
+        match upsert_runtime_status(&self.node, previous.as_ref(), &next).await {
             Ok(()) => *persisted = Some(next),
             Err(error) => tracing::warn!(
                 node_did = %next.node_did,
