@@ -32,6 +32,8 @@ const COMMANDS: &[&str] = &[
     "desktop_allowed_dirs_remove",
     "desktop_plugin_approvals_pending",
     "desktop_plugin_approval_decide",
+    "desktop_plugin_approval_subscribe",
+    "desktop_plugin_approval_unsubscribe",
     "desktop_peer_remove",
     "desktop_peer_rename",
     "desktop_peer_status_fetch",

@@ -386,6 +386,8 @@ export type DesktopApiAdapter = {
     access: AllowedFolderAccess,
   ) => Promise<AllowedFolders>;
   removeAllowedFolder: (path: string) => Promise<AllowedFolders>;
+  subscribePluginApprovals: (token: string) => Promise<void>;
+  unsubscribePluginApprovals: (token: string) => Promise<void>;
   listPendingPluginApprovals: () => Promise<{
     requests: PluginApprovalRequest[];
   }>;
@@ -411,6 +413,8 @@ export type HostAccessCommand =
   | "listAllowedFolders"
   | "addAllowedFolder"
   | "removeAllowedFolder"
+  | "subscribePluginApprovals"
+  | "unsubscribePluginApprovals"
   | "listPendingPluginApprovals"
   | "decidePluginApproval";
 

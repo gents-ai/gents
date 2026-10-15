@@ -32,6 +32,9 @@ export function createHostActions({ api }: { api: DesktopApiAdapter }) {
     addAllowedFolder: (path: string, access: AllowedFolderAccess) =>
       api.addAllowedFolder(path, access),
     removeAllowedFolder: (path: string) => api.removeAllowedFolder(path),
+    subscribePluginApprovals: (token: string) => api.subscribePluginApprovals(token),
+    unsubscribePluginApprovals: (token: string) =>
+      api.unsubscribePluginApprovals(token),
     listPendingPluginApprovals: () => api.listPendingPluginApprovals(),
     decidePluginApproval: (id: string, decision: PluginApprovalDecision) =>
       api.decidePluginApproval(id, decision),

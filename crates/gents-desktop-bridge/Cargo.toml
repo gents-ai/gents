@@ -26,6 +26,7 @@ gents-claude-login.workspace = true
 gents-desktop-core.workspace = true
 gents-protocol = { workspace = true, features = ["typescript"] }
 hostname.workspace = true
+notify = "8.2"
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true

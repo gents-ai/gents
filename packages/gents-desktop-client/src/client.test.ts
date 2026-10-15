@@ -5,6 +5,28 @@ import { BridgeInvokeError } from "./errors.js";
 import { createMemoryTransport } from "./testing.js";
 
 describe("desktop client", () => {
+  it("registers and removes the same plugin prompt token", async () => {
+    const transport = createMemoryTransport({
+      handlers: {
+        desktop_plugin_approval_subscribe: () => undefined,
+        desktop_plugin_approval_unsubscribe: () => undefined,
+      },
+    });
+    const { api } = createDesktopClient(transport);
+    await api.subscribePluginApprovals("prompt-token");
+    await api.unsubscribePluginApprovals("prompt-token");
+    expect(transport.calls).toEqual([
+      {
+        command: "desktop_plugin_approval_subscribe",
+        args: { token: "prompt-token" },
+      },
+      {
+        command: "desktop_plugin_approval_unsubscribe",
+        args: { token: "prompt-token" },
+      },
+    ]);
+  });
+
   it("carries the pending queue fence and physical sources unchanged", async () => {
     const result = { requestDocIds: ["new-doc"], requestIds: ["new-request"] };
     const transport = createMemoryTransport({

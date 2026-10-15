@@ -16,9 +16,16 @@ export function createHostAccessCommands(
     listAllowedFolders: () =>
       invokeDesktop<AllowedFolders>("desktop_allowed_dirs_list"),
     addAllowedFolder: (path: string, access: AllowedFolderAccess) =>
-      invokeDesktop<AllowedFolders>("desktop_allowed_dirs_add", { path, access }),
+      invokeDesktop<AllowedFolders>("desktop_allowed_dirs_add", {
+        path,
+        access,
+      }),
     removeAllowedFolder: (path: string) =>
       invokeDesktop<AllowedFolders>("desktop_allowed_dirs_remove", { path }),
+    subscribePluginApprovals: (token: string) =>
+      invokeDesktop<void>("desktop_plugin_approval_subscribe", { token }),
+    unsubscribePluginApprovals: (token: string) =>
+      invokeDesktop<void>("desktop_plugin_approval_unsubscribe", { token }),
     listPendingPluginApprovals: () =>
       invokeDesktop<{ requests: PluginApprovalRequest[] }>(
         "desktop_plugin_approvals_pending",

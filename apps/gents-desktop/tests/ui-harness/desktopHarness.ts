@@ -940,6 +940,8 @@ export function createDesktopUiHarness(
     async listPendingPluginApprovals() {
       return { requests: [] };
     },
+    async subscribePluginApprovals() {},
+    async unsubscribePluginApprovals() {},
     async decidePluginApproval() {},
     ...(scenario === "empty-fleet"
       ? ({

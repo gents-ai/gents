@@ -261,6 +261,8 @@ pub struct DesktopBridge {
     /// native destruction retires a view; late IPC cannot register it again.
     selected_nodes_by_window: BTreeMap<String, Option<String>>,
     pub updates_task: Option<JoinHandle<()>>,
+    pub approvals_watch_task: Option<JoinHandle<()>>,
+    pub(crate) approvals_prompt_subscriptions: crate::approvals_watch::PromptSubscriptions,
     /// Cancel handle for an in-flight ChatGPT/Codex login server, so a closed
     /// browser can be aborted instead of hanging the callback wait.
     pub codex_login_cancel: Option<gents_chatgpt_login::ShutdownHandle>,
@@ -324,6 +326,8 @@ impl DesktopAppState {
                 core: None,
                 selected_nodes_by_window: BTreeMap::new(),
                 updates_task: None,
+                approvals_watch_task: None,
+                approvals_prompt_subscriptions: Default::default(),
                 codex_login_cancel: None,
                 claude_login_cancel: None,
                 grok_login_cancel: None,
@@ -347,11 +351,20 @@ impl DesktopAppState {
         bridge.apply_window_selection();
     }
 
+    pub(crate) fn clear_plugin_approval_subscriptions(&self, label: &str) {
+        self.bridge
+            .lock()
+            .expect("desktop bridge lock poisoned")
+            .approvals_prompt_subscriptions
+            .remove_window(label);
+    }
+
     pub(crate) fn window_event(&self, label: &str, event: &tauri::WindowEvent) {
         if !matches!(event, tauri::WindowEvent::Destroyed) {
             return;
         }
         let mut bridge = self.bridge.lock().expect("desktop bridge lock poisoned");
+        bridge.approvals_prompt_subscriptions.remove_window(label);
         if bridge.selected_nodes_by_window.remove(label).is_some() {
             bridge.apply_window_selection();
         }
