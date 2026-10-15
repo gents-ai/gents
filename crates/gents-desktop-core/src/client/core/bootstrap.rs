@@ -212,7 +212,6 @@ impl ClientCore {
                 sync_state,
                 p2p_supervisor: tokio::sync::Mutex::new(Some(p2p_supervisor)),
                 selected_node_did,
-                last_loaded_for: tokio::sync::Mutex::new(std::collections::HashMap::new()),
                 request_patch_signatures: tokio::sync::Mutex::new(std::collections::HashMap::new()),
                 p2p_control: tokio::sync::Mutex::new(Some(p2p_control)),
                 shutdown_completion: tokio::sync::Mutex::new(None),
