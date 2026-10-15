@@ -2,7 +2,7 @@
   "manifest_version": 1,
   "name": "dependent_fixture",
   "version": "1.0.0",
-  "description": "A one-slot documents pack that depends on the review_graph fixture, for dependency-resolution tests.",
+  "description": "A one-slot documents pack that depends on the dependee_fixture documents pack, for dependency-resolution tests.",
   "namespace": "fixture",
   "authors": [
     "gents-ai contributors"
@@ -17,7 +17,7 @@
     "pack_config.json"
   ],
   "dependencies": [
-    "fixture/review_graph"
+    "fixture/dependee_fixture"
   ],
   "config": "pack_config.json",
   "inference_slots": [
