@@ -9,10 +9,9 @@ use std::sync::Arc;
 
 #[tokio::test]
 async fn generated_request_closures_use_exact_database_dependencies() {
-    let cases: Vec<Value> = serde_json::from_str(include_str!(
-        "../../../../../gents/tests/fixtures/client_request_closure.json"
-    ))
-    .unwrap();
+    let contract = gents_lean_contract::load_contract_snapshot::<Value>()
+        .expect("executed Lean request closure contract");
+    let cases = contract["client_request_closure_cases"].as_array().unwrap();
     let node = Arc::new(defra_node::NodeBuilder::default().build().await.unwrap());
     crate::client::schema::ensure_runtime_schemas(&node)
         .await

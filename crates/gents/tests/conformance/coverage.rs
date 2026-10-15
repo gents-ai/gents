@@ -984,6 +984,26 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "ManagedExecLivenessCases".to_string(),
         ));
     }
+    assert!(snapshot.client_data_publication_cases["notice_delivery"].is_object());
+    assert!(!snapshot.client_request_patch_publication_cases.is_empty());
+    emitted.insert((
+        "client_request_patch_publication_cases".into(),
+        "ClientRequestPatchPublicationCases".into(),
+    ));
+    assert!(!snapshot.client_request_closure_cases.is_empty());
+    assert!(!snapshot.client_request_cache_identity_cases.is_empty());
+    emitted.insert((
+        "client_data_publication_cases".into(),
+        "ClientDataNoticeDeliveryCases".into(),
+    ));
+    emitted.insert((
+        "client_request_closure_cases".into(),
+        "ClientRequestClosureCases".into(),
+    ));
+    emitted.insert((
+        "client_request_cache_identity_cases".into(),
+        "ClientRequestCacheIdentityCases".into(),
+    ));
     assert_eq!(
         snapshot.frontend_client_shell_case_count,
         snapshot.frontend_client_shell_cases.len(),

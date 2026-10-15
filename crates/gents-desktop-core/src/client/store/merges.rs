@@ -1006,10 +1006,9 @@ mod overlay_tests {
 
     #[test]
     fn generated_request_identity_cases_preserve_physical_twins_and_fold_owners() {
-        let fixture: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../../gents/tests/fixtures/client_request_cache_identity.json"
-        ))
-        .expect("generated request cache identity cases");
+        let contract = gents_lean_contract::load_contract_snapshot::<serde_json::Value>()
+            .expect("executed Lean request cache identity contract");
+        let fixture = &contract["client_request_cache_identity_cases"];
         for case in fixture.as_array().expect("identity cases") {
             let all_input_rows = case["current"]
                 .as_array()

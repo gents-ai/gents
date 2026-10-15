@@ -1073,6 +1073,26 @@ def caseCoverage : List CoverageEntry :=
       "conformance::pairing_reconcile_sweep_does_not_head_of_line_block_ready_peer")
       "pairing-reconcile" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "client_data_publication_cases"
+      "ClientDataNoticeDeliveryCases"
+      "client::observe::projection_store::reload_tests::generated_notice_delivery_never_regresses_watchers")
+      "client-shell" [Surface.operatorUi]
+  , tagged (consumerCoverage
+      "client_request_patch_publication_cases"
+      "ClientRequestPatchPublicationCases"
+      "gents_desktop_core::client::core::writes::request_patch_publication_tests::generated_publication_cases_drive_request_patch_cache_admission")
+      "client-shell" [Surface.operatorUi]
+  , tagged (consumerCoverage
+      "client_request_closure_cases"
+      "ClientRequestClosureCases"
+      "client::query::request_closure::tests::generated_request_closures_use_exact_database_dependencies")
+      "client-shell" [Surface.operatorUi]
+  , tagged (consumerCoverage
+      "client_request_cache_identity_cases"
+      "ClientRequestCacheIdentityCases"
+      "client::store::merges::overlay_tests::generated_request_identity_cases_preserve_physical_twins_and_fold_owners")
+      "client-shell" [Surface.operatorUi]
+  , tagged (consumerCoverage
       "frontend_client_shell_cases"
       "FrontendClientShellCases"
       "packages/gents-desktop-chat/src/chat-shell.test.ts::projectChatShell matches generated Lean ClientShell projection contracts")

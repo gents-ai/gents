@@ -1,3 +1,7 @@
+import Proofs.Conformance.RequestPatchPublicationCases
+import Proofs.Conformance.ClientDataPublicationCases
+import Proofs.Conformance.ClientRequestClosureCases
+import Proofs.Conformance.ClientRequestCacheIdentityCases
 import Proofs.Conformance.CountCarrier
 import Proofs.Conformance.ConfigurationScope
 import Proofs.Conformance.EnrollmentPendingRequests
@@ -245,6 +249,14 @@ def snapshotJson : String :=
       ++ toString Conformance.ClientShellContracts.desktopClientShellCaseCount ++ ","
     ++ "\"desktop_client_shell_cases\":"
       ++ Conformance.ClientShellContracts.desktopClientShellCasesJson ++ ","
+    ++ "\"client_data_publication_cases\":"
+      ++ Conformance.ClientDataPublication.casesJson ++ ","
+    ++ "\"client_request_patch_publication_cases\":"
+      ++ Conformance.RequestPatchPublicationCases.casesJson ++ ","
+    ++ "\"client_request_closure_cases\":"
+      ++ Conformance.ClientRequestClosure.casesJson ++ ","
+    ++ "\"client_request_cache_identity_cases\":"
+      ++ Conformance.ClientRequestCacheIdentity.casesJson ++ ","
     ++ "\"client_session_turn_cases\":"
       ++ Conformance.ClientShellContracts.sessionTurnCasesJson ++ ","
     ++ "\"request_lifecycle_operator_ui_cases\":"
