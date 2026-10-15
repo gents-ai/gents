@@ -1830,7 +1830,7 @@ def caseCoverage : List CoverageEntry :=
       "prompt_assembly_cases"
       "PromptAssemblyClaudeReplayCases"
       "agent::loop_stream::tests::claude_messages_redacted_and_signed_tool_round_trip_through_owned_loop"
-      "Drives only the ordered-signed-redacted-tool case through the owned loop: its replay blocks become turn-1 SSE (thinking and signature as deltas, redacted data at block start) and the turn-2 capture must equal the modeled replay. The persisted canonical grouping of streamed reasoning is not modeled, so it is not compared to the case's blocks. Other replay cases and the thinking-stream family remain unbound through the owned loop.")
+      "Drives the streamed-signed-redacted-tool case through the owned loop: its canonical blocks become turn-1 SSE, the persisted message must retain their exact grouping and payloads, and the turn-2 capture must equal the modeled replay. Other replay cases and the thinking-stream family remain unbound through the owned loop.")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "prompt_assembly_cases"
