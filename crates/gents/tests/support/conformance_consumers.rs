@@ -147,6 +147,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "durable_delivery_predicates_match_executable_lean_owners",
         },
         ConformanceConsumer::RustTest {
+            id: "trigger_engine::tests::durable_contract::generated_latest_delivery_admission_preserves_rejected_and_replayed_work",
+            package: "gents",
+            source_path: "crates/gents/src/trigger_engine/tests/durable_contract.rs",
+            module_path: "trigger_engine::tests::durable_contract",
+            function: "generated_latest_delivery_admission_preserves_rejected_and_replayed_work",
+        },
+        ConformanceConsumer::RustTest {
             id: "trigger_engine::tests::durable_contract::generated_arrival_checkpoints_preserve_committed_delivery_across_crashes",
             package: "gents",
             source_path: "crates/gents/src/trigger_engine/tests/durable_contract.rs",

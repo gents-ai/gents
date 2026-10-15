@@ -578,6 +578,16 @@ def caseCoverage : List CoverageEntry :=
       "triggers" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "trigger_delivery"
+      "Triggers.Types"
+      "trigger_engine::tests::durable_contract::durable_delivery_predicates_match_executable_lean_owners")
+      "triggers" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "trigger_delivery"
+      "Triggers.Durable"
+      "trigger_engine::tests::durable_contract::generated_latest_delivery_admission_preserves_rejected_and_replayed_work")
+      "triggers" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "trigger_delivery"
       "EventDelivery.Durable"
       "trigger_engine::tests::durable_contract::generated_arrival_checkpoints_preserve_committed_delivery_across_crashes")
       "event-delivery" [Surface.runtimeInternal]

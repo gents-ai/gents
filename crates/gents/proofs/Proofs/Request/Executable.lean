@@ -30,7 +30,7 @@ def step? (pre : RequestContext) : Action → Option RequestContext
       else
         none
   | .dedupLose =>
-      if pre.state = .pending ∧ pre.admission = .released then
+      if (pre.state = .pending ∨ pre.state = .workspaceBindingPending) ∧ pre.admission = .released then
         some { pre with state := .superseded }
       else
         none

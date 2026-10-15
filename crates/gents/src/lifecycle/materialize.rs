@@ -1391,14 +1391,98 @@ pub(crate) async fn write_trigger_delivery(
     prepared: &crate::trigger_engine::durable::PreparedFire,
     create: &gents_protocol::request_admission::AgentRequestCreate,
 ) -> Result<TaskDeliveryAdmission> {
-    write_task_delivery_local(
+    crate::config_client::ConfigAccess::transact_local_write(
         node,
-        actor,
-        &prepared.receipt,
-        prepared.target_existing,
-        create,
+        Some(actor),
+        "lifecycle.admit_trigger_delivery",
+        |txn| {
+            Box::pin(async move {
+                let admitted =
+                    stage_task_delivery(txn, &prepared.receipt, prepared.target_existing, create)
+                        .await?;
+                if prepared.replace_prior && !admitted.duplicate {
+                    supersede_trigger_requests_in_txn(
+                        txn,
+                        &prepared.receipt.identity.owner_did,
+                        &prepared.receipt.identity.trigger_id,
+                        Some(&prepared.receipt.request_id),
+                    )
+                    .await?;
+                }
+                Ok(admitted)
+            })
+        },
     )
     .await
+}
+
+#[doc(hidden)]
+pub async fn supersede_trigger_requests_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    owner: &str,
+    trigger_id: &str,
+    excluded_request_id: Option<&str>,
+) -> Result<usize> {
+    let owner_gql = escape_graphql_string(owner);
+    let trigger_gql = escape_graphql_string(trigger_id);
+    let excluded = excluded_request_id
+        .map(|id| {
+            format!(
+                ", request_id: {{ _neq: \"{}\" }}",
+                escape_graphql_string(id),
+            )
+        })
+        .unwrap_or_default();
+    let now = chrono::Utc::now().to_rfc3339();
+    let unclaimed = gents_protocol::request_lifecycle::RequestLifecycleState::graphql_list([
+        gents_protocol::request_lifecycle::RequestLifecycleState::Pending,
+        gents_protocol::request_lifecycle::RequestLifecycleState::WorkspaceBindingPending,
+    ]);
+    let response = txn.execute(&format!(r#"mutation {{ update_AgentRequest(
+        filter: {{ node_did: {{ _eq: "{owner_gql}" }}, caused_by_trigger_id: {{ _eq: "{trigger_gql}" }}{excluded}, lifecycle_state: {{ _in: {unclaimed} }} }},
+        input: {{ lifecycle_state: "superseded", terminalized_at: "{}", terminal_redrive_attempts: 0 }}
+    ) {{ _docID request_id }} }}"#, escape_graphql_string(&now))).await?;
+    let pending = response["data"]["update_AgentRequest"]
+        .as_array()
+        .context("supersession omitted pending requests")?;
+    for row in pending {
+        crate::trigger_engine::durable::publish_request_outcome(
+            txn,
+            owner,
+            row["request_id"]
+                .as_str()
+                .context("superseded request lacks ID")?,
+            "superseded",
+            "newer trigger fire",
+            &now,
+        )
+        .await?;
+    }
+    let active = gents_protocol::request_lifecycle::RequestLifecycleState::graphql_list([
+        gents_protocol::request_lifecycle::RequestLifecycleState::Claimed,
+        gents_protocol::request_lifecycle::RequestLifecycleState::Processing,
+    ]);
+    let response = txn.execute(&format!(r#"{{ AgentRequest(filter: {{
+        node_did: {{ _eq: "{owner_gql}" }}, caused_by_trigger_id: {{ _eq: "{trigger_gql}" }}{excluded},
+        lifecycle_state: {{ _in: {active} }}
+    }}) {{ _docID request_id node_did requester_did agent_id session_id lifecycle_state
+        execution_generation execution_lease_expires_at }} }}"#)).await?;
+    let active: Vec<gents_protocol::row::AgentRequestRow> =
+        serde_json::from_value(response["data"]["AgentRequest"].clone())?;
+    for row in &active {
+        anyhow::ensure!(
+            super::execution_lease::stage_revoke_execution_preserving_output(
+                txn,
+                row,
+                RequestTerminalOutcome::Superseded,
+                "superseded by a newer trigger fire",
+            )
+            .await?
+                == TerminalizeResult::Won,
+            "execution changed during atomic trigger supersession",
+        );
+    }
+    Ok(pending.len() + active.len())
 }
 
 async fn stage_task_delivery(

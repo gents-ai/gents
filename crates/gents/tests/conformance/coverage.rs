@@ -762,8 +762,15 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
     for (domain, families) in [
         (
             "Triggers.Durable",
-            &["admissions", "identities", "sessions", "self_sessions"][..],
+            &[
+                "admissions",
+                "identities",
+                "sessions",
+                "self_sessions",
+                "latest_admissions",
+            ][..],
         ),
+        ("Triggers.Types", &["delivery_options"][..]),
         ("Triggers.Queue", &["queues", "observed_claims"][..]),
         ("EventDelivery.Durable", &["cursors"][..]),
         (

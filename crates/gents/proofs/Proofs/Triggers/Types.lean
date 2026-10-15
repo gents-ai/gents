@@ -36,6 +36,22 @@ inductive ConcurrencyMode where
 
 namespace Triggers
 
+/-- Explicit CLI/desktop Task admission has its own authenticated destination
+contract. These options govern unmaterialized trigger-source deliveries. -/
+def deliveryOptionsAllowed (kind : TriggerKind) (emitOutcome : Bool)
+    (concurrency : ConcurrencyMode) (targetExisting : Bool) : Bool :=
+  match kind with
+  | .event => true
+  | .schedule => !emitOutcome && (targetExisting || concurrency != .queuedSerial)
+  | .manual => !emitOutcome && concurrency != .queuedSerial && !targetExisting
+
+theorem scheduled_queue_requires_destination (emit : Bool) (target : Bool)
+    (h : deliveryOptionsAllowed .schedule emit .queuedSerial target = true) : target = true := by
+  cases emit <;> cases target <;> simp_all [deliveryOptionsAllowed]
+
+theorem targeted_schedule_queue_allowed :
+    deliveryOptionsAllowed .schedule false .queuedSerial true = true := rfl
+
 /-- An outcome consumer cannot opt into publishing another outcome, even when
 its Task is also referenced by another source. Both configuration admission
 and request admission enforce this rule. -/

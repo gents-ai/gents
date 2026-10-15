@@ -26,9 +26,7 @@ pub use crate::trigger_engine::durable::request_arrival_order;
 pub(crate) use execution_lease::revoke_execution_preserving_output_at;
 #[cfg(test)]
 pub(crate) use execution_lease::terminalize_owned_at;
-pub(crate) use execution_lease::{
-    revoke_execution_preserving_output, ExecutionOwnershipLost, RequestExecutionLease,
-};
+pub(crate) use execution_lease::{ExecutionOwnershipLost, RequestExecutionLease};
 pub use execution_lease::{RequestTerminalOutcome, TerminalizeResult};
 pub(crate) use gents_loop::execution_policy;
 #[cfg(test)]

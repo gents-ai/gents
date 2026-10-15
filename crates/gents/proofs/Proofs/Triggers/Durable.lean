@@ -467,4 +467,26 @@ theorem task_assignment_invalidates_previous_controller (previous : GoalAssignme
 theorem new_assignment_usage_baseline (usage : Nat) :
     (assignGoal none usage).usageBaseline = usage := rfl
 
+/-- Destination admission and replacement are one transaction. A rejected
+destination or replay cannot cancel previously admitted work. Execution
+revocation preserves its canonical output through the existing terminal owner. -/
+def admitLatest (state : State) (fire : Fire) (destinationAllowed : Bool) : State :=
+  if !destinationAllowed || admitted state fire.identity ||
+      !Triggers.outcomeSourceAllowed fire.identity.collection fire.emitOutcome then state
+  else recoverOutcomes { state with
+    receipts := state.receipts ++ [fire.identity]
+    requests := (state.requests.map fun request =>
+      if request.fire.identity.owner == fire.identity.owner &&
+          request.fire.identity.trigger == fire.identity.trigger && !request.terminal then
+        { request with running := false, terminal := true }
+      else request) ++ [{ fire := fire }] }
+
+theorem rejected_latest_preserves_work (state : State) (fire : Fire) :
+    admitLatest state fire false = state := by simp [admitLatest]
+
+theorem replayed_latest_preserves_work (state : State) (fire : Fire)
+    (h : admitted state fire.identity = true) :
+    admitLatest state fire true = state := by simp [admitLatest, h]
+
+
 end Triggers.Durable
