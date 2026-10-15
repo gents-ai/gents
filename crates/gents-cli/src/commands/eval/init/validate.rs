@@ -494,6 +494,17 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn runtime_captures_reject_inline_backend_credentials() {
+        let mut draft = good();
+        let capture = &mut first_stage(&mut draft)["capture"][0];
+        capture["collection"] = json!("InferenceBackend");
+        capture["fields"] = json!(["backend_id", "auth"]);
+        let message = only_message(&draft, &FLOOR_ONE);
+        assert!(message.contains("InferenceBackend"), "{message}");
+        assert!(message.contains("auth"), "{message}");
+    }
+
+    #[test]
     fn subject_declarations_cannot_replace_canonical_runtime_fields() {
         let mut subject = dossier();
         subject

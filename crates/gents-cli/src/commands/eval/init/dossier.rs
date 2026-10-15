@@ -47,14 +47,14 @@ pub(super) fn runtime_collections() -> &'static BTreeMap<String, BTreeSet<String
                     && !gents_protocol::schemas::is_credential_collection(&collection.name)
             })
             .map(|collection| {
-                (
-                    collection.name,
-                    collection
-                        .fields
-                        .into_iter()
-                        .map(|field| field.name)
-                        .collect(),
-                )
+                let name = collection.name;
+                let fields = collection
+                    .fields
+                    .into_iter()
+                    .filter(|field| !gents::defra_query::is_restricted_field(&name, &field.name))
+                    .map(|field| field.name)
+                    .collect();
+                (name, fields)
             })
             .collect()
     })
@@ -495,6 +495,7 @@ mod tests {
         assert!(runtime_collections()
             .values()
             .all(|fields| !fields.is_empty()));
+        assert!(!runtime_collections()["InferenceBackend"].contains("auth"));
     }
 
     fn canary_dir() -> PathBuf {
