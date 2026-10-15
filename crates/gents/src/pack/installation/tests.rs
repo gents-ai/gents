@@ -34,6 +34,7 @@ fn identity(version: &str) -> PackIdentity {
             digest: format!("sha256:{}", "e".repeat(64)),
         }],
         dependencies: Vec::new(),
+        explicit: true,
     }
 }
 
@@ -145,6 +146,48 @@ async fn install_then_remove_leaves_no_pack_documents_and_keeps_adopted_ones() {
         remove_pack(&access, OWNER, "acme/demo", DriftPolicy::Refuse)
             .await
             .is_err()
+    );
+}
+
+async fn installation_explicit(access: &ConfigAccess) -> bool {
+    access
+        .execute("{ PackInstallation { explicit } }")
+        .await
+        .unwrap()["data"]["PackInstallation"][0]["explicit"]
+        .as_bool()
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_non_explicit_documents_install_becomes_explicit_when_installed_explicitly() {
+    let access = access().await;
+    let config = config(&[("alpha", "Alpha")]);
+    let dependency = PackIdentity {
+        explicit: false,
+        ..identity("1")
+    };
+    super::super::install_pack_documents(&access, OWNER, &dependency, &config, DriftPolicy::Refuse)
+        .await
+        .unwrap();
+    assert!(!installation_explicit(&access).await);
+
+    super::super::install_pack_documents(
+        &access,
+        OWNER,
+        &identity("1"),
+        &config,
+        DriftPolicy::Refuse,
+    )
+    .await
+    .unwrap();
+    assert!(installation_explicit(&access).await);
+
+    super::super::install_pack_documents(&access, OWNER, &dependency, &config, DriftPolicy::Refuse)
+        .await
+        .unwrap();
+    assert!(
+        installation_explicit(&access).await,
+        "an explicit install is sticky"
     );
 }
 
@@ -505,6 +548,7 @@ fn demo_identity(dependencies: Vec<String>) -> PackIdentity {
         digest: format!("sha256:{}", "d".repeat(64)),
         plugins: vec![],
         dependencies,
+        explicit: true,
     }
 }
 
