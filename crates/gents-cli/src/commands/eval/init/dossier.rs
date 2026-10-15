@@ -6,6 +6,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::path::Path;
+use std::sync::OnceLock;
 
 use anyhow::{Context, Result};
 use gents::document_config::{Agent, PackConfig};
@@ -32,6 +33,32 @@ pub(crate) struct Dossier {
 
 /// A dossier larger than this is refused: it would crowd the author's turn.
 pub(crate) const DOSSIER_LIMIT_BYTES: usize = 64 * 1024;
+
+/// Captures become retained evidence, so credential collections cannot be
+/// offered as runtime capture sources.
+pub(super) fn runtime_collections() -> &'static BTreeMap<String, BTreeSet<String>> {
+    static COLLECTIONS: OnceLock<BTreeMap<String, BTreeSet<String>>> = OnceLock::new();
+    COLLECTIONS.get_or_init(|| {
+        query::parse_sdl(&gents_protocol::schemas::ALL.join("\n"))
+            .expect("canonical collection schemas must parse")
+            .into_iter()
+            .filter(|collection| {
+                gents_protocol::schemas::ALL_COLLECTION_NAMES.contains(&collection.name.as_str())
+                    && !gents_protocol::schemas::is_credential_collection(&collection.name)
+            })
+            .map(|collection| {
+                (
+                    collection.name,
+                    collection
+                        .fields
+                        .into_iter()
+                        .map(|field| field.name)
+                        .collect(),
+                )
+            })
+            .collect()
+    })
+}
 
 /// The dossier of `agent` (or the pack's only agent) of the directory
 /// pack at `pack_dir`.
@@ -451,6 +478,24 @@ mod tests {
     use serde_json::{json, Value};
 
     use super::*;
+
+    #[test]
+    fn runtime_capture_catalog_contains_every_noncredential_canonical_collection() {
+        assert_eq!(
+            runtime_collections()
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            gents_protocol::schemas::ALL_COLLECTION_NAMES
+                .iter()
+                .copied()
+                .filter(|name| !gents_protocol::schemas::is_credential_collection(name))
+                .collect()
+        );
+        assert!(runtime_collections()
+            .values()
+            .all(|fields| !fields.is_empty()));
+    }
 
     fn canary_dir() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR"))
