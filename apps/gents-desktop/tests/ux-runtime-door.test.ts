@@ -10,7 +10,11 @@ const call = vi.fn();
 import { isUxPluginLive } from "@/contrib/activate";
 import { retireRuntimeUxPlugin } from "@/contrib/loader";
 import { installUxHost, type UxHost } from "@/contrib/plugin";
-import { resetUxPluginStore, uxPluginRecords } from "@/contrib/plugins-store";
+import {
+  resetUxPluginStore,
+  setUxPluginEnabled,
+  uxPluginRecords,
+} from "@/contrib/plugins-store";
 import { registry } from "@/contrib/registry";
 import {
   configureUxDoors,
@@ -21,6 +25,7 @@ import {
 } from "@/contrib/runtime-door";
 import { SESSION_HEADER_ACTIONS_AREA } from "@/contrib/types";
 import { resetSdkImportMap } from "@/sdk/runtime";
+import { installInProcessSandbox, uninstallInProcessSandbox } from "./sandbox-fixture";
 
 const host: UxHost = {
   shell: {
@@ -38,17 +43,6 @@ const host: UxHost = {
   },
 };
 
-/* the loader's blob import, rerouted to a data: URL as ux-loader.test does */
-const RealBlob = globalThis.Blob;
-const realCreate = URL.createObjectURL;
-const realRevoke = URL.revokeObjectURL;
-class FakeBlob {
-  parts: string[];
-  constructor(parts: string[]) {
-    this.parts = parts;
-  }
-}
-
 const clock = (id: string): UxPluginListing => ({
   id,
   door: "dev",
@@ -59,7 +53,7 @@ const clock = (id: string): UxPluginListing => ({
 const chipPlugin = (id: string) =>
   `import { SESSION_HEADER_ACTIONS_AREA } from '@gents/ux-sdk'
 export default { id: '${id}', register(ctx) {
-  ctx.register({ id: 'chip', area: SESSION_HEADER_ACTIONS_AREA, render: () => null }) } }`;
+  ctx.register({ id: 'chip', area: SESSION_HEADER_ACTIONS_AREA, data: { label: 'chip' } }) } }`;
 
 /* the faked bridge: a listing and a source per id, each replaceable */
 let listings: UxPluginListing[] = [];
@@ -72,10 +66,7 @@ beforeEach(() => {
   resetRuntimeDoor();
   resetSdkImportMap();
   vi.spyOn(console, "error").mockImplementation(() => {});
-  vi.stubGlobal("Blob", FakeBlob);
-  URL.createObjectURL = (blob: unknown) =>
-    `data:text/javascript;base64,${Buffer.from((blob as FakeBlob).parts.join("")).toString("base64")}`;
-  URL.revokeObjectURL = () => undefined;
+  installInProcessSandbox();
   listings = [];
   sources.clear();
   listGate = Promise.resolve();
@@ -100,14 +91,79 @@ afterEach(() => {
   resetUxPluginStore();
   resetRuntimeDoor();
   resetSdkImportMap();
-  vi.stubGlobal("Blob", RealBlob);
-  URL.createObjectURL = realCreate;
-  URL.revokeObjectURL = realRevoke;
-  vi.unstubAllGlobals();
+  uninstallInProcessSandbox();
   vi.restoreAllMocks();
 });
 
 const chips = () => registry.getArea(SESSION_HEADER_ACTIONS_AREA).map((c) => c.id);
+
+const packed = (name: string, defaultEnabled: boolean | null): UxPluginListing => ({
+  id: `acme/tools/${name}`,
+  door: "pack",
+  producer: "afb",
+  file: `/home/packs/acme/tools/plugins/${name}_ui.afb`,
+  pack: "acme/tools",
+  description: `${name} from a pack`,
+  contributes: { areas: [SESSION_HEADER_ACTIONS_AREA], directives: [] },
+  defaultEnabled,
+});
+const reads = () =>
+  call.mock.calls.filter(([command]) => command === "desktop_ux_plugin_source");
+
+describe("discovery runs nothing that is off", () => {
+  it("lists a pack plugin that ships off from its manifest alone, and loads it on the switch", async () => {
+    listings = [packed("widget", false)];
+    sources.set("acme/tools/widget", chipPlugin("widget"));
+    await scanRuntimeUxPlugins();
+    /* the row is there, built from the listing: producer not run, module not read */
+    expect(reads()).toHaveLength(0);
+    expect(uxPluginRecords().widget).toMatchObject({
+      status: "disabled",
+      door: "pack",
+      producer: "afb",
+      pack: "acme/tools",
+      description: "widget from a pack",
+    });
+    expect(chips()).toEqual([]);
+    /* a Reload re-reads the listing, still without the module */
+    await reloadRuntimeUxPlugins();
+    expect(reads()).toHaveLength(0);
+
+    await setUxPluginEnabled("widget", true);
+    expect(reads()).toHaveLength(1);
+    expect(uxPluginRecords().widget?.status).toBe("loaded");
+    expect(chips()).toEqual(["widget:chip"]);
+
+    /* off again: registrations go; the module is not read again to turn it off */
+    await setUxPluginEnabled("widget", false);
+    expect(uxPluginRecords().widget?.status).toBe("disabled");
+    expect(chips()).toEqual([]);
+    expect(reads()).toHaveLength(1);
+  });
+
+  it("honours a saved decision before any source is read, for a dev plugin too", async () => {
+    await setUxPluginEnabled("clock", false);
+    listings = [clock("clock")];
+    sources.set("clock", chipPlugin("clock"));
+    await scanRuntimeUxPlugins();
+    expect(reads()).toHaveLength(0);
+    expect(uxPluginRecords().clock?.status).toBe("disabled");
+    await setUxPluginEnabled("clock", true);
+    expect(reads()).toHaveLength(1);
+    expect(chips()).toEqual(["clock:chip"]);
+  });
+
+  it("refuses a module whose id is not the one its listing declares", async () => {
+    listings = [packed("widget", true)];
+    sources.set("acme/tools/widget", chipPlugin("gadget"));
+    await scanRuntimeUxPlugins();
+    const row = uxPluginRecords()["acme/tools/widget"];
+    expect(row?.status).toBe("error");
+    expect(row?.error).toContain('id "gadget"');
+    expect(row?.error).toContain('declares "widget"');
+    expect(chips()).toEqual([]);
+  });
+});
 
 describe("the runtime door", () => {
   it("keeps a broken dev plugin on its row, registrations gone, and loads it again once fixed", async () => {

@@ -54,13 +54,34 @@ export interface UxShell {
 /** the app installs these once; a plugin reaches them only through ctx.
     No raw bridge verb: a plugin reaches the runtime through these names
     alone, so what a plugin may do is what this interface lists. */
+/** one data call's answer, as the bridge gives it */
+export interface UxDataCallResult {
+  kind: "query" | "create";
+  output: unknown;
+}
+
 export interface UxHost {
   shell: UxShell;
   /** run a pack's .afb plugin `name`, keyed by the runtime listing
       (`<ns>/<pack>/<name>`) of the UX plugin calling; the bridge resolves
       the pack from the listing. Absent where no runtime is reachable. */
   plugin?: (listing: string, name: string, input: unknown) => Promise<unknown>;
+  /** the data door: a declared tool of a declared surface, on the selected
+      node, under the calling plugin's listing; the bridge checks all three */
+  data?: {
+    call: (
+      listing: string,
+      nodeDid: string,
+      surface: string,
+      tool: string,
+      args: Record<string, unknown>,
+    ) => Promise<UxDataCallResult>;
+    surfaces: (listing: string, nodeDid: string) => Promise<unknown[]>;
+  };
   os: UxOs;
+  /** a change of the route, the selection or the fleet: what a frame's
+      mirror of the shell follows */
+  onShellChange?: (listener: () => void) => () => void;
 }
 
 export interface UxContext {
@@ -92,6 +113,15 @@ export interface UxContext {
   shell: UxShell;
   storage: UxStorage;
   os: UxOs;
+  /** the data door, scoped to this plugin's listing and the selected node */
+  data: {
+    call: (
+      surface: string,
+      tool: string,
+      args?: Record<string, unknown>,
+    ) => Promise<UxDataCallResult>;
+    surfaces: () => Promise<unknown[]>;
+  };
 }
 
 export interface GentsUxPlugin {
@@ -304,27 +334,36 @@ export function createUxContext(
     get os() {
       return host().os;
     },
+    data: {
+      call: (surface, tool, args) => {
+        const h = host();
+        const node = h.shell.selectedDeployment();
+        if (!options.listing || !h.data) {
+          return Promise.reject(
+            new Error(`${pluginId}: ctx.data needs a pack; this plugin ships in none`),
+          );
+        }
+        if (!node) return Promise.reject(new Error(`${pluginId}: no node is selected`));
+        return h.data.call(options.listing, node.nodeDid, surface, tool, args ?? {});
+      },
+      surfaces: () => {
+        const h = host();
+        const node = h.shell.selectedDeployment();
+        if (!options.listing || !h.data) {
+          return Promise.reject(
+            new Error(`${pluginId}: ctx.data needs a pack; this plugin ships in none`),
+          );
+        }
+        if (!node) return Promise.reject(new Error(`${pluginId}: no node is selected`));
+        return h.data.surfaces(options.listing, node.nodeDid);
+      },
+    },
   };
 }
 
-/** a plugin id: a snake_case name, the rule a pack and a dev folder follow
-    (`is_valid_pack_name` in Rust). It prefixes storage keys, contribution
-    ids and routes, so no `.`, `:`, `/` or whitespace. */
-export const UX_PLUGIN_ID_RE = /^[a-z][a-z0-9_]{0,63}$/;
-
-export function isValidUxPluginId(id: unknown): id is string {
-  return typeof id === "string" && UX_PLUGIN_ID_RE.test(id);
-}
+export { UX_PLUGIN_ID_RE, isValidUxPluginId } from "@/sandbox/contract";
 
 /** a contribution's local id: one segment, legal in a route */
 const CONTRIBUTION_ID_RE = /^[^\s/?#:]{1,128}$/;
 
-/** what every loader checks before trusting a module's default export */
-export function isGentsUxPlugin(value: unknown): value is GentsUxPlugin {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    isValidUxPluginId((value as { id?: unknown }).id) &&
-    typeof (value as { register?: unknown }).register === "function"
-  );
-}
+export { isGentsUxPlugin } from "@/sandbox/contract";

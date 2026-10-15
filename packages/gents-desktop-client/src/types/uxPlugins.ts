@@ -33,3 +33,23 @@ export interface PackPluginCallRequest {
   name: string;
   input?: unknown;
 }
+
+/** one data call a plugin's page makes: a declared tool of a declared
+    surface on a node, under the calling plugin's listing */
+export interface UxDataCallRequest {
+  ux: string;
+  nodeDid: string;
+  surface: string;
+  tool: string;
+  args?: Record<string, unknown>;
+}
+
+export interface UxDataCallResult {
+  kind: "query" | "create";
+  output: unknown;
+}
+
+export interface UxDataSurfacesRequest {
+  ux: string;
+  nodeDid: string;
+}

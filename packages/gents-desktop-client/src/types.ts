@@ -166,6 +166,9 @@ export type {
 } from "./types/hostAccess.js";
 export type {
   PackPluginCallRequest,
+  UxDataCallRequest,
+  UxDataCallResult,
+  UxDataSurfacesRequest,
   UxDeclaredContributions,
   UxPluginListing,
   UxPluginSource,

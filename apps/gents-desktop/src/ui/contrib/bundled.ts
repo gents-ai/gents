@@ -1,32 +1,39 @@
-/* The bundled door: every `src/ui/ux-plugins/<name>/plugin.{ts,tsx}` that
-   default-exports a GentsUxPlugin registers at boot through the Vite glob.
-   Drop a folder in; no import, no registry edit. Same inventory and
-   live-toggle contract as runtime plugins. One-shot: the glob is eager, and
-   discovery must not re-run on HMR. After hermes-agent's contrib/plugins.ts. */
-import { activateUxPlugin } from "./activate";
-import { isGentsUxPlugin } from "./plugin";
+/* The bundled door: every `src/ui/ux-plugins/<name>/plugin.js` ships in
+   the app as source and loads at boot through the same frame pipeline as
+   a runtime plugin, under the folder's name as its id. Drop a folder in;
+   no import, no registry edit. Same inventory and live-toggle contract as
+   runtime plugins. One-shot: the glob is eager, and discovery must not
+   re-run on HMR. */
+import { loadRuntimeUxPlugin } from "./loader";
 
-const modules = import.meta.glob<{ default: unknown }>(
-  "../ux-plugins/*/plugin.{ts,tsx}",
-  {
-    eager: true,
-  },
-);
+const sources = import.meta.glob<string>("../ux-plugins/*/plugin.js", {
+  query: "?raw",
+  import: "default",
+  eager: true,
+});
+
+const styles = import.meta.glob<string>("../ux-plugins/*/plugin.css", {
+  query: "?raw",
+  import: "default",
+  eager: true,
+});
+
+const nameOf = (path: string) =>
+  /\/ux-plugins\/([^/]+)\/plugin\.js$/.exec(path)?.[1] ?? null;
 
 let discovered = false;
 
 export function discoverBundledUxPlugins(): void {
   if (discovered) return;
   discovered = true;
-  for (const [path, mod] of Object.entries(modules)) {
-    const plugin = mod.default;
-    if (!isGentsUxPlugin(plugin)) {
-      console.warn(
-        `[ux-plugins] ${path} has no valid default GentsUxPlugin export; skipped`,
-      );
-      continue;
-    }
-    activateUxPlugin(plugin, { door: "bundled" });
+  for (const [path, source] of Object.entries(sources)) {
+    const name = nameOf(path);
+    if (!name) continue;
+    const css = styles[path.replace(/plugin\.js$/, "plugin.css")] ?? null;
+    void loadRuntimeUxPlugin(
+      { source, css },
+      { origin: name, expectId: name, door: "bundled", file: path },
+    );
   }
 }
 

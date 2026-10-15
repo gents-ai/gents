@@ -5,6 +5,8 @@ import type {
   PackInstallRequest,
   PluginApprovalDecision,
   PackPluginCallRequest,
+  UxDataCallRequest,
+  UxDataSurfacesRequest,
 } from "@source-inc/gents-desktop-client";
 
 import { openInBrowser } from "../lib/externalLinks";
@@ -39,6 +41,9 @@ export function createHostActions({ api }: { api: DesktopApiAdapter }) {
     listUxPlugins: () => api.listUxPlugins(),
     readUxPluginSource: (id: string) => api.readUxPluginSource(id),
     callPackPlugin: (request: PackPluginCallRequest) => api.callPackPlugin(request),
+    callUxData: (request: UxDataCallRequest) => api.callUxData(request),
+    listUxDataSurfaces: (request: UxDataSurfacesRequest) =>
+      api.listUxDataSurfaces(request),
     /** Opens a URL in the person's browser: through the bridge in the shell,
         so the browser starts without the shell's environment, else the way
         a page would. */

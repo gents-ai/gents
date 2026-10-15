@@ -156,6 +156,7 @@ describe("ux plugin context", () => {
     expect(Object.keys(ctx).sort()).toEqual(
       [
         "addEventListener",
+        "data",
         "onDispose",
         "onEvent",
         "os",

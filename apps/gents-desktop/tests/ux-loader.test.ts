@@ -18,6 +18,11 @@ import {
 import { registry } from "@/contrib/registry";
 import { SESSION_HEADER_ACTIONS_AREA } from "@/contrib/types";
 import { resetSdkImportMap } from "@/sdk/runtime";
+import {
+  installInProcessSandbox,
+  settle,
+  uninstallInProcessSandbox,
+} from "./sandbox-fixture";
 
 const ALLOWED = ["@gents/ux-sdk", "react", "react/jsx-runtime"];
 
@@ -37,32 +42,18 @@ const host: UxHost = {
   },
 };
 
-/* the loader evaluates a plugin through a blob-URL import(), which the test
-   module runner cannot resolve; reroute to a data: URL node's native ESM
-   loader handles (the same shape hermes-agent's loader tests use). The SDK
-   shims take the same path, so a plugin's `@gents/ux-sdk` import resolves
-   to the live namespace end to end. */
-const RealBlob = globalThis.Blob;
-class FakeBlob {
-  parts: string[];
-  constructor(parts: string[]) {
-    this.parts = parts;
-  }
-}
-
+/* every plugin runs in its frame; under test the frame is in-process over
+   the real protocol (see sandbox-fixture) */
 beforeEach(() => {
   installUxHost(host);
   resetUxPluginStore();
   resetSdkImportMap();
+  installInProcessSandbox();
   vi.spyOn(console, "error").mockImplementation(() => {});
-  vi.stubGlobal("Blob", FakeBlob);
-  URL.createObjectURL = (blob: unknown) =>
-    `data:text/javascript;base64,${Buffer.from((blob as FakeBlob).parts.join("")).toString("base64")}`;
-  URL.revokeObjectURL = () => undefined;
 });
 afterEach(() => {
   for (const id of Object.keys(uxPluginRecords())) retireRuntimeUxPlugin(id);
-  vi.stubGlobal("Blob", RealBlob);
+  uninstallInProcessSandbox();
   vi.restoreAllMocks();
 });
 

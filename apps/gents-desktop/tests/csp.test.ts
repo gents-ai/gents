@@ -32,7 +32,8 @@ describe("the webview CSP", () => {
     expect(prod["script-src"]).toEqual(["'self'", "blob:"]);
     expect(prod["default-src"]).toEqual(["'self'"]);
     expect(prod["object-src"]).toEqual(["'none'"]);
-    expect(prod["frame-src"]).toEqual(["'none'"]);
+    /* the plugin frames load the sandbox document from 'self' and nothing else */
+    expect(prod["frame-src"]).toEqual(["'self'"]);
     expect(prod["base-uri"]).toEqual(["'self'"]);
   });
 
@@ -66,5 +67,37 @@ describe("the webview CSP", () => {
       if (name === "script-src" || name === "connect-src") continue;
       expect(dev[name], name).toEqual(prod[name]);
     }
+  });
+});
+
+describe("the sandbox document", () => {
+  const html = readFileSync(join(__dirname, "../ux-sandbox.html"), "utf8");
+  const meta = /http-equiv="Content-Security-Policy"\s+content="([^"]+)"/.exec(
+    html,
+  )?.[1];
+  const policy = Object.fromEntries(
+    (meta ?? "")
+      .split(";")
+      .map((d) => d.trim())
+      .filter(Boolean)
+      .map((d) => {
+        const [name, ...sources] = d.split(/\s+/);
+        return [name, sources];
+      }),
+  ) as Record<string, string[]>;
+
+  it("carries a policy of its own that reaches no network and no frame", () => {
+    expect(meta).toBeTruthy();
+    expect(policy["default-src"]).toEqual(["'none'"]);
+    expect(policy["script-src"]).toEqual(["'self'", "blob:"]);
+    expect(policy["connect-src"]).toEqual(["'none'"]);
+    expect(policy["frame-src"]).toEqual(["'none'"]);
+    expect(policy["form-action"]).toEqual(["'none'"]);
+  });
+
+  it("is a module page the shell serves itself", () => {
+    expect(html).toContain('src="/src/ui/sandbox/main.tsx"');
+    const vite = readFileSync(join(__dirname, "../vite.config.ts"), "utf8");
+    expect(vite).toContain("ux-sandbox.html");
   });
 });

@@ -61,13 +61,46 @@ export const KNOWN_AREAS = [
 export type KnownArea = (typeof KNOWN_AREAS)[number];
 
 /** payload of an `agent.sections` contribution's `data`: a tab plus the page
-    it renders for the route's agent and item */
+    it renders for the route's node and item. A plugin names its icon (see
+    ./icons.ts); the app's own sections pass a node. */
 export interface AgentSectionData {
   /** the sidebar group the tab sits under ("Configure", "Packs", ...) */
   group: string;
   label: string;
-  icon?: ReactNode;
+  icon?: ReactNode | string | null;
   render: (props: AgentSectionProps) => ReactNode;
+}
+
+/** payload of a plugin's `nav` contribution: a row the rail and the nav
+    panel draw. `to` is a route, or an agent section of the selected node
+    (`{ name: "agent", section }` without a node); the row hides while
+    there is no node to point at. `active` is derived from `to`. */
+export interface NavRowData {
+  id: string;
+  label: string;
+  icon?: string | null;
+  to: unknown;
+  placement?: "primary" | "footer";
+  order?: number;
+}
+
+/** payload of a plugin's `session.header.actions` contribution: a button
+    in the session's pane bar; the click reaches the plugin's frame */
+export interface HeaderActionData {
+  label: string;
+  icon?: string | null;
+  title?: string;
+  onClick?: () => void;
+}
+
+/** payload of a plugin's `transcript.directives` contribution: a chip for
+    `::name{...}` in the model's reply. `label` may name attributes as
+    `{attr}`; the click gets the attributes. */
+export interface DirectiveChipData {
+  name: string;
+  label: string;
+  icon?: string | null;
+  onClick?: (attrs: Readonly<Record<string, string>>) => void;
 }
 
 /** props an `agent.sections` page receives */

@@ -48,10 +48,11 @@ export function isUxPluginLive(id: string): boolean {
   return live.has(id);
 }
 
+/** publishes the row; resolves once the first activation, if any, settled */
 export function activateUxPlugin(
   plugin: GentsUxPlugin,
   options: ActivateOptions,
-): void {
+): Promise<void> {
   const record = {
     id: plugin.id,
     name: plugin.name ?? plugin.id,
@@ -73,7 +74,7 @@ export function activateUxPlugin(
     });
   };
 
-  const activate = () => {
+  const activate = (): Promise<void> => {
     unloadUxPlugin(plugin.id);
     const disposers: (() => void)[] = [];
     live.set(plugin.id, disposers);
@@ -94,16 +95,20 @@ export function activateUxPlugin(
       );
     } catch (error) {
       fail(error);
-      return;
+      return Promise.resolve();
     }
     publishUxPlugin({ ...record, status: "loaded" });
-    /* an async register that rejects would otherwise be an unhandled
-       rejection beside a row that says loaded */
+    /* an async register (a frame's round trip) settles the row when it
+       settles: a rejection lands on the row, never as an unhandled one */
     if (result && typeof (result as PromiseLike<unknown>).then === "function") {
-      void Promise.resolve(result).catch((error: unknown) => {
-        if (live.get(plugin.id) === disposers) fail(error);
-      });
+      return Promise.resolve(result).then(
+        () => undefined,
+        (error: unknown) => {
+          if (live.get(plugin.id) === disposers) fail(error);
+        },
+      );
     }
+    return Promise.resolve();
   };
 
   const deactivate = () => {
@@ -112,13 +117,13 @@ export function activateUxPlugin(
   };
 
   publishUxPlugin({ ...record, status: "disabled" }, { activate, deactivate });
-
   if (
     uxPluginActive(
       plugin.id,
       (plugin.defaultEnabled ?? true) && (options.defaultEnabled ?? true),
     )
   ) {
-    activate();
+    return activate();
   }
+  return Promise.resolve();
 }

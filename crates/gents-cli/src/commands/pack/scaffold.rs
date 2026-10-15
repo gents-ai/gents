@@ -256,19 +256,23 @@ pub(crate) fn scaffold(dir: &Path, name: &str, args: &PackScaffoldArgs) -> Resul
 }
 
 /// The scaffolded UX plugin: a plain ESM file (no build) that lands a nav
-/// row, an agent section page and a transcript directive, each in the
-/// smallest shape that works. Returns its pack-relative path and source.
+/// row, the plugin's own page and a transcript directive, each in the
+/// smallest shape that works: the row and the chip are data the shell
+/// draws, the page renders in the plugin's frame. Returns its
+/// pack-relative path and source.
 fn ux_plugin_source(names: &Names) -> (String, String) {
     let path = format!("ux/{}/plugin.js", names.name);
     let directive = names.name.replace('_', "-");
     let source = format!(
-        r#"// {title}: a UX plugin the desktop loads from this pack. Plain ESM, no
-// build step; only `@gents/ux-sdk`, `react` and `react/jsx-runtime` may be
-// imported. Everything it does goes through `ctx`, so disabling the plugin
-// undoes all of it. Run `gents pack check` to lint, `gents ux module` to
-// see what the desktop receives.
+        r#"// {title}: a UX plugin the desktop loads from this pack into a frame of
+// its own. Plain ESM, no build step; only `@gents/ux-sdk`, `react` and
+// `react/jsx-runtime` may be imported. Everything it does goes through
+// `ctx`, so disabling the plugin undoes all of it. Run `gents pack check`
+// to lint, `gents ux module` to see what the desktop receives. To read and
+// write the node's documents, declare a surface under `ux[].data` in the
+// manifest and use `useQuery` / `useWrite` from the SDK.
 import {{ NAV_AREA, PLUGIN_PAGE_AREA, TRANSCRIPT_DIRECTIVE_AREA, Group, Row }} from '@gents/ux-sdk'
-import {{ jsx, jsxs }} from 'react/jsx-runtime'
+import {{ jsx }} from 'react/jsx-runtime'
 
 /* the plugin's own page, where its nav row goes; a configuration page
    would be an AGENT_SECTIONS_AREA contribution instead */
@@ -278,11 +282,6 @@ function Page() {{
       jsx('code', {{ className: 'font-mono text-xs', children: '/plugins/{name}' }}) }}) }})
 }}
 
-function Card({{ attrs }}) {{
-  return jsxs('span', {{ className: 'rounded border border-border px-2 py-0.5 text-xs',
-    children: ['{title}: ', attrs.id ?? '(no id)'] }})
-}}
-
 export default {{
   id: '{name}',
   name: '{title}',
@@ -290,13 +289,15 @@ export default {{
   register(ctx) {{
     ctx.registerMany([
       {{ id: 'nav', area: NAV_AREA, order: 80, data: {{
-        id: '{name}:nav', label: '{title}', icon: null,
+        id: '{name}:nav', label: '{title}', icon: 'puzzle',
         to: {{ name: 'plugin', pluginId: '{name}' }},
-        active: (route) => route.name === 'plugin' && route.pluginId === '{name}',
         placement: 'footer', order: 80 }} }},
       {{ id: 'page', area: PLUGIN_PAGE_AREA, render: () => jsx(Page, {{}}) }},
+      /* the ::{directive}{{id="..."}} chip the model can write; the shell draws
+         the label from the attributes, the click lands here */
       {{ id: 'directive', area: TRANSCRIPT_DIRECTIVE_AREA, data: {{
-        name: '{directive}', render: ({{ attrs }}) => jsx(Card, {{ attrs }}) }} }},
+        name: '{directive}', label: '{title}: {{id}}',
+        onClick: () => ctx.shell.navigate({{ name: 'plugin', pluginId: '{name}' }}) }} }},
     ])
   }},
 }}

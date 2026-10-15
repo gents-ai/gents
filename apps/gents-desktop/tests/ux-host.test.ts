@@ -143,7 +143,15 @@ describe("buildUxHost: bridge verbs", () => {
   it("exposes no raw bridge verb", () => {
     const host = buildUxHost(testApp(), route);
     expect("bridge" in host).toBe(false);
-    expect(Object.keys(host).sort()).toEqual(["os", "plugin", "shell"]);
+    /* data: the declared-surface door; onShellChange: the host's route
+       feed for the frames, never a plugin-facing verb */
+    expect(Object.keys(host).sort()).toEqual([
+      "data",
+      "onShellChange",
+      "os",
+      "plugin",
+      "shell",
+    ]);
   });
 });
 

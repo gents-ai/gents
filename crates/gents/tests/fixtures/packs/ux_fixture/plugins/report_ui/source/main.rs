@@ -8,8 +8,8 @@ use std::io::{Read, Write};
 const MODULE: &str = r#"import { AGENT_SECTIONS_AREA, TRANSCRIPT_DIRECTIVE_AREA } from '@gents/ux-sdk'
 import { jsx } from 'react/jsx-runtime'
 
-function Page({ agentDid }) {
-  return jsx('p', { className: 'ux-fixture-report', children: `report for ${agentDid}` })
+function Page({ nodeDid }) {
+  return jsx('p', { className: 'ux-fixture-report', children: `report for ${nodeDid}` })
 }
 
 export default {
@@ -19,7 +19,7 @@ export default {
   register(ctx) {
     ctx.registerMany([
       { id: 'page', area: AGENT_SECTIONS_AREA, data: { group: 'Packs', label: 'Report', render: (props) => jsx(Page, props) } },
-      { id: 'directive', area: TRANSCRIPT_DIRECTIVE_AREA, data: { name: 'report', render: ({ attrs }) => jsx('b', { children: attrs.id ?? '?' }) } },
+      { id: 'directive', area: TRANSCRIPT_DIRECTIVE_AREA, data: { name: 'report', label: 'Report {id}' } },
     ])
   }
 }

@@ -5,7 +5,7 @@
    same path). Rust owns the scan; this owns the lifecycle. */
 import type { UxPluginListing, UxPluginSource } from "@source-inc/gents-desktop-client";
 import { loadRuntimeUxPlugin, retireRuntimeUxPlugin } from "./loader";
-import { publishUxPlugin, uxPluginRecords } from "./plugins-store";
+import { publishUxPlugin, uxPluginActive, uxPluginRecords } from "./plugins-store";
 
 /* the listing and the source as the client's adapter types them; the door
    narrows nothing further */
@@ -53,6 +53,44 @@ function publishUnreadable(entry: UxPluginListing, error: unknown): void {
   });
 }
 
+/** The plugin id a listing declares: the manifest's `name` for a pack
+    plugin (`<ns>/<pack>/<name>`), the folder name for a dev one. Decisions
+    are keyed on it, so enablement is known before any source is read, and
+    the module's own `id` must agree. */
+export function declaredPluginId(entry: UxPluginListing): string {
+  return entry.door === "pack"
+    ? entry.id.slice(entry.id.lastIndexOf("/") + 1)
+    : entry.id;
+}
+
+function enabledByListing(entry: UxPluginListing): boolean {
+  return uxPluginActive(declaredPluginId(entry), entry.defaultEnabled ?? true);
+}
+
+/* the inventory row of a plugin that is off: built from the listing alone,
+   its producer never run and its module never evaluated; the switch loads it */
+function publishListed(entry: UxPluginListing): void {
+  const id = declaredPluginId(entry);
+  publishUxPlugin(
+    {
+      id,
+      name: id,
+      description: entry.description ?? undefined,
+      door: entry.door,
+      file: entry.file,
+      producer: entry.producer,
+      pack: entry.pack ?? undefined,
+      declared: entry.contributes ?? undefined,
+      status: "disabled",
+    },
+    {
+      activate: () => loadListing(entry),
+      deactivate: () => undefined,
+    },
+  );
+  known.set(entry.id, id);
+}
+
 async function loadListing(entry: UxPluginListing): Promise<void> {
   const previous = known.get(entry.id) ?? null;
   let module: UxPluginSource | null = null;
@@ -76,6 +114,7 @@ async function loadListing(entry: UxPluginListing): Promise<void> {
     { source: module.source, css: module.css },
     {
       origin: entry.id,
+      expectId: declaredPluginId(entry),
       door: entry.door,
       file: entry.file,
       producer: entry.producer,
@@ -102,6 +141,13 @@ async function reconcile(reloadKnown: boolean): Promise<void> {
   for (const entry of listings.sort((a, b) => a.id.localeCompare(b.id))) {
     seen.add(entry.id);
     if (known.get(entry.id) && !reloadKnown) continue;
+    if (!enabledByListing(entry)) {
+      /* off: the row says so from the manifest; nothing of it runs */
+      const previous = known.get(entry.id) ?? null;
+      if (previous) retireRuntimeUxPlugin(previous);
+      publishListed(entry);
+      continue;
+    }
     await loadListing(entry);
   }
   for (const [id, loaded] of known) {

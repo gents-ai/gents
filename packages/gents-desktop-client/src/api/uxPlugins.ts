@@ -1,5 +1,8 @@
 import type {
   PackPluginCallRequest,
+  UxDataCallRequest,
+  UxDataCallResult,
+  UxDataSurfacesRequest,
   UxPluginListing,
   UxPluginSource,
 } from "../types/uxPlugins.js";
@@ -19,5 +22,11 @@ export function createUxPluginCommands(
       invokeDesktop<UxPluginSource>("desktop_ux_plugin_source", { id }),
     callPackPlugin: (request: PackPluginCallRequest) =>
       invokeDesktop<{ output: unknown }>("desktop_plugin_call", { request }),
+    callUxData: (request: UxDataCallRequest) =>
+      invokeDesktop<UxDataCallResult>("desktop_ux_data_call", { request }),
+    listUxDataSurfaces: (request: UxDataSurfacesRequest) =>
+      invokeDesktop<{ surfaces: unknown[] }>("desktop_ux_data_surfaces", {
+        request,
+      }),
   };
 }

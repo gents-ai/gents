@@ -90,6 +90,9 @@ import type {
 } from "../types/hostAccess.js";
 import type {
   PackPluginCallRequest,
+  UxDataCallRequest,
+  UxDataCallResult,
+  UxDataSurfacesRequest,
   UxPluginListing,
   UxPluginSource,
 } from "../types/uxPlugins.js";
@@ -403,6 +406,10 @@ export type DesktopApiAdapter = {
   callPackPlugin: (
     request: PackPluginCallRequest,
   ) => Promise<{ output: unknown }>;
+  callUxData: (request: UxDataCallRequest) => Promise<UxDataCallResult>;
+  listUxDataSurfaces: (
+    request: UxDataSurfacesRequest,
+  ) => Promise<{ surfaces: unknown[] }>;
 };
 
 export type PackCommand =
@@ -425,7 +432,11 @@ export type HostAccessCommand =
   | "decidePluginApproval";
 
 export type UxPluginCommand =
-  "listUxPlugins" | "readUxPluginSource" | "callPackPlugin";
+  | "listUxPlugins"
+  | "readUxPluginSource"
+  | "callPackPlugin"
+  | "callUxData"
+  | "listUxDataSurfaces";
 
 export type {
   HomeResetDisposition,

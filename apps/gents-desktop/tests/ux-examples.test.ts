@@ -1,7 +1,8 @@
 /* Every example plugin and the fixture pack's file-produced plugin load
-   through the real runtime pipeline: allowlist, SDK shims, blob import,
-   register(ctx). A regression in the SDK's export list or in an example
-   shows up here, not in a user's home. */
+   through the real runtime pipeline: allowlist, a frame of its own (in
+   process here, over the real protocol), SDK shims, register(ctx). A
+   regression in the SDK's export list or in an example shows up here, not
+   in a user's home. */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -26,6 +27,15 @@ import {
   TRANSCRIPT_DIRECTIVE_AREA,
 } from "@/contrib/types";
 import { ALLOWED_SPECIFIERS, resetSdkImportMap } from "@/sdk/runtime";
+import { fireEvent, render } from "@testing-library/react";
+import { createElement, Fragment } from "react";
+
+import {
+  frameMount,
+  installInProcessSandbox,
+  settle,
+  uninstallInProcessSandbox,
+} from "./sandbox-fixture";
 
 const repo = (rel: string) => join(__dirname, "../../..", rel);
 const read = (rel: string) => readFileSync(repo(rel), "utf8");
@@ -54,33 +64,15 @@ const host: UxHost = {
   },
 };
 
-const RealBlob = globalThis.Blob;
-class FakeBlob {
-  parts: string[];
-  constructor(parts: string[]) {
-    this.parts = parts;
-  }
-}
-
 beforeEach(() => {
   installUxHost(host);
   resetUxPluginStore();
   resetSdkImportMap();
-  vi.stubGlobal("Blob", FakeBlob);
-  const store = new Map<string, string>();
-  vi.stubGlobal("localStorage", {
-    getItem: (key: string) => store.get(key) ?? null,
-    setItem: (key: string, value: string) => store.set(key, value),
-    removeItem: (key: string) => store.delete(key),
-  });
-  URL.createObjectURL = (blob: unknown) =>
-    `data:text/javascript;base64,${Buffer.from((blob as FakeBlob).parts.join("")).toString("base64")}`;
-  URL.revokeObjectURL = () => undefined;
+  installInProcessSandbox();
 });
 afterEach(() => {
   for (const id of Object.keys(uxPluginRecords())) retireRuntimeUxPlugin(id);
-  vi.stubGlobal("Blob", RealBlob);
-  vi.unstubAllGlobals();
+  uninstallInProcessSandbox();
   vi.restoreAllMocks();
 });
 
@@ -175,7 +167,8 @@ describe("example plugins", () => {
     expect(uxPluginRecords().board?.status).toBe("loaded");
     /* the nav row opens the plugin's own page, never the agent's configuration */
     const nav = registry.getArea(NAV_AREA).find((c) => c.id === "board:nav");
-    expect((nav?.data as { to: unknown }).to).toEqual({
+    const to = (nav?.data as { to: (ctx: unknown) => unknown }).to;
+    expect(to({ mailboxCount: 0, selectedNodeDid: null })).toEqual({
       name: "plugin",
       pluginId: "board",
     });
@@ -202,6 +195,146 @@ describe("example plugins", () => {
     expect(uxPluginRecords().board?.status).toBe("error");
     expect(uxPluginRecords().board?.error).toMatch(/does not declare/);
     expect(registry.getArea(NAV_AREA).some((c) => c.id === "board:nav")).toBe(false);
+  });
+
+  it("board reads and writes only through the surface and tools its manifest declares", async () => {
+    /* the pack's own declaration is what the host enforces */
+    const manifest = JSON.parse(
+      read("examples/ux-plugins/board_pack/manifest.json"),
+    ) as {
+      kind: string;
+      ux: Array<{ name: string; data: Array<{ surface: string; tools: string[] }> }>;
+    };
+    expect(manifest.kind).toBe("assets");
+    expect(manifest.ux[0]?.data).toEqual([
+      {
+        surface: "board",
+        tools: ["list_tasks", "list_moves", "add_task", "move_task"],
+      },
+    ]);
+    /* and the documents pack installs exactly those four tools on one surface */
+    const docs = JSON.parse(
+      read("examples/ux-plugins/board_docs/pack_config.json"),
+    ) as {
+      datastore_tool_surfaces: Array<{
+        surface_id: string;
+        entries: Array<{ tool_name: string; kind?: string; fields: unknown }>;
+      }>;
+    };
+    expect(docs.datastore_tool_surfaces.map((s) => s.surface_id)).toEqual(["board"]);
+    expect(
+      docs.datastore_tool_surfaces[0]!.entries.map((e) => [
+        e.tool_name,
+        e.kind ?? "create",
+      ]),
+    ).toEqual([
+      ["list_tasks", "query"],
+      ["list_moves", "query"],
+      ["add_task", "create"],
+      ["move_task", "create"],
+    ]);
+
+    /* the page: two live queries on mount, a create on Add, both under the
+       plugin's listing and the selected node, and the fold of moves over
+       tasks the lanes draw */
+    const calls: Array<[string, string, string, string, unknown]> = [];
+    const tasks = [
+      {
+        task_id: "t1",
+        title: "write the guide",
+        lane: "triage",
+        created_at: "2026-10-01T00:00:00Z",
+      },
+      {
+        task_id: "t2",
+        title: "ship it",
+        lane: "triage",
+        created_at: "2026-10-02T00:00:00Z",
+      },
+      {
+        task_id: "t3",
+        title: "old one",
+        lane: "done",
+        created_at: "2026-09-01T00:00:00Z",
+      },
+    ];
+    const moves = [
+      { task_id: "t2", lane: "running", moved_at: "2026-10-03T00:00:00Z" },
+      { task_id: "t2", lane: "ready", moved_at: "2026-10-02T12:00:00Z" },
+      { task_id: "t3", lane: "archived", moved_at: "2026-10-04T00:00:00Z" },
+    ];
+    installUxHost({
+      ...host,
+      shell: {
+        ...host.shell,
+        selectedDeployment: () => ({ nodeDid: "did:key:n" }) as never,
+      },
+      data: {
+        call: async (listing, nodeDid, surface, tool, args) => {
+          calls.push([listing, nodeDid, surface, tool, args]);
+          if (tool === "list_tasks")
+            return { kind: "query", output: { results: tasks, count: 3 } };
+          if (tool === "list_moves")
+            return { kind: "query", output: { results: moves, count: 3 } };
+          return {
+            kind: "create",
+            output: { collection: "BoardTask", document_id: "bae-1", document: args },
+          };
+        },
+        surfaces: async () => [],
+      },
+    });
+    await loadRuntimeUxPlugin(
+      { source: read(EXAMPLES.board) },
+      {
+        origin: "examples/board_pack/board",
+        door: "pack",
+        pack: "examples/board_pack",
+        listing: "examples/board_pack/board",
+        declared: {
+          areas: [NAV_AREA, PLUGIN_PAGE_AREA, TRANSCRIPT_DIRECTIVE_AREA],
+          directives: ["board"],
+        },
+      },
+    );
+    await setUxPluginEnabled("board", true);
+    const page = registry.getArea(PLUGIN_PAGE_AREA)[0]!;
+    const view = render(createElement(Fragment, null, page.render!()));
+    await settle();
+    const mount = frameMount("examples/board_pack/board")!;
+    expect(calls.map((c) => c.slice(0, 4))).toEqual([
+      ["examples/board_pack/board", "did:key:n", "board", "list_tasks"],
+      ["examples/board_pack/board", "did:key:n", "board", "list_moves"],
+    ]);
+    const lane = (name: string) =>
+      [...mount.querySelectorAll(".gents-board-lane")]
+        .find((el) => el.querySelector("h4")?.textContent?.startsWith(name))!
+        .querySelectorAll("[data-task]");
+    expect([...lane("triage")].map((el) => el.getAttribute("data-task"))).toEqual([
+      "t1",
+    ]);
+    /* the latest move wins, not the last one listed */
+    expect([...lane("running")].map((el) => el.getAttribute("data-task"))).toEqual([
+      "t2",
+    ]);
+    /* an archived task is off the board */
+    expect(mount.querySelector('[data-task="t3"]')).toBeNull();
+
+    fireEvent.change(mount.querySelector("input[aria-label='New task']")!, {
+      target: { value: "a new one" },
+    });
+    fireEvent.submit(mount.querySelector("form")!);
+    await settle();
+    const create = calls.find((c) => c[3] === "add_task")!;
+    expect(create[2]).toBe("board");
+    expect(create[4]).toMatchObject({ title: "a new one", lane: "triage" });
+    expect((create[4] as { task_id: string }).task_id).toMatch(/^[a-z0-9]+$/);
+    expect((create[4] as { created_at: string }).created_at).toMatch(
+      /^\d{4}-\d{2}-\d{2}T/,
+    );
+    /* both queries run again after the write */
+    expect(calls.filter((c) => c[3] === "list_tasks").length).toBeGreaterThanOrEqual(2);
+    view.unmount();
   });
 
   it("the fixture pack's badge loads from its file form", async () => {

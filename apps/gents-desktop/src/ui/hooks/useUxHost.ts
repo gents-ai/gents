@@ -27,6 +27,12 @@ function withinUserGesture(): boolean {
   return activation?.isActive === true;
 }
 
+/* route changes arrive through useUxHost's effect; stores notify on their own */
+const routeListeners = new Set<() => void>();
+function notifyRouteChanged() {
+  routeListeners.forEach((listener) => listener());
+}
+
 export function buildUxHost(app: DesktopApp, route: () => Route): UxHost {
   const selection = () => app.stores.selection.getState();
   const fleet = () => app.stores.fleet.getState();
@@ -56,6 +62,25 @@ export function buildUxHost(app: DesktopApp, route: () => Route): UxHost {
     /* through the client's adapter, which sends the fields under `request` */
     plugin: (listing, name, input) =>
       app.actions.callPackPlugin({ ux: listing, name, input }).then((r) => r.output),
+    data: {
+      call: (listing, nodeDid, surface, tool, args) =>
+        app.actions.callUxData({ ux: listing, nodeDid, surface, tool, args }),
+      surfaces: (listing, nodeDid) =>
+        app.actions
+          .listUxDataSurfaces({ ux: listing, nodeDid })
+          .then((r) => r.surfaces),
+    },
+    onShellChange: (listener) => {
+      const offs = [
+        app.stores.selection.subscribe(listener),
+        app.stores.fleet.subscribe(listener),
+      ];
+      routeListeners.add(listener);
+      return () => {
+        offs.forEach((off) => off());
+        routeListeners.delete(listener);
+      };
+    },
     os: {
       openExternal: async (url) => {
         try {
@@ -100,6 +125,9 @@ export function useUxHost(
   const route = useRoute();
   const routeRef = useRef(route);
   routeRef.current = route;
+  useEffect(() => {
+    notifyRouteChanged();
+  }, [route]);
   useEffect(() => {
     installUxHost(buildUxHost(app, () => routeRef.current));
     openUxDoors(app);
