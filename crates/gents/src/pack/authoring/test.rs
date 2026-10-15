@@ -7,8 +7,7 @@
 //! the artifact the build just produced. `expect` absent means the call
 //! only has to succeed.
 //!
-//! Canonical with `crates/gents-cli/src/commands/pack/test.rs`
-//! (`run_plugin_cases`); the CLI's `--scenario` half stays with the CLI's
+//! The CLI delegates plugin cases here; its `--scenario` half stays with the CLI's
 //! scenario owner (`commands::pack::scenario::run`), which runs a live
 //! model endpoint and is not a library call.
 
@@ -156,10 +155,7 @@ mod tests {
         let error = serde_json::from_slice::<PluginCase>(&std::fs::read(&path).unwrap())
             .context("a case is {\"input\": ..., \"expect\": ..., \"bind\": ...}")
             .unwrap_err();
-        assert!(
-            format!("{error:#}").contains("a case is"),
-            "{error:#}"
-        );
+        assert!(format!("{error:#}").contains("a case is"), "{error:#}");
     }
 
     /// A missing artifact is refused with its path, and a plugin with no

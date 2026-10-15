@@ -350,11 +350,7 @@ mod tests {
         let dir = root.path().join("review_toolkit");
         scaffold_minimal(&dir, "review_toolkit");
         let report = check_dir(&dir).await;
-        assert!(
-            report.problems.is_empty(),
-            "{:#?}",
-            report.problems
-        );
+        assert!(report.problems.is_empty(), "{:#?}", report.problems);
         assert!(report.unverified.is_empty(), "{:#?}", report.unverified);
         assert!(report.digest.is_some());
         assert_eq!(report.graphs, Vec::<String>::new());
@@ -367,11 +363,7 @@ mod tests {
         let dir = root.path().join("review_toolkit");
         scaffold_graph(&dir, "review_toolkit");
         let report = check_dir(&dir).await;
-        assert!(
-            report.problems.is_empty(),
-            "{:#?}",
-            report.problems
-        );
+        assert!(report.problems.is_empty(), "{:#?}", report.problems);
         assert_eq!(report.graphs, vec!["review-toolkit".to_owned()]);
     }
 
@@ -447,10 +439,7 @@ mod tests {
         // so declare it the way a scenario-carrying pack does.
         let manifest_path = dir.join("manifest.json");
         let text = std::fs::read_to_string(&manifest_path).unwrap();
-        let updated = text.replace(
-            "\"assets\": [",
-            "\"assets\": [\n    \"experiment.json\",",
-        );
+        let updated = text.replace("\"assets\": [", "\"assets\": [\n    \"experiment.json\",");
         std::fs::write(&manifest_path, updated).unwrap();
         let report = check_dir(&dir).await;
         assert!(

@@ -20,11 +20,8 @@ pub const PREVIEW_OWNER: &str = "did:key:zPackShowPlaceholder";
 /// Checks a `.pack` file, streaming, without installing or storing
 /// anything. Returns the verified header, the way `gents pack verify`
 /// prints it.
-pub fn verify_pack_file(
-    path: &std::path::Path,
-) -> Result<crate::pack_archive::PackHeader> {
-    let file =
-        std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
+pub fn verify_pack_file(path: &std::path::Path) -> Result<crate::pack_archive::PackHeader> {
+    let file = std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
     read_pack(
         std::io::BufReader::new(file),
         crate::pack_archive::Bounds::default(),
@@ -57,10 +54,9 @@ pub fn preview_config(
         .any(|path| path == "experiment.json")
         .then(|| -> Result<serde_json::Value> {
             let bytes = asset("experiment.json")?;
-            let raw = std::str::from_utf8(&bytes)
-                .context("experiment.json is not UTF-8")?;
-            let expanded = crate::pack::interpolate::interpolate_with(raw, &|_| None)
-                .map_err(|missing| {
+            let raw = std::str::from_utf8(&bytes).context("experiment.json is not UTF-8")?;
+            let expanded =
+                crate::pack::interpolate::interpolate_with(raw, &|_| None).map_err(|missing| {
                     anyhow::anyhow!(
                         "experiment.json references environment variable(s) with no default: {}",
                         missing.join(", ")
@@ -74,8 +70,8 @@ pub fn preview_config(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::build::PluginCompiler;
+    use super::*;
     use std::path::Path;
 
     /// A compiler seam that records it was asked and refuses: no real
@@ -166,11 +162,12 @@ mod tests {
         .unwrap();
         let manifest: PackManifest =
             serde_json::from_slice(&std::fs::read(root.join("manifest.json")).unwrap()).unwrap();
-        let asset = |path: &str| -> Result<Vec<u8>> {
-            Ok(std::fs::read(root.join(path))?)
-        };
+        let asset = |path: &str| -> Result<Vec<u8>> { Ok(std::fs::read(root.join(path))?) };
         let report = preview_config(&manifest, &asset).unwrap();
-        assert_eq!(report["config"]["agents"][0]["agent_id"], "review_toolkit-worker");
+        assert_eq!(
+            report["config"]["agents"][0]["agent_id"],
+            "review_toolkit-worker"
+        );
         assert_eq!(report["scenario"], serde_json::Value::Null);
 
         // A scenario with an un-defaulted variable is refused: the preview
@@ -185,10 +182,7 @@ mod tests {
             root.join("manifest.json"),
             std::fs::read_to_string(root.join("manifest.json"))
                 .unwrap()
-                .replace(
-                    "\"assets\": [",
-                    "\"assets\": [\n    \"experiment.json\",",
-                ),
+                .replace("\"assets\": [", "\"assets\": [\n    \"experiment.json\","),
         )
         .unwrap();
         let manifest: PackManifest =
@@ -206,9 +200,6 @@ mod tests {
         )
         .unwrap();
         let report = preview_config(&manifest, &asset).unwrap();
-        assert_eq!(
-            report["scenario"]["endpoint"],
-            "http://127.0.0.1:1/v1"
-        );
+        assert_eq!(report["scenario"]["endpoint"], "http://127.0.0.1:1/v1");
     }
 }

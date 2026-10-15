@@ -1,8 +1,6 @@
 //! The names a template is filled with, all derived from the pack name.
 //!
-//! Canonical with `crates/gents-cli/src/commands/pack/scaffold.rs`'s
-//! `Names`/`to_snake_case`; the CLI adapter keeps its copy until it
-//! delegates here.
+//! The CLI delegates name validation and spelling to this owner.
 
 /// `review_toolkit` -> `review-toolkit` (document ids) and
 /// `ReviewToolkit` (collection names), both derived from one name.

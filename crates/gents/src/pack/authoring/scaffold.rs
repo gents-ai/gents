@@ -7,8 +7,7 @@
 //! `gents pack build` compiles it. Every template passes
 //! `gents pack check` as written and builds unchanged.
 //!
-//! Canonical with `crates/gents-cli/src/commands/pack/scaffold.rs`; two
-//! steps differ by owner and both are preserved:
+//! The CLI delegates to this owner; two steps remain distinct by owner:
 //!
 //! - A graph template's post-scaffold step runs this crate's own graph
 //!   compilation and topology writer (`super::build::build_graph_plans`,
@@ -81,6 +80,54 @@ pub fn scaffold(dir: &Path, name: &str, input: &ScaffoldInput) -> Result<Scaffol
         .template
         .unwrap_or_else(|| Template::for_kind(input.kind));
     std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+
+    // Resolve every generated path through the same rooted path owner used
+    // by file tools before the first write. This rejects an existing nested
+    // symlink that would redirect a template write outside its pack root.
+    let context = crate::toolset::ToolContext::new(dir.to_path_buf(), false)?;
+    let mut output_paths = vec!["README.md".to_owned(), "manifest.json".to_owned()];
+    match template {
+        Template::Assets => {}
+        Template::Minimal | Template::Automation | Template::Graph => {
+            output_paths.extend([
+                "agents/worker/system_prompt.md".to_owned(),
+                "tasks/worker_task/prompt.md".to_owned(),
+                "pack_config.json".to_owned(),
+            ]);
+            if template != Template::Minimal {
+                output_paths.push(format!("schemas/{}_job.graphql", names.name));
+            }
+            if template == Template::Graph {
+                output_paths.push(format!("schemas/{}_result.graphql", names.name));
+                output_paths.push(format!("graphs/{}.plan.json", names.kebab));
+            }
+        }
+        Template::PluginTool => {
+            let language = input
+                .language
+                .as_deref()
+                .unwrap_or("rust")
+                .trim()
+                .to_ascii_lowercase();
+            let entry = super::build::plugin_entry(&language).with_context(|| {
+                format!(
+                    "gents cannot build {language:?} plugins; use one of {}",
+                    crate::pack::SUPPORTED_PLUGIN_LANGUAGES.join(", ")
+                )
+            })?;
+            output_paths.extend([
+                format!("plugins/{}/{}", names.name, entry),
+                format!("plugins/{}/tests/echo.json", names.name),
+                format!("plugins/{}/TOOL.md", names.name),
+            ]);
+            if entry == "source/main.rs" {
+                output_paths.push(format!("plugins/{}/Cargo.toml", names.name));
+            }
+        }
+    }
+    for path in output_paths {
+        context.resolve_path_allow_create(&path)?;
+    }
 
     let mut files: Vec<(String, String)> = vec![("README.md".into(), readme(&names, template))];
     let mut manifest = json!({
@@ -241,11 +288,7 @@ fn scaffold_plugin(dir: &Path, names: &Names, language: Option<&str>) -> Result<
 /// Writes a plugin's source into `source`: a program that returns its JSON
 /// input, in `language` (rust when absent), at the entry the build compiles.
 /// Returns the language.
-pub fn write_plugin_source(
-    source: &Path,
-    name: &str,
-    language: Option<&str>,
-) -> Result<String> {
+pub fn write_plugin_source(source: &Path, name: &str, language: Option<&str>) -> Result<String> {
     let language = language.unwrap_or("rust").trim().to_ascii_lowercase();
     let entry = super::build::plugin_entry(&language).with_context(|| {
         format!(
@@ -482,8 +525,12 @@ mod tests {
         assert_eq!(report.template, "minimal");
         assert!(report.files.contains(&"manifest.json".to_owned()));
         assert!(report.files.contains(&"pack_config.json".to_owned()));
-        assert!(report.files.contains(&"agents/worker/system_prompt.md".to_owned()));
-        assert!(report.files.contains(&"tasks/worker_task/prompt.md".to_owned()));
+        assert!(report
+            .files
+            .contains(&"agents/worker/system_prompt.md".to_owned()));
+        assert!(report
+            .files
+            .contains(&"tasks/worker_task/prompt.md".to_owned()));
         assert_eq!(report.files, {
             let mut sorted = report.files.clone();
             sorted.sort();
@@ -509,14 +556,16 @@ mod tests {
             let dir = root.path().join("review_toolkit");
             let report = scaffold(&dir, "review_toolkit", &input(template)).unwrap();
             assert!(report.files.contains(&"manifest.json".to_owned()));
-            let manifest: crate::pack::PackManifest = serde_json::from_slice(
-                &std::fs::read(dir.join("manifest.json")).unwrap(),
-            )
-            .unwrap_or_else(|error| panic!("{template:?}: {error:#}"));
+            let manifest: crate::pack::PackManifest =
+                serde_json::from_slice(&std::fs::read(dir.join("manifest.json")).unwrap())
+                    .unwrap_or_else(|error| panic!("{template:?}: {error:#}"));
             crate::pack::validate_manifest("review_toolkit", &manifest)
                 .unwrap_or_else(|error| panic!("{template:?}: {error:#}"));
             if template == Template::Graph {
-                assert_eq!(manifest.compiler_version.as_deref(), Some(crate::graph_pipeline::COMPILER_VERSION));
+                assert_eq!(
+                    manifest.compiler_version.as_deref(),
+                    Some(crate::graph_pipeline::COMPILER_VERSION)
+                );
                 assert!(
                     dir.join("graphs/review_toolkit.plan.json").is_file(),
                     "a graph template ships its compiled plan"
@@ -546,6 +595,31 @@ mod tests {
         assert!(dir.join("plugins/format_check/source/main.rs").is_file());
         assert!(dir.join("plugins/format_check/tests/echo.json").is_file());
         assert!(dir.join("plugins/format_check/TOOL.md").is_file());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn plugin_scaffold_rejects_nested_symlink_escape_before_writing() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let dir = root.path().join("new_pack");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::os::unix::fs::symlink(outside.path(), dir.join("plugins")).unwrap();
+
+        let result = scaffold(
+            &dir,
+            "new_pack",
+            &ScaffoldInput {
+                namespace: "acme".into(),
+                template: Some(Template::PluginTool),
+                kind: None,
+                language: None,
+            },
+        );
+
+        assert!(result.is_err(), "nested symlink must be refused");
+        assert!(std::fs::read_dir(outside.path()).unwrap().next().is_none());
+        assert!(!dir.join("manifest.json").exists());
     }
 
     /// A language the build cannot compile is refused by name at scaffold

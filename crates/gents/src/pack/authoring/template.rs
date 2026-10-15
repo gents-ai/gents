@@ -66,7 +66,10 @@ mod tests {
         assert_eq!(Template::for_kind(None), Template::Minimal);
         assert_eq!(Template::for_kind(Some(Kind::Documents)), Template::Minimal);
         assert_eq!(Template::for_kind(Some(Kind::Graph)), Template::Graph);
-        assert_eq!(Template::for_kind(Some(Kind::Plugins)), Template::PluginTool);
+        assert_eq!(
+            Template::for_kind(Some(Kind::Plugins)),
+            Template::PluginTool
+        );
         assert_eq!(Template::for_kind(Some(Kind::Assets)), Template::Assets);
     }
 

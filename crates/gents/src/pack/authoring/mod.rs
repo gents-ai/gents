@@ -25,9 +25,9 @@
 //!   `commands::afterburner_build::{load_and_validate, compile}` is the
 //!   implementation to supply.
 //!
-//! Registration: this module is wired into `crate::pack`
-//! (`pub mod authoring;` in `crates/gents/src/pack.rs`); the CLI delegation
-//! over these owners is the remaining integration step.
+//! The CLI commands are adapters over these owners. Their remaining behavior
+//! stays in the CLI only where its node, registry, home or process owner is
+//! required.
 pub mod build;
 pub mod check;
 pub mod inspect;
@@ -36,8 +36,14 @@ pub mod scaffold;
 pub mod template;
 pub mod test;
 
-pub use build::{build_all, build_graph_plans, build_pack, build_plugin, plugin_entry, BuildReport, PluginCompiler, PluginReport, BUILDER_ID};
-pub use check::{check_dir, check_files, check_readme, load_config, read_manifest, topology_block, write_topology, CheckReport};
+pub use build::{
+    build_all, build_graph_plans, build_pack, build_plugin, plugin_entry, BuildReport,
+    PluginCompiler, PluginReport, BUILDER_ID,
+};
+pub use check::{
+    check_dir, check_files, check_readme, load_config, read_manifest, topology_block,
+    write_topology, CheckReport,
+};
 pub use inspect::{preview_config, verify_pack_file};
 pub use names::{to_snake_case, Names};
 pub use scaffold::{scaffold, tool_markdown, write_plugin_source, ScaffoldInput, ScaffoldReport};

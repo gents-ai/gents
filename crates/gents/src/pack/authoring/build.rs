@@ -11,9 +11,8 @@
 //! (`afterburner::cli::compile`) lives behind a feature this crate does not
 //! carry. Everything else in the manifest travels unchanged.
 //!
-//! Canonical with `crates/gents-cli/src/commands/pack/build.rs`; the
-//! staging, stamping, mirroring and plan-declaration logic is transcribed
-//! from it, with the compile call replaced by the seam.
+//! The CLI delegates build mechanics here and supplies the existing
+//! Afterburner compiler through this seam.
 
 use std::path::{Path, PathBuf};
 
@@ -32,6 +31,12 @@ use crate::pack::{PackManifest, PackPlugin};
 /// `build_plugin` does. Errors are reported with the owner label this
 /// module supplies.
 pub trait PluginCompiler {
+    /// Stable identity for the compiler implementation, used to invalidate
+    /// artifacts when a different compiler produces different output.
+    fn builder_id(&self) -> &str {
+        BUILDER_ID
+    }
+
     fn load_and_validate(&self, owner: &str, dir: &Path) -> Result<()>;
     fn compile(&self, owner: &str, dir: &Path, out_path: &Path) -> Result<()>;
 }
@@ -290,7 +295,7 @@ pub fn build_plugin(
     // from them: skip. The compiler is linked into this binary, so its
     // version is part of the key; an upgrade may change `.afb` output.
     let stamp = staged.join("target").join("gents-build.stamp");
-    let source_digest = format!("{BUILDER_ID} {}", tree_digest(&staged)?);
+    let source_digest = format!("{} {}", compiler.builder_id(), tree_digest(&staged)?);
     if let (Ok(recorded), Ok(artifact)) = (
         std::fs::read_to_string(&stamp),
         std::fs::read(&artifact_path),
@@ -521,8 +526,8 @@ mod tests {
         assert!(out.is_file());
         assert_eq!(report.size_bytes, std::fs::metadata(&out).unwrap().len());
 
-        let packed = crate::pack_archive::PackArchive::from_bytes(&std::fs::read(&out).unwrap())
-            .unwrap();
+        let packed =
+            crate::pack_archive::PackArchive::from_bytes(&std::fs::read(&out).unwrap()).unwrap();
         assert_eq!(packed.digest(), report.digest);
         let staging_left: Vec<_> = std::fs::read_dir(dir.path())
             .unwrap()
@@ -656,10 +661,8 @@ mod tests {
 
         // Pre-stage what build_plugin would, and record a stamp matching
         // this builder's key, so the skip path runs without a compiler.
-        let manifest: PackManifest = serde_json::from_slice(
-            &std::fs::read(root.join("manifest.json")).unwrap(),
-        )
-        .unwrap();
+        let manifest: PackManifest =
+            serde_json::from_slice(&std::fs::read(root.join("manifest.json")).unwrap()).unwrap();
         let staged = root.join("target/plugins/format_check");
         mirror(&root.join("plugin_src"), &staged).unwrap();
         write_if_changed(
@@ -693,8 +696,7 @@ mod tests {
 
         // A stamp from another builder is rebuilt: the seam is asked (and
         // this test's compiler refuses, naming the owner).
-        let recorded =
-            std::fs::read_to_string(staged.join("target/gents-build.stamp")).unwrap();
+        let recorded = std::fs::read_to_string(staged.join("target/gents-build.stamp")).unwrap();
         std::fs::write(
             staged.join("target/gents-build.stamp"),
             recorded.replacen(BUILDER_ID, "gents-cli/0.0.0-other", 1),
@@ -797,10 +799,7 @@ mod tests {
     #[test]
     fn every_supported_language_names_an_entry() {
         for language in crate::pack::SUPPORTED_PLUGIN_LANGUAGES {
-            assert!(
-                plugin_entry(language).is_some(),
-                "{language} has no entry"
-            );
+            assert!(plugin_entry(language).is_some(), "{language} has no entry");
         }
         assert_eq!(plugin_entry("rust"), Some("source/main.rs"));
         assert_eq!(plugin_entry("Rust "), Some("source/main.rs"));

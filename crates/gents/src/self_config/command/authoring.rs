@@ -114,10 +114,10 @@ fn parse_authoring_args(verb: &str, argv: &[String]) -> Result<AuthoringCall> {
             })
         }
         "build" => bail!(
-            "pack build is unavailable through config: compiling plugin sources shells out to language toolchains through the afterburner runner, whose implementation only the CLI owns. Run `gents pack build` from the operator CLI; the seam to supply is crate::pack::authoring::build::PluginCompiler (crates/gents-cli/src/commands/afterburner_build.rs). pack check names any plugin artifact that still needs it."
+            "pack build isn't available through config. Run `gents pack build` from the operator CLI to build plugin artifacts before installing."
         ),
         "test" => bail!(
-            "pack test is unavailable through config: author-test execution is the CLI's owner. Run `gents pack test` from the operator CLI; no canonical process admission for it exists on the config tool."
+            "pack test isn't available through config. Run `gents pack test` from the operator CLI."
         ),
         other => Err(CommandGuidance {
             message: format!(
@@ -151,10 +151,7 @@ fn ensure_mode(
 
 /// The caller-named scaffold target, resolved inside the effective tool
 /// root by the existing path admission owner.
-fn admit_scaffold_dir(
-    context: &crate::toolset::ToolContext,
-    name: &str,
-) -> Result<PathBuf> {
+fn admit_scaffold_dir(context: &crate::toolset::ToolContext, name: &str) -> Result<PathBuf> {
     context.resolve_path_allow_create(name)
 }
 
@@ -167,7 +164,7 @@ fn check_outcome_fields(report: &CheckReport) -> (bool, String) {
     } else if !report.unverified.is_empty() {
         "unverified names the checks this call could not run (event-source filter queries against a node; experiment.json scenario validation). An empty problems list is not full validation; run `gents pack check` from the operator CLI for those, or fold their results in before reporting success."
     } else {
-        "Every validation this layer owns ran, including the apply plan an install would use."
+        "The pack passed every check available in this call."
     };
     (validated, note.to_owned())
 }
@@ -354,7 +351,7 @@ mod tests {
     }
 
     #[test]
-    fn build_and_test_name_the_existing_owner_instead_of_running_them() {
+    fn build_and_test_are_refused_through_config_with_a_next_step() {
         for verb in ["build", "test"] {
             // err().expect, not unwrap_err: AuthoringCall has no Debug and
             // the test needs none.
@@ -362,7 +359,10 @@ mod tests {
                 .err()
                 .expect("build and test refuse through config");
             let message = format!("{error:#}");
-            assert!(message.contains("unavailable through config"), "{message}");
+            assert!(
+                message.contains("isn't available through config"),
+                "{message}"
+            );
             assert!(message.contains("gents pack "), "{message}");
         }
         let error = parse_authoring_args("deploy", &argv(&[]))
@@ -379,8 +379,7 @@ mod tests {
     #[test]
     fn the_caller_path_never_expands_authority() {
         let root = tempfile::tempdir().unwrap();
-        let context =
-            crate::toolset::ToolContext::new(root.path().to_path_buf(), false).unwrap();
+        let context = crate::toolset::ToolContext::new(root.path().to_path_buf(), false).unwrap();
         let inside = admit_scaffold_dir(&context, "review_toolkit").unwrap();
         // ToolContext::new canonicalizes the root, so containment is judged
         // against the canonical root, not the caller alias (e.g. /var is a
@@ -405,7 +404,9 @@ mod tests {
             (FileToolMode::Off, "file permission"),
             (FileToolMode::ReadOnly, "readwrite"),
         ] {
-            let error = ensure_mode(mode, true, "scaffold").err().expect("a write-refusing mode refuses");
+            let error = ensure_mode(mode, true, "scaffold")
+                .err()
+                .expect("a write-refusing mode refuses");
             let message = format!("{error:#}");
             assert!(
                 message.contains(expected),
