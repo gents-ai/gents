@@ -72,6 +72,7 @@ struct Observation {
     native_outstanding: usize,
     registry_abandoned: bool,
     rollback_returned: bool,
+    retry_started: bool,
 }
 
 #[derive(Deserialize)]
