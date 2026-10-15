@@ -127,6 +127,10 @@ struct DependentHome {
 
 impl DependentHome {
     fn new(node_name: &str) -> Result<Self> {
+        Self::with_dependee(node_name, &fixture_pack_dir("dependee_fixture"))
+    }
+
+    fn with_dependee(node_name: &str, dependee: &std::path::Path) -> Result<Self> {
         let tempdir = tempfile::tempdir().context("creating pack install tempdir")?;
         let home = tempdir.path().join("agent-home");
         let home_arg = home.to_str().context("pack home path is not UTF-8")?;
@@ -140,7 +144,7 @@ impl DependentHome {
             &[
                 "pack",
                 "fetch",
-                dir_arg(&fixture_pack_dir("dependee_fixture")),
+                dir_arg(dependee),
                 "--store",
                 "--home",
                 home_arg,
@@ -306,6 +310,51 @@ fn an_explicitly_installed_documents_dependency_survives_its_dependent() -> Resu
     anyhow::ensure!(
         removed["pack"] == "fixture/dependee_fixture",
         "an explicit install of the dependency must survive removing its dependent: {removed}"
+    );
+    Ok(())
+}
+
+/// A documents dependency that ships a plugin installs that plugin under the
+/// dependency's own coordinate, and removing the dependent releases it.
+#[test]
+fn a_documents_dependency_plugin_is_released_with_its_dependent() -> Result<()> {
+    let scratch = tempfile::tempdir().context("creating dependee tempdir")?;
+    let dependee = scratch.path().join("dependee_fixture");
+    copy_dir_all(&fixture_pack_dir("dependee_fixture"), &dependee)?;
+    run_cli_text(
+        scratch.path(),
+        &[
+            "pack",
+            "add",
+            "plugin",
+            "echo_tool",
+            "--dir",
+            dir_arg(&dependee),
+        ],
+    )?;
+    run_cli_text(scratch.path(), &["pack", "build", dir_arg(&dependee)])?;
+
+    let setup = DependentHome::with_dependee("dep-plugin", &dependee)?;
+    run_cli_json(setup.tempdir.path(), &setup.install_args())?;
+    let record = gents::plugin::store::read_record(&setup.home, "fixture", "echo_tool")?;
+    anyhow::ensure!(
+        record.owner_pack_coordinate.as_deref() == Some("fixture/dependee_fixture"),
+        "the dependency's plugin is not owned by the dependency: {record:?}"
+    );
+
+    run_cli_json(
+        setup.tempdir.path(),
+        &[
+            "pack",
+            "remove",
+            "fixture/dependent_fixture",
+            "--home",
+            setup.home_arg(),
+        ],
+    )?;
+    anyhow::ensure!(
+        gents::plugin::store::read_record(&setup.home, "fixture", "echo_tool").is_err(),
+        "the dependency's plugin outlived its dependent"
     );
     Ok(())
 }
