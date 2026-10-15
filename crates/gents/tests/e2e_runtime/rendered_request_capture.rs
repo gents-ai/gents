@@ -524,14 +524,14 @@ async fn manifest_captures_share_blocks_and_grow_linearly_across_turns() {
 /// amplification one capture is responsible for is the growth of this number.
 async fn block_payload_bytes(node: &EmbeddedNode) -> usize {
     let response = node
-        .execute(r#"{ RenderedRequestBlock { byte_len } }"#)
+        .execute(r#"{ RenderedRequestBlock { payload } }"#)
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
     response.data.unwrap()["RenderedRequestBlock"]
         .as_array()
         .map(|rows| {
             rows.iter()
-                .map(|row| row["byte_len"].as_u64().unwrap_or_default() as usize)
+                .map(|row| row["payload"].as_str().map_or(0, str::len))
                 .sum()
         })
         .unwrap_or_default()

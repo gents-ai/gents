@@ -1057,16 +1057,16 @@ async fn read_manifest_blocks<R: CaptureBaseReader + Sync>(
             .get("payload")
             .and_then(Value::as_str)
             .context("capture manifest block row lacks payload")?;
-        let byte_len = row
-            .get("byte_len")
-            .and_then(Value::as_u64)
-            .context("capture manifest block row lacks byte_len")?;
-        anyhow::ensure!(
-            byte_len == entry.byte_len,
-            "capture manifest block {} stores byte_len {byte_len}, manifest pins {}",
-            entry.doc_id,
-            entry.byte_len
-        );
+        // `byte_len` is optional on block documents; resolution checks the
+        // manifest's pinned length either way.
+        if let Some(byte_len) = row.get("byte_len").and_then(Value::as_u64) {
+            anyhow::ensure!(
+                byte_len == entry.byte_len,
+                "capture manifest block {} stores byte_len {byte_len}, manifest pins {}",
+                entry.doc_id,
+                entry.byte_len
+            );
+        }
         anyhow::ensure!(
             encoding::block_content_key(payload.as_bytes()) == entry.content_key,
             "capture manifest block {} stores a payload that does not hash to its content key",
