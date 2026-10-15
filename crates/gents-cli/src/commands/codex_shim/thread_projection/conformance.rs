@@ -104,11 +104,13 @@ async fn generated_agent_selection_cases_drive_scoped_model_binding() {
     assert_eq!(cases.len(), 5);
     for case in cases {
         let temp = tempfile::tempdir().unwrap();
-        let node = gents::defra_node::EmbeddedNode::builder()
-            .data_path(temp.path().join("db"))
-            .build()
-            .await
-            .unwrap();
+        let node = std::sync::Arc::new(
+            gents::defra_node::EmbeddedNode::builder()
+                .data_path(temp.path().join("db"))
+                .build()
+                .await
+                .unwrap(),
+        );
         gents::ensure_runtime_schemas(&node).await.unwrap();
 
         let mut identities = BTreeMap::new();
@@ -151,10 +153,15 @@ async fn generated_agent_selection_cases_drive_scoped_model_binding() {
                 .collect(),
             )
             .unwrap();
-            ConfigAccess::transact_local(&node, None, "codex.agent_selection.fixture", |txn| {
-                let plan = &plan;
-                Box::pin(async move { apply_desired_state_plan(txn, plan).await })
-            })
+            ConfigAccess::transact_local_write(
+                &node,
+                None,
+                "codex.agent_selection.fixture",
+                |txn| {
+                    let plan = &plan;
+                    Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+                },
+            )
             .await
             .unwrap();
         }
