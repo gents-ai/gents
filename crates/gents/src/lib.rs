@@ -499,6 +499,7 @@ pub use backend_registry::{
     record_discovered_catalog_on, record_model_catalog_in_txn, InferenceBackend,
     HEALTHY_PROBE_STATUS, UNKNOWN_PROBE_STATUS,
 };
+pub(crate) use background_completion_diagnostics::load_background_completion_diagnostics_for_session;
 pub use background_completion_diagnostics::{
     load_background_completion_diagnostics, BackgroundCompletionDiagnostics,
     BackgroundCompletionEpochDiagnostic,
