@@ -119,7 +119,9 @@ fn ensure_root_dir(root: &std::path::Path) -> Result<()> {
             );
             Ok(())
         }
-        Err(error) => Err(error).with_context(|| format!("creating pack cache root {}", root.display())),
+        Err(error) => {
+            Err(error).with_context(|| format!("creating pack cache root {}", root.display()))
+        }
     }
 }
 

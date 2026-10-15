@@ -4,7 +4,7 @@ use super::plugin_lifecycle::{install, tests::fixture};
 
 #[tokio::test]
 async fn generated_local_publication_survives_notification_outcomes() {
-    let contract = crate::lean_vocab_test::support::load_contract_snapshot();
+    let contract = crate::lean_vocab_test::lean_contract_snapshot();
     for case in contract.plugin_resource_cases["publication"]
         .as_array()
         .unwrap()
