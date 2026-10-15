@@ -1304,7 +1304,7 @@ fn session_detail_query(node_did: &str, session_ids: &[String]) -> String {
             ) {{
                 session_id
                 message_count: COUNT(GROUP: {{}})
-                latest: _group(
+                latest: GROUP(
                     filter: {{ _and: [
                         {{ created_at: {{ _neq: null }} }},
                         {{ created_at: {{ _neq: "" }} }}
@@ -1324,7 +1324,7 @@ fn session_detail_query(node_did: &str, session_ids: &[String]) -> String {
             ) {{
                 session_id
                 compaction_count: COUNT(GROUP: {{}})
-                latest: _group(
+                latest: GROUP(
                     filter: {{ _and: [
                         {{ created_at: {{ _neq: null }} }},
                         {{ created_at: {{ _neq: "" }} }}
