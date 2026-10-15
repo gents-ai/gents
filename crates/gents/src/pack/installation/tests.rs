@@ -1265,4 +1265,8 @@ async fn a_documents_dependency_with_its_own_dependencies_is_refused() {
         error.contains("declares dependencies of its own"),
         "{error}"
     );
+    assert!(
+        error.contains("install it with `gents pack install`, then remove it from `dependencies`"),
+        "{error}"
+    );
 }

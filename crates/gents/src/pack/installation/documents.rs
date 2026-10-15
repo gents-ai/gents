@@ -100,7 +100,8 @@ pub async fn prepare_document_pack_install(
         );
         anyhow::ensure!(
             dependency.metadata.dependencies.is_empty(),
-            "dependency {}/{} declares dependencies of its own; dependencies are one level",
+            "dependency {}/{} declares dependencies of its own; dependencies are one level: \
+             install it with `gents pack install`, then remove it from `dependencies`",
             dependency.metadata.namespace,
             dependency.name
         );
