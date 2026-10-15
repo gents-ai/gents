@@ -1108,7 +1108,7 @@ mod hop_tests {
         .unwrap();
         assert!(ahead.hop() > planned.hop());
         let (ahead_cause, ahead) = (&ahead_cause, &ahead);
-        crate::config_client::ConfigAccess::transact_local(
+        crate::config_client::ConfigAccess::transact_local_write(
             &node,
             None,
             "session_message.test_ahead_stage",
@@ -1119,7 +1119,7 @@ mod hop_tests {
         .await
         .unwrap();
         let (stale_cause, planned) = (&stale_cause, &planned);
-        let error = crate::config_client::ConfigAccess::transact_local(
+        let error = crate::config_client::ConfigAccess::transact_local_write(
             &node,
             None,
             "session_message.test_stale_stage",
