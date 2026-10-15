@@ -364,6 +364,7 @@ async fn desired_state_apply_batches_identity_reads_by_collection_and_owner() ->
         .map(|id| document(backend(owner, id)))
         .collect::<Vec<_>>();
     apply(&access, docs.clone()).await?;
+    let expected_backend_writes = docs.len();
 
     let plan = DesiredStateApplyPlan::new(docs)?;
     let expected = plan
@@ -390,7 +391,14 @@ async fn desired_state_apply_batches_identity_reads_by_collection_and_owner() ->
     .await;
     let counts = result?;
 
-    assert_eq!(counts, DesiredStateApplyCounts::default());
+    // Counts describe documents staged by this apply, including canonical
+    // replacements that preserve the current configuration. This plan still
+    // submits all three backend documents; the assertions below measure that
+    // its reads were batched independently of those write counts.
+    assert_eq!(
+        counts.get(Collection::InferenceBackend),
+        expected_backend_writes
+    );
     assert_eq!(
         read_queries, 2,
         "one page reads all expectations and one reads all planned documents"
