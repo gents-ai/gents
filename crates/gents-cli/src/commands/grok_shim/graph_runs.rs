@@ -154,10 +154,7 @@ impl ObservedView for GraphRunView {
         self.status().map(GraphRunStatus::is_terminal)
     }
 
-    /// The stock pager keeps the highest revision it holds for a run, across
-    /// leader reconnects, and drops a lower one (probed against v1.0.46). A
-    /// fresh observer after resume or re-attach therefore starts from this
-    /// count of facts that only grow over a run's life: stage, request and
+    /// Counts the facts that only grow over a run's life: stage, request and
     /// plugin-call totals, their terminal outcomes, and the run's own
     /// terminal status. It increases with every change the projection can
     /// show, so it never falls below what an earlier observer delivered for
