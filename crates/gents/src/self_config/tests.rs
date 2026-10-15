@@ -7530,12 +7530,19 @@ async fn native_pack_local_install_inspection_selection_and_digest_fence() {
         !before.to_string().contains("native_echo"),
         "install must not select a tool"
     );
-    tool.call(json!({"argv":["tools","update"],"set":{"integrations":{"plugins":[inspect["selection"].clone()]}}}).to_string()).await.unwrap();
+    let mut integrations = before["document"]["integrations"].clone();
+    integrations
+        .as_object_mut()
+        .unwrap()
+        .insert("plugins".into(), json!([inspect["selection"].clone()]));
+    tool.call(json!({"argv":["tools","update"],"set":{"integrations":integrations}}).to_string())
+        .await
+        .unwrap();
     let readback = config_call(&tools, &["tools", "get"]).await.unwrap();
     assert!(readback.contains("fixture/native_echo"));
     let persisted: crate::document_config::Tools =
         crate::config_client::ConfigAccess::local(node.clone())
-            .transact_write("test.self_config.read_native_pack_tools", |txn| {
+            .transact_readonly("test.self_config.read_native_pack_tools", |txn| {
                 let did = did.clone();
                 Box::pin(async move {
                     let value = crate::config_client::read_desired_state_document_in_txn(
