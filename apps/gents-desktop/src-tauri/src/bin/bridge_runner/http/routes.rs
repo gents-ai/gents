@@ -228,20 +228,12 @@ pub(super) fn handle_request(
             let core = fixture.desktop_core();
             core.set_selected_node_did(did.clone());
             if let Some(did) = did {
-                let refreshed = match runtime.block_on(core.refresh_node(&did)) {
-                    Ok(Some(_version)) => true,
-                    Ok(None) => false,
-                    Err(error) => {
-                        tracing::warn!(
-                            error = %error,
-                            node_did = %did,
-                            "local replica selection refresh failed"
-                        );
-                        false
-                    }
-                };
-                if !refreshed {
-                    runtime.block_on(core.ensure_node_loaded(&did))?;
+                if let Err(error) = runtime.block_on(core.refresh_node(&did)) {
+                    tracing::warn!(
+                        error = %error,
+                        node_did = %did,
+                        "local replica selection refresh failed"
+                    );
                 }
             }
             Ok(HttpResponse::json_ok(serde_json::json!({}).to_string()))

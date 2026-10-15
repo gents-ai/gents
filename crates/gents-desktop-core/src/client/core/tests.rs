@@ -1139,40 +1139,32 @@ async fn resending_an_unknown_enrollment_request_fails_without_pushing() {
 }
 
 #[tokio::test]
-async fn ensure_node_loaded_debounces_repeats() {
+async fn failed_selection_refresh_schedules_scoped_observer_recovery() {
     use crate::client::paths::DesktopPaths;
 
     let tmp = tempfile::TempDir::new().expect("tmpdir");
     let paths = DesktopPaths::from_root(tmp.path().to_path_buf());
-    let core = ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_only())
-        .await
-        .expect("core");
-
-    let first = core.ensure_node_loaded("did:alpha").await.expect("first");
-    let second = core.ensure_node_loaded("did:alpha").await.expect("second");
-    assert!(first, "first call should load");
-    assert!(
-        !second,
-        "second call within debounce window should be a no-op"
+    let core = Arc::new(
+        ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_only())
+            .await
+            .expect("client core"),
     );
+    let observer = core.observer.lock().await.take().expect("observer owner");
+    observer.shutdown().await;
+    let _ = core.store.take_resync_requests();
 
-    Arc::new(core).shutdown().await.expect("shutdown");
-}
-
-#[tokio::test]
-async fn ensure_node_loaded_distinguishes_nodes() {
-    use crate::client::paths::DesktopPaths;
-
-    let tmp = tempfile::TempDir::new().expect("tmpdir");
-    let paths = DesktopPaths::from_root(tmp.path().to_path_buf());
-    let core = ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_only())
+    core.node.shutdown().await;
+    let error = core
+        .refresh_node("did:test:selection-recovery")
         .await
-        .expect("core");
+        .expect_err("a stopped local database cannot refresh the selected scope");
+    assert!(!error.to_string().is_empty());
 
-    assert!(core.ensure_node_loaded("did:alpha").await.expect("alpha"));
-    assert!(core.ensure_node_loaded("did:beta").await.expect("beta"));
+    let (full, scopes) = core.store.take_resync_requests();
+    assert!(!full, "the failed selected refresh remains scoped");
+    assert_eq!(scopes, vec!["did:test:selection-recovery"]);
 
-    Arc::new(core).shutdown().await.expect("shutdown");
+    core.shutdown().await.expect("shutdown client core");
 }
 
 #[test]

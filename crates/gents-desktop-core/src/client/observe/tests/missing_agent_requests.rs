@@ -133,6 +133,7 @@ async fn scoped_resync_request_reloads_that_node_through_the_observer_owner() {
 
     store.replace_snapshot(crate::client::store::ClientStore::default());
     store.request_resync(Some(node_did));
+    store.request_resync(Some(node_did));
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             if store
@@ -149,6 +150,11 @@ async fn scoped_resync_request_reloads_that_node_through_the_observer_owner() {
     })
     .await
     .expect("coalesced scoped resync should reach the existing observer loader");
+    assert_eq!(
+        handle.metrics_snapshot().scope_reloads - before,
+        1,
+        "duplicate selected-refresh recovery requests should coalesce"
+    );
     handle.shutdown().await;
 }
 

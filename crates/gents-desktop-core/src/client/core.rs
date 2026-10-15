@@ -364,7 +364,6 @@ pub struct ClientCore {
     sync_state: sync_state::ClientSyncStateOwner,
     p2p_supervisor: Mutex<Option<JoinHandle<()>>>,
     selected_node_did: watch::Sender<Option<String>>,
-    last_loaded_for: tokio::sync::Mutex<HashMap<String, std::time::Instant>>,
     request_patch_signatures: tokio::sync::Mutex<HashMap<String, (usize, usize, u64)>>,
     p2p_control: Mutex<Option<mpsc::Sender<P2PSupervisorCommand>>>,
     shutdown_completion: Mutex<Option<watch::Receiver<Option<std::result::Result<(), String>>>>>,
@@ -624,13 +623,20 @@ impl ClientCore {
         }
         let (captured, captured_revision) = self.store.snapshot_with_revision();
         let records = self.sync_state.records();
-        let snapshot = load_node_scoped_snapshot_with_peer_records(
+        let snapshot = match load_node_scoped_snapshot_with_peer_records(
             self.node.as_ref(),
             node_did,
             &records,
             self.node_identity.did(),
         )
-        .await?;
+        .await
+        {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                self.store.request_resync(Some(node_did));
+                return Err(error);
+            }
+        };
         let rows = snapshot.row_count();
         let published = self.store.replace_reloaded_snapshot_at_snapshot(
             &captured,
@@ -652,47 +658,6 @@ impl ClientCore {
             "desktop refreshed agent projection from local replica"
         );
         Ok(Some(version))
-    }
-
-    const SELECTION_RELOAD_DEBOUNCE: std::time::Duration = std::time::Duration::from_secs(2);
-
-    pub async fn ensure_node_loaded(&self, node_did: &str) -> Result<bool> {
-        let now = std::time::Instant::now();
-        let mut map = self.last_loaded_for.lock().await;
-        if let Some(last) = map.get(node_did) {
-            if now.duration_since(*last) < Self::SELECTION_RELOAD_DEBOUNCE {
-                return Ok(false);
-            }
-        }
-        let records = self.sync_state.records();
-        let (captured, captured_revision) = self.store.snapshot_with_revision();
-        let snapshot = load_node_scoped_snapshot_with_peer_records(
-            self.node.as_ref(),
-            node_did,
-            &records,
-            self.node_identity.did(),
-        )
-        .await?;
-        let rows = snapshot.row_count();
-        if !self.store.replace_reloaded_snapshot_at_snapshot(
-            &captured,
-            captured_revision.request_event_version,
-            Some(node_did),
-            snapshot,
-        ) {
-            self.store.request_resync(Some(node_did));
-            return Ok(false);
-        }
-        let version = self.store.projection_revision().store_version;
-        map.insert(node_did.to_string(), now);
-        tracing::info!(
-            target: "gents_desktop_core::replication",
-            node_did,
-            rows,
-            version,
-            "ensure_node_loaded merged scoped snapshot"
-        );
-        Ok(true)
     }
 
     pub async fn observer_metrics(

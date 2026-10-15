@@ -611,31 +611,12 @@ pub fn desktop_set_selected_node<R: Runtime>(
     if let Some(did_str) = did {
         let core_arc = Arc::clone(&core);
         tauri::async_runtime::spawn(async move {
-            match core_arc.refresh_node(&did_str).await {
-                Ok(Some(_version)) => {}
-                Ok(None) => {
-                    if let Err(err) = core_arc.ensure_node_loaded(&did_str).await {
-                        tracing::warn!(
-                            error = %err,
-                            node_did = %did_str,
-                            "ensure_node_loaded failed"
-                        );
-                    }
-                }
-                Err(err) => {
-                    tracing::warn!(
-                        error = %err,
-                        node_did = %did_str,
-                        "remote selection refresh failed"
-                    );
-                    if let Err(err) = core_arc.ensure_node_loaded(&did_str).await {
-                        tracing::warn!(
-                            error = %err,
-                            node_did = %did_str,
-                            "ensure_node_loaded failed after remote refresh failure"
-                        );
-                    }
-                }
+            if let Err(err) = core_arc.refresh_node(&did_str).await {
+                tracing::warn!(
+                    error = %err,
+                    node_did = %did_str,
+                    "selected node refresh failed; observer recovery was scheduled"
+                );
             }
         });
     }
