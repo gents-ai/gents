@@ -98,6 +98,19 @@ pub fn request_output_segments_query(request_doc_id: &str) -> String {
     )
 }
 
+/// Read the canonical output facts for one physical request in a single
+/// response. Both collections use their request_doc_id indexes; scope checks
+/// are applied before decoding below.
+pub fn request_output_facts_query(request_doc_id: &str) -> String {
+    let request_doc_id = gents_protocol::graphql::escape_graphql_string(request_doc_id);
+    format!(
+        r#"{{
+            AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }}
+            AgentMessage(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }} }}) {{ {AGENT_MESSAGE_FIELDS} }}
+        }}"#
+    )
+}
+
 /// Decode the rows of [`request_output_segments_query`] that lie in one
 /// exact node scope, and in `session_id` when given. Rows outside the
 /// scope are dropped undecoded, exactly as a scoped store filter would.
@@ -255,6 +268,53 @@ mod tests {
             None
         )
         .is_err());
+    }
+
+    #[test]
+    fn request_facts_use_request_indexes_and_drop_foreign_rows_before_decode() {
+        let query = request_output_facts_query("request");
+        assert!(
+            query.contains("AgentOutputSegment(filter: { request_doc_id: { _eq: \"request\" } }")
+        );
+        assert!(query.contains("AgentMessage(filter: { request_doc_id: { _eq: \"request\" } }"));
+        assert!(!query.contains("node_did:"));
+        assert!(!query.contains("session_id:"));
+
+        let accepted_message = serde_json::json!({
+            "_docID": "message-1",
+            "message_key": "key",
+            "session_id": "session",
+            "node_did": "agent",
+            "request_doc_id": "request",
+            "publication": {"kind": "request_execution", "execution_generation": "gen-1"},
+            "outcome": "complete",
+            "sequence": 3,
+            "role": "assistant",
+            "blocks": [],
+            "created_at": "2026-09-09T22:30:00Z"
+        });
+        let mut message_rows = vec![accepted_message.clone()];
+        for (field, value) in [
+            ("node_did", "foreign"),
+            ("requester_did", "foreign"),
+            ("session_id", "foreign"),
+        ] {
+            let mut row = accepted_message.clone();
+            row[field] = serde_json::json!(value);
+            row["publication"] = serde_json::json!("malformed");
+            message_rows.push(row);
+        }
+        let decoded = decode_scoped_canonical_rows(
+            &message_rows,
+            "agent",
+            Some("session"),
+            None,
+            decode_transcript_message_row,
+        )
+        .unwrap();
+        assert_eq!(decoded.len(), 1);
+        assert_eq!(decoded[0].doc_id, "message-1");
+        assert_eq!(decoded[0].message.sequence, 3);
     }
 
     #[test]
