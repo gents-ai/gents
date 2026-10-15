@@ -1578,7 +1578,6 @@ mod tests {
         );
         let actions = case["actions"].as_array().unwrap();
         assert_eq!(actions.len(), 4);
-        let past = (Utc::now() - chrono::Duration::minutes(1)).to_rfc3339();
         let future = (Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
         let mut modeled_doc_ids = BTreeMap::<u64, String>::new();
         let mut modeled_due = BTreeMap::<u64, bool>::new();
@@ -1593,9 +1592,15 @@ mod tests {
             if !local {
                 row_context.node_did = "did:test:foreign".into();
             }
-            let mut row_args = args(MailboxAction::Ack, &format!("model-row-{model_id}"));
+            let mut row_args = args(
+                MailboxAction::WriteDocument,
+                &format!("model-row-{model_id}"),
+            );
             row_args.deadline_at = Some(future.clone());
-            let created = stamp_create(&node, &row_context, row_args).await.unwrap();
+            let created =
+                stamp_create_with_close_collections(&node, &row_context, row_args, FIXTURE_CLOSE)
+                    .await
+                    .unwrap();
             if local {
                 created_local_ids.push(created.doc_id);
             } else {
@@ -1626,26 +1631,18 @@ mod tests {
         for (index, doc_id) in ordered_ids.into_iter().enumerate() {
             let model_id = index as u64 + 1;
             modeled_doc_ids.insert(model_id, doc_id.clone());
-            let deadline = if modeled_due[&model_id] {
-                &past
-            } else {
-                &future
-            };
-            let response = node
-                .execute(&format!(
-                    r#"mutation {{ update_MailboxItem(
-                        filter: {{ _docID: {{ _eq: "{}" }} }},
-                        input: {{ deadline_at: "{}" }}
-                    ) {{ _docID }} }}"#,
-                    escape_graphql_string(&doc_id),
-                    escape_graphql_string(deadline)
-                ))
-                .await;
-            assert!(
-                !response.has_errors(),
-                "mailbox fixture deadline: {:?}",
-                response.errors
-            );
+            if modeled_due[&model_id] {
+                let item = load_mailbox_item(&node, &doc_id).await.unwrap().unwrap();
+                let response = node.execute(&format!(
+                    r#"mutation {{ create_MailboxFixture(input: {{ mailbox_item_key: "{}", body: "done" }}) {{ _docID }} }}"#,
+                    escape_graphql_string(&item.item_key),
+                )).await;
+                assert!(
+                    !response.has_errors(),
+                    "mailbox close fixture: {:?}",
+                    response.errors
+                );
+            }
         }
         let mut cursor = None::<String>;
         fn metric(value: &Value, name: &str) -> Option<u64> {
@@ -1698,9 +1695,14 @@ mod tests {
                     "keyset page should seek past earlier open rows, got {index_fetches}: {plan}"
                 );
             }
-            let page = sweep_open_mailbox_items(&node, "did:test:agent", cursor.as_deref())
-                .await
-                .unwrap();
+            let page = sweep_open_mailbox_items_with_close_collections(
+                &node,
+                "did:test:agent",
+                cursor.as_deref(),
+                FIXTURE_CLOSE,
+            )
+            .await
+            .unwrap();
             assert!(page.report.scanned <= MAILBOX_SWEEP_PAGE_SIZE);
             let selected = action["selected"].as_array().unwrap();
             assert_eq!(page.report.scanned, selected.len());
@@ -1708,7 +1710,8 @@ mod tests {
                 .iter()
                 .filter(|model_id| modeled_due[&model_id.as_u64().unwrap()])
                 .count();
-            assert_eq!(page.report.expired, due_selected);
+            assert_eq!(page.report.acted, due_selected);
+            assert_eq!(page.report.expired, 0);
             let expected_next = action["next_cursor"]
                 .as_u64()
                 .map(|model_id| modeled_doc_ids[&model_id].clone());
@@ -1721,7 +1724,7 @@ mod tests {
         }
         for (model_id, doc_id) in &modeled_doc_ids {
             let expected_status = if modeled_due[model_id] {
-                "expired"
+                "acted"
             } else {
                 "open"
             };
