@@ -281,39 +281,7 @@ pub async fn load_session_inference_observation(
     requester_did: Option<&str>,
     session_id: &str,
 ) -> Result<SessionInferenceObservation> {
-    anyhow::ensure!(
-        !node_did.trim().is_empty() && !session_id.trim().is_empty(),
-        "session accounting requires a node and session"
-    );
-    let requester = requester_did
-        .map(|did| format!(r#""{}""#, escape_graphql_string(did)))
-        .unwrap_or_else(|| "null".into());
-    let response = graphql_with_transaction_retry(
-        node,
-        &format!(
-            r#"{{ AgentRequest(filter: {{
-        purpose: {{_eq: "normal"}}, node_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}, requester_did: {{_eq: {requester}}}
-    }}) {{_docID request_id}} }}"#,
-            escape_graphql_string(node_did),
-            escape_graphql_string(session_id)
-        ),
-        "session accounting ownership",
-    )
-    .await?;
-    let requests: Vec<AgentRequestRow> = serde_json::from_value(
-        response
-            .data
-            .as_ref()
-            .and_then(|v| v.get("AgentRequest"))
-            .cloned()
-            .context("missing accounting request rows")?,
-    )?;
-    let ids = requests
-        .iter()
-        .map(|request| {
-            clean(request.doc_id.as_ref()).context("accounting request lacks physical identity")
-        })
-        .collect::<Result<Vec<_>>>()?;
+    let ids = load_session_request_doc_ids(node, node_did, requester_did, session_id).await?;
     let mut rows = Vec::new();
     // Bounded predicates, without truncating session history or ever
     // interpolating an empty list literal into a database operation.
@@ -343,6 +311,58 @@ pub async fn load_session_inference_observation(
     })
 }
 
+/// Physical requests visible in one exact session/requester scope. This is the
+/// shared request-selection owner for session summaries and inference accounting.
+pub async fn load_session_request_doc_ids(
+    node: &EmbeddedNode,
+    node_did: &str,
+    requester_did: Option<&str>,
+    session_id: &str,
+) -> Result<Vec<String>> {
+    anyhow::ensure!(
+        !node_did.trim().is_empty() && !session_id.trim().is_empty(),
+        "session request selection requires a node and session"
+    );
+    let requester = requester_did
+        .map(|did| format!(r#""{}""#, escape_graphql_string(did)))
+        .unwrap_or_else(|| "null".into());
+    let response = graphql_with_transaction_retry(
+        node,
+        &format!(
+            r#"{{ AgentRequest(filter: {{
+                purpose: {{_eq: "normal"}},
+                node_did: {{_eq: "{}"}},
+                session_id: {{_eq: "{}"}},
+                requester_did: {{_eq: {requester}}}
+            }}) {{ _docID }} }}"#,
+            escape_graphql_string(node_did.trim()),
+            escape_graphql_string(session_id.trim())
+        ),
+        "session accounting ownership",
+    )
+    .await?;
+    let requests: Vec<PhysicalRequestDocIdRow> = serde_json::from_value(
+        response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("AgentRequest"))
+            .cloned()
+            .context("missing accounting request rows")?,
+    )?;
+    let mut seen = BTreeSet::new();
+    requests
+        .into_iter()
+        .map(|request| {
+            clean(request.doc_id.as_ref()).context("accounting request lacks physical identity")
+        })
+        .filter_map(|result| match result {
+            Ok(doc_id) if seen.insert(doc_id.clone()) => Some(Ok(doc_id)),
+            Ok(_) => None,
+            Err(error) => Some(Err(error)),
+        })
+        .collect()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SessionCompactionEvent {
     pub scope: String,
@@ -361,15 +381,57 @@ struct SessionIndexEnvelope {
 }
 
 #[derive(Debug, Deserialize)]
+struct PhysicalRequestDocIdRow {
+    #[serde(rename = "_docID", default)]
+    doc_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct SessionDetailEnvelope {
     #[serde(rename = "AgentSession", default)]
     sessions: Vec<SessionRow>,
     #[serde(rename = "AgentRequest", default)]
-    requests: Vec<AgentRequestRow>,
+    requests: Vec<SessionRequestAggregateRow>,
     #[serde(rename = "AgentMessage", default)]
-    messages: Vec<MessageRow>,
+    messages: Vec<SessionMessageAggregateRow>,
     #[serde(rename = "CompactionEntry", default)]
-    compactions: Vec<CompactionRow>,
+    compactions: Vec<SessionCompactionAggregateRow>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SessionRequestAggregateRow {
+    #[serde(default)]
+    session_id: String,
+    #[serde(default)]
+    request_count: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct SessionRequestTimestampRow {
+    #[serde(default, rename = "_docID")]
+    doc_id: Option<String>,
+    #[serde(default)]
+    created_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SessionMessageAggregateRow {
+    #[serde(default)]
+    session_id: String,
+    #[serde(default)]
+    message_count: i64,
+    #[serde(default)]
+    latest: Vec<MessageRow>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SessionCompactionAggregateRow {
+    #[serde(default)]
+    session_id: String,
+    #[serde(default)]
+    compaction_count: i64,
+    #[serde(default)]
+    latest: Vec<CompactionRow>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -416,20 +478,18 @@ struct SessionRow {
     created_at: Option<String>,
     #[serde(default)]
     closed_at: Option<String>,
+    #[serde(default)]
+    observation: Option<gents_protocol::session::SessionObservation>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 struct MessageRow {
-    #[serde(default)]
-    session_id: Option<String>,
     #[serde(default)]
     created_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 struct CompactionRow {
-    #[serde(default)]
-    session_id: Option<String>,
     #[serde(default)]
     created_at: Option<String>,
     #[serde(default)]
@@ -676,10 +736,35 @@ async fn load_session_history_in_txn(
         Vec::new()
     } else {
         let response = txn.execute(&session_detail_query(node_did, &ids)).await?;
-        build_session_rows(
-            &ids,
-            decode(response.get("data"), "session history details")?,
-        )
+        let envelope: SessionDetailEnvelope =
+            decode(response.get("data"), "session history details")?;
+        let request_doc_ids = envelope
+            .sessions
+            .iter()
+            .filter_map(|session| session.observation.as_ref())
+            .filter_map(|observation| observation.latest_request.as_ref())
+            .filter_map(|request| clean(Some(&request.request_doc_id)))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let request_timestamps = if request_doc_ids.is_empty() {
+            BTreeMap::new()
+        } else {
+            let response = txn
+                .execute(&session_request_timestamps_query(
+                    node_did,
+                    &ids,
+                    &request_doc_ids,
+                ))
+                .await?;
+            let request_rows: Vec<SessionRequestTimestampRow> =
+                decode(response.get("data"), "session request timestamps")?;
+            request_rows
+                .into_iter()
+                .filter_map(|row| clean(row.doc_id.as_ref()).map(|doc_id| (doc_id, row.created_at)))
+                .collect()
+        };
+        build_session_rows(&ids, envelope, &request_timestamps)?
     };
     Ok(SessionHistorySnapshot {
         node_did: node_did.to_owned(),
@@ -1197,36 +1282,98 @@ fn session_detail_query(node_did: &str, session_ids: &[String]) -> String {
                 tags
                 created_at
                 closed_at
+                observation
             }}
             AgentRequest(
                 filter: {{ _and: [
                     {{ purpose: {{ _eq: "normal" }} }},
                     {{ node_did: {{ _eq: "{node_did}" }} }},
                     {{ session_id: {{ _in: [{list}] }} }}
-                ] }},
-                order: {{ created_at: DESC }}
+                ] }}
+                groupBy: [session_id]
             ) {{
-                request_id
                 session_id
-                lifecycle_state
-                created_at
+                request_count: COUNT(GROUP: {{}})
             }}
-            AgentMessage(filter: {{ _and: [
+            AgentMessage(
+                filter: {{ _and: [
                 {{ node_did: {{ _eq: "{node_did}" }} }},
                 {{ session_id: {{ _in: [{list}] }} }}
-            ] }}) {{
+                ] }}
+                groupBy: [session_id]
+            ) {{
                 session_id
-                created_at
+                message_count: COUNT(GROUP: {{}})
+                latest: _group(
+                    filter: {{ _and: [
+                        {{ created_at: {{ _neq: null }} }},
+                        {{ created_at: {{ _neq: "" }} }}
+                    ] }},
+                    order: [{{created_at: DESC}}],
+                    limit: 1
+                ) {{
+                    created_at
+                }}
             }}
-            CompactionEntry(filter: {{ _and: [
-                {{ node_did: {{ _eq: "{node_did}" }} }},
-                {{ session_id: {{ _in: [{list}] }} }}
-            ] }}) {{
+            CompactionEntry(
+                filter: {{ _and: [
+                    {{ node_did: {{ _eq: "{node_did}" }} }},
+                    {{ session_id: {{ _in: [{list}] }} }}
+                ] }}
+                groupBy: [session_id]
+            ) {{
                 session_id
-                created_at
+                compaction_count: COUNT(GROUP: {{}})
+                latest: _group(
+                    filter: {{ _and: [
+                        {{ created_at: {{ _neq: null }} }},
+                        {{ created_at: {{ _neq: "" }} }}
+                    ] }},
+                    order: [{{created_at: DESC}}],
+                    limit: 1
+                ) {{
+                    created_at
+                }}
             }}
         }}"#
     )
+}
+
+fn session_request_timestamps_query(
+    node_did: &str,
+    session_ids: &[String],
+    request_doc_ids: &[String],
+) -> String {
+    let node_did = escape_graphql_string(node_did);
+    let sessions = quoted_graphql_list(session_ids);
+    let request_doc_ids = quoted_graphql_list(request_doc_ids);
+    format!(
+        r#"{{ AgentRequest(filter: {{ _and: [
+            {{ purpose: {{ _eq: "normal" }} }},
+            {{ node_did: {{ _eq: "{node_did}" }} }},
+            {{ session_id: {{ _in: [{sessions}] }} }},
+            {{ _docID: {{ _in: [{request_doc_ids}] }} }}
+        ] }}) {{ _docID created_at }} }}"#
+    )
+}
+
+/// Session summary timestamps are produced by the canonical RFC3339 row
+/// writers. Missing values stay absent; malformed non-empty values fail the
+/// read rather than silently changing which row appears latest.
+fn summary_timestamp(value: Option<&String>, label: &str) -> Result<Option<String>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let Some(value) = clean(Some(value)) else {
+        anyhow::ensure!(
+            value.is_empty(),
+            "{label} timestamp contains only whitespace"
+        );
+        return Ok(None);
+    };
+    chrono::DateTime::parse_from_rfc3339(&value)
+        .with_context(|| format!("{label} timestamp is not RFC3339"))?;
+    Ok(Some(value))
 }
 
 fn quoted_graphql_list(values: &[String]) -> String {
@@ -1248,7 +1395,8 @@ fn decode<T: serde::de::DeserializeOwned>(data: Option<&Value>, label: &str) -> 
 fn build_session_rows(
     session_ids: &[String],
     envelope: SessionDetailEnvelope,
-) -> Vec<SessionHistoryRow> {
+    request_timestamps: &BTreeMap<String, Option<String>>,
+) -> Result<Vec<SessionHistoryRow>> {
     let SessionDetailEnvelope {
         sessions,
         requests,
@@ -1260,18 +1408,26 @@ fn build_session_rows(
         .filter_map(|session| clean(Some(&session.session_id)).map(|id| (id, session)))
         .collect::<BTreeMap<_, _>>();
     let session_id_set = session_ids.iter().cloned().collect::<HashSet<_>>();
-    let aggregates = aggregate_by_session(requests, messages, compactions, &session_id_set);
+    let aggregates = aggregate_by_session(requests, messages, compactions, &session_id_set)?;
 
     session_ids
         .iter()
         .filter_map(|session_id| {
-            let session = sessions_by_id.get(session_id)?;
+            sessions_by_id
+                .get(session_id)
+                .map(|session| (session_id, session))
+        })
+        .map(|(session_id, session)| {
             let aggregate = aggregates.get(session_id);
-            let latest_request = aggregate.and_then(|aggregate| aggregate.latest_request.as_ref());
-            let latest_request_created_at =
-                latest_request.and_then(|row| clean(row.created_at.as_ref()));
+            let latest_request = session
+                .observation
+                .as_ref()
+                .and_then(|observation| observation.latest_request.as_ref());
+            let latest_request_created_at = latest_request
+                .and_then(|request| request_timestamps.get(&request.request_doc_id))
+                .and_then(Option::as_ref);
 
-            Some(SessionHistoryRow {
+            Ok(SessionHistoryRow {
                 is_current: false,
                 session_id: session_id.clone(),
                 agent_id: clean(session.agent_id.as_ref()),
@@ -1280,10 +1436,14 @@ fn build_session_rows(
                 created_at: clean(session.created_at.as_ref()),
                 closed_at: clean(session.closed_at.as_ref()),
                 latest_request_id: latest_request
-                    .map(|row| row.request_id.trim().to_string())
+                    .map(|request| request.request_id.trim().to_string())
                     .filter(|request_id| !request_id.is_empty()),
-                latest_request_lifecycle_state: latest_request.and_then(|row| row.lifecycle_state),
-                latest_request_created_at,
+                latest_request_lifecycle_state: latest_request
+                    .map(|request| request.lifecycle_state),
+                latest_request_created_at: summary_timestamp(
+                    latest_request_created_at,
+                    "latest session request",
+                )?,
                 request_count: aggregate
                     .map(|aggregate| aggregate.request_count)
                     .unwrap_or(0),
@@ -1305,7 +1465,6 @@ fn build_session_rows(
 #[derive(Debug, Clone, Default)]
 struct SessionAggregate {
     request_count: i64,
-    latest_request: Option<AgentRequestRow>,
     message_count: i64,
     latest_message_at: Option<String>,
     compaction_count: i64,
@@ -1313,84 +1472,55 @@ struct SessionAggregate {
 }
 
 fn aggregate_by_session(
-    requests: Vec<AgentRequestRow>,
-    messages: Vec<MessageRow>,
-    compactions: Vec<CompactionRow>,
+    requests: Vec<SessionRequestAggregateRow>,
+    messages: Vec<SessionMessageAggregateRow>,
+    compactions: Vec<SessionCompactionAggregateRow>,
     session_id_set: &HashSet<String>,
-) -> BTreeMap<String, SessionAggregate> {
+) -> Result<BTreeMap<String, SessionAggregate>> {
     let mut aggregates = BTreeMap::<String, SessionAggregate>::new();
 
     for request in requests {
-        let Some(session_id) = clean(request.session_id.as_ref()) else {
-            continue;
-        };
+        let session_id = request.session_id.trim().to_string();
         if !session_id_set.contains(&session_id) {
             continue;
         }
         let aggregate = aggregates.entry(session_id).or_default();
-        aggregate.request_count += 1;
-        if aggregate.latest_request.is_none()
-            || should_replace_latest(
-                aggregate
-                    .latest_request
-                    .as_ref()
-                    .and_then(|row| clean(row.created_at.as_ref()))
-                    .as_deref(),
-                clean(request.created_at.as_ref()).as_deref(),
-            )
-        {
-            aggregate.latest_request = Some(request);
-        }
+        aggregate.request_count = request.request_count;
     }
 
     for message in messages {
-        let Some(session_id) = clean(message.session_id.as_ref()) else {
-            continue;
-        };
+        let session_id = message.session_id.trim().to_string();
         if !session_id_set.contains(&session_id) {
             continue;
         }
         let aggregate = aggregates.entry(session_id).or_default();
-        aggregate.message_count += 1;
-        update_latest(
-            &mut aggregate.latest_message_at,
-            message.created_at.as_ref(),
-        );
+        aggregate.message_count = message.message_count;
+        aggregate.latest_message_at = message
+            .latest
+            .into_iter()
+            .next()
+            .map(|row| summary_timestamp(row.created_at.as_ref(), "latest session message"))
+            .transpose()?
+            .flatten();
     }
 
     for compaction in compactions {
-        let Some(session_id) = clean(compaction.session_id.as_ref()) else {
-            continue;
-        };
+        let session_id = compaction.session_id.trim().to_string();
         if !session_id_set.contains(&session_id) {
             continue;
         }
         let aggregate = aggregates.entry(session_id).or_default();
-        aggregate.compaction_count += 1;
-        update_latest(
-            &mut aggregate.last_compacted_at,
-            compaction.created_at.as_ref(),
-        );
+        aggregate.compaction_count = compaction.compaction_count;
+        aggregate.last_compacted_at = compaction
+            .latest
+            .into_iter()
+            .next()
+            .map(|row| summary_timestamp(row.created_at.as_ref(), "latest session compaction"))
+            .transpose()?
+            .flatten();
     }
 
-    aggregates
-}
-
-fn update_latest(current: &mut Option<String>, candidate: Option<&String>) {
-    let Some(candidate) = clean(candidate) else {
-        return;
-    };
-    if should_replace_latest(current.as_deref(), Some(candidate.as_str())) {
-        *current = Some(candidate);
-    }
-}
-
-fn should_replace_latest(current: Option<&str>, candidate: Option<&str>) -> bool {
-    match (current, candidate) {
-        (None, Some(_)) => true,
-        (Some(current), Some(candidate)) => candidate > current,
-        _ => false,
-    }
+    Ok(aggregates)
 }
 
 fn clean(value: Option<&String>) -> Option<String> {
@@ -1665,9 +1795,9 @@ mod tests {
                 .unwrap()["_docID"]
                 .as_str()
                 .unwrap();
-            let doc_id = escape_graphql_string(doc_id);
+            let request_doc_id = escape_graphql_string(doc_id);
             let transition = format!(
-                r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, input: {{ lifecycle_state: "{state}" }}) {{ _docID }} }}"#
+                r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{request_doc_id}" }} }}, input: {{ lifecycle_state: "{state}" }}) {{ _docID }} }}"#
             );
             let response = crate::config_client::ConfigAccess::write_local_response(
                 &node,
@@ -1681,6 +1811,35 @@ mod tests {
                     .unwrap()
                     .is_some()
             );
+            if session != "session-c" {
+                let observation = format!(
+                    r#"mutation {{ update_AgentSession(filter: {{ _and: [
+                        {{ node_did: {{ _eq: "{}" }} }},
+                        {{ session_id: {{ _eq: "{}" }} }}
+                    ] }}, input: {{ observation: {{
+                        last_activity_at: "{}",
+                        latest_request: {{ request_doc_id: "{}", request_id: "{}", lifecycle_state: "{}" }}
+                    }} }}) {{ _docID }} }}"#,
+                    escape_graphql_string(signer.did()),
+                    escape_graphql_string(session),
+                    created_at,
+                    request_doc_id,
+                    escape_graphql_string(request_id),
+                    state
+                );
+                let response = crate::config_client::ConfigAccess::write_local_response(
+                    &node,
+                    "test.session_history.session_observation",
+                    &observation,
+                )
+                .await
+                .unwrap();
+                assert!(
+                    crate::graphql::single_mutation_document(&response, "update_AgentSession")
+                        .unwrap()
+                        .is_some()
+                );
+            }
         }
 
         let response = node

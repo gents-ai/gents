@@ -194,6 +194,22 @@ private def recoveryJson (name : String) (initial recovery : Recovery)
   ",\"retry_scheduled\":" ++ toString initial.retryScheduled ++ "},\"actions\":" ++
   recoveryActionsJson setupScopes failedScopes externalScopes timerAdvanced ++ "}"
 
+private def noticeJson (notice : ClientStoreNotice.Notice) : String :=
+  "{\"version\":" ++ toString notice.version ++
+  ",\"provenance\":" ++ toString notice.provenance ++
+  ",\"request_event\":" ++ toString notice.requestEvent ++ "}"
+
+private def noticeCasesJson : String := Id.run do
+  let initial : ClientStoreNotice.Notice := ⟨1, 1, 0⟩
+  let deliveries : List ClientStoreNotice.Notice :=
+    [⟨3, 2, 1⟩, ⟨2, 1, 1⟩, ⟨3, 2, 1⟩, ⟨5, 3, 2⟩, ⟨4, 2, 2⟩]
+  let (_, cases) := deliveries.foldl (fun (current, cases) incoming =>
+    let expected := ClientStoreNotice.deliver current incoming
+    (expected, cases ++ ["{\"incoming\":" ++ noticeJson incoming ++
+      ",\"expected\":" ++ noticeJson expected ++ "}"])) (initial, ([] : List String))
+  return "{\"initial\":" ++ noticeJson initial ++ ",\"deliveries\":[" ++
+    String.intercalate "," cases ++ "]}"
+
 def casesJson : String := Id.run do
   let initial : State :=
     { dataEpoch := 4, provenanceEpoch := 7, requestEventEpoch := 3, transcriptEpoch := 2 }
@@ -221,7 +237,8 @@ def casesJson : String := Id.run do
   ] ++ "]"
   return "{\"publication\":" ++ publicationCases ++ ",\"recovery\":" ++ recoveryCases ++
     ",\"scoped_replacement\":" ++ scopedReplacementCasesJson ++
-    ",\"scoped_publication\":" ++ scopedPublicationCasesJson ++ "}"
+    ",\"scoped_publication\":" ++ scopedPublicationCasesJson ++
+    ",\"notice_delivery\":" ++ noticeCasesJson ++ "}"
 
 end Conformance.ClientDataPublication
 

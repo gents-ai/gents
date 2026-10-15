@@ -586,7 +586,6 @@ async fn wait_for_client_complete_response(
         // live in the global observer. Read the app's bounded, scoped page.
         core.ensure_session_hydration_started(session_id, node_did)
             .await?;
-        core.refresh_local_request(node_did, request_id).await?;
         let page = gents_desktop_core::client::load_session_transcript_page(
             core.node(),
             session_id,
@@ -594,6 +593,20 @@ async fn wait_for_client_complete_response(
             Some(core.node_identity().did()),
             None,
             Some(40),
+        )
+        .await?;
+        let page_request_doc_ids = page
+            .store
+            .transcript_messages
+            .iter()
+            .filter_map(|row| row.message.request_doc_id.clone())
+            .collect::<Vec<_>>();
+        core.refresh_local_request(
+            node_did,
+            session_id,
+            Some(request_id),
+            None,
+            &page_request_doc_ids,
         )
         .await?;
         let snapshot = core.store().snapshot();

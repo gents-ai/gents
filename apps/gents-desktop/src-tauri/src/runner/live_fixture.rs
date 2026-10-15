@@ -745,6 +745,7 @@ mod tests {
             None,
             true,
             true,
+            None,
         )
         .await
         .context("desktop session snapshot missing after skill chat submit")?;

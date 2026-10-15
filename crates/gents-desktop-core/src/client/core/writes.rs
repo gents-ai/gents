@@ -35,6 +35,14 @@ use crate::client::peer_directory::RemovalCause;
 
 const REQUEST_PATCH_SIGNATURE_CAPACITY: usize = 2_048;
 
+#[derive(Clone, Debug)]
+pub struct RefreshedRequestProjection {
+    pub requests: Vec<AgentRequestRow>,
+    pub requester_did: Option<String>,
+    pub selected_request_id: Option<String>,
+    pub published_version: Option<u64>,
+}
+
 /// A validated applied receipt is the command result. The local projection is
 /// a separate replica observation; if it is unavailable, the selected-session
 /// refresh and normal observer path reconcile it without inviting replay.
@@ -178,22 +186,6 @@ fn chat_patch_signature(patch: &ClientStore) -> (usize, usize, u64) {
         }
         Err(_) => (rows, 0, 0),
     }
-}
-
-fn request_patch_is_current(
-    current: &ClientStore,
-    patch: &ClientStore,
-    node_did: &str,
-    request_id: &str,
-) -> bool {
-    let request_value = |store: &ClientStore| {
-        store
-            .requests
-            .iter()
-            .find(|row| row.request_id == request_id && row.node_did.as_deref() == Some(node_did))
-            .and_then(|row| serde_json::to_value(row).ok())
-    };
-    request_value(current).is_some_and(|current| request_value(patch) == Some(current))
 }
 
 fn agent_id_for_write(requested_agent_id: Option<&str>) -> Option<String> {
@@ -599,11 +591,18 @@ impl ClientCore {
     pub async fn refresh_local_request(
         &self,
         node_did: &str,
-        request_id: &str,
-    ) -> Result<Option<u64>> {
+        session_id: &str,
+        request_id: Option<&str>,
+        fallback_request_id: Option<&str>,
+        page_request_doc_ids: &[String],
+    ) -> Result<Option<RefreshedRequestProjection>> {
         let node_did = node_did.trim();
-        let request_id = request_id.trim();
-        if node_did.is_empty() || request_id.is_empty() {
+        let session_id = session_id.trim();
+        let request_id = request_id.map(str::trim).filter(|id| !id.is_empty());
+        let fallback_request_id = fallback_request_id
+            .map(str::trim)
+            .filter(|id| !id.is_empty());
+        if node_did.is_empty() || session_id.is_empty() {
             return Ok(None);
         }
 
@@ -611,10 +610,29 @@ impl ClientCore {
         let (patch, source) = match self.operator_graphql(node_did) {
             Some(graphql) => {
                 let access = ConfigAccess::Graphql(graphql);
-                (load_chat_patch_on(&access, request_id).await?, "operator")
+                (
+                    load_chat_patch_on(
+                        &access,
+                        node_did,
+                        session_id,
+                        request_id,
+                        fallback_request_id,
+                        page_request_doc_ids,
+                    )
+                    .await?,
+                    "operator",
+                )
             }
             None => (
-                load_chat_patch(self.node.as_ref(), request_id).await?,
+                load_chat_patch(
+                    self.node.as_ref(),
+                    node_did,
+                    session_id,
+                    request_id,
+                    fallback_request_id,
+                    page_request_doc_ids,
+                )
+                .await?,
                 "local",
             ),
         };
@@ -626,18 +644,41 @@ impl ClientCore {
         // it untagged so the local observer and operator GraphQL path converge
         // on the same in-memory rows.
         let signature = chat_patch_signature(&patch);
-        let cache_key = format!("{source}\0{node_did}\0{request_id}");
+        let request_projection = patch.requests.clone();
+        let requester_did = patch
+            .sessions
+            .first()
+            .and_then(|session| session.requester_did.clone());
+        let latest_request_id = patch
+            .sessions
+            .first()
+            .and_then(|session| session.observation.as_ref())
+            .and_then(|observation| observation.latest_request.as_ref())
+            .map(|latest| latest.request_id.clone());
+        let legacy_fallback_request_id = patch
+            .sessions
+            .first()
+            .filter(|session| session.observation.is_none())
+            .and_then(|_| fallback_request_id.map(str::to_owned));
+        let resolved_request_id = request_id
+            .map(str::to_owned)
+            .or_else(|| latest_request_id.clone())
+            .or(legacy_fallback_request_id);
+        let requester_key = requester_did.as_deref().unwrap_or("<null>");
+        let request_key = resolved_request_id.as_deref().unwrap_or("<none>");
+        let cache_key =
+            format!("{source}\0{node_did}\0{session_id}\0{requester_key}\0{request_key}");
         {
             let mut signatures = self.request_patch_signatures.lock().await;
             if signatures.get(&cache_key) == Some(&signature)
-                && request_patch_is_current(
-                    self.store.snapshot().as_ref(),
-                    &patch,
-                    node_did,
-                    request_id,
-                )
+                && self.store.accepts_chat_patch_read(&captured, &patch)
             {
-                return Ok(None);
+                return Ok(Some(RefreshedRequestProjection {
+                    requests: request_projection,
+                    requester_did,
+                    selected_request_id: resolved_request_id,
+                    published_version: None,
+                }));
             }
             if signatures.len() >= REQUEST_PATCH_SIGNATURE_CAPACITY {
                 signatures.clear();
@@ -646,8 +687,9 @@ impl ClientCore {
         }
 
         let (_rows, bytes, _hash) = signature;
-        let terminal = patch
-            .request_row(request_id)
+        let terminal = resolved_request_id
+            .as_deref()
+            .and_then(|request_id| patch.request_row(request_id))
             .is_some_and(|row| row.is_terminal());
         let Some(version) = self.store.merge_chat_patch_at_read(&captured, patch) else {
             self.store.request_resync(Some(node_did));
@@ -666,7 +708,7 @@ impl ClientCore {
         };
         tracing::debug!(
             target: "gents_desktop_core::replication",
-            request_id,
+            request_id = resolved_request_id.as_deref().unwrap_or_default(),
             node_did,
             version,
             rows,
@@ -675,7 +717,12 @@ impl ClientCore {
             source,
             "desktop selected request patch merged"
         );
-        Ok(Some(version))
+        Ok(Some(RefreshedRequestProjection {
+            requests: request_projection,
+            requester_did,
+            selected_request_id: resolved_request_id,
+            published_version: Some(version),
+        }))
     }
 
     pub async fn rename_session(

@@ -131,8 +131,7 @@ impl StoreMutation {
         match self {
             Self::Replace(_) => StoreScope::All,
             Self::ReplaceNode(node, incoming) => current.replacement_scope(node, incoming),
-            Self::Chat(incoming) => current.merge_scope(incoming, true),
-            Self::Observer(incoming) => current.merge_scope(incoming, false),
+            Self::Chat(incoming) | Self::Observer(incoming) => current.merge_scope(incoming),
         }
     }
 
@@ -391,8 +390,7 @@ impl ObservedStore {
                 revision: state.revision,
             }
         };
-        self.version_tx.send_replace(notice.revision.store_version);
-        self.change_tx.send_replace(notice);
+        self.publish_notice(notice);
         notice.revision.store_version
     }
 
@@ -404,6 +402,34 @@ impl ObservedStore {
         state.revision.request_event_version =
             state.revision.request_event_version.saturating_add(1);
         state.revision.request_event_version
+    }
+
+    fn publish_notice(&self, notice: StoreUpdateNotice) {
+        self.version_tx.send_if_modified(|current| {
+            if *current >= notice.revision.store_version {
+                return false;
+            }
+            *current = notice.revision.store_version;
+            true
+        });
+        self.change_tx.send_if_modified(|current| {
+            if current.revision.store_version >= notice.revision.store_version {
+                return false;
+            }
+            *current = notice;
+            true
+        });
+    }
+
+    pub(crate) fn accepts_chat_patch_read(
+        &self,
+        captured: &StoreReadFence,
+        incoming: &ClientStore,
+    ) -> bool {
+        let state = self.state.read().expect("store snapshot lock poisoned");
+        state
+            .fences
+            .accepts(captured, &state.snapshot.merge_scope(incoming))
     }
 
     fn update_if(&self, captured: Option<&StoreReadFence>, mutation: StoreMutation) -> Option<u64> {
@@ -438,8 +464,7 @@ impl ObservedStore {
                 revision: state.revision,
             }
         };
-        self.version_tx.send_replace(notice.revision.store_version);
-        self.change_tx.send_replace(notice);
+        self.publish_notice(notice);
         Some(notice.revision.store_version)
     }
 }
@@ -497,6 +522,33 @@ mod reload_tests {
                 .collect(),
             ..Default::default()
         })
+    }
+
+    #[test]
+    fn generated_notice_delivery_never_regresses_watchers() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../gents/tests/fixtures/client_data_publication.json"
+        ))
+        .expect("generated publication fixture");
+        let case = &fixture["notice_delivery"];
+        let decode = |value: &serde_json::Value| StoreUpdateNotice {
+            revision: StoreProjectionRevision {
+                store_version: value["version"].as_u64().expect("store version"),
+                provenance_version: value["provenance"].as_u64().expect("provenance version"),
+                request_event_version: value["request_event"]
+                    .as_u64()
+                    .expect("request event version"),
+            },
+        };
+        let (store, versions) = ObservedStore::new(ClientStore::default());
+        let changes = store.change_tx.subscribe();
+        store.publish_notice(decode(&case["initial"]));
+        for delivery in case["deliveries"].as_array().expect("notice deliveries") {
+            store.publish_notice(decode(&delivery["incoming"]));
+            let expected = decode(&delivery["expected"]);
+            assert_eq!(*versions.borrow(), expected.revision.store_version);
+            assert_eq!(*changes.borrow(), expected);
+        }
     }
 
     #[test]
@@ -589,6 +641,30 @@ mod reload_tests {
             assert_eq!(store.snapshot().requests.len(), 1);
             assert_eq!(store.snapshot().requests[0].request_id, "pending");
         }
+    }
+
+    #[test]
+    fn physical_request_owner_replacement_fences_both_scopes() {
+        let rows = |owner: &str| {
+            ClientStore::from_rows(ClientStoreRows {
+                requests: vec![AgentRequestRow {
+                    doc_id: Some("physical".into()),
+                    request_id: "request".into(),
+                    node_did: Some(owner.into()),
+                    purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })
+        };
+        let (store, _) = ObservedStore::new(rows("did:old"));
+        let read = store.capture_read();
+        store.merge_observer_patch(rows("did:new"));
+        assert!(!store.replace_reloaded_snapshot_at_read(&read, Some("did:old"), rows("did:old")));
+        assert_eq!(
+            store.snapshot().requests[0].node_did.as_deref(),
+            Some("did:new")
+        );
     }
 
     #[test]
@@ -962,9 +1038,12 @@ mod reload_tests {
             let publication = tokio::spawn(async move {
                 blocked_read.await.expect("release modeled database read");
                 if merge {
-                    publisher
+                    let read_accepted = publisher.accepts_chat_patch_read(&read, &incoming);
+                    let published = publisher
                         .merge_observer_patch_at_read(&read, incoming)
-                        .is_some()
+                        .is_some();
+                    assert_eq!(read_accepted, published);
+                    published
                 } else {
                     publisher.replace_reloaded_snapshot_at_read(&read, scope.as_deref(), incoming)
                 }

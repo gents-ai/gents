@@ -186,6 +186,7 @@ pub fn build_session_snapshot_from_store_for_node(
         node_did,
         session_id,
         preferred_request_id,
+        None,
     )
 }
 
@@ -212,6 +213,7 @@ pub async fn build_session_snapshot_for_node(
         None,
         true,
         true,
+        None,
     )
     .await
 }
@@ -231,6 +233,7 @@ pub async fn build_session_snapshot_for_node_with_transcript(
     )>,
     context_totals_exact: bool,
     include_live_tail: bool,
+    request_projection: Option<&[AgentRequestRow]>,
 ) -> Option<DesktopSessionSnapshot> {
     let (store, projection_revision) = core.store().snapshot_with_revision();
     let unreadable = node_did.and_then(|node_did| {
@@ -289,17 +292,23 @@ pub async fn build_session_snapshot_for_node_with_transcript(
         }
         _ => None,
     };
-    let request_ids = node_did.map_or_else(
-        || store.requests_for_session(session_id),
-        |node_did| store.requests_for_session_for_node(session_id, node_did),
-    );
-    let request_ids = request_ids
-        .into_iter()
-        .map(|request| request.request_id.clone())
-        .collect::<Vec<_>>();
-    let loaded_context = match node_did {
-        Some(node_did) => {
-            match load_latest_session_request_context(core.node(), node_did, &request_ids).await {
+    let session_requester = node_did.and_then(|node_did| {
+        store
+            .sessions
+            .iter()
+            .find(|session| session.node_did == node_did && session.session_id == session_id)
+            .map(|session| session.requester_did.as_deref())
+    });
+    let loaded_context = match (node_did, session_requester) {
+        (Some(node_did), Some(requester_did)) => {
+            match load_latest_session_request_context(
+                core.node(),
+                node_did,
+                requester_did,
+                session_id,
+            )
+            .await
+            {
                 Ok(context) => context,
                 Err(error) => {
                     tracing::warn!(
@@ -313,7 +322,7 @@ pub async fn build_session_snapshot_for_node_with_transcript(
                 }
             }
         }
-        None => None,
+        _ => None,
     };
     let mut snapshot = build_session_snapshot_from_store_for_node_with_transcript(
         store.as_ref(),
@@ -328,6 +337,7 @@ pub async fn build_session_snapshot_for_node_with_transcript(
         node_did,
         session_id,
         preferred_request_id,
+        request_projection,
     );
     if snapshot.is_none() {
         snapshot = hydration
@@ -524,6 +534,7 @@ mod paging_coverage_tests {
                 Some("node"),
                 "session",
                 Some("request"),
+                None,
             )
             .unwrap();
             assert_eq!(

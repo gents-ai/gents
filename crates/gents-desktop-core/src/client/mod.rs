@@ -15,7 +15,7 @@ pub use collection_resolver::CollectionResolver;
 pub use core::{
     ClientCore, ClientCoreOptions, ClientPeerStatus, ClientRouteStatus, ClientSyncStateSnapshot,
     EnrollmentRequestResult, P2PHealth, P2PHealthStatus, PairingCollectionStatus,
-    RuntimeSchemaObservation, STUCK_THRESHOLD_ATTEMPTS,
+    RefreshedRequestProjection, RuntimeSchemaObservation, STUCK_THRESHOLD_ATTEMPTS,
 };
 pub use gents::P2pSyncStatusSnapshot;
 pub use mutations::{PeerMutationResult, SubmitRequestOptions, SubmittedRequest};

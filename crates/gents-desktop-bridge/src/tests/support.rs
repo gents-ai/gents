@@ -181,17 +181,22 @@ pub async fn seed_provenance_fixture() -> (Arc<ClientCore>, TempDir, String) {
 pub async fn refresh_request_and_wait_for_projection(
     core: &ClientCore,
     node_did: &str,
+    session_id: &str,
+    requester_did: Option<&str>,
     request_id: &str,
 ) {
     let mut updates = core.store_updates();
-    core.refresh_local_request(node_did, request_id)
+    core.refresh_local_request(node_did, session_id, Some(request_id), None, &[])
         .await
         .expect("refresh request");
 
     tokio::time::timeout(std::time::Duration::from_secs(10), async {
         loop {
             if core.store().snapshot().requests.iter().any(|row| {
-                row.node_did.as_deref() == Some(node_did) && row.request_id == request_id
+                row.node_did.as_deref() == Some(node_did)
+                    && row.session_id.as_deref() == Some(session_id)
+                    && row.requester_did.as_deref() == requester_did
+                    && row.request_id == request_id
             }) {
                 return;
             }

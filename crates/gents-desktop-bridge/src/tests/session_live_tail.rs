@@ -117,7 +117,8 @@ async fn a_queued_or_folded_submission_keeps_the_running_turns_streaming_text() 
     )
     .await;
     for request_id in ["req_head", "req_queued", "req_folded"] {
-        refresh_request_and_wait_for_projection(&core, OPERATOR, request_id).await;
+        refresh_request_and_wait_for_projection(&core, OPERATOR, "sess_live", None, request_id)
+            .await;
     }
 
     for submitted in ["req_queued", "req_folded"] {

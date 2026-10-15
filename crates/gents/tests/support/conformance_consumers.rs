@@ -56,11 +56,32 @@ impl ConformanceConsumer {
 pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
     &[
         ConformanceConsumer::RustTest {
+            id: "client::observe::projection_store::reload_tests::generated_notice_delivery_never_regresses_watchers",
+            package: "gents-desktop-core",
+            source_path: "crates/gents-desktop-core/src/client/observe/projection_store.rs",
+            module_path: "client::observe::projection_store::reload_tests",
+            function: "generated_notice_delivery_never_regresses_watchers",
+        },
+        ConformanceConsumer::RustTest {
+            id: "client::query::request_closure::tests::generated_request_closures_use_exact_database_dependencies",
+            package: "gents-desktop-core",
+            source_path: "crates/gents-desktop-core/src/client/query/request_closure/tests.rs",
+            module_path: "client::query::request_closure::tests",
+            function: "generated_request_closures_use_exact_database_dependencies",
+        },
+        ConformanceConsumer::RustTest {
             id: "client::core::writes::accepted_edit_projection_tests::generated_accepted_receipt_survives_projection_refresh_failure",
             package: "gents-desktop-core",
             source_path: "crates/gents-desktop-core/src/client/core/writes.rs",
             module_path: "client::core::writes::accepted_edit_projection_tests",
             function: "generated_accepted_receipt_survives_projection_refresh_failure",
+        },
+        ConformanceConsumer::RustTest {
+            id: "client::store::merges::overlay_tests::generated_request_identity_cases_preserve_physical_twins_and_fold_owners",
+            package: "gents-desktop-core",
+            source_path: "crates/gents-desktop-core/src/client/store/merges.rs",
+            module_path: "client::store::merges::overlay_tests",
+            function: "generated_request_identity_cases_preserve_physical_twins_and_fold_owners",
         },
         ConformanceConsumer::RustTest {
             id: "e2e_runtime::session_input_edit::generated_remote_edits_replicate_signed_effect_and_receipt",

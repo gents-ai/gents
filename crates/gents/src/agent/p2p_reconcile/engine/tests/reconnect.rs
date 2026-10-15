@@ -300,3 +300,44 @@ async fn inbound_reconnect_force_replays_without_owner_redial() {
         ]
     );
 }
+
+#[tokio::test]
+async fn reconnect_replay_reinstalls_when_delete_reports_remote_not_found() {
+    let filter = one_filter("AgentRequest", "node_did", "did:key:local-owner");
+    let store = MockStore::with_desired(Some(PairingDesired {
+        replicator_addresses: set(&["addr1"]),
+        replicator_collections: set(&["AgentRequest"]),
+        replicator_filter: filter.clone(),
+        template_ids: set(&["agent-target-host"]),
+        ..Default::default()
+    }));
+    *store.applied.lock().unwrap() = PairingApplied {
+        replicator_addresses: set(&["addr1"]),
+        replicator_filter: filter.clone(),
+        ..Default::default()
+    };
+    let admin = MockAdmin::default();
+    admin.replicators.lock().unwrap().insert(
+        "addr1".into(),
+        RemoteReplicator {
+            id: Some("id-addr1".into()),
+            collections: vec![mock_collection_id("AgentRequest")],
+            address: Some("addr1".into()),
+            filters: Some(mock_live_filters(&filter)),
+        },
+    );
+    *admin.delete_replicator_not_found.lock().unwrap() = true;
+
+    let outcome = reconcile_peer_tick(&admin, &store, "peer-a")
+        .await
+        .expect("missing old replicator must not prevent reconnect replay");
+
+    assert_eq!(outcome.replayed_replicators, vec!["addr1"]);
+    assert_eq!(
+        *admin.emitted.lock().unwrap(),
+        vec![DiffOp::InstallReplicator("addr1".into())],
+        "replay must reinstall after the concurrent removal"
+    );
+    assert!(admin.replicators.lock().unwrap().contains_key("addr1"));
+}
+

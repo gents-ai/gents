@@ -102,8 +102,19 @@ async fn maps_the_lineage_owner_and_each_call_to_its_caused_request() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_started_session_names_its_starter_and_the_sender_of_each_turn() {
     let (core, _tmp, _) = seed_provenance_fixture().await;
-    for request_id in ["req_parent", "req_child", "req_child_2"] {
-        refresh_request_and_wait_for_projection(&core, OPERATOR, request_id).await;
+    for (session_id, request_id) in [
+        ("sess_parent", "req_parent"),
+        ("sess_child", "req_child"),
+        ("sess_child", "req_child_2"),
+    ] {
+        refresh_request_and_wait_for_projection(
+            &core,
+            OPERATOR,
+            session_id,
+            Some(OPERATOR),
+            request_id,
+        )
+        .await;
     }
     let view = session_provenance(&core, scope("sess_child"))
         .await
@@ -152,7 +163,14 @@ async fn a_root_session_has_no_provenance() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_replicated_session_message_keeps_the_call_that_sent_it() {
     let (core, _tmp, parent) = seed_provenance_fixture().await;
-    refresh_request_and_wait_for_projection(&core, OPERATOR, "req_child_2").await;
+    refresh_request_and_wait_for_projection(
+        &core,
+        OPERATOR,
+        "sess_child",
+        Some(OPERATOR),
+        "req_child_2",
+    )
+    .await;
     let store = core.store().snapshot();
     let row = store
         .request_row("req_child_2")

@@ -84,6 +84,22 @@ impl<'a> MigrationStep<'a> {
 pub struct Registry<'a> {
     pub baseline: &'a [BaselineCollection<'a>],
     pub steps: &'a [MigrationStep<'a>],
+    pub ordinary_indexes: &'a [OrdinaryIndex<'a>],
+}
+
+/// Named ordinary index that must be present on a managed collection.
+#[derive(Debug, Clone, Copy)]
+pub struct OrdinaryIndex<'a> {
+    pub collection: &'a str,
+    pub name: &'a str,
+    pub fields: &'a [OrdinaryIndexField<'a>],
+}
+
+/// One ordered field in an ordinary index definition.
+#[derive(Debug, Clone, Copy)]
+pub struct OrdinaryIndexField<'a> {
+    pub name: &'a str,
+    pub descending: bool,
 }
 
 impl<'a> Registry<'a> {
@@ -637,10 +653,111 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
 /// Future schema evolution starts here, after the canonical baseline lands.
 pub static DEFAULT_STEPS: &[MigrationStep<'static>] = &[];
 
+static AGENT_REQUEST_NODE_SESSION_FIELDS: &[OrdinaryIndexField<'static>] = &[
+    OrdinaryIndexField {
+        name: "node_did",
+        descending: false,
+    },
+    OrdinaryIndexField {
+        name: "session_id",
+        descending: false,
+    },
+];
+
+static AGENT_REQUEST_TRIGGER_HISTORY_FIELDS: &[OrdinaryIndexField<'static>] = &[
+    OrdinaryIndexField {
+        name: "node_did",
+        descending: false,
+    },
+    OrdinaryIndexField {
+        name: "caused_by_trigger_id",
+        descending: false,
+    },
+    OrdinaryIndexField {
+        name: "purpose",
+        descending: false,
+    },
+    OrdinaryIndexField {
+        name: "created_at",
+        descending: true,
+    },
+    OrdinaryIndexField {
+        name: "request_id",
+        descending: true,
+    },
+    OrdinaryIndexField {
+        name: "session_id",
+        descending: false,
+    },
+];
+
+static AGENT_REQUEST_PREDECESSOR_FIELDS: &[OrdinaryIndexField<'static>] = &[
+    OrdinaryIndexField {
+        name: "request_id",
+        descending: false,
+    },
+    OrdinaryIndexField {
+        name: "node_did",
+        descending: false,
+    },
+    OrdinaryIndexField {
+        name: "session_id",
+        descending: false,
+    },
+    OrdinaryIndexField {
+        name: "requester_did",
+        descending: false,
+    },
+];
+
+static AGENT_REQUEST_RETRY_CHILD_FIELDS: &[OrdinaryIndexField<'static>] = &[
+    OrdinaryIndexField {
+        name: "retry_parent_request",
+        descending: false,
+    },
+    OrdinaryIndexField {
+        name: "node_did",
+        descending: false,
+    },
+    OrdinaryIndexField {
+        name: "session_id",
+        descending: false,
+    },
+    OrdinaryIndexField {
+        name: "requester_did",
+        descending: false,
+    },
+];
+
+/// Ordinary indexes whose query plans have been measured on existing stores.
+pub static DEFAULT_ORDINARY_INDEXES: &[OrdinaryIndex<'static>] = &[
+    OrdinaryIndex {
+        collection: gents_protocol::schemas::AGENT_REQUEST_NAME,
+        name: "AgentRequest_node_did_session_id",
+        fields: AGENT_REQUEST_NODE_SESSION_FIELDS,
+    },
+    OrdinaryIndex {
+        collection: gents_protocol::schemas::AGENT_REQUEST_NAME,
+        name: "AgentRequest_node_trigger_created_request",
+        fields: AGENT_REQUEST_TRIGGER_HISTORY_FIELDS,
+    },
+    OrdinaryIndex {
+        collection: gents_protocol::schemas::AGENT_REQUEST_NAME,
+        name: "AgentRequest_request_node_session_requester",
+        fields: AGENT_REQUEST_PREDECESSOR_FIELDS,
+    },
+    OrdinaryIndex {
+        collection: gents_protocol::schemas::AGENT_REQUEST_NAME,
+        name: "AgentRequest_retry_parent_node_session_requester",
+        fields: AGENT_REQUEST_RETRY_CHILD_FIELDS,
+    },
+];
+
 /// Production registry: canonical pinned baseline plus future migrations.
 pub static DEFAULT_REGISTRY: Registry<'static> = Registry {
     baseline: DEFAULT_BASELINE,
     steps: DEFAULT_STEPS,
+    ordinary_indexes: DEFAULT_ORDINARY_INDEXES,
 };
 
 /// Embedded fixture lens wasm (built by `build.rs`).

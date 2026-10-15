@@ -148,8 +148,29 @@ impl ClientStore {
         let requests = self
             .requests_for_session(session_id)
             .into_iter()
+            .filter(|row| request_row_in_session_scope(row, node_did, requester_did))
+            .collect::<Vec<_>>();
+        Self::session_tip_request_from_rows(
+            requests,
+            session_id,
+            node_did,
+            requester_did,
+            request_id,
+        )
+    }
+
+    pub fn session_tip_request_from_rows<'a>(
+        requests: impl IntoIterator<Item = &'a AgentRequestRow>,
+        session_id: &str,
+        node_did: Option<&str>,
+        requester_did: Option<&str>,
+        request_id: &str,
+    ) -> Option<AgentRequestRow> {
+        let requests = requests
+            .into_iter()
             .filter(|row| {
-                row.node_did.as_deref() == node_did && row.requester_did.as_deref() == requester_did
+                row.session_id.as_deref() == Some(session_id)
+                    && request_row_in_session_scope(row, node_did, requester_did)
             })
             .collect::<Vec<_>>();
         let submitted = requests
@@ -276,4 +297,12 @@ impl ClientStore {
     ) -> Option<ClientTurnState> {
         turns::derive_turn_for_request_for_node(self, request_id, node_did)
     }
+}
+
+fn request_row_in_session_scope(
+    row: &AgentRequestRow,
+    node_did: Option<&str>,
+    requester_did: Option<&str>,
+) -> bool {
+    row.node_did.as_deref() == node_did && row.requester_did.as_deref() == requester_did
 }

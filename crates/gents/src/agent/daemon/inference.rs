@@ -1534,6 +1534,8 @@ pub(super) mod tests {
 
     #[tokio::test]
     async fn daemon_request_path_stamps_requester_lineage_on_hook_messages() {
+        use gents_protocol::request_lifecycle::RequestLifecycleState;
+
         let data_path =
             std::env::temp_dir().join(format!("daemon-requester-lineage-{}", uuid::Uuid::new_v4()));
         let node = Arc::new(
@@ -1592,6 +1594,40 @@ pub(super) mod tests {
             .process_request(request.clone(), shutdown_rx)
             .await
             .unwrap();
+
+        assert_eq!(
+            persisted_request_state(&node, &request.doc_id).await,
+            RequestLifecycleState::Completed,
+            "successful processing returns only after request completion"
+        );
+        let request_doc_id = crate::graphql::escape_graphql_string(&request.doc_id);
+        let requester = crate::graphql::escape_graphql_string(&requester_did);
+        let authored_prompt = node
+            .execute(&format!(
+                r#"{{ AgentMessage(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }}, requester_did: {{ _eq: "{requester}" }}, role: {{ _eq: "user" }} }}) {{ _docID message_key request_doc_id requester_did role }} }}"#
+            ))
+            .await;
+        assert!(
+            !authored_prompt.has_errors(),
+            "query completed request's authored prompt failed: {:?}",
+            authored_prompt.errors
+        );
+        let authored_rows = authored_prompt.data.unwrap()["AgentMessage"]
+            .as_array()
+            .unwrap()
+            .clone();
+        assert!(
+            authored_rows.iter().any(|row| {
+                row["request_doc_id"] == request.doc_id
+                    && row["requester_did"] == requester_did
+                    && row["message_key"]
+                        == crate::session::canonical_rows::authored_message_key(
+                            &request.doc_id,
+                            "prompt",
+                        )
+            }),
+            "completed fresh non-retry request must have its exact durable authored prompt: {authored_rows:?}"
+        );
 
         let escaped_session_id = crate::graphql::escape_graphql_string(&request.session_id);
         let query = format!(

@@ -314,10 +314,18 @@ async fn load_chat_patch_reads_only_the_selected_local_session() {
         .expect("schemas");
 
     let mutation = r#"mutation {
+        selected_session: create_AgentSession(input: {
+            session_id: "sess-selected",
+            node_did: "did:test:agent",
+            requester_did: "did:test:requester",
+            agent_id: "default",
+            created_at: "2026-07-24T00:00:00Z"
+        }) { _docID }
         first_request: create_AgentRequest(input: {
             request_id: "req-selected",
             purpose: "normal",
             node_did: "did:test:agent",
+            requester_did: "did:test:requester",
             agent_id: "default",
             session_id: "sess-selected",
             content: "selected",
@@ -325,10 +333,23 @@ async fn load_chat_patch_reads_only_the_selected_local_session() {
             execution_generation: "generation-selected",
             created_at: "2026-07-24T00:00:00Z"
         }) { _docID }
+        foreign_request_twin: create_AgentRequest(input: {
+            request_id: "req-selected",
+            purpose: "normal",
+            node_did: "did:test:agent",
+            requester_did: "did:test:foreign-requester",
+            agent_id: "default",
+            session_id: "sess-selected",
+            content: "foreign twin",
+            lifecycle_state: "processing",
+            execution_generation: "generation-foreign",
+            created_at: "2026-07-24T00:00:00Z"
+        }) { _docID }
         second_request: create_AgentRequest(input: {
             request_id: "req-unrelated",
             purpose: "normal",
             node_did: "did:test:agent",
+            requester_did: "did:test:requester",
             agent_id: "default",
             session_id: "sess-unrelated",
             content: "unrelated",
@@ -339,9 +360,39 @@ async fn load_chat_patch_reads_only_the_selected_local_session() {
     let response = node.execute(mutation).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
 
-    let patch = load_chat_patch(node.as_ref(), "req-selected")
-        .await
-        .expect("selected local chat patch");
+    let selected_doc_id = response.data.as_ref().expect("mutation data")["first_request"][0]
+        ["_docID"]
+        .as_str()
+        .expect("physical request identity");
+    let observation = gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
+        "last_activity_at": "2026-07-24T00:00:01Z",
+        "latest_request": {
+            "request_doc_id": selected_doc_id,
+            "request_id": "req-selected",
+            "lifecycle_state": "processing"
+        }
+    }))
+    .expect("session observation literal");
+    let response = node
+        .execute(&format!(
+            r#"mutation {{ update_AgentSession(
+                filter: {{ node_did: {{ _eq: "did:test:agent" }}, session_id: {{ _eq: "sess-selected" }} }}
+                input: {{ observation: {observation} }}
+            ) {{ _docID }} }}"#
+        ))
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+
+    let patch = load_chat_patch(
+        node.as_ref(),
+        "did:test:agent",
+        "sess-selected",
+        None,
+        None,
+        &[],
+    )
+    .await
+    .expect("selected local chat patch");
     assert_eq!(patch.requests.len(), 1);
     assert_eq!(patch.requests[0].request_id, "req-selected");
     assert_eq!(
@@ -374,10 +425,96 @@ async fn load_chat_patch_reads_only_the_selected_local_session() {
         ))
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
-    let terminal_patch = load_chat_patch(node.as_ref(), "req-selected")
-        .await
-        .expect("terminal selected chat patch");
+    let terminal_patch = load_chat_patch(
+        node.as_ref(),
+        "did:test:agent",
+        "sess-selected",
+        Some("req-selected"),
+        None,
+        &[],
+    )
+    .await
+    .expect("terminal selected chat patch");
     assert_eq!(terminal_patch.requests[0].terminal_output, Some(terminal));
+}
+
+#[test]
+fn selected_request_lookup_rejects_mixed_valid_and_malformed_rows() {
+    let lookup = super::super::SelectedRequestLookup {
+        query: String::new(),
+        expected_doc_id: None,
+        expected_request_id: None,
+    };
+    let data = serde_json::json!({
+        "AgentRequest": [
+            {
+                "_docID": "doc-valid",
+                "request_id": "valid",
+                "node_did": "did:test:agent",
+                "session_id": "session",
+                "requester_did": null
+            },
+            {
+                "_docID": "doc-malformed",
+                "request_id": 7,
+                "node_did": "did:test:agent",
+                "session_id": "session",
+                "requester_did": null
+            }
+        ]
+    });
+
+    assert!(lookup
+        .decode(&data, "did:test:agent", "session", None)
+        .is_err());
+}
+
+#[tokio::test]
+async fn load_chat_patch_uses_the_canonical_nullable_session_requester() {
+    let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
+    ensure_runtime_schemas(node.as_ref())
+        .await
+        .expect("schemas");
+    let response = node
+        .execute(
+            r#"mutation {
+                session: create_AgentSession(input: {
+                    session_id: "sess-public",
+                    node_did: "did:test:agent",
+                    requester_did: null,
+                    agent_id: "default",
+                    created_at: "2026-07-24T00:00:00Z"
+                }) { _docID }
+                request: create_AgentRequest(input: {
+                    request_id: "req-public",
+                    purpose: "normal",
+                    node_did: "did:test:agent",
+                    requester_did: null,
+                    agent_id: "default",
+                    session_id: "sess-public",
+                    content: "public session",
+                    lifecycle_state: "completed",
+                    created_at: "2026-07-24T00:00:00Z"
+                }) { _docID }
+            }"#,
+        )
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+
+    let patch = load_chat_patch(
+        node.as_ref(),
+        "did:test:agent",
+        "sess-public",
+        Some("req-public"),
+        None,
+        &[],
+    )
+    .await
+    .expect("canonical nullable requester resolves");
+    assert_eq!(patch.sessions.len(), 1);
+    assert_eq!(patch.sessions[0].requester_did, None);
+    assert_eq!(patch.requests.len(), 1);
+    assert_eq!(patch.requests[0].requester_did, None);
 }
 
 #[tokio::test]

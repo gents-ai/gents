@@ -498,6 +498,7 @@ impl ClientStore {
         upsert_rows_by_key(&mut rows.node_readiness, incoming.node_readiness, |row| {
             row.node_did.clone()
         });
+        retire_request_placeholders(&mut rows.requests, &incoming.requests);
         upsert_rows_by_key(&mut rows.requests, incoming.requests, request_merge_key);
         upsert_rows_by_key(&mut rows.mailbox_items, incoming.mailbox_items, |row| {
             row.doc_id.clone()
@@ -697,15 +698,7 @@ impl ClientStore {
         // submit may already have installed an unscoped optimistic row. Let
         // the scoped document replace that placeholder; keeping both makes
         // agent-aware turn lookup select the older processing row first.
-        let scoped_request_ids = patch_rows
-            .requests
-            .iter()
-            .filter(|row| row.node_did.is_some())
-            .map(|row| row.request_id.clone())
-            .collect::<HashSet<_>>();
-        rows.requests.retain(|row| {
-            row.node_did.is_some() || !scoped_request_ids.contains(row.request_id.as_str())
-        });
+        retire_request_placeholders(&mut rows.requests, &patch_rows.requests);
         upsert_rows_by_key(&mut rows.requests, patch_rows.requests, request_merge_key);
         union_immutable_rows(
             &mut rows.transcript_messages,
@@ -820,6 +813,7 @@ mod overlay_tests {
     use gents_protocol::output::{
         MessagePublication, MessageRole, OutputOutcome, TranscriptMessage,
     };
+    use gents_protocol::request_lifecycle::RequestLifecycleState;
     use gents_protocol::row::{NodeReadinessRow, NodeRuntimeRow};
     use gents_protocol::session::{AgentSession, SessionTitle};
 
@@ -1008,6 +1002,134 @@ mod overlay_tests {
 
         assert!(merged.requests.is_empty());
         assert!(merged.tool_calls.is_empty());
+    }
+
+    #[test]
+    fn generated_request_identity_cases_preserve_physical_twins_and_fold_owners() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../gents/tests/fixtures/client_request_cache_identity.json"
+        ))
+        .expect("generated request cache identity cases");
+        for case in fixture.as_array().expect("identity cases") {
+            let all_input_rows = case["current"]
+                .as_array()
+                .expect("current rows")
+                .iter()
+                .chain(case["incoming"].as_array().expect("incoming rows").iter())
+                .cloned()
+                .collect::<Vec<_>>();
+            let convert_rows = |values: &[serde_json::Value]| {
+                values
+                    .iter()
+                    .map(|row| {
+                        let doc = row["doc"].as_u64();
+                        let request = row["request"].as_u64().expect("logical request ID");
+                        let folded_into = row["folded_into"].as_u64();
+                        let folded_request = folded_into.and_then(|owner_doc| {
+                            all_input_rows
+                                .iter()
+                                .find(|candidate| candidate["doc"].as_u64() == Some(owner_doc))
+                                .and_then(|candidate| candidate["request"].as_u64())
+                        });
+                        let lifecycle_state = match row["state"].as_str().expect("row state") {
+                            "unclaimed" => "pending",
+                            "active" => "processing",
+                            "terminal" if folded_into.is_some() => "superseded",
+                            "terminal" => "completed",
+                            other => panic!("unexpected modeled request state {other}"),
+                        };
+                        serde_json::from_value::<AgentRequestRow>(serde_json::json!({
+                            "_docID": doc.map(|id| format!("doc-{id}")),
+                            "request_id": format!("request-{request}"),
+                            "purpose": "normal",
+                            "node_did": row["node"].as_u64().map(|id| format!("did:model:{id}")),
+                            "requester_did": row["requester"].as_u64().map(|id| format!("did:model:{id}")),
+                            "session_id": "session-model",
+                            "lifecycle_state": lifecycle_state,
+                            "superseded_by_request": folded_request.map(|id| format!("request-{id}")),
+                            "superseded_by_request_doc_id": folded_into.map(|id| format!("doc-{id}")),
+                            "failure_reason": folded_into.map(|_| "folded into claimed request"),
+                            "retry_parent_request": row["retry_parent"].as_u64().map(|id| format!("request-{id}")),
+                        }))
+                        .expect("modeled request maps to desktop row")
+                    })
+                    .collect::<Vec<_>>()
+            };
+            let current = convert_rows(case["current"].as_array().unwrap());
+            let incoming = convert_rows(case["incoming"].as_array().unwrap());
+            let base = ClientStore::from_rows(ClientStoreRows {
+                requests: current,
+                ..Default::default()
+            });
+            let incoming = ClientStore::from_rows(ClientStoreRows {
+                requests: incoming,
+                ..Default::default()
+            });
+            let stores = [
+                base.clone().merge_snapshot(incoming.clone()),
+                base.merge_chat_patch(incoming),
+            ];
+            for store in stores {
+                let actual_rows = store
+                    .requests
+                    .iter()
+                    .map(|row| {
+                    let parse_num = |value: Option<&str>, prefix: &str| {
+                        value.and_then(|value| value.strip_prefix(prefix))
+                            .and_then(|value| value.parse::<u64>().ok())
+                    };
+                    let state = if row.lifecycle_state == Some(RequestLifecycleState::Pending) {
+                        "unclaimed"
+                    } else if row.lifecycle_state == Some(RequestLifecycleState::Superseded)
+                        || row.lifecycle_state.is_some_and(|state| state.is_terminal())
+                    {
+                        "terminal"
+                    } else {
+                        "active"
+                    };
+                    serde_json::json!({
+                        "doc": parse_num(row.doc_id.as_deref(), "doc-"),
+                        "node": row.node_did.as_deref().and_then(|did| did.strip_prefix("did:model:")).and_then(|id| id.parse::<u64>().ok()),
+                        "requester": row.requester_did.as_deref().and_then(|did| did.strip_prefix("did:model:")).and_then(|id| id.parse::<u64>().ok()),
+                        "request": parse_num(Some(&row.request_id), "request-"),
+                        "state": state,
+                        "folded_into": parse_num(row.superseded_by_request_doc_id.as_deref(), "doc-"),
+                        "queued_after": null,
+                        "retry_parent": row.retry_parent_request.as_deref().and_then(|id| parse_num(Some(id), "request-"))
+                    })
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    serde_json::Value::Array(actual_rows),
+                    case["expected_rows"],
+                    "{}",
+                    case["name"]
+                );
+
+                if let Some(selected_doc) = case["selected_doc"].as_u64() {
+                    let expected_turn_doc = case["expected_turn_doc"]
+                        .as_u64()
+                        .expect("modeled turn doc");
+                    let selected_doc = format!("doc-{selected_doc}");
+                    let selected = store
+                        .requests
+                        .iter()
+                        .find(|row| row.doc_id.as_deref() == Some(selected_doc.as_str()))
+                        .expect("selected physical request row");
+                    let scoped = store
+                        .requests
+                        .iter()
+                        .filter(|row| {
+                            row.node_did == selected.node_did
+                                && row.session_id == selected.session_id
+                        })
+                        .collect::<Vec<_>>();
+                    let tip = super::super::turns::session_turn_request(&scoped, selected);
+                    let expected_turn_doc = format!("doc-{expected_turn_doc}");
+                    assert_eq!(tip.doc_id.as_deref(), Some(expected_turn_doc.as_str()));
+                }
+            }
+        }
     }
 
     #[test]

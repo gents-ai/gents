@@ -287,7 +287,7 @@ fn read_init_ceiling(node_home: &std::path::Path) -> Option<InitCeilingView> {
 #[path = "snapshot/runtime_tasks.rs"]
 mod runtime_tasks;
 #[cfg(test)]
-use runtime_tasks::{recent_runs_for_task_views, session_summaries, task_run_history};
+use runtime_tasks::{recent_runs_for_task_views, session_summaries, task_run_histories};
 use runtime_tasks::{request_matches_node, source_matches_node};
 
 #[path = "snapshot/runtime.rs"]
