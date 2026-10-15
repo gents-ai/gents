@@ -1288,3 +1288,67 @@ async fn admitted_schedule_replay_precedes_render_and_latest_only_supersession()
         "processing"
     );
 }
+
+#[tokio::test]
+async fn scheduled_target_admission_is_atomic_and_recovers_same_occurrence() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let behavior = integration_test_agent("general");
+    let owner = behavior.node_did().to_string();
+    for (target, agent, closed) in [
+        ("captain", "general", false),
+        ("wrong-agent", "other", false),
+        ("closed", "general", true),
+    ] {
+        node.execute(&crate::defra::mutation::build_create_mutation("Session", &serde_json::json!({
+            "session_id":target, "node_did":owner, "agent_id":agent,
+            "purpose":"normal", "closed":closed, "created_at":"2025-01-01T00:00:00Z"
+        })).unwrap()).await.into_result().unwrap();
+    }
+    let task = resolved_task("wake {{ session.id }}");
+    for target in ["captain", "wrong-agent", "closed", "missing"] {
+        let trigger = format!("wake-{target}");
+        let mut schedule = resolved_schedule(&trigger, task.clone());
+        schedule.session_id_template = Some(target.into());
+        schedule.concurrency = ConcurrencyMode::QueuedSerial;
+        let snapshot = snapshot_with_agent_and_schedules(behavior.clone(), HashMap::from([(trigger.clone(), schedule)]));
+        let (tx, rx) = watch::channel(snapshot);
+        let materializer = Arc::new(ProductionMaterializer::new(node.clone(), rx.clone()));
+        let engine = TriggerEngine::new(rx, materializer.clone());
+        let identity = gents_protocol::trigger_delivery::FireIdentity {
+            owner_did:owner.clone(), trigger_id:trigger.clone(), source_collection:"Schedule".into(),
+            source_doc_id:"due-2030-01-01".into(),
+        };
+        let intent = || FireIntent {
+            trigger_id:Some(trigger.clone()), trigger_kind:TriggerKind::Schedule,
+            task:task.clone(), concurrency:ConcurrencyMode::QueuedSerial,
+            event_vars:serde_json::json!({}), doc_vars:None, correlation:None,
+            group_vars:None, trigger_context:None, args_vars:None,
+            durable_fire_key:"due-2030-01-01".into(), pre_materialized_request_id:None,
+            on_result:Box::new(|_| {}),
+        };
+        let first = engine.dispatch(intent()).await;
+        if target == "captain" {
+            assert!(matches!(first, FireResult::Fired { ref request_id } if request_id == &identity.request_id()), "{first:?}");
+            // Simulate losing the cursor acknowledgement and removing config.
+            tx.send(snapshot_with_agent_and_schedules(behavior.clone(), HashMap::new())).unwrap();
+            assert!(matches!(engine.dispatch(intent()).await, FireResult::Duplicate { request_id } if request_id == identity.request_id()));
+        } else {
+            assert!(matches!(first, FireResult::Errored { .. } | FireResult::Rejected { .. }), "{first:?}");
+        }
+        let response = node.execute(&format!(r#"{{ TriggerFire(filter: {{fire_key: {{_eq: "{}"}}}}) {{ request_id queued_serial }} AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}) {{ session_id caused_by_trigger_kind content }} }}"#,
+            escape_graphql_string(&identity.fire_key()), escape_graphql_string(&identity.request_id()))).await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+        let data = response.data.unwrap();
+        let expected = usize::from(target == "captain");
+        assert_eq!(data["TriggerFire"].as_array().unwrap().len(), expected);
+        assert_eq!(data["AgentRequest"].as_array().unwrap().len(), expected);
+        if expected == 1 {
+            let request = &data["AgentRequest"][0];
+            assert_eq!(request["session_id"], "captain");
+            assert_eq!(request["caused_by_trigger_kind"], "schedule");
+            assert_eq!(data["TriggerFire"][0]["queued_serial"], true);
+            assert_eq!(request["content"], "wake captain");
+        }
+    }
+}
