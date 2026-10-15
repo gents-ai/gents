@@ -29,6 +29,8 @@ mod graphql;
 mod inference_backend;
 mod inference_profile;
 mod profile_switch;
+#[cfg(test)]
+mod query_tests;
 mod retry;
 mod schema_contract;
 mod schema_install;
@@ -509,5 +511,8 @@ pub async fn query_graphql_with_options(
 ) -> Result<Value> {
     graphql::query_with_options(graphql, query, options)
         .await
-        .map_err(|error| anyhow::anyhow!("{error}\n{}", graphql_diagnostic_hint(graphql.url())))
+        .map_err(|error| {
+            let diagnostic = format!("{error}\n{}", graphql_diagnostic_hint(graphql.url()));
+            error.context(diagnostic)
+        })
 }
