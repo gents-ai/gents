@@ -37,8 +37,28 @@ def reuseJson (entry : String × Bool × Bool × Bool × Bool) : String :=
     ",\"rows_current\":" ++ toString rowsCurrent ++
     ",\"expected_reuse\":" ++ toString (reusable state sameSignature fenceAccepted rowsCurrent) ++ "}"
 
+def freshReadActionJson : FreshReadAction → String
+  | .mergeFresh => "merge_fresh"
+  | .rejectCandidate => "reject_candidate"
+  | .noPatch => "no_patch"
+
+def freshReadCases : List (String × Bool × Bool) :=
+  [ ("cache_miss_current_fence_publishes_fresh_patch", true, true)
+  , ("cache_miss_stale_fence_rejects_fresh_patch", false, true)
+  , ("missing_fresh_patch_has_no_publication", true, false)
+  ]
+
+def freshReadJson (entry : String × Bool × Bool) : String :=
+  let (name, fenceAccepted, patchAvailable) := entry
+  "{\"name\":\"" ++ name ++
+    "\",\"fence_accepted\":" ++ toString fenceAccepted ++
+    ",\"patch_available\":" ++ toString patchAvailable ++
+    ",\"expected_action\":\"" ++ freshReadActionJson
+      (freshReadAction fenceAccepted patchAvailable) ++ "\"}"
+
 def casesJson : String :=
   "{\"publications\":[" ++ String.intercalate "," (publicationCases.map publicationJson) ++
-    "],\"reuse\":[" ++ String.intercalate "," (reuseCases.map reuseJson) ++ "]}"
+    "],\"reuse\":[" ++ String.intercalate "," (reuseCases.map reuseJson) ++
+    "],\"fresh_read\":[" ++ String.intercalate "," (freshReadCases.map freshReadJson) ++ "]}"
 
 end Conformance.RequestPatchPublicationCases
