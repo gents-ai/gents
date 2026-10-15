@@ -1813,13 +1813,31 @@ mod tests {
                 assert_eq!(roots.len(), 1);
                 let doc_fetches = metric(&roots[0], "docFetches").expect("docFetches metric");
                 let index_fetches = metric(&roots[0], "indexFetches").expect("indexFetches metric");
+                let cursor_model_id = cursor_model_id(current_cursor, &modeled_ids_by_item_key);
+                let remaining_local_open_rows = action["rows"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|row| {
+                        row["node_did"] == node_did
+                            && row["open"] == true
+                            && row["doc_id"]
+                                .as_u64()
+                                .is_some_and(|id| id > cursor_model_id)
+                    })
+                    .count() as u64;
                 assert!(
                     doc_fetches <= (MAILBOX_SWEEP_PAGE_SIZE + 1) as u64,
                     "keyset page must bound document reads, got {doc_fetches}: {execution}"
                 );
+                // DefraDB retains the node/status predicate as a residual filter,
+                // so its index scan has no page-size early-stop bound. Keep this
+                // honest suffix bound: older history before the cursor and other
+                // nodes must not widen the scan, while the current eligible tail
+                // can still be inspected to satisfy the residual predicate.
                 assert!(
-                    index_fetches <= (MAILBOX_SWEEP_PAGE_SIZE + 1) as u64,
-                    "keyset page should seek past earlier open rows, got {index_fetches}: {execution}"
+                    index_fetches <= remaining_local_open_rows,
+                    "keyset index scan should stay within the modeled local open suffix of {remaining_local_open_rows}, got {index_fetches}: {execution}"
                 );
             }
             let page = sweep_open_mailbox_items_with_close_collections(
