@@ -4,8 +4,8 @@ use std::sync::Arc;
 use gents::config_client::ConfigAccess;
 use gents::graphql::graphql_string_list_literal;
 use gents::session::{public_request_filter, session_scope_filter};
-use gents::session_origin::{caused_requests, lineage, SessionLink, SessionScope};
-use gents::toolset::{AGENT_MESSAGE_TOOL_NAME, AGENT_NEW_TOOL_NAME};
+use gents::session_origin::{group_caused, lineage, SessionLink, SessionScope};
+use gents::toolset::is_session_message_tool;
 use gents_desktop_core::client::ClientCore;
 use serde_json::Value;
 
@@ -90,61 +90,83 @@ async fn caused_calls(
     access: &ConfigAccess,
     scope: &SessionScope,
 ) -> anyhow::Result<Vec<CausedCallView>> {
-    let own = session_scope_filter(
-        &scope.node_did,
-        &scope.session_id,
-        scope.requester_did.as_deref(),
-    );
-    let tools = graphql_string_list_literal([AGENT_NEW_TOOL_NAME, AGENT_MESSAGE_TOOL_NAME]);
-    let calls = rows(
+    let own = rows(
         access,
         &format!(
-            "{{AgentToolCall(filter: {{{own}, tool_name: {{_in: {tools}}}}}) {{_docID request_id tool_call_id}}}}"
-        ),
-        "AgentToolCall",
-    )
-    .await?;
-    let doc_ids = calls
-        .iter()
-        .filter_map(|row| row.get("_docID").and_then(Value::as_str))
-        .collect::<Vec<_>>();
-    let caused = caused_requests(access, doc_ids.iter().copied()).await?;
-    if caused.is_empty() {
-        return Ok(Vec::new());
-    }
-    let states = rows(
-        access,
-        &format!(
-            "{{AgentRequest(filter: {{{}}}) {{request_id node_did session_id requester_did lifecycle_state created_at caused_by_parent_tool_call_doc_id}}}}",
-            public_request_filter(&format!(
-                "request_id: {{_in: {}}}, caused_by_parent_tool_call_doc_id: {{_in: {}}}",
-                graphql_string_list_literal(caused.values().map(String::as_str)),
-                graphql_string_list_literal(caused.keys().map(String::as_str)),
+            "{{AgentRequest(filter: {{{}}}) {{_docID}}}}",
+            public_request_filter(&session_scope_filter(
+                &scope.node_did,
+                &scope.session_id,
+                scope.requester_did.as_deref(),
             ))
         ),
         "AgentRequest",
     )
     .await?;
-    let by_call = states
+    let own_doc_ids = own
         .iter()
-        .filter_map(|row| Some((text(row, "caused_by_parent_tool_call_doc_id")?, row)))
-        .filter(|(call, row)| caused.get(call) == text(row, "request_id").as_ref())
+        .filter_map(|row| row.get("_docID").and_then(Value::as_str))
+        .collect::<Vec<_>>();
+    if own_doc_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let states = rows(
+        access,
+        &format!(
+            "{{AgentRequest(filter: {{{}}}) {{_docID node_did session_id requester_did request_id created_at lifecycle_state caused_by_parent_tool_call_doc_id}}}}",
+            public_request_filter(&format!(
+                "caused_by_parent_request_doc_id: {{_in: {}}}, caused_by_parent_tool_call_doc_id: {{_ne: null}}",
+                graphql_string_list_literal(own_doc_ids.iter().copied()),
+            ))
+        ),
+        "AgentRequest",
+    )
+    .await?;
+    let caused = group_caused(&states);
+    if caused.is_empty() {
+        return Ok(Vec::new());
+    }
+    let state_of = states
+        .iter()
+        .filter_map(|row| Some((text(row, "_docID")?, row)))
         .collect::<BTreeMap<_, _>>();
+    let calls = rows(
+        access,
+        &format!(
+            "{{AgentToolCall(filter: {{_docID: {{_in: {}}}}}) {{_docID request_id tool_call_id tool_name}}}}",
+            graphql_string_list_literal(caused.keys().map(String::as_str))
+        ),
+        "AgentToolCall",
+    )
+    .await?;
     Ok(calls
         .iter()
         .filter_map(|call| {
-            let request = by_call.get(&text(call, "_docID")?)?;
-            Some(CausedCallView {
-                request_id: text(call, "request_id")?,
-                tool_call_id: text(call, "tool_call_id")?,
-                caused: CausedRequestView {
-                    request_id: text(request, "request_id")?,
-                    node_did: text(request, "node_did")?,
-                    session_id: text(request, "session_id")?,
-                    requester_did: text(request, "requester_did"),
-                    lifecycle_state: text(request, "lifecycle_state"),
-                    created_at: text(request, "created_at"),
-                },
+            let requests = caused.get(&text(call, "_docID")?)?;
+            let session_message = is_session_message_tool(&text(call, "tool_name")?);
+            let shown = if session_message && requests.len() != 1 {
+                &[][..]
+            } else {
+                requests.as_slice()
+            };
+            Some((call, shown))
+        })
+        .flat_map(|(call, shown)| {
+            let state_of = &state_of;
+            shown.iter().filter_map(move |request| {
+                let state = state_of.get(&request.request_doc_id)?;
+                Some(CausedCallView {
+                    request_id: text(call, "request_id")?,
+                    tool_call_id: text(call, "tool_call_id")?,
+                    caused: CausedRequestView {
+                        request_id: request.request_id.clone(),
+                        node_did: request.scope.node_did.clone(),
+                        session_id: request.scope.session_id.clone(),
+                        requester_did: request.scope.requester_did.clone(),
+                        lifecycle_state: text(state, "lifecycle_state"),
+                        created_at: Some(request.created_at.clone()),
+                    },
+                })
             })
         })
         .collect())
