@@ -409,6 +409,62 @@ pub(crate) fn chunk_capture_body(encoded: &str) -> Vec<ChunkedBlock> {
     blocks
 }
 
+/// Repeated JSON strings must start at the same chunk boundary to share their
+/// leading and trailing bytes across the wire body and native provenance.
+/// The manifest still restores each original byte stream by concatenation.
+pub(crate) fn chunk_capture_payloads(payloads: [&str; 2]) -> [Vec<ChunkedBlock>; 2] {
+    let ranges = payloads.map(long_json_strings);
+    let mut occurrences = std::collections::HashMap::<&str, usize>::new();
+    for (payload, ranges) in payloads.iter().zip(&ranges) {
+        for &(start, end) in ranges {
+            *occurrences.entry(&payload[start..end]).or_default() += 1;
+        }
+    }
+    std::array::from_fn(|index| {
+        let payload = payloads[index];
+        let mut blocks = Vec::new();
+        let mut start = 0;
+        for &(value_start, value_end) in &ranges[index] {
+            if occurrences[&payload[value_start..value_end]] < 2 {
+                continue;
+            }
+            blocks.extend(chunk_capture_body(&payload[start..value_start]));
+            blocks.extend(chunk_capture_body(&payload[value_start..value_end]));
+            start = value_end;
+        }
+        blocks.extend(chunk_capture_body(&payload[start..]));
+        // Aligning strings can introduce short framing blocks. Preserve the
+        // existing reader's reference limit for otherwise admissible bodies.
+        if blocks.len() > MAX_MANIFEST_BLOCKS {
+            chunk_capture_body(payload)
+        } else {
+            blocks
+        }
+    })
+}
+
+fn long_json_strings(encoded: &str) -> Vec<(usize, usize)> {
+    let mut ranges = Vec::new();
+    let mut start = None;
+    let mut escaped = false;
+    for (index, byte) in encoded.bytes().enumerate() {
+        match start {
+            None if byte == b'"' => start = Some(index),
+            Some(_) if escaped => escaped = false,
+            Some(_) if byte == b'\\' => escaped = true,
+            Some(value_start) if byte == b'"' => {
+                let end = index + 1;
+                if end - value_start >= CHUNK_MIN_SIZE {
+                    ranges.push((value_start, end));
+                }
+                start = None;
+            }
+            _ => {}
+        }
+    }
+    ranges
+}
+
 /// Length of the first chunk cut from `chunk`: a content-defined boundary
 /// after [`CHUNK_MIN_SIZE`] bytes, a forced cut at [`CHUNK_MAX_SIZE`], or the
 /// end of the body. A final block may be shorter than the minimum.
@@ -1173,6 +1229,98 @@ mod tests {
             out.push(char::from(b'a' + (state % 26) as u8));
         }
         out
+    }
+
+    #[test]
+    fn repeated_json_strings_share_blocks_without_changing_either_payload() {
+        let text = format!("{}\\\"λ\n", deterministic_capture_text(8 * 1024));
+        let values = [
+            json!({"messages": [{"role": "tool", "content": text}]}),
+            json!({
+                "effective_messages": [{"content": [{"text": text}]}],
+                "threaded_tool_results": [{"content": [{"text": text}]}]
+            }),
+        ];
+        let layouts = values
+            .each_ref()
+            .map(|value| capture_block_layout(value).unwrap());
+        let shared = chunk_capture_payloads([&layouts[0], &layouts[1]]);
+        let baseline = layouts.each_ref().map(|layout| chunk_capture_body(layout));
+        let unique_bytes = |payloads: &[Vec<ChunkedBlock>; 2]| {
+            let mut unique = BTreeMap::new();
+            for block in payloads.iter().flatten() {
+                unique.insert(&block.content_key, block.bytes.len());
+            }
+            unique.values().sum::<usize>()
+        };
+        assert!(
+            unique_bytes(&shared) < unique_bytes(&baseline),
+            "aligned strings must reduce stored block bytes: aligned={}, baseline={}",
+            unique_bytes(&shared),
+            unique_bytes(&baseline)
+        );
+
+        let text_blocks = chunk_capture_body(&serde_json::to_string(&text).unwrap());
+        for (index, blocks) in shared.iter().enumerate() {
+            for block in &text_blocks {
+                assert!(blocks
+                    .iter()
+                    .any(|candidate| candidate.content_key == block.content_key));
+            }
+            let (entries, store) = manifest_store(blocks);
+            let manifest = encode_manifest(&entries).unwrap();
+            let restored =
+                resolve_manifest_with_limit(entries.len() + 2, &manifest.stored, |entry| {
+                    let (witness, bytes) = &store[&entry.doc_id];
+                    Ok((bytes.clone(), witness.clone()))
+                })
+                .unwrap();
+            assert_eq!(restored, values[index]);
+        }
+    }
+
+    #[test]
+    fn unshared_json_strings_keep_existing_chunk_boundaries() {
+        let values = [
+            json!({"text": deterministic_capture_text(4000)}),
+            json!({"text": deterministic_capture_text(5000)}),
+        ];
+        let layouts = values
+            .each_ref()
+            .map(|value| capture_block_layout(value).unwrap());
+        let chunks = chunk_capture_payloads([&layouts[0], &layouts[1]]);
+        for (layout, actual) in layouts.iter().zip(chunks) {
+            let expected = chunk_capture_body(layout);
+            assert_eq!(
+                actual
+                    .iter()
+                    .map(|block| &block.content_key)
+                    .collect::<Vec<_>>(),
+                expected
+                    .iter()
+                    .map(|block| &block.content_key)
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn repeated_string_framing_cannot_exceed_the_existing_manifest_limit() {
+        let text = deterministic_capture_text(CHUNK_MIN_SIZE);
+        let payload = serde_json::to_string(&vec![&text; MAX_MANIFEST_BLOCKS / 2 + 1]).unwrap();
+        let [chunks, _] = chunk_capture_payloads([&payload, "{}"]);
+        let baseline = chunk_capture_body(&payload);
+        assert!(chunks.len() <= MAX_MANIFEST_BLOCKS);
+        assert_eq!(
+            chunks
+                .iter()
+                .map(|block| &block.content_key)
+                .collect::<Vec<_>>(),
+            baseline
+                .iter()
+                .map(|block| &block.content_key)
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]

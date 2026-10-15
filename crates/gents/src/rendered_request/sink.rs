@@ -331,8 +331,8 @@ impl DefraRenderedRequestSink {
                 .context("encoding rendered-request provenance payload")?;
         let provenance_json = canonical_json_string(&rendered.provenance_json)
             .context("encoding rendered-request provenance_json")?;
-        let request_chunks = super::encoding::chunk_capture_body(&request_layout);
-        let provenance_chunks = super::encoding::chunk_capture_body(&provenance_payload_layout);
+        let [request_chunks, provenance_chunks] =
+            super::encoding::chunk_capture_payloads([&request_layout, &provenance_payload_layout]);
         let blocks = unique_blocks(&[&request_chunks, &provenance_chunks]);
 
         // Blocks and the manifest row commit together. The existence read runs
@@ -952,6 +952,49 @@ mod tests {
         assert_eq!(
             provenance,
             super::super::canonical_json(&rendered.provenance_payload_json)
+        );
+        node.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn repeated_tool_output_is_stored_once_across_wire_and_native_payloads() {
+        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+        let sink = DefraRenderedRequestSink::new(Arc::clone(&node));
+        let text = capture_text(73, 8 * 1024);
+        let mut rendered = rendered_turn(
+            0,
+            json!({
+                "messages": [{"role": "tool", "content": text}]
+            }),
+        );
+        rendered.provenance_payload_json = json!({
+            "effective_messages": [{"content": [{"text": text}]}],
+            "threaded_tool_results": [{"content": [{"text": text}]}]
+        });
+        sink.capture(rendered.clone()).await.unwrap();
+        let rows = block_rows(node.as_ref()).await;
+        let text_chunks =
+            super::super::encoding::chunk_capture_body(&serde_json::to_string(&text).unwrap());
+        for chunk in text_chunks {
+            assert_eq!(
+                rows.iter()
+                    .filter(|row| row["content_key"] == chunk.content_key)
+                    .count(),
+                1
+            );
+        }
+        let row = stored_capture(node.as_ref(), &rendered.capture_key).await;
+        let decoded = super::super::decode_capture_pair_embedded(
+            node.as_ref(),
+            3,
+            row["request_json"].as_str().unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            decoded,
+            (rendered.request_json, rendered.provenance_payload_json)
         );
         node.shutdown().await;
     }
