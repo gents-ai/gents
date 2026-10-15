@@ -1813,7 +1813,6 @@ mod tests {
                 assert_eq!(roots.len(), 1);
                 let doc_fetches = metric(&roots[0], "docFetches").expect("docFetches metric");
                 let index_fetches = metric(&roots[0], "indexFetches").expect("indexFetches metric");
-                let cursor_model_id = cursor_model_id(current_cursor, &modeled_ids_by_item_key);
                 let remaining_local_open_rows = action["rows"]
                     .as_array()
                     .unwrap()
