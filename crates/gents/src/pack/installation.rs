@@ -558,6 +558,12 @@ pub async fn record_plugin_store_change(
 /// access is embedded and the caller knows the invoking DID. `None` keeps the
 /// default actor (the operator/CLI path). A model-facing caller must pass the
 /// invoking DID: the record's owner string is not authentication.
+///
+/// This record wakes reconciliation; local plugin records govern execution.
+/// A local publication can outlive a failed or cancelled notification, so
+/// retries project the current home pin instead of restoring an older pin
+/// from the caller. Concurrent later publications are observed by their
+/// own notification or the next reconciliation.
 pub async fn record_plugin_store_change_as(
     access: &ConfigAccess,
     owner: &str,
@@ -566,24 +572,26 @@ pub async fn record_plugin_store_change_as(
     coordinate: &str,
     installed: Option<&PackIdentity>,
 ) -> Result<()> {
-    let retained = installed.is_none()
-        && crate::plugin::store::list_records(home)?
-            .iter()
-            .any(|plugin| plugin.owner_pack_coordinate.as_deref() == Some(coordinate));
     match access {
         ConfigAccess::Local(local) => {
             ConfigAccess::transact_local_write(
                 local.node(),
                 identity,
                 "pack.record_plugin_store",
-                |txn| Box::pin(async move { write_plugin_record(txn, owner, home, coordinate, installed, retained).await }),
+                |txn| {
+                    Box::pin(async move {
+                        write_plugin_record(txn, owner, home, coordinate, installed).await
+                    })
+                },
             )
             .await
         }
         ConfigAccess::Graphql(_) => {
             access
                 .transact_write("pack.record_plugin_store", |txn| {
-                    Box::pin(async move { write_plugin_record(txn, owner, home, coordinate, installed, retained).await })
+                    Box::pin(async move {
+                        write_plugin_record(txn, owner, home, coordinate, installed).await
+                    })
                 })
                 .await
         }
@@ -593,11 +601,23 @@ pub async fn record_plugin_store_change_as(
 async fn write_plugin_record(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,
-    _home: &Path,
+    home: &Path,
     coordinate: &str,
     installed: Option<&PackIdentity>,
-    retained: bool,
 ) -> Result<()> {
+    let current_home = super::read_home_install(home, coordinate)?;
+    let current_identity = current_home.map(|record| PackIdentity {
+        coordinate: record.coordinate,
+        version: record.version,
+        digest: record.digest,
+        plugins: record.plugins,
+        dependencies: Vec::new(),
+    });
+    let installed = current_identity.as_ref().or(installed);
+    let retained = installed.is_none()
+        && crate::plugin::store::list_records(home)?
+            .iter()
+            .any(|plugin| plugin.owner_pack_coordinate.as_deref() == Some(coordinate));
     let prior = read_record(txn, owner, coordinate).await?;
     let documents: Vec<RecordedDocument> = prior.documents.values().cloned().collect();
     let own = prior.doc_id.is_none() || prior.plugin_store;
@@ -628,7 +648,16 @@ async fn write_plugin_record(
         dependencies: Vec::new(),
     };
     let plugin_store = prior.plugin_store;
-    write_record_in_txn(txn, owner, &unchanged, &prior, documents, false, plugin_store).await
+    write_record_in_txn(
+        txn,
+        owner,
+        &unchanged,
+        &prior,
+        documents,
+        false,
+        plugin_store,
+    )
+    .await
 }
 
 /// Whether an installation record row is a plugin-store record

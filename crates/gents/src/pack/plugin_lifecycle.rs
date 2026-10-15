@@ -7,46 +7,15 @@ use anyhow::{Context, Result};
 use super::{HomePackInstall, InstalledPackPlugin, PackIdentity, PackKind};
 use crate::plugin::{install, store};
 
-struct Rollback<'a> {
-    home: &'a Path,
-    coordinate: String,
-    previous: Option<HomePackInstall>,
-    plugins: Vec<(String, String, Option<store::InstalledPlugin>)>,
-    committed: bool,
-}
-
-impl Drop for Rollback<'_> {
-    fn drop(&mut self) {
-        if self.committed {
-            return;
-        }
-        install::rollback_pack_plugin_records(self.home, &self.plugins);
-        let restored = match &self.previous {
-            Some(previous) => super::write_home_install(self.home, previous),
-            None => super::forget_home_install(self.home, &self.coordinate),
-        };
-        if let Err(error) = restored {
-            tracing::error!(coordinate = %self.coordinate, %error, "failed to restore pack install record");
-        }
-    }
-}
-
 /// The caller supplies operator consent and the existing node notification owner.
 /// Model-facing callers must pass false; a statement in model input is never consent.
 ///
-/// Lifecycle mutations (plugin records and the home install record) are
-/// serialized under the plugin store's exclusive lock, so a concurrent
-/// install's published state cannot be erased by this operation's rollback:
-/// a snapshot is only taken once this operation holds the lock, and a
-/// competing install waits until the lock is released.
-///
-/// The notification (node record) is written through the existing durable
-/// transaction owner, which supports commit followed by lost receipt. A
-/// notification error is therefore ambiguous, not proof of rollback: the
-/// home install record is only restored when the transaction owner reports
-/// the write durably failed (`Err` from a non-retryable failure), and an
-/// ambiguous outcome is left to that owner's idempotent retry/recovery
-/// instead of reverting local state under a possibly-committed node record.
+/// Local plugin records, bindings, and the home install pin publish together
+/// under one nonblocking store lock. Once that synchronous local publication
+/// succeeds it is the installed state; a node notification failure or caller
+/// cancellation must not roll it back, because the durable transaction may
+/// have committed without returning its receipt. The notification owner can
+/// reconcile its auxiliary node record on a later operation.
 #[allow(clippy::too_many_arguments)]
 pub async fn install<F: Future<Output = Result<()>>>(
     home: &Path,
@@ -63,78 +32,134 @@ pub async fn install<F: Future<Output = Result<()>>>(
     );
     let coordinate = format!("{}/{}", manifest.metadata.namespace, manifest.name);
     let (root, _cache_lease) = super::materialize::cached(home, archive)?;
-    // A malformed record is not absence and must never become a rollback snapshot.
-    store::list_records(home)?;
-    // The store lock serializes every plugin-record and home-record mutation
-    // of this home, including release_unreferenced_bytes. It is held across
-    // the awaitable notification so a competing install cannot publish and
-    // then be erased by this operation's rollback.
-    let lock = store::lock_store(home, true)?;
-    let previous = super::read_home_install(home, &coordinate)?;
-    for plugin in &manifest.metadata.plugins {
-        store::check_plugin_ownership(
-            home,
-            &manifest.metadata.namespace,
-            &plugin.name,
-            &coordinate,
-        )?;
-        store::grant_on_install(home, &manifest.metadata.namespace, plugin, consent)?;
-    }
-    let mut rollback = Rollback {
-        home,
-        coordinate: coordinate.clone(),
-        previous,
-        plugins: install::snapshot_pack_plugin_records(home, manifest),
-        committed: false,
+    let install_owner = if bindings.is_empty() {
+        None
+    } else {
+        Some(owner.context("plugin slot bindings require an owner")?)
     };
-    let installed = install::install_pack_plugins_locked(
-        &lock,
+    let mut published_record = None;
+    let installed = install::install_pack_plugins_with_bindings(
         home,
         manifest,
         archive.digest(),
         |path| archive.asset(path),
         consent,
+        install_owner,
+        bindings,
+        |plugins| {
+            let previous = super::read_home_install(home, &coordinate)?;
+            let record = HomePackInstall {
+                coordinate: coordinate.clone(),
+                version: manifest.version.clone(),
+                digest: archive.digest().to_owned(),
+                kind: manifest.metadata.kind.clone(),
+                assets: root.strip_prefix(home)?.to_string_lossy().into_owned(),
+                plugins: plugins
+                    .iter()
+                    .map(|plugin| InstalledPackPlugin {
+                        name: plugin.name.clone(),
+                        digest: plugin.digest.clone(),
+                    })
+                    .collect(),
+                installed_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            };
+            if let Err(error) = super::write_home_install(home, &record) {
+                let restored = match previous {
+                    Some(previous) => super::write_home_install(home, &previous),
+                    None => super::forget_home_install(home, &coordinate),
+                };
+                if let Err(restore_error) = restored {
+                    tracing::error!(coordinate = %coordinate, error = %restore_error, "failed to restore pack install record after local publication error");
+                }
+                return Err(error).context("publishing the local pack install record");
+            }
+            published_record = Some(record);
+            Ok(())
+        },
     )?;
-    let record = HomePackInstall {
-        coordinate,
-        version: manifest.version.clone(),
-        digest: archive.digest().to_owned(),
-        kind: manifest.metadata.kind.clone(),
-        assets: root.strip_prefix(home)?.to_string_lossy().into_owned(),
-        plugins: installed
-            .iter()
-            .map(|plugin| InstalledPackPlugin {
-                name: plugin.name.clone(),
-                digest: plugin.digest.clone(),
-            })
-            .collect(),
-        installed_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-    };
-    let result: anyhow::Result<()> = async {
-        if !bindings.is_empty() {
-            install::bind_plugin_slots(
-                home,
-                manifest,
-                owner.context("plugin slot bindings require an owner")?,
-                bindings,
-            )?;
+    let record = published_record.context("local pack install did not publish its record")?;
+    if !record.plugins.is_empty() {
+        if let Err(error) = notify(PackIdentity::new(
+            manifest,
+            archive.digest(),
+            record.plugins.clone(),
+        ))
+        .await
+        {
+            return Err(error).context(
+                "the pack was installed locally, but its node notification was not confirmed; retry the pack operation to reconcile the node record",
+            );
         }
-        super::write_home_install(home, &record)?;
-        if !record.plugins.is_empty() {
-            notify(PackIdentity::new(
-                manifest,
-                archive.digest(),
-                record.plugins.clone(),
-            ))
-            .await?;
-        }
-        Ok(())
     }
-    .await;
-    result?;
-    rollback.committed = true;
-    drop(lock);
     Ok((record, installed))
+}
+
+pub struct LocalPackRemoval {
+    pub record: HomePackInstall,
+    pub plugins: Vec<InstalledPackPlugin>,
+    pub cache_error: Option<String>,
+}
+
+/// Removes a home pin and its owned plugin records under the same exclusion
+/// used by publication. Cache cleanup runs under that exclusion so a concurrent
+/// reinstall cannot publish into the cache while it is being retired.
+pub fn remove_local(
+    home: &Path,
+    coordinate: &str,
+    cleanup_cache: impl FnOnce(&HomePackInstall) -> Result<()>,
+) -> Result<LocalPackRemoval> {
+    let guard = store::try_lock_store(home)?;
+    let record = super::read_home_install(home, coordinate)?
+        .with_context(|| format!("{coordinate} is not installed"))?;
+    let (namespace, _) = crate::pack_registry::split_pack_coordinate(coordinate);
+    let mut previous = Vec::new();
+    for plugin in &record.plugins {
+        match store::read_record(home, namespace, &plugin.name) {
+            Ok(existing) => previous.push(existing),
+            Err(error) if store::is_not_found(&error) => {}
+            Err(error) => return Err(error),
+        }
+    }
+    let result = (|| {
+        let mut removed = Vec::new();
+        for plugin in &record.plugins {
+            if store::remove_record_if_owned_locked(
+                &guard,
+                home,
+                namespace,
+                &plugin.name,
+                coordinate,
+                &plugin.digest,
+            )? {
+                removed.push(plugin.clone());
+            }
+        }
+        super::forget_home_install(home, coordinate)?;
+        Ok(removed)
+    })();
+    match result {
+        Ok(plugins) => {
+            let cache_error = cleanup_cache(&record)
+                .err()
+                .map(|error| format!("{error:#}"));
+            Ok(LocalPackRemoval {
+                record,
+                plugins,
+                cache_error,
+            })
+        }
+        Err(error) => {
+            for plugin in previous {
+                if let Err(restore) = store::write_record(home, &plugin) {
+                    tracing::error!(%coordinate, %restore, "failed to restore plugin after removal error");
+                }
+            }
+            if let Err(restore) = super::write_home_install(home, &record) {
+                tracing::error!(%coordinate, %restore, "failed to restore home pin after removal error");
+            }
+            Err(error)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -179,11 +204,11 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn plugin_lifecycle_rolls_back_notification_failure_and_cancellation() {
+    async fn plugin_lifecycle_keeps_local_publication_after_notification_failure_or_cancellation() {
         let home = tempfile::tempdir().unwrap();
         let (_dir, _path, archive) = fixture("1.0.0", false);
         let coordinate = "fixture/native_echo_pack";
-        install(
+        let error = install(
             home.path(),
             &archive,
             false,
@@ -193,10 +218,11 @@ pub(crate) mod tests {
         )
         .await
         .unwrap_err();
-        assert!(super::super::read_home_install(home.path(), coordinate)
+        assert!(format!("{error:#}").contains("installed locally"));
+        let first = super::super::read_home_install(home.path(), coordinate)
             .unwrap()
-            .is_none());
-        assert!(store::list_records(home.path()).unwrap().is_empty());
+            .expect("local pin survives a failed notification");
+        let first_plugin = store::read_record(home.path(), "fixture", "native_echo").unwrap();
         let (before, _) = install(
             home.path(),
             &archive,
@@ -217,16 +243,17 @@ pub(crate) mod tests {
         )
         .await;
         assert!(cancelled.is_err());
-        assert_eq!(
-            super::super::read_home_install(home.path(), coordinate)
-                .unwrap()
-                .unwrap(),
-            before
-        );
-        assert_eq!(
-            store::read_record(home.path(), "fixture", "native_echo").unwrap(),
-            plugin_before
-        );
+        let after_cancel = super::super::read_home_install(home.path(), coordinate)
+            .unwrap()
+            .unwrap();
+        assert_eq!(after_cancel.version, "2.0.0");
+        assert_ne!(after_cancel, before);
+        let plugin_after_cancel =
+            store::read_record(home.path(), "fixture", "native_echo").unwrap();
+        assert_eq!(plugin_after_cancel.version, "2.0.0");
+        assert_ne!(plugin_after_cancel, plugin_before);
+        assert_ne!(first, before);
+        assert_ne!(first_plugin, plugin_before);
     }
 
     #[tokio::test]
@@ -245,7 +272,7 @@ pub(crate) mod tests {
         .is_err());
         assert!(store::list_records(home.path()).unwrap().is_empty());
         let (_dir2, _, sealed) = fixture("1.0.0", false);
-        install(
+        let error = install(
             home.path(),
             &sealed,
             false,

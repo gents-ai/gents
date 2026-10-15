@@ -48,7 +48,7 @@ pub fn install_from_pack(
     instructions: Option<String>,
     consent: bool,
 ) -> Result<InstalledPlugin> {
-    let lock = store::lock_store(home, false)?;
+    let lock = store::try_lock_store(home)?;
     install_from_pack_locked(
         &lock,
         home,
@@ -72,7 +72,7 @@ pub fn install_from_pack(
 /// tied to a different home, so a caller cannot hand it the wrong store's
 /// guard and run unlocked.
 #[allow(clippy::too_many_arguments)]
-pub fn install_from_pack_locked(
+fn install_from_pack_locked(
     lock: &store::StoreGuard,
     home: &Path,
     pack_namespace: &str,
@@ -144,24 +144,63 @@ pub fn install_pack_plugins<'a>(
     asset: impl Fn(&str) -> Result<&'a [u8]>,
     consent: bool,
 ) -> Result<Vec<InstalledPlugin>> {
-    let lock = store::lock_store(home, false)?;
-    install_pack_plugins_locked(
-        &lock,
+    install_pack_plugins_with_bindings(
         home,
         manifest,
         pack_digest,
         asset,
         consent,
+        None,
+        &BTreeMap::new(),
+        |_| Ok(()),
     )
 }
 
-/// [`install_pack_plugins`] under a store lock the caller already holds:
-/// `pack::plugin_lifecycle::install` calls this under its exclusive lock so
-/// the pack's plugins are admitted, bound, published and — on failure —
-/// rolled back without ever dropping that lock, and without the re-lock that
-/// would deadlock against it. The guard is checked against `home` so a
-/// caller cannot hand it another store's guard and run unlocked.
-pub fn install_pack_plugins_locked<'a>(
+/// Performs a pack's synchronous local publication under one nonblocking
+/// exclusive store lock. The callback is local-only and synchronous, so the
+/// lock and rollback snapshot never cross an await. A caller that later
+/// notifies the node must preserve this local install if that notification
+/// fails or is cancelled.
+pub fn install_pack_plugins_with_bindings<'a>(
+    home: &Path,
+    manifest: &PackManifest,
+    pack_digest: &str,
+    asset: impl Fn(&str) -> Result<&'a [u8]>,
+    consent: bool,
+    owner: Option<&str>,
+    bindings: &BTreeMap<String, String>,
+    publish_local: impl FnOnce(&[InstalledPlugin]) -> Result<()>,
+) -> Result<Vec<InstalledPlugin>> {
+    let lock = store::try_lock_store(home)?;
+    // A malformed record is not absence and cannot become a rollback snapshot
+    // or be overwritten as an unowned plugin.
+    store::list_records(home)?;
+    let previous = snapshot_pack_plugin_records(home, manifest)?;
+    let result = (|| {
+        let installed =
+            install_pack_plugins_locked(&lock, home, manifest, pack_digest, asset, consent)?;
+        if !bindings.is_empty() {
+            bind_plugin_slots_locked(
+                &lock,
+                home,
+                manifest,
+                owner.context("plugin slot bindings require an owner")?,
+                bindings,
+            )?;
+        }
+        publish_local(&installed)?;
+        Ok(installed)
+    })();
+    if result.is_err() {
+        rollback_pack_plugin_records(home, &previous);
+    }
+    result
+}
+
+/// Installs each declared plugin while the enclosing pack-install owner holds
+/// the store guard. The guard is checked against `home` so a caller cannot
+/// apply this mutation under another home's lock.
+fn install_pack_plugins_locked<'a>(
     lock: &store::StoreGuard,
     home: &Path,
     manifest: &PackManifest,
@@ -207,6 +246,18 @@ pub fn bind_plugin_slots(
     owner: &str,
     bindings: &BTreeMap<String, String>,
 ) -> Result<Vec<String>> {
+    let lock = store::try_lock_store(home)?;
+    bind_plugin_slots_locked(&lock, home, manifest, owner, bindings)
+}
+
+fn bind_plugin_slots_locked(
+    lock: &store::StoreGuard,
+    home: &Path,
+    manifest: &PackManifest,
+    owner: &str,
+    bindings: &BTreeMap<String, String>,
+) -> Result<Vec<String>> {
+    lock.for_home(home)?;
     let mut bound = Vec::new();
     for plugin in &manifest.metadata.plugins {
         let Some(profile_id) = plugin
@@ -217,7 +268,8 @@ pub fn bind_plugin_slots(
             continue;
         };
         let coordinate = format!("{}/{}", manifest.metadata.namespace, plugin.name);
-        set_model_binding(
+        set_model_binding_locked(
+            lock,
             home,
             &coordinate,
             Some(ModelBinding {
@@ -246,6 +298,17 @@ pub fn set_model_binding(
     coordinate: &str,
     binding: Option<ModelBinding>,
 ) -> Result<InstalledPlugin> {
+    let lock = store::try_lock_store(home)?;
+    set_model_binding_locked(&lock, home, coordinate, binding)
+}
+
+fn set_model_binding_locked(
+    lock: &store::StoreGuard,
+    home: &Path,
+    coordinate: &str,
+    binding: Option<ModelBinding>,
+) -> Result<InstalledPlugin> {
+    lock.for_home(home)?;
     let (namespace, name) = store::parse_coordinate(coordinate)?;
     let mut record = store::read_record(home, namespace, name)
         .with_context(|| format!("plugin {coordinate} is not installed"))?;
@@ -262,22 +325,33 @@ pub fn set_model_binding(
 /// any write, so a failure later in the same pack install can restore
 /// exactly what was there (or remove what was not) instead of leaving an
 /// orphaned plugin record behind. `None` means the name was not installed.
-pub fn snapshot_pack_plugin_records(
+fn snapshot_pack_plugin_records(
     home: &Path,
     manifest: &PackManifest,
-) -> Vec<(String, String, Option<InstalledPlugin>)> {
+) -> Result<Vec<(String, String, Option<InstalledPlugin>)>> {
     manifest
         .metadata
         .plugins
         .iter()
         .map(|plugin| {
             let previous =
-                store::read_record(home, &manifest.metadata.namespace, &plugin.name).ok();
-            (
+                match store::read_record(home, &manifest.metadata.namespace, &plugin.name) {
+                    Ok(record) => Some(record),
+                    Err(error) if store::is_not_found(&error) => None,
+                    Err(error) => {
+                        return Err(error).with_context(|| {
+                            format!(
+                                "reading existing plugin {}/{} before installation",
+                                manifest.metadata.namespace, plugin.name
+                            )
+                        })
+                    }
+                };
+            Ok((
                 manifest.metadata.namespace.clone(),
                 plugin.name.clone(),
                 previous,
-            )
+            ))
         })
         .collect()
 }
@@ -288,7 +362,7 @@ pub fn snapshot_pack_plugin_records(
 /// none. Best-effort and never fails the caller: a restore that cannot
 /// complete is logged loudly rather than masking the original error that
 /// triggered the rollback.
-pub fn rollback_pack_plugin_records(
+fn rollback_pack_plugin_records(
     home: &Path,
     previous: &[(String, String, Option<InstalledPlugin>)],
 ) {

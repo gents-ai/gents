@@ -952,13 +952,6 @@ struct PackInstallParams {
     pub expected_digest: Option<String>,
 }
 
-/// What [`crate::plugin::install::snapshot_pack_plugin_records`] observed, to restore on failure.
-type PluginRollback = Vec<(
-    String,
-    String,
-    Option<crate::plugin::store::InstalledPlugin>,
-)>;
-
 /// A resolved pack and where it came from.
 struct ConfigPackDistribution(crate::pack_resolve::ResolvedNamedPack);
 
@@ -1623,16 +1616,17 @@ impl PackInstaller {
 
     /// Installs the plugins `distribution` ships into the home's plugin store,
     /// sealed: a plugin that asks for authority is refused, because granting
-    /// it is the operator's call. Returns the records to restore if the
-    /// graph install that follows fails, and the plugins now installed.
+    /// it is the operator's call. Local plugin records are the publication
+    /// boundary; later graph failures do not roll them back.
     fn install_plugins(
         &self,
         distribution: &ConfigPackDistribution,
         package_digest: &str,
-    ) -> anyhow::Result<(PluginRollback, Vec<crate::plugin::store::InstalledPlugin>)> {
+        bindings: &crate::pack::PackInferenceBindings,
+    ) -> anyhow::Result<Vec<crate::plugin::store::InstalledPlugin>> {
         let manifest = distribution.manifest();
         if manifest.metadata.plugins.is_empty() {
-            return Ok((Vec::new(), Vec::new()));
+            return Ok(Vec::new());
         }
         let home = self.home.as_deref().with_context(|| {
             format!(
@@ -1640,13 +1634,15 @@ impl PackInstaller {
                 manifest.name
             )
         })?;
-        let rollback = crate::plugin::install::snapshot_pack_plugin_records(home, manifest);
-        let installed = crate::plugin::install::install_pack_plugins(
+        crate::plugin::install::install_pack_plugins_with_bindings(
             home,
             manifest,
             package_digest,
             |path| distribution.0.archive.asset(path),
             false,
+            Some(self.core.node_did()),
+            &bindings.inference_slots,
+            |_| Ok(()),
         )
         .with_context(|| {
             format!(
@@ -1654,8 +1650,6 @@ impl PackInstaller {
                 manifest.name
             )
         })
-        .inspect_err(|_| crate::plugin::install::rollback_pack_plugin_records(home, &rollback))?;
-        Ok((rollback, installed))
     }
 
     /// Pack slots have no current backend: each bound profile must be
@@ -1861,19 +1855,8 @@ impl PackInstaller {
         };
         let external_dependencies = package.manifest.external_dependencies.clone();
         let plugins = package.manifest.metadata.plugins.clone();
-        let (plugin_rollback, installed_plugins) =
-            self.install_plugins(&distribution, &package.package_digest)?;
-        if let Some(home) = self.home.as_deref() {
-            crate::plugin::install::bind_plugin_slots(
-                home,
-                distribution.manifest(),
-                self.core.node_did(),
-                &bindings.inference_slots,
-            )
-            .inspect_err(|_| {
-                crate::plugin::install::rollback_pack_plugin_records(home, &plugin_rollback)
-            })?;
-        }
+        let installed_plugins =
+            self.install_plugins(&distribution, &package.package_digest, &inference.bindings)?;
         let record = crate::graph_package::GraphInstallRecord {
             plugins: installed_plugins
                 .iter()
@@ -1884,10 +1867,10 @@ impl PackInstaller {
                 .collect(),
             explicit: operation == "install",
         };
-        // A failure past this point must not leave the plugins installed
-        // above orphaned: undo them along with the graph install that never
-        // landed.
-        let receipt = match crate::graph_package::install_loaded_graph_package(
+        // Local plugin publication is its own completed effect. A later node
+        // transaction failure is reported without deleting that installation;
+        // retrying the pinned pack operation can reconcile the graph record.
+        let receipt = crate::graph_package::install_loaded_graph_package(
             &access,
             self.core.node_did(),
             &package,
@@ -1896,15 +1879,7 @@ impl PackInstaller {
             &record,
         )
         .await
-        {
-            Ok(receipt) => receipt,
-            Err(error) => {
-                if let Some(home) = self.home.as_deref() {
-                    crate::plugin::install::rollback_pack_plugin_records(home, &plugin_rollback);
-                }
-                return Err(error);
-            }
-        };
+        .context("graph installation failed after local pack plugins were published; the plugins remain installed")?;
         let activation = crate::graph_pipeline::activate_graph_revision_with_access(
             &access,
             self.core.node_did(),
@@ -1912,7 +1887,8 @@ impl PackInstaller {
             &receipt.revision_digest,
             previous.as_ref().map(|plan| plan.digest.as_str()),
         )
-        .await?;
+        .await
+        .context("graph installation completed, but activation failed; locally published plugins remain installed")?;
         let effective = self
             .installed(distribution.manifest())
             .await?

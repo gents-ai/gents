@@ -13,7 +13,8 @@
       },
       "cases": [
         "./cases/local_sealed_install.json",
-        "./cases/authority_refusal.json"
+        "./cases/authority_refusal.json",
+        "./cases/scaffold_check.json"
       ]
     }
   ]

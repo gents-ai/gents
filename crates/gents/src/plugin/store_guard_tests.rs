@@ -70,10 +70,7 @@ fn a_guard_holds_the_lock_until_dropped_then_releases_it() {
     assert!(lock_is_free(home.path()), "dropping a shared guard unlocks");
 
     let exclusive = lock_store(home.path(), true).unwrap();
-    assert!(
-        !lock_is_free(home.path()),
-        "exclusive guard holds the lock"
-    );
+    assert!(!lock_is_free(home.path()), "exclusive guard holds the lock");
     drop(exclusive);
     assert!(
         lock_is_free(home.path()),
@@ -93,4 +90,17 @@ fn lock_store_creates_the_lock_file_under_the_plugins_root() {
     assert!(!path.exists());
     let _guard = lock_store(home.path(), false).unwrap();
     assert!(path.is_file(), "{} must exist", path.display());
+}
+
+/// Async mutation owners fail immediately rather than blocking their executor
+/// while another operation holds the store lock.
+#[test]
+fn try_lock_store_reports_contention_without_waiting() {
+    let home = tempfile::tempdir().unwrap();
+    let _held = lock_store(home.path(), true).unwrap();
+    let error = match try_lock_store(home.path()) {
+        Ok(_) => panic!("the held lock must be reported busy"),
+        Err(error) => error,
+    };
+    assert!(format!("{error:#}").contains("store is busy"));
 }

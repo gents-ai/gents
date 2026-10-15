@@ -30,8 +30,7 @@ pub(crate) async fn install(args: PluginInstallArgs) -> Result<()> {
         !manifest.metadata.plugins.is_empty(),
         "{namespace}/{name} carries no plugins; install the whole pack with gents pack install"
     );
-    let rollback = crate::commands::pack::snapshot_pack_plugin_records(&home, manifest);
-    let installed = crate::commands::pack::install_pack_plugins(
+    let installed = gents::plugin::install::install_pack_plugins(
         &home,
         manifest,
         &pack.digest,
@@ -50,12 +49,9 @@ pub(crate) async fn install(args: PluginInstallArgs) -> Result<()> {
             .collect(),
     );
     let coordinate = format!("{namespace}/{name}");
-    if let Err(error) =
-        crate::commands::pack::record_plugin_store_change(&home, &coordinate, Some(&identity)).await
-    {
-        crate::commands::pack::rollback_pack_plugin_records(&home, &rollback);
-        return Err(error);
-    }
+    crate::commands::pack::record_plugin_store_change(&home, &coordinate, Some(&identity))
+        .await
+        .context("the plugins were installed locally, but their node notification was not confirmed; retry to reconcile")?;
 
     crate::print_json(&json!({
         "pack": format!("{namespace}/{name}"),

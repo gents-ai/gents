@@ -4,16 +4,18 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
+pub mod authoring;
 mod home_install;
 mod inference;
 mod installation;
-pub mod authoring;
 pub mod interpolate;
 mod loader;
 pub mod local;
 pub mod materialize;
 pub mod plugin_lifecycle;
 mod provenance;
+#[cfg(test)]
+mod publication_contract_tests;
 pub use home_install::{
     forget_home_install, list_home_installs, read_home_install, write_home_install, HomePackInstall,
 };
@@ -26,9 +28,8 @@ pub use installation::{
     document_pack_schema_paths, install_prepared_document_pack, installed_packs,
     list_installed_packs, prepare_document_pack_install, read_installed_pack,
     record_plugin_store_change, record_plugin_store_change_as, referenced_pack_digests,
-    remove_pack, DriftPolicy, InstallReport,
-    InstalledPack, InstalledPackPlugin, PackIdentity, PreparedDocumentPackInstall, RemoveReport,
-    Retained,
+    remove_pack, DriftPolicy, InstallReport, InstalledPack, InstalledPackPlugin, PackIdentity,
+    PreparedDocumentPackInstall, RemoveReport, Retained,
 };
 pub(crate) use installation::{observe_graph_install_in_txn, record_graph_install_in_txn};
 pub use loader::{

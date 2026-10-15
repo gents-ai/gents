@@ -7472,6 +7472,12 @@ async fn native_pack_local_install_inspection_selection_and_digest_fence() {
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
         .unwrap();
     tool.call(json!({"argv":["tools","update"],"set":{"host":{"root":workspace.path(),"files":{"mode":"ReadOnly"},"bash":{"mode":"Off"}}}}).to_string()).await.unwrap();
+    tool.call(
+        json!({"argv":["tools","update"],"set":{"integrations":{"lsp":{"timeout_secs":31}}}})
+            .to_string(),
+    )
+    .await
+    .unwrap();
     let path = artifact.to_str().unwrap();
     let preview: Value = serde_json::from_str(
         &config_call(&tools, &["pack", "preview", "install", path])
@@ -7527,16 +7533,53 @@ async fn native_pack_local_install_inspection_selection_and_digest_fence() {
     tool.call(json!({"argv":["tools","update"],"set":{"integrations":{"plugins":[inspect["selection"].clone()]}}}).to_string()).await.unwrap();
     let readback = config_call(&tools, &["tools", "get"]).await.unwrap();
     assert!(readback.contains("fixture/native_echo"));
+    let persisted: crate::document_config::Tools =
+        crate::config_client::ConfigAccess::local(node.clone())
+            .transact_write("test.self_config.read_native_pack_tools", |txn| {
+                let did = did.clone();
+                Box::pin(async move {
+                    let value = crate::config_client::read_desired_state_document_in_txn(
+                        txn,
+                        crate::Collection::Tools,
+                        &did,
+                        "setup:tools",
+                    )
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("persisted Tools document disappeared"))?;
+                    Ok(serde_json::from_value(value)?)
+                })
+            })
+            .await
+            .unwrap();
+    assert_eq!(
+        persisted
+            .integrations
+            .as_ref()
+            .and_then(|integrations| integrations.lsp.as_ref())
+            .and_then(|lsp| lsp.timeout_secs),
+        Some(31),
+        "selecting the plugin must preserve another configured integration"
+    );
     let record = crate::plugin::store::read_record(home.path(), "fixture", "native_echo").unwrap();
     assert!(record.granted.is_none());
-    let selection: crate::document_config::PluginToolRef =
-        serde_json::from_value(inspect["selection"].clone()).unwrap();
-    let fresh_tool = crate::plugin::tool::PluginTool::resolve(
-        plugins,
-        &selection,
-        Some(workspace.path().to_owned()),
+    let surface = crate::tool_surface::AgentToolSurfaceConfig::from_tools_document(
+        "setup",
+        &persisted,
+        &crate::tool_surface::ToolCeiling::readonly_at(workspace.path()),
+        Vec::new(),
     )
+    .unwrap()
+    .resolve(&node, &did, &plugins)
+    .await
     .unwrap();
+    let runtime =
+        crate::tool_surface::ToolRuntimeContext::oneshot_with_node_did(node.clone(), &did)
+            .with_plugins(plugins.clone());
+    let fresh_tools = surface.build_tools(&runtime).await.unwrap();
+    let fresh_tool = fresh_tools
+        .iter()
+        .find(|tool| tool.name() == "native_echo")
+        .expect("a fresh ToolSurface built from persisted Tools should expose the selected plugin");
     let output: Value = serde_json::from_str(&fresh_tool.call("{}".into()).await.unwrap()).unwrap();
     assert_eq!(output, json!({"native_pack_echo":"ok"}));
     let (_next_dir, next_path, next) =

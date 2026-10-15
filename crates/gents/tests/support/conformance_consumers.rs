@@ -637,6 +637,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_plugin_invocation_retry_revalidates_current_installation",
         },
         ConformanceConsumer::RustTest {
+            id: "pack::publication_contract_tests::generated_local_publication_survives_notification_outcomes",
+            package: "gents",
+            source_path: "crates/gents/src/pack/publication_contract_tests.rs",
+            module_path: "pack::publication_contract_tests",
+            function: "generated_local_publication_survives_notification_outcomes",
+        },
+        ConformanceConsumer::RustTest {
             id: "tool_call_lifecycle::plugin_receipt::tests::generated_receipt_commit_cases",
             package: "gents",
             source_path: "crates/gents/src/tool_call_lifecycle/plugin_receipt.rs",
