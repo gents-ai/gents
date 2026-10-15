@@ -215,8 +215,10 @@ pub(crate) async fn ensure_session_in_txn(
 /// Claim-time resume owner for a reused session inside the caller's
 /// transaction. Reopening clears `closed_at` without resetting creation time,
 /// title, tags or provenance, and advances the observation activity
-/// monotonically (`max(now, old)`). Returns whether a closed session was
-/// actually reopened. Scope is exact, mirroring `ensure_session_in_txn`.
+/// monotonically (`max(now, old)`). An open session is left unwritten: the
+/// claim's observation write carries its activity (see
+/// [`touch_session_in_txn`]). Returns whether a closed session was actually
+/// reopened. Scope is exact, mirroring `ensure_session_in_txn`.
 pub(crate) async fn reopen_session_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     session_id: &str,
@@ -256,16 +258,33 @@ pub(crate) async fn reopen_session_in_txn(
         (None, None) => {}
     }
     let was_closed = session.closed_at.is_some();
+    if was_closed {
+        patch_session_in_txn(
+            txn,
+            &row.doc_id,
+            serde_json::json!({
+                "closed_at": null,
+                "observation": touched_observation(&row, now),
+            }),
+        )
+        .await?;
+    }
+    Ok(was_closed)
+}
+
+/// Advance a session's observation activity to `max(now, old)` without
+/// changing its preview or latest request.
+pub(crate) async fn touch_session_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    row: &super::rows::SessionOwnerRow,
+    now: &str,
+) -> Result<()> {
     patch_session_in_txn(
         txn,
         &row.doc_id,
-        serde_json::json!({
-            "closed_at": null,
-            "observation": touched_observation(&row, now),
-        }),
+        serde_json::json!({ "observation": touched_observation(row, now) }),
     )
-    .await?;
-    Ok(was_closed)
+    .await
 }
 
 /// Close the session through its existing owner: reread inside a transaction,

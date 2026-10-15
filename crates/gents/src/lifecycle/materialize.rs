@@ -1068,7 +1068,7 @@ pub(super) async fn apply_request_session_projection(
         now,
     )
     .await?;
-    session::reopen_session_in_txn(
+    let reopened = session::reopen_session_in_txn(
         txn,
         &request.session_id,
         &request.node_did,
@@ -1092,8 +1092,12 @@ pub(super) async fn apply_request_session_projection(
                 && fact.observed.request_id == request.request_id
         })
         .context("claimed request missing from its exact session scope")?;
-    session::advance_session_request_observation_in_txn(txn, incoming, &request.content, now)
-        .await?;
+    let advanced =
+        session::advance_session_request_observation_in_txn(txn, incoming, &request.content, now)
+            .await?;
+    if !reopened && !advanced {
+        session::touch_session_in_txn(txn, &owner, now).await?;
+    }
     Ok(())
 }
 
