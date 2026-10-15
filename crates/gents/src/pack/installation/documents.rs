@@ -224,7 +224,7 @@ fn install_plugins<'a>(
         asset,
         grant_authority,
         Some(owner),
-        &bindings.inference_slots,
+        bindings,
         |_| Ok(()),
     )?;
     Ok(plugins

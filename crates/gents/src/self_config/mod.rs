@@ -1641,7 +1641,7 @@ impl PackInstaller {
             |path| distribution.0.archive.asset(path),
             false,
             Some(self.core.node_did()),
-            &bindings.inference_slots,
+            bindings,
             |_| Ok(()),
         )
         .with_context(|| {
