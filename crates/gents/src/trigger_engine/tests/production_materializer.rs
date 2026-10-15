@@ -1302,9 +1302,9 @@ async fn scheduled_target_admission_is_atomic_and_recovers_same_occurrence() {
         ("foreign-owner", "general", false),
     ] {
         crate::session::ensure_session_with_agent_id_and_requester_did(
-            &node, target, if target == "foreign-owner" { "did:key:foreign" } else { &owner }, agent, None,
+            &node, target, if target == "foreign-owner" { "did:key:foreign" } else { &owner }, agent, Some(&owner),
         ).await.unwrap();
-        if closed { crate::session::close_session(&node, &owner, target, None).await.unwrap(); }
+        if closed { crate::session::close_session(&node, &owner, target, Some(&owner)).await.unwrap(); }
 
     }
     let task = resolved_task("wake {{ session.session_id }}");
