@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -219,6 +220,7 @@ async fn messages(
         .iter()
         .map(crate::session::canonical_rows::decode_transcript_message_row)
         .collect::<Result<Vec<_>>>()?;
+    let tool_calls = load_tool_call_summaries(txn, &scope, &headers, limit).await?;
     let mut reader =
         TxnCanonicalReader::new(txn, &target.node_did, target.requester_did.as_deref());
     reader.observe_headers(&headers);
@@ -229,7 +231,7 @@ async fn messages(
         let presentation = gents_protocol::transcript::present_message(&message);
         let (text, truncated) = bounded(&visible_text(&message), text_budget);
         text_budget -= text.chars().count();
-        let tools = tool_summaries(txn, &scope, &header, &message).await?;
+        let tools = tool_summaries(&tool_calls, &header, &message)?;
         result.push(json!({"message_doc_id": row.doc_id, "sequence": header.sequence, "role": presentation.role.label(), "created_at": header.created_at, "text": text, "text_truncated": truncated, "tools": tools}));
     }
     let next = if args.view == ReadView::Recent && headers.len() > limit {
@@ -251,9 +253,75 @@ async fn messages(
     Ok(json!({"items": result, "next_cursor": next}))
 }
 
-async fn tool_summaries(
+fn selected_tool_call_doc_ids(
+    headers: &[crate::session::canonical_rows::TranscriptMessageRow],
+    message_limit: usize,
+) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut doc_ids = Vec::new();
+    for header in headers.iter().take(message_limit) {
+        let mut count = 0;
+        for block in &header.message.blocks {
+            let doc_id = match block {
+                gents_protocol::output::MessageBlock::ToolCall {
+                    tool_call_doc_id, ..
+                }
+                | gents_protocol::output::MessageBlock::ToolResult {
+                    tool_call_doc_id, ..
+                } => tool_call_doc_id,
+                _ => continue,
+            };
+            if count == STATUS_LIMIT {
+                break;
+            }
+            count += 1;
+            if seen.insert(doc_id.clone()) {
+                doc_ids.push(doc_id.clone());
+            }
+        }
+    }
+    doc_ids
+}
+
+fn tool_call_batch_query(scope: &str, doc_ids: &[String]) -> Option<String> {
+    if doc_ids.is_empty() {
+        return None;
+    }
+    let ids = doc_ids
+        .iter()
+        .map(|id| quoted(id))
+        .collect::<Vec<_>>()
+        .join(",");
+    Some(format!(
+        "{{AgentToolCall(filter: {{{scope}, _docID: {{_in: [{ids}]}}}}) {{_docID tool_call_key tool_call_id tool_name lifecycle_state}}}}"
+    ))
+}
+
+async fn load_tool_call_summaries(
     txn: &ConfigApplyTxn<'_>,
     scope: &str,
+    headers: &[crate::session::canonical_rows::TranscriptMessageRow],
+    message_limit: usize,
+) -> Result<HashMap<String, Value>> {
+    let doc_ids = selected_tool_call_doc_ids(headers, message_limit);
+    let Some(query) = tool_call_batch_query(scope, &doc_ids) else {
+        return Ok(HashMap::new());
+    };
+    let response = txn.execute(&query).await?;
+    rows(&response, "AgentToolCall")?
+        .into_iter()
+        .map(|row| {
+            let doc_id = row["_docID"]
+                .as_str()
+                .context("tool-call summary row omitted _docID")?
+                .to_owned();
+            Ok((doc_id, row))
+        })
+        .collect()
+}
+
+fn tool_summaries(
+    tool_calls: &HashMap<String, Value>,
     header: &gents_protocol::output::TranscriptMessage,
     message: &Message,
 ) -> Result<Value> {
@@ -271,10 +339,8 @@ async fn tool_summaries(
         if summaries.len() == STATUS_LIMIT {
             break;
         }
-        let response = txn.execute(&format!("{{AgentToolCall(filter: {{{scope}, _docID: {{_eq: {}}}}}, limit: 1) {{tool_call_key tool_call_id tool_name lifecycle_state}}}}", quoted(doc_id))).await?;
-        let rows = rows(&response, "AgentToolCall")?;
-        let row = rows
-            .first()
+        let row = tool_calls
+            .get(doc_id)
             .context("canonical tool summary references an unavailable call")?;
         let preview = match message {
             Message::User { content } => content
@@ -393,6 +459,20 @@ mod tests {
         assert!(!text.contains("private reasoning"));
     }
 
+    #[test]
+    fn tool_call_summary_batch_is_one_exact_scoped_read() {
+        let ids = vec!["tool-1".to_owned(), "tool\"2".to_owned()];
+        let query = tool_call_batch_query(
+            r#"node_did: {_eq: "node"}, session_id: {_eq: "session"}, requester_did: {_eq: null}"#,
+            &ids,
+        )
+        .unwrap();
+        assert_eq!(query.matches("AgentToolCall(").count(), 1);
+        assert!(query.contains(r#"_docID: {_in: ["tool-1","tool\"2"]}"#));
+        assert!(query.contains(r#"requester_did: {_eq: null}"#));
+        assert!(tool_call_batch_query("scope", &[]).is_none());
+    }
+
     #[tokio::test]
     async fn trigger_worker_inspection_reads_canonical_output_status_and_goal() {
         use crate::identity::NodeIdentity;
@@ -469,7 +549,7 @@ mod tests {
         crate::sign_agent_request_create(&identity, &mut queued)
             .await
             .unwrap();
-        ConfigAccess::Local(node.clone())
+        ConfigAccess::local(node.clone())
             .write(
                 "test.inspection.steering",
                 &queued.graphql_mutation().unwrap(),
@@ -612,7 +692,7 @@ mod tests {
                     gents_protocol::request_lifecycle::RequestLifecycleState::Processing,
             }),
         };
-        ConfigAccess::transact_local(&node, None, "test.inspection.index_only", |txn| {
+        ConfigAccess::transact_local_write(&node, None, "test.inspection.index_only", |txn| {
             let scope = scope.clone();
             let observation = observation.clone();
             Box::pin(async move { txn.execute_with_variables(&format!("mutation($input: AgentSessionMutationInputArg!) {{update_AgentSession(filter: {{{scope}}}, input: $input) {{_docID}}}}"), &json!({"input": {"observation": observation}})).await })
