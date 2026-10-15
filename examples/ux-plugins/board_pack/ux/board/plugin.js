@@ -1,9 +1,10 @@
-// Board: the shape of hermes-agent's kanban plugin on Gents. The plugin's
-// own page (PLUGIN_PAGE_AREA stands in for ROUTES_AREA), a nav row that
-// opens it (NAV_AREA for SIDEBAR_NAV_AREA), a ::board{id} card the agent
-// can emit (TRANSCRIPT_DIRECTIVE_AREA, as in Hermes), and the pack's own
-// board_store plugin as the backend half: ctx.plugin() where Hermes uses
-// ctx.rest(). Plain ESM, lint-clean, no build.
+// Board: the shape of hermes-agent's kanban plugin on Gents, on documents.
+// The plugin's own page (PLUGIN_PAGE_AREA stands in for ROUTES_AREA), a nav
+// row that opens it (NAV_AREA for SIDEBAR_NAV_AREA), a ::board{id} card the
+// agent can emit (TRANSCRIPT_DIRECTIVE_AREA, as in Hermes), and the `board`
+// surface of ../../../board_docs as the data half: ctx.data where Hermes
+// uses ctx.rest(). The page observes documents and writes documents; it
+// owns no processing. Plain ESM, lint-clean, no build.
 import {
   Button,
   Group,
@@ -13,94 +14,97 @@ import {
   Row,
   TRANSCRIPT_DIRECTIVE_AREA,
   toast,
+  useQuery,
+  useWrite,
 } from '@gents/ux-sdk'
-import { useCallback, useEffect, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { jsx, jsxs } from 'react/jsx-runtime'
 
+/* the surface and tools this plugin's manifest declares; the desktop
+   refuses any other pair, so these names are the whole data contract */
+const SURFACE = 'board'
 const LANES = ['triage', 'ready', 'running', 'done']
+/* a move here takes a task off the board; the document stays */
+const ARCHIVED = 'archived'
+/* what a ::board{id} card may name: the attrs are model output */
+const TASK_ID = /^[a-z0-9][a-z0-9_-]{0,39}$/
 
 /* the task a ::board{id} card points at: set by the card's click, read by
    the page it opens, cleared once drawn */
 let highlightTask = null
 
-/* the refresh signal: `client-updated` (the agent may have moved a card
-   through the board_store tool) bumps it, and every mounted page re-reads */
-const refresh = { version: 0, listeners: new Set() }
-const bumpRefresh = () => {
-  refresh.version += 1
-  refresh.listeners.forEach((fn) => fn(refresh.version))
-}
-function useRefreshVersion() {
-  const [version, setVersion] = useState(refresh.version)
-  useEffect(() => {
-    refresh.listeners.add(setVersion)
-    return () => refresh.listeners.delete(setVersion)
-  }, [])
-  return version
-}
+const now = () => new Date().toISOString()
+const mintId = () => `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
 
-/* the board's folder: the operator allows one with `gents plugin dirs
-   add`; the page remembers the last choice in the plugin's own storage */
-function useBoard(ctx) {
-  const [root, setRoot] = useState(() => {
-    const stored = ctx.storage.get('root', '')
-    return typeof stored === 'string' ? stored : ''
-  })
-  const [tasks, setTasks] = useState([])
-  const [error, setError] = useState(null)
-  const version = useRefreshVersion()
-  const call = useCallback(
-    async (input) => {
-      if (!root) return null
-      try {
-        const out = await ctx.plugin('board_store', { root, ...input })
-        setError(null)
-        return out
-      } catch (e) {
-        setError(e instanceof Error ? e.message : String(e))
-        return null
-      }
-    },
-    [ctx, root],
-  )
-  const reload = useCallback(async () => {
-    const out = await call({ action: 'list' })
-    if (out && Array.isArray(out.tasks)) setTasks(out.tasks)
-  }, [call])
-  useEffect(() => {
-    void reload()
-  }, [reload, version])
-  const chooseRoot = async () => {
-    const picked = await ctx.os.pickDirectory({ title: 'Board folder' })
-    if (!picked) return
-    ctx.storage.set('root', picked)
-    setRoot(picked)
+/* the board as the documents say it is: every task, its latest move
+   deciding the lane; archived ones left out */
+function fold(tasks, moves) {
+  const latest = new Map()
+  for (const m of moves) {
+    const prev = latest.get(m.task_id)
+    if (!prev || m.moved_at > prev.moved_at) latest.set(m.task_id, m)
   }
-  return { root, tasks, error, reload, call, chooseRoot }
+  return tasks
+    .map((t) => ({ ...t, lane: latest.get(t.task_id)?.lane ?? t.lane }))
+    .filter((t) => t.lane !== ARCHIVED)
+    .sort((a, b) => (a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : 0))
 }
 
-function Lane({ lane, tasks, highlight, onMove, onRemove }) {
+/* two live queries and two create tools; `useQuery` re-runs on the shell's
+   client-updated (an agent wrote through the same surface) and on a
+   bounded interval while the page is mounted */
+function useBoard(ctx) {
+  const tasks = useQuery(ctx, SURFACE, 'list_tasks', { args: { limit: 1000 } })
+  const moves = useQuery(ctx, SURFACE, 'list_moves', { args: { limit: 1000 } })
+  const addTask = useWrite(ctx, SURFACE, 'add_task')
+  const moveTask = useWrite(ctx, SURFACE, 'move_task')
+  const rows = useMemo(
+    () => fold(tasks.data?.results ?? [], moves.data?.results ?? []),
+    [tasks.data, moves.data],
+  )
+  const refresh = () => {
+    tasks.refresh()
+    moves.refresh()
+  }
+  return {
+    rows,
+    loading: tasks.loading || moves.loading,
+    error: tasks.error ?? moves.error ?? addTask.error ?? moveTask.error,
+    pending: addTask.pending || moveTask.pending,
+    refresh,
+    add: async (title) => {
+      await addTask.write({ task_id: mintId(), title, lane: 'triage', created_at: now() })
+      refresh()
+    },
+    move: async (task_id, lane) => {
+      await moveTask.write({ task_id, lane, moved_at: now() })
+      refresh()
+    },
+  }
+}
+
+function Lane({ lane, tasks, highlight, onMove }) {
   return jsxs('div', {
     className: 'gents-board-lane',
     children: [
       jsxs('h4', { className: 'gents-board-lane-title', children: [lane, ' ', jsx('span', { children: tasks.length })] }),
       ...tasks.map((t) =>
         jsxs('div', {
-          className: t.id === highlight ? 'gents-board-card gents-board-card-highlight' : 'gents-board-card',
-          'data-task': t.id,
+          className: t.task_id === highlight ? 'gents-board-card gents-board-card-highlight' : 'gents-board-card',
+          'data-task': t.task_id,
           children: [
-            jsxs('span', { className: 'gents-board-card-title', children: [jsx('code', { children: `#${t.id}` }), ' ', t.title] }),
+            jsxs('span', { className: 'gents-board-card-title', children: [jsx('code', { children: `#${t.task_id}` }), ' ', t.title] }),
             jsxs('div', {
               className: 'gents-board-card-actions',
               children: [
                 ...LANES.filter((l) => l !== lane).map((l) =>
-                  jsx(Button, { size: 'sm', variant: 'ghost', onClick: () => onMove(t.id, l), children: `→ ${l}` }, l),
+                  jsx(Button, { size: 'sm', variant: 'ghost', onClick: () => onMove(t.task_id, l), children: `→ ${l}` }, l),
                 ),
-                jsx(Button, { size: 'sm', variant: 'ghost', onClick: () => onRemove(t.id), children: '✕' }),
+                jsx(Button, { size: 'sm', variant: 'ghost', title: 'Archive', onClick: () => onMove(t.task_id, ARCHIVED), children: '✕' }),
               ],
             }),
           ],
-        }, t.id),
+        }, t.task_id),
       ),
     ],
   })
@@ -117,56 +121,38 @@ function BoardPage({ ctx }) {
   const [title, setTitle] = useState('')
   const add = async () => {
     if (!title.trim()) return
-    await board.call({ action: 'add', title: title.trim(), lane: 'triage' })
+    await board.add(title.trim())
     setTitle('')
-    await board.reload()
-  }
-  const move = async (id, lane) => {
-    await board.call({ action: 'move', id, lane })
-    await board.reload()
-  }
-  const remove = async (id) => {
-    await board.call({ action: 'remove', id })
-    await board.reload()
-  }
-  if (!board.root) {
-    return jsx(Group, {
-      title: 'Board',
-      children: jsx(Row, {
-        label: 'Board folder',
-        description: 'board.json lives in a folder the operator allowed (gents plugin dirs add)',
-        children: jsx(Button, { size: 'sm', onClick: () => void board.chooseRoot(), children: 'Choose folder' }),
-      }),
-    })
   }
   return jsxs('div', {
     children: [
       jsxs(Group, {
         title: 'Board',
-        action: jsx(Button, { size: 'sm', variant: 'ghost', onClick: () => void board.chooseRoot(), children: board.root }),
+        action: jsx(Button, { size: 'sm', variant: 'ghost', onClick: board.refresh, children: board.loading ? 'Loading…' : 'Refresh' }),
         children: [
           jsx(Row, {
             label: 'New task',
+            description: `${board.rows.length} on the board`,
             error: board.error,
             children: jsxs('form', {
               className: 'flex gap-2',
               onSubmit: (e) => {
                 e.preventDefault()
-                void add()
+                void add().catch(() => {})
               },
               children: [
                 jsx(Input, { value: title, onChange: (e) => setTitle(e.target.value), placeholder: 'What needs doing', 'aria-label': 'New task' }),
-                jsx(Button, { type: 'submit', size: 'sm', children: 'Add' }),
+                jsx(Button, { type: 'submit', size: 'sm', disabled: board.pending, children: 'Add' }),
               ],
             }),
           }),
           jsx(Row, {
             label: 'Ask the agent',
-            description: 'the agent reads the same board through the board_store tool',
+            description: 'an agent whose tools select the board surface reads the same documents',
             children: jsx(Button, {
               size: 'sm',
               variant: 'outline',
-              onClick: () => void ctx.send(`List the board in ${board.root} and tell me what to run next.`),
+              onClick: () => void ctx.send('Read the board (list_tasks and list_moves) and tell me what to run next.'),
               children: 'What next?',
             }),
           }),
@@ -175,33 +161,22 @@ function BoardPage({ ctx }) {
       jsx('div', {
         className: 'gents-board',
         children: LANES.map((lane) =>
-          jsx(Lane, { lane, tasks: board.tasks.filter((t) => t.lane === lane), highlight, onMove: move, onRemove: remove }, lane),
+          jsx(Lane, {
+            lane,
+            tasks: board.rows.filter((t) => t.lane === lane),
+            highlight,
+            onMove: (id, to) => void board.move(id, to).catch(() => {}),
+          }, lane),
         ),
       }),
     ],
   })
 }
 
-/* the ::board{id="3"} card: a chip the agent drops into chat that opens
-   the page; attrs are untrusted model output, so the id is validated */
-function BoardCard({ ctx, attrs }) {
-  const id = /^\d{1,9}$/.test(attrs.id ?? '') ? attrs.id : null
-  return jsx(Button, {
-    size: 'sm',
-    variant: 'outline',
-    className: 'gents-board-chip',
-    onClick: () => {
-      highlightTask = id
-      ctx.shell.navigate({ name: 'plugin', pluginId: 'board' })
-    },
-    children: id ? `Board · task #${id}` : 'Board',
-  })
-}
-
 export default {
   id: 'board',
   name: 'Board',
-  description: 'Task board: its own Board page, a nav row that opens it, and a ::board card; backed by the pack\'s board_store plugin.',
+  description: 'Task board: its own Board page, a nav row that opens it, and a ::board card; the board_docs pack holds the documents it reads and writes.',
   /* ships off, as the kanban plugin does: it inventories, and registers
      once the operator turns it on */
   defaultEnabled: false,
@@ -214,10 +189,9 @@ export default {
         data: {
           id: 'board:nav',
           label: 'Board',
-          icon: null,
+          icon: 'kanban',
           /* the plugin's own page, not the agent's configuration */
           to: { name: 'plugin', pluginId: 'board' },
-          active: (route) => route.name === 'plugin' && route.pluginId === 'board',
           placement: 'footer',
           order: 60,
         },
@@ -228,14 +202,21 @@ export default {
         render: () => jsx(BoardPage, { ctx }),
       },
       {
+        /* the ::board{id="…"} card: a chip the agent drops into chat that
+           opens the page on that task; the id is model output, validated
+           before it can select anything */
         id: 'directive',
         area: TRANSCRIPT_DIRECTIVE_AREA,
-        data: { name: 'board', render: ({ attrs }) => jsx(BoardCard, { ctx, attrs }) },
+        data: {
+          name: 'board',
+          label: 'Board · task #{id}',
+          onClick: (attrs) => {
+            highlightTask = TASK_ID.test(attrs.id ?? '') ? attrs.id : null
+            ctx.shell.navigate({ name: 'plugin', pluginId: 'board' })
+          },
+        },
       },
     ])
-    /* the agent may have moved a card through the board_store tool: every
-       mounted page re-reads */
-    ctx.onEvent('client-updated', bumpRefresh)
     ctx.onDispose(() => toast('Board plugin unloaded'))
   },
 }

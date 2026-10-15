@@ -1,44 +1,16 @@
 {
   "manifest_version": 1,
   "name": "board_pack",
-  "version": "0.1.0",
-  "description": "A task board for the agent: a board page, a nav row, a ::board directive, and a board_store plugin the page reads and writes through.",
+  "version": "0.2.0",
+  "description": "The board's page: a Board nav row, the board page it opens, and a ::board directive card. Reads and writes the board through the `board` surface that ../board_docs installs on the node.",
   "namespace": "examples",
   "authors": ["gents"],
-  "tags": ["example", "ux"],
-  "kind": "plugins",
+  "tags": ["example", "ux", "board"],
+  "kind": "assets",
   "assets": [
     "README.md",
-    "plugins/board_store.afb",
-    "plugins/board_store/TOOL.md",
     "ux/board/plugin.js",
     "ux/board/plugin.css"
-  ],
-  "plugins": [
-    {
-      "name": "board_store",
-      "description": "Reads and updates the task board. Actions: list, add (title, lane), move (id, lane), remove (id). The board is kept in the bound directory as board.json.",
-      "artifact": "plugins/board_store.afb",
-      "source": "plugins/board_store",
-      "language": "rust",
-      "instructions": "plugins/board_store/TOOL.md",
-      "input_schema": {
-        "type": "object",
-        "required": ["action", "root"],
-        "properties": {
-          "action": {"type": "string", "enum": ["list", "add", "move", "remove"]},
-          "root": {"type": "string"},
-          "title": {"type": "string"},
-          "lane": {"type": "string", "enum": ["triage", "ready", "running", "done"]},
-          "id": {"type": "string"}
-        }
-      },
-      "bind_dir": {
-        "input_field": "root",
-        "description": "The folder board.json lives in",
-        "access": "read_write"
-      }
-    }
   ],
   "ux": [
     {
@@ -49,7 +21,10 @@
       "contributes": {
         "areas": ["nav", "plugin.pages", "transcript.directives"],
         "directives": ["board"]
-      }
+      },
+      "data": [
+        { "surface": "board", "tools": ["list_tasks", "list_moves", "add_task", "move_task"] }
+      ]
     }
   ]
 }
