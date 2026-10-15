@@ -206,6 +206,7 @@ pub(crate) async fn build_desktop_session_snapshot(
         Some(&page.canonical_dependencies),
         context_store.as_ref(),
         None,
+        None,
         context_store.is_some(),
         timeline_before_item_key.is_none(),
     )
@@ -357,6 +358,7 @@ async fn build_request_diagnostics(
         session_id,
         Some(request_id),
         transcript_store,
+        None,
         None,
         None,
         None,

@@ -1,3 +1,6 @@
+use gents::agent::p2p_reconcile::session_hydration::{
+    ClientHydrationPhase, ClientHydrationProgress,
+};
 use gents::session::canonical_rows::{OutputSegmentRow, TranscriptMessageRow};
 use gents_desktop_core::client::{ClientStore, ClientStoreRows};
 use gents_protocol::output::{
@@ -19,8 +22,42 @@ use super::build_session_snapshot_from_store;
 use super::build_session_snapshot_from_store_for_node;
 use super::read_stored_init_config;
 use super::recent_runs_for_task_views;
+use super::scoped_hydration_observation_view;
 use super::session_summaries;
 use super::task_run_history;
+
+#[test]
+fn supplied_hydration_observation_is_projected_only_for_its_exact_session_and_node() {
+    let observation = ClientHydrationProgress {
+        session_id: "session-a".into(),
+        node_did: "did:test:node-a".into(),
+        phase: ClientHydrationPhase::Requested,
+        ..Default::default()
+    };
+
+    let view = scoped_hydration_observation_view(
+        Some((observation.clone(), None)),
+        "session-a",
+        "did:test:node-a",
+    )
+    .expect("matching observation");
+    assert_eq!(view.session_id, "session-a");
+    assert_eq!(view.node_did, "did:test:node-a");
+    assert_eq!(view.phase, "requested");
+
+    assert!(scoped_hydration_observation_view(
+        Some((observation.clone(), None)),
+        "session-b",
+        "did:test:node-a",
+    )
+    .is_none());
+    assert!(scoped_hydration_observation_view(
+        Some((observation, None)),
+        "session-a",
+        "did:test:node-b",
+    )
+    .is_none());
+}
 
 #[test]
 fn bootstrap_init_config_status_distinguishes_absence_from_unreadable_and_configured() {

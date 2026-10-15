@@ -435,12 +435,17 @@ async fn title_request_patch_preserves_existence_without_public_projection() {
         .await
         .expect("title-only patch");
     assert_eq!(title_only.observed_documents, 1);
+    assert!(title_only
+        .missing_doc_ids
+        .as_ref()
+        .is_some_and(Vec::is_empty));
     assert!(title_only.store.requests.is_empty());
 
     let mixed = fetch_doc_patch(node.as_ref(), AGENT_REQUEST_NAME, &[normal_id, title_id])
         .await
         .expect("mixed patch");
     assert_eq!(mixed.observed_documents, 2);
+    assert!(mixed.missing_doc_ids.as_ref().is_some_and(Vec::is_empty));
     assert_eq!(mixed.store.requests.len(), 1);
     assert_eq!(mixed.store.requests[0].request_id, "patch-normal");
     assert_eq!(
@@ -458,6 +463,10 @@ async fn title_request_patch_preserves_existence_without_public_projection() {
     .await
     .expect("mixed present/missing patch");
     assert_eq!(missing.observed_documents, 1);
+    assert_eq!(
+        missing.missing_doc_ids.as_ref().unwrap(),
+        &["physically-absent-request".to_owned()]
+    );
     assert!(missing.store.requests.is_empty());
     assert!(
         missing.observed_documents < 2,

@@ -66,6 +66,16 @@ pub(crate) fn to_hydration_view(
     }
 }
 
+pub(crate) fn scoped_hydration_observation_view(
+    observation: Option<(ClientHydrationProgress, Option<String>)>,
+    session_id: &str,
+    node_did: &str,
+) -> Option<SessionHydrationView> {
+    let (progress, detail) = observation?;
+    (progress.session_id == session_id && progress.node_did == node_did)
+        .then(|| to_hydration_view(&progress, detail))
+}
+
 const UNREADABLE_OWNERSHIP_REASON: &str =
     "The node reports that this session belongs to another requester, so this client cannot read it.";
 

@@ -55,6 +55,7 @@ async fn merge_accepted_edit_projection(
         if doc_ids.is_empty() {
             return anyhow::Result::<()>::Ok(());
         }
+        let (captured, captured_revision) = store.snapshot_with_revision();
         let rows = crate::client::load_request_documents_on(access, &doc_ids).await?;
         for row in &rows {
             anyhow::ensure!(
@@ -68,7 +69,13 @@ async fn merge_accepted_edit_projection(
             requests: rows,
             ..ClientStoreRows::default()
         });
-        store.merge_chat_patch(patch);
+        if store
+            .merge_chat_patch_at_snapshot(&captured, captured_revision.request_event_version, patch)
+            .is_none()
+        {
+            store.request_resync(Some(node_did));
+            anyhow::bail!("accepted edit projection read became stale before publication");
+        }
         anyhow::Result::<()>::Ok(())
     }
     .await;
@@ -603,6 +610,7 @@ impl ClientCore {
             return Ok(None);
         }
 
+        let (captured, captured_revision) = self.store.snapshot_with_revision();
         let (patch, source) = match self.operator_graphql(node_did) {
             Some(graphql) => {
                 let access = ConfigAccess::Graphql(graphql);
@@ -644,7 +652,14 @@ impl ClientCore {
         let terminal = patch
             .request_row(request_id)
             .is_some_and(|row| row.is_terminal());
-        let version = self.store.merge_chat_patch(patch);
+        let Some(version) = self.store.merge_chat_patch_at_snapshot(
+            &captured,
+            captured_revision.request_event_version,
+            patch,
+        ) else {
+            self.store.request_resync(Some(node_did));
+            return Ok(None);
+        };
         // A completed agent turn may have used self-configuration tools. Most
         // of that control plane is intentionally absent from the client P2P
         // route (the Node document and inference credentials in particular),
@@ -1692,22 +1707,27 @@ impl ClientCore {
     ///
     /// A rejected request is terminal here. Retrying it is an explicit user
     /// action owned by [`Self::retry_session_hydration`].
+    ///
+    /// Returns this target's observed status. The initial status read stays
+    /// under the transition lock; after starting a request, it rereads durable
+    /// status so callers can project the resulting state without repeating it.
     pub async fn ensure_session_hydration_started(
         &self,
         session_id: &str,
         node_did: &str,
-    ) -> Result<()> {
+    ) -> Result<(
+        gents::agent::p2p_reconcile::session_hydration::ClientHydrationProgress,
+        Option<String>,
+    )> {
         let session_id = normalize_required("session_id", session_id)?;
         let node_did = normalize_required("node_did", node_did)?;
         let foreign_header = self
             .session_unreadable_reason(&session_id, &node_did)
             .is_some();
         let _transition = self.hydration_transition.lock().await;
-        let progress = self
-            .session_hydration_progress(&session_id, &node_did)
-            .await?;
+        let (progress, detail) = self.load_hydration_status(&session_id, &node_did).await?;
         if !should_start_session_hydration_request(&progress, &session_id, &node_did) {
-            return Ok(());
+            return Ok((progress, detail));
         }
         let evidence = load_local_hydration_start_evidence(
             self.node.as_ref(),
@@ -1717,9 +1737,12 @@ impl ClientCore {
         )
         .await?;
         if !hydration_start_evidence_is_ready(foreign_header, &progress, &evidence) {
-            return Ok(());
+            return Ok((progress, detail));
         }
-        self.request_session_hydration(&session_id, &node_did).await
+        self.request_session_hydration(&session_id, &node_did)
+            .await?;
+        drop(_transition);
+        self.load_hydration_status(&session_id, &node_did).await
     }
 
     /// The requester scope this client reads a node's transcripts under:

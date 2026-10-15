@@ -75,6 +75,7 @@ fn delta(store: &ClientStore, cursor: &str) -> SessionLiveDeltaView {
         StoreProjectionRevision {
             store_version: 900,
             provenance_version: 1,
+            request_event_version: 1,
         },
         "session",
         Some("node"),
@@ -143,6 +144,7 @@ fn a_lagging_replica_request_row_binds_the_same_cursor_as_the_full_snapshot() {
         StoreProjectionRevision {
             store_version: 900,
             provenance_version: 1,
+            request_event_version: 1,
         },
         "session",
         Some("node"),
@@ -225,6 +227,7 @@ fn snapshot_and_delta_preserve_the_same_markdown_bytes() {
         StoreProjectionRevision {
             store_version: 1,
             provenance_version: 1,
+            request_event_version: 1,
         },
         "session",
         Some("node"),

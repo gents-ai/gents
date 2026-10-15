@@ -575,6 +575,7 @@ impl ClientCore {
 
     pub async fn refresh_store(&self) -> Result<u64> {
         let scoped = self.selected_node_did();
+        let (captured, captured_revision) = self.store.snapshot_with_revision();
         let records = self.sync_state.records();
         let snapshot = match scoped.as_deref() {
             Some(did) => {
@@ -596,14 +597,21 @@ impl ClientCore {
             }
         };
         let rows = snapshot.row_count();
-        let version = match scoped.as_deref() {
-            Some(did) => self.store.replace_node_snapshot(did, snapshot),
-            None => self.store.replace_snapshot(snapshot),
-        };
+        let published = self.store.replace_reloaded_snapshot_at_snapshot(
+            &captured,
+            captured_revision.request_event_version,
+            scoped.as_deref(),
+            snapshot,
+        );
+        if !published {
+            self.store.request_resync(scoped.as_deref());
+        }
+        let version = self.store.projection_revision().store_version;
         tracing::debug!(
             target: "gents_desktop_core::replication",
             version,
             rows,
+            published,
             scoped = scoped.is_some(),
             "desktop local replica snapshot refreshed"
         );
@@ -615,6 +623,7 @@ impl ClientCore {
         if node_did.is_empty() {
             return Ok(None);
         }
+        let (captured, captured_revision) = self.store.snapshot_with_revision();
         let records = self.sync_state.records();
         let snapshot = load_node_scoped_snapshot_with_peer_records(
             self.node.as_ref(),
@@ -624,12 +633,23 @@ impl ClientCore {
         )
         .await?;
         let rows = snapshot.row_count();
-        let version = self.store.replace_node_snapshot(node_did, snapshot);
+        let published = self.store.replace_reloaded_snapshot_at_snapshot(
+            &captured,
+            captured_revision.request_event_version,
+            Some(node_did),
+            snapshot,
+        );
+        if !published {
+            self.store.request_resync(Some(node_did));
+            return Ok(None);
+        }
+        let version = self.store.projection_revision().store_version;
         tracing::debug!(
             target: "gents_desktop_core::replication",
             node_did,
             version,
             rows,
+            published,
             "desktop refreshed agent projection from local replica"
         );
         Ok(Some(version))
@@ -646,6 +666,7 @@ impl ClientCore {
             }
         }
         let records = self.sync_state.records();
+        let (captured, captured_revision) = self.store.snapshot_with_revision();
         let snapshot = load_node_scoped_snapshot_with_peer_records(
             self.node.as_ref(),
             node_did,
@@ -654,7 +675,16 @@ impl ClientCore {
         )
         .await?;
         let rows = snapshot.row_count();
-        let version = self.store.replace_node_snapshot(node_did, snapshot);
+        if !self.store.replace_reloaded_snapshot_at_snapshot(
+            &captured,
+            captured_revision.request_event_version,
+            Some(node_did),
+            snapshot,
+        ) {
+            self.store.request_resync(Some(node_did));
+            return Ok(false);
+        }
+        let version = self.store.projection_revision().store_version;
         map.insert(node_did.to_string(), now);
         tracing::info!(
             target: "gents_desktop_core::replication",
