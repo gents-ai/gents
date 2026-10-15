@@ -131,9 +131,10 @@ pub async fn check_dir(dir: &Path) -> CheckReport {
 }
 
 pub fn read_manifest(dir: &Path) -> Result<PackManifest> {
-    let path = dir.join("manifest.json");
-    let bytes = std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
-    serde_json::from_slice(&bytes).with_context(|| format!("parsing {}", path.display()))
+    let mut file = crate::pack::open_pack_asset(dir, "manifest.json")?;
+    let mut bytes = Vec::new();
+    std::io::Read::read_to_end(&mut file, &mut bytes).context("reading manifest.json")?;
+    serde_json::from_slice(&bytes).context("parsing manifest.json")
 }
 
 /// Declared files that are missing, and present files that are not declared.
@@ -225,7 +226,7 @@ pub fn load_config(archive: &PackArchive) -> Result<crate::document_config::Pack
 }
 
 pub fn check_readme(dir: &Path, problems: &mut Vec<String>) {
-    match std::fs::read_to_string(dir.join("README.md")) {
+    match read_pack_text_asset(dir, "README.md") {
         Ok(text) if text.contains("## ") => {}
         Ok(_) => problems.push("README.md needs sections on configuration and usage".into()),
         Err(_) => problems.push("README.md is missing".into()),
@@ -238,13 +239,21 @@ fn check_topology(
     problems: &mut Vec<String>,
 ) {
     let block = topology_block(config);
-    let current = std::fs::read_to_string(dir.join("README.md")).unwrap_or_default();
+    let current = read_pack_text_asset(dir, "README.md").unwrap_or_default();
     if !current.contains(&block) {
         problems.push(
             "README.md topology diagram is stale or missing; run gents pack graph --write-readme"
                 .into(),
         );
     }
+}
+
+fn read_pack_text_asset(dir: &Path, path: &str) -> Result<String> {
+    let mut file = crate::pack::open_pack_asset(dir, path)?;
+    let mut text = String::new();
+    std::io::Read::read_to_string(&mut file, &mut text)
+        .with_context(|| format!("reading {path}"))?;
+    Ok(text)
 }
 
 /// The README's generated diagram: every graph's nodes and port edges.
@@ -289,8 +298,7 @@ pub fn write_topology(dir: &Path) -> Result<()> {
     let (bytes, _) = pack_dir(dir).with_context(|| format!("packing {}", dir.display()))?;
     let block = topology_block(&load_config(&PackArchive::from_bytes(&bytes)?)?);
     let readme = dir.join("README.md");
-    let text = std::fs::read_to_string(&readme)
-        .with_context(|| format!("reading {}", readme.display()))?;
+    let text = read_pack_text_asset(dir, "README.md")?;
     let updated = match (text.find(TOPOLOGY_START), text.find(TOPOLOGY_END)) {
         (Some(start), Some(end)) if start < end => {
             format!(
@@ -354,6 +362,28 @@ mod tests {
         assert!(report.unverified.is_empty(), "{:#?}", report.unverified);
         assert!(report.digest.is_some());
         assert_eq!(report.graphs, Vec::<String>::new());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn native_check_and_pack_writer_refuse_manifest_symlinks_outside_the_pack() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let dir = root.path().join("review_toolkit");
+        scaffold_minimal(&dir, "review_toolkit");
+        let manifest = std::fs::read(dir.join("manifest.json")).unwrap();
+        let sentinel = outside.path().join("manifest.json");
+        std::fs::write(&sentinel, manifest).unwrap();
+        std::fs::remove_file(dir.join("manifest.json")).unwrap();
+        std::os::unix::fs::symlink(&sentinel, dir.join("manifest.json")).unwrap();
+
+        let report = check_dir(&dir).await;
+        assert!(report.pack.is_none(), "native check must reject the link");
+        assert!(!report.problems.is_empty());
+        assert!(
+            crate::pack_archive::pack_dir(&dir).is_err(),
+            "pack writer must reject the same external manifest link"
+        );
     }
 
     /// A freshly scaffolded graph pack checks clean and names its graph.
