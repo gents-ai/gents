@@ -465,16 +465,59 @@ async fn automation_validation_refuses_what_every_fire_would_reject() {
 
     // Schedules may explicitly target an existing session, but queueing
     // without a destination and outcome emission remain unsupported.
-    ok(&tools, edit("schedule", "hourly", json!({"cadence":{"kind":"interval","interval_secs":3600}}))).await;
-    ok(&tools, edit("task", "tick", json!({"prompt_template":"Tick"}))).await;
+    ok(
+        &tools,
+        edit(
+            "schedule",
+            "hourly",
+            json!({"cadence":{"kind":"interval","interval_secs":3600}}),
+        ),
+    )
+    .await;
+    ok(
+        &tools,
+        edit("task", "tick", json!({"prompt_template":"Tick"})),
+    )
+    .await;
     let error = refused(&tools, edit("trigger", "hourly-tick", json!({"task_id":"tick","source":{"kind":"schedule","schedule_id":"hourly"},"concurrency":"queued_serial"}))).await;
     assert!(error.contains("explicit session_id_template"), "{error}");
-    ok(&tools, edit("trigger", "hourly-tick", json!({"task_id":"tick","source":{"kind":"schedule","schedule_id":"hourly"}}))).await;
-    ok(&tools, edit("trigger", "hourly-tick", json!({"session_id_template":"abc-session","concurrency":"queued_serial"}))).await;
-    let error = refused(&tools, edit("trigger", "hourly-tick", json!({"session_id_template":"{{ doc.session }}"}))).await;
+    ok(
+        &tools,
+        edit(
+            "trigger",
+            "hourly-tick",
+            json!({"task_id":"tick","source":{"kind":"schedule","schedule_id":"hourly"}}),
+        ),
+    )
+    .await;
+    ok(
+        &tools,
+        edit(
+            "trigger",
+            "hourly-tick",
+            json!({"session_id_template":"abc-session","concurrency":"queued_serial"}),
+        ),
+    )
+    .await;
+    let error = refused(
+        &tools,
+        edit(
+            "trigger",
+            "hourly-tick",
+            json!({"session_id_template":"{{ doc.session }}"}),
+        ),
+    )
+    .await;
     assert!(error.contains("doc"), "{error}");
-    ok(&tools, edit("trigger", "hourly-tick", json!({"session_id_template":null,"concurrency":null}))).await;
-
+    ok(
+        &tools,
+        edit(
+            "trigger",
+            "hourly-tick",
+            json!({"session_id_template":null,"concurrency":null}),
+        ),
+    )
+    .await;
 }
 
 #[tokio::test]

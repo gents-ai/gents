@@ -297,6 +297,7 @@ async fn production_event_fire_into_a_paired_client_session_adopts_its_requester
         created_at: chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
     };
     let prepared = crate::trigger_engine::durable::PreparedFire {
+        replace_prior: false,
         receipt: fire.clone(),
         target_existing: true,
     };

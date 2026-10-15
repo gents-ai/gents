@@ -393,6 +393,11 @@ async fn schedule_source_next_fire_emits_intent_when_schedule_is_due() {
         "fired_at should be a string, got {:?}",
         ev["fired_at"]
     );
+    let retry = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+        .await
+        .expect("unacknowledged occurrence remains due")
+        .expect("schedule source remains active");
+    assert_eq!(retry.durable_fire_key, intent.durable_fire_key);
 }
 
 /// After a successful fire, the callback advances the Trigger's

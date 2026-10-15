@@ -492,7 +492,8 @@ impl ConfigReferences {
                         require(Collection::Schedule, schedule_id, "source.schedule_id")?;
                         // The fire-time owner, so publication refuses exactly
                         // what every schedule fire would error on (#2080).
-                        crate::trigger_engine::validate_scheduled_task_options(
+                        crate::trigger_engine::validate_task_delivery_options(
+                            crate::trigger_engine::TriggerKind::Schedule,
                             task.emit_outcome,
                             doc.concurrency.unwrap_or_default(),
                             doc.session_id_template.is_some(),

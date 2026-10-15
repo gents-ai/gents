@@ -1302,42 +1302,158 @@ async fn scheduled_target_admission_is_atomic_and_recovers_same_occurrence() {
         ("foreign-owner", "general", false),
     ] {
         crate::session::ensure_session_with_agent_id_and_requester_did(
-            &node, target, if target == "foreign-owner" { "did:key:foreign" } else { &owner }, agent, Some(&owner),
-        ).await.unwrap();
-        if closed { crate::session::close_session(&node, &owner, target, Some(&owner)).await.unwrap(); }
-
+            &node,
+            target,
+            if target == "foreign-owner" {
+                "did:key:foreign"
+            } else {
+                &owner
+            },
+            agent,
+            Some(&owner),
+        )
+        .await
+        .unwrap();
+        if closed {
+            crate::session::close_session(&node, &owner, target, Some(&owner))
+                .await
+                .unwrap();
+        }
     }
     let task = resolved_task("wake {{ session.session_id }}");
-    for target in ["captain", "wrong-agent", "closed", "missing", "foreign-owner"] {
+    for target in [
+        "captain",
+        "wrong-agent",
+        "closed",
+        "missing",
+        "foreign-owner",
+    ] {
         let trigger = format!("wake-{target}");
         let mut schedule = resolved_schedule(&trigger, task.clone());
         schedule.session_id_template = Some(target.into());
         schedule.concurrency = ConcurrencyMode::QueuedSerial;
-        let snapshot = snapshot_with_agent_and_schedules(behavior.clone(), HashMap::from([(trigger.clone(), schedule)]));
+        let snapshot = snapshot_with_agent_and_schedules(
+            behavior.clone(),
+            HashMap::from([(trigger.clone(), schedule)]),
+        );
         let (tx, rx) = watch::channel(snapshot);
         let materializer = Arc::new(ProductionMaterializer::new(node.clone(), rx.clone()));
         let engine = TriggerEngine::new(rx, materializer.clone());
         let identity = gents_protocol::trigger_delivery::FireIdentity {
-            owner_did:owner.clone(), trigger_id:trigger.clone(), source_collection:"Schedule".into(),
-            source_doc_id:"due-2030-01-01".into(),
+            owner_did: owner.clone(),
+            trigger_id: trigger.clone(),
+            source_collection: "Schedule".into(),
+            source_doc_id: "due-2030-01-01".into(),
         };
         let intent = || FireIntent {
-            trigger_id:Some(trigger.clone()), trigger_kind:TriggerKind::Schedule,
-            task:task.clone(), concurrency:ConcurrencyMode::QueuedSerial,
-            event_vars:serde_json::json!({}), doc_vars:None, correlation:None,
-            group_vars:None, trigger_context:None, args_vars:None,
-            durable_fire_key:"due-2030-01-01".into(), pre_materialized_request_id:None,
-            on_result:Box::new(|_| {}),
+            trigger_id: Some(trigger.clone()),
+            trigger_kind: TriggerKind::Schedule,
+            task: task.clone(),
+            concurrency: ConcurrencyMode::QueuedSerial,
+            event_vars: serde_json::json!({}),
+            doc_vars: None,
+            correlation: None,
+            group_vars: None,
+            trigger_context: None,
+            args_vars: None,
+            durable_fire_key: "due-2030-01-01".into(),
+            pre_materialized_request_id: None,
+            on_result: Box::new(|_| {}),
         };
         let first = engine.dispatch(intent()).await;
         if target == "captain" {
-            assert!(matches!(first, FireResult::Fired { ref request_id } if request_id == &identity.request_id()), "{first:?}");
+            assert!(
+                matches!(first, FireResult::Fired { ref request_id } if request_id == &identity.request_id()),
+                "{first:?}"
+            );
+            let mut queued = intent();
+            queued.durable_fire_key = "due-2030-01-01-second".into();
+            let queued_id = gents_protocol::trigger_delivery::FireIdentity {
+                source_doc_id: queued.durable_fire_key.clone(),
+                ..identity.clone()
+            }
+            .request_id();
+            assert!(matches!(
+                engine.dispatch(queued).await,
+                FireResult::Fired { .. }
+            ));
+            let response = crate::graphql::graphql_with_transaction_retry(
+                &node,
+                &format!(
+                    "{{ AgentRequest {{ {} }} }}",
+                    crate::watcher::AGENT_REQUEST_FIELDS
+                ),
+                "test.scheduled_claim_rows",
+            )
+            .await
+            .unwrap();
+            let rows: Vec<gents_protocol::row::AgentRequestRow> =
+                serde_json::from_value(response.data.unwrap()["AgentRequest"].clone()).unwrap();
+            let cases = gents_lean_contract::load_contract_snapshot::<serde_json::Value>().unwrap();
+            let mut claim_owners = Vec::new();
+            for (request_id, case_name) in [
+                (identity.request_id(), "serial_first_claims"),
+                (queued_id, "serial_second_waits"),
+            ] {
+                let row = rows
+                    .iter()
+                    .find(|row| row.request_id == request_id)
+                    .unwrap()
+                    .clone();
+                let request = crate::watcher::AgentRequest::try_from(row).unwrap();
+                let mut lifecycle = crate::RequestLifecycle::new_with_execution_binding(
+                    node.clone(),
+                    "general",
+                    &owner,
+                    request,
+                    60,
+                    crate::lifecycle::ExecutionOrigin::Scheduled,
+                    "test-backend",
+                );
+                let now = chrono::Utc::now();
+                let claimed = lifecycle
+                    .claim_pending_durable_with_inputs(
+                        || now,
+                        || (now, uuid::Uuid::new_v4().to_string()),
+                    )
+                    .await
+                    .unwrap()
+                    .was_claimed();
+                let expected = cases["trigger_delivery"]["queues"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|case| case["name"] == case_name)
+                    .unwrap()["can_claim"]
+                    .as_bool()
+                    .unwrap();
+                assert_eq!(
+                    claimed, expected,
+                    "scheduled delivery uses the canonical claim queue: {case_name}"
+                );
+                if claimed {
+                    claim_owners.push(lifecycle);
+                }
+            }
             // Simulate losing the cursor acknowledgement and removing config.
-            tx.send(snapshot_with_agent_and_schedules(behavior.clone(), HashMap::new())).unwrap();
+            tx.send(snapshot_with_agent_and_schedules(
+                behavior.clone(),
+                HashMap::new(),
+            ))
+            .unwrap();
             let replay = engine.dispatch(intent()).await;
-            assert!(matches!(&replay, FireResult::Duplicate { request_id } if request_id == &identity.request_id()), "{replay:?}");
+            assert!(
+                matches!(&replay, FireResult::Duplicate { request_id } if request_id == &identity.request_id()),
+                "{replay:?}"
+            );
         } else {
-            assert!(matches!(first, FireResult::Errored { .. } | FireResult::Rejected { .. }), "{first:?}");
+            assert!(
+                matches!(
+                    first,
+                    FireResult::Errored { .. } | FireResult::Rejected { .. }
+                ),
+                "{first:?}"
+            );
         }
         let response = node.execute(&format!(r#"{{ TriggerFire(filter: {{fire_key: {{_eq: "{}"}}}}) {{ request_id queued_serial }} AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}) {{ session_id caused_by_trigger_kind content }} }}"#,
             escape_graphql_string(&identity.fire_key()), escape_graphql_string(&identity.request_id()))).await;

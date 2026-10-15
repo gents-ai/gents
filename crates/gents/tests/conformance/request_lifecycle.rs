@@ -14,7 +14,7 @@ fn rust_request_transition_action(from: &str, to: &str) -> Option<&'static str> 
         ("workspaceBindingPending", "pending") => Some("bindWorkspace"),
         ("pending", "claimed") => Some("claim"),
         ("pending", "failed") => Some("admissionReject"),
-        ("pending", "superseded") => Some("dedupLose"),
+        ("pending" | "workspaceBindingPending", "superseded") => Some("dedupLose"),
         ("claimed", "processing") => Some("beginInference"),
         ("processing", "processing") => Some("continueProcessing"),
         ("processing", "completed") => Some("finish"),
@@ -323,7 +323,7 @@ async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) 
         .then(|| (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339());
     let request_input =
         (action == "dedupLose").then(|| coalesce_input(&format!("dedup-{request_id}")));
-    let initial_state = if action == "bindWorkspace" {
+    let initial_state = if case.from == "workspaceBindingPending" {
         "workspaceBindingPending"
     } else {
         "pending"
@@ -358,36 +358,54 @@ async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) 
             assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
         }
         "dedupLose" => {
-            // Drive the PRODUCTION supersede writer. This arm used to issue its
-            // own raw mutation, which asserted only that DefraDB accepts a
-            // superseding write — not that any runtime code performs one.
-            let survivor_id = uuid::Uuid::new_v4().to_string();
-            let survivor_created_at =
-                (chrono::Utc::now() - chrono::Duration::seconds(30)).to_rfc3339();
-            let key = format!("dedup-{request_id}");
-            let survivor_input = coalesce_input(&key);
-            let survivor_doc_id = create_request_with_signed_fields(
-                &db.node,
-                &survivor_id,
-                &session_id,
-                "pending",
-                &survivor_created_at,
-                None,
-                Some(&survivor_input),
-                None,
-                None,
-            )
-            .await;
-            gents::__test_internals::reconcile_coalesced_pending_request(
-                &db.node,
-                &session_id,
-                NODE_DID,
-                gents::__test_internals::QueueSource::User,
-                &key,
-            )
-            .await
-            .expect("coalesce reconcile must succeed");
-            let _ = survivor_doc_id;
+            if case.from == "workspaceBindingPending" {
+                gents::config_client::ConfigAccess::transact_local_write(
+                    &db.node, None, "test.supersede_before_workspace_binding", |txn| {
+                        let doc_id = &doc_id;
+                        Box::pin(async move {
+                            txn.execute(&format!(
+                                "mutation {{ update_AgentRequest(docID: \"{}\", input: {{caused_by_trigger_id: \"conformance-trigger\"}}) {{_docID}} }}",
+                                gents::graphql::escape_graphql_string(doc_id),
+                            )).await?;
+                            gents::__test_internals::supersede_trigger_requests_in_txn(
+                                txn, NODE_DID, "conformance-trigger", None,
+                            ).await?;
+                            Ok(())
+                        })
+                    },
+                ).await.unwrap();
+            } else {
+                // Drive the PRODUCTION supersede writer. This arm used to issue its
+                // own raw mutation, which asserted only that DefraDB accepts a
+                // superseding write — not that any runtime code performs one.
+                let survivor_id = uuid::Uuid::new_v4().to_string();
+                let survivor_created_at =
+                    (chrono::Utc::now() - chrono::Duration::seconds(30)).to_rfc3339();
+                let key = format!("dedup-{request_id}");
+                let survivor_input = coalesce_input(&key);
+                let survivor_doc_id = create_request_with_signed_fields(
+                    &db.node,
+                    &survivor_id,
+                    &session_id,
+                    "pending",
+                    &survivor_created_at,
+                    None,
+                    Some(&survivor_input),
+                    None,
+                    None,
+                )
+                .await;
+                gents::__test_internals::reconcile_coalesced_pending_request(
+                    &db.node,
+                    &session_id,
+                    NODE_DID,
+                    gents::__test_internals::QueueSource::User,
+                    &key,
+                )
+                .await
+                .expect("coalesce reconcile must succeed");
+                let _ = survivor_doc_id;
+            }
         }
         "admissionReject" => {
             lifecycle

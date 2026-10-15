@@ -307,10 +307,27 @@ impl MaterializerHandle for SpyMaterializer {
         let group_markers = self.group_markers.clone();
         let marker_trigger_id = trigger_id.map(str::to_owned);
         let marker_fire_key = durable_fire_key.to_owned();
+        let replacement = delivery
+            .filter(|prepared| prepared.replace_prior)
+            .map(|prepared| {
+                (
+                    prepared.receipt.identity.owner_did.clone(),
+                    prepared.receipt.identity.trigger_id.clone(),
+                    prepared.receipt.request_id.clone(),
+                )
+            });
         Box::pin(async move {
             if let Some(gate) = gate {
                 let _ = gate.entered_tx.send(());
                 gate.release.notified().await;
+            }
+            if let Some((owner, trigger, request)) = replacement {
+                self.supersede_active_runtime_requests_for_trigger(
+                    &owner,
+                    &trigger,
+                    Some(&request),
+                )
+                .await?;
             }
             calls.lock().unwrap().push(entry);
             materialized_request_ids
@@ -666,7 +683,13 @@ async fn event_group_eligibility_matches_lean_generated_contract_cases() {
 
 #[test]
 fn nondocument_task_options_fail_explicitly() {
-    assert!(validate_non_document_task_options(false, ConcurrencyMode::Parallel, false).is_ok());
+    assert!(validate_task_delivery_options(
+        TriggerKind::Manual,
+        false,
+        ConcurrencyMode::Parallel,
+        false
+    )
+    .is_ok());
     for (emit, mode, target, expected) in [
         (true, ConcurrencyMode::Parallel, false, "emit_outcome"),
         (false, ConcurrencyMode::QueuedSerial, false, "queued_serial"),
@@ -677,9 +700,11 @@ fn nondocument_task_options_fail_explicitly() {
             "session_id_template",
         ),
     ] {
-        assert!(validate_non_document_task_options(emit, mode, target)
-            .unwrap_err()
-            .to_string()
-            .contains(expected));
+        assert!(
+            validate_task_delivery_options(TriggerKind::Manual, emit, mode, target)
+                .unwrap_err()
+                .to_string()
+                .contains(expected)
+        );
     }
 }

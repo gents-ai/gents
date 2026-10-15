@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use tokio::sync::{Mutex, watch};
+use tokio::sync::{watch, Mutex};
 use tokio_util::sync::CancellationToken;
 
 use crate::runtime_snapshot::ActiveRuntimeSnapshot;
@@ -187,7 +187,7 @@ pub(crate) trait MaterializerHandle: Send + Sync {
         prepared_ids: Option<(&str, &str)>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send + '_>>;
 
-    fn recover_event_fire(
+    fn recover_admitted_fire(
         &self,
         _identity: &gents_protocol::trigger_delivery::FireIdentity,
     ) -> std::pin::Pin<
@@ -324,7 +324,7 @@ impl TriggerEngine {
             return result;
         }
 
-        let event_identity = if intent.trigger_kind == TriggerKind::Schedule {
+        let delivery_identity = if intent.trigger_kind == TriggerKind::Schedule {
             // Probe every scheduled occurrence, even if its destination was
             // removed after admission but before the cursor was persisted.
             let snapshot = self.snapshot_rx.borrow().clone();
@@ -377,8 +377,8 @@ impl TriggerEngine {
         } else {
             None
         };
-        if let Some(identity) = &event_identity {
-            match self.materializer.recover_event_fire(identity).await {
+        if let Some(identity) = &delivery_identity {
+            match self.materializer.recover_admitted_fire(identity).await {
                 Ok(Some(request_id)) => {
                     let result = FireResult::Duplicate { request_id };
                     (intent.on_result)(result.clone());
@@ -387,7 +387,7 @@ impl TriggerEngine {
                 Ok(None) => {}
                 Err(error) => {
                     let result = FireResult::Errored {
-                        error: format!("recover event fire: {error}"),
+                        error: format!("recover admitted fire: {error}"),
                     };
                     (intent.on_result)(result.clone());
                     return result;
@@ -496,14 +496,16 @@ impl TriggerEngine {
                 if schedule.task_id != intent.task.task_id {
                     Err(anyhow::anyhow!("schedule Task changed before admission"))
                 } else {
-                    validate_scheduled_task_options(
+                    validate_task_delivery_options(
+                        TriggerKind::Schedule,
                         intent.task.emit_outcome,
                         intent.concurrency,
                         targeted_schedule,
                     )
                 }
             } else {
-                validate_non_document_task_options(
+                validate_task_delivery_options(
+                    intent.trigger_kind,
                     intent.task.emit_outcome,
                     intent.concurrency,
                     false,
@@ -689,6 +691,8 @@ impl TriggerEngine {
                     scope.session = Some(serde_json::json!({"session_id": fire.session_id}));
                     scope.request = Some(serde_json::json!({"request_id": fire.request_id}));
                     Some(durable::PreparedFire {
+                        replace_prior: intent.concurrency
+                            == crate::runtime_snapshot::ConcurrencyMode::LatestOnly,
                         target_existing: targeted_schedule
                             || graph_session_id.is_some()
                             || snapshot
@@ -812,13 +816,13 @@ impl TriggerEngine {
         };
         let guard = lock.lock().await;
 
-        if let Some(identity) = &event_identity {
-            let recovered = self.materializer.recover_event_fire(identity).await;
+        if let Some(identity) = &delivery_identity {
+            let recovered = self.materializer.recover_admitted_fire(identity).await;
             let result = match recovered {
                 Ok(Some(request_id)) => Some(FireResult::Duplicate { request_id }),
                 Ok(None) => None,
                 Err(error) => Some(FireResult::Errored {
-                    error: format!("recover locked event fire: {error}"),
+                    error: format!("recover locked admitted fire: {error}"),
                 }),
             };
             if let Some(result) = result {
@@ -906,6 +910,7 @@ impl TriggerEngine {
                     return result;
                 }
             },
+            (false, ConcurrencyMode::LatestOnly) if delivery.is_some() => {}
             (false, ConcurrencyMode::LatestOnly) => {
                 if let Err(error) = self
                     .materializer
@@ -1007,81 +1012,34 @@ impl TriggerEngine {
     }
 }
 
-pub(crate) fn validate_non_document_task_options(
+pub(crate) fn validate_task_delivery_options(
+    kind: TriggerKind,
     emit_outcome: bool,
     concurrency: crate::runtime_snapshot::ConcurrencyMode,
-    session_template: bool,
+    target_existing: bool,
 ) -> anyhow::Result<()> {
+    if kind == TriggerKind::Event {
+        return Ok(());
+    }
     anyhow::ensure!(
         !emit_outcome,
         "emit_outcome requires document-triggered delivery or explicit CLI/desktop Task admission"
     );
-    anyhow::ensure!(
-        concurrency != crate::runtime_snapshot::ConcurrencyMode::QueuedSerial,
-        "queued_serial requires a document event source"
-    );
-    anyhow::ensure!(
-        !session_template,
-        "session_id_template requires a document event source"
-    );
+    if kind == TriggerKind::Schedule {
+        anyhow::ensure!(
+            target_existing
+                || concurrency != crate::runtime_snapshot::ConcurrencyMode::QueuedSerial,
+            "queued_serial requires an explicit session_id_template for scheduled delivery"
+        );
+    } else {
+        anyhow::ensure!(
+            concurrency != crate::runtime_snapshot::ConcurrencyMode::QueuedSerial,
+            "queued_serial requires a document event source"
+        );
+        anyhow::ensure!(
+            !target_existing,
+            "session_id_template requires a document event source"
+        );
+    }
     Ok(())
-}
-
-pub(crate) fn validate_scheduled_task_options(
-    emit_outcome: bool,
-    concurrency: crate::runtime_snapshot::ConcurrencyMode,
-    session_template: bool,
-) -> anyhow::Result<()> {
-    anyhow::ensure!(
-        !emit_outcome,
-        "emit_outcome requires document-triggered delivery or explicit CLI/desktop Task admission"
-    );
-    anyhow::ensure!(
-        session_template || concurrency != crate::runtime_snapshot::ConcurrencyMode::QueuedSerial,
-        "queued_serial requires an explicit session_id_template for scheduled delivery"
-    );
-    Ok(())
-}
-
-#[cfg(test)]
-mod scheduled_task_options_tests {
-    use super::validate_scheduled_task_options;
-    use crate::runtime_snapshot::ConcurrencyMode;
-
-    #[test]
-    fn targeted_queued_serial_is_accepted() {
-        assert!(
-            validate_scheduled_task_options(false, ConcurrencyMode::QueuedSerial, true).is_ok()
-        );
-    }
-
-    #[test]
-    fn untargeted_queued_serial_is_rejected() {
-        let err = validate_scheduled_task_options(false, ConcurrencyMode::QueuedSerial, false)
-            .expect_err("untargeted queued_serial must be rejected");
-        assert!(
-            err.to_string()
-                .contains("queued_serial requires an explicit session_id_template")
-        );
-    }
-
-    #[test]
-    fn emit_outcome_is_rejected_even_when_targeted() {
-        let err = validate_scheduled_task_options(true, ConcurrencyMode::default(), true)
-            .expect_err("emit_outcome must be rejected for scheduled delivery");
-        assert!(err.to_string().contains("emit_outcome"));
-    }
-
-    #[test]
-    fn untargeted_default_concurrency_is_accepted() {
-        assert!(validate_scheduled_task_options(false, ConcurrencyMode::default(), false).is_ok());
-    }
-
-    #[test]
-    fn non_document_helper_still_rejects_session_template() {
-        assert!(
-            super::validate_non_document_task_options(false, ConcurrencyMode::default(), true,)
-                .is_err()
-        );
-    }
 }
