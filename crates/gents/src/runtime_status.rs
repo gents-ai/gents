@@ -103,6 +103,10 @@ impl RuntimeStatusOwner {
 pub(crate) struct RuntimeStatusHandle {
     node: Arc<defra_node::EmbeddedNode>,
     state: Arc<Mutex<RuntimeStatusRow>>,
+    /// The row this process last wrote. DefraDB commits every field an update
+    /// names even when its value is unchanged, so later writes name only the
+    /// fields that differ from it; the first write names every field.
+    persisted: Arc<Mutex<Option<RuntimeStatusRow>>>,
     readiness: NodeReadinessPublisherHandle,
 }
 
@@ -121,6 +125,7 @@ impl RuntimeStatusHandle {
             Self {
                 node,
                 state: Arc::new(Mutex::new(RuntimeStatusRow::new(node_did))),
+                persisted: Arc::default(),
                 readiness,
             },
         )
@@ -143,6 +148,7 @@ impl RuntimeStatusHandle {
             Self {
                 node,
                 state: Arc::new(Mutex::new(RuntimeStatusRow::new(node_did))),
+                persisted: Arc::default(),
                 readiness,
             },
         )
@@ -158,6 +164,7 @@ impl RuntimeStatusHandle {
         let handle = Self {
             node,
             state: Arc::new(Mutex::new(RuntimeStatusRow::new(node_did))),
+            persisted: Arc::default(),
             readiness,
         };
         handle
@@ -181,6 +188,7 @@ impl RuntimeStatusHandle {
             Self {
                 node,
                 state: Arc::new(Mutex::new(RuntimeStatusRow::new(node_did))),
+                persisted: Arc::default(),
                 readiness,
             },
         )
@@ -338,56 +346,74 @@ impl RuntimeStatusHandle {
             );
         }
         *guard = next.clone();
-        if let Err(error) = upsert_runtime_status(&self.node, &next).await {
-            tracing::warn!(
+        let mut persisted = self.persisted.lock().await;
+        match upsert_runtime_status(&self.node, persisted.as_ref(), &next).await {
+            Ok(()) => *persisted = Some(next),
+            Err(error) => tracing::warn!(
                 node_did = %next.node_did,
                 error = %error,
                 "failed to persist NodeRuntime status"
-            );
+            ),
         }
     }
 }
 
+/// Mutable NodeRuntime fields as GraphQL input literals, in input order.
+fn runtime_status_fields(row: &RuntimeStatusRow) -> [(&'static str, String); 8] {
+    let string = |value: &str| format!("\"{}\"", escape_graphql_string(value));
+    [
+        ("reconcile_phase", string(&row.reconcile_phase)),
+        (
+            "agent_executor_capacity",
+            row.agent_executor_capacity.to_string(),
+        ),
+        (
+            "agent_executor_queue_depth",
+            row.agent_executor_queue_depth.to_string(),
+        ),
+        (
+            "agent_executor_status_json",
+            string(&row.agent_executor_status_json),
+        ),
+        ("last_reconcile_result", string(&row.last_reconcile_result)),
+        ("last_reconcile_error", string(&row.last_reconcile_error)),
+        (
+            "last_reconcile_completed_at",
+            string(&row.last_reconcile_completed_at),
+        ),
+        ("updated_at", string(&row.updated_at)),
+    ]
+}
+
 async fn upsert_runtime_status(
     node: &std::sync::Arc<defra_node::EmbeddedNode>,
+    persisted: Option<&RuntimeStatusRow>,
     row: &RuntimeStatusRow,
 ) -> anyhow::Result<()> {
+    let fields = runtime_status_fields(row);
+    let previous = persisted.map(runtime_status_fields);
+    let render = |(name, value): &(&str, String)| format!("{name}: {value}");
+    let add = fields.iter().map(render).collect::<Vec<_>>().join(", ");
+    let update = fields
+        .iter()
+        .enumerate()
+        .filter(|(index, field)| {
+            previous
+                .as_ref()
+                .is_none_or(|previous| previous[*index] != **field)
+        })
+        .map(|(_, field)| render(field))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let node_did = escape_graphql_string(&row.node_did);
     let mutation = format!(
         r#"mutation {{
             upsert_NodeRuntime(
                 filter: {{ node_did: {{ _eq: "{node_did}" }} }},
-                add: {{
-                    node_did: "{node_did}",
-                    reconcile_phase: "{reconcile_phase}",
-                    agent_executor_capacity: {agent_executor_capacity},
-                    agent_executor_queue_depth: {agent_executor_queue_depth},
-                    agent_executor_status_json: "{agent_executor_status_json}",
-                    last_reconcile_result: "{last_reconcile_result}",
-                    last_reconcile_error: "{last_reconcile_error}",
-                    last_reconcile_completed_at: "{last_reconcile_completed_at}",
-                    updated_at: "{updated_at}"
-                }},
-                update: {{
-                    reconcile_phase: "{reconcile_phase}",
-                    agent_executor_capacity: {agent_executor_capacity},
-                    agent_executor_queue_depth: {agent_executor_queue_depth},
-                    agent_executor_status_json: "{agent_executor_status_json}",
-                    last_reconcile_result: "{last_reconcile_result}",
-                    last_reconcile_error: "{last_reconcile_error}",
-                    last_reconcile_completed_at: "{last_reconcile_completed_at}",
-                    updated_at: "{updated_at}"
-                }}
+                add: {{ node_did: "{node_did}", {add} }},
+                update: {{ {update} }}
             ) {{ _docID }}
         }}"#,
-        node_did = escape_graphql_string(&row.node_did),
-        reconcile_phase = escape_graphql_string(&row.reconcile_phase),
-        agent_executor_capacity = row.agent_executor_capacity,
-        agent_executor_queue_depth = row.agent_executor_queue_depth,
-        agent_executor_status_json = escape_graphql_string(&row.agent_executor_status_json),
-        last_reconcile_result = escape_graphql_string(&row.last_reconcile_result),
-        last_reconcile_error = escape_graphql_string(&row.last_reconcile_error),
-        last_reconcile_completed_at = escape_graphql_string(&row.last_reconcile_completed_at),
-        updated_at = escape_graphql_string(&row.updated_at),
     );
     let response = crate::config_client::ConfigAccess::write_local_response(
         node,
