@@ -722,7 +722,8 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
                 Some(&access),
             )
             .await?;
-            let output = install_documents_pack(&access, &owner, &pack, &args, true).await?;
+            let output =
+                install_documents_pack(&access, &owner, &pack, &args, args.explicit).await?;
             crate::print_json(&output)
         }
         PackKind::Assets | PackKind::Plugins => {
