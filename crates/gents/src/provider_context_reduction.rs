@@ -152,11 +152,7 @@ impl ProviderContextReduction {
             .context("decoding ProviderContextReduction retained_suffix_json")?;
         let associations = self.replay_associations()?;
         validate_replay_associations(&associations, &prefix, &suffix, &self.request_doc_id)?;
-        let checkpoint = self.checkpoint_messages()?;
-        anyhow::ensure!(
-            checkpoint_matches_stored_projection(&checkpoint, &suffix, &self.summary),
-            "ProviderContextReduction checkpoint has invalid stored projection structure"
-        );
+        let checkpoint = decode_checkpoint(&self.checkpoint_messages_json, &suffix, &self.summary)?;
         let mut tagged = Vec::with_capacity(checkpoint.len());
         if !self.summary.trim().is_empty() {
             tagged.push(TaggedMessage::unassociated(checkpoint[0].clone()));
@@ -848,13 +844,9 @@ fn validate_recoverable_rows(rows: &[ProviderContextReduction]) -> Result<()> {
                 row.reduction_key
             );
         }
-        let checkpoint = row.checkpoint_messages()?;
-        if !checkpoint_matches_stored_projection(&checkpoint, &suffix, &row.summary) {
-            anyhow::bail!(
-                "ProviderContextReduction {} checkpoint has invalid stored projection structure",
-                row.reduction_key
-            );
-        }
+        decode_checkpoint(&row.checkpoint_messages_json, &suffix, &row.summary).with_context(
+            || format!("validating ProviderContextReduction {}", row.reduction_key),
+        )?;
         validate_replay_associations(
             &row.replay_associations()?,
             &prefix,
@@ -945,7 +937,10 @@ fn encode_checkpoint(checkpoint: &[Message], summary: &str) -> Result<String> {
     let prefix_len = usize::from(!summary.trim().is_empty());
     crate::rendered_request::canonical_json_string(&serde_json::to_value(CheckpointPrefix {
         version: 1,
-        prefix: checkpoint[..prefix_len].to_vec(),
+        prefix: checkpoint
+            .get(..prefix_len)
+            .context("checkpoint is missing its rendered summary")?
+            .to_vec(),
     })?)
 }
 
