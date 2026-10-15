@@ -1,9 +1,9 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::sync::Arc;
 
 use anyhow::Result;
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 use gents::config_client::ConfigAccess;
 use gents::graph_pipeline::{
@@ -280,6 +280,9 @@ fn unobserved(run_id: &str, run: &Observed) -> Value {
 
 #[cfg(test)]
 mod tests {
+    use chrono::Duration;
+    use std::collections::BTreeMap;
+
     use super::super::observation_cursor::{ABANDONED_REVISION, MAX_RETRY_DELAY_SECS};
     use super::super::projection::BoundModelContext;
     use super::super::test_fixtures::seed_canonical_tool_call;
