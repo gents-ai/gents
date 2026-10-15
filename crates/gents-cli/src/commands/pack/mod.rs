@@ -821,8 +821,12 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
                 args.grant_authority,
                 slot_owner.as_deref(),
                 &requested,
-                |identity| async {
-                    record_plugin_store_change(&home, &identity.coordinate, Some(&identity)).await
+                |identity| {
+                    let home = &home;
+                    async move {
+                        record_plugin_store_change(home, &identity.coordinate, Some(&identity))
+                            .await
+                    }
                 },
             )
             .await?;

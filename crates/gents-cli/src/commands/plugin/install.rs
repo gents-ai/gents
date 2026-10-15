@@ -269,7 +269,7 @@ mod instruction_tests {
         let archive = gents::pack_archive::PackArchive::from_bytes(&bytes).unwrap();
         let home = tempfile::tempdir().unwrap();
 
-        crate::commands::pack::install_pack_plugins(
+        gents::plugin::install::install_pack_plugins(
             home.path(),
             archive.manifest(),
             archive.digest(),
