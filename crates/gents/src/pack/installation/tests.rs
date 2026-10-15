@@ -809,3 +809,53 @@ async fn installing_a_pack_keeps_the_users_default_behavior() {
     );
     assert_eq!(tools_ids(&access).await, ["pack-tools"]);
 }
+
+#[tokio::test]
+async fn a_delayed_plugin_notification_projects_the_current_home_pin() {
+    let access = access().await;
+    let home = tempfile::tempdir().unwrap();
+    let current = identity("2");
+    super::super::write_home_install(
+        home.path(),
+        &super::super::HomePackInstall {
+            coordinate: current.coordinate.clone(),
+            version: current.version.clone(),
+            digest: current.digest.clone(),
+            kind: super::super::PackKind::Plugins,
+            assets: "packs/.materialized/acme/demo/current".into(),
+            plugins: current.plugins.clone(),
+            installed_at: "2026-01-01T00:00:00Z".into(),
+        },
+    )
+    .unwrap();
+    record_plugin_store_change(
+        &access,
+        OWNER,
+        home.path(),
+        "acme/demo",
+        Some(&identity("1")),
+    )
+    .await
+    .unwrap();
+    let response = access
+        .execute("{ PackInstallation { version digest } }")
+        .await
+        .unwrap();
+    assert_eq!(
+        response["data"]["PackInstallation"][0]["version"],
+        current.version
+    );
+    assert_eq!(
+        response["data"]["PackInstallation"][0]["digest"],
+        current.digest
+    );
+    super::super::forget_home_install(home.path(), "acme/demo").unwrap();
+    record_plugin_store_change(&access, OWNER, home.path(), "acme/demo", None)
+        .await
+        .unwrap();
+    let response = access
+        .execute("{ PackInstallation { _docID } }")
+        .await
+        .unwrap();
+    assert_eq!(response["data"]["PackInstallation"], json!([]));
+}

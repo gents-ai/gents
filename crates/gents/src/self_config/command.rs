@@ -1,5 +1,6 @@
 use super::*;
 
+mod authoring;
 mod crud;
 mod datastore;
 mod discovery;
@@ -38,6 +39,10 @@ const HELP_INDEX: &[(&str, &str)] = &[
         "connect sources, tasks and triggers; wiring recipes",
     ),
     ("pack", "pack and graph installation"),
+    (
+        "plugin",
+        "installed plugin inspection and explicit Tools selection",
+    ),
     ("discovery", "external configuration scan"),
     ("cleanup", "atomic multi-document deletion"),
     ("validate", "check saved configuration and references"),
@@ -106,7 +111,8 @@ impl ConfigCommandParams {
                 | ["backend", "get" | "create" | "discover", ..]
                 | ["profile", "create", ..]
                 | ["skill", "get", ..]
-                | ["pack", "get" | "install" | "update" | "remove", ..] => 2,
+                | ["pack", "get" | "install" | "update" | "remove", ..]
+                | ["plugin", "get", ..] => 2,
                 ["automation", "get" | "preview" | "edit", _, ..] => 3,
                 ["get", ..] => return Err(CommandGuidance {
                     message: "Put the resource before the verb: use agent get to inspect an agent.".into(),
@@ -399,7 +405,7 @@ fn log_config_call(
     let resource = argv.first().map(String::as_str).unwrap_or("");
     let verb = argv.get(1).map(String::as_str).unwrap_or("");
     let reads = [
-        "get", "list", "discover", "context", "help", "--help", "-h", "scan",
+        "get", "list", "discover", "context", "help", "--help", "-h", "scan", "verify",
     ];
     if help
         || previewing
@@ -510,6 +516,9 @@ fn model_resources(categories: &BTreeSet<String>, pack: bool) -> Vec<&'static st
     if pack {
         resources.push("pack");
     }
+    if pack || categories.contains("tools") {
+        resources.push("plugin");
+    }
     if !categories.is_empty() {
         resources.push("cleanup");
         resources.push("batch");
@@ -589,6 +598,16 @@ impl ConfigCommandTool {
                 message,
                 json!({"tool":"schema","next_call":{"argv":["help"]}}),
             );
+        }
+        if matches!(argv.first().map(String::as_str), Some("pack"))
+            && matches!(argv.get(1).map(String::as_str), Some("install" | "update"))
+        {
+            if let Some(package) = argv.get(2) {
+                return (
+                    message,
+                    json!({"next_call":{"argv":["pack","preview",argv[1],package]}}),
+                );
+            }
         }
         let resource = argv.first().map(String::as_str).unwrap_or("help");
         let next = if resources
@@ -696,6 +715,7 @@ impl ConfigCommandTool {
             "automation" => self.automation(&argv[1..]).await,
             "cleanup" => self.cleanup(&argv[1..]).await,
             "pack" => self.pack(&argv[1..]).await,
+            "plugin" => self.plugin(&argv[1..]),
             "skill" => self.skill(&argv[1..]).await,
             "discovery" => self.discovery(&argv[1..]).await,
             "validate" => self.validate_saved(&argv[1..]).await,
@@ -1459,6 +1479,59 @@ impl ConfigCommandTool {
         .pretty()
     }
 
+    fn plugin(&self, argv: &[String]) -> Result<String> {
+        anyhow::ensure!(
+            self.core.held_grants().pack_install || self.categories.contains("tools"),
+            "plugin inspection requires the pack or tools grant"
+        );
+        let home = self
+            .plugins
+            .home()
+            .context("this runtime has no plugin home")?;
+        match argv.first().map(String::as_str) {
+            Some("list") => {
+                let parsed = ParsedArgs::parse(&argv[1..])?;
+                parsed.reject_mutation_flags()?;
+                anyhow::ensure!(
+                    parsed.positionals.is_empty()
+                        && parsed
+                            .options
+                            .keys()
+                            .all(|name| matches!(name.as_str(), "limit" | "cursor")),
+                    "plugin list accepts options.limit and options.cursor only"
+                );
+                let limit = parse_limit(&parsed)?;
+                let cursor = parsed.one("cursor")?;
+                let mut records = crate::plugin::store::list_records(home)?;
+                records.sort_by_key(|record| format!("{}/{}", record.namespace, record.name));
+                let mut items = records.into_iter().filter(|record| cursor.is_none_or(|cursor| format!("{}/{}", record.namespace, record.name).as_str() > cursor)).take(limit + 1).map(|record| json!({"plugin":format!("{}/{}",record.namespace,record.name),"version":record.version,"digest":record.digest,"owner_pack_coordinate":record.owner_pack_coordinate})).collect::<Vec<_>>();
+                let truncated = items.len() > limit;
+                items.truncate(limit);
+                let next_cursor = truncated
+                    .then(|| {
+                        items
+                            .last()
+                            .and_then(|item| item["plugin"].as_str())
+                            .map(ToOwned::to_owned)
+                    })
+                    .flatten();
+                ordered! {"items": items, "next_cursor": next_cursor, "next_call": json!({"argv":["plugin","get","<PLUGIN>"]})}.pretty()
+            }
+            Some("get") if argv.len() == 2 => {
+                let (namespace, name) = crate::plugin::store::parse_coordinate(&argv[1])?;
+                let record = crate::plugin::store::read_record(home, namespace, name)?;
+                ordered! {
+                    "plugin": argv[1],
+                    "selection": json!({"plugin":argv[1],"digest":record.digest}),
+                    "next_call": json!({"argv":["tools","get"]}),
+                    "guidance": "Read the target Tools document and preserve its other integration settings and plugin entries. Explicitly update integrations.plugins with the pinned selection, then read tools get and effective config get for resolved readback. Start a fresh request to call the tool; installation alone does not expose it to the current request.",
+                    "installed": record,
+                }.pretty()
+            }
+            _ => bail!("plugin supports list and get; call [\"help\",\"plugin\"]"),
+        }
+    }
+
     async fn pack(&self, argv: &[String]) -> Result<String> {
         anyhow::ensure!(
             self.core.held_grants().pack_install,
@@ -1473,6 +1546,9 @@ impl ConfigCommandTool {
             .first()
             .map(String::as_str)
             .context("pack command is required; see [\"help\",\"pack\"]")?;
+        if matches!(verb, "scaffold" | "check" | "verify" | "build" | "test") {
+            return self.authoring(verb, &argv[1..]).await;
+        }
         match verb {
             "search" => {
                 let parsed = ParsedArgs::parse(&argv[1..])?;

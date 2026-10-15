@@ -278,6 +278,12 @@ c["tools"][0]["self_config"] = json.load(open(grant))
 json.dump(c, open(config, "w"), indent=2)
 PYSESSIONS
   fi
+  if [ "$level" = native-packs ]; then
+    RUN_SUBJECT="$EVAL_HOME/native_packs_subject-$SHA"
+    rm -rf "$RUN_SUBJECT"
+    cp -R "${GENTS_EVAL_SUBJECT:-$FIXTURES/native_pack_subject}" "$RUN_SUBJECT"
+    cp "$ROOT/crates/gents-protocol/prompts/engineer.md" "$RUN_SUBJECT/agents/engineer/system_prompt.md"
+  fi
   if [ "$level" = factory-setup ]; then
     RUN_SUBJECT="$EVAL_HOME/factory_subject-$SHA"
     rm -rf "$RUN_SUBJECT"

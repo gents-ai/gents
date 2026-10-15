@@ -14,6 +14,7 @@
 //! [`Self::lookup`] can resolve a bare `namespace/name[@version]` to a
 //! stored archive without opening any of them.
 
+use std::collections::BTreeMap;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
@@ -210,6 +211,35 @@ impl PackStore {
         self.import_file_accepting(file, expected, |_| Ok(()))
     }
 
+    /// [`Self::import_file`], refusing a final symlink instead of following
+    /// it: the handle the caller's admission validated is the handle this
+    /// reads, so a swap between admission and import cannot change which
+    /// bytes are verified and stored.
+    pub fn import_file_no_follow(&self, file: &Path, expected: Option<&str>) -> Result<StoredPack> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            let input = std::fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_NOFOLLOW)
+                .open(file)
+                .with_context(|| format!("opening {}", file.display()))?;
+            self.import_accepting(io::BufReader::new(input), expected, |_| Ok(()))
+                .with_context(|| format!("{} is not a valid pack", file.display()))
+        }
+        #[cfg(not(unix))]
+        {
+            let metadata = std::fs::symlink_metadata(file)
+                .with_context(|| format!("opening {}", file.display()))?;
+            anyhow::ensure!(
+                metadata.file_type().is_file(),
+                "{} is not a regular file",
+                file.display()
+            );
+            self.import_file(file, expected)
+        }
+    }
+
     /// [`Self::import_accepting`] for a file.
     pub fn import_file_accepting(
         &self,
@@ -228,6 +258,12 @@ impl PackStore {
     /// renamed into place); every open maps its files from there, so a pack
     /// of any size costs page cache, not memory. [`Self::verify`] checks the
     /// stored file again from scratch.
+    ///
+    /// The unpacked copy is content the store does not rewrite, so it is
+    /// rehashed before its bytes are mapped: a modified unpacked tree must
+    /// not be able to supply different manifest or plugin bytes under the
+    /// digest that authorized them. A mismatch is repaired by unpacking the
+    /// stored archive again.
     pub fn open(&self, digest: &str) -> Result<PackArchive> {
         let hex = digest_hex(digest)?;
         let unpacked = self.unpacked_root().join(hex);
@@ -245,10 +281,36 @@ impl PackStore {
             unpacked.display(),
             header.digest
         );
-        let manifest = serde_json::from_slice(
+        let manifest: crate::pack::PackManifest = serde_json::from_slice(
             &std::fs::read(unpacked.join("manifest.json")).context("reading manifest.json")?,
         )
         .context("the unpacked manifest is not valid")?;
+        // Read every declared file to its own buffer so the digest closes over
+        // slices that outlive each call: `digest_declared_assets` borrows the
+        // bytes per entry and the closure cannot hold a temporary.
+        let contents = Self::declared_file_contents(&unpacked, &manifest)?;
+        let computed =
+            crate::pack::digest_declared_assets(&manifest, |path| Ok(contents[path].as_slice()))?;
+        if computed != digest {
+            tracing::warn!(
+                digest,
+                unpacked = %unpacked.display(),
+                "the unpacked pack's contents no longer hash to their digest; unpacking the stored archive again"
+            );
+            self.unpack(digest, &unpacked)?;
+            let reread: crate::pack::PackManifest = serde_json::from_slice(
+                &std::fs::read(unpacked.join("manifest.json")).context("reading manifest.json")?,
+            )
+            .context("the unpacked manifest is not valid")?;
+            let contents = Self::declared_file_contents(&unpacked, &reread)?;
+            let recomputed =
+                crate::pack::digest_declared_assets(&reread, |path| Ok(contents[path].as_slice()))?;
+            ensure!(
+                recomputed == digest,
+                "the unpacked pack at {} does not match {digest} even after unpacking the stored archive again",
+                unpacked.display()
+            );
+        }
         PackArchive::from_unpacked(&unpacked, header, manifest)
     }
 
@@ -257,6 +319,23 @@ impl PackStore {
             || self.root.join("unpacked"),
             |packs| packs.join("unpacked"),
         )
+    }
+
+    /// Reads every declared file of `manifest` under `unpacked` to memory.
+    /// Each read is no-follow-checked as a regular file so a symlink planted
+    /// in the unpacked tree cannot redirect a digest verification.
+    fn declared_file_contents(
+        unpacked: &Path,
+        manifest: &crate::pack::PackManifest,
+    ) -> Result<BTreeMap<String, Vec<u8>>> {
+        crate::pack::declared_paths(manifest)
+            .into_iter()
+            .map(|path| {
+                let bytes = no_follow_read(&unpacked.join(&path))
+                    .with_context(|| format!("reading the unpacked {path}"))?;
+                Ok((path, bytes))
+            })
+            .collect()
     }
 
     /// `{home}/packs/store/by-name`, the name index root.
@@ -712,7 +791,35 @@ impl PackStore {
     }
 }
 
-/// Copies every byte read from `inner` into `copy`.
+/// Reads `path` whole, refusing a final symlink instead of following it
+/// (O_NOFOLLOW on unix).
+pub(crate) fn no_follow_read(path: &Path) -> Result<Vec<u8>> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(path)
+            .with_context(|| format!("opening {}", path.display()))?;
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes)
+            .with_context(|| format!("reading {}", path.display()))?;
+        Ok(bytes)
+    }
+    #[cfg(not(unix))]
+    {
+        let metadata = std::fs::symlink_metadata(path)
+            .with_context(|| format!("opening {}", path.display()))?;
+        ensure!(
+            metadata.file_type().is_file(),
+            "{} is not a regular file",
+            path.display()
+        );
+        std::fs::read(path).with_context(|| format!("reading {}", path.display()))
+    }
+}
+
 struct TeeReader<R, W> {
     inner: R,
     copy: W,

@@ -1,4 +1,35 @@
 //! Shared by build-time embedding and runtime pack resolution.
+use std::path::{Path, PathBuf};
+
+use anyhow::{ensure, Context, Result};
+
+/// Opens one pack file only when its resolved target remains under the pack
+/// directory. Pack paths are manifest input; lexical admission alone does
+/// not keep a symlinked file inside that directory.
+pub(crate) fn open_pack_asset(root: &Path, path: &str) -> Result<std::fs::File> {
+    ensure!(
+        is_distributable_asset(path) && has_canonical_asset_spelling(path),
+        "refusing to read pack asset {path:?}"
+    );
+    let root = std::fs::canonicalize(root)
+        .with_context(|| format!("canonicalizing pack directory {}", root.display()))?;
+    let source = root.join(path);
+    let resolved: PathBuf =
+        std::fs::canonicalize(&source).with_context(|| format!("resolving pack asset {path:?}"))?;
+    ensure!(
+        resolved.starts_with(&root),
+        "refusing to read pack asset {path:?} outside {}",
+        root.display()
+    );
+    let file =
+        std::fs::File::open(&resolved).with_context(|| format!("opening pack asset {path:?}"))?;
+    ensure!(
+        file.metadata()?.is_file(),
+        "pack asset {path:?} is not a regular file"
+    );
+    Ok(file)
+}
+
 pub(crate) fn is_distributable_asset(path: &str) -> bool {
     !path.is_empty()
         && !path.contains('\\')

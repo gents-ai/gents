@@ -6,9 +6,6 @@ use serde_json::json;
 
 use crate::cli::{PackDiffArgs, PackShowArgs, PackVerifyArgs};
 
-/// The owner a `--config` preview is bound to. Never written anywhere.
-const SHOW_CONFIG_OWNER: &str = "did:key:zPackShowPlaceholder";
-
 /// `gents pack show`: the manifest, the pack digest and every file with its
 /// size and sha256, for any pack `install` accepts; with `--config`, instead
 /// prints `{config, scenario}` as an install would load them, at their
@@ -61,32 +58,10 @@ pub(super) async fn show(args: PackShowArgs) -> Result<()> {
 /// environment is never read: a missing default is refused so the preview
 /// never differs from the pack's own declared defaults.
 fn show_config(pack: &super::PackSource) -> Result<()> {
-    let manifest = pack.manifest();
-    let config = gents::pack::load_pack_config(
-        manifest,
-        &gents::pack::PackInstallOptions {
-            node_did: SHOW_CONFIG_OWNER.into(),
-        },
-        &|path| pack.asset(path).map(Vec::from),
-        &|_| None,
-    )?;
-    let scenario = gents::pack::declared_paths(manifest)
-        .iter()
-        .any(|path| path == "experiment.json")
-        .then(|| -> Result<serde_json::Value> {
-            let raw = std::str::from_utf8(pack.asset("experiment.json")?)
-                .context("experiment.json is not UTF-8")?;
-            let expanded = crate::desired_state::interpolate::interpolate_with(raw, &|_| None)
-                .map_err(|missing| {
-                    anyhow::anyhow!(
-                        "experiment.json references environment variable(s) with no default: {}",
-                        missing.join(", ")
-                    )
-                })?;
-            serde_json::from_str(&expanded).context("parsing experiment.json")
-        })
-        .transpose()?;
-    crate::print_json(&json!({ "config": config, "scenario": scenario }))
+    let preview = gents::pack::authoring::preview_config(pack.manifest(), &|path| {
+        pack.asset(path).map(Vec::from)
+    })?;
+    crate::print_json(&preview)
 }
 
 /// `gents pack verify`: checks a `.pack` file, or a pack in the home's
@@ -97,15 +72,7 @@ pub(super) fn verify(args: PackVerifyArgs) -> Result<()> {
         gents::pack_store::PackStore::new(&home).verify(&args.target)?
     } else {
         let path = std::path::Path::new(&args.target);
-        let file =
-            std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
-        gents::pack_archive::read_pack(
-            std::io::BufReader::new(file),
-            gents::pack_archive::Bounds::default(),
-            |_, _| Ok(()),
-        )
-        .with_context(|| format!("{} is not a valid pack", path.display()))?
-        .header
+        gents::pack::authoring::verify_pack_file(path)?
     };
     crate::print_json(&json!({ "verified": true, "pack": header }))
 }

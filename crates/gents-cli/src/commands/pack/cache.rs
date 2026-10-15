@@ -77,17 +77,7 @@ pub(super) fn asset_cache_root_for(
     name: &str,
     digest: &str,
 ) -> Result<std::path::PathBuf> {
-    anyhow::ensure!(
-        gents::pack::is_valid_pack_name(namespace) && gents::pack::is_valid_pack_name(name),
-        "invalid pack coordinate {namespace}/{name}"
-    );
-    let hash = gents::pack_archive::digest_hex(digest)?;
-    Ok(home
-        .join(gents::home::PACKS_DIR_NAME)
-        .join(".materialized")
-        .join(namespace)
-        .join(name)
-        .join(hash))
+    gents::pack::materialize::cache_root(home, namespace, name, digest)
 }
 
 /// A receipt whose path omits the namespace needs its verified pack contents
@@ -98,6 +88,36 @@ pub(super) fn release_recorded_cache(
     coordinate: &str,
     record: &HomePackInstall,
 ) -> Result<CacheRelease> {
+    prepare_recorded_cache(home, coordinate, record)?.finish()
+}
+
+pub(super) struct PreparedCacheRelease {
+    root: std::path::PathBuf,
+    disposition: CacheRelease,
+    _lock: Option<FileLock>,
+}
+
+impl PreparedCacheRelease {
+    pub(super) fn finish(self) -> Result<CacheRelease> {
+        match self.disposition {
+            CacheRelease::Removed => {
+                std::fs::remove_dir_all(&self.root)
+                    .with_context(|| format!("removing {}", self.root.display()))?;
+                Ok(CacheRelease::Removed)
+            }
+            CacheRelease::Retained(reason) => Ok(CacheRelease::Retained(reason)),
+        }
+    }
+}
+
+/// Acquires and retains the cache lock, and validates ownership and retention
+/// rules before local pack records are removed. `finish` performs the delete
+/// later while the caller still holds the home's plugin-store guard.
+pub(super) fn prepare_recorded_cache(
+    home: &Path,
+    coordinate: &str,
+    record: &HomePackInstall,
+) -> Result<PreparedCacheRelease> {
     anyhow::ensure!(
         record.coordinate == coordinate,
         "pack receipt coordinate mismatch"
@@ -116,10 +136,14 @@ pub(super) fn release_recorded_cache(
     );
     let root = home.join(recorded);
     let Some(parent) = root.parent().filter(|parent| parent.is_dir()) else {
-        return Ok(CacheRelease::Retained("already absent"));
+        return Ok(PreparedCacheRelease {
+            root,
+            disposition: CacheRelease::Retained("already absent"),
+            _lock: None,
+        });
     };
-    let _lock = lock_exclusive(parent)?;
-    release_cache_root(&root, || {
+    let lock = lock_exclusive(parent)?;
+    let disposition = cache_root_disposition(&root, || {
         if recorded == unscoped {
             let archive = gents::pack_store::PackStore::new(home).open(&record.digest)?;
             anyhow::ensure!(
@@ -136,6 +160,11 @@ pub(super) fn release_recorded_cache(
             }
         }
         Ok(())
+    })?;
+    Ok(PreparedCacheRelease {
+        root,
+        disposition,
+        _lock: Some(lock),
     })
 }
 
@@ -168,6 +197,20 @@ fn release_cache_root(
     root: &Path,
     check_owner: impl FnOnce() -> Result<()>,
 ) -> Result<CacheRelease> {
+    match cache_root_disposition(root, check_owner)? {
+        CacheRelease::Removed => {
+            std::fs::remove_dir_all(root)
+                .with_context(|| format!("removing {}", root.display()))?;
+            Ok(CacheRelease::Removed)
+        }
+        retained => Ok(retained),
+    }
+}
+
+fn cache_root_disposition(
+    root: &Path,
+    check_owner: impl FnOnce() -> Result<()>,
+) -> Result<CacheRelease> {
     if !root.is_dir() {
         return Ok(CacheRelease::Retained("already absent"));
     }
@@ -178,7 +221,6 @@ fn release_cache_root(
         return Ok(CacheRelease::Retained("holds run history"));
     }
     check_owner()?;
-    std::fs::remove_dir_all(root).with_context(|| format!("removing {}", root.display()))?;
     Ok(CacheRelease::Removed)
 }
 
@@ -229,9 +271,7 @@ mod tests {
         for (namespace, version) in [("acme", "1.0.0"), ("acme", "2.0.0"), ("zeta", "1.0.0")] {
             let dir = assets_pack_dir(namespace, "tools", version);
             let pack = local_pack_source(dir.path(), home.path());
-            let root = super::super::asset_cache_root(home.path(), &pack).unwrap();
-            super::super::materialize(&pack, &root).unwrap();
-            write_cache_marker(&root).unwrap();
+            let (root, _lease) = super::super::materialize_cached_pack(home.path(), &pack).unwrap();
             sources.push((pack, root));
         }
         let unscoped = home.path().join("packs/tools").join("a".repeat(64));

@@ -350,59 +350,18 @@ pub(crate) async fn resolve_pack_source(
 }
 
 fn materialize(pack: &PackSource, root: &std::path::Path) -> Result<()> {
-    use std::io::Write;
-    for path in std::iter::once("manifest.json")
-        .chain(pack.manifest().metadata.assets.iter().map(String::as_str))
-    {
-        let destination = root.join(path);
-        std::fs::create_dir_all(destination.parent().context("asset parent")?)?;
-        let bytes = pack.asset(path)?;
-        // Stage beside the destination and publish without replacing it. Readers
-        // never see a partial body, and an interrupted staging write cannot
-        // poison the digest-addressed destination or overwrite operator edits.
-        let mut staged = tempfile::NamedTempFile::new_in(destination.parent().unwrap())?;
-        staged.write_all(bytes)?;
-        set_distribution_permissions(staged.as_file())?;
-        staged.as_file().sync_all()?;
-        match staged.persist_noclobber(&destination) {
-            Ok(_) => {
-                #[cfg(unix)]
-                std::fs::File::open(destination.parent().unwrap())?.sync_all()?;
-            }
-            Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {
-                anyhow::ensure!(
-                    std::fs::read(&destination)? == bytes,
-                    "installed asset was modified: {}",
-                    destination.display()
-                );
-                set_distribution_permissions(&std::fs::File::open(&destination)?)?;
-            }
-            Err(error) => return Err(error.error.into()),
-        }
-    }
-    Ok(())
+    gents::pack::materialize::materialize(&pack.archive, root)
 }
 
 fn set_distribution_permissions(file: &std::fs::File) -> Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        file.set_permissions(std::fs::Permissions::from_mode(0o644))?;
-    }
-    Ok(())
+    gents::pack::materialize::set_distribution_permissions(file)
 }
 
 fn materialize_cached_pack(
     home: &std::path::Path,
     pack: &PackSource,
 ) -> Result<(std::path::PathBuf, gents::file_lock::FileLock)> {
-    let root = asset_cache_root(home, pack)?;
-    let lock = gents::file_lock::FileLock::shared(cache::cache_lock(
-        root.parent().context("pack cache parent")?,
-    )?)?;
-    materialize(pack, &root)?;
-    cache::write_cache_marker(&root)?;
-    Ok((root, lock))
+    gents::pack::materialize::cached(home, &pack.archive)
 }
 
 /// A subject pack for `gents eval run` and `gents optimization run`: a
@@ -527,43 +486,6 @@ fn asset_cache_root(home: &std::path::Path, pack: &PackSource) -> Result<std::pa
     )
 }
 
-/// Thin caller over [`gents::plugin::install::install_pack_plugins`]; the
-/// implementation moved into the runtime crate so `self_config` can install
-/// a graph pack's plugins itself, without asking this CLI to do it.
-pub(crate) fn install_pack_plugins<'a>(
-    home: &std::path::Path,
-    manifest: &PackManifest,
-    pack_digest: &str,
-    asset: impl Fn(&str) -> Result<&'a [u8]>,
-    consent: bool,
-) -> Result<Vec<super::plugin::store::InstalledPlugin>> {
-    gents::plugin::install::install_pack_plugins(home, manifest, pack_digest, asset, consent)
-}
-
-/// Thin caller over [`gents::plugin::install::snapshot_pack_plugin_records`].
-pub(crate) fn snapshot_pack_plugin_records(
-    home: &std::path::Path,
-    manifest: &PackManifest,
-) -> Vec<(
-    String,
-    String,
-    Option<super::plugin::store::InstalledPlugin>,
-)> {
-    gents::plugin::install::snapshot_pack_plugin_records(home, manifest)
-}
-
-/// Thin caller over [`gents::plugin::install::rollback_pack_plugin_records`].
-pub(crate) fn rollback_pack_plugin_records(
-    home: &std::path::Path,
-    previous: &[(
-        String,
-        String,
-        Option<super::plugin::store::InstalledPlugin>,
-    )],
-) {
-    gents::plugin::install::rollback_pack_plugin_records(home, previous)
-}
-
 /// Records a plugin-store change of `coordinate` in `home`'s node for the
 /// home's Node (`gents::pack::record_plugin_store_change`), after the
 /// store itself changed. An uninitialized home has no node, so no runtime to
@@ -624,22 +546,6 @@ async fn resolve_plugin_slot_owner(
     let (access, owner) = resolve_scope_owner(scope).await?;
     gents::pack::preview_pack_inference_bindings(&access, manifest, &owner, requested).await?;
     Ok(Some(owner))
-}
-
-/// Binds each plugin's model slot to the profile `requested` names for it;
-/// a no-op when nothing is requested.
-fn bind_plugin_slots(
-    home: &std::path::Path,
-    manifest: &PackManifest,
-    owner: Option<&str>,
-    requested: &BTreeMap<String, String>,
-) -> Result<()> {
-    match owner {
-        Some(owner) => {
-            gents::plugin::install::bind_plugin_slots(home, manifest, owner, requested).map(|_| ())
-        }
-        None => Ok(()),
-    }
 }
 
 /// The node and the owner a pack command acts for.
@@ -820,8 +726,8 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
                 .await
                 .context("pack install schemas")?;
             let plugin_home = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
-            let (plugins, plugin_rollback) = if pack.manifest().metadata.plugins.is_empty() {
-                (Vec::new(), Vec::new())
+            let plugins = if pack.manifest().metadata.plugins.is_empty() {
+                Vec::new()
             } else {
                 // A plugin runs on the host of the node that calls it; a
                 // remote node's host is not reachable from here.
@@ -831,23 +737,17 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
                      there with --home",
                     pack.manifest().name
                 );
-                let rollback = snapshot_pack_plugin_records(&plugin_home, pack.manifest());
-                let installed = install_pack_plugins(
+                gents::plugin::install::install_pack_plugins_with_bindings(
                     &plugin_home,
                     pack.manifest(),
                     pack.digest(),
                     |path| pack.asset(path),
                     args.grant_authority,
-                )
-                .inspect_err(|_| rollback_pack_plugin_records(&plugin_home, &rollback))?;
-                bind_plugin_slots(
-                    &plugin_home,
-                    pack.manifest(),
                     Some(&owner),
                     &inference.bindings,
+                    |_| Ok(()),
                 )
-                .inspect_err(|_| rollback_pack_plugin_records(&plugin_home, &rollback))?;
-                (installed, rollback)
+                .context("publishing document-pack plugins locally")?
             };
             let mut identity = gents::pack::PackIdentity::new(
                 pack.manifest(),
@@ -861,11 +761,10 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
                     .collect(),
             );
             identity.dependencies = dependency_coordinates;
-            // From here, a document-transaction failure must not leave the
-            // plugins installed above orphaned: the operator sees this pack
-            // install as one atomic step, so its filesystem side effect is
-            // undone along with the write that never landed.
-            let apply = match gents::pack::install_pack_documents(
+            // Local plugin publication is complete before the node write.
+            // A later transaction failure leaves those files installed for
+            // the next explicit reconciliation attempt.
+            let apply = gents::pack::install_pack_documents(
                 &access,
                 &owner,
                 &identity,
@@ -873,13 +772,7 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
                 args.drift.policy(),
             )
             .await
-            {
-                Ok(apply) => apply,
-                Err(error) => {
-                    rollback_pack_plugin_records(&plugin_home, &plugin_rollback);
-                    return Err(error);
-                }
-            };
+            .context("document pack write failed after local plugins were published; the plugins remain installed")?;
             crate::print_json(&json!({
                 "pack": pack.manifest().name,
                 "source": pack.label(),
@@ -922,86 +815,22 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
                 .scope
                 .home
                 .context("asset and plugins packs require --home")?;
-            let (root, _cache_lease) = materialize_cached_pack(&home, &pack)?;
-            // A pack's plugins travel inside it (pack_archive's own doc),
-            // so installing the pack installs each one into the same
-            // content-addressed plugin store `gents plugin install` uses:
-            // a plugin that arrived bundled in a pack is just as runnable
-            // by name (`gents plugin run <name>`) as one installed on its
-            // own. A failure past this point (the record write) must not
-            // leave the plugins installed above orphaned.
-            let prior_record = gents::pack::read_home_install(
+            let (record, installed_plugins) = gents::pack::plugin_lifecycle::install(
                 &home,
-                &format!(
-                    "{}/{}",
-                    pack.manifest().metadata.namespace,
-                    pack.manifest().name
-                ),
-            )?;
-            let rollback = snapshot_pack_plugin_records(&home, pack.manifest());
-            let installed_plugins = install_pack_plugins(
-                &home,
-                pack.manifest(),
-                pack.digest(),
-                |path| pack.asset(path),
+                &pack.archive,
                 args.grant_authority,
+                slot_owner.as_deref(),
+                &requested,
+                |identity| {
+                    let home = &home;
+                    async move {
+                        record_plugin_store_change(home, &identity.coordinate, Some(&identity))
+                            .await
+                    }
+                },
             )
-            .inspect_err(|_| rollback_pack_plugin_records(&home, &rollback))?;
-            let record = gents::pack::HomePackInstall {
-                coordinate: format!(
-                    "{}/{}",
-                    pack.manifest().metadata.namespace,
-                    pack.manifest().name
-                ),
-                version: pack.manifest().version.clone(),
-                digest: pack.digest().to_owned(),
-                kind: pack.manifest().metadata.kind.clone(),
-                assets: root
-                    .strip_prefix(&home)
-                    .unwrap_or(root.as_path())
-                    .to_string_lossy()
-                    .into_owned(),
-                plugins: installed_plugins
-                    .iter()
-                    .map(|plugin| gents::pack::InstalledPackPlugin {
-                        name: plugin.name.clone(),
-                        digest: plugin.digest.clone(),
-                    })
-                    .collect(),
-                installed_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-            };
-            // The node record goes last, in one transaction: a failure
-            // before it leaves the node untouched, and undoing the store and
-            // home record restores everything else.
-            let recorded = async {
-                bind_plugin_slots(&home, pack.manifest(), slot_owner.as_deref(), &requested)?;
-                gents::pack::write_home_install(&home, &record)?;
-                if !record.plugins.is_empty() {
-                    let identity = gents::pack::PackIdentity::new(
-                        pack.manifest(),
-                        pack.digest(),
-                        record.plugins.clone(),
-                    );
-                    record_plugin_store_change(&home, &record.coordinate, Some(&identity)).await?;
-                }
-                anyhow::Ok(())
-            }
-            .await;
-            if let Err(error) = recorded {
-                rollback_pack_plugin_records(&home, &rollback);
-                let restored = match &prior_record {
-                    Some(prior) => gents::pack::write_home_install(&home, prior),
-                    None => gents::pack::forget_home_install(&home, &record.coordinate),
-                };
-                if let Err(restore) = restored {
-                    tracing::error!(
-                        coordinate = %record.coordinate,
-                        error = %restore,
-                        "failed to restore the pack install record after a failed pack install",
-                    );
-                }
-                return Err(error);
-            }
+            .await?;
+            let root = home.join(&record.assets);
             crate::print_json(&json!({
                 "pack": pack.manifest().name,
                 "digest": pack.digest(),
@@ -1286,7 +1115,7 @@ mod tests {
     /// exactly as it was before this install attempt, not orphan whatever
     /// it just wrote.
     #[test]
-    fn a_failure_after_plugin_install_rolls_back_to_exactly_the_previous_records() {
+    fn local_publication_failure_restores_exactly_the_previous_records() {
         let home = tempfile::tempdir().unwrap();
         let echo_v1 = super::super::plugin::testing::build_plugin_afb(
             "echo",
@@ -1300,12 +1129,21 @@ mod tests {
 
         // A prior install this pack coordinate already owns.
         let v1 = plugin_manifest("acme", "widget", "echo", "1.0.0");
-        install_pack_plugins(home.path(), &v1, "sha256:v1", asset_v1, false).unwrap();
+        gents::plugin::install::install_pack_plugins_with_bindings(
+            home.path(),
+            &v1,
+            "sha256:v1",
+            asset_v1,
+            false,
+            None,
+            &BTreeMap::new(),
+            |_| Ok(()),
+        )
+        .unwrap();
         let before = super::super::plugin::store::read_record(home.path(), "acme", "echo").unwrap();
 
-        // An update whose install fails after the plugin step must roll all
-        // the way back to `before`, exactly as `install()` does when
-        // `install_pack_documents` errors.
+        // A rejected synchronous local publication rolls records back under
+        // the same guard; later node transaction failures do not use this path.
         let echo_v2 = super::super::plugin::testing::build_plugin_afb(
             "echo",
             b"fn main() { println!(\"{{\\\"v\\\":2}}\"); }",
@@ -1316,14 +1154,18 @@ mod tests {
                 .context("unexpected asset")
         };
         let v2 = plugin_manifest("acme", "widget", "echo", "1.1.0");
-        let rollback = snapshot_pack_plugin_records(home.path(), &v2);
-        install_pack_plugins(home.path(), &v2, "sha256:v2", asset_v2, false).unwrap();
-        let mid = super::super::plugin::store::read_record(home.path(), "acme", "echo").unwrap();
-        assert_ne!(
-            mid, before,
-            "the reinstall must actually have changed the record"
-        );
-        rollback_pack_plugin_records(home.path(), &rollback);
+        let error = gents::plugin::install::install_pack_plugins_with_bindings(
+            home.path(),
+            &v2,
+            "sha256:v2",
+            asset_v2,
+            false,
+            None,
+            &BTreeMap::new(),
+            |_| anyhow::bail!("local publication rejected"),
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("local publication rejected"));
         assert_eq!(
             super::super::plugin::store::read_record(home.path(), "acme", "echo").unwrap(),
             before
@@ -1341,10 +1183,17 @@ mod tests {
                 .context("unexpected asset")
         };
         let first_time = plugin_manifest("acme", "brand_new", "brandnew", "1.0.0");
-        let rollback = snapshot_pack_plugin_records(home.path(), &first_time);
-        install_pack_plugins(home.path(), &first_time, "sha256:new", asset_new, false).unwrap();
-        assert!(super::super::plugin::store::read_record(home.path(), "acme", "brandnew").is_ok());
-        rollback_pack_plugin_records(home.path(), &rollback);
+        let error = gents::plugin::install::install_pack_plugins_with_bindings(
+            home.path(),
+            &first_time,
+            "sha256:new",
+            asset_new,
+            false,
+            None,
+            &BTreeMap::new(),
+            |_| anyhow::bail!("local publication rejected"),
+        );
+        assert!(error.is_err());
         assert!(super::super::plugin::store::read_record(home.path(), "acme", "brandnew").is_err());
     }
 }

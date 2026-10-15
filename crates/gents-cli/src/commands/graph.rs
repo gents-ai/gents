@@ -112,35 +112,25 @@ pub(crate) async fn install_with_access(
         }));
     }
     let plugin_home = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
-    let (plugin_rollback, installed_plugins) = if package.manifest.metadata.plugins.is_empty() {
-        (Vec::new(), Vec::new())
+    let installed_plugins = if package.manifest.metadata.plugins.is_empty() {
+        Vec::new()
     } else {
-        // A plugin runs on the host of the node that calls it; a remote
-        // node's host is not reachable from here.
         anyhow::ensure!(
             args.scope.graphql.is_none(),
-            "{} ships plugins, which install on the node's own host; run the install there \
-             with --home",
+            "{} ships plugins, which install on the node's own host; run the install there with --home",
             args.package
         );
-        let rollback = super::pack::snapshot_pack_plugin_records(&plugin_home, &package.manifest);
-        let installed = super::pack::install_pack_plugins(
+        gents::plugin::install::install_pack_plugins_with_bindings(
             &plugin_home,
             &package.manifest,
             &package.package_digest,
             |path| source.asset(path),
             args.grant_authority,
-        )
-        .inspect_err(|_| super::pack::rollback_pack_plugin_records(&plugin_home, &rollback))?;
-        (rollback, installed)
+            Some(owner_did),
+            &bindings.inference_slots,
+            |_| Ok(()),
+        )?
     };
-    gents::plugin::install::bind_plugin_slots(
-        &plugin_home,
-        &package.manifest,
-        owner_did,
-        &bindings.inference_slots,
-    )
-    .inspect_err(|_| super::pack::rollback_pack_plugin_records(&plugin_home, &plugin_rollback))?;
     let record = GraphInstallRecord {
         plugins: installed_plugins
             .iter()
@@ -151,20 +141,15 @@ pub(crate) async fn install_with_access(
             .collect(),
         explicit: args.explicit,
     };
-    // A failure past this point must not leave the plugins installed above
-    // orphaned: undo them along with the graph install that never landed.
     let receipt =
-        match install_loaded_graph_package(access, owner_did, &package, &bindings, None, &record)
+        install_loaded_graph_package(access, owner_did, &package, &bindings, None, &record)
             .await
-        {
-            Ok(receipt) => receipt,
-            Err(error) => {
-                super::pack::rollback_pack_plugin_records(&plugin_home, &plugin_rollback);
-                return Err(error);
-            }
-        };
+            .context(
+                "graph installation was not confirmed; locally published plugins remain installed",
+            )?;
     let previous = load_active_graph_plan_with_access(access, owner_did, &receipt.graph_id)
-        .await?
+        .await
+        .context("graph installation completed, but activation lookup failed; locally published plugins remain installed")?
         .map(|plan| plan.digest);
     let activation = activate_graph_revision_with_access(
         access,
@@ -173,7 +158,8 @@ pub(crate) async fn install_with_access(
         &receipt.revision_digest,
         previous.as_deref(),
     )
-    .await?;
+    .await
+    .context("graph installation completed, but activation failed; locally published plugins remain installed")?;
     if !emit_report {
         return Ok(());
     }

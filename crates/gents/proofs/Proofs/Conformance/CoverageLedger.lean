@@ -1365,6 +1365,11 @@ def caseCoverage : List CoverageEntry :=
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
       "plugin_resource_cases"
+      "ToolPolicy.PluginPublication"
+      "pack::publication_contract_tests::generated_local_publication_survives_notification_outcomes")
+      "tool-policy" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "plugin_resource_cases"
       "PluginReceiptCases"
       "tool_call_lifecycle::plugin_receipt::tests::generated_receipt_commit_cases")
       "tool-policy" [Surface.runtimeInternal]

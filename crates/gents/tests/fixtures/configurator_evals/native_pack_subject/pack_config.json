@@ -1,0 +1,55 @@
+{
+  "node": {},
+  "agents": [
+    {
+      "agent_id": "engineer",
+      "display_name": "The Engineer",
+      "description": "Configures this node through the native config tool.",
+      "context_id": "engineer-context",
+      "inference_profile_id": "gents:inference-slot:engineer",
+      "tags": [
+        "gents:engineer"
+      ]
+    }
+  ],
+  "contexts": [
+    {
+      "context_id": "engineer-context",
+      "display_name": "The Engineer",
+      "system_prompt": "./agents/engineer/system_prompt.md",
+      "tools_id": "engineer-tools"
+    }
+  ],
+  "tools": [
+    {
+      "tools_id": "engineer-tools",
+      "display_name": "The Engineer: native config tool",
+      "self_config": {
+        "enable_self_config": true,
+        "self_config_categories": [
+          "node",
+          "agent",
+          "tools",
+          "profile",
+          "backend",
+          "mcp_service",
+          "automation"
+        ],
+        "self_config_no_lockout": true,
+        "self_config_preview": true,
+        "enable_pack_install": true
+      },
+      "built_ins": {
+        "enable_schema_tool": true
+      },
+      "host": {
+        "bash": {
+          "mode": "Off"
+        },
+        "files": {
+          "mode": "ReadWrite"
+        }
+      }
+    }
+  ]
+}

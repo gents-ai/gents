@@ -17,6 +17,7 @@ mod execution;
 pub use execution::ConfigExecutionReceipt;
 mod graph_preview;
 mod ops;
+mod pack_plugins;
 mod read;
 #[cfg(test)]
 mod tests;
@@ -931,7 +932,7 @@ async fn guard_agent_profile_choice(
     ops::guard_compaction_choice_in_txn(txn, SelfConfigTarget::Agent, &anchor, &own, &cloned).await
 }
 
-/// Install document and graph packs from the home's pack store or the registry through the
+/// Install document, graph and plugins-only packs from the home's pack store or the registry through the
 /// canonical resolver, package publication, and activation owners. The running
 /// node is always the install owner; callers cannot select another DID,
 /// filesystem distribution, registry endpoint, or control-plane endpoint.
@@ -950,13 +951,6 @@ struct PackInstallParams {
     pub inference_slots: crate::pack::PackInferenceBindings,
     pub expected_digest: Option<String>,
 }
-
-/// What [`crate::plugin::install::snapshot_pack_plugin_records`] observed, to restore on failure.
-type PluginRollback = Vec<(
-    String,
-    String,
-    Option<crate::plugin::store::InstalledPlugin>,
-)>;
 
 /// A resolved pack and where it came from.
 struct ConfigPackDistribution(crate::pack_resolve::ResolvedNamedPack);
@@ -983,6 +977,9 @@ impl ConfigPackDistribution {
     /// preview filled) rather than whatever is newest by then. `requested`
     /// stands when the version is not one a store index can hold.
     fn pinned_spec(&self, requested: &str) -> String {
+        if crate::pack::local::classify(requested).is_some() {
+            return self.digest().to_owned();
+        }
         let manifest = self.manifest();
         if crate::pack_store::is_valid_index_version(&manifest.version) {
             format!(
@@ -1020,7 +1017,9 @@ impl PackInstaller {
     fn validate(&self, args: &PackInstallParams) -> anyhow::Result<()> {
         let coordinate = args.package.trim();
         anyhow::ensure!(!coordinate.is_empty(), "pack name must not be blank");
-        crate::pack_resolve::parse_pack_spec(coordinate)?;
+        if crate::pack::local::classify(coordinate).is_none() {
+            crate::pack_resolve::parse_pack_spec(coordinate)?;
+        }
         anyhow::ensure!(
             args.variables.len() <= 32,
             "pack variables exceed the 32-entry limit"
@@ -1059,6 +1058,56 @@ impl PackInstaller {
     ) -> anyhow::Result<ConfigPackDistribution> {
         self.validate(args)?;
         let coordinate = args.package.trim();
+        if let Some(local) = crate::pack::local::classify(coordinate) {
+            let home = self
+                .home
+                .as_deref()
+                .context("local packs require a runtime plugin home")?;
+            let archive = match local {
+                crate::pack::local::LocalName::Digest(_) => crate::pack::local::open(&local, home)?,
+                crate::pack::local::LocalName::Path(path) => {
+                    // Effective authority, not the process ceiling alone: a
+                    // narrower agent selection (or WorkspaceRoot policy) must
+                    // bound what this inspection can read.
+                    let effective = self
+                        .core
+                        .read_effective_config(&BTreeSet::new(), false, false)
+                        .await?;
+                    let mode = effective
+                        .pointer("/runtime_effective/effective/file_mode")
+                        .and_then(Value::as_str)
+                        .map(crate::tool_surface::FileToolMode::parse)
+                        .transpose()?
+                        .unwrap_or_default();
+                    anyhow::ensure!(mode != crate::tool_surface::FileToolMode::Off, "local pack inspection requires effective file read permission on the invoking agent");
+                    let root = effective
+                        .pointer("/runtime_effective/effective/root")
+                        .and_then(Value::as_str)
+                        .context("local pack inspection requires an effective tool root")?;
+                    let context = crate::toolset::ToolContext::new(root.into(), false)?;
+                    let path = context
+                        .resolve_existing_file(path.to_str().context("pack path is not UTF-8")?)?;
+                    anyhow::ensure!(path.extension().is_some_and(|extension| extension == crate::pack_archive::EXTENSION), "native local inspection accepts a built .pack artifact; directories require a scoped build owner");
+                    // The no-follow import carries the same handle the
+                    // admission validated, so a swap after admission cannot
+                    // change which bytes are verified and stored.
+                    crate::pack::local::open(&crate::pack::local::LocalName::Path(&path), home)?
+                }
+            };
+            anyhow::ensure!(
+                matches!(
+                    archive.manifest().metadata.kind,
+                    crate::pack::PackKind::Plugins
+                ),
+                "native local lifecycle currently accepts plugins-only artifacts"
+            );
+            return Ok(ConfigPackDistribution(
+                crate::pack_resolve::ResolvedNamedPack {
+                    archive,
+                    from: crate::pack_resolve::ResolvedFrom::Store,
+                },
+            ));
+        }
         let registry_url = crate::pack_registry::resolve_registry_url(None);
         let spec = match crate::pack_resolve::parse_pack_spec(coordinate)? {
             parsed if operation == "update" && parsed.version.is_none() => {
@@ -1099,9 +1148,9 @@ impl PackInstaller {
             operation == "get"
                 || matches!(
                     distribution.manifest().metadata.kind,
-                    crate::pack::PackKind::Graph | crate::pack::PackKind::Documents
+                    crate::pack::PackKind::Graph | crate::pack::PackKind::Documents | crate::pack::PackKind::Plugins
                 ),
-            "pack {:?} is {:?}; the model-facing installer supports document and graph packs only",
+            "pack {:?} is {:?}; the model-facing installer supports document, graph and plugins-only packs",
             distribution.manifest().name,
             distribution.manifest().metadata.kind
         );
@@ -1137,6 +1186,22 @@ impl PackInstaller {
         &self,
         manifest: &crate::pack::PackManifest,
     ) -> anyhow::Result<Option<Value>> {
+        if manifest.metadata.kind == crate::pack::PackKind::Plugins {
+            return self
+                .home
+                .as_deref()
+                .map(|home| {
+                    crate::pack::read_home_install(
+                        home,
+                        &format!("{}/{}", manifest.metadata.namespace, manifest.name),
+                    )
+                })
+                .transpose()?
+                .flatten()
+                .map(serde_json::to_value)
+                .transpose()
+                .map_err(Into::into);
+        }
         if manifest.metadata.kind == crate::pack::PackKind::Graph {
             return Ok(self.installed(manifest).await?.map(|plan| {
                 json!({
@@ -1369,7 +1434,9 @@ impl PackInstaller {
             let manifest = archive.manifest();
             let installable = matches!(
                 manifest.metadata.kind,
-                crate::pack::PackKind::Graph | crate::pack::PackKind::Documents
+                crate::pack::PackKind::Graph
+                    | crate::pack::PackKind::Documents
+                    | crate::pack::PackKind::Plugins
             );
             let installed = if installable {
                 self.installation_status(manifest).await?
@@ -1426,7 +1493,7 @@ impl PackInstaller {
         ordered! {
             "items": items,
             "next_call": if has_more { page.checked_add(1).map(|next| json!({"argv":["pack","search"],"options":{"query":query,"page":next}})) } else { None },
-            "guidance": "Inspect a candidate with pack get before installation: it reports its kind, inference slots and installed state. This installer supports document and graph packs; search includes other kinds too.",
+            "guidance": "Inspect a candidate with pack get before installation: it reports its kind, inference slots and installed state. This installer supports document, graph and plugins-only packs; search includes other kinds too.",
             "registry": registry,
             "page": page,
             "has_more": has_more,
@@ -1451,7 +1518,9 @@ impl PackInstaller {
         .await?;
         let installable = matches!(
             distribution.manifest().metadata.kind,
-            crate::pack::PackKind::Graph | crate::pack::PackKind::Documents
+            crate::pack::PackKind::Graph
+                | crate::pack::PackKind::Documents
+                | crate::pack::PackKind::Plugins
         );
         let installed = if distribution.manifest().metadata.kind == crate::pack::PackKind::Graph {
             self.installed(distribution.manifest())
@@ -1472,7 +1541,9 @@ impl PackInstaller {
             "installed": installed,
             "installable": installable,
             "installation_blockers": self.plugin_install_blockers(distribution.manifest()),
-            "supported_operations": installable.then_some(["preview install", "install", "preview update", "update", "remove"]),
+            "supported_operations": if distribution.manifest().metadata.kind == crate::pack::PackKind::Plugins {
+                Some(vec!["preview install", "install", "preview update", "update"])
+            } else { installable.then_some(vec!["preview install", "install", "preview update", "update", "remove"]) },
         }))?)
     }
 
@@ -1499,6 +1570,9 @@ impl PackInstaller {
             spec.name
         );
         let coordinate = format!("{}/{}", spec.namespace, spec.name);
+        if let Some(home) = self.home.as_deref() {
+            anyhow::ensure!(crate::pack::read_home_install(home, &coordinate)?.is_none(), "native removal of home-installed plugin/assets packs is unavailable; the existing pack removal owner must release plugin and home records together. Current installation is unchanged");
+        }
         let access = crate::config_client::ConfigAccess::local(self.node.clone());
         let report = crate::pack::remove_pack(
             &access,
@@ -1542,16 +1616,17 @@ impl PackInstaller {
 
     /// Installs the plugins `distribution` ships into the home's plugin store,
     /// sealed: a plugin that asks for authority is refused, because granting
-    /// it is the operator's call. Returns the records to restore if the
-    /// graph install that follows fails, and the plugins now installed.
+    /// it is the operator's call. Local plugin records are the publication
+    /// boundary; later graph failures do not roll them back.
     fn install_plugins(
         &self,
         distribution: &ConfigPackDistribution,
         package_digest: &str,
-    ) -> anyhow::Result<(PluginRollback, Vec<crate::plugin::store::InstalledPlugin>)> {
+        bindings: &crate::pack::PackInferenceBindings,
+    ) -> anyhow::Result<Vec<crate::plugin::store::InstalledPlugin>> {
         let manifest = distribution.manifest();
         if manifest.metadata.plugins.is_empty() {
-            return Ok((Vec::new(), Vec::new()));
+            return Ok(Vec::new());
         }
         let home = self.home.as_deref().with_context(|| {
             format!(
@@ -1559,13 +1634,15 @@ impl PackInstaller {
                 manifest.name
             )
         })?;
-        let rollback = crate::plugin::install::snapshot_pack_plugin_records(home, manifest);
-        let installed = crate::plugin::install::install_pack_plugins(
+        crate::plugin::install::install_pack_plugins_with_bindings(
             home,
             manifest,
             package_digest,
             |path| distribution.0.archive.asset(path),
             false,
+            Some(self.core.node_did()),
+            bindings,
+            |_| Ok(()),
         )
         .with_context(|| {
             format!(
@@ -1573,8 +1650,6 @@ impl PackInstaller {
                 manifest.name
             )
         })
-        .inspect_err(|_| crate::plugin::install::rollback_pack_plugin_records(home, &rollback))?;
-        Ok((rollback, installed))
     }
 
     /// Pack slots have no current backend: each bound profile must be
@@ -1609,6 +1684,11 @@ impl PackInstaller {
                 "pack digest changed: requested {expected:?}, resolved {:?}; preview again",
                 distribution.digest()
             );
+        }
+        if distribution.manifest().metadata.kind == crate::pack::PackKind::Plugins {
+            return self
+                .plugins_pack(operation, &args, &distribution, false)
+                .await;
         }
         if distribution.manifest().metadata.kind == crate::pack::PackKind::Documents {
             return self.documents(operation, &args, &distribution, false).await;
@@ -1723,6 +1803,11 @@ impl PackInstaller {
             "pack digest changed: preview authorized {expected:?}, resolved {:?}; preview again",
             distribution.digest()
         );
+        if distribution.manifest().metadata.kind == crate::pack::PackKind::Plugins {
+            return self
+                .plugins_pack(operation, &args, &distribution, true)
+                .await;
+        }
         if distribution.manifest().metadata.kind == crate::pack::PackKind::Documents {
             return self.documents(operation, &args, &distribution, true).await;
         }
@@ -1770,19 +1855,8 @@ impl PackInstaller {
         };
         let external_dependencies = package.manifest.external_dependencies.clone();
         let plugins = package.manifest.metadata.plugins.clone();
-        let (plugin_rollback, installed_plugins) =
-            self.install_plugins(&distribution, &package.package_digest)?;
-        if let Some(home) = self.home.as_deref() {
-            crate::plugin::install::bind_plugin_slots(
-                home,
-                distribution.manifest(),
-                self.core.node_did(),
-                &bindings.inference_slots,
-            )
-            .inspect_err(|_| {
-                crate::plugin::install::rollback_pack_plugin_records(home, &plugin_rollback)
-            })?;
-        }
+        let installed_plugins =
+            self.install_plugins(&distribution, &package.package_digest, &inference.bindings)?;
         let record = crate::graph_package::GraphInstallRecord {
             plugins: installed_plugins
                 .iter()
@@ -1793,10 +1867,10 @@ impl PackInstaller {
                 .collect(),
             explicit: operation == "install",
         };
-        // A failure past this point must not leave the plugins installed
-        // above orphaned: undo them along with the graph install that never
-        // landed.
-        let receipt = match crate::graph_package::install_loaded_graph_package(
+        // Local plugin publication is its own completed effect. A later node
+        // transaction failure is reported without deleting that installation;
+        // retrying the pinned pack operation can reconcile the graph record.
+        let receipt = crate::graph_package::install_loaded_graph_package(
             &access,
             self.core.node_did(),
             &package,
@@ -1805,15 +1879,7 @@ impl PackInstaller {
             &record,
         )
         .await
-        {
-            Ok(receipt) => receipt,
-            Err(error) => {
-                if let Some(home) = self.home.as_deref() {
-                    crate::plugin::install::rollback_pack_plugin_records(home, &plugin_rollback);
-                }
-                return Err(error);
-            }
-        };
+        .context("graph installation failed after local pack plugins were published; the plugins remain installed")?;
         let activation = crate::graph_pipeline::activate_graph_revision_with_access(
             &access,
             self.core.node_did(),
@@ -1821,7 +1887,8 @@ impl PackInstaller {
             &receipt.revision_digest,
             previous.as_ref().map(|plan| plan.digest.as_str()),
         )
-        .await?;
+        .await
+        .context("graph installation completed, but activation failed; locally published plugins remain installed")?;
         let effective = self
             .installed(distribution.manifest())
             .await?
