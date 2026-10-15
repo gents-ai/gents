@@ -13,39 +13,18 @@ use gents::graph_pipeline::{
 use serde_json::{json, Value};
 
 use super::observation_cursor::{
-    send, without_clock, Backoff, Delivered, ObservationError, ABANDONED_REVISION, LOADS_PER_TICK,
+    observe_due, Backoff, ObservationSet, Observed, ObservedView, Sink,
 };
 use super::projection::tools::session_tool_results;
 use super::projection::ProjectionEngine;
 use super::turn::PromptSender;
-
-struct RunObservation {
-    graph_id: String,
-    revision: u64,
-    delivered: Option<Delivered>,
-    finished: bool,
-    backoff: Backoff,
-}
-
-impl RunObservation {
-    fn new(graph_id: impl Into<String>) -> Self {
-        Self {
-            graph_id: graph_id.into(),
-            revision: 0,
-            delivered: None,
-            finished: false,
-            backoff: Backoff::default(),
-        }
-    }
-}
 
 #[derive(Default)]
 pub(super) struct GraphRunCursor {
     scanned: HashSet<String>,
     replies: HashMap<String, Backoff>,
     discovery_failures: u32,
-    runs: BTreeMap<String, RunObservation>,
-    loaded_through: Option<String>,
+    runs: ObservationSet,
 }
 
 impl GraphRunCursor {
@@ -112,8 +91,7 @@ impl GraphRunCursor {
                 Ok(Some(result)) => {
                     if let Some(receipt) = run_receipt_from_tool_result(&result) {
                         self.runs
-                            .entry(receipt.run_id)
-                            .or_insert_with(|| RunObservation::new(receipt.graph_id));
+                            .insert(receipt.run_id, Observed::new(receipt.graph_id));
                     }
                     self.replies.remove(&call.doc_id);
                     self.scanned.insert(call.doc_id);
@@ -134,102 +112,58 @@ impl GraphRunCursor {
         sender: &PromptSender,
         projections: &ProjectionEngine,
         now: DateTime<Utc>,
-        mut load: F,
+        load: F,
     ) -> Vec<anyhow::Error>
     where
         F: FnMut(String) -> Fut,
         Fut: Future<Output = Result<GraphRunView>>,
     {
-        let mut reports = Vec::new();
-        for run_id in self.due(now) {
-            let Some(run) = self.runs.get_mut(&run_id) else {
-                continue;
-            };
-            let outcome = async {
-                let view = load(run_id.clone()).await.map_err(|error| {
-                    if error.downcast_ref::<GraphRunUnobservable>().is_some() {
-                        ObservationError::Permanent(error)
-                    } else {
-                        ObservationError::Transient(error)
-                    }
-                })?;
-                let status = view.status().map_err(ObservationError::Permanent)?;
-                let revision = durable_revision(&view).max(run.revision + 1);
-                let update = project(&view, status, revision, now);
-                let shape = without_clock(&update);
-                if run
-                    .delivered
-                    .as_ref()
-                    .is_none_or(|delivered| without_clock(&delivered.update) != shape)
-                {
-                    send(session, update.clone(), sender, projections)
-                        .await
-                        .map_err(ObservationError::Transient)?;
-                    run.revision = revision;
-                    run.delivered = Some(Delivered { update, at: now });
-                }
-                run.finished = status.is_terminal();
-                Ok(())
-            }
-            .await;
-            let subject = format!("graph run {run_id}");
-            match outcome {
-                Ok(()) => run.backoff = Backoff::default(),
-                Err(ObservationError::Transient(error)) => {
-                    reports.extend(run.backoff.fail(now, error, &subject));
-                }
-                Err(ObservationError::Permanent(error)) => {
-                    run.finished = true;
-                    run.revision = ABANDONED_REVISION;
-                    let update = abandoned(&run_id, run, &error, now);
-                    reports.push(error.context(format!("{subject}: observation stopped")));
-                    if let Err(error) = send(session, update, sender, projections).await {
-                        reports.push(error.context(format!("{subject}: final update")));
-                    }
-                }
-            }
-        }
-        reports
-    }
-
-    fn due(&mut self, now: DateTime<Utc>) -> Vec<String> {
-        let after = self.loaded_through.as_deref();
-        let (later, earlier): (Vec<&String>, Vec<&String>) = self
-            .runs
-            .iter()
-            .filter(|(_, run)| !run.finished && run.backoff.ready(now))
-            .map(|(run_id, _)| run_id)
-            .partition(|run_id| after.is_some_and(|after| run_id.as_str() > after));
-        let due = later
-            .into_iter()
-            .chain(earlier)
-            .take(LOADS_PER_TICK)
-            .cloned()
-            .collect::<Vec<_>>();
-        if let Some(last) = due.last() {
-            self.loaded_through = Some(last.clone());
-        }
-        due
+        let sink = Sink {
+            session,
+            sender,
+            projections,
+        };
+        observe_due(
+            &mut self.runs,
+            &sink,
+            now,
+            load,
+            |error| error.downcast_ref::<GraphRunUnobservable>().is_some(),
+            unobserved,
+            "graph run",
+        )
+        .await
     }
 }
 
-/// The stock pager keeps the highest revision it holds for a run, across
-/// leader reconnects, and drops a lower one (probed against v1.0.46). Counting
-/// only facts that grow over a run's life (stage, request and plugin-call
-/// totals, their terminal outcomes, and the run's terminal status) keeps the
-/// revision from falling below what an earlier observer delivered for the
-/// same durable state.
-fn durable_revision(view: &GraphRunView) -> u64 {
-    let stages: usize = view
-        .stages
-        .iter()
-        .map(|stage| stage.total + stage.succeeded + stage.failed)
-        .sum();
-    let calls: usize = [&view.requests, &view.plugin_calls]
-        .into_iter()
-        .map(|calls| calls.len() + calls.iter().filter(|call| call.terminal).count())
-        .sum();
-    1 + (stages + calls + usize::from(view.is_terminal())) as u64
+impl ObservedView for GraphRunView {
+    fn is_terminal(&self) -> Result<bool> {
+        self.status().map(GraphRunStatus::is_terminal)
+    }
+
+    /// The stock pager keeps the highest revision it holds for a run, across
+    /// leader reconnects, and drops a lower one (probed against v1.0.46).
+    /// Counting only facts that grow over a run's life (stage, request and
+    /// plugin-call totals, their terminal outcomes, and the run's terminal
+    /// status) keeps the revision from falling below what an earlier observer
+    /// delivered for the same durable state.
+    fn durable_revision(&self) -> u64 {
+        let stages: usize = self
+            .stages
+            .iter()
+            .map(|stage| stage.total + stage.succeeded + stage.failed)
+            .sum();
+        let calls: usize = [&self.requests, &self.plugin_calls]
+            .into_iter()
+            .map(|calls| calls.len() + calls.iter().filter(|call| call.terminal).count())
+            .sum();
+        1 + (stages + calls + usize::from(GraphRunView::is_terminal(self))) as u64
+    }
+
+    fn project(&self, revision: u64, now: DateTime<Utc>) -> Value {
+        let status = self.status().unwrap_or(GraphRunStatus::Failed);
+        project(self, status, revision, now)
+    }
 }
 
 fn elapsed_ms(view: &GraphRunView, now: DateTime<Utc>) -> u64 {
@@ -331,41 +265,22 @@ fn project(
     update
 }
 
-fn abandoned(
-    run_id: &str,
-    run: &RunObservation,
-    error: &anyhow::Error,
-    now: DateTime<Utc>,
-) -> Value {
-    let mut update = match &run.delivered {
-        Some(delivered) => {
-            let mut update = delivered.update.clone();
-            let shown = update["elapsed_ms"].as_u64().unwrap_or_default();
-            let since = (now - delivered.at).num_milliseconds().max(0) as u64;
-            update["elapsed_ms"] = json!(shown + since);
-            update
-        }
-        None => json!({
-            "sessionUpdate": "workflow_updated",
-            "run_id": run_id,
-            "name": run.graph_id,
-            "objective": objective(&run.graph_id),
-            "foreground": false,
-            "phases": [],
-            "elapsed_ms": 0,
-            "agents": [],
-        }),
-    };
-    update["revision"] = json!(run.revision);
-    update["status"] = json!("failed");
-    update["active_agents"] = json!(0);
-    update["pause_message"] = json!(format!("Gents stopped observing this graph run: {error}"));
-    update
+fn unobserved(run_id: &str, run: &Observed) -> Value {
+    json!({
+        "sessionUpdate": "workflow_updated",
+        "run_id": run_id,
+        "name": run.name,
+        "objective": objective(&run.name),
+        "foreground": false,
+        "phases": [],
+        "elapsed_ms": 0,
+        "agents": [],
+    })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::observation_cursor::MAX_RETRY_DELAY_SECS;
+    use super::super::observation_cursor::{ABANDONED_REVISION, MAX_RETRY_DELAY_SECS};
     use super::super::projection::BoundModelContext;
     use super::super::test_fixtures::seed_canonical_tool_call;
     use super::*;
@@ -552,7 +467,7 @@ mod tests {
         let mut cursor = GraphRunCursor::default();
         cursor
             .runs
-            .insert("run-1".into(), RunObservation::new("research-graph"));
+            .insert("run-1".into(), Observed::new("research-graph"));
         let loads = AtomicUsize::new(0);
         macro_rules! step {
             ($view:expr, $at:expr) => {
@@ -610,7 +525,7 @@ mod tests {
         let mut first = GraphRunCursor::default();
         first
             .runs
-            .insert("run-1".into(), RunObservation::new("research-graph"));
+            .insert("run-1".into(), Observed::new("research-graph"));
         observe_view(
             &mut first,
             &sender,
@@ -633,7 +548,7 @@ mod tests {
             let mut fresh = GraphRunCursor::default();
             fresh
                 .runs
-                .insert("run-1".into(), RunObservation::new("research-graph"));
+                .insert("run-1".into(), Observed::new("research-graph"));
             observe_view(&mut fresh, &sender, &projections, &loads, view, now()).await;
         }
         let revisions = updates(&buffer)
@@ -650,7 +565,7 @@ mod tests {
         let mut cursor = GraphRunCursor::default();
         cursor
             .runs
-            .insert("run-1".into(), RunObservation::new("research-graph"));
+            .insert("run-1".into(), Observed::new("research-graph"));
         let loads = AtomicUsize::new(0);
         let mut reports = Vec::new();
         let mut delays = Vec::new();
@@ -665,7 +580,7 @@ mod tests {
                     .observe("session", &sender, &projections, at, failing)
                     .await,
             );
-            let retry_at = cursor.runs["run-1"].backoff.retry_at.unwrap();
+            let retry_at = cursor.runs.subjects["run-1"].backoff.retry_at.unwrap();
             delays.push((retry_at - at).num_seconds());
             let reads = loads.load(Ordering::SeqCst);
             let early = retry_at - Duration::milliseconds(1);
@@ -684,7 +599,7 @@ mod tests {
             .map(|error| format!("{error:#}"))
             .collect::<Vec<_>>();
         assert_eq!(reports, ["graph run run-1: retrying: storage unavailable"]);
-        assert!(!cursor.runs["run-1"].finished);
+        assert!(!cursor.runs.subjects["run-1"].finished);
         assert!(buffer.lock().await.is_empty());
 
         let reports = cursor
@@ -693,7 +608,7 @@ mod tests {
             })
             .await;
         assert!(reports.is_empty(), "{reports:?}");
-        assert_eq!(cursor.runs["run-1"].backoff.failures, 0);
+        assert_eq!(cursor.runs.subjects["run-1"].backoff.failures, 0);
         let sent = updates(&buffer).await;
         assert_eq!(sent.len(), 1);
         assert_eq!(sent[0]["revision"], 11);
@@ -712,7 +627,7 @@ mod tests {
         ] {
             cursor
                 .runs
-                .insert(run.into(), RunObservation::new("research-graph"));
+                .insert(run.into(), Observed::new("research-graph"));
         }
         let loads = std::sync::Mutex::new(BTreeMap::<String, u32>::new());
         let mut reports = Vec::new();
@@ -771,8 +686,8 @@ mod tests {
         );
         assert!(["missing-run", "shown-then-denied", "unknown-status"]
             .iter()
-            .all(|run| cursor.runs[*run].finished));
-        assert!(!cursor.runs["run-1"].finished);
+            .all(|run| cursor.runs.subjects[*run].finished));
+        assert!(!cursor.runs.subjects["run-1"].finished);
 
         let sent = updates(&buffer).await;
         let for_run = |run: &str| {
@@ -817,7 +732,7 @@ mod tests {
         for run in &runs {
             cursor
                 .runs
-                .insert(run.clone(), RunObservation::new("research-graph"));
+                .insert(run.clone(), Observed::new("research-graph"));
         }
         let mut ticks = Vec::new();
         for _ in 0..3 {
@@ -930,7 +845,7 @@ mod tests {
         let mut cursor = GraphRunCursor::default();
         let reports = cursor.discover(&node, principal, "session", now()).await;
         assert!(reports.is_empty(), "{reports:?}");
-        assert!(cursor.runs.is_empty());
+        assert!(cursor.runs.subjects.is_empty());
         let loads = AtomicUsize::new(0);
         let reports = cursor
             .observe("session", &sender, &projections, now(), |_| {
@@ -966,7 +881,7 @@ mod tests {
             .discover(&node, principal, "session", now())
             .await
             .is_empty());
-        assert!(cursor.runs.is_empty() && cursor.scanned.is_empty());
+        assert!(cursor.runs.subjects.is_empty() && cursor.scanned.is_empty());
         let delivered = run_graph_result("run-late");
         seed_canonical_tool_call(
             &node,
@@ -985,8 +900,11 @@ mod tests {
             .discover(&node, principal, "session", now())
             .await
             .is_empty());
-        assert_eq!(cursor.runs.keys().collect::<Vec<_>>(), ["run-late"]);
-        assert_eq!(cursor.runs["run-late"].graph_id, "research-graph");
+        assert_eq!(
+            cursor.runs.subjects.keys().collect::<Vec<_>>(),
+            ["run-late"]
+        );
+        assert_eq!(cursor.runs.subjects["run-late"].name, "research-graph");
         assert_eq!(cursor.scanned.len(), 1);
     }
 
@@ -1265,9 +1183,7 @@ mod tests {
 
         let mut intruder = GraphRunCursor::default();
         for run in [receipt.run_id.as_str(), "missing-run"] {
-            intruder
-                .runs
-                .insert(run.into(), RunObservation::new("pipeline"));
+            intruder.runs.insert(run.into(), Observed::new("pipeline"));
         }
         let loads = AtomicUsize::new(0);
         let mut denied = Vec::new();
@@ -1295,7 +1211,7 @@ mod tests {
         assert!(denied
             .iter()
             .any(|report| report.ends_with(r#"GraphRun "missing-run" does not exist"#)));
-        assert!(intruder.runs.values().all(|run| run.finished));
+        assert!(intruder.runs.subjects.values().all(|run| run.finished));
         let sent = updates(&buffer).await;
         assert_eq!(sent.len(), 3);
         let delivered = sent[0]["revision"].as_u64().unwrap();
@@ -1316,7 +1232,7 @@ mod tests {
         let mut cursor = GraphRunCursor::default();
         cursor
             .runs
-            .insert(receipt.run_id.clone(), RunObservation::new("pipeline"));
+            .insert(receipt.run_id.clone(), Observed::new("pipeline"));
         let mut steps = Vec::<(&str, u64, u64, u64)>::new();
         macro_rules! step {
             ($name:expr) => {{
@@ -1333,7 +1249,7 @@ mod tests {
                 let mut fresh = GraphRunCursor::default();
                 fresh
                     .runs
-                    .insert(receipt.run_id.clone(), RunObservation::new("pipeline"));
+                    .insert(receipt.run_id.clone(), Observed::new("pipeline"));
                 let silent = PromptSender::Buffer {
                     buffer: Arc::new(tokio::sync::Mutex::new(Vec::new())),
                 };
@@ -1346,9 +1262,9 @@ mod tests {
                 assert!(reports.is_empty(), "{reports:?}");
                 steps.push((
                     $name,
-                    durable_revision(&view),
-                    cursor.runs[&receipt.run_id].revision,
-                    fresh.runs[&receipt.run_id].revision,
+                    view.durable_revision(),
+                    cursor.runs.subjects[&receipt.run_id].revision,
+                    fresh.runs.subjects[&receipt.run_id].revision,
                 ));
                 view
             }};
