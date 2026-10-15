@@ -920,12 +920,14 @@ mod overlay_tests {
             tool_calls: vec![
                 tool_call(Some("did:alpha"), "stale-alpha", "shared-session"),
                 tool_call(Some("did:beta"), "beta", "shared-session"),
+                tool_call(Some("did:beta"), "fresh-alpha", "shared-session"),
                 tool_call(None, "unknown-alpha-session", "shared-session"),
                 tool_call(None, "source-alpha", "another-session"),
                 tool_call(None, "source-beta", "shared-session"),
                 tool_call(None, "unknown-other-session", "other-session"),
             ],
             tool_call_source_node_dids: vec![
+                None,
                 None,
                 None,
                 None,
@@ -967,6 +969,14 @@ mod overlay_tests {
             .into_iter()
             .collect()
         );
+        assert_eq!(
+            merged
+                .tool_calls
+                .iter()
+                .filter(|row| row.tool_call_key == "fresh-alpha")
+                .count(),
+            2
+        );
         assert_eq!(merged.compaction_entries.len(), 1);
         assert_eq!(
             merged.compaction_entries[0].compaction_key,
@@ -986,7 +996,7 @@ mod overlay_tests {
         );
         assert_eq!(
             scoped_keys("did:beta"),
-            ["beta", "source-beta"].into_iter().collect()
+            ["beta", "fresh-alpha", "source-beta"].into_iter().collect()
         );
     }
 

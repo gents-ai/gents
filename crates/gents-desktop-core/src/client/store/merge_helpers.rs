@@ -163,7 +163,10 @@ pub(super) fn goal_merge_key(row: &GoalRow) -> String {
 pub(super) fn tool_call_merge_key(row: &AgentToolCallRow, source_node_did: Option<&str>) -> String {
     format!(
         "{}\0{}",
-        source_node_did.unwrap_or_default(),
+        row.node_did
+            .as_deref()
+            .or(source_node_did)
+            .unwrap_or_default(),
         row.tool_call_key
     )
 }
